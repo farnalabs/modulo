@@ -581,11 +581,11 @@ class TriggerEngine:
                         context="webhook_engine",
                     )
                 except Exception:
-                    # FAR-1735 fail closed: an undecryptable token-shaped
-                    # secret must never be used as the HMAC key (the shared
-                    # resolver only raises for token-shaped values — a
-                    # non-token value is legacy plaintext, returned by the
-                    # dated shim with a warning).
+                    # FAR-1735 fail closed: an undecryptable ciphertext secret
+                    # must never be used as the HMAC key (the shared resolver
+                    # only raises for decryptable values and structurally
+                    # complete tokens — anything else is legacy plaintext,
+                    # returned by the warn-only dated shim with a warning).
                     _log.exception("trigger_engine.hmac_secret_decrypt_failed trigger=%s", trigger_id)
                     raise
             if hmac_secret is not None and not verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):

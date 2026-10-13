@@ -233,13 +233,14 @@ def _trigger_failure_hash(trigger_id: uuid.UUID) -> str:
 async def _resolve_signing_secret(
     session: AsyncSession, trigger_id: uuid.UUID, cfg: dict[str, Any], org_id: uuid.UUID
 ) -> str:
-    """Decode the trigger's Slack signing secret (FAR-1735 bounded resolver).
+    """Decode the trigger's Slack signing secret (FAR-1735 shared resolver).
 
-    A token-shaped value decrypts via the scope-bound helper and FAILS CLOSED
-    (:class:`SlackSignatureError`) when it cannot — ciphertext is never used
-    as the signing secret. A NON-token value is legacy pre-0306 plaintext,
-    accepted with a loud dated warning (the shared resolver's shim), so
-    pre-migration deployments keep delivering.
+    A decryptable value is decrypted via the scope-bound helper and a
+    structurally complete token that cannot be decrypted FAILS CLOSED
+    (:class:`SlackSignatureError`) — ciphertext is never used as the signing
+    secret. A NON-decryptable, NON-token value is legacy pre-0306 plaintext,
+    accepted with a loud dated warning (the shared resolver's warn-only
+    shim), so pre-migration deployments keep delivering.
     """
     signing_secret_raw = cfg.get("signing_secret")
     if not signing_secret_raw:

@@ -224,11 +224,12 @@ async def _verify_slack_delivery(
         # here cannot AttributeError on external ingress.
         cfg = trigger.config_json or {}
         # FAR-1732/1735: the stored signing_secret is a Fernet token (this
-        # route's own path encrypts at write). The shared bounded resolver
-        # decrypts token-shaped values via the scope-bound helper and accepts
-        # a NON-token value as legacy pre-0306 plaintext — a genuinely
-        # plaintext value is returned UNCHANGED by the resolver; it does NOT
-        # raise (only scope/key/decrypt errors do).
+        # route's own path encrypts at write). The shared resolver decrypts
+        # decryptable values via the scope-bound helper and accepts a
+        # NON-decryptable, NON-token value as legacy pre-0306 plaintext — a
+        # genuinely plaintext value is returned UNCHANGED by the resolver
+        # (warn-only shim); it does NOT raise (only scope/key/decrypt errors
+        # do).
         signing_secret: str | None
         signing_secret_raw = cfg.get("signing_secret")
         if signing_secret_raw is None:

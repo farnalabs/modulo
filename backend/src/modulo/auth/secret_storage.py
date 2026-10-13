@@ -17,6 +17,7 @@ Two layers exist for decryption:
   plaintext outside a tenant context (the FAR-519/522 gap class).
 """
 
+import base64
 import uuid
 from typing import TYPE_CHECKING
 
@@ -127,6 +128,42 @@ def is_encrypted_secret(value: object, fernet_key: str, old_fernet_key: str = ""
         else:
             return True
     return False
+
+
+# The minimum decoded length of a Fernet token: 1 version byte + 8 timestamp +
+# 16 IV + 16 (one AES block of PKCS7-padded ciphertext, empty plaintext) + 32
+# HMAC. No genuine token is shorter than this.
+_MIN_FERNET_TOKEN_BYTES = 73
+
+
+def _is_complete_fernet_token(value: object) -> bool:
+    """True iff *value* is a structurally COMPLETE Fernet token (FAR-1735).
+
+    :func:`is_encrypted_secret` returns False for BOTH legacy plaintext AND a
+    genuine Fernet token that no configured key can decrypt. Call sites that
+    must FAIL LOUD on the latter (broken ciphertext) while ACCEPTING the
+    former (legacy plaintext — including a plaintext that merely begins with
+    ``gAAAA``) need a discriminator stronger than the ``gAAAA`` prefix shape
+    check (:func:`_is_encrypted_token`): a Fernet token is
+    ``base64url(0x80-version | 8-byte timestamp | 16-byte IV | >=1 AES block
+    | 32-byte HMAC)``, so every genuine token decodes to at least
+    :data:`_MIN_FERNET_TOKEN_BYTES` bytes carrying the version byte, while a
+    ``gAAAA``-prefixed human-chosen plaintext does not.
+
+    A plaintext secret that IS at least that long, entirely base64url-valid,
+    and carries the Fernet version byte is cryptographically indistinguishable
+    from an undecryptable token — nothing can separate those two — and this
+    helper deliberately classifies such a value as a token (fail closed).
+    """
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        # base64-decode tolerates missing padding; non-alphabet characters
+        # are discarded by the default (validate=False) mode.
+        raw = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    except ValueError:
+        return False
+    return len(raw) >= _MIN_FERNET_TOKEN_BYTES and raw[0] == 0x80
 
 
 def decode_stored_secret(value: object, fernet_key: str) -> str:

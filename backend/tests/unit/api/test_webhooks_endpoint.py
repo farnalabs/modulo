@@ -408,6 +408,59 @@ def test_receive_webhook_legacy_plaintext_secret_accepted_with_dated_warning(
     assert "hmac_secret" in caplog.text
 
 
+def test_receive_webhook_gaaaa_prefixed_plaintext_secret_accepted_with_dated_warning(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """FAR-1735 consistency: the route reader's shared resolver classifies
+    with the DECRYPTABILITY probe, not the ``gAAAA`` prefix. A legacy
+    plaintext hmac_secret that merely BEGINS with ``gAAAA`` is accepted with
+    the dated warning (delivery verifies) — never misclassified as ciphertext
+    and failed closed. The REAL resolver runs (no decode mock)."""
+    import logging as _logging
+
+    stored_secret = "gAAAA-not-actually-a-fernet-token"
+    system_session = make_system_session_mock(trigger_config={"hmac_secret": stored_secret})
+    app_session = _make_mock_session()
+
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield system_session
+
+    async def override_app_session() -> AsyncGenerator[AsyncMock, None]:
+        yield app_session
+
+    app.dependency_overrides[get_system_db_session] = override_system_session
+    app.dependency_overrides[get_db_session] = override_app_session
+
+    ts = int(time.time())
+    body = b'{"event": "test"}'
+    signature = "sha256=" + hmac.new(stored_secret.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
+    try:
+        with (
+            patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.dispatch_run", new=AsyncMock(return_value=("enqueued", "job-id"))),
+            patch("modulo.api.routes.webhooks.set_rls_org", new=AsyncMock()),
+            caplog.at_level(_logging.WARNING, logger="modulo.core.trigger_secrets"),
+        ):
+            m.return_value = (_make_mock_run(), None, {})
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+                content=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Modulo-Timestamp": str(ts),
+                    "X-Modulo-Webhook-Secret": signature,
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+        app.dependency_overrides.pop(get_db_session, None)
+
+    # The gAAAA-prefixed plaintext verified the signature → accepted, not 401/500.
+    assert resp.status_code == 202, resp.text
+    assert "trigger_secret.legacy_plaintext" in caplog.text
+    assert "hmac_secret" in caplog.text
+
+
 def test_receive_webhook_undecryptable_token_secret_fails_closed(
     client: TestClient, caplog: pytest.LogCaptureFixture
 ) -> None:

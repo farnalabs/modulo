@@ -222,12 +222,14 @@ async def _verify_webhook_auth(
     errors the inline path raised: ``TimestampExpiredError`` (400) and
     ``HmacValidationError`` (401), surfaced by the route's outer handler.
 
-    FAR-1735: the stored hmac_secret is resolved by the shared bounded
-    resolver: a token-shaped value is decrypted and FAILS CLOSED
-    (:class:`SecretStorageError`) when it cannot be — ciphertext is never
-    used as the HMAC key; a NON-token value is legacy pre-0306 plaintext
-    accepted with a loud dated warning (pre-migration deployments keep
-    delivering, and a future plaintext write is surfaced, never silently
+    FAR-1735: the stored hmac_secret is resolved by the shared resolver: a
+    value that decrypts under the configured key is decrypted and a
+    structurally complete token that cannot be decrypted FAILS CLOSED
+    (:class:`SecretStorageError`) — ciphertext is never used as the HMAC
+    key; a NON-decryptable, non-token value is legacy pre-0306 plaintext
+    accepted with a loud dated warning (the shim is warn-only, not
+    bounded — pre-migration deployments keep delivering, and a future
+    plaintext write is surfaced, never silently
     accepted).
 
     FAR-1516 ordering is preserved: the ``signature_verified`` actor-source
@@ -423,10 +425,11 @@ async def _verify_replay_auth(
     ``HmacValidationError`` (401, including the no-hmac_secret-configured
     case), ``ReplayNotFoundError`` (404).
 
-    FAR-1735: the stored hmac_secret is resolved by the shared bounded
-    resolver — token-shaped values decrypt or FAIL CLOSED
-    (:class:`SecretStorageError`, 500 via the route ladder); a NON-token
-    value is legacy pre-0306 plaintext accepted with a loud dated warning.
+    FAR-1735: the stored hmac_secret is resolved by the shared resolver —
+    decryptable values decrypt and a structurally complete token that cannot
+    be decrypted FAILS CLOSED (:class:`SecretStorageError`, 500 via the
+    route ladder); a NON-decryptable, non-token value is legacy pre-0306
+    plaintext accepted with a loud dated warning (warn-only shim).
     FAR-1516: on success the actor source is promoted to
     ``signature_verified`` — same ordering contract as
     ``_verify_webhook_auth`` (promotion only after the check passes, always

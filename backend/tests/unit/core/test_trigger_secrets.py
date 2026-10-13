@@ -73,6 +73,37 @@ async def test_token_shape_decrypts_via_scope_bound_helper() -> None:
     assert result == "decrypted-secret"
 
 
+async def test_gaaaa_prefixed_legacy_plaintext_accepted_with_dated_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-1735 consistency: classification is the DECRYPTABILITY probe, not
+    the ``gAAAA`` prefix. A legacy plaintext that merely BEGINS with
+    ``gAAAA`` decrypts under neither key and is not a complete token, so it
+    is accepted as legacy plaintext with the dated warning — never fed to the
+    decryptor and failed closed (which permanently broke such triggers)."""
+    import logging as _logging
+
+    tricky_plaintext = "gAAAA-not-actually-a-fernet-token"
+
+    with caplog.at_level(_logging.WARNING, logger="modulo.core.trigger_secrets"):
+        result = await resolve_trigger_secret_scoped(
+            _session_mock(),
+            stored_raw=tricky_plaintext,
+            fernet_key=_FERNET_KEY,
+            org_id=_ORG_ID,
+            trigger_id=_TRIGGER_ID,
+            config_key="hmac_secret",
+            context="webhooks_route",
+        )
+
+    assert result == tricky_plaintext
+    assert "trigger_secret.legacy_plaintext" in caplog.text
+    assert str(_TRIGGER_ID) in caplog.text
+    assert "hmac_secret" in caplog.text
+    assert "webhooks_route" in caplog.text
+    assert LEGACY_PLAINTEXT_SHIM_SINCE in caplog.text
+
+
 async def test_undecryptable_token_fails_closed(caplog: pytest.LogCaptureFixture) -> None:
     """A token-shaped value that cannot be decrypted raises
     :class:`DecryptionError` — ciphertext is never returned as the secret,
