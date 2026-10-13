@@ -19,7 +19,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Self
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import sqlalchemy as sa
@@ -267,6 +267,81 @@ class TestAgeGateHardInFlightExclusion:
         # The router already excludes node-started rows via the zero-progress
         # shape; it must NOT carry the live-marker exclusion.
         assert ":live_marker_tombstone" not in ch._NODELESS_ROUTER_SQL
+
+
+class TestReconcileOneRowTailGuard:
+    """The tail guard inside ``_reconcile_one_row`` holds the widened-window row.
+
+    The direct ``_held_back_by_widened_window`` tests above pin the predicate;
+    this exercises the branch the predicate gates in the real row loop — the
+    ``summary["skipped"]`` / early-return arm — so a young zero-progress row
+    from a widened-window pipeline is never re-dispatched by the generic
+    recovery path before its per-pipeline window elapses.
+    """
+
+    @pytest.mark.asyncio
+    async def test_widened_window_row_is_held_back_before_the_generic_path(self) -> None:
+        row = SimpleNamespace(
+            id=uuid.uuid4(),
+            status="running",
+            dispatcher="saq",
+            node_token_usage=None,
+            outputs_absent=True,
+            checkpoints_absent=True,
+            started_at=datetime.now(UTC) - timedelta(minutes=20),
+        )
+        summary: dict[str, Any] = {"skipped": 0}
+        # session/queue/redis are unused: the early-detect block is off
+        # (early_detect_minutes defaults to None), the nodeless repair returns
+        # None (the row is younger than the full window so it is not a zombie),
+        # and the tail guard returns before any of them is touched.
+        got = await ch._reconcile_one_row(
+            MagicMock(),
+            MagicMock(),
+            MagicMock(),
+            uuid.uuid4(),
+            row,
+            60,
+            0,
+            summary,
+            [],
+            floor_nodeless_window=35,
+        )
+        assert got == 0
+        assert summary["skipped"] == 1
+
+    @pytest.mark.asyncio
+    async def test_non_widened_row_falls_through_past_the_tail_guard(self) -> None:
+        # Same row but the window was NOT widened (window == floor): the tail
+        # guard must not fire, so the row continues down the generic recovery
+        # path (patched to a sentinel here) rather than being held back.
+        row = SimpleNamespace(
+            id=uuid.uuid4(),
+            status="running",
+            dispatcher="saq",
+            node_token_usage=None,
+            outputs_absent=True,
+            checkpoints_absent=True,
+            started_at=datetime.now(UTC) - timedelta(minutes=20),
+        )
+        summary: dict[str, Any] = {"skipped": 0}
+        with (
+            patch.object(ch, "_reconcile_enqueue_failed", new_callable=AsyncMock, return_value=7),
+        ):
+            got = await ch._reconcile_one_row(
+                MagicMock(),
+                MagicMock(),
+                MagicMock(),
+                uuid.uuid4(),
+                row,
+                35,
+                0,
+                summary,
+                [],
+                floor_nodeless_window=35,
+            )
+        assert got == 7
+        assert summary["skipped"] == 0
 
     def test_orm_nodeless_predicate_still_compiles(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from modulo.db.models.run import Run
