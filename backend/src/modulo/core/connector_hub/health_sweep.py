@@ -41,6 +41,14 @@ Contract:
   from ``health_check()`` (an allowlist without ``read``) is counted
   ``skipped``: no health columns are written, because the probe never ran and
   a permission answer is not a transport/upstream failure.
+* FAR-1682 shell connector truth — the sweep threads a ``RuntimeProviderHub``
+  (built the same way the run executor builds one) into every ``ConnectorHub``
+  it constructs. ``ShellConnector.health_check()`` reports on whether a runtime
+  provider is bound; the runtime provider IS available at runtime, but the sweep
+  previously built its hub with none, so every active ``shell`` instance was
+  falsely recorded ``Runtime provider not configured``. ADR 044 deprecates
+  ShellConnector but keeps existing shell pipelines executable, so the health
+  signal must be truthful rather than suppressed.
 """
 
 from __future__ import annotations
@@ -48,6 +56,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -71,11 +80,27 @@ def _bound_detail(detail: str) -> str:
     return detail.replace("\x00", "")[:_ERR_DETAIL_LIMIT]
 
 
+def _build_default_runtime_provider_hub() -> Any:
+    """Build the runtime-provider hub the sweep binds to each ``ConnectorHub`` (FAR-1682).
+
+    Mirrors the run executor's construction (``create_default_hub()`` — the
+    env-gated ``build_hub`` factory that always registers the ``local`` provider
+    and registers ``e2b`` / ``runner_docker`` / ``kubernetes`` when configured).
+    The import is lazy so the connector-hub module does not couple to the
+    runtime-provider package at import time. The returned hub is disposed by
+    ``run_connector_health_checks`` via ``aclose()`` once the sweep finishes.
+    """
+    from modulo.core.runtime_provider import create_default_hub
+
+    return create_default_hub()
+
+
 async def _check_instance(
     ci: ConnectorInstance,
     *,
     session: AsyncSession,
     fernet_key: str | None,
+    runtime_provider_hub: Any = None,
 ) -> str:
     """Health-check one instance. Returns "" for ok, else a redacted failure detail.
 
@@ -112,12 +137,22 @@ async def _check_instance(
        failure predated the creds parse — structurally credential-free) the
        detail FALLS CLOSED to ``_FALLBACK_DETAIL`` rather than echoing
        unredacted ``str(exc)``. ``ConnectorPermissionError`` re-raises (the
-       FAR-1564 skip class) and ``asyncio.CancelledError`` re-raises as-is, so
-       the run-loop semantics for those are unchanged.
+        FAR-1564 skip class) and ``asyncio.CancelledError`` re-raises as-is, so
+        the run-loop semantics for those are unchanged.
+
+    FAR-1682: ``runtime_provider_hub`` is threaded into the ``ConnectorHub`` so
+    a ``shell`` instance's ``health_check()`` sees a bound runtime provider
+    (the hub the sweep builds once per tick). Without it the deprecated-but-
+    still-executable ShellConnector always reported ``Runtime provider not
+    configured``.
     """
     await set_rls_org(session, ci.organisation_id)
     secrets_backend = create_secrets_backend(fernet_key=fernet_key, session=session)
-    async with ConnectorHub(secrets_backend=secrets_backend, org_id=str(ci.organisation_id)) as hub:
+    async with ConnectorHub(
+        secrets_backend=secrets_backend,
+        org_id=str(ci.organisation_id),
+        runtime_provider_hub=runtime_provider_hub,
+    ) as hub:
         await hub.initialise([ci])
         redactor = hub.credential_redactor_for(ci.id)
         try:
@@ -173,6 +208,12 @@ async def run_connector_health_checks(
     answer 403 rather than 502. Such an instance is counted ``skipped``, its
     health columns are left untouched (the probe never ran, so the sweep must
     not claim a new health state), and the denial is logged.
+
+    FAR-1682: a single ``RuntimeProviderHub`` is built for the tick (the same
+    way the run executor builds one) and threaded into every instance's
+    ``ConnectorHub``, then disposed in a ``finally`` so provider-owned clients
+    are released. This is what makes a ``shell`` connector's ``health_check()``
+    report truthfully instead of always seeing no runtime provider bound.
     """
     checked = 0
     healthy = 0
@@ -183,56 +224,68 @@ async def run_connector_health_checks(
         result = await session.execute(select(ConnectorInstance).where(ConnectorInstance.status == "active"))
         instances = list(result.scalars().all())
 
-    for ci in instances:
-        checked += 1
-        detail = ""
-        async with session_factory() as write_session, write_session.begin():
-            try:
-                detail = await _check_instance(ci, session=write_session, fernet_key=fernet_key)
-                if detail == "":
-                    healthy += 1
-            except asyncio.CancelledError:
-                raise
-            except ConnectorPermissionError as exc:
-                # FAR-1564: an ACL denial is a PERMISSION answer about this
-                # connector's allowed_operations, not a transport/upstream
-                # failure — recording it as last_health_check_error would mark
-                # a perfectly healthy connector unhealthy and mask the real
-                # cause. Skip it distinctly (no health columns written).
-                skipped += 1
-                logger.warning(
-                    "connector_health_sweep.acl_denied connector_id=%s: %s",
-                    ci.id,
-                    exc,
-                )
-                continue
-            except Exception as exc:
-                # Residual backstop (FAR-1651Fix3): after _check_instance's own
-                # redaction boundary, only DB-layer failures can reach here
-                # (set_rls_org / session factory / secrets-backend
-                # construction — no connector credential is ever bound at this
-                # layer). Fail closed anyway: the full message goes to the log,
-                # the PERSISTED detail degrades to the placeholder, because this
-                # column is an operator-visible persistence boundary.
-                logger.exception(
-                    "connector_health_sweep.residual_failure connector_id=%s type=%s",
-                    ci.id,
-                    ci.connector_type_id,
-                )
-                detail = _bound_detail(f"{type(exc).__name__}: {_FALLBACK_DETAIL}")
-            await write_session.execute(
-                update(ConnectorInstance)
-                .where(ConnectorInstance.id == ci.id)
-                .values(
-                    last_health_check_at=checked_at,
-                    last_health_check_error=None if detail == "" else detail,
-                    validation_level=resolve_validation_level(
-                        connector_baseline_level(ci.connector_type_id),
+    runtime_provider_hub = _build_default_runtime_provider_hub()
+    try:
+        for ci in instances:
+            checked += 1
+            detail = ""
+            async with session_factory() as write_session, write_session.begin():
+                try:
+                    detail = await _check_instance(
+                        ci,
+                        session=write_session,
+                        fernet_key=fernet_key,
+                        runtime_provider_hub=runtime_provider_hub,
+                    )
+                    if detail == "":
+                        healthy += 1
+                except asyncio.CancelledError:
+                    raise
+                except ConnectorPermissionError as exc:
+                    # FAR-1564: an ACL denial is a PERMISSION answer about this
+                    # connector's allowed_operations, not a transport/upstream
+                    # failure — recording it as last_health_check_error would mark
+                    # a perfectly healthy connector unhealthy and mask the real
+                    # cause. Skip it distinctly (no health columns written).
+                    skipped += 1
+                    logger.warning(
+                        "connector_health_sweep.acl_denied connector_id=%s: %s",
+                        ci.id,
+                        exc,
+                    )
+                    continue
+                except Exception as exc:
+                    # Residual backstop (FAR-1651Fix3): after _check_instance's own
+                    # redaction boundary, only DB-layer failures can reach here
+                    # (set_rls_org / session factory / secrets-backend
+                    # construction — no connector credential is ever bound at this
+                    # layer). Fail closed anyway: the full message goes to the log,
+                    # the PERSISTED detail degrades to the placeholder, because this
+                    # column is an operator-visible persistence boundary.
+                    logger.exception(
+                        "connector_health_sweep.residual_failure connector_id=%s type=%s",
+                        ci.id,
+                        ci.connector_type_id,
+                    )
+                    detail = _bound_detail(f"{type(exc).__name__}: {_FALLBACK_DETAIL}")
+                await write_session.execute(
+                    update(ConnectorInstance)
+                    .where(ConnectorInstance.id == ci.id)
+                    .values(
                         last_health_check_at=checked_at,
                         last_health_check_error=None if detail == "" else detail,
-                    ),
+                        validation_level=resolve_validation_level(
+                            connector_baseline_level(ci.connector_type_id),
+                            last_health_check_at=checked_at,
+                            last_health_check_error=None if detail == "" else detail,
+                        ),
+                    )
                 )
-            )
+    finally:
+        # FAR-1682: dispose the per-tick runtime-provider hub so provider-owned
+        # clients (e.g. E2B / Docker) are released — the hub is shared across
+        # every instance in this sweep, so it must be closed exactly once here.
+        await runtime_provider_hub.aclose()
 
     return {
         "checked": checked,

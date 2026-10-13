@@ -16,8 +16,6 @@ from pathlib import Path
 
 import pytest
 
-import modulo.launcher.secrets_file as secrets_file_module
-import modulo.settings as settings_module
 from modulo.launcher.config_source import (
     CONFIG_ENV_FILENAME,
     LauncherConfigError,
@@ -30,6 +28,7 @@ from modulo.launcher.config_source import (
 from modulo.launcher.secrets_file import LauncherSecrets
 from modulo.launcher.state import LauncherState, save_state
 from modulo.settings import get_settings
+from tests.unit.launcher.test_launcher_shared import bypass_platform_seams, launcher_state_reset
 
 FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 SECRET_KEY = "a" * 32
@@ -37,17 +36,14 @@ SECRET_KEY = "a" * 32
 
 @pytest.fixture(autouse=True)
 def _reset_launcher_state() -> Iterator[None]:
-    get_settings.cache_clear()
-    yield
-    settings_module._pinned_env_file = None
-    settings_module._first_boot_guard = None
-    get_settings.cache_clear()
+    """The shared snapshot/restore body lives in the launcher-test module."""
+    yield from launcher_state_reset()
 
 
 @pytest.fixture(autouse=True)
 def _bypass_platform_guard(monkeypatch: pytest.MonkeyPatch) -> None:
-    if sys.platform == "win32":
-        monkeypatch.setattr(secrets_file_module, "assert_supported_platform", lambda: None)
+    """Bypass the Windows-refusal seams this module's tests exercise."""
+    bypass_platform_seams(monkeypatch, "modulo.launcher.secrets_file")
 
 
 def _secrets() -> LauncherSecrets:
@@ -130,6 +126,46 @@ def test_source_omits_keys_the_environment_already_sets(monkeypatch: pytest.Monk
     real_create(data_dir / "secrets.json")  # keep the tmp dir realistic for later asserts
 
 
+def test_source_redis_url_environment_wins_over_composed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """An operator REDIS_URL env var must drop the composed redis value.
+
+    The source returns init-kwargs (which outrank env), so any composed key
+    whose environment variable is already set must be omitted — otherwise the
+    bundled Redis password would shadow the operator's explicit choice.
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    save_state(_state(), data_dir / "state.json", _secrets().state_hmac_key)
+    import modulo.launcher.secrets_file as sf
+
+    monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("MODULO_SYSTEM_DATABASE_URL", raising=False)
+    monkeypatch.setenv("REDIS_URL", "redis://operator:secret@cache.example.com:6379/7")
+    resolved = LauncherConfigSource(data_dir)()
+    assert "redis_url" not in resolved  # the operator's env wins
+    assert resolved["database_url"] == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/modulo"
+
+
+def test_source_system_database_url_environment_wins_over_composed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """MODULO_SYSTEM_DATABASE_URL set (without DATABASE_URL) drops the composed one."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    save_state(_state(), data_dir / "state.json", _secrets().state_hmac_key)
+    import modulo.launcher.secrets_file as sf
+
+    monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", "postgresql://system:op@db.example.com:5432/modulo")
+    resolved = LauncherConfigSource(data_dir)()
+    assert "modulo_system_database_url" not in resolved  # the operator's env wins
+    assert resolved["database_url"] == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/modulo"
+    assert resolved["redis_url"] == "redis://:redis-pw@127.0.0.1:16379/0"
+
+
 def test_source_derives_system_url_from_the_operators_database_url(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -155,22 +191,23 @@ def test_source_derives_system_url_from_the_operators_database_url(
     assert "pg-pw" not in system
 
 
-def test_source_includes_everything_without_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_source_includes_everything_without_environment(
+    clean_launcher_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     save_state(_state(), data_dir / "state.json", _secrets().state_hmac_key)
     import modulo.launcher.secrets_file as sf
 
     monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.delenv("REDIS_URL", raising=False)
-    monkeypatch.delenv("MODULO_SYSTEM_DATABASE_URL", raising=False)
     resolved = LauncherConfigSource(data_dir)()
     assert resolved["database_url"] == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/modulo"
     assert resolved["redis_url"] == "redis://:redis-pw@127.0.0.1:16379/0"
 
 
-def test_source_settings_roundtrip_honours_priority(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_source_settings_roundtrip_honours_priority(
+    clean_launcher_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     from modulo.settings import Settings
 
     data_dir = tmp_path / "data"
@@ -179,9 +216,6 @@ def test_source_settings_roundtrip_honours_priority(monkeypatch: pytest.MonkeyPa
     import modulo.launcher.secrets_file as sf
 
     monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.delenv("REDIS_URL", raising=False)
-    monkeypatch.delenv("MODULO_SYSTEM_DATABASE_URL", raising=False)
     resolved = LauncherConfigSource(data_dir)()
     settings = Settings(
         secret_key=SECRET_KEY,
@@ -273,15 +307,14 @@ def test_write_pinned_env_file_refuses_symlink_squat(tmp_path: Path) -> None:
     assert victim.read_text(encoding="utf-8") == "innocent"
 
 
-def test_pinned_env_file_feeds_get_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_pinned_env_file_feeds_get_settings(
+    clean_launcher_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     from modulo.settings import pin_env_file
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     path = write_pinned_env_file(data_dir, _state(), _secrets())
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.delenv("REDIS_URL", raising=False)
-    monkeypatch.delenv("MODULO_SYSTEM_DATABASE_URL", raising=False)
     monkeypatch.setenv("SECRET_KEY", SECRET_KEY)
     monkeypatch.setenv("FERNET_KEY", FERNET_KEY)
     pin_env_file(str(path))

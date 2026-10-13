@@ -69,7 +69,7 @@ jobs:
       TAG: ${{ github.ref_name }}
     steps:
       - name: Checkout (scripts/install.sh must exist for the from-file install)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Fetch the artifact to smoke + enforce the integrity gates
         env:
@@ -83,7 +83,10 @@ jobs:
             if [ -n "${REQUESTED}" ]; then
               tag="${REQUESTED}"
             else
-              tag="$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')"
+              if ! tag="$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name' 2>/tmp/latest-err)"; then
+                echo "::error::cannot canary ${{ github.repository }}: releases/latest failed ($(tr -d '\n' </tmp/latest-err)). No bundle-v* release is published to verify - publish one, or dispatch with canary_version."
+                exit 1
+              fi
             fi
             if ! gh api "repos/${{ github.repository }}/releases/tags/${tag}" > /dev/null; then
               echo "::error::canary release ${tag} does not exist"; exit 1
@@ -337,13 +340,22 @@ jobs:
       matrix:
         attempt: [1, 2, 3]
       fail-fast: false
+    # Expose the resolved canary tag to canary-housekeeping (needs.canary):
+    # GITHUB_ENV written inside this job is job-scoped and never reaches a
+    # needs-dependent job, so `${{ env.TAG }}` there is always empty. Every
+    # matrix leg resolves the same tag, so the merged output is stable; a leg
+    # that fails BEFORE resolving (e.g. the no-releases 404 path) simply
+    # contributes no value, leaving the `:-unknown` fallback intact.
+    outputs:
+      tag: ${{ steps.fetch.outputs.tag }}
     env:
       CANARY: "1"
     steps:
       - name: Checkout (scripts/install.sh must exist for the from-file install)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Fetch the artifact to smoke + enforce the integrity gates
+        id: fetch
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTED: ${{ inputs.canary_version }}
@@ -355,7 +367,10 @@ jobs:
             if [ -n "${REQUESTED}" ]; then
               tag="${REQUESTED}"
             else
-              tag="$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')"
+              if ! tag="$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name' 2>/tmp/latest-err)"; then
+                echo "::error::cannot canary ${{ github.repository }}: releases/latest failed ($(tr -d '\n' </tmp/latest-err)). No bundle-v* release is published to verify - publish one, or dispatch with canary_version."
+                exit 1
+              fi
             fi
             if ! gh api "repos/${{ github.repository }}/releases/tags/${tag}" > /dev/null; then
               echo "::error::canary release ${tag} does not exist"; exit 1
@@ -363,6 +378,10 @@ jobs:
             version="${tag#bundle-v}"
             echo "TAG=${tag}" >> "$GITHUB_ENV"
             echo "TARBALL=canary.tar.gz" >> "$GITHUB_ENV"
+            # Also surface the resolved tag as a job output so
+            # canary-housekeeping can name it in the tracking issue body
+            # (GITHUB_ENV above does not cross the job boundary).
+            echo "tag=${tag}" >> "$GITHUB_OUTPUT"
             # Resolve N-1 (the previous bundle-v release) so the N-1 upgrade leg
             # below is not permanently dead code. Best-effort: a resolution
             # failure must WARN, never abort the smoke.
@@ -627,7 +646,8 @@ jobs:
         if: needs.canary.result == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
-          CANARY_TAG: ${{ env.TAG }}
+          GH_REPO: ${{ github.repository }}
+          CANARY_TAG: ${{ needs.canary.outputs.tag }}
         run: |
           set -euo pipefail
           issue_key="[canary] $(date -u +%F)"
@@ -646,6 +666,7 @@ jobs:
         if: needs.canary.result == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           issue_key="[canary] $(date -u +%F)"

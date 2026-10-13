@@ -33,6 +33,12 @@ with contextlib.suppress(FileNotFoundError, OSError):
 
 def _make_mock_session() -> Any:
     session = AsyncMock()
+    # FAR-1639 (FAR-1629 sweep): in_transaction() and add() are SYNC
+    # AsyncSession methods — bare-AsyncMock children type them as async, so
+    # production code reaching set_rls_* (db/rls.py) passes the guard
+    # vacuously (an unawaited coroutine is truthy).
+    session.in_transaction = MagicMock(return_value=True)
+    session.add = MagicMock()
 
     mock_scalars = MagicMock()
     mock_scalars.all.return_value = []
@@ -58,6 +64,14 @@ def _make_mock_session() -> Any:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # FAR-1639: the flag-override audit writes open a nested transaction
+    # (``session.begin_nested()`` in core/audit_logger) before their chain-head
+    # read — type the nested CM's sync contract the same way as ``begin`` (see
+    # ``_make_audit_session`` in test_scim_provisioning.py for the full shape).
+    nested_cm = AsyncMock()
+    nested_cm.__aenter__ = AsyncMock(return_value=None)
+    nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested_cm)
     session.flush = AsyncMock()
 
     return session

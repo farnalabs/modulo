@@ -86,6 +86,26 @@ def _scalar_one_result(value) -> SimpleNamespace:
     return SimpleNamespace(scalar_one=lambda: value, scalar_one_or_none=lambda: value)
 
 
+def _team_dim_result(name: str) -> SimpleNamespace:
+    """Team entity read double for ``_snapshot_dimensions`` (FAR-1653).
+
+    The dimension reads are ENTITY selects (so ``include_soft_deleted``'s
+    single-type-parameter bound accepts them), fetched via
+    ``.scalar_one_or_none()`` and then dereferenced as ``.name`` — not the old
+    scalar-column shape.
+    """
+    return _scalar_one_result(SimpleNamespace(name=name))
+
+
+def _pipeline_dim_result(name: str, folder_id=None) -> SimpleNamespace:
+    """Pipeline entity read double for ``_snapshot_dimensions`` (FAR-1653).
+
+    Mirrors ``_team_dim_result``: the read returns a ``Pipeline``-shaped entity
+    carrying ``.name`` and ``.folder_id``.
+    """
+    return _scalar_one_result(SimpleNamespace(name=name, folder_id=folder_id))
+
+
 def _empty_rows_result() -> SimpleNamespace:
     """A result double for the repo reader's rows fetch (no rows) and legacy
     fallback (.first() -> None)."""
@@ -204,8 +224,8 @@ class TestSnapshotDimensions:
         )
         session = _session(
             execute_side_effect=[
-                _scalar_one_result("Platform"),
-                SimpleNamespace(first=lambda: ("CI", folder_id)),
+                _team_dim_result("Platform"),
+                _pipeline_dim_result("CI", folder_id),
             ]
         )
         team_name, pipeline_name, folder = await analytics_mod._snapshot_dimensions(session, run)
@@ -220,7 +240,7 @@ class TestSnapshotDimensions:
 
     async def test_missing_pipeline_row_falls_back_to_none(self) -> None:
         run = _make_run(pipeline_id="55555555-5555-4555-8555-555555555555")
-        session = _session(execute_side_effect=[SimpleNamespace(first=lambda: None)])
+        session = _session(execute_side_effect=[_scalar_one_result(None)])
         team_name, pipeline_name, folder = await analytics_mod._snapshot_dimensions(session, run)
         assert (team_name, pipeline_name, folder) == (None, None, None)
 
@@ -304,8 +324,8 @@ class TestRecordRunFacts:
         )
         session = _session(
             execute_side_effect=[
-                _scalar_one_result("Platform"),
-                SimpleNamespace(first=lambda: ("CI", None)),
+                _team_dim_result("Platform"),
+                _pipeline_dim_result("CI"),
                 *_blob_read_results(),
                 _scalar_one_result(None),  # FAR-802 workspace_inputs_count read
                 _enforcement_empty_result(),  # FAR-902 enforcement-aggregate read
@@ -367,8 +387,8 @@ class TestRecordRunFacts:
         )
         session = _session(
             execute_side_effect=[
-                _scalar_one_result("Platform"),
-                SimpleNamespace(first=lambda: ("CI", None)),
+                _team_dim_result("Platform"),
+                _pipeline_dim_result("CI"),
                 *_blob_read_results(),
                 _scalar_one_result(None),  # FAR-802 workspace_inputs_count read
                 _enforcement_empty_result(),  # FAR-902 enforcement-aggregate read
@@ -525,8 +545,8 @@ class TestRecordRunFacts:
         )
         session = _session(
             execute_side_effect=[
-                _scalar_one_result("Platform"),
-                SimpleNamespace(first=lambda: ("CI", None)),
+                _team_dim_result("Platform"),
+                _pipeline_dim_result("CI"),
                 *_blob_read_results(),
                 _scalar_one_result(None),  # FAR-802 workspace_inputs_count read
                 _enforcement_empty_result(),  # FAR-902 enforcement-aggregate read
@@ -591,8 +611,8 @@ class TestRecordRunFacts:
         )
         session = _session(
             execute_side_effect=[
-                _scalar_one_result("Platform"),
-                SimpleNamespace(first=lambda: ("CI", None)),
+                _team_dim_result("Platform"),
+                _pipeline_dim_result("CI"),
                 *_blob_read_results(),
                 _scalar_one_result(None),  # FAR-802 workspace_inputs_count read
                 _enforcement_empty_result(),  # FAR-902 enforcement-aggregate read
@@ -640,8 +660,8 @@ class TestRecordRunFacts:
         )
         session = _session(
             execute_side_effect=[
-                _scalar_one_result(None),
-                SimpleNamespace(first=lambda: (None, None)),
+                _scalar_one_result(None),  # team dim read (succeeds, no team)
+                _scalar_one_result(None),  # pipeline dim read (succeeds, no pipeline)
                 *_blob_read_results(),
                 _scalar_one_result(None),  # FAR-802 workspace_inputs_count read (succeeds)
                 _enforcement_empty_result(),  # FAR-902 enforcement-aggregate read (succeeds)

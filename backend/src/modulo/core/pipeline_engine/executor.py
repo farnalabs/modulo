@@ -56,6 +56,7 @@ from modulo.core.audit_logger.labels import (
 )
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.cost_controller.finalize import FinalizeMetricSink, derive_node_type_map, finalize_cost
+from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.core.eval_engine import (
     EvalBlockedError,
 )
@@ -106,6 +107,7 @@ from modulo.core.pipeline_engine.evidence import (
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile, struct_hash_with_eval_defs
 from modulo.core.pipeline_engine.hitl_context import HitlReviewContext, build_hitl_review_context
 from modulo.core.pipeline_engine.idempotency import read_before_write_suppression
+from modulo.core.pipeline_engine.llm_judge import resolve_llm_judge_callable
 from modulo.core.pipeline_engine.model_backend_errors import classify_provider_error
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 from modulo.core.pipeline_engine.node_runner import (
@@ -116,7 +118,6 @@ from modulo.core.pipeline_engine.node_runner import (
     SupersededNodeError,
     _idempotency_gate_skipped_envelope,
     _marker_delivery_done_for_node,
-    _resolve_llm_judge_callable,
     set_conformance_ctx,
 )
 from modulo.core.pipeline_engine.output_filter import OutputRejectedError
@@ -219,6 +220,19 @@ def _is_finalize_lock_retryable(exc: BaseException) -> bool:
 
 
 _log = logging.getLogger(__name__)
+
+# FAR-209 Track B: the guardrail eval_type value the executor splits out of
+# the node-scoped eval defs (interception-owned, never eval-engine-owned —
+# the eval engine raises GuardrailMisroutedError on a guardrail-typed def).
+GUARDRAIL_EVAL_TYPE = "guardrail"
+
+# NOTE: the output-point predicate is NOT re-implemented here. The canonical
+# ``is_output_interception`` lives in ``modulo.core.guardrails.output_intercept``
+# and is lazily imported inside ``_handle_chain_end_event`` (a module-level
+# import cycles guardrails -> eval_engine -> executor). A local copy of a
+# security-seam predicate is exactly the duplication the FAR-209 review
+# flagged — never reintroduce one.
+
 
 # Pipeline retry_policy events (must stay in sync with the API schema in
 # api/routes/pipelines.py and the graph validator). A policy can retry on:
@@ -2938,9 +2952,127 @@ class PipelineExecutor:
             # judge callable from eval_def.config["model_backend_id"] via the
             # ModelBackendHub, so llm_judge evals score against a real judge
             # instead of returning the fail-closed 0.0 "callable not provided".
-            resolve_llm_judge=_resolve_llm_judge_callable,
+            resolve_llm_judge=resolve_llm_judge_callable,
             on_eval_result=_on_post_node_eval_result,
         )
+
+    async def _run_output_guardrails(
+        self,
+        *,
+        node_id: str,
+        envelope: dict[str, Any],
+        guardrail_defs: list[EvalDefDTO],
+        run_id: uuid.UUID,
+        org_id: uuid.UUID | None,
+    ) -> dict[str, Any]:
+        """FAR-209 Track B: intercept a completed node's output envelope.
+
+        Runs ONLY the output-point guardrails (filtered here — the input-point
+        ones are excluded upstream, before this seam). Orders per the design:
+        interception runs BEFORE `_run_post_node_evals` in
+        `_handle_chain_end_event`, the redacted envelope is OVERWRITTEN into
+        ``ctx.completed_node_outputs`` there, and downstream LangGraph state
+        propagation is intentionally NOT in scope (documented known gap).
+
+        A block outcome raises ``GuardrailBlockedError`` — the stream loop's
+        existing ``except EvalBlockedError`` handler terminalizes the run
+        (``eval_failed``) unchanged. A destroy-mode mechanism error (fail
+        closed) becomes the same terminal block. Detection-only (replay /
+        kill switch) never acts and returns the envelope untouched.
+        """
+        from modulo.core.guardrails import GuardrailBlockedError, GuardrailRedactionMechanismError
+        from modulo.core.guardrails.output_intercept import run_output_interception_async
+
+        if not org_id:
+            _log.warning("guardrails.output_no_org", extra={"node_id": node_id})
+            return envelope
+        try:
+            outcome = await run_output_interception_async(
+                guardrail_defs,
+                envelope,
+                session_factory=self._session_factory,
+                run_id=run_id,
+                org_id=org_id,
+            )
+        except GuardrailRedactionMechanismError as exc:
+            _log.exception("guardrails.output_destroy_mechanism_error")
+            raise GuardrailBlockedError(
+                node_id, f"guardrail output mechanism error (destroy redaction failed closed): {exc}"
+            ) from exc
+        except Exception as exc:
+            # Defect path guard: any unexpected pass failure with a guarding
+            # guardrail must not pass through unredacted — block. The shared
+            # pass already fail-closes internally for detection mechanism
+            # errors; this covers anything IT failed to convert.
+            guarding = any((d.config.get("action") in ("block", "redact")) for d in guardrail_defs)
+            if guarding:
+                _log.exception("guardrails.output_pass_failed_closed")
+                raise GuardrailBlockedError(node_id, "guardrail output mechanism error at node-output edge") from exc
+            _log.warning("guardrails.output_pass_failed_open", extra={"node_id": node_id})
+            return envelope
+        # Typed round-trip: the seam returns the pass's redacted envelope
+        # by reference (outcome is dynamically typed from the async helper).
+        redacted: dict[str, Any] = outcome.payload
+        if outcome.blocked:
+            raise GuardrailBlockedError(outcome.blocking_eval_name or node_id, outcome.block_message)
+        return redacted
+
+    async def _intercept_node_output_and_run_evals(
+        self,
+        *,
+        name: str,
+        output: dict[str, Any],
+        ctx: _StreamContext,
+    ) -> dict[str, Any]:
+        """FAR-209 Track B: split a completed node's eval defs at the output seam.
+
+        Guardrail-typed defs bound to *name* are interception-owned, not
+        eval-owned: the OUTPUT-point ones intercept THIS envelope (and the
+        redacted copy is written back into ``ctx.completed_node_outputs``);
+        the rest keep flowing through ``_run_post_node_evals``. A guardrail
+        def left in the eval-shaped list would raise ``GuardrailMisroutedError``
+        inside the eval engine and crash the run.
+
+        Returns the (possibly redacted) envelope. A block outcome raises
+        ``GuardrailBlockedError`` (an ``EvalBlockedError`` subclass) — the
+        stream loop's handler terminalizes the run unchanged.
+        """
+        from modulo.core.guardrails.output_intercept import is_output_interception
+
+        node_defs = (ctx.eval_definitions_by_node or {}).get(name) or []
+        # Only the OUTPUT-point guardrail defs intercept THIS envelope
+        # (strictly the "output" literal -- an unknown value stays with the
+        # eval-shape list below, where strict validation fails closed).
+        # Input-point ones are owned by their upstream seam, so they keep
+        # flowing in the eval-shaped path here.
+        guardrail_defs = [d for d in node_defs if str(d.eval_type) == GUARDRAIL_EVAL_TYPE and is_output_interception(d)]
+        if guardrail_defs:
+            redacted = await self._run_output_guardrails(
+                node_id=name,
+                envelope=output,
+                guardrail_defs=guardrail_defs,
+                run_id=ctx.run_id,
+                org_id=ctx.org_id,
+            )
+            output = redacted
+            if ctx.completed_node_outputs is not None:
+                ctx.completed_node_outputs[name] = redacted
+        # Non-output defs (other eval types AND input-point guardrails) keep
+        # flowing in the eval-shaped path — an output-point one is the only
+        # def owned by THIS seam.
+        eval_defs = [
+            d for d in node_defs if not (str(d.eval_type) == GUARDRAIL_EVAL_TYPE and is_output_interception(d))
+        ]
+        if eval_defs:
+            await self._run_post_node_evals(
+                name,
+                output,
+                {name: eval_defs},
+                ctx.run_id,
+                ctx.org_id,
+                node_type_map=ctx.node_type_map,
+            )
+        return output
 
     async def _init_model_backend_hub(self, org_id: uuid.UUID) -> ModelBackendHub | None:
         """Load active model backends for the org and initialise ModelBackendHub.
@@ -5688,6 +5820,17 @@ class PipelineExecutor:
         cannot resurrect a run the watchdog just failed, and a cancellation
         cannot be reversed.
 
+        The row keeps ``dispatcher='saq'``/``dispatched_at``/``dispatch_phase``,
+        so the resulting ``pending`` row's ONLY durable recovery is
+        ``dispatcher_reconcile``'s pending re-enqueue leg (FAR-1649 qa
+        iteration 3) — and that leg re-dispatches it as ``execute_run``,
+        i.e. re-executes the run. Safe ONLY because every call site of THIS
+        method is gated on ``_graph_is_idempotent`` (``_can_fenced_requeue``,
+        ``_retry_policy_applies``, watchdog_retry's ``not graph_idempotent``
+        stand-down): the reset is never performed on a graph whose re-run is
+        unsafe (FAR-295). A new call site MUST keep that gate or a
+        non-idempotent node-started run becomes re-dispatchable.
+
         Returns the UPDATE rowcount (1 = the fence held / reset confirmed,
         0 = fence lost) so callers can distinguish a confirmed reset from a
         lost race (FAR-525: the retry counter only fires on a CONFIRMED reset).
@@ -6526,6 +6669,16 @@ class PipelineExecutor:
         )
         if output is None:
             return
+        # Markers are extracted from the RAW output BEFORE interception — a
+        # FAR-209 Track B redaction (transform/policy) must never blank the
+        # stall / agent-failure / session-lost evidence path (these publish to
+        # the event broker on the surviving detail; the raw payload itself is
+        # only ever framed here).
+        stall_reason, agent_failure, session_lost = _record_node_markers(
+            output,
+            ctx.broker,
+            name,
+        )
         # FAR-305: standalone post-node eval path — run any node-scoped evals
         # for this node against its inner output dict. This is independent of
         # HITL gates: a plain node (no gate) now gets its node-scoped evals
@@ -6535,20 +6688,13 @@ class PipelineExecutor:
         # If this node ALSO feeds a HITL gate with eval-before-interrupt,
         # the evals run twice (once here post-node, once in the gate) —
         # acceptable for now, the gate's eval is a separate node.
+        #
+        # FAR-209 Track B: guardrail-typed defs bound to a node are SPLIT out
+        # here — they are interception-owned, not eval-owned. Output-point
+        # ones intercept THIS envelope; anything else would raise
+        # GuardrailMisroutedError inside the eval engine and crash the run.
         if ctx.eval_definitions_by_node:
-            await self._run_post_node_evals(
-                name,
-                output,
-                ctx.eval_definitions_by_node,
-                ctx.run_id,
-                ctx.org_id,
-                node_type_map=ctx.node_type_map,
-            )
-        stall_reason, agent_failure, session_lost = _record_node_markers(
-            output,
-            ctx.broker,
-            name,
-        )
+            output = await self._intercept_node_output_and_run_evals(name=name, output=output, ctx=ctx)
         if stall_reason:
             state.stall_reason = stall_reason
         if agent_failure:
@@ -6582,9 +6728,14 @@ class PipelineExecutor:
             if not state.first_node_signalled:
                 state.first_node_signalled = True
                 # FAR-893: update phase tracker so the watchdog logs the transition.
+                # FAR-1649: bind the shared constant (dependency-free leaf
+                # ``dispatch_phases``) so the write site and every
+                # reconcile/age-gate predicate share ONE definition — a
+                # bare literal here could desynchronise from the
+                # ``:first_node_phase`` bind params silently.
                 _tracker = self._dispatch_phase_tracker
                 if _tracker is not None:
-                    _tracker.enter_phase("first_node_dispatched")
+                    _tracker.enter_phase(PHASE_FIRST_NODE_DISPATCHED)
                 if self.on_first_progress is not None:
                     self.on_first_progress()
             # FAR-369 absolute node-deadline watchdog: signal per-node

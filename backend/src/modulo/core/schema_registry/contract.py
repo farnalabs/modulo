@@ -254,6 +254,213 @@ def _cleanup_orphan_tmps(schema_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _render_direction_schema(
+    node_id: str,
+    direction: str,
+    raw_schema: dict[str, Any],
+    sanitised_canonical: dict[str, Any],
+    *,
+    profile: SchemaProfile,
+    provider_id: str | None,
+) -> tuple[dict[str, Any], list[str]]:
+    """Render *raw_schema* for *profile*, falling back to the canonical form.
+
+    Verbatim profiles reuse *sanitised_canonical* directly (no extra
+    deep-copy).  A skipped render or a render error also falls back to
+    *sanitised_canonical* — a render failure never fails the write.
+
+    Returns ``(rendered_schema, warnings)``.
+    """
+    if profile == "verbatim":
+        return sanitised_canonical, []
+    try:
+        result = render_for_profile(raw_schema, profile, provider_id)
+        if result.skipped:
+            # Rendering was skipped (abstract schema, translation error,
+            # etc.) — fall back to sanitised canonical.
+            return sanitised_canonical, []
+        # Sanitise the rendered output too — the rendered form may
+        # have different free-text content.
+        rendered_sanitised, render_warns = _sanitise_schema(result.schema)
+        return rendered_sanitised, [f"{direction}:render:{w}" for w in render_warns]
+    except Exception:
+        _log.exception(
+            "contract.render_for_profile_failed",
+            extra={"node_id": node_id, "direction": direction, "profile": profile},
+        )
+        # Fall back to sanitised canonical.
+        return sanitised_canonical, [f"{direction}:render_error_fallback"]
+
+
+def _write_bidirectional_schemas(
+    node_id: str,
+    pairs: list[tuple[str, dict[str, Any] | None]],
+    *,
+    profile: SchemaProfile,
+    provider_id: str | None,
+) -> tuple[
+    dict[str, tuple[dict[str, Any], list[str]]],
+    dict[str, dict[str, Any]],
+    list[str],
+]:
+    """Sanitise and render both directions of a node's schema contract.
+
+    For each ``(direction, raw_schema)`` pair in *pairs* the raw schema is
+    sanitised (free-text keywords stripped, const/enum bounds enforced) and
+    rendered for *profile* (``verbatim`` skips rendering and reuses the
+    sanitised form; a skipped or failed render falls back to the sanitised
+    canonical).
+
+    Returns ``(sanitised_schemas, rendered_schemas, warnings)`` where the
+    schema dicts are keyed by direction name and warnings are prefixed
+    ``"<direction>:..."`` (``"<direction>:render:..."`` for render-side
+    sanitisation).
+    """
+    sanitised_schemas: dict[str, tuple[dict[str, Any], list[str]]] = {}
+    rendered_schemas: dict[str, dict[str, Any]] = {}
+    all_warnings: list[str] = []
+
+    for direction, raw_schema in pairs:
+        if raw_schema is None:
+            sanitised_schemas[direction] = ({}, [])
+            continue
+        sanitised, warns = _sanitise_schema(raw_schema)
+        sanitised_schemas[direction] = (sanitised, warns)
+        all_warnings.extend(f"{direction}:{w}" for w in warns)
+
+    for direction, raw_schema in pairs:
+        if raw_schema is None:
+            rendered_schemas[direction] = {}
+            continue
+        rendered, render_warns = _render_direction_schema(
+            node_id,
+            direction,
+            raw_schema,
+            sanitised_schemas[direction][0],
+            profile=profile,
+            provider_id=provider_id,
+        )
+        rendered_schemas[direction] = rendered
+        all_warnings.extend(render_warns)
+
+    return sanitised_schemas, rendered_schemas, all_warnings
+
+
+def _persist_direction_files(
+    node_id: str,
+    schema_dir: Path,
+    direction: str,
+    canonical_data: dict[str, Any],
+    active_data: dict[str, Any],
+) -> tuple[bool, list[str]]:
+    """Write the canonical and active files for a single direction.
+
+    Order: canonical first, then active.  If canonical succeeds but active
+    fails, the canonical file is rolled back — a half-updated state is never
+    left on disk.  A write failure never raises; it is logged and surfaced
+    as a warning.
+
+    Returns ``(written, warnings)`` where *written* is ``True`` only when
+    both files were written successfully.
+    """
+    canonical_path = schema_dir / f"{direction}.canonical.json"
+    active_path = schema_dir / f"{direction}.active.json"
+
+    # --- Write canonical ---
+    try:
+        if canonical_data:
+            _atomic_write_json(canonical_path, canonical_data)
+        else:
+            # Empty schema — write sentinel with contract version.
+            _atomic_write_json(
+                canonical_path,
+                {**_SENTINEL_UNAVAILABLE, "_schema_contract_version": SCHEMA_CONTRACT_VERSION},
+            )
+    except Exception:
+        _log.exception(
+            "contract.canonical_write_failed",
+            extra={"node_id": node_id, "direction": direction},
+        )
+        return False, [f"{direction}:canonical_write_failed"]
+
+    # --- Write active ---
+    try:
+        if active_data:
+            _atomic_write_json(active_path, active_data)
+        else:
+            _atomic_write_json(
+                active_path,
+                {**_SENTINEL_UNAVAILABLE, "_schema_contract_version": SCHEMA_CONTRACT_VERSION},
+            )
+    except Exception:
+        _log.exception(
+            "contract.active_write_failed",
+            extra={"node_id": node_id, "direction": direction},
+        )
+        # Rollback canonical — never leave a half-updated state.
+        try:
+            canonical_path.unlink(missing_ok=True)
+        except OSError:
+            _log.exception(
+                "contract.canonical_rollback_failed",
+                extra={"node_id": node_id, "direction": direction},
+            )
+        return False, [f"{direction}:active_write_failed_rolled_back"]
+
+    return True, []
+
+
+def _persist_contract_result(
+    node_id: str,
+    schema_dir: Path,
+    sanitised_schemas: dict[str, tuple[dict[str, Any], list[str]]],
+    rendered_schemas: dict[str, dict[str, Any]],
+) -> tuple[bool, list[str]]:
+    """Write canonical/active schema files for both directions, with rollback.
+
+    Delegates per-direction persistence (including the canonical-then-active
+    ordering and rollback) to :func:`_persist_direction_files`.  Orphan
+    ``.tmp`` files are cleaned up best-effort in a ``finally`` block.  A
+    write failure never raises; it is logged and surfaced as a warning.
+
+    Returns ``(files_written, warnings)``.
+    """
+    all_warnings: list[str] = []
+    files_written = False
+
+    try:
+        schema_dir.mkdir(parents=True, exist_ok=True)
+
+        for direction in ("input", "output"):
+            canonical_data, _sanitise_warns = sanitised_schemas[direction]
+            active_data = rendered_schemas[direction]
+
+            written, direction_warnings = _persist_direction_files(
+                node_id,
+                schema_dir,
+                direction,
+                canonical_data,
+                active_data,
+            )
+            files_written = files_written or written
+            all_warnings.extend(direction_warnings)
+
+    except Exception:
+        _log.exception(
+            "contract.write_failed",
+            extra={"node_id": node_id},
+        )
+        all_warnings.append("write_failed")
+    finally:
+        # Best-effort orphan .tmp cleanup.
+        try:
+            _cleanup_orphan_tmps(schema_dir)
+        except Exception:
+            _log.debug("contract.orphan_cleanup_failed", extra={"node_id": node_id})
+
+    return files_written, all_warnings
+
+
 def write_schema_contract(
     output_dir: Path,
     *,
@@ -298,56 +505,18 @@ def write_schema_contract(
 
     schema_dir = output_dir / _SCHEMA_DIR / node_id
 
-    all_warnings: list[str] = []
-    files_written = False
-
     # Resolve the pairs to write: (direction, schema_or_none).
     pairs: list[tuple[str, dict[str, Any] | None]] = [
         ("input", input_schema),
         ("output", output_schema),
     ]
 
-    # --- sanitise both schemas up front ---
-    sanitised_schemas: dict[str, tuple[dict[str, Any], list[str]]] = {}
-    for direction, raw_schema in pairs:
-        if raw_schema is None:
-            sanitised_schemas[direction] = ({}, [])
-            continue
-        sanitised, warns = _sanitise_schema(raw_schema)
-        sanitised_schemas[direction] = (sanitised, warns)
-        all_warnings.extend(f"{direction}:{w}" for w in warns)
-
-    # --- render for profile ---
-    rendered_schemas: dict[str, dict[str, Any]] = {}
-    for direction, raw_schema in pairs:
-        if raw_schema is None:
-            rendered_schemas[direction] = {}
-            continue
-        if profile == "verbatim":
-            # Verbatim: active == sanitised canonical (no render_for_profile
-            # needed — avoid the extra deep-copy in render_for_profile).
-            rendered_schemas[direction] = sanitised_schemas[direction][0]
-        else:
-            try:
-                result = render_for_profile(raw_schema, profile, provider_id)
-                if result.skipped:
-                    # Rendering was skipped (abstract schema, translation error,
-                    # etc.) — fall back to sanitised canonical.
-                    rendered_schemas[direction] = sanitised_schemas[direction][0]
-                else:
-                    # Sanitise the rendered output too — the rendered form may
-                    # have different free-text content.
-                    rendered_sanitised, render_warns = _sanitise_schema(result.schema)
-                    rendered_schemas[direction] = rendered_sanitised
-                    all_warnings.extend(f"{direction}:render:{w}" for w in render_warns)
-            except Exception:
-                _log.exception(
-                    "contract.render_for_profile_failed",
-                    extra={"node_id": node_id, "direction": direction, "profile": profile},
-                )
-                # Fall back to sanitised canonical.
-                rendered_schemas[direction] = sanitised_schemas[direction][0]
-                all_warnings.append(f"{direction}:render_error_fallback")
+    sanitised_schemas, rendered_schemas, all_warnings = _write_bidirectional_schemas(
+        node_id,
+        pairs,
+        profile=profile,
+        provider_id=provider_id,
+    )
 
     # --- stamp contract version (only on non-empty schemas) ---
     for direction in ("input", "output"):
@@ -356,76 +525,8 @@ def write_schema_contract(
         if rendered_schemas[direction]:
             rendered_schemas[direction]["_schema_contract_version"] = SCHEMA_CONTRACT_VERSION
 
-    # --- write files ---
-    # Order: canonical first, then active.  If canonical succeeds but active
-    # fails, rollback canonical.
-    try:
-        schema_dir.mkdir(parents=True, exist_ok=True)
-
-        for direction in ("input", "output"):
-            canonical_data, _sanitise_warns = sanitised_schemas[direction]
-            active_data = rendered_schemas[direction]
-
-            canonical_path = schema_dir / f"{direction}.canonical.json"
-            active_path = schema_dir / f"{direction}.active.json"
-
-            # --- Write canonical ---
-            try:
-                if canonical_data:
-                    _atomic_write_json(canonical_path, canonical_data)
-                else:
-                    # Empty schema — write sentinel with contract version.
-                    _atomic_write_json(
-                        canonical_path,
-                        {**_SENTINEL_UNAVAILABLE, "_schema_contract_version": SCHEMA_CONTRACT_VERSION},
-                    )
-            except Exception:
-                _log.exception(
-                    "contract.canonical_write_failed",
-                    extra={"node_id": node_id, "direction": direction},
-                )
-                all_warnings.append(f"{direction}:canonical_write_failed")
-                continue
-
-            # --- Write active ---
-            try:
-                if active_data:
-                    _atomic_write_json(active_path, active_data)
-                else:
-                    _atomic_write_json(
-                        active_path,
-                        {**_SENTINEL_UNAVAILABLE, "_schema_contract_version": SCHEMA_CONTRACT_VERSION},
-                    )
-            except Exception:
-                _log.exception(
-                    "contract.active_write_failed",
-                    extra={"node_id": node_id, "direction": direction},
-                )
-                # Rollback canonical — never leave a half-updated state.
-                try:
-                    canonical_path.unlink(missing_ok=True)
-                except OSError:
-                    _log.exception(
-                        "contract.canonical_rollback_failed",
-                        extra={"node_id": node_id, "direction": direction},
-                    )
-                all_warnings.append(f"{direction}:active_write_failed_rolled_back")
-                continue
-
-            files_written = True
-
-    except Exception:
-        _log.exception(
-            "contract.write_failed",
-            extra={"node_id": node_id},
-        )
-        all_warnings.append("write_failed")
-    finally:
-        # Best-effort orphan .tmp cleanup.
-        try:
-            _cleanup_orphan_tmps(schema_dir)
-        except Exception:
-            _log.debug("contract.orphan_cleanup_failed", extra={"node_id": node_id})
+    files_written, write_warnings = _persist_contract_result(node_id, schema_dir, sanitised_schemas, rendered_schemas)
+    all_warnings.extend(write_warnings)
 
     return ContractWriteResult(
         schema_files_written=files_written,

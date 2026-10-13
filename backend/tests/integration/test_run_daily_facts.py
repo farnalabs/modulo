@@ -92,6 +92,36 @@ async def _seed_pipeline(db_engine: AsyncEngine, org_id: uuid.UUID, user_id: uui
     return pipeline_id
 
 
+async def _seed_team(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    name: str,
+    *,
+    soft_deleted: bool = False,
+) -> uuid.UUID:
+    """Raw INSERT INTO teams — optional soft-delete (FAR-1653 tests)."""
+    team_id = uuid.uuid4()
+    if soft_deleted:
+        sql = (
+            "INSERT INTO teams (id, organisation_id, name, account_id, "
+            "notification_endpoints, settings, deleted_at) "
+            "VALUES (:id, :oid, :name, :aid, '[]'::json, '{}'::json, now())"
+        )
+    else:
+        sql = (
+            "INSERT INTO teams (id, organisation_id, name, account_id, "
+            "notification_endpoints, settings, deleted_at) "
+            "VALUES (:id, :oid, :name, :aid, '[]'::json, '{}'::json, NULL)"
+        )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(sql),
+            {"id": str(team_id), "oid": str(org_id), "name": name, "aid": str(user_id)},
+        )
+    return team_id
+
+
 async def _seed_snapshot(db_engine: AsyncEngine, org_id: uuid.UUID, pipeline_id: uuid.UUID) -> uuid.UUID:
     snapshot_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
@@ -123,6 +153,7 @@ async def _insert_run(
     total_tokens: int | None = None,
     run_id: uuid.UUID | None = None,
     claim_token: str | None = None,
+    owner_team_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
     from sqlalchemy import insert as sa_insert
 
@@ -140,6 +171,8 @@ async def _insert_run(
     }
     if claim_token is not None:
         values["claim_token"] = claim_token
+    if owner_team_id is not None:
+        values["owner_team_id"] = owner_team_id
     values.update(
         {
             col: value
@@ -1161,3 +1194,134 @@ class TestTerminalStatusesInvariant:
         check_values = set(re.findall(r"'([^']+)'", definition))
         for status in TERMINAL_STATUSES:
             assert status in check_values, f"TERMINAL_STATUSES {status!r} not in runs.status CHECK constraint"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1653: soft-deleted team/pipeline names on historical fact writers
+# ---------------------------------------------------------------------------
+
+
+class TestSoftDeletedTeamNamePreservation:
+    """A soft-deleted team's name must survive on historical fact paths.
+
+    The global soft-delete filter (``db/soft_delete.py``) scopes plain ORM
+    SELECTs with ``deleted_at IS NULL``; historical name lookups must opt out
+    via ``include_soft_deleted`` so a team/pipeline deleted AFTER its runs
+    completed still resolves its name (never NULL / blank).
+    """
+
+    @pytest.fixture(autouse=True)
+    def _register_soft_delete_listener(self) -> None:
+        """Idempotent — mirrors production (``db/session.py``) so the filter
+        is active exactly as it is in a live deployment."""
+        from modulo.db.soft_delete import register_soft_delete_filter
+
+        register_soft_delete_filter()
+
+    async def test_backfill_facts_preserves_soft_deleted_team_name(
+        self,
+        db_engine: AsyncEngine,
+        org: uuid.UUID,
+        user: uuid.UUID,
+        pipeline: uuid.UUID,
+        snapshot: uuid.UUID,
+    ) -> None:
+        """backfill_facts must snapshot a soft-deleted team's NAME (FAR-1653).
+
+        The backfill is an INSERT...FROM SELECT — the SELECT-only soft-delete
+        listener never scopes it, so the outer join already resolves deleted
+        team names. This test LOCKS that invariant: a future refactor that
+        executes the inner SELECT through the ORM must not regress it.
+        """
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        day = date(2026, 8, 20)
+        team_id = await _seed_team(db_engine, org, user, "Far1653 Backfill Deleted Team", soft_deleted=True)
+        run_id = uuid.uuid4()
+        async with factory() as session, session.begin():
+            await _insert_run(
+                session,
+                org_id=org,
+                pipeline_id=pipeline,
+                snapshot_id=snapshot,
+                status="complete",
+                started_at=datetime(2026, 8, 20, 9, 0, tzinfo=UTC),
+                run_id=run_id,
+                owner_team_id=team_id,
+            )
+
+        async with factory() as session, session.begin():
+            await session.execute(text("SELECT set_config('timezone', 'UTC', true)"))
+            inserted = await backfill_facts(session, day)
+        assert inserted >= 1, "the seeded terminal run must be backfilled"
+
+        async with db_engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text("SELECT team_id, team_name FROM run_daily_facts WHERE run_id = :rid"),
+                    {"rid": str(run_id)},
+                )
+            ).first()
+        assert row is not None, "backfill must insert the fact row"
+        assert uuid.UUID(str(row[0])) == team_id, "the fact must carry the run's team_id"
+        assert row[1] == "Far1653 Backfill Deleted Team", (
+            f"a soft-deleted team's NAME must be preserved on the backfill path, got {row[1]!r}"
+        )
+
+    async def test_record_run_facts_resolves_soft_deleted_team_and_pipeline_name(
+        self,
+        db_engine: AsyncEngine,
+        org: uuid.UUID,
+        user: uuid.UUID,
+    ) -> None:
+        """_snapshot_dimensions must resolve soft-deleted team AND pipeline names.
+
+        The live fact writer's explicit name reads are plain ORM SELECTs, so
+        without ``include_soft_deleted`` the global filter NULLs both names for
+        entities soft-deleted after the run completed (FAR-1653).
+        """
+        from modulo.core.analytics import record_run_facts
+
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        team_id = await _seed_team(db_engine, org, user, "Far1653 Live Deleted Team", soft_deleted=True)
+        del_pipeline_id = await _seed_pipeline(db_engine, org, user, "Far1653-Live-Deleted-Pipeline")
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(
+                text("UPDATE pipelines SET deleted_at = now() WHERE id = :pid"),
+                {"pid": str(del_pipeline_id)},
+            )
+        del_snapshot_id = await _seed_snapshot(db_engine, org, del_pipeline_id)
+
+        run_id = uuid.uuid4()
+        async with factory() as session, session.begin():
+            await _insert_run(
+                session,
+                org_id=org,
+                pipeline_id=del_pipeline_id,
+                snapshot_id=del_snapshot_id,
+                status="complete",
+                started_at=datetime(2026, 8, 21, 9, 0, tzinfo=UTC),
+                completed_at=datetime(2026, 8, 21, 9, 5, tzinfo=UTC),
+                run_id=run_id,
+                owner_team_id=team_id,
+            )
+
+        async with factory() as session, session.begin():
+            await session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
+            run = await session.get(Run, run_id)
+            assert run is not None
+            await record_run_facts(session, run)
+
+        async with db_engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text("SELECT team_name, pipeline_name FROM run_daily_facts WHERE run_id = :rid"),
+                    {"rid": str(run_id)},
+                )
+            ).first()
+        assert row is not None, "record_run_facts must write the fact row"
+        assert row[0] == "Far1653 Live Deleted Team", (
+            f"a soft-deleted team's NAME must resolve on the live fact writer, got {row[0]!r}"
+        )
+        assert row[1] == "Far1653-Live-Deleted-Pipeline", (
+            f"a soft-deleted pipeline's NAME must resolve on the live fact writer, got {row[1]!r}"
+        )

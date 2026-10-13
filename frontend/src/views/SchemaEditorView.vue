@@ -88,6 +88,8 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
+import { useProductAnalytics } from '../composables/useProductAnalytics'
+import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
 import { buildJsonSchema, parseDefinitionToFields, type SchemaField } from '../utils/schema-definition'
 import FeatureGate from '../components/FeatureGate.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
@@ -103,6 +105,8 @@ import SchemaJsonPreview from '../components/schema/SchemaJsonPreview.vue'
 const { t } = useI18n()
 
 const route = useRoute()
+
+const { track } = useProductAnalytics()
 
 const schemas = ref<SchemaItem[]>([])
 const loadingSchemas = ref(true)
@@ -314,6 +318,8 @@ async function saveSchema() {
         return
       }
       if (!schemaData) return
+
+      track(ANALYTICS_EVENTS.SCHEMA_CREATED, { schema_id: schemaData.id })
 
       const { error: versionErr } = await api.POST('/api/v1/schemas/{schema_id}/versions', {
         params: { path: { schema_id: schemaData.id } },

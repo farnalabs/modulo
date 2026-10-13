@@ -18,6 +18,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fakeredis import FakeAsyncRedis, FakeRedis, FakeServer
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
@@ -54,6 +55,24 @@ def _make_settings() -> Settings:
         fernet_key="a" * 32,
         modulo_admin_password="testpass",
         modulo_multi_org_enabled=True,
+    )
+
+
+def _make_redis_settings() -> Settings:
+    """Settings with a parseable Redis URL for the FAR-1719 fakeredis tests.
+
+    The unit conftest sets ``REDIS_URL=""`` (hermetic: cache reads/writes fail
+    fast), which fakeredis cannot parse — the invalidation tests re-override
+    ``get_settings`` with this builder so the patched fakeredis client can
+    connect.
+    """
+    return Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key="a" * 32,
+        fernet_key="a" * 32,
+        modulo_admin_password="testpass",
+        modulo_multi_org_enabled=True,
+        redis_url="redis://localhost:6379/0",
     )
 
 
@@ -561,6 +580,69 @@ def test_remove_org_license_error_mapping(
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(side_effect=exc))
     resp = client.delete(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license")
     assert resp.status_code == expected
+
+
+def _patch_fake_redis(monkeypatch: pytest.MonkeyPatch) -> FakeRedis:
+    """Route ``admin_license``'s cache Redis at a shared fakeredis server (FAR-1719)."""
+    import modulo.api.routes.admin_license as admin_license
+
+    # The invalidation helper reads settings.redis_url, which the unit conftest
+    # pins to "" (unparseable by fakeredis). Re-override it for these tests.
+    app.dependency_overrides[get_settings] = _make_redis_settings
+    server = FakeServer()
+
+    def _from_url(_url: str, **kwargs: Any) -> FakeAsyncRedis:
+        kwargs.pop("socket_connect_timeout", None)
+        kwargs.pop("socket_timeout", None)
+        return FakeAsyncRedis.from_url(str(_url), server=server, **kwargs)
+
+    fake_redis = MagicMock()
+    fake_redis.from_url = _from_url
+    monkeypatch.setattr(admin_license, "Redis", fake_redis)
+    # Sync probe over the same FakeServer the app's async client uses.
+    return FakeRedis.from_url("redis://localhost:6379/0", server=server, decode_responses=True)
+
+
+_STALE_STATUS = '{"has_license": false, "tier": "community", "features": [], "expires_at": null, "org_id": null}'
+
+
+def test_set_org_license_invalidates_org_status_cache(
+    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FAR-1719: an org-level licence rotate busts that org's cached status."""
+    client, _ = api
+    probe = _patch_fake_redis(monkeypatch)
+    org = _org(settings_json={})
+    monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
+    monkeypatch.setattr(
+        "modulo.core.license.parse_and_verify",
+        MagicMock(return_value=SimpleNamespace(valid=True, license_data=_license_data(), error=None)),
+    )
+    monkeypatch.setattr(admin_orgs, "update_organisation", AsyncMock(return_value=org))
+    key = f"license:{_TARGET_ORG_ID}"
+    probe.set(key, _STALE_STATUS, ex=60)
+
+    resp = client.put(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license", json={"license_key": "valid-key"})
+    assert resp.status_code == 200
+    # Without invalidation the stale community entry survives until TTL.
+    assert probe.get(key) is None
+
+
+def test_remove_org_license_invalidates_org_status_cache(
+    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FAR-1719: an org-level licence clear busts that org's cached status."""
+    client, _ = api
+    probe = _patch_fake_redis(monkeypatch)
+    org = _org(settings_json={"license_key": "k", "other": 1})
+    monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
+    monkeypatch.setattr(admin_orgs, "update_organisation", AsyncMock(return_value=org))
+    key = f"license:{_TARGET_ORG_ID}"
+    probe.set(key, _STALE_STATUS, ex=60)
+
+    resp = client.delete(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license")
+    assert resp.status_code == 200
+    assert probe.get(key) is None
 
 
 # ── PATCH /{org_id}/authz-enforce ──

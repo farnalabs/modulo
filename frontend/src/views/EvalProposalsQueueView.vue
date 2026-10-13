@@ -87,7 +87,7 @@
               <button type="button"
                 :disabled="actioningId === p.id"
                 data-testid="proposal-dismiss"
-                class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+                class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 @click="dismissProposal(p.id)"
               >
                 {{ actioningId === p.id ? $t('views.EvalProposalsQueueView.dismissing') : $t('views.EvalProposalsQueueView.dismiss') }}

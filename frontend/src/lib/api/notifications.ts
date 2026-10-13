@@ -38,8 +38,15 @@ export interface PaginatedNotificationsResponse {
   page_size: number
 }
 
-export async function fetchDashboardNotifications(): Promise<DashboardNotificationResponse> {
-  return throwOnError(await api.GET('/api/v1/notifications/in-app/dashboard'))
+export async function fetchDashboardNotifications(limit?: number): Promise<DashboardNotificationResponse> {
+  // A call without a limit stays a plain one-argument GET so the server
+  // applies its own default; a supplied limit rides as a bounded query param.
+  if (limit === undefined) {
+    return throwOnError(await api.GET('/api/v1/notifications/in-app/dashboard'))
+  }
+  return throwOnError(
+    await api.GET('/api/v1/notifications/in-app/dashboard', { params: { query: { limit } } }),
+  )
 }
 
 export async function reviewLater(notificationId: string): Promise<void> {
@@ -77,4 +84,21 @@ export async function fetchNotificationDetail(id: string): Promise<NotificationR
 export async function fetchUnreadCount(): Promise<number> {
   const data = throwOnError(await api.GET('/api/v1/notifications/in-app/unread-count')) as { count?: number }
   return data.count ?? 0
+}
+
+export interface MarkAllReadResponse {
+  status: string
+  marked: number
+}
+
+/**
+ * Mark every live notification in the caller's view as read (FAR-249).
+ *
+ * Modulo models read-ness as a per-user dismissal: the server files a
+ * `dismiss_scope='self'` row for each live notification the caller can see.
+ * The response reports how many rows were marked so the UI can distinguish a
+ * real clear (marked > 0) from a no-op re-run (marked === 0).
+ */
+export async function markAllNotificationsRead(): Promise<MarkAllReadResponse> {
+  return throwOnError(await api.POST('/api/v1/notifications/in-app/mark-all-read'))
 }

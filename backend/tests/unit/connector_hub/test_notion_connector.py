@@ -1,5 +1,7 @@
 """Unit tests for NotionConnector — HTTP responses are mocked via httpx + respx."""
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -283,6 +285,111 @@ async def test_health_check_non_dict_body_no_crash(connector):
     result = await connector.health_check()
     assert result.ok is True
     assert "0 users" in result.detail
+
+
+# ---------------------------------------------------------------------------
+# query — request body invariants (arm extraction must not alter payloads)
+# ---------------------------------------------------------------------------
+
+
+def _json_body_bytes(payload):
+    """The exact bytes httpx sends for ``json=`` (mirrors httpx._content.encode_json)."""
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+
+
+@respx.mock
+async def test_query_databases_request_body_byte_identical(connector):
+    """POST /search body must stay byte-identical to the pre-extraction payload."""
+    respx.post(f"{_BASE}/search").mock(
+        return_value=httpx.Response(200, json={"results": [], "next_cursor": None}),
+    )
+    await connector.query(
+        ConnectorQuery(resource="databases", filters={"query": "Project"}, cursor="cursor_prev", limit=150),
+    )
+    expected = {
+        "filter": {"value": "database", "property": "object"},
+        "query": "Project",
+        "start_cursor": "cursor_prev",
+        "page_size": 100,
+    }
+    assert respx.calls[0].request.content == _json_body_bytes(expected)
+
+
+@respx.mock
+async def test_query_pages_request_body_byte_identical(connector):
+    """POST /databases/{id}/query body must stay byte-identical to the pre-extraction payload."""
+    respx.post(f"{_BASE}/databases/db1/query").mock(
+        return_value=httpx.Response(200, json={"results": [], "next_cursor": None}),
+    )
+    await connector.query(
+        ConnectorQuery(
+            resource="pages",
+            filters={
+                "database_id": "db1",
+                "filter": {"property": "Status", "status": {"equals": "Done"}},
+                "sorts": [{"property": "Created", "direction": "descending"}],
+            },
+            cursor="cursor_prev",
+            limit=25,
+        ),
+    )
+    expected = {
+        "filter": {"property": "Status", "status": {"equals": "Done"}},
+        "sorts": [{"property": "Created", "direction": "descending"}],
+        "start_cursor": "cursor_prev",
+        "page_size": 25,
+    }
+    assert respx.calls[0].request.content == _json_body_bytes(expected)
+
+
+# ---------------------------------------------------------------------------
+# query — optional pagination arms (falsy limit, blocks cursor)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_query_databases_zero_limit_omits_page_size(connector):
+    """A falsy limit omits page_size so the server default applies (the q.limit==0 arm)."""
+    respx.post(f"{_BASE}/search").mock(
+        return_value=httpx.Response(200, json={"results": [], "next_cursor": None}),
+    )
+    await connector.query(ConnectorQuery(resource="databases", limit=0))
+    expected = {"filter": {"value": "database", "property": "object"}}
+    assert respx.calls[0].request.content == _json_body_bytes(expected)
+
+
+@respx.mock
+async def test_query_pages_zero_limit_omits_page_size(connector):
+    """A falsy limit on a database query omits page_size (the q.limit==0 arm)."""
+    respx.post(f"{_BASE}/databases/db1/query").mock(
+        return_value=httpx.Response(200, json={"results": [], "next_cursor": None}),
+    )
+    await connector.query(ConnectorQuery(resource="pages", filters={"database_id": "db1"}, limit=0))
+    assert respx.calls[0].request.content == _json_body_bytes({})
+
+
+@respx.mock
+async def test_query_blocks_with_cursor_and_zero_limit(connector):
+    """Blocks pagination forwards the cursor and omits page_size for a falsy limit."""
+    respx.get(f"{_BASE}/blocks/block_id_1/children").mock(
+        return_value=httpx.Response(200, json={"results": [], "next_cursor": None}),
+    )
+    await connector.query(
+        ConnectorQuery(resource="blocks", filters={"block_id": "block_id_1"}, cursor="cursor_prev", limit=0),
+    )
+    params = respx.calls[0].request.url.params
+    assert params["start_cursor"] == "cursor_prev"
+    assert "page_size" not in params
+
+
+@respx.mock
+async def test_query_users_zero_limit_omits_page_size(connector):
+    """A falsy limit on the users listing omits page_size (the q.limit==0 arm)."""
+    respx.get(f"{_BASE}/users").mock(
+        return_value=httpx.Response(200, json={"results": [], "next_cursor": None}),
+    )
+    await connector.query(ConnectorQuery(resource="users", limit=0))
+    assert "page_size" not in respx.calls[0].request.url.params
 
 
 # ---------------------------------------------------------------------------

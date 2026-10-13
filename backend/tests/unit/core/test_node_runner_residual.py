@@ -25,6 +25,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
+import modulo.core.pipeline_engine.llm_judge as llm_judge
 import modulo.core.pipeline_engine.node_runner as nr
 from modulo.connectors.base import CIRun, CIRunLog, CIRunStatus
 from modulo.core.pipeline_engine.node_runner import (
@@ -910,8 +911,8 @@ def _stub_run_coroutine_sync(content: str) -> Callable[[Any], SimpleNamespace]:
 
 
 def test_llm_judge_non_json_response_falls_back(monkeypatch: pytest.MonkeyPatch):
-    judge = nr._build_llm_judge_callable(MagicMock(), _judge_backend_id())
-    monkeypatch.setattr(nr, "_run_coroutine_sync", _stub_run_coroutine_sync("model said: no"))
+    judge = llm_judge.build_llm_judge_callable(MagicMock(), _judge_backend_id())
+    monkeypatch.setattr(llm_judge, "run_coroutine_sync", _stub_run_coroutine_sync("model said: no"))
     result = judge({"answer": "hello"}, SimpleNamespace(config={"field": "answer"}))
     assert result["passed"] is False
     assert result["score"] == 0.0
@@ -919,10 +920,10 @@ def test_llm_judge_non_json_response_falls_back(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_llm_judge_parses_structured_response(monkeypatch: pytest.MonkeyPatch):
-    judge = nr._build_llm_judge_callable(MagicMock(), _judge_backend_id())
+    judge = llm_judge.build_llm_judge_callable(MagicMock(), _judge_backend_id())
     monkeypatch.setattr(
-        nr,
-        "_run_coroutine_sync",
+        llm_judge,
+        "run_coroutine_sync",
         _stub_run_coroutine_sync('{"passed": true, "score": 0.9, "detail": "good"}'),
     )
     result = judge({"answer": "hello"}, SimpleNamespace(config={"field": "answer"}))
@@ -1095,6 +1096,7 @@ async def test_run_evals_persist_before_decide_reraises_cancellation():
         await eval_persist_order.run_evals_persist_before_decide(
             eval_defs=eval_defs,
             resolve_eval_target=lambda ed: {"text": "pass"},
+            resolve_llm_judge=lambda _ed: None,
             run_id=uuid.uuid4(),
             org_id=_ORG_UUID,
             session_factory=lambda: session,
@@ -1118,6 +1120,7 @@ async def test_run_evals_persist_before_decide_persistence_failure_boundaries():
         results = await eval_persist_order.run_evals_persist_before_decide(
             eval_defs=eval_defs,
             resolve_eval_target=lambda ed: {"text": "pass"},
+            resolve_llm_judge=lambda _ed: None,
             run_id=uuid.uuid4(),
             org_id=_ORG_UUID,
             session_factory=lambda: session,
@@ -1139,6 +1142,7 @@ async def test_run_evals_persist_before_decide_persistence_failure_boundaries():
         await eval_persist_order.run_evals_persist_before_decide(
             eval_defs=block_defs,
             resolve_eval_target=lambda ed: {"text": "pass"},
+            resolve_llm_judge=lambda _ed: None,
             run_id=uuid.uuid4(),
             org_id=_ORG_UUID,
             session_factory=lambda: block_session,
@@ -1166,6 +1170,7 @@ async def test_run_evals_persist_before_decide_skips_without_run_id():
     results = await eval_persist_order.run_evals_persist_before_decide(
         eval_defs=eval_defs,
         resolve_eval_target=lambda ed: {"text": "pass"},
+        resolve_llm_judge=lambda _ed: None,
         run_id=None,
         org_id=_ORG_UUID,
         session_factory=lambda: session,
@@ -1572,6 +1577,7 @@ async def test_dispatch_fire_and_forget_completes_once_without_polling():
     assert output["execution_identity"] == "customer_substrate"
     assert output["declared_external_cost"] is None
     assert output["witnessed_via"] == node_def["connector_binding"]["instance_id"]
+    assert output["provenance"] == "reported"
 
 
 async def test_dispatch_await_completion_polls_until_terminal_then_completes(

@@ -30,18 +30,124 @@ Do NOT put connector-specific fixtures here; they belong in
 # inside product code would NOT work: product modules first execute inside the
 # rollback block, so their import is deleted again. Guarded by
 # ``tests/unit/library_sync/test_coverage_source_import_guard.py``.
+import sys
+
 import pydantic.root_model  # noqa: F401
 import pytest
 
-import modulo.auth.dependencies as _auth_dependencies
 import modulo.core.ssrf as _ssrf
 
-# Captured at conftest import time — before any test module is collected, and
-# therefore before any fixture can replace the symbol. The guard below compares
-# by IDENTITY (``is``) rather than ``isinstance(..., Mock)`` so that ANY
-# replacement — a plain callable, a lambda, a partial — is caught, not just
-# ``unittest.mock`` instances.
-_REAL_VERIFY_IDENTITY = _auth_dependencies._verify_identity
+#: The module whose ``_verify_identity`` the FAR-1631 leak guard protects.
+_AUTH_DEPS_MODULE = "modulo.auth.dependencies"
+
+#: Snapshot of the real ``_verify_identity`` — the function object the auth
+#: module body bound when it executed. Captured LAZILY (never at conftest
+#: load): importing ``modulo.auth.dependencies`` costs ~2 s of session
+#: startup, which is pure overhead for pure-logic sessions that never touch
+#: auth. The capture points, in order of likelihood:
+#:
+#: 1. At module EXEC — an import hook (``_AuthDepsSnapshotFinder``, installed
+#:    below) snapshots the binding the instant the module body finishes
+#:    executing, before any importer receives the module object and can
+#:    patch it. This is the normal path and is pristine by construction.
+#: 2. At conftest load — when the module was already in ``sys.modules``
+#:    (imported by a plugin before this conftest loaded). Still pristine:
+#:    no test fixture has run yet.
+#: 3. At the guard's FIRST observation (``_assert_real_verify_identity``)
+#:    — only reachable when the module somehow predated the import hook AND
+#:    was not caught by point 2; the root autouse guard runs before every
+#:    other fixture, so a first observation at test-1 setup is still
+#:    pre-patch.
+#:
+#: ``None`` until a capture happens. The guard below compares by IDENTITY
+#: (``is``) rather than ``isinstance(..., Mock)`` so that ANY replacement —
+#: a plain callable, a lambda, a partial — is caught, not just
+#: ``unittest.mock`` instances.
+_REAL_VERIFY_IDENTITY: object | None = None
+
+
+def _snapshot_verify_identity(module: object) -> None:
+    """Record the pristine ``_verify_identity`` binding from *module*.
+
+    Called only at the three capture points above — each guarantees the
+    module body has bound the real function and no fixture has patched it.
+    On ``importlib.reload`` the hook fires again and re-snapshots the fresh
+    binding, keeping the guard aligned with the live module.
+    """
+    global _REAL_VERIFY_IDENTITY
+    _REAL_VERIFY_IDENTITY = module._verify_identity
+
+
+class _AuthDepsSnapshotLoader:
+    """Loader wrapper: snapshot ``_verify_identity`` right after ``exec_module``.
+
+    ``import`` sets ``sys.modules[name]`` BEFORE executing the module body,
+    but no importer can *use* the module until its import call returns — so
+    the moment ``exec_module`` completes, the binding is the real function
+    and no patcher has run yet. Duck-typed (no ``importlib.abc`` subclass) to
+    keep conftest imports minimal; every other loader attribute delegates.
+    """
+
+    def __init__(self, wrapped: object) -> None:
+        self._wrapped = wrapped
+
+    def create_module(self, spec: object) -> object | None:
+        create = getattr(self._wrapped, "create_module", None)
+        return create(spec) if create is not None else None
+
+    def exec_module(self, module: object) -> None:
+        self._wrapped.exec_module(module)  # type: ignore[attr-defined]
+        _snapshot_verify_identity(module)
+
+    def __getattr__(self, name: str) -> object:
+        # Delegate get_source / get_code / is_package / etc. to the real loader
+        # (coverage.py and other tooling may probe them).
+        return getattr(self._wrapped, name)
+
+
+class _AuthDepsSnapshotFinder:
+    """``sys.meta_path`` finder that installs the snapshot loader.
+
+    Registered at conftest load (zero cost — no module is imported). For
+    every import attempt it only string-compares the name; on a match it
+    delegates to the remaining finders and wraps the winning loader. Inserted
+    at the FRONT of ``sys.meta_path`` so it sees the import before the default
+    ``PathFinder`` (which would otherwise return an unwrapped loader first);
+    non-matching names return ``None`` immediately, so pytest's assertion
+    rewriter and every other finder run unchanged.
+    """
+
+    def find_spec(
+        self,
+        fullname: str,
+        path: object = None,
+        target: object = None,
+    ) -> object | None:
+        if fullname != _AUTH_DEPS_MODULE:
+            return None
+        for finder in tuple(sys.meta_path):
+            if finder is self:
+                continue
+            find = getattr(finder, "find_spec", None)
+            if find is None:
+                continue
+            spec = find(fullname, path, target)
+            if spec is not None:
+                if getattr(spec, "loader", None) is not None:
+                    spec.loader = _AuthDepsSnapshotLoader(spec.loader)
+                return spec
+        return None
+
+
+# Install the hook (cheap; no import performed), then handle the pre-existing
+# module case: anything already in ``sys.modules`` at conftest-load time was
+# imported before the hook existed and will never re-import, so snapshot it
+# now — still pre-collection, pre-fixture, therefore pristine.
+sys.meta_path.insert(0, _AuthDepsSnapshotFinder())
+_auth_deps_preexisting = sys.modules.get(_AUTH_DEPS_MODULE)
+if _auth_deps_preexisting is not None:
+    _snapshot_verify_identity(_auth_deps_preexisting)
+del _auth_deps_preexisting
 
 
 def _assert_real_verify_identity() -> None:
@@ -62,19 +168,48 @@ def _assert_real_verify_identity() -> None:
     ``monkeypatch.setattr``. ``_patch_verify_identity`` now also uses
     ``monkeypatch.setattr`` so both restores share one LIFO-correct undo stack.
 
-    The comparison is by identity against the real function captured at import
-    time, so it catches a replacement of any shape, not only ``Mock`` objects.
-    Exposed as a module-level function (not inlined in the fixture) so the
-    guard's own behaviour is covered by ``tests/architecture/
+    LAZY (why this is not a conftest-load check): the real function is
+    captured by the import hook the moment the auth module executes — never
+    by importing it at conftest load, which cost every backend test session
+    ~2 s even when no test touches auth. When the module is not in
+    ``sys.modules`` at all (a pure-logic session), nothing can hold or leak a
+    patched symbol and the check returns at zero cost. When it IS present,
+    the snapshot was taken pristine (see ``_REAL_VERIFY_IDENTITY``), so the
+    comparison below is exactly as strong as the old eager capture —
+    including catching a fixture that leaked a patch before this guard's
+    first observation of the symbol. Ordering makes a same-setup race
+    impossible: this is a ROOT-level autouse fixture, and pytest runs
+    root-conftest autouse fixtures before sub-directory autouse fixtures, so
+    the guard always observes the state left by the previous test's teardown,
+    never a concurrent patch.
+
+    The comparison is by identity against the snapshot, so it catches a
+    replacement of any shape, not only ``Mock`` objects. Exposed as a
+    module-level function (not inlined in the fixture) so the guard's own
+    behaviour is covered by ``tests/architecture/
     test_verify_identity_guard.py`` — a guard that cannot fail is not a guard.
     """
-    current = _auth_dependencies._verify_identity
-    if current is not _REAL_VERIFY_IDENTITY:
+    module = sys.modules.get(_AUTH_DEPS_MODULE)
+    if module is None:
+        # Never imported in this session: no symbol exists to leak. This is
+        # the pure-logic fast path the laziness exists for.
+        return
+    captured = _REAL_VERIFY_IDENTITY
+    if captured is None:
+        # Belt-and-braces fallback for a module that predated the import hook
+        # without being caught at conftest load. Reachable only at the first
+        # test's setup (any later setup would have found a snapshot), and the
+        # root autouse guard runs before every fixture — so the binding is
+        # still pristine: capture it now.
+        _snapshot_verify_identity(module)
+        return
+    current = module._verify_identity
+    if current is not captured:
         raise AssertionError(
             "modulo.auth.dependencies._verify_identity was replaced and not "
             "restored before test setup: a fixture leaked a patch (teardown "
             "restored a stale value). Expected the real function "
-            f"{_REAL_VERIFY_IDENTITY!r} but found {current!r}. Fix the leaking "
+            f"{captured!r} but found {current!r}. Fix the leaking "
             "fixture's teardown so it restores the original callable."
         )
 
@@ -86,7 +221,9 @@ def _guard_real_verify_identity() -> None:
     This root-level autouse guard runs before the legitimate patchers, which
     set up strictly after it, so it observes the state left by the *previous*
     test's teardown. A leaked replacement is caught here on the next test
-    instead of silently changing its behaviour.
+    instead of silently changing its behaviour. When
+    ``modulo.auth.dependencies`` was never imported in this session the check
+    is a no-op (see :func:`_assert_real_verify_identity`).
     """
     _assert_real_verify_identity()
 

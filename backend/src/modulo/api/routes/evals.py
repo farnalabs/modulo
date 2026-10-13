@@ -27,7 +27,6 @@ URLs:
 
 import logging
 import uuid
-from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -85,6 +84,7 @@ from modulo.core.eval_engine.suite_run import (
     summarise_eval_timeseries,
 )
 from modulo.core.node_output_split import node_return
+from modulo.db.crud._gate_advisory_lock import with_gate_advisory_lock
 from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.crud.run_node_outputs import read_run_blobs
 from modulo.db.models.eval import Eval
@@ -327,44 +327,16 @@ class PolicyGateResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Policy Gate helpers — advisory lock and create-or-replace
+# Policy Gate helpers — shared advisory lock and create-or-replace
 # ---------------------------------------------------------------------------
 
-_GATE_LOCK_TIMEOUT_SQL = "SET LOCAL statement_timeout = '5s'"
-_GATE_ADVISORY_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext(:key))"
-_GATE_LOCK_KEY_PREFIX = "policy_gate:"
-
-
-async def _with_gate_advisory_lock[T](
-    eval_id: uuid.UUID,
-    session: AsyncSession,
-    fn: Callable[..., Awaitable[T]],
-) -> T:
-    """Execute *fn* while holding a transaction-scoped advisory lock keyed on *eval_id*.
-
-    The lock is released when the transaction commits or rolls back.
-
-    PostgreSQL advisory locks are transaction-scoped when called inside a
-    transaction.  The lock key is derived from *eval_id* via ``hashtext()``
-    — the established pattern for string-keyed advisory locks in this
-    codebase (see ``gate_coalescing.py:107``).
-
-    ``SET LOCAL statement_timeout`` limits how long the session blocks on
-    ``pg_advisory_xact_lock``.  5 seconds is long enough for normal
-    acquisition (the lock is held only for the check-delete-insert sequence)
-    and short enough to surface contention to the caller quickly.
-    On timeout, PostgreSQL raises ``statement_timeout`` (SQLSTATE 57014)
-    which surfaces as a 503 Service Unavailable.
-
-    Generic over the wrapped callable's return type (FAR-967 F6): the
-    toggle handler wraps its load-and-mutate under the SAME lock, so the
-    helper must be able to return whatever the callback produces — not only
-    a ``PolicyGate``.
-    """
-    lock_key = f"{_GATE_LOCK_KEY_PREFIX}{eval_id}"
-    await session.execute(text(_GATE_LOCK_TIMEOUT_SQL))
-    await session.execute(text(_GATE_ADVISORY_LOCK_SQL), {"key": lock_key})
-    return await fn()
+# The per-eval advisory lock is SHARED with the declarative graph writer
+# (``modulo.db.crud.pipeline``): both serialise through
+# ``modulo.db.crud._gate_advisory_lock.with_gate_advisory_lock`` — the SAME
+# ``policy_gate:<eval_id>`` key through ``hashtext`` (FAR-1688). The helper
+# lives in a neutral ``db``-side module because the ``db-does-not-import-core``
+# import-linter contract forbids ``modulo.db`` -> ``modulo.api``, so this layer
+# cannot own the helper the DB layer also needs.
 
 
 async def _create_or_replace_gate(
@@ -434,7 +406,7 @@ async def _create_or_replace_gate(
         await session.flush()
         return new_gate
 
-    return await _with_gate_advisory_lock(eval_id, session, _do_insert)
+    return await with_gate_advisory_lock(eval_id, session, _do_insert)
 
 
 async def _load_eval_or_404(
@@ -1057,7 +1029,7 @@ async def toggle_policy_gate(
                     gate.enabled_at = None
                 return gate, pre_enabled
 
-            gate, pre_enabled = await _with_gate_advisory_lock(eval_id, session, _do_toggle)
+            gate, pre_enabled = await with_gate_advisory_lock(eval_id, session, _do_toggle)
 
             # Audit log (best-effort — a failed audit never blocks the toggle)
             try:

@@ -3,10 +3,12 @@
 Two layers of guard:
 
 1. **The serializer's own contract** (behavioural): ``run_provenance_fields``
-   returns exactly ``{"execution_origin": str | None}`` for a dispatched run, an
-   executed run, a row that never carried the column, and a missing row — with
-   NO ``isinstance(str)`` coercion (FAR-1566 removed the test-double tolerance
-   that used to live in every surface's ad-hoc copy).
+   returns exactly ``{"execution_origin": str | None, "provenance": str | None}``
+   for a dispatched run, an executed run, a row that never carried the column,
+   and a missing row — with NO ``isinstance(str)`` coercion (FAR-1566 removed
+   the test-double tolerance that used to live in every surface's ad-hoc copy),
+   and with the FAR-1693 ``provenance`` class ENGINE-DERIVED from
+   ``execution_origin`` (``reported`` for dispatched, ``None`` otherwise).
 
 2. **The surface set** (structural, replacing the hand-enumerated list of
    surfaces): an AST scan of ``src/modulo/api/**`` and
@@ -201,29 +203,36 @@ def _run(**overrides: Any) -> SimpleNamespace:
 
 
 class TestRunProvenanceFields:
-    def test_wire_shape_is_exactly_execution_origin(self) -> None:
-        assert set(run_provenance_fields(_run(execution_origin="dispatched"))) == {"execution_origin"}
+    def test_wire_shape_is_execution_origin_and_provenance(self) -> None:
+        assert set(run_provenance_fields(_run(execution_origin="dispatched"))) == {
+            "execution_origin",
+            "provenance",
+        }
 
-    def test_a_dispatched_run_reads_dispatched(self) -> None:
-        assert run_provenance_fields(_run(execution_origin="dispatched")) == {"execution_origin": "dispatched"}
+    def test_a_dispatched_run_reads_dispatched_and_reported(self) -> None:
+        assert run_provenance_fields(_run(execution_origin="dispatched")) == {
+            "execution_origin": "dispatched",
+            "provenance": "reported",
+        }
 
-    def test_an_executed_run_reads_null(self) -> None:
-        assert run_provenance_fields(_run(execution_origin=None)) == {"execution_origin": None}
+    def test_an_executed_run_reads_null_and_untyped(self) -> None:
+        assert run_provenance_fields(_run(execution_origin=None)) == {"execution_origin": None, "provenance": None}
 
     def test_a_row_that_never_carried_the_column_reads_null(self) -> None:
         """Pre-migration / partially-projected rows must read NULL, never raise
         — provenance must never break a read."""
         row = _run()
         del row.execution_origin
-        assert run_provenance_fields(row) == {"execution_origin": None}
+        assert run_provenance_fields(row) == {"execution_origin": None, "provenance": None}
 
     def test_a_missing_row_reads_null_so_the_key_is_never_omitted(self) -> None:
         """The eval.blocked audit's degrade arm passes ``None`` after a failed
-        origin read: the key stays present with NULL."""
-        assert run_provenance_fields(None) == {"execution_origin": None}
+        origin read: the keys stay present with NULL."""
+        assert run_provenance_fields(None) == {"execution_origin": None, "provenance": None}
 
     def test_there_is_no_test_double_coercion(self) -> None:
         """FAR-1566: a non-string value passes through UNCHANGED instead of
         being silently rewritten to ``None`` — the response models own the
-        ``str | None`` wire contract and reject a violation loudly."""
-        assert run_provenance_fields(_run(execution_origin=12345)) == {"execution_origin": 12345}
+        ``str | None`` wire contract and reject a violation loudly. FAR-1693: a
+        non-origin value derives NO class (``None``), never a guessed one."""
+        assert run_provenance_fields(_run(execution_origin=12345)) == {"execution_origin": 12345, "provenance": None}

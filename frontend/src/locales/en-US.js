@@ -64,6 +64,13 @@ export default {
       "approve": "Approve",
       "approving": "Approving...",
       "approved_redirecting": "Approved — redirecting to the application...",
+      "team_limited": "This connection is limited to team {name}.",
+      "loading_request": "Loading request details...",
+      "context_load_error": "Could not load this authorization request. It may have expired — return to the application and try again.",
+      "no_scopes_selected": "Select at least one permission to approve, or decline the request.",
+      "decline": "Decline",
+      "declined_title": "Request declined",
+      "declined_description": "You declined this authorization request. You can close this window and return to the application."
     },
     "LibraryView": {
       "title": "Library",
@@ -222,7 +229,6 @@ export default {
       "off": "Off",
       "skills_as_knowledge": "Skills as Knowledge Sources",
       "skill_name": "Skill Name",
-      "product_primer": "Product Primer",
       "product_primer_description": "A brief primer on what your product does, loaded at the start of every Assistant session.",
       "page_context_description": "Context from the current page Assistant is operating on.",
       "user_profile_description": "User profile data including name, role, and preferences.",
@@ -230,8 +236,6 @@ export default {
       "integration_status_description": "Status of connected integrations (GitHub, Jira, etc.).",
       "org_config_description": "Organisation configuration including feature flags and settings.",
       "feature_overview_description": "Overview of available features and their activation status.",
-      "regenerate_primer": "Regenerate Primer",
-      "primer_regenerated": "Primer regenerated.",
       "add_one_in_model_backends": "Add one in Model Backends",
       "users_with_the_selected_organisation_roles_will_have_access": "Users with the selected organisation roles will have access to Assistant.",
       "save_the_current_access_list_configuration": "Save the current access list configuration.",
@@ -298,7 +302,6 @@ export default {
       "edit_skill_description": "Update the skill configuration.",
       "context_source_mode": "Context source mode",
       "skill_knowledge_mode": "Skill knowledge mode",
-      "regenerating": "Regenerating...",
       "member_count": "{count} members | {count} member | {count} members",
       "failed_to_save": "Failed to save",
       "failed_to_save_access_list": "Failed to save access list:",
@@ -308,7 +311,6 @@ export default {
       "failed_to_save_guidance": "Failed to save guidance:",
       "failed_to_save_source": "Failed to save source:",
       "failed_to_save_skill_source_mode": "Failed to save skill source mode:",
-      "failed": "Failed",
       "context_source_primer_label": "Product Primer",
       "context_source_page_label": "Page Context",
       "context_source_user_profile_label": "User Profile",
@@ -4254,7 +4256,19 @@ export default {
     "NotificationBell": {
       "notifications": "Notifications",
       "reconnect_banner": "Live updates stopped. Reconnect with a fresh sign-in to resume them.",
-      "reconnect_action": "Reconnect"
+      "reconnect_action": "Reconnect",
+      "unread_count_status": "{count} unread notifications"
+    },
+    "NotificationDropdown": {
+      "title": "Notifications",
+      "mark_all_read": "Mark all as read",
+      "marking_all_read": "Marking…",
+      "marked_all_read_status": "All notifications marked as read",
+      "failed_to_mark_all_read": "Failed to mark all as read",
+      "failed_to_load": "Couldn't load notifications",
+      "retry": "Retry",
+      "no_notifications": "No notifications",
+      "view_all": "View all notifications"
     },
     "PageTabs": {
       "section_navigation": "Section navigation"

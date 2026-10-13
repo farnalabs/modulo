@@ -127,14 +127,16 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       patched (`steps/test_alpha_errors.py`)
 - [x] Run lifecycle is BDD-exercised end to end: a manual trigger creates a pending run
       (202), the engine moves it pending → running, a clean completion lands on
-      `completed` with a `final_state`, an unhandled node exception lands on `failed`
+      the terminal `complete` status, an unhandled node exception lands on `failed`
       with an `error_detail`, and a mid-run cancellation is terminal (`cancelled`, no
       further nodes execute). A node that returns `None` output is a normal empty
       result – the run continues to the next node with no error – and sequential
-      pipelines complete nodes strictly in order. A trigger refused by
-      `max_concurrent_runs` while a pending run is already active surfaces 429
-      (`run_lifecycle.feature`, `run_sequential.feature`, registered for execution by
-      `steps/test_pipelines.py`)
+      pipelines complete nodes strictly in order. A rate-limit conflict on the
+      manual-trigger route surfaces 429 through the typed `RateLimitConflictError`
+      path, while the pipeline `max_concurrent_runs` cap is enforced at dispatch (an
+      over-capacity run parks with the `pipeline_capacity` marker rather than 429 at
+      trigger time) (`run_lifecycle.feature`, `run_sequential.feature`, registered for
+      execution by `steps/test_pipelines.py`)
 - [x] Run-outcome delivery signal (FAR-189/228): every terminal run carries a
       `run_classification` JSON record written atomically with terminalization by
       the shared fenced terminal write – `value` (`delivered` / `no_delivery` /
@@ -254,6 +256,26 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       "Dispatched" badge (`frontend/src/utils/runUtils.ts`,
       `frontend/src/lib/api/runs.ts`, `api/routes/{runs,viewmodel,dashboard,
       lifecycle_maps,analytics}.py`)
+- [x] The governed-run provenance VOCABULARY is ONE taxonomy (FAR-1693,
+      ADR-042 unified 2026-10-12): `core/provenance.py` single-sources the
+      closed four-class set — `observed` (Modulo observed it through a
+      credential it holds), `derived` (Modulo computed it from observed facts),
+      `reported` (arrived from ANY external surface, incl. a dispatched runtime,
+      stamped `witnessed_via: <connector/channel>`), `attested` (governance
+      events Modulo records natively). The dispatch arm's `witnessed_via` is the
+      CHANNEL STAMP of a `reported` datum, not a class of its own: a dispatch
+      node's folded-back data is stamped `provenance: reported` (NEVER
+      `attested` — the binding foreclosure is that substrate data stays the
+      substrate's report, and no governed badge implies anything about a
+      customer's CI internals). Every claim-ready run payload composes the
+      `provenance` class alongside `execution_origin` from the ONE serializer
+      (`core/run_provenance.py`), engine-derived (`reported` for a dispatched
+      run, `NULL` for an executed/legacy run — never a guessed `observed`); the
+      class is engine-assigned, never self-asserted, so a prompt-injected
+      substrate result cannot claim a stronger provenance
+      (`core/provenance.py`, `core/run_provenance.py`,
+      `core/pipeline_engine/node_runner.py`, `core/node_output_split.py`,
+      `api/routes/runs.py`, `tests/unit/core/test_provenance_taxonomy.py`)
 - _Output Diff (`/runs/diff`, `POST /runs/diff`, `core/line_diff.py`) deferred from the
   MVP nav (hidden via `visibility: private_preview`). Behaviour detail removed for the
   MVP cut – restore from git history when re-enabling. See FAR-542._

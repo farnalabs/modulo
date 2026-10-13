@@ -46,6 +46,13 @@ def _make_mock_session() -> AsyncMock:
     session.begin = MagicMock(return_value=begin_cm)
     session.flush = AsyncMock()
 
+    # FAR-1639 (FAR-1629 sweep): in_transaction() and add() are SYNC
+    # AsyncSession methods — bare-AsyncMock children type them as async, so
+    # production code reaching set_rls_* (db/rls.py::_ensure_active_transaction)
+    # passes the guard vacuously (an unawaited coroutine is truthy).
+    session.in_transaction = MagicMock(return_value=True)
+    session.add = MagicMock()
+
     return session
 
 

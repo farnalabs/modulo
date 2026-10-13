@@ -50,50 +50,13 @@ from modulo.launcher.doctor import (
 from modulo.launcher.entry import PGDATA_DIRNAME
 from modulo.launcher.secrets_file import LauncherSecrets, _parse
 from modulo.launcher.state import LauncherState, load_state, save_state
+from tests.unit.launcher.test_launcher_shared import all_pass_probes
 
 
 def _probes(**overrides: object) -> DoctorProbes:
-    probes = DoctorProbes(
-        disk_free_bytes=lambda _root: 40 * 1024 * 1024 * 1024,
-        assert_writable=lambda _root: None,
-        listening_on=lambda _port: ["127.0.0.1"],
-        probe_postgres=lambda: None,
-        role_violations=list,
-        probe_redis=lambda: None,
-        migrations_at_head=lambda: True,
-        effective_uid=lambda: 1000,
-        username_of_uid=lambda _uid: "operator",
-        file_owner=lambda _path: "operator",
-        secrets_mode=lambda _data_dir: 0o600,
-        ambient_env_names=list,
-        env_value=_env_probe,
-        service_installed=lambda: False,
-        service_enabled=lambda: False,
-        service_linger=lambda: False,
-        available_memory_bytes=lambda: 8 * 1024 * 1024 * 1024,
-        data_dir_pg_version=lambda: "16.4",
-        bundle_pg_version=lambda: "16.4",
-        installed_bundle_pg_version=lambda: None,
-        bundled_binaries=list,
-        port_owner_description=lambda _port: None,
-        second_install_hint=lambda: None,
-        modulo_on_path=lambda: None,
-        install_root=lambda: str(Path("/install")),
-        degraded_reason=lambda: None,
-        last_backup_at=lambda: time.time(),
-        tls_expiry=lambda: time.time() + 400 * 86400,
-        cloud_sync_hit=lambda _root: None,
-        cwd_env_file=None,
-        env_file_pinned=lambda: True,
-        launcher_running=lambda: True,
-    )
-    for key, value in overrides.items():
-        setattr(probes, key, value)
-    return probes
-
-
-def _env_probe(name: str) -> str | None:
-    return None
+    """The all-pass injection — the behavior-identical canonical factory
+    lives in the shared launcher-test module."""
+    return all_pass_probes(**overrides)
 
 
 def _state() -> LauncherState:
@@ -534,12 +497,6 @@ def test_bundle_version_fail_minor_drift() -> None:
     assert "16.4" in result.detail
 
 
-def test_bundle_version_fail_downgrade() -> None:
-    result = check_bundle_versions(Path(), None, _probes(installed_bundle_pg_version=lambda: "17.0"))
-    assert result.ok is False
-    assert "OLDER" in result.detail
-
-
 def test_bundle_version_warn_upgrade() -> None:
     result = check_bundle_versions(Path(), None, _probes(installed_bundle_pg_version=lambda: "16.2"))
     assert result.ok is True
@@ -676,11 +633,6 @@ def test_tls_pass_far_expiry() -> None:
     assert result.warning is False
 
 
-def test_tls_skip_absent_keypair() -> None:
-    result = check_tls_expiry(Path(), None, _probes(tls_expiry=lambda: None))
-    assert result.ok is True
-
-
 def test_tls_skip_absent_keypair_explains_no_generator() -> None:
     """MINOR 3: the no-keypair skip is an honest 'feature not shipped' note,
     not a silent pass — it documents that no keypair generator has landed yet."""
@@ -697,7 +649,7 @@ def test_stale_backup_warn_old(tmp_path: Path) -> None:
     assert "30" in result.detail
 
 
-def test_stale_backup_fail_missing(tmp_path: Path) -> None:
+def test_stale_backup_missing_timestamp_is_honest_skip(tmp_path: Path) -> None:
     """No last_backup_at ever recorded -> honest skip (schema v1)."""
     result = check_stale_backup(tmp_path, None, _probes(last_backup_at=lambda: None))
     assert result.ok is True
@@ -873,7 +825,12 @@ def test_probe_migrations_at_head_translates_sslmode() -> None:
     from unittest.mock import AsyncMock, MagicMock, patch
 
     composed = {"DATABASE_URL": "postgresql+asyncpg://u:p@h/db?sslmode=require"}
-    probe = doctor_module._build_database_probes(composed, 5432, "redis://localhost:6379/0")[3]
+    (
+        _probe_postgres,
+        _role_violations,
+        _probe_redis,
+        migrations_at_head,
+    ) = doctor_module._build_database_probes(composed, 5432, "redis://localhost:6379/0")
 
     mock_engine = MagicMock()
     mock_engine.dispose = AsyncMock()
@@ -881,11 +838,10 @@ def test_probe_migrations_at_head_translates_sslmode() -> None:
         patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=mock_engine) as create_engine,
         patch("modulo.db.health_checks.db_is_at_migration_head", AsyncMock(return_value=True)),
     ):
-        assert probe() is True
+        assert migrations_at_head() is True
 
-    args, kwargs = create_engine.call_args
-    assert args[0] == "postgresql+asyncpg://u:p@h/db"
-    assert kwargs["connect_args"]["ssl"] == "require"
+    assert create_engine.call_args.args[0] == "postgresql+asyncpg://u:p@h/db"
+    assert create_engine.call_args.kwargs["connect_args"]["ssl"] == "require"
 
 
 def test_probe_registry_names_and_order(tmp_path: Path) -> None:

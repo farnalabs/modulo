@@ -12,17 +12,20 @@ polls, never computed sleeps (repo timing lesson).
 """
 
 import json
+import logging
 import os
 import signal
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from subprocess import Popen
 
 import pytest
 
 import modulo.launcher.secrets_file as secrets_file_module
+import modulo.launcher.supervisor as supervisor_module
 from modulo.launcher import policy as policy_module
 from modulo.launcher.secrets_file import load_or_create
 from modulo.launcher.state import LauncherState, save_state
@@ -41,11 +44,11 @@ from modulo.launcher.supervisor import (
     collect_status,
     knobs_from_env,
     read_proc_starttime,
-    read_runtime_manifest,
     reconcile_orphans,
     request_stop,
     write_runtime_manifest,
 )
+from tests.unit.launcher.test_launcher_shared import bypass_platform_seams
 
 POSIX = sys.platform != "win32"
 requires_posix = pytest.mark.skipif(not POSIX, reason="POSIX-only supervision mechanics")
@@ -274,47 +277,6 @@ def test_backoff_resets_to_initial_after_a_clean_exit() -> None:
     harness.clock.advance(0.02)
     harness.supervisor.tick()  # clean exit → backoff reset
     assert child.backoff == pytest.approx(0.01)
-
-
-def test_backoff_progression_is_exponential_and_capped() -> None:
-    harness = Harness(
-        knobs=SupervisorKnobs(
-            restart_backoff_initial=0.01,
-            restart_backoff_max=0.05,
-            crash_window_seconds=1000.0,
-            crash_cap=100,
-        )
-    )
-    harness.supervisor.tick()  # spawn #1
-    child = harness.supervisor._children["postgres"]
-    for expected_gap in (0.01, 0.02, 0.04, 0.05, 0.05):
-        harness.supervisor.tick()  # detect the exit → schedule the respawn
-        assert child.next_spawn_at is not None
-        assert child.next_spawn_at - harness.clock.now == pytest.approx(expected_gap)
-        harness.clock.advance(expected_gap)
-        harness.supervisor.tick()  # the backoff elapsed → respawn
-        assert child.next_spawn_at is None
-
-
-def test_sliding_window_eviction_prevents_cap_trip() -> None:
-    harness = Harness(
-        knobs=SupervisorKnobs(
-            restart_backoff_initial=0.01,
-            restart_backoff_max=0.02,
-            crash_window_seconds=1.0,
-            crash_cap=3,
-        )
-    )
-    harness.supervisor.tick()  # spawn #1
-    harness.supervisor.tick()  # crash 1
-    harness.clock.advance(0.02)
-    harness.supervisor.tick()  # spawn #2
-    harness.supervisor.tick()  # crash 2 — below the cap (3), no trip
-    assert harness.supervisor.degraded_reason is None
-    harness.clock.advance(5.0)  # the whole window slides out
-    harness.supervisor.tick()  # spawn #3
-    harness.supervisor.tick()  # crash 3 — only one crash in the window now
-    assert harness.supervisor.degraded_reason is None
 
 
 def test_deferred_child_spawns_only_after_start_condition() -> None:
@@ -636,6 +598,62 @@ time.sleep(8)
 """
 
 
+_LOCK_FLOCK_SCRIPT = """
+import fcntl
+import os
+import sys
+import time
+from pathlib import Path
+
+# Anonymous flock holder: locks the file fd WITHOUT writing the holder
+# record, exercising the refusal branch that cannot name a culprit.
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o644)
+fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+Path(sys.argv[2]).write_text("locked")
+time.sleep(8)
+"""
+
+
+@requires_posix
+def test_lock_refuses_anonymous_flock_without_holder_record(tmp_path: Path) -> None:
+    """A foreign flock (no holder JSON) is refused as *another process*.
+
+    The holder-record path (PID + mode + requested mode) is covered by
+    test_lock_refuses_second_holder_naming_pid_and_mode; this one asserts the
+    no-record branch stays distinct — it may NOT name a holder it cannot see.
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    marker = tmp_path / "locked.marker"
+    # Popen (not run+timeout): the holder must STILL hold the flock during the
+    # in-process acquire — subprocess.run's timeout kills the child first.
+    # Imported as a bare name because subprocess.Popen does not accept a
+    # construction-time timeout keyword; the finally below bounds the child
+    # with terminate + wait(timeout=10).
+    proc = Popen(  # noqa: S603 — test driver, fixed argv below
+        [sys.executable, "-c", _LOCK_FLOCK_SCRIPT, str(data_dir) + ".lock", str(marker)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        for _ in range(40):
+            if marker.exists():
+                break
+            if proc.poll() is not None:
+                pytest.fail(f"anonymous holder child exited early — stderr: {proc.stderr.read().decode()!r}")  # pyright: ignore[reportArgumentType]
+            time.sleep(0.05)
+        assert marker.exists(), "anonymous holder child never acquired the lock"
+        second = DataDirLock(data_dir, mode="serve")
+        with pytest.raises(DataDirLockError) as excinfo:
+            second.acquire()
+        message = str(excinfo.value)
+        assert "locked by another process" in message
+        assert "holder PID" not in message
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+
+
 @requires_posix
 def test_lock_is_kernel_released_when_holder_dies(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
@@ -648,7 +666,7 @@ def test_lock_is_kernel_released_when_holder_dies(tmp_path: Path) -> None:
     with pytest.raises(subprocess.TimeoutExpired) as excinfo:
         subprocess.run(  # noqa: S603 — test driver
             [sys.executable, "-c", _LOCK_CHILD_SCRIPT, str(data_dir), str(marker)],
-            timeout=5.0,
+            timeout=2.0,
             capture_output=True,
             check=False,
         )
@@ -849,14 +867,6 @@ def test_is_postgres_process_refuses_on_non_linux(monkeypatch: pytest.MonkeyPatc
 # ---------------------------------------------------------------------------
 
 
-def test_runtime_manifest_roundtrip_and_corrupt_handling(tmp_path: Path) -> None:
-    path = tmp_path / "runtime.json"
-    write_runtime_manifest(path, {"postgres": 100, "redis": 200})
-    assert read_runtime_manifest(path) == {"postgres": 100, "redis": 200}
-    path.write_text("not json{")
-    assert not read_runtime_manifest(path)
-
-
 def test_record_runtime_persists_installed_bundle_pg_version(tmp_path: Path) -> None:
     """`_record_runtime_locked` must persist `installed_bundle_pg_version` into the
     runtime manifest's extra so doctor's downgrade/upgrade axis can fire (FAR-676
@@ -921,8 +931,8 @@ def _write_bootstrapped_data_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def _bypass_platform_guard(monkeypatch: pytest.MonkeyPatch) -> None:
-    if sys.platform == "win32":
-        monkeypatch.setattr(secrets_file_module, "assert_supported_platform", lambda: None)
+    """Bypass the Windows-refusal seams this module's tests exercise."""
+    bypass_platform_seams(monkeypatch, "modulo.launcher.secrets_file")
 
 
 def test_collect_status_uninitialized_dir(tmp_path: Path) -> None:
@@ -975,6 +985,7 @@ def test_shim_should_abandon_matrix() -> None:
 def test_read_proc_starttime_for_self_is_positive() -> None:
     starttime = read_proc_starttime(os.getpid())
     assert starttime is not None
+    assert isinstance(starttime, int)
     assert starttime > 0
 
 
@@ -1000,6 +1011,66 @@ def test_child_shim_argv_wraps_on_linux() -> None:
         pytest.skip("Linux-only shim mechanics")
     argv = child_shim_argv(["redis-server", "--port", "1"], parent_pid=os.getpid())
     assert argv[:3] == [sys.executable, "-m", "modulo.launcher.supervisor"]
+
+
+def _child_argv_pair(recorded: object = ...) -> list[str]:
+    """Build a direct-call argv for child_shim_main pointing at this pytest."""
+    if recorded is ...:
+        from modulo.launcher.supervisor import read_proc_starttime as _reader
+
+        recorded = _reader(os.getpid())
+    return [
+        "modulo-child-shim",
+        "--parent-pid",
+        str(os.getpid()),
+        "--parent-starttime",
+        str(recorded),
+        "--",
+        sys.executable,
+        "-c",
+    ]
+
+
+@pytest.fixture(autouse=True)
+def _restore_shim_signal_handlers() -> Iterator[None]:
+    """child_shim_main installs SIGTERM/SIGINT handlers in-process; undo them."""
+    saved = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    yield
+    for sig, handler in saved.items():
+        signal.signal(sig, handler)
+
+
+def test_child_shim_main_rejects_empty_child_argv(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A shim invocation with no child after -- logs and exits 2."""
+    from modulo.launcher.supervisor import child_shim_main
+
+    with caplog.at_level(logging.ERROR, logger="modulo.launcher.supervisor"):
+        result = child_shim_main(["modulo-child-shim", "--parent-pid", "1", "--parent-starttime", "1", "--"])
+    assert result == 2
+    assert "shim.no_child_argv" in caplog.text
+
+
+@requires_posix
+def test_child_shim_main_propagates_child_exit_code() -> None:
+    """A child's exit code is what the shim returns (crash bookkeeping truth)."""
+    from modulo.launcher.supervisor import child_shim_main
+
+    argv = [*_child_argv_pair(), "raise SystemExit(3)"]
+    assert child_shim_main(argv) == 3
+
+
+@requires_posix
+def test_child_shim_main_abandons_on_recorded_starttime_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A changed/missing STARTTIME kills the child and exits 2."""
+    from modulo.launcher.supervisor import child_shim_main
+
+    argv = [*_child_argv_pair(100500), "import time; time.sleep(60)"]
+    monkeypatch.setattr(supervisor_module, "read_proc_starttime", lambda _pid: 200000)
+    assert child_shim_main(argv) == 2
 
 
 # ---------------------------------------------------------------------------

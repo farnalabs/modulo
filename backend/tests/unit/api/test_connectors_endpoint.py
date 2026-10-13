@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from cryptography.fernet import Fernet
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
@@ -2035,6 +2036,22 @@ def test_patch_github_missing_scopes_returns_422(client: TestClient) -> None:
         resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"credentials": "ghp_newtoken"})
     assert resp.status_code == 422
     assert "missing required" in resp.json()["detail"]
+
+
+async def test_verify_github_token_defensive_missing_payload_raises_500() -> None:
+    """FAR-532: the GitHub scope check must fail loudly (500) rather than hand
+    ``None`` to ``GitHubConnector`` when it is reached with no credential
+    payload. That state is unreachable through the endpoint — the rotation step
+    clears ``credentials_updated`` before this guard runs — so the defensive
+    branch is exercised directly. A bare ``assert`` would be stripped under
+    ``python -O`` and silently pass ``None`` downstream."""
+    existing = _make_github_patch_connector()
+    with pytest.raises(HTTPException) as exc_info:
+        await connectors_module._verify_github_token_for_update(
+            existing, credentials_updated=True, new_credentials=None
+        )
+    assert exc_info.value.status_code == 500
+    assert "Credential payload missing" in exc_info.value.detail
 
 
 def test_create_rest_non_json_credentials_rejected(client: TestClient) -> None:

@@ -37,7 +37,14 @@ Lenses:
     0294_eval_results_org_fk chains onto 0293_oauth_clients_team_id, and
     0295_decision_record_event_identity chains onto 0294_eval_results_org_fk, and
     0296_benign_run_outcomes chains onto 0295_decision_record_event_identity, and
-    0297_autonomy_gating_s1 chains onto 0296_benign_run_outcomes as the
+    0297_autonomy_gating_s1 chains onto 0296_benign_run_outcomes, and
+    0298_accounts_kind chains onto 0297_autonomy_gating_s1, and
+    0299_accounts_service_identity chains onto 0298_accounts_kind, and
+    0300_benign_facts_repair chains onto 0299_accounts_service_identity,
+    0301_oauth_consent_state_preauth_rls chains onto 0300_benign_facts_repair,
+    0302_runs_run_grouping chains onto 0301_oauth_consent_state_preauth_rls, and
+    0303_feedback_records_lookup_indexes chains onto 0302_runs_run_grouping, and
+    0304_metrics_staging_recorded_at_index chains onto 0303_feedback_records_lookup_indexes as the
     current single linear head.
 * **Structure (mocked ``op``)** - upgrade adds BOTH columns existence-gated,
   adds the ``ck_pipelines_hitl_review_window`` CHECK (NOT VALID then VALIDATE on
@@ -64,7 +71,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0265_hitl_review_window"
 _MIGRATION_DOWN_REVISION = "0264_pipelines_max_autonomy_ge_default"
-_HEAD_MIGRATION = "0297_autonomy_gating_s1"
+_HEAD_MIGRATION = "0304_metrics_staging_recorded_at_index"
 _CHECK_CONSTRAINT = "ck_pipelines_hitl_review_window"
 _SWEEP_INDEX = "ix_hitl_claims_terminalize_sweep"
 _ENVELOPE = (60, 604800)

@@ -25,7 +25,7 @@ from modulo.core.release_channels import (
     should_rollback,
 )
 from modulo.db.crud.pipeline_snapshot import create_snapshot_edit
-from modulo.db.crud.pipeline_snapshot_versioning import diff_snapshots
+from modulo.db.crud.pipeline_snapshot_versioning import diff_snapshots, resolve_snapshot_for_channel
 
 
 def _mock_snapshot(
@@ -460,3 +460,140 @@ class TestDiffSnapshotsSemantic:
         assert len(result["nodes_modified"]) == 1
         modified = result["nodes_modified"][0]
         assert "agent_id" in modified["changes"]
+
+
+def _channel_session(resolved: MagicMock | None) -> AsyncMock:
+    """Return an AsyncMock session resolving the channel lookup to *resolved*."""
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: resolved))
+    return session
+
+
+def _compiled_statement(session: AsyncMock):
+    """Return (sql, params) for the single statement the resolver executed."""
+    stmt = session.execute.call_args[0][0]
+    compiled = stmt.compile()
+    return str(compiled).lower(), compiled.params
+
+
+class TestResolveSnapshotForChannel:
+    async def test_returns_resolved_snapshot(self):
+        pipeline_id = uuid.uuid4()
+        org_id = uuid.uuid4()
+        snap = MagicMock()
+        snap.id = uuid.uuid4()
+        session = _channel_session(snap)
+
+        result = await resolve_snapshot_for_channel(
+            session, pipeline_id=pipeline_id, channel="canary", organisation_id=org_id
+        )
+        assert result is snap
+
+    async def test_returns_none_when_no_snapshot_for_channel(self):
+        session = _channel_session(None)
+
+        result = await resolve_snapshot_for_channel(
+            session, pipeline_id=uuid.uuid4(), channel="stable", organisation_id=uuid.uuid4()
+        )
+        assert result is None
+
+    async def test_statement_scopes_pipeline_channel_and_excludes_drafts(self):
+        # The resolver must pin the pipeline, filter to the channel, exclude
+        # drafts, and take the newest version — verified against the compiled
+        # statement because the AsyncMock session cannot execute SQL.
+        pipeline_id = uuid.uuid4()
+        session = _channel_session(None)
+
+        await resolve_snapshot_for_channel(session, pipeline_id=pipeline_id, channel="canary")
+
+        sql, params = _compiled_statement(session)
+        assert pipeline_id in params.values(), "pipeline scoping must be bound"
+        assert "canary" in params.values(), "channel filter must be bound"
+        assert "draft" in sql, "drafts must be excluded in SQL"
+        assert "is false" in sql, "drafts must be excluded in SQL"
+        assert "order by" in sql, "newest version must sort first"
+        assert "desc" in sql, "newest version must sort first"
+        assert "limit" in sql, "only the latest channel snapshot must resolve"
+
+    async def test_organisation_scope_applied_when_given(self):
+        pipeline_id = uuid.uuid4()
+        org_id = uuid.uuid4()
+        session = _channel_session(None)
+
+        await resolve_snapshot_for_channel(session, pipeline_id=pipeline_id, channel="stable", organisation_id=org_id)
+
+        _, params = _compiled_statement(session)
+        assert org_id in params.values(), "org scoping must be bound when given"
+
+    async def test_organisation_scope_omitted_when_not_given(self):
+        pipeline_id = uuid.uuid4()
+        session = _channel_session(None)
+
+        await resolve_snapshot_for_channel(session, pipeline_id=pipeline_id, channel="stable")
+
+        sql, _ = _compiled_statement(session)
+        assert ".organisation_id = " not in sql, "no org filter without an org scope"
+
+
+class TestResolveSnapshotIdForTrigger:
+    def _trigger(self, config_json: dict | None):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            pipeline_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+            config_json=config_json,
+        )
+
+    async def test_none_trigger_resolves_none_without_db_hit(self):
+        from modulo.core.trigger_engine import TriggerEngine
+
+        session = _channel_session(MagicMock())
+
+        result = await TriggerEngine().resolve_snapshot_id_for_trigger(session, trigger=None)
+        assert result is None
+        session.execute.assert_not_called()
+
+    async def test_unbound_trigger_resolves_none_without_db_hit(self):
+        from modulo.core.trigger_engine import TriggerEngine
+
+        session = _channel_session(MagicMock())
+
+        result = await TriggerEngine().resolve_snapshot_id_for_trigger(session, trigger=self._trigger({}))
+        assert result is None
+        session.execute.assert_not_called()
+
+    async def test_bogus_channel_resolves_none_without_db_hit(self):
+        from modulo.core.trigger_engine import TriggerEngine
+
+        session = _channel_session(MagicMock())
+
+        result = await TriggerEngine().resolve_snapshot_id_for_trigger(
+            session, trigger=self._trigger({"release_channel": "bogus"})
+        )
+        assert result is None
+        session.execute.assert_not_called()
+
+    async def test_bound_trigger_resolves_channel_snapshot_id(self):
+        from modulo.core.trigger_engine import TriggerEngine
+
+        snap = MagicMock()
+        snap.id = uuid.uuid4()
+        session = _channel_session(snap)
+
+        result = await TriggerEngine().resolve_snapshot_id_for_trigger(
+            session, trigger=self._trigger({"release_channel": "canary"})
+        )
+        assert result == snap.id
+        _, params = _compiled_statement(session)
+        assert "canary" in params.values(), "hook must resolve the bound channel"
+
+    async def test_bound_trigger_without_channel_snapshot_resolves_none(self):
+        from modulo.core.trigger_engine import TriggerEngine
+
+        session = _channel_session(None)
+
+        result = await TriggerEngine().resolve_snapshot_id_for_trigger(
+            session, trigger=self._trigger({"release_channel": "stable"})
+        )
+        assert result is None

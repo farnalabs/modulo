@@ -23,7 +23,7 @@ Feature: Failed Run State
     Given a run that failed
     When I GET /api/runs/{run_id}
     Then the response status is 200
-    And the response contains final_state
+    And the response reports a terminal run status
     And the response contains error_detail
 
   Scenario: Run failure is logged in audit trail

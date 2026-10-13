@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.models.eval_definition import EvalDefinition
+from modulo.db.models.eval import Eval
 from modulo.db.models.eval_result import EvalResult
 
 
@@ -18,8 +18,25 @@ def non_guardrail_eval_results_clause() -> Any:
     the default for normal-eval surfaces, whose pass-rate / failure counting
     break on guardrail semantics (a regex guardrail's ``passed=True`` means the
     pattern MATCHED = a violation, inverted from a normal eval).
+
+    The guardrail set is read from ``evals`` — the storage source since the
+    FAR-1100/1101 eval-definition cutover (migration ``0254``) and the table
+    ``eval_results.eval_id`` actually references through the composite FK
+    ``fk_eval_results_eval_org`` (migration ``0294``). The legacy
+    ``eval_definitions`` table is a frozen pre-cutover snapshot that no write
+    path touches, so sourcing the exclusion from it silently no-ops for every
+    post-cutover guardrail and lets inverted-semantics rows into pass rates
+    (FAR-1725).
+
+    The sub-select is deliberately Core-level (``Eval.__table__``): an ORM
+    ``select(Eval.id)`` would pick up the global soft-delete loader criteria
+    (``deleted_at IS NULL``) and drop soft-deleted guardrails from the
+    exclusion set, re-leaking their stored results. A guardrail's ``passed``
+    stays inverted after the definition is retired, so soft-deleted
+    definitions must stay excluded too.
     """
-    return EvalResult.eval_id.not_in(select(EvalDefinition.id).where(EvalDefinition.eval_type == "guardrail"))
+    evals_table = Eval.__table__
+    return EvalResult.eval_id.not_in(select(evals_table.c.id).where(evals_table.c.eval_type == "guardrail"))
 
 
 async def get_run_evals(

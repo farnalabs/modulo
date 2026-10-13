@@ -216,8 +216,7 @@ def pick_variant_weighted(
 async def _lock_variant_group(session: AsyncSession, group: VariantGroup) -> VariantGroup | None:
     """Row-lock the group to prevent concurrent quota races (PRD 8.19)."""
     result = await session.execute(select(VariantGroup).where(VariantGroup.id == group.id).with_for_update())
-    locked = result.scalar_one_or_none()
-    return locked if locked is not None else None
+    return result.scalar_one_or_none()
 
 
 def _coerce_snapshot_id(raw: Any) -> uuid.UUID | None:

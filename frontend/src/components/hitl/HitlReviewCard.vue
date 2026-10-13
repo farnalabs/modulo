@@ -281,6 +281,8 @@ import { shortId } from '../../utils/format'
 import { asRejectDisposition, type RejectDisposition } from '../../utils/rejectDisposition'
 import { formatDateShortWithTime } from '../../lib/formatDate'
 import { useHitlReviewState } from '../../composables/useHitlReviewState'
+import { useProductAnalytics } from '../../composables/useProductAnalytics'
+import { ANALYTICS_EVENTS } from '../../composables/productAnalyticsEvents'
 import Button from 'primevue/button'
 import HitlBriefing from '../HitlBriefing.vue'
 
@@ -329,6 +331,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const { track } = useProductAnalytics()
 
 // Per-gate session state (FAR-686): the claim token and notes live in a
 // module-scoped store keyed by run_id:review_id so they survive the card
@@ -626,6 +629,7 @@ async function claimGate() {
       const d = data as { claim_token: string; expires_at: string }
       reviewState.setClaimToken(d.claim_token)
       claimedByYou.value = true
+      track(ANALYTICS_EVENTS.HITL_REVIEW_CLAIMED)
       const payload: HitlMessage = { type: 'success', text: t('hitl.gate.gate_claimed_you_can_now_approve_or_reject') }
       showMessage(payload)
       emit('claimed', payload)
@@ -677,6 +681,11 @@ async function decideGate(decision: 'approve' | 'reject') {
       // stale session state is left behind (FAR-686).
       reviewState.clear()
       claimedByYou.value = false
+      track(
+        decision === 'approve'
+          ? ANALYTICS_EVENTS.HITL_REVIEW_APPROVED
+          : ANALYTICS_EVENTS.HITL_REVIEW_REJECTED,
+      )
       // FAR-1486: the reject outcome is only "routed to the reject target"
       // when the gate actually HAS a reject route; without one the rejection
       // records the decision and the run continues along its normal path.

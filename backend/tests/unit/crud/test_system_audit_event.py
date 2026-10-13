@@ -18,6 +18,14 @@ from modulo.db.crud.system_audit_event import (
     LIST_MAX_PAGE_SIZE,
     list_system_audit_events,
 )
+from modulo.db.models.system_audit_event import SystemAuditEvent
+from tests.unit.crud.helpers import (
+    compile_sql,
+    find_count_statement,
+    find_entity_statement,
+    is_count_select,
+    where_column_names,
+)
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _OTHER_ORG = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -66,7 +74,12 @@ def _params(stmt: Any) -> dict[str, Any]:
 
 def _sql_literal(stmt: Any) -> str:
     """Render bind params inline so LIMIT/OFFSET show their actual values."""
-    return str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    return compile_sql(stmt)
+
+
+def _page_stmt(session: _CaptureSession) -> Any:
+    """The row-select statement — identified by shape, never by call position."""
+    return find_entity_statement(session.statements, SystemAuditEvent)
 
 
 async def _run(session: _CaptureSession, **kwargs: Any) -> tuple[list[Any], int]:
@@ -89,7 +102,7 @@ async def test_returns_rows_and_total() -> None:
     assert total == 7
     # One COUNT statement + one page statement, both inside the caller's tx.
     assert len(session.statements) == 2
-    assert "COUNT" in _sql(session.statements[0]).upper()
+    assert is_count_select(find_count_statement(session.statements))
 
 
 async def test_no_filters_builds_an_unfiltered_query() -> None:
@@ -97,9 +110,11 @@ async def test_no_filters_builds_an_unfiltered_query() -> None:
 
     await _run(session)
 
-    page_sql = _sql(session.statements[1])
-    assert "system_audit_events" in page_sql
-    assert "WHERE" not in page_sql
+    page_stmt = _page_stmt(session)
+    assert "system_audit_events" in _sql(page_stmt)
+    # Structural: NO where criteria at all — dialect-free, unlike a "WHERE"
+    # substring check, which also matches inside identifiers.
+    assert not where_column_names(page_stmt)
 
 
 async def test_event_type_filter_reaches_the_where_clause() -> None:
@@ -107,7 +122,7 @@ async def test_event_type_filter_reaches_the_where_clause() -> None:
 
     await _run(session, event_type="org_deletion_completed")
 
-    page_stmt = session.statements[1]
+    page_stmt = _page_stmt(session)
     assert "system_audit_events.event_type =" in _sql(page_stmt)
     assert "org_deletion_completed" in _params(page_stmt).values()
 
@@ -117,11 +132,11 @@ async def test_org_id_filter_reaches_the_where_clause() -> None:
 
     await _run(session, org_id=_ORG)
 
-    page_stmt = session.statements[1]
+    page_stmt = _page_stmt(session)
     assert "system_audit_events.org_id =" in _sql(page_stmt)
     assert _ORG in _params(page_stmt).values()
     # The count query honours the same filter, so `total` matches the page.
-    assert _ORG in _params(session.statements[0]).values()
+    assert _ORG in _params(find_count_statement(session.statements)).values()
 
 
 async def test_date_range_filter_reaches_both_bounds() -> None:
@@ -131,7 +146,7 @@ async def test_date_range_filter_reaches_both_bounds() -> None:
 
     await _run(session, from_date=from_date, to_date=to_date)
 
-    page_stmt = session.statements[1]
+    page_stmt = _page_stmt(session)
     page_sql = _sql(page_stmt)
     assert "system_audit_events.created_at >=" in page_sql
     assert "system_audit_events.created_at <=" in page_sql
@@ -145,9 +160,10 @@ async def test_no_date_bounds_when_omitted() -> None:
 
     await _run(session, from_date=None, to_date=None)
 
-    page_sql = _sql(session.statements[1])
-    assert "created_at >=" not in page_sql
-    assert "created_at <=" not in page_sql
+    page_stmt = _page_stmt(session)
+    # Structural: the created_at column must be absent from the where clause
+    # entirely (both bounds) — dialect-free, unlike substring matching.
+    assert "created_at" not in where_column_names(page_stmt)
 
 
 async def test_rows_are_ordered_newest_first_with_a_stable_tiebreak() -> None:
@@ -155,7 +171,7 @@ async def test_rows_are_ordered_newest_first_with_a_stable_tiebreak() -> None:
 
     await _run(session)
 
-    page_sql = _sql(session.statements[1])
+    page_sql = _sql(_page_stmt(session))
     assert "ORDER BY system_audit_events.created_at DESC, system_audit_events.id DESC" in page_sql
 
 
@@ -164,7 +180,7 @@ async def test_page_size_is_clamped_to_the_maximum() -> None:
 
     await _run(session, page_size=LIST_MAX_PAGE_SIZE + 500)
 
-    page_sql = _sql_literal(session.statements[1])
+    page_sql = _sql_literal(_page_stmt(session))
     assert f"LIMIT {LIST_MAX_PAGE_SIZE}" in page_sql
     assert "OFFSET 0" in page_sql
 
@@ -174,7 +190,7 @@ async def test_page_size_is_clamped_to_at_least_one() -> None:
 
     await _run(session, page_size=0)
 
-    assert "LIMIT 1" in _sql_literal(session.statements[1])
+    assert "LIMIT 1" in _sql_literal(_page_stmt(session))
 
 
 async def test_page_one_offsets_by_zero() -> None:
@@ -182,7 +198,7 @@ async def test_page_one_offsets_by_zero() -> None:
 
     await _run(session, page=1, page_size=LIST_DEFAULT_PAGE_SIZE)
 
-    page_sql = _sql_literal(session.statements[1])
+    page_sql = _sql_literal(_page_stmt(session))
     assert f"LIMIT {LIST_DEFAULT_PAGE_SIZE}" in page_sql
     assert "OFFSET 0" in page_sql
 
@@ -192,7 +208,7 @@ async def test_page_n_offsets_by_a_full_page() -> None:
 
     await _run(session, page=3, page_size=25)
 
-    page_sql = _sql_literal(session.statements[1])
+    page_sql = _sql_literal(_page_stmt(session))
     assert "LIMIT 25" in page_sql
     assert "OFFSET 50" in page_sql
 
@@ -202,6 +218,6 @@ async def test_page_below_one_is_clamped_to_the_first_page() -> None:
 
     await _run(session, page=0, page_size=10)
 
-    page_sql = _sql_literal(session.statements[1])
+    page_sql = _sql_literal(_page_stmt(session))
     assert "LIMIT 10" in page_sql
     assert "OFFSET 0" in page_sql

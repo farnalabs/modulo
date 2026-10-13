@@ -1,18 +1,25 @@
 """BDD step definitions: Run failed state, recovery.
 
-``failed_state.feature`` drives ``GET /api/v1/runs/{id}`` through the real route
-handler with the ``_do_*`` DB-fetch seams patched. ``recovery.feature`` drives the
-REAL ``POST /api/v1/runs/{run_id}/nodes/{node_id}/recover`` route — the recover-node
-surface that replaced the draft run-level ``/resume`` / ``/retry`` endpoints — with
-only the ``recover_node`` DB seam and the ``dispatch_run`` resume seam patched, so
-the route's typed error mapping (200 replay/skip, 403 role gate, 404, 409, 422,
-500), the replay/skip action selector and the resume dispatch are asserted end to
-end.
+``failed_state.feature`` drives two REAL routes with only their DB seams
+patched: the run-detail ``GET /api/v1/runs/{id}`` (with the ``_do_*``
+DB-fetch seams patched) and the per-node output surface
+``GET /api/v1/runs/{run_id}/nodes/{node_id}/output`` (with ``get_run`` /
+``read_run_blobs`` patched) — the run-detail ``RunResponse`` carries no
+per-node map, so "inspecting the detail" of a failed run means reading its
+node outputs through that route. ``recovery.feature`` drives the REAL
+``POST /api/v1/runs/{run_id}/nodes/{node_id}/recover`` route — the recover-node
+surface that replaced the draft run-level ``/resume`` / ``/retry`` endpoints —
+with only the ``recover_node`` DB seam and the ``dispatch_run`` resume seam
+patched, so the route's typed error mapping (200 replay/skip, 403 role gate,
+404, 409, 422, 500), the replay/skip action selector and the resume dispatch
+are asserted end to end.
 """
 
+import asyncio
 import contextlib
 import json
 import uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -23,7 +30,7 @@ with contextlib.suppress(FileNotFoundError, OSError):
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/errors/recovery.feature")
 
-from tests.bdd.conftest import _active_client, make_mock_run
+from tests.bdd.conftest import ORG_ID, _active_client, make_mock_run
 
 
 @given(parsers.parse("a run that failed at node {failed:d} of {total:d}"))
@@ -47,7 +54,6 @@ def get_run(run_id, client, request):
                     id=run_id,
                     status="failed",
                     error_detail="Node 2: Connection timeout",
-                    final_state={"node-1": {"output": "ok"}},
                 ),
                 False,
             ),
@@ -80,30 +86,110 @@ def check_error_detail(request):
     assert data.get("error_detail") is not None
 
 
+def _failed_run_blobs(request):
+    """The ``RunBlobs`` for the scenario's failed run, derived from the Given.
+
+    Node ids are the ``Given a run that failed at node {failed:d} of {total:d}``
+    integers as strings. Every node BEFORE the failed one completed with a
+    recorded pure return; the failed node has NO return but a telemetry entry
+    (so the endpoint derives ``{status, summary}`` from it rather than 404ing);
+    every node AFTER it has no entry at all (so the endpoint 404s). The shape is
+    fixed by the Given, never by the value an individual step asserts.
+    """
+    from modulo.db.crud.run_node_outputs import RunBlobs
+
+    failed = request.node._failed_node
+    outputs = {str(n): {"node": n, "status": "completed", "result": f"output-{n}"} for n in range(1, failed)}
+    telemetry = {
+        str(failed): {
+            "status": "failed",
+            "summary": "Connection timeout",
+            "agent_stdout": "internal log tail that must not leak through the derived surface",
+        }
+    }
+    return RunBlobs(outputs=outputs, telemetry=telemetry, markers=None)
+
+
+def _get_node_output(request, node):
+    """Drive the REAL ``GET /api/v1/runs/{run_id}/nodes/{node_id}/output`` route.
+
+    Only the route module's DB seams are patched — ``set_rls_org``,
+    ``get_run`` and ``read_run_blobs`` (imported into ``modulo.api.routes.runs``
+    at runs.py:2521-2527) — so the route body, its response model, the
+    derived-telemetry fallback and its 404 all run for real.
+    """
+    client = _active_client(request)
+    run_id = request.node._run_id
+    run = make_mock_run(id=run_id, status="failed", error_detail="Node 2: Connection timeout")
+    with (
+        patch("modulo.api.routes.runs.set_rls_org", new=AsyncMock()),
+        patch("modulo.api.routes.runs.get_run", new=AsyncMock(return_value=run)),
+        patch("modulo.api.routes.runs.read_run_blobs", new=AsyncMock(return_value=_failed_run_blobs(request))),
+    ):
+        return client.get(f"/api/v1/runs/{run_id}/nodes/{node}/output")
+
+
 @when("I inspect the run detail")
 def inspect_run_detail(request):
-    pass
+    """Inspect the failed node through the REAL per-node output surface.
+
+    The run-detail payload (``RunResponse``) carries no per-node map; the
+    product's per-node surface is
+    ``GET /api/v1/runs/{run_id}/nodes/{node_id}/output``. This reads the failed
+    node through that route and asserts the inspection itself succeeds; the
+    ``Then`` steps below read their own node from the same surface.
+    """
+    resp = _get_node_output(request, request.node._failed_node)
+    request.node._resp = resp
+    assert resp.status_code == 200, resp.text
 
 
 @then(parsers.parse("node {node:d} output is available"))
 def node_output_available(node: int, request):
-    pass
+    """A completed node's pure return is served by the real node-output route."""
+    resp = _get_node_output(request, node)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["node_id"] == str(node)
+    assert body["output"] == {"node": node, "status": "completed", "result": f"output-{node}"}
 
 
 @then(parsers.parse("node {node:d} error is available"))
 def node_error_available(node: int, request):
-    pass
+    """A telemetry-only node surfaces a DERIVED ``{status, summary}``, never raw telemetry.
+
+    The endpoint must NOT 404 for the failed node (it has no pure return), and
+    the derived surface must not leak the log tail the summary was drawn from.
+    """
+    resp = _get_node_output(request, node)
+    assert resp.status_code == 200, resp.text
+    output = resp.json()["output"]
+    assert output["status"] == "failed"
+    assert output["summary"] == "Connection timeout"
+    assert "agent_stdout" not in output
 
 
 @then(parsers.parse("node {node:d} has no output"))
 def node_no_output(node: int, request):
-    pass
+    """A node absent from both outputs and telemetry 404s on the real route."""
+    resp = _get_node_output(request, node)
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"] == f"Node {node} not found in run outputs"
 
 
-@then("the response contains final_state")
-def check_final_state(request):
+@then("the response reports a terminal run status")
+def check_response_terminal_status(request):
+    """Assert the run-detail payload carries a real terminal run status.
+
+    A Run has a terminal ``status`` (and, on failure, an ``error_detail``) —
+    this asserts the real payload the ``GET /runs/{id}`` route produced, read
+    against ``TERMINAL_STATUSES`` from the Run model
+    (modulo/db/models/run.py), rather than a value the step itself set.
+    """
+    from modulo.db.models.run import TERMINAL_STATUSES
+
     data = request.node._resp.json()
-    assert data.get("status") is not None
+    assert data.get("status") in TERMINAL_STATUSES, f"Expected a terminal run status, got {data.get('status')!r}"
 
 
 @then("the response contains error_detail")
@@ -112,14 +198,145 @@ def check_error_detail_field(request):
     assert data.get("error_detail") is not None or "error_detail" in data
 
 
+# ---------------------------------------------------------------------------
+# Audit trail (REAL background-sweep write path -> REAL GET /api/v1/admin/audit)
+# ---------------------------------------------------------------------------
+# The IN-RUN EXECUTOR failure path writes NO audit event: it publishes the
+# notifier event only (``broker.publish("run_failed", ...)`` ->
+# ``core.notifier.EVENT_RUN_FAILED``). A failed run IS recorded on the org audit
+# chain by BACKGROUND-SWEEP TERMINALISATION, however:
+# ``record_run_state_change_audits`` (core/audit_logger/background.py) is called
+# from the stale-run / slot reconciliation sweeps
+# (``core/run_terminal_advance.advance_terminalised_run``,
+# ``core/runner_capacity``, ``core/cron_helpers``) and writes a
+# ``run.sweep_terminalised`` event with ``resource_type="run"`` and
+# ``payload_json["run_status"]`` for every run whose LIVE status is in
+# ``TERMINAL_STATUSES`` (db/models/run.py) -- which includes ``"failed"``. That
+# event is readable through the REAL ``GET /api/v1/admin/audit`` route.
+#
+# These steps therefore drive that path end to end rather than asserting
+# nothing: the production writer runs for real with only its DB session seam
+# (the post-commit ``Run`` re-select) and its ``append_audit_event`` append
+# patched, and the event it produces is served through the real audit read
+# route. The steps fail if the writer stops emitting a run-entity event for a
+# failed terminal run -- the discriminating fields (event_type, resource_type,
+# run_status) are the writer's, not the test's.
+
+
+def _write_failed_run_audit(request) -> dict:
+    """Run the REAL background-sweep audit writer for the scenario's failed run.
+
+    Only the writer's DB session seam (the post-commit ``Run`` re-select) and
+    its ``append_audit_event`` append are patched -- the same seams the unit
+    contract for this writer patches
+    (tests/unit/audit_logger/test_background_audit.py). ``expected_statuses``
+    is the real ``TERMINAL_STATUSES``, so a ``"failed"`` run is only recorded
+    when production still classifies it terminal. Returns the event kwargs the
+    production writer handed to ``append_audit_event``.
+    """
+    from modulo.core.audit_logger import background
+    from modulo.db.models.run import TERMINAL_STATUSES
+
+    run = make_mock_run(id=request.node._run_id, status="failed", error_detail="Node 2: Connection timeout")
+    run.organisation_id = ORG_ID
+    run.error_code = "node.failed"
+
+    session = MagicMock()
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [run]
+    session.execute = AsyncMock(return_value=result)
+    session_begin = MagicMock()
+    session_begin.__aenter__ = AsyncMock(return_value=session)
+    session_begin.__aexit__ = AsyncMock(return_value=False)
+    session.begin.return_value = session_begin
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=session)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
+    factory = MagicMock(return_value=session_cm)
+
+    append = AsyncMock(return_value=None)
+    with (
+        patch.object(background, "set_rls_org", new=AsyncMock()),
+        patch.object(background, "append_audit_event", new=append),
+    ):
+        recorded = asyncio.run(
+            background.record_run_state_change_audits(
+                factory,
+                [(request.node._run_id, ORG_ID)],
+                event_type="run.sweep_terminalised",
+                expected_statuses=TERMINAL_STATUSES,
+                actor_source="stale_run_recovery",
+                log_key="bdd.failed_state.audit_append_failed",
+                summary_prefix="Run terminalised by background sweep:",
+            )
+        )
+    assert recorded == 1, "the production audit writer recorded no event for the failed run"
+    return append.await_args.kwargs
+
+
+def _audit_event_item(event: dict) -> dict:
+    """One ``GET /api/v1/admin/audit`` item, shaped as the read route returns it.
+
+    Every discriminating field is taken from the production writer's
+    ``append_audit_event`` kwargs; only the chain bookkeeping (id, hash,
+    timestamp) is synthesised, since the BDD suite has no database.
+    """
+    return {
+        "id": str(uuid.uuid4()),
+        "event_type": event["event_type"],
+        "actor_user_id": event["actor_user_id"],
+        "resource_type": event["resource_type"],
+        "resource_id": str(event["resource_id"]),
+        "payload_json": event["payload_json"],
+        "request_id": None,
+        "previous_hash": "hash_0",
+        "created_at": datetime.now(UTC).isoformat(),
+    }
+
+
 @when("I check the audit log")
 def check_audit_log(request):
-    pass
+    """Read the REAL audit route over the event the REAL writer produced.
+
+    The run-failure event comes from the production background-sweep writer
+    (see the block comment above); only the read route's ``list_audit_events``
+    DB seam and ``set_rls_org`` are patched -- the same pattern the rest of
+    this module uses for its route-level steps.
+    """
+    event = _write_failed_run_audit(request)
+    client = _active_client(request)
+    with (
+        patch("modulo.api.routes.audit.set_rls_org"),
+        patch(
+            "modulo.api.routes.audit.list_audit_events",
+            return_value={
+                "items": [_audit_event_item(event)],
+                "total": 1,
+                "next_cursor": None,
+                "prev_cursor": None,
+                "limit": 50,
+            },
+        ),
+    ):
+        resp = client.get("/api/v1/admin/audit")
+    request.node._resp = resp
 
 
 @then("an audit event exists for run failure")
 def audit_event_for_failure(request):
-    pass
+    """``GET /api/v1/admin/audit`` surfaces the failed run's ``run``-entity event.
+
+    Asserts the route returned 200 and carried a ``run``-entity event whose
+    payload records the terminal failure -- the observable audit-trail evidence
+    of a failed run, as written by the production background-sweep writer.
+    """
+    resp = request.node._resp
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    run_events = [e for e in items if e.get("resource_type") == "run"]
+    assert run_events, "No run-entity event observable through GET /api/v1/admin/audit"
+    failed = [e for e in run_events if (e.get("payload_json") or {}).get("run_status") == "failed"]
+    assert failed, "No run-failure (run_status='failed') event observable through GET /api/v1/admin/audit"
 
 
 # ---------------------------------------------------------------------------

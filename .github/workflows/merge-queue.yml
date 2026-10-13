@@ -63,7 +63,7 @@ jobs:
       frozen: ${{ steps.check.outputs.frozen }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check for release-freeze tag
         id: check
         env:
@@ -229,7 +229,7 @@ jobs:
             fi
           done
           echo "Stuck-run sweep complete."
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: main
@@ -243,7 +243,7 @@ jobs:
         with:
           version: 11.28.5
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
           cache: pnpm
@@ -318,6 +318,26 @@ jobs:
             TITLE=$(echo "$pr" | jq -r '.title')
 
             echo -n "  PR #$NUM ($TITLE) -- "
+
+            # Same-repo author gate (FAR-264): a fork / external-author PR must
+            # NEVER be auto-merged by this queue. The decision is delegated to
+            # the versioned, unit-tested helper
+            # (.github/scripts/same-repo-author-guard.py) so merge and review
+            # cannot diverge. Any failure to resolve the PR's head repository or
+            # author association fails CLOSED (skipped), never merged; an
+            # external PR needs a human/approved path instead.
+            AUTHOR_FILE=$(mktemp)
+            if gh api "repos/${{ github.repository }}/pulls/$NUM" > "$AUTHOR_FILE" 2>/dev/null; then
+              AUTHOR_OUT=$(python3 .github/scripts/same-repo-author-guard.py "$AUTHOR_FILE" "${{ github.repository }}" 2>/dev/null) || true
+            else
+              AUTHOR_OUT=""
+            fi
+            rm -f "$AUTHOR_FILE"
+            AUTHOR_VERDICT="${AUTHOR_OUT%%|*}"
+            if [ "$AUTHOR_VERDICT" != "ok" ]; then
+              echo "skipping - same-repo author gate: ${AUTHOR_OUT#*|}"
+              continue
+            fi
 
             # Check for approval reviews
             APPROVERS=$(gh pr view "$NUM" --json reviews --jq '.reviews[]? | select(.state == "APPROVED") | .author.login' 2>/dev/null | sort -u)
@@ -965,6 +985,24 @@ jobs:
             REVIEW_DECISION=$(gh pr view "$NUM" --json reviewDecision --jq '.reviewDecision' 2>/dev/null || echo "unknown")
             if [ "$REVIEW_DECISION" != "APPROVED" ]; then
               echo "  PR #$NUM reviewDecision is '$REVIEW_DECISION' -- skipping merge (stays open for next queue cycle)"
+              continue
+            fi
+
+            # Same-repo author gate re-verify (FAR-264, defense in depth): the
+            # collect step already gated this, but the PR's head repository /
+            # author state can change between collection and merge, so re-check
+            # immediately before merging - fail closed, like the reviewDecision
+            # re-verify above. An external verdict skips WITHOUT joining FAILED
+            # (the PR was never meant to auto-merge; a human path owns it).
+            AUTHOR_FILE=$(mktemp)
+            if gh api "repos/${{ github.repository }}/pulls/$NUM" > "$AUTHOR_FILE" 2>/dev/null; then
+              AUTHOR_OUT=$(python3 .github/scripts/same-repo-author-guard.py "$AUTHOR_FILE" "${{ github.repository }}" 2>/dev/null) || true
+            else
+              AUTHOR_OUT=""
+            fi
+            rm -f "$AUTHOR_FILE"
+            if [ "${AUTHOR_OUT%%|*}" != "ok" ]; then
+              echo "  PR #$NUM same-repo author gate: ${AUTHOR_OUT#*|} -- skipping merge (fail closed)"
               continue
             fi
 

@@ -17,6 +17,12 @@ identity bootstrap stage holds NO ``app.organisation_id`` RLS context:
 
 These tests pin the real SQL semantics against a real Postgres (testcontainers),
 not mocks, because mock-level assertions cannot exercise the actual RLS policy.
+
+FAR-1126 note: the sibling ``conftest.py`` session-scoped autouse
+``keycloak_tls_trust_env`` fixture sets ``SSRF_TRUST_PROXY=1`` process-wide for
+every test in this directory, deliberately relaxing the pinned transport's
+fail-closed default. It is inert without a proxy env var, but a test here that
+asserts the proxy-ignore guard must clear ``SSRF_TRUST_PROXY`` explicitly.
 """
 
 import uuid

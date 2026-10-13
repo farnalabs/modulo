@@ -277,11 +277,11 @@ export const REST_ADVANCED_FIELDS = [
 // re-declaring drift-prone REST_*-prefixed copies (FAR-532).
 export const ON_UNKNOWN_OPTIONS: string[] = ['fail_open', 'fail_closed', 'off']
 export const AUTH_MODE_OPTIONS: string[] = ['bearer', 'basic', 'api_key']
-</script>
 
-<script setup lang="ts">
-import { reactive, ref, watch, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
+// HTTP methods offered by the method <select>. Module scope (like the option
+// enums above) so validateConnectorConfig — which lives outside setup() —
+// validates against exactly the list the template renders.
+const METHOD_OPTIONS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']
 
 export interface RestConfigState {
   base_url: string
@@ -305,58 +305,77 @@ export interface RestCredsState {
   query_param_name: string
 }
 
-const config = defineModel<RestConfigState>('config', { required: true })
-const credentials = defineModel<RestCredsState>('credentials', { required: true })
-const credsDirty = defineModel<boolean>('credsDirty', { default: false })
-// Separate SECRET (secret) dirtiness from AUTH-IDENTITY dirtiness so an
-// identity-only edit (auth_mode / apiKeyIn / header_name / query_param_name)
-// re-sends the credentials payload (and the backend overlays the new identity
-// while preserving the stored secret), without ever triggering the secret
-// clobber invariant or demanding a re-entered secret (FAR-466).
-const credsIdentityDirty = defineModel<boolean>('credsIdentityDirty', { default: false })
+// Minimal translation surface the validation helpers need. Structural so the
+// module-level helpers can run outside setup() (where vue-i18n's `t` lives);
+// the component passes its own `t` in.
+type TranslateFn = (key: string, params?: Record<string, unknown>) => string
 
-const props = defineProps<{ mode: 'add' | 'edit' | null; legacyAuthEcho?: boolean }>()
-const { t } = useI18n()
+// Everything validateConnectorConfig needs: the helper runs at module scope,
+// so the reactive models and setup-only state are passed in explicitly.
+interface ConnectorValidationInput {
+  config: RestConfigState
+  credentials: RestCredsState
+  mode: 'add' | 'edit' | null
+  credsDirty: boolean
+  baselineAuthMode: string | null
+  t: TranslateFn
+}
 
-const METHOD_OPTIONS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']
-
-const errors = reactive<Record<string, string>>({})
-
-function validate(): boolean {
-  Object.keys(errors).forEach(k => { errors[k] = '' })
-
-  const baseUrl = String(config.value.base_url || '').trim()
+function validateBaseUrl(baseUrl: string, t: TranslateFn): string {
   if (!baseUrl) {
-    errors.base_url = t('connectors.rest.base_url_required')
-  } else {
-    try {
-      const parsedBaseUrl = new URL(baseUrl)
-      // The connector is HTTP-only — reject any non http/https scheme (e.g.
-      // mailto:, ftp:, file:) that `new URL()` would otherwise accept.
-      if (parsedBaseUrl.protocol !== 'http:' && parsedBaseUrl.protocol !== 'https:') {
-        errors.base_url = t('connectors.rest.base_url_invalid')
-      }
-    } catch {
-      errors.base_url = t('connectors.rest.base_url_invalid')
+    return t('connectors.rest.base_url_required')
+  }
+  try {
+    const parsedBaseUrl = new URL(baseUrl)
+    // The connector is HTTP-only — reject any non http/https scheme (e.g.
+    // mailto:, ftp:, file:) that `new URL()` would otherwise accept.
+    if (parsedBaseUrl.protocol !== 'http:' && parsedBaseUrl.protocol !== 'https:') {
+      return t('connectors.rest.base_url_invalid')
     }
+  } catch {
+    return t('connectors.rest.base_url_invalid')
   }
-  const method = String(config.value.method || '').toUpperCase()
-  if (method && !METHOD_OPTIONS.includes(method)) {
-    errors.method = t('connectors.rest.method_invalid', { method, options: METHOD_OPTIONS.join(', ') })
+  return ''
+}
+
+function validateMethod(method: string, t: TranslateFn): string {
+  const normalisedMethod = String(method || '').toUpperCase()
+  if (normalisedMethod && !METHOD_OPTIONS.includes(normalisedMethod)) {
+    return t('connectors.rest.method_invalid', { method: normalisedMethod, options: METHOD_OPTIONS.join(', ') })
   }
-  const timeout = config.value.timeout_seconds
+  return ''
+}
+
+function validateTimeout(timeout: number | string, t: TranslateFn): string {
   const numTimeout = Number(timeout)
   if (timeout === '' || timeout === null || Number.isNaN(numTimeout) || !Number.isInteger(numTimeout) || numTimeout < 1) {
-    errors.timeout_seconds = t('connectors.rest.timeout_invalid')
+    return t('connectors.rest.timeout_invalid')
   }
-  const onUnknown = config.value.on_unknown
-  if (onUnknown && !ON_UNKNOWN_OPTIONS.includes(onUnknown)) {
-    errors.on_unknown = t('connectors.rest.on_unknown_invalid', { value: onUnknown, options: ON_UNKNOWN_OPTIONS.join(', ') })
+  return ''
+}
+
+function validateChoice(value: string, options: string[], key: string, params: Record<string, unknown>, t: TranslateFn): string {
+  if (value && !options.includes(value)) {
+    return t(key, { value, ...params })
   }
-  const authMode = credentials.value.auth_mode
-  if (authMode && !AUTH_MODE_OPTIONS.includes(authMode)) {
-    errors.auth_mode = t('connectors.rest.auth_mode_invalid', { value: authMode })
+  return ''
+}
+
+function validateAdvancedJson(advancedJson: string, t: TranslateFn): string {
+  if (advancedJson && advancedJson.trim()) {
+    try {
+      JSON.parse(advancedJson)
+    } catch {
+      return t('connectors.rest.advanced_json_invalid')
+    }
   }
+  return ''
+}
+
+function validateCredentials(input: ConnectorValidationInput): Record<string, string> {
+  const errors: Record<string, string> = {}
+  const { credentials, mode, credsDirty, baselineAuthMode, t } = input
+  const authMode = credentials.auth_mode
   // CRITICAL (FAR-466): editing an existing connector must not demand a
   // credential the user has not re-entered. In edit mode, the stored secret is
   // write-only and read back as empty, so a prefill (credsDirty === false)
@@ -374,29 +393,73 @@ function validate(): boolean {
   // change away from the mount-time (stored) auth_mode must run the NEW mode's
   // required-field checks, while an identity-only edit that leaves auth_mode
   // untouched (e.g. header_name) must still save without demanding a secret.
-  const modeChanged = baselineAuthMode.value !== null
-    && credentials.value.auth_mode !== baselineAuthMode.value
-  const editingExisting = props.mode === 'edit' && !credsDirty.value && !modeChanged
-  if (!editingExisting) {
-    if (authMode === 'bearer' && !credentials.value.token) {
-      errors.token = t('connectors.rest.token_required')
-    }
-    if (authMode === 'basic') {
-      if (!credentials.value.username) errors.username = t('connectors.rest.username_required')
-      if (!credentials.value.password) errors.password = t('connectors.rest.password_required')
-    }
-    if (authMode === 'api_key' && !credentials.value.api_key) {
-      errors.api_key = t('connectors.rest.api_key_required')
-    }
+  const modeChanged = baselineAuthMode !== null && authMode !== baselineAuthMode
+  const editingExisting = mode === 'edit' && !credsDirty && !modeChanged
+  if (editingExisting) {
+    return errors
   }
-  if (config.value.advanced_json && config.value.advanced_json.trim()) {
-    try {
-      JSON.parse(config.value.advanced_json)
-      errors.advanced_json = ''
-    } catch {
-      errors.advanced_json = t('connectors.rest.advanced_json_invalid')
-    }
+  if (authMode === 'bearer' && !credentials.token) {
+    errors.token = t('connectors.rest.token_required')
   }
+  if (authMode === 'basic') {
+    if (!credentials.username) errors.username = t('connectors.rest.username_required')
+    if (!credentials.password) errors.password = t('connectors.rest.password_required')
+  }
+  if (authMode === 'api_key' && !credentials.api_key) {
+    errors.api_key = t('connectors.rest.api_key_required')
+  }
+  return errors
+}
+
+// Validates the full connector config + credential state and returns the
+// field-keyed errors (empty string where a field is valid). Extracted to
+// module scope so each check stays small (SonarCloud typescript:S3776) while
+// the exposed validate() hook stays a thin clear/assign/derive wrapper.
+function validateConnectorConfig(input: ConnectorValidationInput): Record<string, string> {
+  const { config, credentials, t } = input
+  const errors: Record<string, string> = {
+    base_url: validateBaseUrl(String(config.base_url || '').trim(), t),
+    method: validateMethod(config.method, t),
+    timeout_seconds: validateTimeout(config.timeout_seconds, t),
+    on_unknown: validateChoice(config.on_unknown, ON_UNKNOWN_OPTIONS, 'connectors.rest.on_unknown_invalid', { options: ON_UNKNOWN_OPTIONS.join(', ') }, t),
+    auth_mode: validateChoice(credentials.auth_mode, AUTH_MODE_OPTIONS, 'connectors.rest.auth_mode_invalid', {}, t),
+    advanced_json: validateAdvancedJson(config.advanced_json, t),
+  }
+  Object.assign(errors, validateCredentials(input))
+  return errors
+}
+</script>
+
+<script setup lang="ts">
+import { reactive, ref, watch, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const config = defineModel<RestConfigState>('config', { required: true })
+const credentials = defineModel<RestCredsState>('credentials', { required: true })
+const credsDirty = defineModel<boolean>('credsDirty', { default: false })
+// Separate SECRET (secret) dirtiness from AUTH-IDENTITY dirtiness so an
+// identity-only edit (auth_mode / apiKeyIn / header_name / query_param_name)
+// re-sends the credentials payload (and the backend overlays the new identity
+// while preserving the stored secret), without ever triggering the secret
+// clobber invariant or demanding a re-entered secret (FAR-466).
+const credsIdentityDirty = defineModel<boolean>('credsIdentityDirty', { default: false })
+
+const props = defineProps<{ mode: 'add' | 'edit' | null; legacyAuthEcho?: boolean }>()
+const { t } = useI18n()
+
+const errors = reactive<Record<string, string>>({})
+
+function validate(): boolean {
+  const found = validateConnectorConfig({
+    config: config.value,
+    credentials: credentials.value,
+    mode: props.mode,
+    credsDirty: credsDirty.value,
+    baselineAuthMode: baselineAuthMode.value,
+    t,
+  })
+  Object.keys(errors).forEach(k => { errors[k] = '' })
+  Object.assign(errors, found)
 
   return !Object.values(errors).some(v => v)
 }

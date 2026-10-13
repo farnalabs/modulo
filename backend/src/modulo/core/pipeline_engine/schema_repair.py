@@ -390,6 +390,85 @@ class SchemaRepairLoop:
 # ---------------------------------------------------------------------------
 
 
+def _seed_repair_info(repair_info: dict[str, int] | None) -> None:
+    """Default the FAR-902 attempt counters on a caller-supplied dict.
+
+    No-op when *repair_info* is None. Uses ``setdefault`` so a
+    pre-populated dict keeps its existing values (production callers pass
+    fresh dicts; the semantics are preserved for exact behavioural parity
+    with the pre-refactor loop).
+    """
+    if repair_info is None:
+        return
+    repair_info.setdefault("repair_attempts", 0)
+    repair_info.setdefault("wasted_attempts", 0)
+
+
+def _invoke_and_validate_repair(
+    prompt: str,
+    schema: dict[str, Any],
+    current_errors: list[dict[str, Any]],
+    schema_id: str,
+    attempts_used: int,
+    repair_invoke_fn: Any,
+) -> tuple[SchemaValidationOutcome | None, list[dict[str, Any]], Any]:
+    """Invoke the repair backend, parse its output, and re-validate.
+
+    Returns ``(outcome, errors, repaired_data)``:
+
+    - ``None`` outcome — invoke + parse succeeded but validation FAILED:
+      *errors* is the new validation error list (feeds the next attempt);
+      *repaired_data* is None.
+    - ``PASSED_AFTER_REPAIR`` — validation passed; *repaired_data* holds the
+      fixed payload and *errors* is empty.
+    - ``REPAIR_EXHAUSTED`` — the invoke raised (already logged);
+      *errors* is *current_errors* unchanged.
+    - ``NATIVE_DECODE_NOT_JSON`` — the raw output was not JSON;
+      *errors* is *current_errors* unchanged.
+
+    Raises nothing — every failure is encoded in the outcome value.
+    """
+    try:
+        raw_output = repair_invoke_fn(prompt)
+    except Exception:
+        _log.exception(
+            "schema_repair.invoke_failed",
+            extra={"schema_id": schema_id, "attempt": attempts_used},
+        )
+        return SchemaValidationOutcome.REPAIR_EXHAUSTED, current_errors, None
+
+    try:
+        repaired_data = json.loads(raw_output)
+    except ValueError:
+        # Raw output is not valid JSON → terminal, no more repair
+        return SchemaValidationOutcome.NATIVE_DECODE_NOT_JSON, current_errors, None
+
+    is_valid, errors = validate_against_schema(repaired_data, schema)
+    if is_valid:
+        return SchemaValidationOutcome.PASSED_AFTER_REPAIR, [], repaired_data
+    return None, errors, None
+
+
+def _exhausted_repair_result(
+    outcome: SchemaValidationOutcome,
+    errors: list[dict[str, Any]],
+    data: Any,
+    repair: SchemaRepairLoop,
+    wasted_count: int,
+    repair_info: dict[str, int] | None,
+) -> tuple[str, list[dict[str, Any]], Any]:
+    """Record final loop stats (when requested) and build the failure return.
+
+    Terminal-failure exits of ``run_repair_loop`` (invoke failure, bad JSON,
+    untranslatable, budget exhaustion) all funnel through here so the
+    FAR-902 attempt accounting is written exactly once per outcome.
+    """
+    if repair_info is not None:
+        repair_info["repair_attempts"] = repair.attempts_used
+        repair_info["wasted_attempts"] = wasted_count
+    return outcome.value, errors, data
+
+
 def run_repair_loop(
     data: Any,
     schema: dict[str, Any],
@@ -427,24 +506,12 @@ def run_repair_loop(
     Raises:
         Nothing — all failures are encoded in the outcome value.
     """
-    from json import JSONDecodeError
-
-    from modulo.core.pipeline_engine.schema_repair import (
-        SchemaRepairLoop,
-        SchemaValidationOutcome,
-    )
-
     if budget <= 0 or repair_invoke_fn is None:
         # No repair budget or no invoke function → terminal failure
         is_valid, errors = validate_against_schema(data, schema)
+        _seed_repair_info(_repair_info)
         if is_valid:
-            if _repair_info is not None:
-                _repair_info.setdefault("repair_attempts", 0)
-                _repair_info.setdefault("wasted_attempts", 0)
             return SchemaValidationOutcome.NATIVE_DECODED_AND_VALIDATED.value, [], data
-        if _repair_info is not None:
-            _repair_info.setdefault("repair_attempts", 0)
-            _repair_info.setdefault("wasted_attempts", 0)
         return SchemaValidationOutcome.REPAIR_EXHAUSTED.value, errors, data
 
     # Check daily spend limit before attempting repair
@@ -453,18 +520,14 @@ def run_repair_loop(
             "schema_repair.skip_spend_limit",
             extra={"schema_id": schema_id, "spend": current_spend, "limit": daily_spend_limit},
         )
-        is_valid, errors = validate_against_schema(data, schema)
-        if _repair_info is not None:
-            _repair_info.setdefault("repair_attempts", 0)
-            _repair_info.setdefault("wasted_attempts", 0)
+        _spend_check_valid, errors = validate_against_schema(data, schema)
+        _seed_repair_info(_repair_info)
         return SchemaValidationOutcome.REPAIR_EXHAUSTED.value, errors, data
 
     # Initial validation to get the errors
     is_valid, current_errors = validate_against_schema(data, schema)
     if is_valid:
-        if _repair_info is not None:
-            _repair_info.setdefault("repair_attempts", 0)
-            _repair_info.setdefault("wasted_attempts", 0)
+        _seed_repair_info(_repair_info)
         return SchemaValidationOutcome.NATIVE_DECODED_AND_VALIDATED.value, [], data
 
     repair = SchemaRepairLoop(
@@ -485,33 +548,25 @@ def run_repair_loop(
             last_outcome = SchemaValidationOutcome.REPAIR_EXHAUSTED
             break
 
-        # Build repair prompt and invoke
+        # Build repair prompt, invoke the backend, and re-validate.
         prompt = repair.build_repair_prompt(current_errors)
-        try:
-            raw_output = repair_invoke_fn(prompt)
-        except Exception:
-            _log.exception(
-                "schema_repair.invoke_failed",
-                extra={"schema_id": schema_id, "attempt": repair.attempts_used},
-            )
-            last_outcome = SchemaValidationOutcome.REPAIR_EXHAUSTED
-            break
-
-        # Parse the raw output
-        try:
-            repaired_data = json.loads(raw_output)
-        except (JSONDecodeError, ValueError):
-            # Raw output is not valid JSON → terminal, no more repair
-            last_outcome = SchemaValidationOutcome.NATIVE_DECODE_NOT_JSON
-            break
-
-        # Validate the repaired output
-        is_valid, current_errors = validate_against_schema(repaired_data, schema)
-        if is_valid:
+        attempt_outcome, current_errors, repaired_data = _invoke_and_validate_repair(
+            prompt,
+            schema,
+            current_errors,
+            schema_id,
+            repair.attempts_used,
+            repair_invoke_fn,
+        )
+        if attempt_outcome == SchemaValidationOutcome.PASSED_AFTER_REPAIR:
             if _repair_info is not None:
                 _repair_info["repair_attempts"] = repair.attempts_used
                 _repair_info["wasted_attempts"] = wasted_count
             return SchemaValidationOutcome.PASSED_AFTER_REPAIR.value, [], repaired_data
+        if attempt_outcome is not None:
+            # Terminal: invoke failure or non-JSON output.
+            last_outcome = attempt_outcome
+            break
 
         # Schema rejection was the sole failure cause for this attempt.
         wasted_count += 1
@@ -522,25 +577,37 @@ def run_repair_loop(
         SchemaValidationOutcome.NATIVE_DECODE_NOT_JSON,
         SchemaValidationOutcome.REPAIR_EXHAUSTED,
     ):
-        if _repair_info is not None:
-            _repair_info["repair_attempts"] = repair.attempts_used
-            _repair_info["wasted_attempts"] = wasted_count
-        return last_outcome.value, current_errors, data
+        return _exhausted_repair_result(
+            last_outcome,
+            current_errors,
+            data,
+            repair,
+            wasted_count,
+            _repair_info,
+        )
 
     # Budget exhaustion: the loop exited because is_exhausted is True
     if repair.is_exhausted:
-        if _repair_info is not None:
-            _repair_info["repair_attempts"] = repair.attempts_used
-            _repair_info["wasted_attempts"] = wasted_count
-        return SchemaValidationOutcome.REPAIR_EXHAUSTED.value, current_errors, data
+        return _exhausted_repair_result(
+            SchemaValidationOutcome.REPAIR_EXHAUSTED,
+            current_errors,
+            data,
+            repair,
+            wasted_count,
+            _repair_info,
+        )
 
     # Should not reach here, but defensive: the loop can only exit via a break
     # (handled at the terminal-outcome check above) or because ``is_exhausted``
     # became True (handled immediately above), so this tail is unreachable.
-    if _repair_info is not None:  # pragma: no cover - unreachable defensive fall-through
-        _repair_info["repair_attempts"] = repair.attempts_used
-        _repair_info["wasted_attempts"] = wasted_count
-    return last_outcome.value, current_errors, data  # pragma: no cover - unreachable defensive fall-through
+    return _exhausted_repair_result(  # pragma: no cover - unreachable defensive fall-through
+        last_outcome,
+        current_errors,
+        data,
+        repair,
+        wasted_count,
+        _repair_info,
+    )
 
 
 # ---------------------------------------------------------------------------

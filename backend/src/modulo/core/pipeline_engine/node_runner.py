@@ -43,7 +43,6 @@ Eval-before-interrupt ((Section 8.17):
 
 import asyncio
 import base64
-import concurrent.futures
 import difflib
 import hashlib
 import json
@@ -54,7 +53,7 @@ import re as _re
 import socket
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import asdict as _dc_asdict
@@ -102,7 +101,7 @@ from modulo.core.cost_controller.breakdown.params import (
     coerce_reported_token,
     is_proven_zero_token_usage,
 )
-from modulo.core.eval_engine import EvalEngine, EvalResult, EvalType
+from modulo.core.eval_engine import EvalEngine, EvalResult
 from modulo.core.guardrails.loop_intercept import LoopInterceptConfig
 from modulo.core.node_output_split import (
     DEFAULT_NODE_TYPE,
@@ -130,6 +129,11 @@ from modulo.core.pipeline_engine.jmespath_eval import (
     compile_jmespath,
     evaluate_jmespath_condition,
 )
+from modulo.core.pipeline_engine.llm_judge import (
+    invoke_backend,
+    resolve_llm_judge_callable,
+    run_coroutine_sync,
+)
 from modulo.core.pipeline_engine.sandbox_errors import (
     SandboxNodeFailedError as SandboxNodeFailedError,  # noqa: PLC0414 - explicit re-export
 )
@@ -140,6 +144,7 @@ from modulo.core.pipeline_engine.sandbox_mode import (
     _validate_sandbox_mode_config,
     sandbox_jinja_environment,
 )
+from modulo.core.provenance import DISPATCH_DATUM_PROVENANCE, PROVENANCE_KEY, WITNESSED_VIA_KEY
 from modulo.core.run_context.autonomy import (
     AutonomyResolution,
     is_autonomy_gating_enabled,
@@ -4568,9 +4573,10 @@ def _build_repair_invoke(model_backend_id_str: str) -> Any:
     ModelBackendHub and can re-invoke the same backend with the repair
     prompt. ``run_repair_loop`` calls this SYNCHRONOUSLY while the node
     coroutine is already on the event loop, so bridge to the async backend
-    with ``_run_coroutine_sync`` (the same worker-loop bridge the LLM-judge
-    callable uses). An async repair fn here would hand ``json.loads`` an
-    un-awaited coroutine and crash the node instead of repairing it.
+    with ``run_coroutine_sync`` (the same worker-loop bridge the LLM-judge
+    callable uses, bounded per FAR-1652). An async repair fn here would hand
+    ``json.loads`` an un-awaited coroutine and crash the node instead of
+    repairing it.
 
     The backend id is parsed safely - non-UUID backend ids (mock/stub/aliased
     backends, common in unit tests and some real graphs) must not crash the
@@ -4589,7 +4595,7 @@ def _build_repair_invoke(model_backend_id_str: str) -> Any:
         """Re-invoke the same model backend with the repair prompt."""
         if hub is None:
             raise RuntimeError("ModelBackendHub not available for repair invoke")
-        resp = _run_coroutine_sync(_invoke_backend(hub, backend_id, [HumanMessage(content=prompt)]))
+        resp = run_coroutine_sync(invoke_backend(hub, backend_id, [HumanMessage(content=prompt)]))
         return resp.content if hasattr(resp, "content") else str(resp)
 
     return _std_repair_invoke
@@ -4907,111 +4913,6 @@ def make_router_node_fn(
 
     _router.__name__ = f"router_{node_id}" if node_id else "router"
     return _router
-
-
-async def _invoke_backend(
-    hub: Any,
-    backend_id: uuid.UUID,
-    messages: list[Any],
-) -> Any:
-    """Resolve a backend from the hub and invoke it asynchronously."""
-    backend = await hub.get(backend_id)
-    return await backend.invoke(messages)
-
-
-_JUDGE_EXECUTOR: concurrent.futures.ThreadPoolExecutor | None = None
-
-
-def _run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> Any:
-    """Run an async coroutine to completion from a sync context.
-
-    ``make_hitl_review_fn`` runs inside an already-running asyncio event loop,
-    so ``asyncio.run`` and ``loop.run_until_complete`` both raise "This event
-    loop is already running". The LLMJudgeCallable protocol is synchronous, so
-    we bridge sync -> async by executing the coroutine on a dedicated event
-    loop in a worker thread and blocking on the result.
-    """
-    global _JUDGE_EXECUTOR
-    if _JUDGE_EXECUTOR is None:
-        _JUDGE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="llm-judge",
-        )
-
-    def _run() -> Any:
-        return asyncio.run(coro)
-
-    future: concurrent.futures.Future[Any] = _JUDGE_EXECUTOR.submit(_run)
-    return future.result()
-
-
-def _build_llm_judge_callable(
-    hub: Any,
-    backend_id_str: str,
-) -> Callable[[dict[str, Any], EvalDefDTO], dict[str, Any]]:
-    """Build a synchronous LLM judge callable backed by a model backend.
-
-    The ``LLMJudgeCallable`` protocol is synchronous, but ``make_hitl_review_fn``
-    runs inside an already-running asyncio event loop. We bridge sync -> async
-    by running the async backend invoke on a dedicated event loop in a worker
-    thread via ``_run_coroutine_sync``.
-
-    ``backend_id_str`` comes from ``eval_def.config["model_backend_id"]`` —
-    unvalidated free-form JSON, so a typo or stale manual edit can put any
-    string here. A malformed id does NOT raise: raising ``ValueError`` out of
-    ``run_evals_persist_before_decide``'s per-eval loop would abort every
-    sibling eval and terminalise the run via the generic error path. Instead
-    the returned judge fails THIS eval closed with a clear configuration
-    message (``passed=False``), so the block/warn decision still fires and
-    the remaining evals in the loop still run.
-    """
-    try:
-        backend_id = uuid.UUID(backend_id_str)
-    except (ValueError, TypeError) as exc:
-        detail = (
-            f"llm_judge eval has a malformed model_backend_id {backend_id_str!r}: "
-            f"not a valid UUID ({exc}); fix the eval definition's "
-            "config['model_backend_id']"
-        )
-        _log.error(
-            "llm_judge.malformed_model_backend_id",
-            extra={"model_backend_id": backend_id_str, "detail": detail},
-        )
-
-        def _fail_closed_judge(
-            output: dict[str, Any],
-            eval_def: EvalDefDTO,
-        ) -> dict[str, Any]:
-            return {"passed": False, "score": 0.0, "detail": detail}
-
-        return _fail_closed_judge
-
-    def _judge(
-        output: dict[str, Any],
-        eval_def: EvalDefDTO,
-    ) -> dict[str, Any]:
-        field = eval_def.config.get("field", "")
-        content = output.get(field, "")
-        prompt = (
-            "Evaluate the following output and return JSON with keys passed "
-            "(bool), score (float 0-1), detail (str).\n\n"
-            f"Output:\n{content}"
-        )
-        messages = [HumanMessage(content=prompt)]
-        response = _run_coroutine_sync(_invoke_backend(hub, backend_id, messages))
-        text = response.content if hasattr(response, "content") else str(response)
-        try:
-            parsed = json.loads(text)
-        except ValueError:
-            parsed = {"passed": False, "score": 0.0, "detail": text}
-        detail = parsed.get("detail", "")
-        return {
-            "passed": bool(parsed.get("passed", False)),
-            "score": parsed.get("score"),
-            "detail": str(detail) if detail is not None else "",
-        }
-
-    return _judge
 
 
 def _resolve_gate_eval_envelope(
@@ -5413,17 +5314,6 @@ def _hitl_review_condition_evaluate(
     }
 
 
-def _resolve_llm_judge_callable(eval_def: Any) -> Any:
-    """Resolve the LLM judge callable for an eval definition, if configured."""
-    if eval_def.eval_type == EvalType.LLM_JUDGE and eval_def.config.get("model_backend_id"):
-        from modulo.core.pipeline_engine.decorator import get_model_backend_hub
-
-        hub = get_model_backend_hub()
-        if hub is not None:
-            return _build_llm_judge_callable(hub, str(eval_def.config["model_backend_id"]))
-    return None
-
-
 async def _run_gate_evals(
     state: dict[str, Any],
     eval_definitions: Sequence[EvalDefDTO] | None,
@@ -5468,7 +5358,7 @@ async def _run_gate_evals(
         org_id=org_id,
         session_factory=session_factory,
         node_id=review_id,
-        resolve_llm_judge=_resolve_llm_judge_callable,
+        resolve_llm_judge=resolve_llm_judge_callable,
         on_eval_result=_on_gate_eval_result,
     )
 
@@ -6501,12 +6391,17 @@ async def _await_dispatch_terminal(
 
 
 def _stamp_dispatch_provenance(result: Any, instance_id: str) -> Any:
-    """Stamp FAR-1141 provenance onto a dispatch node's output.
+    """Stamp FAR-1141 / FAR-1693 provenance onto a dispatch node's output.
 
     A dispatch node WITNESSES state on the customer's own substrate — it never
-    executed anything — so its output carries:
+    executed anything — so its output carries, all ENGINE-ASSIGNED:
 
-    * ``witnessed_via``          the connector instance id it read through
+    * ``provenance``             the unified taxonomy class ``reported`` — the
+      substrate's datum arrived from an external surface (FAR-1693). NEVER
+      ``attested``: that would imply the substrate's data is true, which the
+      contract forecloses.
+    * ``witnessed_via``          the connector instance id it read through —
+      the CHANNEL STAMP of the ``reported`` class, not a class of its own.
     * ``execution_identity``     ``"customer_substrate"`` (never ``modulo``)
     * ``declared_external_cost`` ``None`` — Modulo declares NO cost for work it
       did not run
@@ -6518,11 +6413,16 @@ def _stamp_dispatch_provenance(result: Any, instance_id: str) -> Any:
     pass through unstamped, so a witnessed run list read as an array Modulo
     produced. The key set is the one
     :data:`modulo.core.node_output_split.DISPATCH_PROVENANCE_FIELDS` lifts back
-    out on the failed-artifact path, so the two cannot drift. Never raises.
+    out on the failed-artifact path, so the two cannot drift.
+
+    Each provenance key is OVERWRITTEN, never merged — a hostile or
+    prompt-injected substrate result cannot assert its own class or channel
+    (ADR-034's engine-assignment rule). Never raises.
     """
     if isinstance(result, dict):
         stamped = dict(result)
-        stamped["witnessed_via"] = instance_id
+        stamped[PROVENANCE_KEY] = DISPATCH_DATUM_PROVENANCE
+        stamped[WITNESSED_VIA_KEY] = instance_id
         stamped["execution_identity"] = "customer_substrate"
         stamped["declared_external_cost"] = None
         if "status" in stamped:
@@ -6530,7 +6430,8 @@ def _stamp_dispatch_provenance(result: Any, instance_id: str) -> Any:
         return stamped
     return {
         "result": result,
-        "witnessed_via": instance_id,
+        PROVENANCE_KEY: DISPATCH_DATUM_PROVENANCE,
+        WITNESSED_VIA_KEY: instance_id,
         "execution_identity": "customer_substrate",
         "declared_external_cost": None,
     }

@@ -152,6 +152,20 @@ def _mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=None)
     session.begin = MagicMock(return_value=begin_cm)
+    # FAR-1639 (FAR-1629 sweep): ``in_transaction`` is a SYNC method on
+    # AsyncSession, so a bare-AsyncMock child returns a truthy un-awaited
+    # coroutine instead of False/True and the RLS guard in
+    # db/rls._ensure_active_transaction (``if not session.in_transaction():``)
+    # is passed vacuously — observed concretely on
+    # TestTriggerToolGaps.test_delete_trigger_soft_delete_returns_none, whose
+    # un-patched _pipeline_team_gate reaches the guard via
+    # pipeline_team_scope_team_blind. Type it as a MagicMock returning True.
+    # ``add`` is the other sync method in the FAR-1629 family: the eval
+    # create/update chain (eval_engine.eval_definition_write) calls
+    # ``session.add(...)`` non-awaited on these doubles, which a bare-AsyncMock
+    # child turns into a dangling coroutine.
+    session.in_transaction = MagicMock(return_value=True)
+    session.add = MagicMock()
     nested_cm = MagicMock()
     nested_cm.__aenter__ = AsyncMock(return_value=None)
     nested_cm.__aexit__ = AsyncMock(return_value=False)
@@ -500,6 +514,12 @@ class TestValidateOauthLive(_AuthContext):
             patch.object(ms, "_session", return_value=_make_session_context(session)),
             patch.object(ms, "check_oauth_token_family_valid", new=AsyncMock(return_value=True)),
             patch.object(ms, "_revalidate_live_role", new=AsyncMock(return_value=None)),
+            # FAR-1639: leave the leg explicit — the production resolver would
+            # run scalar_one_or_none() (a SYNC Result accessor) against this
+            # double's AsyncMock execute result, leaving a dangling coroutine.
+            # None is the org-wide/no-boundary posture this test's deny outcome
+            # rests on.
+            patch.object(ms, "get_oauth_client_team_id", new=AsyncMock(return_value=None)),
         ):
             assert await _validate_oauth_live(_API_KEY) is False
 
@@ -916,8 +936,11 @@ class TestOauthAuthorizeHandler:
             patches={
                 "modulo.api.mcp_server._get_session_factory": {"return_value": _mock_factory(_mock_session())},
                 "modulo.auth.oauth.get_oauth_client_by_client_id": {"new": AsyncMock(return_value=client)},
-                "modulo.auth.oauth.normalize_scopes": {"new": AsyncMock(return_value=["trigger:run"])},
-                "modulo.auth.oauth.validate_client_scopes": {"new": AsyncMock(return_value=["trigger:run"])},
+                # FAR-1639 (FAR-1629 sweep): normalize_scopes / validate_client_scopes are
+                # SYNC oauth helpers (auth/oauth.py) — patching them as AsyncMock yields
+                # dangling never-awaited coroutines at _oauth_authorize's call site.
+                "modulo.auth.oauth.normalize_scopes": {"new": MagicMock(return_value=["trigger:run"])},
+                "modulo.auth.oauth.validate_client_scopes": {"new": MagicMock(return_value=["trigger:run"])},
                 "modulo.auth.oauth.create_consent_state": {"new": AsyncMock(return_value=None)},
                 "modulo.api.mcp_server.set_rls_org": {"new": AsyncMock(return_value=None)},
                 # FAR-1283: the authorize leg enforces the kill switch; this test

@@ -285,6 +285,7 @@ async def test_gate_eval_persist_stamps_definition_version(monkeypatch) -> None:
     await eval_persist_order.run_evals_persist_before_decide(
         eval_defs=[eval_def],
         resolve_eval_target=lambda ed: {"text": "a"},
+        resolve_llm_judge=lambda _ed: None,
         run_id=uuid.uuid4(),
         org_id=org_id,
         session_factory=_Factory(),
