@@ -254,6 +254,7 @@ def test_split_dispatch_failure_preserves_witness_provenance() -> None:
         "execution_identity": "customer_substrate",
         "declared_external_cost": None,
         "substrate_status": "failure",
+        "provenance": "reported",
     }
     envelope = {
         "artifacts": [{"node_id": "d1", "status": "failed", "error": "failure"}],

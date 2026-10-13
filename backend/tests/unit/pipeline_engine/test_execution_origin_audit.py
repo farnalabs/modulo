@@ -111,10 +111,13 @@ class TestRunStartedExecutionOrigin:
     async def test_dispatched_run_payload_carries_origin(self) -> None:
         payload = await _run_started_payload(_run(execution_origin="dispatched"))
         assert payload["execution_origin"] == "dispatched"
+        # FAR-1693: the unified class rides alongside, engine-derived.
+        assert payload["provenance"] == "reported"
 
     async def test_executed_run_payload_carries_null(self) -> None:
         payload = await _run_started_payload(_run(execution_origin=None))
         assert payload["execution_origin"] is None
+        assert payload["provenance"] is None
 
     async def test_no_test_double_coercion_in_the_payload(self) -> None:
         """FAR-1566: the audit payload reads the row VERBATIM — a stand-in that

@@ -860,12 +860,26 @@ def test_stamp_dispatch_provenance_wraps_a_list_result():
     assert stamped["witnessed_via"] == "inst-1"
     assert stamped["execution_identity"] == "customer_substrate"
     assert stamped["declared_external_cost"] is None
+    # FAR-1693: the unified class, engine-assigned — never "attested".
+    assert stamped["provenance"] == "reported"
 
 
 def test_stamp_dispatch_provenance_stamps_a_dict_in_place():
     stamped = nr._stamp_dispatch_provenance({"id": "job-1", "status": "success"}, "inst-1")
     assert stamped["substrate_status"] == "success"
     assert stamped["execution_identity"] == "customer_substrate"
+    assert stamped["provenance"] == "reported"
+
+
+def test_stamp_dispatch_provenance_overwrites_a_self_asserted_class():
+    """A substrate result cannot assert its own provenance — the engine
+    OVERWRITES it (ADR-034's engine-assignment rule, unified by FAR-1693)."""
+    stamped = nr._stamp_dispatch_provenance(
+        {"id": "job-1", "provenance": "attested", "witnessed_via": "attacker"},
+        "inst-1",
+    )
+    assert stamped["provenance"] == "reported"
+    assert stamped["witnessed_via"] == "inst-1"
 
 
 def test_failed_dispatch_envelope_carries_every_provenance_key():
@@ -911,6 +925,7 @@ async def test_list_runs_node_output_carries_provenance():
     assert output["witnessed_via"] == node_def["connector_binding"]["instance_id"]
     assert output["execution_identity"] == "customer_substrate"
     assert output["declared_external_cost"] is None
+    assert output["provenance"] == "reported"
 
 
 # ---------------------------------------------------------------------------
@@ -1052,6 +1067,7 @@ def test_stamp_dispatch_provenance_without_status_omits_substrate_status():
     assert "substrate_status" not in stamped
     assert stamped["witnessed_via"] == "inst-1"
     assert stamped["execution_identity"] == "customer_substrate"
+    assert stamped["provenance"] == "reported"
 
 
 def test_failed_dispatch_envelope_without_provenance_keys_is_still_valid():

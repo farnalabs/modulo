@@ -17891,6 +17891,8 @@ export interface components {
             trigger_type?: string | null;
             /** Execution Origin */
             execution_origin?: string | null;
+            /** Provenance */
+            provenance?: string | null;
             /** Trigger Actor */
             trigger_actor?: string | null;
             /** Trigger Id */

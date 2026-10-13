@@ -911,6 +911,12 @@ class RunResponse(BaseModel):
     # Modulo-executed one. Additive/nullable — existing consumers are
     # unaffected.
     execution_origin: str | None = None
+    # FAR-1693: the unified provenance class of the run's externally-sourced
+    # data — ``reported`` for a dispatched run (the substrate's datum arrived
+    # from an external surface), ``None`` for an executed / legacy run. Engine-
+    # derived from ``execution_origin`` via ``core.provenance``; additive and
+    # always present alongside ``execution_origin``.
+    provenance: str | None = None
     trigger_actor: str | None = None
     trigger_id: uuid.UUID | None = None
     heartbeat_at: datetime | None = None
