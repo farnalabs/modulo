@@ -288,6 +288,22 @@ ENQUEUE_FAILED_REDISPATCH_MAX_PER_TICK = 50
 # terminal-fail (terminal-fail reduces load; it never enqueues).
 NODELESS_REDISPATCH_MAX_PER_TICK = 50
 
+# FAR-1740: the claimed-but-nodeless window is DERIVED PER-PIPELINE from the
+# pipeline's longest node ``timeout_seconds``. A sandbox node writes no
+# LangGraph checkpoint until it COMPLETES a super-step, so a healthy first node
+# that runs longer than the window is indistinguishable from a never-dispatched
+# zombie — the fixed 35-min global window (calibrated to an 1800s node) misreads
+# a 3300s node. The window MUST exceed the pipeline's max node timeout;
+# ``NODELESS_WINDOW_SETUP_GRACE_MINUTES`` is the margin on top (graph compile +
+# the reconcile tick cadence), reproducing the historical
+# "1800s node -> 35 min window (5 min margin)" calibration exactly, so a
+# pipeline whose longest node fits the global default keeps today's behaviour.
+NODELESS_WINDOW_SETUP_GRACE_MINUTES = 5
+# Hard ceiling on a derived window, mirroring ``SAQ_CLAIMED_NODELESS_MINUTES``'s
+# own Field bound (le=1440): a graph whose node timeout is pinned at the
+# GraphValidator cap must never derive an absurdly long window.
+NODELESS_WINDOW_MAX_MINUTES = 1440
+
 # FAR-746 resilience bounds for the dispatcher_reconcile tick.
 #
 # Redis read/write socket timeout for the tick's dedicated client: the
@@ -466,6 +482,20 @@ _MID_GRAPH_WEDGE_SQL = (
     "  SELECT ctid FROM runs "
     "  WHERE organisation_id=:oid AND status='running' AND dispatcher='saq' "
     "  AND started_at < now() - (:max_age_minutes * interval '1 minute') "
+    # FAR-1740 (3): a node-STARTED row (``first_node_dispatched``) that still
+    # carries a LIVE dispatch marker is HARD in-flight — a node was dispatched
+    # and has not completed. Its termination is owned by the node-deadline
+    # watchdog (and, on executor death, by the dispatch-lease recovery path),
+    # so the age gate must NOT abandon it, however long it runs. A node-started
+    # row WITHOUT a live marker (marker cleared/tombstoned, or never written)
+    # keeps the truthful ``run.no_progress`` at the age bound. The tombstone
+    # pattern is bound (``:live_marker_tombstone`` from
+    # _live_dispatch_marker_tombstone_pattern) so the SQL text stays STATIC —
+    # no runtime str.replace, which keeps the statement identical to the
+    # template every test asserts against.
+    "  AND NOT (dispatch_phase = :first_node_phase "
+    "AND runs.sandbox_dispatch_state IS NOT NULL "
+    "AND runs.sandbox_dispatch_state NOT LIKE :live_marker_tombstone) "
     "  AND NOT (__ZERO_PROGRESS_SHAPE__) "
     "  LIMIT :max_rows) "
     "RETURNING id"
@@ -4629,6 +4659,178 @@ def _has_live_dispatch_marker(row: Any) -> bool:
     return f'"state": "{MARKER_STATE_CLEARED_AT_HITL}"' not in marker
 
 
+def _live_dispatch_marker_tombstone_pattern() -> str:
+    """LIKE pattern (FAR-1740): the HITL tombstone state of the dispatch marker.
+
+    The exact complement of :func:`_nodeless_no_live_marker_sql`: a marker that
+    is non-NULL and does NOT match this pattern is LIVE. A node-started row
+    (``first_node_dispatched``) that still carries a live marker is HARD
+    in-flight — a node was dispatched and has not completed — so its
+    termination is owned by the node-deadline watchdog (and, on executor death,
+    by the dispatch-lease recovery path), and the reconcile age gate must never
+    abandon it. The pattern is bound as a parameter (never inlined into the
+    statement) and derives from ``runner_capacity.MARKER_STATE_CLEARED_AT_HITL``
+    (lazy import, same reason as the row leg), so a rename of the tombstone
+    state can never silently kill the shield. Matches the JSON ``state`` field
+    PRECISELY (never a bare ``%cleared_at_hitl%`` substring).
+    """
+    from modulo.core.runner_capacity import MARKER_STATE_CLEARED_AT_HITL
+
+    return f'%"state": "{MARKER_STATE_CLEARED_AT_HITL}"%'
+
+
+def _max_node_timeout_seconds_from_graph(source: Any) -> int | None:
+    """Largest ``timeout_seconds`` across a serialised graph's nodes, or ``None``.
+
+    FAR-1740. Accepts either a graph dict (``{"nodes": [...]}`` — the shape of
+    ``pipeline_snapshots.graph_json``) or a bare node list (the shape of
+    ``pipelines.graph_nodes_json``). Mirrors the NULL-safe walk in
+    ``analytics._derive_graph_dimensions``: a non-dict/non-list degrades to
+    ``None`` (never raises), so a malformed graph can only fall back to the
+    global floor — it can never invent a window. ``bool`` is excluded (it is an
+    ``int`` subclass and never a real timeout).
+    """
+    nodes = source.get("nodes") if isinstance(source, dict) else source
+    if not isinstance(nodes, list):
+        return None
+    largest: int | None = None
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        raw = node.get("timeout_seconds")
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            continue
+        value = int(raw)
+        if largest is None or value > largest:
+            largest = value
+    return largest
+
+
+def _positive_int(value: Any) -> int | None:
+    """*value* as a positive ``int``, else ``None`` (rejects ``bool``)."""
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
+def _row_pipeline_max_node_timeout_seconds(row: Any) -> int | None:
+    """Best-effort max node ``timeout_seconds`` for the row's pipeline (FAR-1740).
+
+    Prefers the run's FROZEN snapshot graph (``snapshot_graph_json`` — the graph
+    the run actually executes), then the live pipeline node list
+    (``pipeline_graph_json``), then the pipeline-level default
+    (``pipeline_node_timeout_seconds``); ``None`` when none is available — a
+    row source that carries no pipeline graph keeps the pre-FAR-1740 global
+    floor. Taking the MAX across sources is deliberate: under-estimating the
+    window is the bug, over-estimating merely waits longer.
+    """
+    candidates: list[int] = []
+    for attr in ("snapshot_graph_json", "pipeline_graph_json"):
+        value = _positive_int(_max_node_timeout_seconds_from_graph(getattr(row, attr, None)))
+        if value is not None:
+            candidates.append(value)
+    default = _positive_int(getattr(row, "pipeline_node_timeout_seconds", None))
+    if default is not None:
+        candidates.append(default)
+    return max(candidates) if candidates else None
+
+
+def pipeline_nodeless_window_minutes(floor_minutes: int, *, max_node_timeout_seconds: int | None) -> int:
+    """FAR-1740: derive a pipeline's claimed-but-nodeless window (minutes).
+
+    ``ceil(max_node_timeout_seconds / 60) + NODELESS_WINDOW_SETUP_GRACE_MINUTES``,
+    clamped to ``[floor_minutes, NODELESS_WINDOW_MAX_MINUTES]`` where
+    *floor_minutes* is the configured global ``SAQ_CLAIMED_NODELESS_MINUTES``
+    (a pipeline is never held to a SHORTER window than the global default, so
+    behaviour for the standard 1800s-node pipelines is unchanged: 1800s -> 35).
+    A missing/unknown node timeout returns *floor_minutes* verbatim.
+
+    The window MUST exceed the max node timeout (the mechanical invariant): a
+    sandbox node writes no checkpoint until it completes a super-step, so a
+    legitimate first node longer than the window is misread as a zombie.
+    Ceiling division ensures the whole-minute window never rounds the required
+    coverage DOWN.
+    """
+    node_timeout = _positive_int(max_node_timeout_seconds)
+    if node_timeout is None:
+        return floor_minutes
+    required = (node_timeout + 59) // 60 + NODELESS_WINDOW_SETUP_GRACE_MINUTES
+    return min(max(floor_minutes, required), NODELESS_WINDOW_MAX_MINUTES)
+
+
+def _row_early_detect_minutes(
+    early_detect_minutes: int | None,
+    *,
+    floor_minutes: int,
+    row_window_minutes: int,
+) -> int | None:
+    """FAR-1740: disable FAR-873 early-detect for a WIDENED per-pipeline window.
+
+    Early-detect deliberately declares "no progress" at a SHORTER window than
+    the full one. That is safe only while the full window is the standard one
+    (the status quo, protected by the FAR-1649 node-started legs + the
+    FAR-1088 live-marker shield). For a pipeline whose longest node timeout
+    forced the window ABOVE the global floor, a node may legitimately still be
+    running inside the early window, so no early "no progress" judgement is
+    safe: the row waits for its per-pipeline window (the full nodeless repair).
+    A non-widened pipeline keeps the configured early window unchanged.
+    """
+    if early_detect_minutes is None:
+        return None
+    if row_window_minutes > floor_minutes:
+        return None
+    return early_detect_minutes
+
+
+def _is_zero_progress_shape_row(row: Any) -> bool:
+    """Row-level mirror of :data:`_ZERO_PROGRESS_SHAPE_SQL` (FAR-1740).
+
+    True when the reconcile flags say ZERO node progress: no token usage, no
+    finalised store row (``outputs_absent``) and no LangGraph checkpoint
+    (``checkpoints_absent``). Fails CLOSED (``False``) when a flag is absent,
+    so a row source that forgets a column is never treated as zero-progress.
+    """
+    return (
+        getattr(row, "node_token_usage", None) is None
+        and bool(getattr(row, "outputs_absent", False))
+        and bool(getattr(row, "checkpoints_absent", False))
+    )
+
+
+def _row_age_seconds(row: Any) -> float | None:
+    """Seconds since ``started_at``, or ``None`` when it is unavailable."""
+    started_at = getattr(row, "started_at", None)
+    if started_at is None:
+        return None
+    return float((datetime.now(UTC) - started_at).total_seconds())
+
+
+def _held_back_by_widened_window(row: Any, *, nodeless_window: int, floor_nodeless_window: int | None) -> bool:
+    """FAR-1740 tail guard: is *row* too young for a WIDENED nodeless window?
+
+    The SQL scan composes the GLOBAL-floor window (a superset of every
+    per-pipeline window), so a row from a pipeline whose window was widened
+    above the floor can reach the generic recovery path younger than its own
+    window. The nodeless repair already refused it (too young); without this
+    guard the generic path would re-dispatch a job-gone row as ``execute_run``,
+    rotating ``claim_count`` and killing the in-flight attempt.
+
+    True only for a zero-progress RUNNING saq row whose age is within
+    *nodeless_window* (once it elapses the full repair owns the row). Gated on a
+    non-``None`` floor and a genuinely widened window, so direct callers and
+    non-widened pipelines are unaffected; a missing ``started_at`` is NOT held
+    (no age evidence).
+    """
+    if floor_nodeless_window is None or nodeless_window <= floor_nodeless_window:
+        return False
+    if getattr(row, "status", None) != "running" or getattr(row, "dispatcher", None) != "saq":
+        return False
+    if not _is_zero_progress_shape_row(row):
+        return False
+    age_seconds = _row_age_seconds(row)
+    return age_seconds is not None and age_seconds <= nodeless_window * 60
+
+
 def _per_attempt_anchor_expr() -> Any:
     """SQL expression for the in-flight floor's time anchor (FAR-1088 F3).
 
@@ -5979,6 +6181,11 @@ async def _terminalize_mid_graph_wedges(
             # FAR-1649: shared-constant bind for the shape's phase leg (see
             # the router's params above — one definition, both statements).
             "first_node_phase": PHASE_FIRST_NODE_DISPATCHED,
+            # FAR-1740 (3): the HITL-tombstone LIKE pattern for the node-started
+            # hard-in-flight exclusion — bound (not inlined) so the statement
+            # text stays the static template and the tombstone constant has ONE
+            # definition (runner_capacity.MARKER_STATE_CLEARED_AT_HITL).
+            "live_marker_tombstone": _live_dispatch_marker_tombstone_pattern(),
             "max_age_minutes": max_age_minutes,
             "max_rows": _terminalize_max_rows(max_rows),
         },
@@ -7593,6 +7800,7 @@ async def _reconcile_org(
     exact blocking site instead of only the org.
     """
     from modulo.db.models.pipeline import Pipeline
+    from modulo.db.models.pipeline_snapshot import PipelineSnapshot
     from modulo.db.models.run import Run
 
     def _mark(detail: str) -> None:
@@ -7705,8 +7913,20 @@ async def _reconcile_org(
                 Run.sandbox_dispatch_state,
                 text("runs.enqueue_failed_at AS enqueue_failed_at"),
                 Pipeline.retry_policy,
+                # FAR-1740: the per-pipeline max node timeout drives the
+                # claimed-but-nodeless window. The FROZEN snapshot graph is the
+                # graph the run actually executes; the live pipeline node list
+                # and the pipeline-level default are fallbacks. All three are
+                # NULL-safe (a row source without them keeps the global floor).
+                PipelineSnapshot.graph_json.label("snapshot_graph_json"),
+                Pipeline.graph_nodes_json.label("pipeline_graph_json"),
+                Pipeline.node_timeout_seconds.label("pipeline_node_timeout_seconds"),
             )
             row_select = row_select.join(Pipeline, Pipeline.id == Run.pipeline_id, isouter=True)
+            # FAR-1740: the run's frozen snapshot graph — joined (not a
+            # per-row query) so deriving the window is free per row. LEFT join:
+            # a run with no snapshot (or a pruned one) still reconciles.
+            row_select = row_select.join(PipelineSnapshot, PipelineSnapshot.id == Run.snapshot_id, isouter=True)
             row_select = row_select.where(
                 Run.organisation_id == org_id,
                 # The F6a statuses must be IN this scan tuple too (qa
@@ -7792,17 +8012,36 @@ async def _reconcile_org(
                 break
             _mark(f"row_loop:{row_index}/{len(rows)}")
             summary["scanned"] += 1
+            # FAR-1740: derive the claimed-but-nodeless window PER-PIPELINE from
+            # this row's longest node timeout (frozen snapshot graph preferred,
+            # then the live node list, then the pipeline default). A row whose
+            # pipeline graph is unavailable keeps the global floor, so the SQL
+            # scan's global window stays a valid SUPERSET and the row-level
+            # recheck enforces the (never shorter) per-pipeline window. The
+            # FAR-873 early-detect is disabled for a pipeline whose window had
+            # to be widened above the floor — a node may still be legitimately
+            # running inside the early window.
+            row_nodeless_window = pipeline_nodeless_window_minutes(
+                tuning.nodeless_window,
+                max_node_timeout_seconds=_row_pipeline_max_node_timeout_seconds(row),
+            )
+            row_early_detect_minutes = _row_early_detect_minutes(
+                early_detect_minutes,
+                floor_minutes=tuning.nodeless_window,
+                row_window_minutes=row_nodeless_window,
+            )
             enqueue_failed_redispatched = await _reconcile_one_row(
                 session,
                 q,
                 redis_client,
                 org_id,
                 row,
-                tuning.nodeless_window,
+                row_nodeless_window,
                 enqueue_failed_redispatched,
                 summary,
                 terminalized_run_ids,
-                early_detect_minutes=early_detect_minutes,
+                early_detect_minutes=row_early_detect_minutes,
+                floor_nodeless_window=tuning.nodeless_window,
             )
         # FAR-1425: the fetch above returned one row beyond the budget when
         # (and only when) matching rows remain. Count the org as deferred so
@@ -8543,6 +8782,7 @@ async def _reconcile_one_row(
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
     *,
     early_detect_minutes: int | None = None,
+    floor_nodeless_window: int | None = None,
 ) -> int:
     """Reconcile ONE matched run row; returns the updated enqueue-failed counter.
 
@@ -8550,6 +8790,12 @@ async def _reconcile_one_row(
     early-detect, B3 enqueue-failed branch, F6a resume guard, capacity check,
     the job re-check, and the re-dispatch decision for a single row.
     ``summary`` and ``terminalized_run_ids`` are mutated in place.
+
+    FAR-1740: *nodeless_window* is the row's PER-PIPELINE window (derived by the
+    caller from the pipeline's longest node timeout). *floor_nodeless_window* is
+    the global floor it was derived from — a WIDENED window (floor < window)
+    additionally arms the tail guard below, so a zero-progress running row is
+    never re-dispatched by the generic recovery path before its window elapses.
     """
     # FAR-873: early-detect for fresh-heartbeat nodeless zombies.  Fire BEFORE
     # the full nodeless repair so a wedged-worker zombie is re-dispatched ~20
@@ -8619,6 +8865,24 @@ async def _reconcile_one_row(
     )
     if handled is not None:
         return handled
+
+    # FAR-1740 tail guard: the SQL scan's global window is a SUPERSET of every
+    # per-pipeline window, so a row from a pipeline whose window was WIDENED
+    # above the floor can reach here younger than its own window. The nodeless
+    # repair above already refused it (too young), but the generic recovery
+    # path below would re-dispatch a job-gone row as ``execute_run`` — rotating
+    # claim_count and killing the in-flight attempt. Hold back a zero-progress
+    # RUNNING saq row until its per-pipeline window elapses (once it does, the
+    # full repair above owns it). Gated on a widened window, so direct callers
+    # (tests) and non-widened pipelines are unaffected; the existing
+    # ``node_started_running`` belt still owns node-started rows.
+    if _held_back_by_widened_window(
+        row,
+        nodeless_window=nodeless_window,
+        floor_nodeless_window=floor_nodeless_window,
+    ):
+        summary["skipped"] += 1
+        return enqueue_failed_redispatched
 
     # B3 enqueue-failed branch: pending + dispatched + dispatcher
     # NULL + enqueue_failed_at set.

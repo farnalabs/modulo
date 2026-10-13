@@ -644,15 +644,18 @@ class Settings(BaseSettings):
     # minutes is a claimed-but-never-executed zombie (the execute_run watchdog
     # normally fails it at SAQ_SETUP_GRACE_SECONDS; this branch catches the case
     # where the worker process itself is wedged and cannot run the watchdog).
-    # MUST exceed the pipeline's max node timeout so a legitimate long first
-    # node (which writes its first checkpoint only after completing) is never
-    # failed. Default 35 min > the 1800s node timeout used by agent pipelines
-    # (5 min margin for graph compile + reconcile tick cadence). Reduced from
-    # 45 min by FAR-199: a wedged worker fleet left claimed-but-nodeless runs
-    # 'running' for the whole window (observed executor_stalled /
-    # never_dispatched runs sitting 45-70 min before terminalization); 35 min
-    # bounds that accumulation while staying above the max node timeout so a
-    # slow-but-healthy first node is never false-failed. Tunable per deploy.
+    # FAR-1740: this is now only the FLOOR — the effective window is derived
+    # PER-PIPELINE from the pipeline's longest node ``timeout_seconds`` as
+    # ``ceil(max_node_timeout/60) + 5`` minutes, clamped to
+    # ``[saq_claimed_nodeless_minutes, 1440]`` (cron_helpers
+    # ``pipeline_nodeless_window_minutes``), so a 3300s-node pipeline gets a
+    # 60-minute window and a slow-but-healthy first node is never false-failed.
+    # Default 35 min keeps the historical behaviour for the 1800s-node agent
+    # pipelines exactly (5 min margin for graph compile + reconcile tick
+    # cadence). Reduced from 45 min by FAR-199: a wedged worker fleet left
+    # claimed-but-nodeless runs 'running' for the whole window (observed
+    # executor_stalled / never_dispatched runs sitting 45-70 min before
+    # terminalization); 35 min bounds that accumulation. Tunable per deploy.
     saq_claimed_nodeless_minutes: int = Field(default=35, alias="SAQ_CLAIMED_NODELESS_MINUTES", ge=5, le=1440)
     # FAR-873: early-detect window for claimed-but-nodeless zombies. A SAQ run
     # that has been 'running' with a FRESH heartbeat but ZERO progress after
