@@ -224,11 +224,11 @@ async def _seed_eval_definition(
     async with db_engine.connect() as conn, conn.begin(), _bypass_triggers(conn):
         await conn.execute(
             text(
-                "INSERT INTO eval_definitions (id, organisation_id, pipeline_id, "
-                "node_id, name, eval_type, config_json, failure_behaviour, "
+                "INSERT INTO evals (id, organisation_id, pipeline_id, "
+                "node_id, name, eval_type, config_json, "
                 "suite_id, account_id) "
                 "VALUES (:id, :oid, :pid, :nid, :name, 'regex', '{}'::json, "
-                "'warn', NULL, :uid)",
+                "NULL, :uid)",
             ),
             {
                 "id": str(eval_id),

@@ -13,6 +13,9 @@ observe   compute + validate + discard + log would-block (shadow).
 warn      log the violation; the run continues.
 block     the run transitions to ``eval_failed`` (TERMINAL).
 redact    field-scoped redaction at the ingestion edge.
+escalate  recognised action reserved for in-run human escalation
+          (FAR-1694). Behaviour is unchanged until the escalation slices
+          land: the vocabulary accepts it, but nothing yet suspends a run.
 
 Redaction
 ---------
@@ -86,6 +89,10 @@ class GuardrailAction(StrEnum):
     WARN = "warn"
     BLOCK = "block"
     REDACT = "redact"
+    # FAR-1694: in-run human escalation. Added to the vocabulary in S1
+    # (behaviour-neutral); the bridge protocol and mid-loop suspension that
+    # give it effect ship in later slices.
+    ESCALATE = "escalate"
 
 
 class FieldRedactionMode(StrEnum):

@@ -1,8 +1,8 @@
-"""Unit tests for migration 0305_trigger_secret_encryption (FAR-1732).
+"""Unit tests for migration 0306_trigger_secret_encryption (FAR-1732).
 
 Structural + behavioural contract (no Postgres needed — the bind is mocked):
 
-* **Revision chain** — 0305 revises ``0304_metrics_staging_recorded_at_index``
+* **Revision chain** — 0306 revises ``0305_guardrail_escalate_action``
   (the migrations directory has exactly one head, pinned by every sibling
   chain test), the revision id matches the filename, and neither
   ``branch_labels`` nor ``depends_on`` is set.
@@ -37,10 +37,10 @@ from cryptography.fernet import Fernet
 from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0305_trigger_secret_encryption"
+_MIGRATION_NAME = "0306_trigger_secret_encryption"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
-_DOWN_REVISION = "0304_metrics_staging_recorded_at_index"
-_CHAIN_HEAD_MIGRATION = "0305_trigger_secret_encryption"
+_DOWN_REVISION = "0305_guardrail_escalate_action"
+_CHAIN_HEAD_MIGRATION = "0306_trigger_secret_encryption"
 
 _KEY = "c3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3M="  # url-safe base64 of 32 b's — a valid deterministic Fernet key
 _FERNET = Fernet(_KEY.encode())
@@ -84,7 +84,7 @@ def _bind(configs: list[dict[str, Any]]) -> MagicMock:
     returns fake rows built from ``configs``; the mock records all later
     ``execute`` calls for assertion. The real-Postgres execution of that
     statement — and of the UPDATE — is covered by
-    ``tests/integration/db/test_migration_0305_trigger_secret_encryption.py``.
+    ``tests/integration/db/test_migration_0306_trigger_secret_encryption.py``.
     """
     bind = MagicMock()
     select_result = MagicMock()
@@ -108,11 +108,11 @@ def _run_upgrade(configs: list[dict[str, Any]]) -> tuple[MagicMock, ModuleType]:
 
 
 class TestChain:
-    def test_single_head_is_0305_trigger_secret_encryption(self) -> None:
+    def test_single_head_is_0306_trigger_secret_encryption(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
-    def test_down_revision_is_0304_metrics_staging_recorded_at_index(self) -> None:
+    def test_down_revision_is_0305_guardrail_escalate_action(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
 
     def test_revision_id_matches_filename(self) -> None:

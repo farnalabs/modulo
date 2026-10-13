@@ -1,7 +1,7 @@
 """Encrypt plaintext trigger webhook secrets at rest (FAR-1732).
 
-Revision ID: 0305_trigger_secret_encryption
-Revises: 0304_metrics_staging_recorded_at_index
+Revision ID: 0306_trigger_secret_encryption
+Revises: 0305_guardrail_escalate_action
 Create Date: 2026-10-13
 
 Why
@@ -53,8 +53,8 @@ from typing import Any, TypeGuard
 from alembic import op
 from sqlalchemy import text
 
-revision: str = "0305_trigger_secret_encryption"
-down_revision: str | None = "0304_metrics_staging_recorded_at_index"
+revision: str = "0306_trigger_secret_encryption"
+down_revision: str | None = "0305_guardrail_escalate_action"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

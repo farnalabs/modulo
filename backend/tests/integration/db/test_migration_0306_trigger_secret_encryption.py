@@ -1,22 +1,22 @@
-"""Integration test for migration 0305_trigger_secret_encryption (FAR-1732).
+"""Integration test for migration 0306_trigger_secret_encryption (FAR-1732).
 
 Against REAL Postgres (testcontainers, private database per test — the
 ``test_migration_0302`` / ``test_migration_0191`` harness), unlike the
 structural unit test whose bind is a MagicMock and whose SQL never executes:
 
-* seed three pre-existing trigger rows at ``0304_metrics_staging_recorded_at_index``
+* seed three pre-existing trigger rows at ``0305_guardrail_escalate_action``
   (the deployed shape where ``hmac_secret`` may still be PLAINTEXT):
   - ``plain``  — plaintext ``hmac_secret`` + ``signing_secret`` + non-secret keys,
   - ``enc``    — a secret already stored under a Fernet token (the write path's
     shape), ``masked`` — the sensitive-value mask sentinel;
-* the REAL alembic ``upgrade`` of ``0305_trigger_secret_encryption``:
+* the REAL alembic ``upgrade`` of ``0306_trigger_secret_encryption``:
   - exactly the PLAINTEXT row's ``config_json`` changes — the already-encrypted
     and masked rows are byte-for-byte untouched (``config_json::text`` compare),
   - the rewritten secret decrypts back to the original plaintext under the
     application's own ``fernet_key``,
   - every non-secret key of that row is preserved,
   - the already-encrypted row still decrypts (not double-encrypted, not clobbered);
-* idempotency on REAL data: an alembic downgrade (0305's deliberate no-op) and a
+* idempotency on REAL data: an alembic downgrade (0306's deliberate no-op) and a
   second ``upgrade`` re-run leaves all three rows byte-for-byte identical to the
   first run — a re-encryption would produce a fresh Fernet token (timestamped)
   and fail this comparison.
@@ -46,8 +46,8 @@ pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = Path(__file__).parents[3]  # backend/
 
-MIGRATION_REV = "0305_trigger_secret_encryption"
-PREV_REV = "0304_metrics_staging_recorded_at_index"
+MIGRATION_REV = "0306_trigger_secret_encryption"
+PREV_REV = "0305_guardrail_escalate_action"
 
 _PLAIN_HMAC = "plain-hmac-secret"
 _PLAIN_SIGNING = "plain-signing-secret"
@@ -120,7 +120,7 @@ def _downgrade(iso_url: str, target: str) -> None:
 async def pre_upgrade_db_url(db_url: str) -> AsyncGenerator[str, None]:
     """A private Postgres database migrated to ``PREV_REV`` — the deployed
     shape where plaintext trigger secrets can still exist."""
-    db_name, iso_url = await _fresh_db(db_url, "m0305_pre")
+    db_name, iso_url = await _fresh_db(db_url, "m0306_pre")
     try:
         _migrate(iso_url, PREV_REV)
         yield iso_url
