@@ -9,6 +9,7 @@ All pure validation tests call _check_schema_fields directly (no DB).
 Tests needing DB interaction use mocked AsyncSession.
 """
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
@@ -445,8 +446,14 @@ async def test_schema_deletion_allowed_when_not_pinned():
 # ===================================================================
 
 
-async def test_pre_existing_pipeline_gets_degraded_warning():
-    """Pre-Phase-1 snapshot with incompatible schemas does not block early."""
+async def test_pre_existing_pipeline_logs_degraded_mode(caplog: pytest.LogCaptureFixture):
+    """Pre-Phase-1 snapshot with incompatible schemas does not block early.
+
+    The degraded-mode signal is a WARNING-level log record (the ``SCHEMA_DEGRADED``
+    issue is stripped by ``_strip_warnings`` before ``validate_for_run`` returns),
+    so it is pinned here via ``caplog``.
+    """
+    caplog.set_level(logging.WARNING)
     out_id = uuid.uuid4()
     in_id = uuid.uuid4()
 
@@ -474,6 +481,7 @@ async def test_pre_existing_pipeline_gets_degraded_warning():
 
     assert not result.is_valid
     assert any(i.code == "SCHEMA_FIELD_INCOMPATIBLE" for i in result.issues)
+    assert any("Run proceeds in degraded mode" in r.getMessage() for r in caplog.records)
 
 
 async def test_non_pre_existing_pipeline_blocks_on_incompatible():
