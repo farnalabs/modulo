@@ -454,6 +454,12 @@ def get_assistant_session_by_id(session_id: str, request, ctx) -> None:
         patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
+        # The permission kill-switch read (resolve_authz_enforce) awaits
+        # session.execute; an untyped AsyncMock awaited returns another
+        # AsyncMock, so result.scalar_one_or_none() leaves a dangling
+        # coroutine. Shape the awaited result once — None keeps the
+        # fail-closed default (enforce=True) the tests already rely on.
+        mock_session_inst.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         # FAR-1639 (FAR-1629 sweep): in_transaction()/add() are SYNC
         # AsyncSession methods — the route emitters call session.add(msg)
         # un-awaited, which a bare AsyncMock child leaves dangling.
@@ -479,6 +485,12 @@ def rename_assistant_session(request, ctx) -> None:
         patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
+        # The permission kill-switch read (resolve_authz_enforce) awaits
+        # session.execute; an untyped AsyncMock awaited returns another
+        # AsyncMock, so result.scalar_one_or_none() leaves a dangling
+        # coroutine. Shape the awaited result once — None keeps the
+        # fail-closed default (enforce=True) the tests already rely on.
+        mock_session_inst.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         # FAR-1639 (FAR-1629 sweep): in_transaction()/add() are SYNC
         # AsyncSession methods — the route emitters call session.add(msg)
         # un-awaited, which a bare AsyncMock child leaves dangling.
@@ -504,6 +516,12 @@ def delete_assistant_session(request, ctx) -> None:
         patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
+        # The permission kill-switch read (resolve_authz_enforce) awaits
+        # session.execute; an untyped AsyncMock awaited returns another
+        # AsyncMock, so result.scalar_one_or_none() leaves a dangling
+        # coroutine. Shape the awaited result once — None keeps the
+        # fail-closed default (enforce=True) the tests already rely on.
+        mock_session_inst.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         # FAR-1639 (FAR-1629 sweep): in_transaction()/add() are SYNC
         # AsyncSession methods — the route emitters call session.add(msg)
         # un-awaited, which a bare AsyncMock child leaves dangling.
@@ -529,6 +547,12 @@ def get_other_users_session(request, ctx) -> None:
         patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
+        # The permission kill-switch read (resolve_authz_enforce) awaits
+        # session.execute; an untyped AsyncMock awaited returns another
+        # AsyncMock, so result.scalar_one_or_none() leaves a dangling
+        # coroutine. Shape the awaited result once — None keeps the
+        # fail-closed default (enforce=True) the tests already rely on.
+        mock_session_inst.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         # FAR-1639 (FAR-1629 sweep): in_transaction()/add() are SYNC
         # AsyncSession methods — the route emitters call session.add(msg)
         # un-awaited, which a bare AsyncMock child leaves dangling.
@@ -562,6 +586,12 @@ def append_message(role: str, request, ctx, content: str = "Hello") -> None:
         patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
+        # The permission kill-switch read (resolve_authz_enforce) awaits
+        # session.execute; an untyped AsyncMock awaited returns another
+        # AsyncMock, so result.scalar_one_or_none() leaves a dangling
+        # coroutine. Shape the awaited result once — None keeps the
+        # fail-closed default (enforce=True) the tests already rely on.
+        mock_session_inst.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         # FAR-1639 (FAR-1629 sweep): in_transaction()/add() are SYNC
         # AsyncSession methods — the route emitters call session.add(msg)
         # un-awaited, which a bare AsyncMock child leaves dangling.
@@ -592,6 +622,12 @@ def append_message_with_parent(role: str, content: str, request, ctx) -> None:
         patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
+        # The permission kill-switch read (resolve_authz_enforce) awaits
+        # session.execute; an untyped AsyncMock awaited returns another
+        # AsyncMock, so result.scalar_one_or_none() leaves a dangling
+        # coroutine. Shape the awaited result once — None keeps the
+        # fail-closed default (enforce=True) the tests already rely on.
+        mock_session_inst.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         # FAR-1639 (FAR-1629 sweep): in_transaction()/add() are SYNC
         # AsyncSession methods — the route emitters call session.add(msg)
         # un-awaited, which a bare AsyncMock child leaves dangling.
@@ -618,6 +654,12 @@ def append_message_to_session_id(role: str, session_id: str, request, ctx) -> No
         patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
+        # The permission kill-switch read (resolve_authz_enforce) awaits
+        # session.execute; an untyped AsyncMock awaited returns another
+        # AsyncMock, so result.scalar_one_or_none() leaves a dangling
+        # coroutine. Shape the awaited result once — None keeps the
+        # fail-closed default (enforce=True) the tests already rely on.
+        mock_session_inst.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         # FAR-1639 (FAR-1629 sweep): in_transaction()/add() are SYNC
         # AsyncSession methods — the route emitters call session.add(msg)
         # un-awaited, which a bare AsyncMock child leaves dangling.
@@ -681,6 +723,12 @@ def list_messages_for_session_id(session_id: str, request, ctx) -> None:
         patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
+        # The permission kill-switch read (resolve_authz_enforce) awaits
+        # session.execute; an untyped AsyncMock awaited returns another
+        # AsyncMock, so result.scalar_one_or_none() leaves a dangling
+        # coroutine. Shape the awaited result once — None keeps the
+        # fail-closed default (enforce=True) the tests already rely on.
+        mock_session_inst.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         # FAR-1639 (FAR-1629 sweep): in_transaction()/add() are SYNC
         # AsyncSession methods — the route emitters call session.add(msg)
         # un-awaited, which a bare AsyncMock child leaves dangling.
@@ -709,6 +757,12 @@ def append_message_with_tool_calls(request, ctx) -> None:
         patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
+        # The permission kill-switch read (resolve_authz_enforce) awaits
+        # session.execute; an untyped AsyncMock awaited returns another
+        # AsyncMock, so result.scalar_one_or_none() leaves a dangling
+        # coroutine. Shape the awaited result once — None keeps the
+        # fail-closed default (enforce=True) the tests already rely on.
+        mock_session_inst.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         # FAR-1639 (FAR-1629 sweep): in_transaction()/add() are SYNC
         # AsyncSession methods — the route emitters call session.add(msg)
         # un-awaited, which a bare AsyncMock child leaves dangling.
@@ -886,6 +940,12 @@ def create_skill(name: str, body: str, request, ctx) -> None:
         patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
+        # The permission kill-switch read (resolve_authz_enforce) awaits
+        # session.execute; an untyped AsyncMock awaited returns another
+        # AsyncMock, so result.scalar_one_or_none() leaves a dangling
+        # coroutine. Shape the awaited result once — None keeps the
+        # fail-closed default (enforce=True) the tests already rely on.
+        mock_session_inst.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         # FAR-1639 (FAR-1629 sweep): in_transaction()/add() are SYNC
         # AsyncSession methods — the route emitters call session.add(msg)
         # un-awaited, which a bare AsyncMock child leaves dangling.
@@ -940,6 +1000,12 @@ def update_org_skill(request, ctx) -> None:
         patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
+        # The permission kill-switch read (resolve_authz_enforce) awaits
+        # session.execute; an untyped AsyncMock awaited returns another
+        # AsyncMock, so result.scalar_one_or_none() leaves a dangling
+        # coroutine. Shape the awaited result once — None keeps the
+        # fail-closed default (enforce=True) the tests already rely on.
+        mock_session_inst.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         # FAR-1639 (FAR-1629 sweep): in_transaction()/add() are SYNC
         # AsyncSession methods — the route emitters call session.add(msg)
         # un-awaited, which a bare AsyncMock child leaves dangling.
@@ -965,6 +1031,12 @@ def delete_org_skill(request, ctx) -> None:
         patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
+        # The permission kill-switch read (resolve_authz_enforce) awaits
+        # session.execute; an untyped AsyncMock awaited returns another
+        # AsyncMock, so result.scalar_one_or_none() leaves a dangling
+        # coroutine. Shape the awaited result once — None keeps the
+        # fail-closed default (enforce=True) the tests already rely on.
+        mock_session_inst.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         # FAR-1639 (FAR-1629 sweep): in_transaction()/add() are SYNC
         # AsyncSession methods — the route emitters call session.add(msg)
         # un-awaited, which a bare AsyncMock child leaves dangling.
@@ -994,6 +1066,12 @@ def list_user_skills(request, ctx) -> None:
         patch("modulo.api.routes.me.get_user_skills", new_callable=AsyncMock, return_value=skills),
     ):
         mock_session_inst = AsyncMock()
+        # The permission kill-switch read (resolve_authz_enforce) awaits
+        # session.execute; an untyped AsyncMock awaited returns another
+        # AsyncMock, so result.scalar_one_or_none() leaves a dangling
+        # coroutine. Shape the awaited result once — None keeps the
+        # fail-closed default (enforce=True) the tests already rely on.
+        mock_session_inst.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         # FAR-1639 (FAR-1629 sweep): in_transaction()/add() are SYNC
         # AsyncSession methods — the route emitters call session.add(msg)
         # un-awaited, which a bare AsyncMock child leaves dangling.
@@ -1016,6 +1094,12 @@ def update_org_skill_by_id(skill_id: str, name: str, request, ctx) -> None:
         patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
+        # The permission kill-switch read (resolve_authz_enforce) awaits
+        # session.execute; an untyped AsyncMock awaited returns another
+        # AsyncMock, so result.scalar_one_or_none() leaves a dangling
+        # coroutine. Shape the awaited result once — None keeps the
+        # fail-closed default (enforce=True) the tests already rely on.
+        mock_session_inst.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         # FAR-1639 (FAR-1629 sweep): in_transaction()/add() are SYNC
         # AsyncSession methods — the route emitters call session.add(msg)
         # un-awaited, which a bare AsyncMock child leaves dangling.
@@ -1039,6 +1123,12 @@ def delete_org_skill_by_id(skill_id: str, request, ctx) -> None:
         patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
+        # The permission kill-switch read (resolve_authz_enforce) awaits
+        # session.execute; an untyped AsyncMock awaited returns another
+        # AsyncMock, so result.scalar_one_or_none() leaves a dangling
+        # coroutine. Shape the awaited result once — None keeps the
+        # fail-closed default (enforce=True) the tests already rely on.
+        mock_session_inst.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         # FAR-1639 (FAR-1629 sweep): in_transaction()/add() are SYNC
         # AsyncSession methods — the route emitters call session.add(msg)
         # un-awaited, which a bare AsyncMock child leaves dangling.
