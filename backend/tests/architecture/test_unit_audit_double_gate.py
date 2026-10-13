@@ -14,7 +14,11 @@ silently dials the real shared engine (a fail-open append logs-and-continues;
 on a live Postgres it writes a real audit row). These tests pin:
 
 - the SKIP path: the factory is untouched AND the audit module is NOT
-  imported as a side effect of the fixture body;
+  imported as a side effect of the fixture body — asserted while the fixture
+  generator is suspended at its ``yield`` (closing first unwinds the install,
+  so a removed gate would leave the factory restored and read as a false pass);
+- the fixture body actually CONSULTS the gate (a spy replaces
+  ``_audit_session_double_needed``), so dropping the gate call fails outright;
 - the PATCH path via a ``sys.modules`` marker (surface already loaded);
 - the PATCH path via source mention (the lazy in-body-import shape);
 - the PATCH path's teardown: closing the fixture generator restores the
@@ -71,16 +75,61 @@ def test_gate_skips_without_hint_and_does_not_import_audit_stack(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No surface loaded, no token in source -> no patch, no import, no side effect."""
+    """No surface loaded, no token in source -> no patch, no import, no side effect.
+
+    The asserts run INSIDE the fixture-body window — while the generator is
+    suspended at its ``yield`` — NOT after ``gen.close()``. Closing first
+    unwinds the ``monkeypatch.context()`` install, so a fixture with the gate
+    removed would leave the factory restored and this test would still pass;
+    observing the state the fixture actually installs for the test body is
+    what makes the pin discriminating. (The ``sys.modules`` probe alone could
+    not: string ``monkeypatch.setattr`` resolves each dotted part through
+    ``getattr`` on the already-imported parent package, so the ungated install
+    never re-imports the module it patches.)
+    """
     request = _fake_request(tmp_path, monkeypatch, "value = 1\n")
     _drop_audit_markers(monkeypatch)
 
     gen = _unit_conftest._isolated_audit_session.__wrapped__(request, monkeypatch)
     next(gen)  # skip path yields once without installing
-    gen.close()
+    try:
+        assert _audit_coverage._shared_session_factory is _REAL_FACTORY
+        assert "modulo.core.audit_coverage" not in sys.modules
+    finally:
+        gen.close()
 
+
+def test_isolated_audit_session_consults_the_gate_predicate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fixture body must CONSULT ``_audit_session_double_needed``.
+
+    Pins the predicate's USE directly: a spy replaces the predicate and the
+    fixture is driven through it, so dropping the gate call from the fixture
+    body leaves the spy unconsulted and fails here — independent of the
+    monkeypatch string-resolution path the identity assert leans on. Forcing
+    the spy True also drives the install path through the fixture's own gate,
+    so the assertion below proves the gate's True branch patches.
+    """
+    request = _fake_request(tmp_path, monkeypatch, "value = 1\n")
+    _drop_audit_markers(monkeypatch)
+    consulted: list[object] = []
+
+    def _spy(node: object) -> bool:
+        consulted.append(node)
+        return True
+
+    monkeypatch.setattr(_unit_conftest, "_audit_session_double_needed", _spy)
+
+    gen = _unit_conftest._isolated_audit_session.__wrapped__(request, monkeypatch)
+    next(gen)
+    try:
+        assert consulted == [request]
+        assert _audit_coverage._shared_session_factory is not _REAL_FACTORY
+    finally:
+        gen.close()
     assert _audit_coverage._shared_session_factory is _REAL_FACTORY
-    assert "modulo.core.audit_coverage" not in sys.modules
 
 
 def test_gate_patches_when_surface_already_loaded(
