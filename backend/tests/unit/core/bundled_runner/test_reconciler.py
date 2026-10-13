@@ -1293,3 +1293,25 @@ async def test_destroy_workspaces_for_run_logs_a_source_close_failure(
 
     assert result == {"scanned": 1, "destroyed": 1, "errors": 0}
     assert "runner.teardown.source_close_failed" in caplog.text
+
+
+async def test_destroy_workspaces_for_run_never_builds_an_inapplicable_tier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tier whose endpoint is unresolvable is never constructed — the
+    run-scoped destroy sweeps only the applicable tiers (parity with the
+    orphan sweep's engine-less skip)."""
+    k8s_source = _fake_source([_container("target-run", 1.0, "pod-1")])
+    docker_factory = MagicMock(side_effect=AssertionError("_DockerWorkspaceSource must not be built when skipping"))
+    monkeypatch.setattr(runner_reconciler, "docker_endpoint_skip_reason", lambda: "engine-unavailable")
+    monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", docker_factory)
+    monkeypatch.setattr(runner_reconciler, "_KubernetesWorkspaceSource", lambda: k8s_source)
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value=None))
+    monkeypatch.setattr(runner_reconciler, "e2b_endpoint_skip_reason", AsyncMock(return_value="e2b-off"))
+
+    result = await destroy_workspaces_for_run("target-run")
+
+    assert result == {"scanned": 1, "destroyed": 1, "errors": 0}
+    docker_factory.assert_not_called()
+    k8s_source.destroy_by_container_id.assert_has_awaits([(("pod-1",), {})])
+    k8s_source.close.assert_awaited_once()
