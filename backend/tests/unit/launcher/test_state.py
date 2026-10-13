@@ -163,6 +163,45 @@ def test_invalid_port_refused(tmp_path: Path) -> None:
         load_state(path, _key())
 
 
+def _valid_payload() -> dict[str, object]:
+    """A structurally valid from_payload input; one field varies per case."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "postgres_port": 15432,
+        "redis_port": 16379,
+        "api_port": 18000,
+    }
+
+
+def test_from_payload_missing_required_field_refused() -> None:
+    """A payload lost a required port key: refuse, never KeyError halfway in."""
+    payload = _valid_payload()
+    payload.pop("redis_port")
+    with pytest.raises(StateIntegrityError, match="missing field"):
+        LauncherState.from_payload(payload)
+
+
+def test_from_payload_non_string_backup_timestamp_refused() -> None:
+    payload = _valid_payload()
+    payload["last_backup_at"] = 123
+    with pytest.raises(StateIntegrityError, match="not a valid timestamp"):
+        LauncherState.from_payload(payload)
+
+
+def test_from_payload_empty_backup_timestamp_refused() -> None:
+    payload = _valid_payload()
+    payload["last_backup_at"] = ""
+    with pytest.raises(StateIntegrityError, match="not a valid timestamp"):
+        LauncherState.from_payload(payload)
+
+
+def test_from_payload_non_integer_schema_version_refused() -> None:
+    payload = _valid_payload()
+    payload["schema_version"] = "1"
+    with pytest.raises(StateIntegrityError, match="not an integer"):
+        LauncherState.from_payload(payload)
+
+
 def test_save_is_atomic_no_tmp_leftovers(tmp_path: Path) -> None:
     path = tmp_path / "state.json"
     save_state(_state(), path, _key())

@@ -381,6 +381,31 @@ def test_crash_ladder_backoff_progression_is_exponential_and_capped() -> None:
         clock.advance(0.05)
 
 
+def test_respawn_clears_pending_schedule() -> None:
+    """A respawn clears the pending `next_spawn_at` schedule.
+
+    Regression guard restored from the deduped supervisor suite: once the
+    backoff elapses and the child is respawned, `_spawn_locked` must reset
+    `next_spawn_at` to None. If it did not, the stale schedule would defer
+    the child's NEXT respawn (the schedule would survive the spawn).
+    """
+    supervisor, clock = _build_crashy_supervisor(
+        cap=50,
+        window_seconds=10_000.0,
+        backoff_initial=0.01,
+        backoff_max=0.05,
+        degraded_path=None,
+    )
+    supervisor.tick()  # spawn the (immediately crashing) child
+    clock.advance(0.02)
+    supervisor.tick()  # poll the crash -> schedule a backed-off respawn
+    child = supervisor._children["postgres"]
+    assert child.next_spawn_at is not None
+    clock.advance(0.02)  # past the initial 0.01 backoff
+    supervisor.tick()  # respawn
+    assert child.next_spawn_at is None
+
+
 def test_sliding_window_eviction_keeps_a_lone_crash_alive() -> None:
     """Crashes older than the window must not accumulate against the cap."""
     supervisor, clock = _build_crashy_supervisor(

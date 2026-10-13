@@ -31,10 +31,12 @@ from modulo.launcher.manifest import (
     _KEY_ID_CURRENT,
     _KEY_ID_NEXT,
     ManifestSecurityError,
+    ReleaseManifest,
     read_signature_file,
     sign_release_bytes,
     verify_artifacts,
     verify_manifest,
+    verify_release_from_files,
     verify_signature,
 )
 
@@ -216,6 +218,122 @@ def test_manifest_artifact_name_escape_refuses(tmp_path: Path, test_trust_store:
     )
     with pytest.raises(ManifestSecurityError, match="escapes the bundle root"):
         verify_artifacts(tmp_path, verified)
+
+
+# ---------------------------------------------------------------------------
+# --from-file path: verify_release_from_files (offline/corporate installs)
+# ---------------------------------------------------------------------------
+
+
+def test_verify_release_from_files_verifies_a_named_subset(
+    tmp_path: Path, test_trust_store: dict, test_signing_keys: dict
+) -> None:
+    """The pre-extraction tarball check: one named artifact is verified."""
+    body = _manifest_body(artifact_count=2)
+    manifest_path, signature_path = _write_release_files(
+        tmp_path,
+        body,
+        key_hex=test_signing_keys[_KEY_ID_CURRENT],
+        key_id=_KEY_ID_CURRENT,
+    )
+    name = body["artifacts"][0]["name"]
+    verified = verify_release_from_files(
+        manifest_path=manifest_path,
+        signature_path=signature_path,
+        artifacts_root=tmp_path,
+        artifact_names=[name],
+        trust_store=test_trust_store,
+    )
+    assert isinstance(verified, ReleaseManifest)
+    assert verified.release == "bundle-v1.2.0"
+    assert verified.checksum_for(name) == body["artifacts"][0]["sha256"]
+
+
+def test_verify_release_from_files_tampered_named_artifact_refuses(
+    tmp_path: Path, test_trust_store: dict, test_signing_keys: dict
+) -> None:
+    body = _manifest_body(artifact_count=1)
+    manifest_path, signature_path = _write_release_files(
+        tmp_path,
+        body,
+        key_hex=test_signing_keys[_KEY_ID_CURRENT],
+        key_id=_KEY_ID_CURRENT,
+    )
+    name = body["artifacts"][0]["name"]
+    (tmp_path / name).write_text("tampered bytes", encoding="utf-8")
+    with pytest.raises(ManifestSecurityError, match="sha256 MISMATCH"):
+        verify_release_from_files(
+            manifest_path=manifest_path,
+            signature_path=signature_path,
+            artifacts_root=tmp_path,
+            artifact_names=[name],
+            trust_store=test_trust_store,
+        )
+
+
+def test_verify_release_from_files_uncovered_artifact_refuses(
+    tmp_path: Path, test_trust_store: dict, test_signing_keys: dict
+) -> None:
+    """An artifact the manifest does not describe is refused outright."""
+    body = _manifest_body(artifact_count=1)
+    manifest_path, signature_path = _write_release_files(
+        tmp_path,
+        body,
+        key_hex=test_signing_keys[_KEY_ID_CURRENT],
+        key_id=_KEY_ID_CURRENT,
+    )
+    with pytest.raises(ManifestSecurityError, match="does not cover"):
+        verify_release_from_files(
+            manifest_path=manifest_path,
+            signature_path=signature_path,
+            artifacts_root=tmp_path,
+            artifact_names=["not-in-the-manifest.tgz"],
+            trust_store=test_trust_store,
+        )
+
+
+def test_verify_release_from_files_none_verifies_every_artifact(
+    tmp_path: Path, test_trust_store: dict, test_signing_keys: dict
+) -> None:
+    """artifact_names=None verifies every artifact the manifest covers."""
+    body = _manifest_body(artifact_count=2)
+    manifest_path, signature_path = _write_release_files(
+        tmp_path,
+        body,
+        key_hex=test_signing_keys[_KEY_ID_CURRENT],
+        key_id=_KEY_ID_CURRENT,
+    )
+    verified = verify_release_from_files(
+        manifest_path=manifest_path,
+        signature_path=signature_path,
+        artifacts_root=tmp_path,
+        artifact_names=None,
+        trust_store=test_trust_store,
+    )
+    assert verified.release == "bundle-v1.2.0"
+
+
+def test_verify_release_from_files_none_refuses_missing_artifact(
+    tmp_path: Path, test_trust_store: dict, test_signing_keys: dict
+) -> None:
+    """artifact_names=None: a listed artifact missing from disk is a hard failure."""
+    body = _manifest_body(artifact_count=2)
+    manifest_path, signature_path = _write_release_files(
+        tmp_path,
+        body,
+        key_hex=test_signing_keys[_KEY_ID_CURRENT],
+        key_id=_KEY_ID_CURRENT,
+    )
+    missing = body["artifacts"][1]["name"]
+    (tmp_path / missing).unlink()
+    with pytest.raises(ManifestSecurityError, match="missing from the bundle"):
+        verify_release_from_files(
+            manifest_path=manifest_path,
+            signature_path=signature_path,
+            artifacts_root=tmp_path,
+            artifact_names=None,
+            trust_store=test_trust_store,
+        )
 
 
 # ---------------------------------------------------------------------------

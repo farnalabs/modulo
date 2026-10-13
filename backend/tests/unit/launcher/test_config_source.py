@@ -130,6 +130,46 @@ def test_source_omits_keys_the_environment_already_sets(monkeypatch: pytest.Monk
     real_create(data_dir / "secrets.json")  # keep the tmp dir realistic for later asserts
 
 
+def test_source_redis_url_environment_wins_over_composed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """An operator REDIS_URL env var must drop the composed redis value.
+
+    The source returns init-kwargs (which outrank env), so any composed key
+    whose environment variable is already set must be omitted — otherwise the
+    bundled Redis password would shadow the operator's explicit choice.
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    save_state(_state(), data_dir / "state.json", _secrets().state_hmac_key)
+    import modulo.launcher.secrets_file as sf
+
+    monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("MODULO_SYSTEM_DATABASE_URL", raising=False)
+    monkeypatch.setenv("REDIS_URL", "redis://operator:secret@cache.example.com:6379/7")
+    resolved = LauncherConfigSource(data_dir)()
+    assert "redis_url" not in resolved  # the operator's env wins
+    assert resolved["database_url"] == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/modulo"
+
+
+def test_source_system_database_url_environment_wins_over_composed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """MODULO_SYSTEM_DATABASE_URL set (without DATABASE_URL) drops the composed one."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    save_state(_state(), data_dir / "state.json", _secrets().state_hmac_key)
+    import modulo.launcher.secrets_file as sf
+
+    monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", "postgresql://system:op@db.example.com:5432/modulo")
+    resolved = LauncherConfigSource(data_dir)()
+    assert "modulo_system_database_url" not in resolved  # the operator's env wins
+    assert resolved["database_url"] == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/modulo"
+    assert resolved["redis_url"] == "redis://:redis-pw@127.0.0.1:16379/0"
+
+
 def test_source_derives_system_url_from_the_operators_database_url(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

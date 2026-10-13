@@ -10,7 +10,9 @@ initdb tests (the win32 refusal itself is locked in test_secrets_file_platform.p
 """
 
 import json
+import os
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -171,6 +173,47 @@ def test_write_failure_leaves_no_credential_file_behind(
     assert not path.exists()
     leftovers = list(tmp_path.iterdir())
     assert not leftovers
+
+
+def test_create_fails_closed_when_mode_cannot_be_pinned(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CRITICAL: a fresh file whose 0600 pin cannot be enforced is deleted.
+
+    The exclusive create + chmod pair is a security pin (ADR 031 Decision 8):
+    the file MUST end up owner-only. Force stat() to report 0o644 for the
+    target file only — the real create is already 0o600 on POSIX, so the
+    widened value can only be simulated — and assert load_or_create refuses
+    AND unlinks rather than handing credentials back inside a
+    world-readable file.
+
+    Discriminating power: if the ``mode != _PRIVATE_MODE`` raise is removed,
+    load_or_create returns the generated credentials and pytest.raises fails.
+    """
+    if os.name != "posix":
+        pytest.skip("0o600 mode enforcement is POSIX-only (TODO(P3) Windows ACLs)")
+    path = tmp_path / "secrets.json"
+    real_stat = Path.stat
+
+    def _widened_stat(self: Path, *args: object, **kwargs: object) -> object:
+        # Only the freshly created target reports a widened mode; every other
+        # path (and every pre-create exists() probe) uses the real stat. The
+        # existence check goes through the REAL stat, never Path.exists(), so
+        # the patched method cannot recurse into itself.
+        if self == path:
+            try:
+                real_stat(self, *args, **kwargs)
+            except OSError:
+                return real_stat(self, *args, **kwargs)  # absent -> real FileNotFoundError
+            return types.SimpleNamespace(st_mode=0o644)
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", _widened_stat)
+    with pytest.raises(SecretsFileError, match="could not be pinned"):
+        load_or_create(path)
+    monkeypatch.undo()
+    assert not path.exists()  # the partially-created file was cleaned up
 
 
 def test_created_file_is_parseable_and_matches_generated_values(tmp_path: Path) -> None:

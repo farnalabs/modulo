@@ -13,6 +13,7 @@ paths are asserted directly rather than against external services.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import time
 from datetime import UTC, datetime, timedelta
@@ -121,18 +122,6 @@ def test_secrets_permissions_probe_failure(tmp_path: Path):
     assert "secrets-permission probe failed" in res.detail
 
 
-def test_secrets_permissions_mode_mismatch(tmp_path: Path):
-    _touch_secrets(tmp_path)
-    res = check_secrets_permissions(tmp_path, None, _probes(secrets_mode=lambda _d: 0o644))
-    assert res.ok is False
-    assert "chmod 600" in res.detail
-
-
-def test_secrets_permissions_mode_none(tmp_path: Path):
-    res = check_secrets_permissions(tmp_path, None, _probes(secrets_mode=lambda _d: None))
-    assert res.ok is True
-
-
 def test_ambient_pg_env_probe_failure(tmp_path: Path):
     res = check_ambient_pg_env(
         tmp_path, None, _probes(ambient_env_names=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
@@ -187,15 +176,6 @@ def test_service_identity_installed_degraded(tmp_path: Path):
     assert "systemctl enable" in res.detail
 
 
-def test_service_identity_installed_healthy(tmp_path: Path):
-    res = check_service_identity(
-        tmp_path,
-        None,
-        _probes(service_installed=lambda: True, service_enabled=lambda: True, service_linger=lambda: True),
-    )
-    assert res.ok is True
-
-
 def test_memory_probe_failure(tmp_path: Path):
     res = check_memory_headroom(
         tmp_path, None, _probes(available_memory_bytes=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
@@ -206,18 +186,6 @@ def test_memory_probe_failure(tmp_path: Path):
 def test_memory_unknown(tmp_path: Path):
     res = check_memory_headroom(tmp_path, None, _probes(available_memory_bytes=lambda: None))
     assert res.ok is True
-
-
-def test_memory_below_floor(tmp_path: Path):
-    res = check_memory_headroom(tmp_path, None, _probes(available_memory_bytes=lambda: 512 * 1024 * 1024))
-    assert res.ok is False
-    assert "MiB" in res.detail
-
-
-def test_memory_warn_band(tmp_path: Path):
-    res = check_memory_headroom(tmp_path, None, _probes(available_memory_bytes=lambda: 1536 * 1024 * 1024))
-    assert res.ok is True
-    assert res.warning is True
 
 
 def test_bundle_versions_probe_failure(tmp_path: Path):
@@ -253,20 +221,6 @@ def test_bundle_versions_older_binary(tmp_path: Path):
     )
     assert res.ok is False
     assert "OLDER" in res.detail
-
-
-def test_bundle_versions_upgrade_available(tmp_path: Path):
-    res = check_bundle_versions(
-        tmp_path,
-        _state(),
-        _probes(
-            data_dir_pg_version=lambda: "16",
-            bundle_pg_version=lambda: "16.4",
-            installed_bundle_pg_version=lambda: "16.2",
-        ),
-    )
-    assert res.ok is True
-    assert res.warning is True
 
 
 def test_bundled_binaries_probe_failure(tmp_path: Path):
@@ -342,12 +296,6 @@ def test_tls_near_expiry(tmp_path: Path):
     res = check_tls_expiry(tmp_path, None, _probes(tls_expiry=lambda: time.time() + 5 * 86400))
     assert res.ok is True
     assert res.warning is True
-
-
-def test_tls_valid(tmp_path: Path):
-    res = check_tls_expiry(tmp_path, None, _probes(tls_expiry=lambda: time.time() + 400 * 86400))
-    assert res.ok is True
-    assert res.warning is False
 
 
 def test_stale_backup_probe_failure(tmp_path: Path):
@@ -441,18 +389,6 @@ def test_password_from_url():
     assert not doctor_module._password_from_url("redis://h:1")
 
 
-def test_decode_proc_address():
-    import socket
-
-    from modulo.launcher.doctor import _decode_proc_address
-
-    # /proc stores addresses in network (big-endian) byte order.
-    ipv4 = _decode_proc_address("0100007F", socket.AF_INET)
-    assert ipv4 == "127.0.0.1"
-    ipv6 = _decode_proc_address("00000000000000000000000001000000", socket.AF_INET6)
-    assert ipv6 == "::1"
-
-
 def test_port_owner_descriptions_no_foreign():
     from modulo.launcher.doctor import _port_owner_descriptions
 
@@ -521,17 +457,34 @@ def test_default_probes_real(tmp_path: Path):
     # uid resolves to an int on POSIX and to None on Windows (os.getuid is
     # POSIX-only; _effective_uid's contract is `int | None`).
     uid = probes.effective_uid()
-    if hasattr(os, "getuid"):
-        assert isinstance(uid, int)
-    else:
+    if sys.platform == "win32":
+        # TODO(P3): Windows seams; uid is None, and the uid/owner probes
+        # honestly report None rather than guessing a SID/account.
         assert uid is None
-    assert probes.username_of_uid(uid) is not None or probes.username_of_uid(uid) is None
-    assert probes.file_owner(tmp_path) is not None or probes.file_owner(tmp_path) is None
+        assert probes.username_of_uid(1000) is None
+        assert probes.file_owner(tmp_path) is None
+    else:
+        assert isinstance(uid, int)
+        import pwd
 
-    # env snapshot probes
-    assert probes.env_value("PATH") is not None or probes.env_value("PATH") is None
+        # Both probes resolve to THIS process's own login name on POSIX.
+        # Guard the UID lookup: a runner whose UID has no /etc/passwd entry
+        # makes getpwuid raise KeyError, whereas the probe under test returns
+        # None for that case — so mirror the probe's honest-None contract.
+        try:
+            me = pwd.getpwuid(os.getuid()).pw_name
+        except KeyError:
+            me = None
+        assert probes.username_of_uid(uid) == me
+        assert probes.file_owner(tmp_path) == me
+
+    # env snapshot probes: the snapshot is taken inside default_probes(), so
+    # it must reflect the live process environment (PATH is a stable anchor).
+    assert probes.env_value("PATH") == os.environ.get("PATH")
     assert isinstance(probes.ambient_env_names(), list)
-    assert isinstance(probes.available_memory_bytes(), int) or probes.available_memory_bytes() is None
+    available_memory = probes.available_memory_bytes()
+    assert isinstance(available_memory, int)
+    assert available_memory > 0
 
     # PG_VERSION read from pgdata
     pgdata = tmp_path / "pgdata"
@@ -545,9 +498,13 @@ def test_default_probes_real(tmp_path: Path):
     assert probes.cloud_sync_hit(synced) is not None
     assert probes.cloud_sync_hit(tmp_path) is None
 
-    # PATH / install root probes
+    # PATH / install root probes: `modulo` is installed into this worktree's
+    # venv, which `uv run` prepends to PATH, so the probe must resolve it.
     assert probes.install_root() is not None
-    assert probes.modulo_on_path() is None or isinstance(probes.modulo_on_path(), str)
+    # The probe is `shutil.which("modulo")`; assert it agrees with the
+    # environment-agnostic source rather than assuming the venv bin is on
+    # PATH (a runner that does not prepend it would otherwise fail).
+    assert probes.modulo_on_path() == shutil.which("modulo")
 
     # second install hint (sandbox may share a parent dir with other installs)
     hint = probes.second_install_hint()
@@ -578,7 +535,12 @@ def test_default_probes_real(tmp_path: Path):
 
     # bundled binaries / bundle version resolve (may be empty if no bundle)
     assert isinstance(probes.bundled_binaries(), list)
-    assert probes.bundle_pg_version() is None or isinstance(probes.bundle_pg_version(), str)
+    # Only assume "no bundled postgres" when the bundle list itself is empty;
+    # a bundle that does carry postgres is allowed to report a version (its
+    # dotted-token parse path is owned by
+    # test_probe_bundle_pg_version_parses_dotted_token in test_doctor.py).
+    if not probes.bundled_binaries():
+        assert probes.bundle_pg_version() is None
 
     # launcher-running + env-file-pinned probes run without crashing
     assert isinstance(probes.launcher_running(), bool)
