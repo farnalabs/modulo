@@ -135,9 +135,9 @@ class TestChain:
         # 0298_accounts_kind, then 0299_accounts_service_identity, then
         # 0300_benign_facts_repair, then 0301_oauth_consent_state_preauth_rls,
         # then 0302_runs_run_grouping, then 0303_feedback_records_lookup_indexes,
-        # then 0305_guardrail_escalate_action,
+        # then 0305_guardrail_escalate_action, then 0306_trigger_secret_encryption,
         # now chain onto this migration, so the single head moved up another revision.
-        assert heads == ["0305_guardrail_escalate_action"], f"expected a single head, got {heads}"
+        assert heads == ["0306_trigger_secret_encryption"], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0271_org_api_keys_revocation_sweep_indexes(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
