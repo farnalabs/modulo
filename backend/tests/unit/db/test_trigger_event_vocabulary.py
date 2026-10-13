@@ -66,7 +66,8 @@ _MIGRATION_PATH = (
 # FAR-583's 0192_run_node_outputs re-parented onto 0191 with its
 # 0193_run_node_outputs_sweep_index (qa iteration 2, the sweep's partial index)
 # chained onto 0192, 0194_uuid_pk_server_defaults (FAR-718, from main) chained onto
-# 0193, improve-database's 0197/0198/0199 chain off it, 0201_spend_anomaly_unique_org_date
+# 0193, improve-database's 0197/0198/0199 chain off it,
+# 0200_runs_runner_marker_sweep_index chained onto 0199, 0201_spend_anomaly_unique_org_date
 # (from main) chained onto 0200, 0202_runs_error_code_claimed_by_indexes (from main)
 # chained onto 0201, 0195_hitl_claim_gate_config_json (FAR-634, from main) chained onto 0202,
 # 0203_triggers_add_name (FAR-681 slice 2, from main) chained onto 0195, FAR-681
@@ -78,8 +79,10 @@ _MIGRATION_PATH = (
 # chained onto 0208, FAR-764's 0210_community_gate chained onto 0209, and FAR-775's
 # 0211_variant_batch_state chained onto 0210, and 0212_variant_batch_state_updated_at
 # chained onto 0211, and FAR-788's 0213_runs_rerun_trigger_type chained onto 0212, and
-# 0215_drop_runs_blob_columns chained onto 0213, FAR-748's 0216_audit_events_sweep_detection_index
+# 0214_connector_instance_indexes_unique chained onto 0213, and
+# 0215_drop_runs_blob_columns chained onto 0214, FAR-748's 0216_audit_events_sweep_detection_index
 # chained onto 0215, 0217_hitl_claims_decided_by chained onto 0216,
+# 0218_eval_cluster_indexes chained onto 0217,
 # and 0219_eval_cluster_check_constraints chained onto 0218,
 # and 0220_run_node_artifacts chained onto 0219,
 # and FAR-802's 0221_workspace_inputs_env_profiles chained onto 0220,
@@ -157,6 +160,7 @@ _MIGRATION_PATH = (
 # 0291_invitations_lookup_constraints chained onto 0290_scheduled_reports_due_scan, and
 # 0292_audit_events_resource_lookup chained onto 0291_invitations_lookup_constraints, and
 # 0293_oauth_clients_team_id chained onto 0292_audit_events_resource_lookup, and
+# 0294_eval_results_org_fk chained onto 0293_oauth_clients_team_id, and
 # 0295_decision_record_event_identity chained onto 0294_eval_results_org_fk, and
 # 0296_benign_run_outcomes chained onto 0295_decision_record_event_identity, and
 # 0297_autonomy_gating_s1 chained onto 0296_benign_run_outcomes, and
