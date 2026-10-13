@@ -1187,6 +1187,18 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > and the parked predicate/`decide` (§4). `_ORPHANED_BDD_FEATURES` stays
 > empty.
 
+> **Closed this walk (2026-10-13):** closed the untracked FAR-153
+> sub-surface under `feat-runs` (`build/runs.md`) – run grouping + the
+> resume-as-child thread model (`runs.run_group_id` / `runs.run_group_kind`,
+> the closed retry/resume vocabulary, the `create_run` persist-boundary
+> contract, and the two partial unique indexes replacing the global thread
+> unique) shipped 2026-10-12 in PR #1668 (migration 0302) with unit coverage
+> (`test_run_grouping_resume_child.py`,
+> `test_migration_0302_runs_run_grouping.py`) but described by NEITHER
+> product-map layer. Tracked in both layers (manifest `feat-runs` registry +
+> tracker behaviour line, code and unit-test citations in both frontmatter and
+> registry). `_ORPHANED_BDD_FEATURES` stays empty.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A

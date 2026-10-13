@@ -16,6 +16,7 @@ code:
   - backend/src/modulo/db/models/run.py
   - backend/src/modulo/db/migrations/versions/0280_runs_node_deadline_watchdog_fired_count.py
   - backend/src/modulo/db/migrations/versions/0288_runs_execution_origin.py
+  - backend/src/modulo/db/migrations/versions/0302_runs_run_grouping.py
   - backend/src/modulo/core/line_diff.py
   - backend/src/modulo/core/cost_controller
   - frontend/src/utils/runUtils.ts
@@ -33,6 +34,8 @@ unit-tests:
   - backend/tests/unit/core/test_pipeline_execution_watchdog_retry.py
   - backend/tests/unit/core/cost_controller/test_run_warnings.py
   - backend/tests/unit/core/cost_controller/test_cost_aggregate.py
+  - backend/tests/unit/db/test_run_grouping_resume_child.py
+  - backend/tests/unit/db/test_migration_0302_runs_run_grouping.py
 bdd:
   - backend/tests/bdd/features/errors
   - backend/tests/bdd/features/pipelines/run_lifecycle.feature
@@ -273,9 +276,39 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       run, `NULL` for an executed/legacy run — never a guessed `observed`); the
       class is engine-assigned, never self-asserted, so a prompt-injected
       substrate result cannot claim a stronger provenance
-      (`core/provenance.py`, `core/run_provenance.py`,
-      `core/pipeline_engine/node_runner.py`, `core/node_output_split.py`,
-      `api/routes/runs.py`, `tests/unit/core/test_provenance_taxonomy.py`)
+       (`core/provenance.py`, `core/run_provenance.py`,
+       `core/pipeline_engine/node_runner.py`, `core/node_output_split.py`,
+       `api/routes/runs.py`, `tests/unit/core/test_provenance_taxonomy.py`)
+- [x] Retry/resume attempts are grouped rows, not fresh runs (FAR-153,
+      §15.1 agent-failure UX v6): `runs.run_group_id` names the group's ROOT
+      run id and `runs.run_group_kind` names WHY the row joined the group –
+      the closed `{'retry','resume'}` vocabulary single-sourced as
+      `RUN_GROUP_KIND_VALUES` in `db/models/run.py` (NULL for roots, signal /
+      correction / work-item children, and legacy rows, which keep their
+      existing rollup behaviour). A retry child runs its graph CLEAN on a
+      fresh `langgraph_thread_id`; a resume child inherits its parent's
+      thread via `create_run(thread_id=...)` so it continues the parent's
+      checkpoint – the resume-as-child thread model. The contract is enforced
+      at the `create_run` persist boundary (`_validate_run_grouping_kwargs` /
+      `_validate_resume_thread_override` in `db/crud/run.py`): an unknown kind,
+      a grouped row without `parent_run_id` or `run_group_id`, a resume
+      without a thread override, and a resume whose thread is not the parent's
+      – even a thread owned by a run in ANOTHER org – are all `ValueError`
+      before any write (the parent read is org-scoped, so a resume never
+      crosses orgs). Two partial unique indexes replace the former global
+      `UNIQUE(langgraph_thread_id)` (migration `0302_runs_run_grouping`):
+      exactly ONE resume child per parent (`uq_runs_resume_parent` – a second
+      resume of the same stalled parent is rejected at the DB, while a resume
+      child that itself stalls can be resumed again because its parent is a
+      different row, so resume-of-resume chains work) and global thread
+      uniqueness for every NON-resume row (`uq_runs_thread_non_resume` – two
+      roots cannot share a thread and a retry can never inherit its parent's).
+      No FK from `run_group_id` to the root row: the root may be purged by
+      retention while a younger attempt survives, and a dangling group id is
+      the intended read. Additive columns, never backfilled (`db/models/run.py`,
+      `db/crud/run.py`, migration `0302_runs_run_grouping.py`,
+      `test_run_grouping_resume_child.py`,
+      `test_migration_0302_runs_run_grouping.py`)
 - _Output Diff (`/runs/diff`, `POST /runs/diff`, `core/line_diff.py`) deferred from the
   MVP nav (hidden via `visibility: private_preview`). Behaviour detail removed for the
   MVP cut – restore from git history when re-enabling. See FAR-542._
@@ -290,6 +323,18 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
 
 ## QA History
 
+- 2026-10-13: **Improve Architecture product-map walk** – closed the untracked
+  FAR-153 sub-surface: run grouping + the resume-as-child thread model
+  (`runs.run_group_id` / `runs.run_group_kind`, the closed retry/resume
+  vocabulary, the `create_run` persist-boundary contract, and the two partial
+  unique indexes replacing the global thread unique) shipped in PR #1668
+  (migration 0302) with unit coverage (`test_run_grouping_resume_child.py`,
+  `test_migration_0302_runs_run_grouping.py`) but was described by NEITHER
+  product-map layer – invisible to the feature graph and to Assistant's
+  `search_documentation` indexer. Added the checked behaviour line plus the
+  `db/models/run.py` / `db/crud/run.py` / migration-0302 code citations and
+  the two unit-test citations (frontmatter + manifest `feat-runs` registry).
+  `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
   FAR-1141 run-provenance half: `runs.execution_origin` (ADR-042) and the
   `dispatched` stamp shipped in PR #1370 with only a testid in the product map,
