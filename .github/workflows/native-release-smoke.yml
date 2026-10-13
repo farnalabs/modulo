@@ -389,9 +389,14 @@ jobs:
           # Ask the release feed directly: does ANY published bundle-v*
           # release exist? An API failure is NOT "no release" - proceed with
           # skip=false so the fetch step reports it loudly (fail-closed).
+          #
+          # Emit one tag per line via a scalar stream, never a per-page
+          # `join("\n")`: under --paginate gh applies --jq once per page, so a
+          # `join` only joins within a page and tags from adjacent pages could
+          # run together past the 100-release page size.
           set +e
           releases="$(gh api "repos/${{ github.repository }}/releases?per_page=100" --paginate \
-            --jq '[.[] | select(.tag_name | startswith("bundle-v")) | select(.draft == false) | .tag_name] | join("\n")' 2>/tmp/gate-err)"
+            --jq '.[] | select(.tag_name | startswith("bundle-v")) | select(.draft == false) | .tag_name' 2>/tmp/gate-err)"
           rc=$?
           set -e
           if [ "${rc}" -ne 0 ]; then
