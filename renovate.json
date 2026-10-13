@@ -110,6 +110,16 @@
         "major"
       ],
       "enabled": false
+    },
+    {
+      "description": "Hold the python base image below 3.15: python:3.15-slim breaks the prod image build. zstandard 0.25.0 ships no cp315 wheel, so 'uv sync --frozen' falls back to an sdist build that needs gcc, which the images' --no-build policy forbids (see revert #1721). Remove this once the native dependencies publish cp315 wheels.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "python"
+      ],
+      "allowedVersions": "<3.15"
     }
   ]
 }
