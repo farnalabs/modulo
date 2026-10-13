@@ -4634,7 +4634,14 @@ def _run_status_base(run: Run) -> dict[str, Any]:
 
 
 def _run_status_detail(run: Run, blobs: RunBlobs) -> dict[str, Any]:
-    from modulo.api.routes.runs import _clamp_node_token_usage_union
+    # FAR-1737: reuse the REST serialisers verbatim — the masked input payload
+    # and the deadline-triage projection must be byte-identical to
+    # ``GET /api/v1/runs/{run_id}``, never a hand-rolled copy of either.
+    from modulo.api.routes.runs import (
+        _clamp_node_token_usage_union,
+        _deadline_triage_from_markers,
+        _mask_output_value,
+    )
 
     token_usage = _clamp_node_token_usage_union(run.node_token_usage or {})
     # FAR-583 read-switch: the blobs reassemble from run_node_outputs
@@ -4651,6 +4658,19 @@ def _run_status_detail(run: Run, blobs: RunBlobs) -> dict[str, Any]:
     result: dict[str, Any] = {"nodes": nodes}
     if run.cost_breakdown is not None:
         result["cost_breakdown"] = _sanitize_cost_breakdown(run.cost_breakdown)
+    # FAR-1737: detail-parity with REST. Without these, a failed sandbox run
+    # was unrecoverable over MCP — ``nodes: []`` carried neither the original
+    # input (prompt) nor the per-attempt sandbox envelopes that explain why
+    # the node produced no output. ``input_payload`` goes through the SAME
+    # masker REST uses; ``deadline_triage`` is projected by the SAME helper
+    # from the markers already reassembled for this detail read. Both are
+    # detail-only: the base response never touches either (matches REST, where
+    # the mask/projection sit behind the detail builder).
+    _raw_input_payload = getattr(run, "input_payload", None)
+    result["input_payload"] = (
+        _mask_output_value(_raw_input_payload) if isinstance(_raw_input_payload, dict) and _raw_input_payload else None
+    )
+    result["deadline_triage"] = _deadline_triage_from_markers(getattr(blobs, "markers", None))
     return result
 
 
@@ -4713,7 +4733,15 @@ async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
     return result
 
 
-@mcp.tool(description="Get current run status. Pass detail=true for per-node breakdown.")
+@mcp.tool(
+    description=(
+        "Get current run status. Pass detail=true for a per-node breakdown, the "
+        "masked run input_payload (the original run input, sensitive fields "
+        "redacted), and deadline_triage[] — the per-attempt sandbox envelopes "
+        "(attempt_key, no_output_reason, sandbox_log_tail, raw_output_tail, "
+        "stdout_length) that explain why a node produced no output."
+    )
+)
 @_RETRY_DB
 async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
     try:
