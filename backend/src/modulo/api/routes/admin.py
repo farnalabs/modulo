@@ -112,7 +112,6 @@ from modulo.db.models.account import KIND_HUMAN, Account
 from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.eval import Eval
-from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.invitation import Invitation
 from modulo.db.models.library_primitive import LibraryPrimitive
@@ -2923,9 +2922,12 @@ async def _eval_summary(session: AsyncSession) -> EvalDashboardSummary:
     ).where(non_guardrail_eval_results_clause())
     summary_row = (await session.execute(summary_q)).one()
 
-    defs_q = (
-        select(func.count(EvalDefinition.id)).select_from(EvalDefinition).where(EvalDefinition.deleted_at.is_(None))
-    )
+    # FAR-1725: count ``evals`` (the current storage) — the same source the
+    # rest of this response reads (``by_type``, ``coverage_gaps``,
+    # ``recent_results``). The frozen ``eval_definitions`` snapshot stops at the
+    # cutover, so counting it here would disagree with every sibling figure in
+    # the same payload. Org isolation comes from RLS (``set_rls_org``).
+    defs_q = select(func.count(Eval.id)).select_from(Eval).where(Eval.deleted_at.is_(None))
     total_defs = (await session.execute(defs_q)).scalar() or 0
 
     total_results = summary_row.total_results or 0
@@ -3019,11 +3021,15 @@ async def _eval_coverage_gaps(session: AsyncSession, org_id: uuid.UUID) -> list[
     ).all()
 
     covered_pairs: set[tuple[uuid.UUID, str]] = set()
+    # FAR-1725: read live ``evals`` rows, not the frozen ``eval_definitions``
+    # snapshot — otherwise ``by_type`` and ``coverage_gaps`` in the SAME
+    # response disagree: a node whose only eval postdates the cutover is
+    # counted by ``by_type`` yet still reported here as uncovered.
     eval_defs = (
         await session.execute(
-            select(EvalDefinition.pipeline_id, EvalDefinition.node_id).where(
-                EvalDefinition.organisation_id == org_id,
-                EvalDefinition.deleted_at.is_(None),
+            select(Eval.pipeline_id, Eval.node_id).where(
+                Eval.organisation_id == org_id,
+                Eval.deleted_at.is_(None),
             )
         )
     ).all()
@@ -3063,6 +3069,7 @@ async def _eval_recent_results(session: AsyncSession, org_id: uuid.UUID) -> list
         FROM eval_results er
         JOIN evals ed ON ed.id = er.eval_id
         WHERE er.organisation_id = :org_id
+          AND ed.organisation_id = :org_id
           AND ed.eval_type != 'guardrail'
         ORDER BY er.evaluated_at DESC
         LIMIT 50
