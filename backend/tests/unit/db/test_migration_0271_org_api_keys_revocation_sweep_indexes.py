@@ -36,7 +36,7 @@ lookup indexes:
   ``0300_benign_facts_repair`` then
   ``0301_oauth_consent_state_preauth_rls`` then
   ``0302_runs_run_grouping`` then
-  ``0304_metrics_staging_recorded_at_index`` now the single linear head)
+  ``0305_hitl_claims_sweep_decided_index`` now the single linear head)
   so the pre-commit check-migration-heads hook and every ``test_single_head_*``
   pin cannot be ambushed by a renumber;
 * the upgrade emits exactly the two ``CREATE INDEX IF NOT EXISTS`` statements
@@ -70,7 +70,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0271_org_api_keys_revocation_sweep_indexes"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0270_pipeline_snapshots_max_autonomy_ge_default"
-_HEAD_MIGRATION = "0304_metrics_staging_recorded_at_index"
+_HEAD_MIGRATION = "0305_hitl_claims_sweep_decided_index"
 _TABLE = 'public."org_api_keys"'
 
 #: Index name -> (ordered key columns, partial WHERE predicate). This is the

@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -10,7 +10,33 @@ from modulo.db.models.base import OrgScoped
 
 class HitlClaim(OrgScoped):
     __tablename__ = "hitl_claims"
-    __table_args__ = (UniqueConstraint("run_id", "review_id", name="uq_hitl_claims_run_review"),)
+    __table_args__ = (
+        UniqueConstraint("run_id", "review_id", name="uq_hitl_claims_run_review"),
+        # FAR-748 sweep-detection lookup: ``count_recent_approves``
+        # (``core/hitl_manager/sweep_alarm.py``) aggregates one actor's
+        # committed decisions per tick — ``WHERE organisation_id = ? AND
+        # decided_by = ? AND decision IN ('approved', 'deliver_manual')
+        # AND decision_at IS NOT NULL AND decision_at >= ?``. The
+        # single-column ``ix_hitl_claims_decided_by`` (0217) cannot serve
+        # the org equality + actor equality + recency range in one btree
+        # descent, and ``hitl_claims`` grows one row per fired gate forever
+        # (decided rows are kept as the verdict audit trail), so the
+        # actor-history scan grows unbounded. The partial predicate keeps
+        # the index to counted decisions only — rejected rows and legacy
+        # NULL-``decided_by`` rows never enter it. Mirrors migration 0305.
+        Index(
+            "ix_hitl_claims_sweep_decided",
+            "organisation_id",
+            "decided_by",
+            "decision_at",
+            postgresql_where=text(
+                "decided_by IS NOT NULL AND decision IN ('approved', 'deliver_manual') AND decision_at IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "decided_by IS NOT NULL AND decision IN ('approved', 'deliver_manual') AND decision_at IS NOT NULL"
+            ),
+        ),
+    )
 
     run_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
