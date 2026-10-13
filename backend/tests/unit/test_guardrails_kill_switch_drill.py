@@ -135,6 +135,28 @@ async def test_read_check_uses_the_failing_stub_not_a_real_org(
     assert isinstance(seen[0], drill_module._FailingReadSession)
 
 
+async def test_cron_ctx_path_opens_owned_session_and_commits_one_row(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC1/AC5 — the SAQ cron path (a plain ctx dict) owns its transaction.
+
+    The cron scheduler invokes ``run_kill_switch_drill(ctx)`` with a context
+    dict, not a session; the drill must then open a cross-org system session and
+    commit exactly one evidence row rather than appending in a caller's session.
+    """
+    maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+    monkeypatch.setattr(sw, "_make_system_session_factory", lambda: maker)
+
+    result = await run_kill_switch_drill({"job": "kill_switch_drill"})
+
+    assert result["result"] == "pass"
+    async with maker() as s, s.begin():
+        rows = (await s.execute(select(SystemAuditEvent))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].event_type == "kill_switch_drill"
+    assert rows[0].payload_json["result"] == "pass"
+
+
 def test_module_never_reaches_for_the_organisations_model() -> None:
     """AC6 — no code path imports the org model (no real switch read/write)."""
     source = Path(drill_module.__file__).read_text(encoding="utf-8")
