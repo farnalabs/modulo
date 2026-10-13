@@ -45,6 +45,16 @@ def _make_list_result(items: list[MagicMock], *, total: int, next_cursor: str | 
 
 
 def _make_session_context(session: AsyncMock) -> AsyncMock:
+    # FAR-1639: the RLS preamble calls ``session.in_transaction()`` and the
+    # write paths call ``session.add()`` with SYNC call sites; on a bare
+    # AsyncMock those return un-awaited coroutines and always-truthy values,
+    # so the active-transaction guard (rls._ensure_active_transaction) passes
+    # vacuously and dangling coroutines leak on GC. Type both here, keeping
+    # any deliberately customised member (e.g. _make_add_session's add
+    # side effect is already a MagicMock and is not overwritten).
+    session.in_transaction = MagicMock(return_value=True)
+    if not isinstance(session.add, MagicMock):
+        session.add = MagicMock()
     cm = AsyncMock()
     cm.__aenter__ = AsyncMock(return_value=session)
     cm.__aexit__ = AsyncMock(return_value=False)
