@@ -150,6 +150,16 @@ async def test_topology_reserved_hitl_review_prefix_error_attributes_node():
     assert "hitl_review_" in issue.message
 
 
+async def test_topology_db_sentinel_prefix_error_attributes_node():
+    """FAR-583: node ids squatting the ``__`` sentinel namespace are rejected."""
+    snap = _snapshot(graph_json={"nodes": [{"id": "__run_meta__"}], "edges": []})
+    session = _session_returning([])
+    result = await GraphValidator().validate(snap, session)
+    assert not result.is_valid
+    issue = next(i for i in result.issues if i.code == "TOPOLOGY_NODE_DB_SENTINEL_PREFIX")
+    assert issue.node_id == "__run_meta__"
+
+
 async def test_topology_null_source_uses_missing_value_marker():
     snap = _snapshot(
         graph_json={
@@ -162,35 +172,6 @@ async def test_topology_null_source_uses_missing_value_marker():
     issue = next(i for i in result.issues if i.code == "TOPOLOGY_UNKNOWN_SOURCE")
     assert "'?'" in issue.message
     assert "None" not in issue.message
-
-
-async def test_topology_edge_unknown_target():
-    snap = _snapshot(
-        graph_json={
-            "nodes": [{"id": "a"}],
-            "edges": [{"source": "a", "target": "z"}],
-        }
-    )
-    session = _session_returning([])
-    result = await GraphValidator().validate(snap, session)
-    assert not result.is_valid
-    assert any(i.code == "TOPOLOGY_UNKNOWN_TARGET" for i in result.issues)
-
-
-async def test_topology_cycle_detected():
-    snap = _snapshot(
-        graph_json={
-            "nodes": [{"id": "a"}, {"id": "b"}],
-            "edges": [
-                {"source": "a", "target": "b"},
-                {"source": "b", "target": "a"},
-            ],
-        }
-    )
-    session = _session_returning([])
-    result = await GraphValidator().validate(snap, session)
-    assert not result.is_valid
-    assert any(i.code == "TOPOLOGY_CYCLE" for i in result.issues)
 
 
 async def test_topology_unreachable_node_is_warning():

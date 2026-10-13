@@ -7,10 +7,7 @@ validates the ``eval_condition`` block of a HITL gate edge.
 import uuid
 
 from modulo.core.graph_validator import GraphValidator, ValidationResult
-
-
-def _codes(result: ValidationResult) -> set[str]:
-    return {i.code for i in result.issues}
+from tests.unit.graph_validator._helpers import codes_of as _codes
 
 
 def _edge(**overrides) -> dict:

@@ -298,20 +298,3 @@ async def test_validator_category_check_in_validate_for_run():
     result = await validator.validate_for_run(snap, {}, session)
     assert not result.is_valid
     assert any(i.code == "CATEGORY_NOT_FOUND" for i in result.issues)
-
-
-async def test_category_check_does_not_block_topology_errors():
-    """Category errors should not prevent topology checks from running."""
-    graph = {
-        "nodes": [],
-        "edges": [],
-    }
-
-    session = _session_with_category(None)
-
-    snap = _snapshot(graph_json=graph)
-
-    validator = GraphValidator()
-    result = await validator.validate(snap, session)
-    assert not result.is_valid
-    assert any(i.code == "TOPOLOGY_NO_NODES" for i in result.issues)

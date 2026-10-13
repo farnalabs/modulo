@@ -15,6 +15,7 @@ from modulo.core import graph_validator as _gv_module
 from modulo.core.graph_validator import GraphValidator, ValidationResult
 from modulo.core.graph_validator._types import try_parse_uuids
 from modulo.core.graph_validator.category_validator import validate_node_category
+from tests.unit.graph_validator._helpers import codes_of as _codes
 
 _PHASE_1_CUTOVER = _gv_module._PHASE_1_CUTOVER
 
@@ -446,11 +447,12 @@ def test_llm_routing_source_node_id_fallback():
     result = ValidationResult()
     GraphValidator._check_llm_routing(
         [{"id": "a", "routing_mode": "llm", "routing_prompt": "route", "default_target": "b"}],
-        [{"source_node_id": "a", "target": "b", "routing_label": "cont"}],
+        [{"source_node_id": "a", "target": "b", "routing_label": ""}],
         {"a", "b"},
         result,
     )
-    assert result.is_valid
+    issue = next(i for i in result.issues if i.code == "LLM_ROUTING_MISSING_LABEL")
+    assert issue.node_id == "a"
 
 
 def test_llm_routing_edges_from_other_nodes_ignored():
@@ -458,11 +460,11 @@ def test_llm_routing_edges_from_other_nodes_ignored():
     result = ValidationResult()
     GraphValidator._check_llm_routing(
         [{"id": "a", "routing_mode": "llm", "routing_prompt": "route", "default_target": "b"}],
-        [{"source": "c", "target": "b", "routing_label": "cont"}],
+        [{"source": "c", "target": "b", "routing_label": ""}],
         {"a", "b", "c"},
         result,
     )
-    assert result.is_valid
+    assert "LLM_ROUTING_MISSING_LABEL" not in _codes(result)
 
 
 async def test_deep_schema_skipped_edge_type_not_checked():

@@ -11,11 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from modulo.core.graph_validator import GraphValidator, ValidationResult
-
-
-def _codes(result: ValidationResult) -> set[str]:
-    return {i.code for i in result.issues}
-
+from tests.unit.graph_validator._helpers import codes_of as _codes
 
 # ---------------------------------------------------------------------------
 # _check_loop_edges
@@ -35,17 +31,6 @@ def test_loop_edges_non_loop_edges_skipped():
     )
     assert result.is_valid
     assert not result.issues
-
-
-def test_loop_edge_missing_default_target_is_error():
-    result = ValidationResult()
-    GraphValidator._check_loop_edges(
-        [{"source": "a", "target": "b", "type": "loop"}],
-        {"a", "b"},
-        result,
-    )
-    assert "LOOP_MISSING_DEFAULT_TARGET" in _codes(result)
-    assert not result.is_valid
 
 
 def test_loop_edge_missing_default_target_reports_source():
