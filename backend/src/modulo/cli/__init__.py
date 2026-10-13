@@ -22,8 +22,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-_MIGRATE_ORG_MODULE = "modulo.cli.migrate_org"
-
 if TYPE_CHECKING:
     from modulo.cli.break_glass import cli as break_glass_cli
     from modulo.cli.migrate_org import build_parser, cmd_export, cmd_import, main
