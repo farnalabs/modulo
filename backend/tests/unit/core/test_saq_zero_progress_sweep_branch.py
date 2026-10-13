@@ -274,6 +274,82 @@ class TestSweepEmitsFar714ClassSignal:
         assert count == 0
         ingest.assert_not_awaited()
 
+    async def test_context_normalises_naive_timestamps_and_reports_phase(self) -> None:
+        """asyncpg can hand back NAIVE datetimes: the emission normalises each
+        to UTC before the elapsed arithmetic, reports the dispatch-phase
+        elapsed when the phase was entered, and stringifies the ids."""
+        run_id = uuid.uuid4()
+        org_id = uuid.uuid4()
+        pipeline_id = uuid.uuid4()
+        trigger_id = uuid.uuid4()
+        completed = datetime.now(UTC)
+        naive_started = (completed - timedelta(minutes=200)).replace(tzinfo=None)
+        naive_dispatched = (completed - timedelta(minutes=205)).replace(tzinfo=None)
+        naive_phase = (completed - timedelta(minutes=198)).replace(tzinfo=None)
+        conn = _CapturingConn(
+            zero_progress_rows=[
+                _zero_progress_row(
+                    run_id,
+                    pipeline_id=pipeline_id,
+                    trigger_id=trigger_id,
+                    claim_count=2,
+                    dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
+                    dispatch_phase_entered_at=naive_phase,
+                    started_at=naive_started,
+                    dispatched_at=naive_dispatched,
+                ),
+            ],
+        )
+        ingest = AsyncMock()
+        with patch.object(ch, "_ingest_saq_error", new=ingest):
+            count = await pe._sweep_org_saq_zero_progress_runs(
+                conn,
+                org_id=org_id,
+                max_age_minutes=135,
+                max_rows=25,
+                terminalised_run_ids=[],
+            )
+
+        assert count == 1
+        context = ingest.await_args.kwargs["context"]
+        assert context["pipeline_id"] == str(pipeline_id)
+        assert context["trigger_id"] == str(trigger_id)
+        assert context["dispatch_phase"] == PHASE_FIRST_NODE_DISPATCHED
+        assert context["dispatch_phase_elapsed"] is not None
+        assert context["zombie_age_minutes"] is not None
+        assert context["saq_queue_wait_seconds"] is not None
+        assert context["dispatched_at"] is not None
+        assert context["started_at"] is not None
+
+    async def test_context_tolerates_missing_timestamps_and_ids(self) -> None:
+        """A sparse row (no timestamps, no pipeline/trigger ids) yields None
+        diagnostics — the emission never raises on the NULL shape and the log
+        renders 'unknown' for each absent value."""
+        run_id = uuid.uuid4()
+        org_id = uuid.uuid4()
+        conn = _CapturingConn(zero_progress_rows=[_zero_progress_row(run_id)])
+        ingest = AsyncMock()
+        with patch.object(ch, "_ingest_saq_error", new=ingest):
+            count = await pe._sweep_org_saq_zero_progress_runs(
+                conn,
+                org_id=org_id,
+                max_age_minutes=135,
+                max_rows=25,
+                terminalised_run_ids=[],
+            )
+
+        assert count == 1
+        context = ingest.await_args.kwargs["context"]
+        assert context["run_id"] == str(run_id)
+        assert context["pipeline_id"] is None
+        assert context["trigger_id"] is None
+        assert context["dispatch_phase"] is None
+        assert context["dispatch_phase_elapsed"] is None
+        assert context["zombie_age_minutes"] is None
+        assert context["saq_queue_wait_seconds"] is None
+        assert context["dispatched_at"] is None
+        assert context["started_at"] is None
+
     def test_the_reconcile_chokepoint_shares_the_same_constant(self) -> None:
         """The chokepoint's zero-node arm reads the SAME constant, so the two
         writers cannot drift into separate groups."""

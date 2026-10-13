@@ -449,6 +449,127 @@ _SAQ_ZERO_PROGRESS_DETAIL_PREFIX_FMT = (
     "No node progress within the {age}m age bound (stale_run_recovery zero-progress sweep; "
 )
 
+
+@dataclass(frozen=True)
+class _SaqZeroProgressEmission:
+    """Normalised per-row diagnostics for the sweep's FAR-714 class signal.
+
+    The raw UPDATE RETURNING row (see the SQL template's RETURNING list) is
+    projected through :func:`_saq_zero_progress_emission` into this value
+    object: UTC-normalised timestamps plus the derived elapsed values, so the
+    log/ingest formatting is a pure, branch-light projection of it.
+    """
+
+    run_id: uuid.UUID
+    pipeline_id: uuid.UUID | None
+    trigger_id: uuid.UUID | None
+    claim_count: int
+    dispatch_phase: str | None
+    dispatch_phase_elapsed: float | None
+    zombie_age_minutes: float | None
+    saq_queue_wait_seconds: float | None
+    dispatched_at: datetime | None
+    started_at: datetime | None
+
+
+def _utc_or_none(value: datetime | None) -> datetime | None:
+    """Normalise a possibly-naive DB timestamp to UTC-aware, or None.
+
+    asyncpg can hand back naive datetimes for timestamp columns; the elapsed
+    arithmetic below must never mix naive and aware values.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
+def _seconds_between(end: datetime | None, start: datetime | None) -> float | None:
+    """Non-negative seconds from ``start`` to ``end``; None if either is None."""
+    if end is None or start is None:
+        return None
+    return max((end - start).total_seconds(), 0.0)
+
+
+def _format_optional(value: float | None, *, spec: str = ".0f", suffix: str = "") -> str:
+    """Render an optional numeric diagnostic as ``<value><suffix>`` or 'unknown'."""
+    if value is None:
+        return "unknown"
+    return f"{value:{spec}}{suffix}"
+
+
+def _saq_zero_progress_emission(row: Any, completed_at: datetime) -> _SaqZeroProgressEmission:
+    """Project one UPDATE RETURNING row into a normalised emission record."""
+    (
+        run_id,
+        pipeline_id,
+        trigger_id,
+        claim_count,
+        dispatch_phase,
+        dispatch_phase_entered_at,
+        started_at,
+        dispatched_at,
+    ) = row
+    started = _utc_or_none(started_at)
+    dispatched = _utc_or_none(dispatched_at)
+    phase_entered = _utc_or_none(dispatch_phase_entered_at)
+    zombie_seconds = _seconds_between(completed_at, started)
+    return _SaqZeroProgressEmission(
+        run_id=run_id,
+        pipeline_id=pipeline_id,
+        trigger_id=trigger_id,
+        claim_count=claim_count,
+        dispatch_phase=dispatch_phase,
+        dispatch_phase_elapsed=_seconds_between(completed_at, phase_entered),
+        zombie_age_minutes=None if zombie_seconds is None else zombie_seconds / 60,
+        saq_queue_wait_seconds=_seconds_between(started, dispatched),
+        dispatched_at=dispatched,
+        started_at=started,
+    )
+
+
+def _log_saq_zero_progress_emission(
+    emission: _SaqZeroProgressEmission, *, org_id: uuid.UUID, max_age_minutes: int
+) -> None:
+    """Alert-grade, per-run log — same shape as the chokepoint's log so a
+    burst is visible with per-run attribution."""
+    _log.error(
+        "stale_run_recovery.claimed_but_never_dispatched run=%s org=%s claim_count=%s "
+        "pipeline=%s trigger=%s dispatch_phase=%s dispatch_phase_elapsed=%s "
+        "zombie_age_minutes=%s saq_queue_wait_seconds=%s — zero-progress SAQ run "
+        "terminal-failed with %s by the stale_run_recovery sweep (age bound %d min)",
+        emission.run_id,
+        org_id,
+        emission.claim_count,
+        emission.pipeline_id,
+        emission.trigger_id,
+        emission.dispatch_phase if emission.dispatch_phase is not None else "unknown",
+        _format_optional(emission.dispatch_phase_elapsed, spec=".1f", suffix="s"),
+        _format_optional(emission.zombie_age_minutes),
+        _format_optional(emission.saq_queue_wait_seconds, suffix="s"),
+        EXECUTOR_STALLED_ERROR_CODE,
+        max_age_minutes,
+    )
+
+
+def _saq_zero_progress_ingest_context(emission: _SaqZeroProgressEmission) -> dict[str, object]:
+    """The error-event context mirroring the reconcile chokepoint's per-run
+    diagnostics (so the shared Error Dashboard group detail matches)."""
+    return {
+        "run_id": str(emission.run_id),
+        "pipeline_id": str(emission.pipeline_id) if emission.pipeline_id is not None else None,
+        "trigger_id": str(emission.trigger_id) if emission.trigger_id is not None else None,
+        "claim_count": emission.claim_count,
+        "dispatch_phase": emission.dispatch_phase,
+        "dispatch_phase_elapsed": emission.dispatch_phase_elapsed,
+        "zombie_age_minutes": emission.zombie_age_minutes,
+        "saq_queue_wait_seconds": emission.saq_queue_wait_seconds,
+        "dispatched_at": emission.dispatched_at.isoformat() if emission.dispatched_at is not None else None,
+        "started_at": emission.started_at.isoformat() if emission.started_at is not None else None,
+    }
+
+
 # Claim caps are a SINGLE source of truth: ``SAQ_RUN_CLAIM_CAP`` in settings
 # (default 20). Execute (plan F4) and resume (plan F6a) claims both resolve the
 # cap from settings via :func:`_resolve_claim_cap` — the old execute-only
@@ -2642,80 +2763,27 @@ async def _sweep_org_saq_zero_progress_runs(
         },
     )
     rows = result.all()
-    count = len(rows)
     terminalised_run_ids.extend((row[0], org_id) for row in rows)
-    if count:
-        for row in rows:
-            (
-                run_id,
-                pipeline_id,
-                trigger_id,
-                claim_count,
-                dispatch_phase,
-                dispatch_phase_entered_at,
-                started_at,
-                dispatched_at,
-            ) = row
-            completed_at = datetime.now(UTC)
-            zombie_age_minutes: float | None = None
-            if started_at is not None:
-                if started_at.tzinfo is None:
-                    started_at = started_at.replace(tzinfo=UTC)
-                zombie_age_minutes = max((completed_at - started_at).total_seconds() / 60, 0.0)
-            saq_queue_wait_seconds: float | None = None
-            if dispatched_at is not None and started_at is not None:
-                if dispatched_at.tzinfo is None:
-                    dispatched_at = dispatched_at.replace(tzinfo=UTC)
-                saq_queue_wait_seconds = max((started_at - dispatched_at).total_seconds(), 0.0)
-            dispatch_phase_elapsed: float | None = None
-            if dispatch_phase_entered_at is not None:
-                if dispatch_phase_entered_at.tzinfo is None:
-                    dispatch_phase_entered_at = dispatch_phase_entered_at.replace(tzinfo=UTC)
-                dispatch_phase_elapsed = max((completed_at - dispatch_phase_entered_at).total_seconds(), 0.0)
-            # Alert-grade, per run — same shape as the chokepoint's log so a
-            # burst is visible with per-run attribution (the aggregate sweep
-            # summary is logged by the caller).
-            _log.error(
-                "stale_run_recovery.claimed_but_never_dispatched run=%s org=%s claim_count=%s "
-                "pipeline=%s trigger=%s dispatch_phase=%s dispatch_phase_elapsed=%s "
-                "zombie_age_minutes=%s saq_queue_wait_seconds=%s — zero-progress SAQ run "
-                "terminal-failed with %s by the stale_run_recovery sweep (age bound %d min)",
-                run_id,
-                org_id,
-                claim_count,
-                pipeline_id,
-                trigger_id,
-                dispatch_phase if dispatch_phase is not None else "unknown",
-                f"{dispatch_phase_elapsed:.1f}s" if dispatch_phase_elapsed is not None else "unknown",
-                f"{zombie_age_minutes:.0f}" if zombie_age_minutes is not None else "unknown",
-                f"{saq_queue_wait_seconds:.0f}" if saq_queue_wait_seconds is not None else "unknown",
-                EXECUTOR_STALLED_ERROR_CODE,
-                max_age_minutes,
-            )
-            await _ingest_saq_error(
-                # Vestigial param (see ``_ingest_saq_error``): the ingest
-                # opens its OWN session/transaction; pass this org
-                # transaction's conn for caller symmetry.
-                conn,
-                org_id,
-                function="stale_run_recovery",
-                # STABLE message (no run id) — the SHARED class constant, so
-                # this writer and the reconcile chokepoint feed ONE group.
-                message=_NODELESS_ZOMBIE_STABLE_MESSAGE,
-                context={
-                    "run_id": str(run_id),
-                    "pipeline_id": str(pipeline_id) if pipeline_id is not None else None,
-                    "trigger_id": str(trigger_id) if trigger_id is not None else None,
-                    "claim_count": claim_count,
-                    "dispatch_phase": dispatch_phase,
-                    "dispatch_phase_elapsed": dispatch_phase_elapsed,
-                    "zombie_age_minutes": zombie_age_minutes,
-                    "saq_queue_wait_seconds": saq_queue_wait_seconds,
-                    "dispatched_at": dispatched_at.isoformat() if dispatched_at is not None else None,
-                    "started_at": started_at.isoformat() if started_at is not None else None,
-                },
-            )
-    return count
+    completed_at = datetime.now(UTC)
+    for row in rows:
+        emission = _saq_zero_progress_emission(row, completed_at)
+        # Alert-grade, per run — same shape as the chokepoint's log so a burst
+        # is visible with per-run attribution (the aggregate sweep summary is
+        # logged by the caller).
+        _log_saq_zero_progress_emission(emission, org_id=org_id, max_age_minutes=max_age_minutes)
+        await _ingest_saq_error(
+            # Vestigial param (see ``_ingest_saq_error``): the ingest
+            # opens its OWN session/transaction; pass this org
+            # transaction's conn for caller symmetry.
+            conn,
+            org_id,
+            function="stale_run_recovery",
+            # STABLE message (no run id) — the SHARED class constant, so this
+            # writer and the reconcile chokepoint feed ONE group.
+            message=_NODELESS_ZOMBIE_STABLE_MESSAGE,
+            context=_saq_zero_progress_ingest_context(emission),
+        )
+    return len(rows)
 
 
 async def _redispatch_stranded_rows(stranded_rows: list[Any]) -> dict[str, int]:

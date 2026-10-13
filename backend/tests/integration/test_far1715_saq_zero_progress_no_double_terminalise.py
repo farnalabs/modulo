@@ -129,9 +129,11 @@ async def _seed_zero_progress_run(db_engine: AsyncEngine, env: _Env) -> uuid.UUI
                 "sid": str(env.snapshot_id),
                 "uid": str(env.account_id),
                 "thread": f"{env.org_id}:{run_id}",
-                "heartbeat": started.isoformat(),
-                "dispatched": started.isoformat(),
-                "started": started.isoformat(),
+                # asyncpg binds timestamptz params as datetime objects, never
+                # ISO strings (the FAR-1623 twin passes datetimes the same way).
+                "heartbeat": started,
+                "dispatched": started,
+                "started": started,
             },
         )
     return run_id
