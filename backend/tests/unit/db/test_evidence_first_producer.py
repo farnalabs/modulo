@@ -311,3 +311,57 @@ async def test_run_without_guardrails_writes_no_evidence(session: AsyncSession) 
     await session.flush()
 
     assert not await _all_evidence(session)
+
+
+# ---------------------------------------------------------------------------
+# FAR-1729: source-table pin — the guardrail version stamp reads ``evals``
+# ---------------------------------------------------------------------------
+
+
+class TestFar1729GuardrailVersionStampSourcePin:
+    """The version lookup must query ``evals``, never the frozen table.
+
+    ``eval_definitions`` was frozen by the 0254 cutover (no production write
+    path post-cutover); resolving versions from it stamps every post-cutover
+    guardrail result ``eval_definition_version=NULL``. The pin fails if the
+    source is reverted.
+    """
+
+    async def test_version_lookup_compiles_against_evals_table(self) -> None:
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from modulo.db.crud.run import _persist_guardrail_eval_results
+
+        org_id = uuid.uuid4()
+        eval_id = uuid.uuid4()
+        captured: list[str] = []
+
+        def _execute(stmt, params=None):
+            captured.append(str(stmt))
+            result = MagicMock()
+            result.all = MagicMock(return_value=[SimpleNamespace(id=eval_id, version=5)])
+            return result
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=_execute)
+
+        gr = SimpleNamespace(eval_id=eval_id, passed=True, score=1.0, detail="ok")
+        await _persist_guardrail_eval_results(
+            session,
+            org_id=org_id,
+            run_id=uuid.uuid4(),
+            guardrail_results=[gr],
+            guardrail_observed_by_eval={eval_id: False},
+        )
+
+        stale = [s for s in captured if "eval_definitions" in s]
+        assert not stale, f"version stamp must not resolve from the frozen table: {stale}"
+        version_reads = [s for s in captured if "FROM evals" in s]
+        assert version_reads, f"no evals version lookup captured: {captured}"
+
+        # The stamped result must carry the version the evals row supplied.
+        added = [c.args[0] for c in session.add.call_args_list]
+        eval_results = [r for r in added if isinstance(r, EvalResult)]
+        assert len(eval_results) == 1
+        assert eval_results[0].eval_definition_version == 5

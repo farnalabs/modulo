@@ -1,7 +1,9 @@
 """Unit tests for repair_accounts_fks.py — sslmode translation (FAR-1441).
 
-The script reuses ``modulo.db.bootstrap.split_postgres_sslmode`` (a stdlib-only
-helper, so the "asyncpg + stdlib only" runtime contract is preserved). These
+The script reuses ``modulo.db.url_utils.split_postgres_sslmode`` (a stdlib-only
+helper, so the "asyncpg + stdlib only" runtime contract is preserved — the
+shared helper is a stdlib-only leaf module; FAR-1469 folded the former
+bootstrap copy into it). These
 tests pin the script's fail-closed contract: the operator's ``sslmode`` is
 HONOURED on the asyncpg connect, never silently stripped or downgraded.
 """

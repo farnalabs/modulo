@@ -70,7 +70,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.eval_run import get_evals_for_runs
 from modulo.db.crud.variant_group import get_batch_runs
-from modulo.db.models.eval_definition import EvalDefinition
+from modulo.db.models.eval import Eval
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 
 _log = logging.getLogger(__name__)
@@ -598,10 +598,12 @@ async def _load_eval_names(
     """Org-scoped ``eval_id -> name`` for the referenced eval definitions."""
     if not eval_ids:
         return {}
+    # FAR-1729: names come from the live ``evals`` table — the frozen
+    # ``eval_definitions`` snapshot cannot name post-cutover results.
     result = await session.execute(
-        select(EvalDefinition.id, EvalDefinition.name).where(
-            EvalDefinition.id.in_(eval_ids),
-            EvalDefinition.organisation_id == org_id,
+        select(Eval.id, Eval.name).where(
+            Eval.id.in_(eval_ids),
+            Eval.organisation_id == org_id,
         )
     )
     return {row.id: row.name for row in result.all()}

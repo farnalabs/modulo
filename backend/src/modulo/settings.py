@@ -411,6 +411,28 @@ class Settings(BaseSettings):
     # Per-run execution ceiling for SAQ execute_run (dispatch.py): the job must
     # reach a terminal state within this budget or the worker fails it.
     saq_run_timeout: int = Field(default=7200, alias="SAQ_RUN_TIMEOUT", ge=300, le=86400)
+    # FAR-1715: age bound (minutes) past ``runs.started_at`` at which a
+    # ``dispatcher='saq'`` run with ZERO node progress is terminalised — the
+    # dispatcher_reconcile nodeless router / mid-graph age gate AND the
+    # independent stale_run_recovery zero-progress branch, which share this
+    # ONE knob. UNSET (the default) keeps the pre-FAR-1715 bound exactly:
+    # cron_helpers derives ``max(SAQ_RUN_TIMEOUT // 60, 120) + 15`` (135 min at
+    # the shipped 7200s) when the field is None, so the default behaviour is
+    # unchanged. An EXPLICIT pin is validated by
+    # ``_saq_zero_progress_max_age_invariant`` below: it must cover the worst
+    # window of EVERY consumer — both the zero-progress consumers' pre-node
+    # window (``saq_setup_grace_seconds`` + ``MAX_NODE_TIMEOUT_SECONDS``) and
+    # the mid-graph age gate's floor (a run may legitimately execute up to
+    # ``SAQ_RUN_TIMEOUT``, floored at 2h, plus a 15-min skew — 135 min at the
+    # shipped defaults). So the bound can never be pinned low enough to kill a
+    # legitimately slow-starting run (run 32420's first node started at 1h43m
+    # — FAR-1680 P0 measurement) OR a still-progressing mid-graph run (a pin
+    # in [65, 134] would drop the mid-graph gate below the maximum legitimate
+    # run duration and falsely fail a live run ``no_progress`` — FAR-1715
+    # pre-PR QA M1).
+    saq_zero_progress_max_age_minutes: int | None = Field(
+        default=None, alias="SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES", ge=1, le=10080
+    )
     # Per-claim cap on SAQ claim attempts for dispatcher='saq' runs (F3a).
     # Single source of truth (retro item 9): execute and resume claims in
     # pipeline_execution resolve this value via _resolve_claim_cap; cron_helpers
@@ -1252,6 +1274,66 @@ class Settings(BaseSettings):
                 f"({MAX_NODE_TIMEOUT_SECONDS}) = {required}s: the FAR-1088 in-flight shield would expire "
                 "before the node deadline, letting the nodeless backstop claim a live attempt. "
                 f"Raise it to >= {required}, or unset it to derive from the grace."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _saq_zero_progress_max_age_invariant(self) -> "Settings":
+        """FAIL (never warn): an explicit zero-progress age bound must cover
+        the worst window of EVERY consumer of the shared knob.
+
+        FAR-1715: ``saq_zero_progress_max_age_minutes`` is the age bound at
+        which a zero-progress ``dispatcher='saq'`` run is terminalised
+        (dispatcher_reconcile's nodeless router / mid-graph gate, and the
+        stale_run_recovery zero-progress branch). The bound must never sit
+        below the longest window in which a legitimate run may still be alive,
+        so the floor is the MAX of the two consumers' floors:
+
+        * zero-progress consumers (nodeless router, stale_run_recovery
+          branch): the worst-case legitimate pre-node window —
+          ``saq_setup_grace_seconds`` (time to first dispatch) +
+          ``MAX_NODE_TIMEOUT_SECONDS`` (the GraphValidator cap on one node's
+          ``timeout_seconds``), expressed in MINUTES — the knob's unit — via
+          ceiling division: 65 min at the shipped defaults (600s + 3300s =
+          3900s).
+        * the mid-graph age gate (``_terminalize_mid_graph_wedges``): a run
+          with node progress may legitimately execute up to ``SAQ_RUN_TIMEOUT``
+          (it shares this knob), so its floor is the pre-FAR-1715 derivation
+          ``max(SAQ_RUN_TIMEOUT // 60, 120) + 15`` — 135 min at the shipped
+          7200s. A pin below that floor would falsely fail a still-progressing
+          mid-graph run ``no_progress`` (FAR-1715 pre-PR QA M1: the former
+          pre-node-only invariant accepted a pin in [65, 134] that dropped the
+          mid-graph bound under the maximum legitimate run duration).
+
+        At the shipped defaults the binding floor is the mid-graph one (135),
+        which equals the unset derivation, so the default behaviour is
+        unchanged. Unset (None) is left for cron_helpers to derive the
+        historical default, so only an EXPLICIT pin is validated here —
+        mirroring ``_nodeless_in_flight_floor_invariant`` above.
+        """
+        if self.saq_zero_progress_max_age_minutes is None:
+            return self
+        pre_node_seconds = self.saq_setup_grace_seconds + MAX_NODE_TIMEOUT_SECONDS
+        # Ceiling division: minutes granularity must never round the
+        # requirement DOWN (a grace+cap that is not a whole number of minutes
+        # still requires the next whole minute of coverage).
+        pre_node_minutes = (pre_node_seconds + 59) // 60
+        # Mid-graph gate floor — the SAME derivation cron_helpers falls back
+        # to (``_MID_GRAPH_WEDGE_MAX_AGE_MINUTES``), computed from THIS
+        # Settings' ``saq_run_timeout`` so the floor tracks the operator's
+        # actual timeout knob, never a stale module constant.
+        mid_graph_minutes = max(self.saq_run_timeout // 60, 120) + 15
+        required_minutes = max(pre_node_minutes, mid_graph_minutes)
+        if self.saq_zero_progress_max_age_minutes < required_minutes:
+            raise ValueError(
+                f"SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES={self.saq_zero_progress_max_age_minutes} does not cover "
+                f"the worst-case legitimate window of every consumer: the pre-node window "
+                f"SAQ_SETUP_GRACE_SECONDS ({self.saq_setup_grace_seconds}) + max node timeout "
+                f"({MAX_NODE_TIMEOUT_SECONDS}) = {pre_node_seconds}s = {pre_node_minutes} min, and the mid-graph "
+                f"gate floor max(SAQ_RUN_TIMEOUT ({self.saq_run_timeout}) // 60, 120) + 15 = {mid_graph_minutes} min "
+                f"= {required_minutes} min binding. A lower bound would terminalise a legitimately slow-starting "
+                "run before its first node, or falsely fail a still-progressing mid-graph run no_progress. "
+                f"Raise it to >= {required_minutes}, or unset it to keep the historical default."
             )
         return self
 

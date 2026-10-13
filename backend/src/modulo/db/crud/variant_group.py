@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.crud.agent import get_agent
 from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.crud.run import count_active_runs_for_pipeline, create_run
-from modulo.db.models.eval_definition import EvalDefinition
+from modulo.db.models.eval import Eval
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -615,10 +615,13 @@ async def get_coverage_gaps(
     Returns a list of gaps: [{variant: …, missing_evals: [str, …]}, …].
     """
     if eval_def_ids is None:
+        # FAR-1729: live ``evals`` rows — the frozen ``eval_definitions``
+        # snapshot stops at the cutover, so post-cutover definitions would be
+        # missing from the gap calculation.
         result = await session.execute(
-            select(EvalDefinition).where(
-                EvalDefinition.pipeline_id == group.pipeline_id,
-                EvalDefinition.deleted_at.is_(None),
+            select(Eval).where(
+                Eval.pipeline_id == group.pipeline_id,
+                Eval.deleted_at.is_(None),
             )
         )
         eval_defs = list(result.scalars())
@@ -759,11 +762,13 @@ async def has_pipeline_default_evals(session: AsyncSession, pipeline_id: uuid.UU
     default evals the frontend shows "no evals → cost/diff only". Returned as a
     signal only — never a hard block.
     """
+    # FAR-1729: live ``evals`` rows — a post-cutover default eval is invisible
+    # in the frozen snapshot, which would wrongly report "no evals".
     result = await session.execute(
-        select(EvalDefinition.id)
+        select(Eval.id)
         .where(
-            EvalDefinition.pipeline_id == pipeline_id,
-            EvalDefinition.deleted_at.is_(None),
+            Eval.pipeline_id == pipeline_id,
+            Eval.deleted_at.is_(None),
         )
         .limit(1)
     )

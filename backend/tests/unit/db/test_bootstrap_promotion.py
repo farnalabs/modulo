@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 
 import modulo.db.bootstrap as bootstrap_module
-from modulo.db.url_utils import derive_system_database_url, fix_database_url
+from modulo.db.url_utils import derive_system_database_url, fix_database_url, split_postgres_sslmode
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _DEPLOY_SHIM = _REPO_ROOT / "deploy" / "fly" / "bootstrap_db.py"
@@ -175,6 +175,24 @@ def test_split_postgres_sslmode_rejects_downgrading_modes(mode: str) -> None:
 def test_split_postgres_sslmode_rejects_non_postgres_scheme() -> None:
     with pytest.raises(ValueError, match="Postgres URL"):
         bootstrap_module.split_postgres_sslmode("mysql://u:p@h:3306/db")
+
+
+def test_split_postgres_sslmode_has_exactly_one_definition() -> None:
+    """FAR-1469: the interim bootstrap copy is folded into url_utils.
+
+    Grep-audit guard: ``def split_postgres_sslmode`` must appear exactly once
+    under ``backend/src`` (in ``modulo/db/url_utils.py``), and the name
+    reachable via ``modulo.db.bootstrap`` must BE that shared helper — not a
+    private reimplementation.
+    """
+    src_root = _REPO_ROOT / "backend" / "src"
+    hits = sorted(
+        str(path.relative_to(src_root))
+        for path in src_root.rglob("*.py")
+        if "def split_postgres_sslmode" in path.read_text(encoding="utf-8")
+    )
+    assert hits == ["modulo/db/url_utils.py"], f"expected exactly one definition, found: {hits}"
+    assert bootstrap_module.split_postgres_sslmode is split_postgres_sslmode
 
 
 class _FakeConn:

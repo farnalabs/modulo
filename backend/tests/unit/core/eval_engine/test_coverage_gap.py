@@ -349,3 +349,38 @@ class TestEvaluateCoverageGap:
         assert gap.recommended_action == "improve_evals"
         assert gap.status == "complete"
         assert summary.variant_divergence >= DEFAULT_DIVERGENCE_THRESHOLD
+
+
+# --------------------------------------------------------------------------- #
+# FAR-1729: source-table pin — the coverage-gap name lookup reads ``evals``  #
+# --------------------------------------------------------------------------- #
+class TestFar1729EvalNameLookupSourcePin:
+    """``_load_eval_names`` must query ``evals``, never the frozen table.
+
+    ``eval_definitions`` was frozen by the 0254 cutover (no production write
+    path post-cutover); reading it cannot name any post-cutover result the
+    gap report surfaces. The pin fails if the source is reverted.
+    """
+
+    async def test_name_lookup_compiles_against_evals_table(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from modulo.core.eval_engine.coverage_gap import _load_eval_names
+
+        captured: list[str] = []
+
+        def _execute(stmt, params=None):
+            captured.append(str(stmt))
+            result = MagicMock()
+            result.all = MagicMock(return_value=[])
+            return result
+
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=_execute)
+
+        names = await _load_eval_names(session, org_id=uuid.uuid4(), eval_ids={uuid.uuid4()})
+        assert names == {}
+
+        stale = [s for s in captured if "eval_definitions" in s]
+        assert not stale, f"_load_eval_names must not read the frozen table: {stale}"
+        assert any("FROM evals" in s for s in captured), f"no evals read captured: {captured}"

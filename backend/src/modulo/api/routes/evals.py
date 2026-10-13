@@ -89,7 +89,6 @@ from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.crud.run_node_outputs import read_run_blobs
 from modulo.db.models.eval import Eval
 from modulo.db.models.eval_dataset import EvalDataset
-from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.eval_suite import EvalSuite
 from modulo.db.models.pipeline import Pipeline
@@ -1412,14 +1411,17 @@ async def eval_coverage(
             nodes_raw = pipeline.graph_nodes_json or []
             node_ids = [str(n.get("id")) for n in nodes_raw if n.get("id")]
 
+            # FAR-1729: read live ``evals`` rows (the storage source since the
+            # 0254 cutover) — the frozen ``eval_definitions`` snapshot stops at
+            # the cutover, so post-cutover definitions would be invisible here.
             eval_defs_rows = (
                 (
                     await session.execute(
-                        select(EvalDefinition).where(
-                            EvalDefinition.pipeline_id == pipeline_id,
-                            EvalDefinition.organisation_id == principal.organisation_id,
-                            EvalDefinition.node_id.in_([uuid.UUID(nid) for nid in node_ids if nid]),
-                            EvalDefinition.deleted_at.is_(None),
+                        select(Eval).where(
+                            Eval.pipeline_id == pipeline_id,
+                            Eval.organisation_id == principal.organisation_id,
+                            Eval.node_id.in_([uuid.UUID(nid) for nid in node_ids if nid]),
+                            Eval.deleted_at.is_(None),
                         )
                     )
                 )
@@ -1617,12 +1619,15 @@ async def eval_timeseries(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
+            # FAR-1729: the exists/name lookup must read ``evals`` — checking
+            # the frozen ``eval_definitions`` snapshot 404s every post-cutover
+            # eval even though its results exist.
             eval_def = (
                 await session.execute(
                     include_soft_deleted(
-                        select(EvalDefinition).where(
-                            EvalDefinition.id == eval_id,
-                            EvalDefinition.organisation_id == principal.organisation_id,
+                        select(Eval).where(
+                            Eval.id == eval_id,
+                            Eval.organisation_id == principal.organisation_id,
                         )
                     )
                 )
@@ -3071,13 +3076,16 @@ async def _fetch_eval_definitions(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            # FAR-1729: names come from the live ``evals`` table — reading the
+            # frozen snapshot silently labels every post-cutover result
+            # ``eval_name: "unknown"`` in the compare payload.
             defs_rows = (
                 (
                     await session.execute(
                         include_soft_deleted(
-                            select(EvalDefinition).where(
-                                EvalDefinition.id.in_(eval_ids),
-                                EvalDefinition.organisation_id == principal.organisation_id,
+                            select(Eval).where(
+                                Eval.id.in_(eval_ids),
+                                Eval.organisation_id == principal.organisation_id,
                             )
                         )
                     )

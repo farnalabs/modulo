@@ -30,7 +30,7 @@ from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.notifier import EVENT_EVAL_REGRESSION
-from modulo.db.models.eval_definition import EvalDefinition
+from modulo.db.models.eval import Eval
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.eval_suite import EvalSuite
 from modulo.db.models.eval_suite_run import SuiteRun, SuiteRunState
@@ -85,11 +85,14 @@ async def resolve_eval_definition_version(
         return pinned_version
     from modulo.db.soft_delete import include_soft_deleted
 
+    # FAR-1729: the definition's current version lives on ``evals`` — the
+    # frozen ``eval_definitions`` snapshot stops at the cutover, so a
+    # NULL-version lookup against it 404s every post-cutover definition.
     result = await session.execute(
         include_soft_deleted(
-            select(EvalDefinition).where(
-                EvalDefinition.id == eval_id,
-                EvalDefinition.organisation_id == org_id,
+            select(Eval).where(
+                Eval.id == eval_id,
+                Eval.organisation_id == org_id,
             )
         )
     )

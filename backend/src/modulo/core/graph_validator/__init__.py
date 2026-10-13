@@ -1437,7 +1437,8 @@ class GraphValidator:
         """Validate a live graph definition or an immutable snapshot.
 
         *guardrail_definitions*, when provided, are the pipeline's
-        ``eval_type='guardrail'`` ``EvalDefinition`` rows — used for the
+        ``eval_type='guardrail'`` ``Eval`` rows (the live storage since the
+        0254 cutover) — used for the
         per-node guardrail cap check (FAR-223 item 7). Returns warnings and
         errors. Errors block execution; warnings are advisory.
         """

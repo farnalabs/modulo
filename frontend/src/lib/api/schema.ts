@@ -8741,8 +8741,9 @@ export interface paths {
          * @description Publish an eval-gap proposal as a live eval definition (PRD §8.20 ¶Eval suite growth #3).
          *
          *     A human reviews/edits the proposed eval (name, eval_type, config) and
-         *     publishes it. Publishing creates an ``EvalDefinition`` scoped to the
-         *     feedback record's pipeline and producing node — because run-time eval
+         *     publishes it. Publishing creates an ``evals`` row (plus its policy gate)
+         *     scoped to the feedback record's pipeline and producing node — because
+         *     run-time eval
          *     execution and gap detection load definitions by ``pipeline_id`` at run
          *     time, the published eval is immediately active for future runs of that
          *     pipeline — then resolves the proposal record (status -> ``resolved``).

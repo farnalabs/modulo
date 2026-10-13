@@ -35,8 +35,17 @@ Feature: Feature Flag Inspection
     When I PUT "/api/v1/admin/feature-flags/sso" with body {"enabled": true}
     Then the response status is 403
 
-  Scenario: Public license endpoint
+  Scenario: Public license endpoint without a licence
     When I GET "/api/v1/license"
     Then the response status is 200
-    And the response contains a "tier" field
+    And the response field "tier" equals "community"
     And the response contains a "features" list
+    And the response field "is_valid" is false
+
+  Scenario: Public license endpoint with a stored signed licence
+    Given a signed licence is stored in memory
+    When I GET "/api/v1/license"
+    Then the response status is 200
+    And the response field "tier" equals "team"
+    And the response contains a "features" list
+    And the response field "is_valid" is true
