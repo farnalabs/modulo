@@ -45,6 +45,7 @@ from modulo.launcher.supervisor import (
     request_stop,
     write_runtime_manifest,
 )
+from tests.unit.launcher.test_launcher_shared import bypass_platform_seams
 
 POSIX = sys.platform != "win32"
 requires_posix = pytest.mark.skipif(not POSIX, reason="POSIX-only supervision mechanics")
@@ -871,8 +872,8 @@ def _write_bootstrapped_data_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def _bypass_platform_guard(monkeypatch: pytest.MonkeyPatch) -> None:
-    if sys.platform == "win32":
-        monkeypatch.setattr(secrets_file_module, "assert_supported_platform", lambda: None)
+    """Bypass the Windows-refusal seams this module's tests exercise."""
+    bypass_platform_seams(monkeypatch, "modulo.launcher.secrets_file")
 
 
 def test_collect_status_uninitialized_dir(tmp_path: Path) -> None:

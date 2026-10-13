@@ -53,7 +53,7 @@ from modulo.launcher.initdb import (
     bootstrap_pgdata,
     validate_target_dir,
 )
-from tests.unit.launcher.test_launcher_shared import minimal_probes
+from tests.unit.launcher.test_launcher_shared import bypass_platform_seams, minimal_probes
 
 requires_posix = pytest.mark.skipif(sys.platform == "win32", reason="POSIX fault mechanics; runs on Linux CI")
 
@@ -61,11 +61,12 @@ requires_posix = pytest.mark.skipif(sys.platform == "win32", reason="POSIX fault
 @pytest.fixture(autouse=True)
 def _bypass_platform_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     """Logic tests run on any OS: bypass the Windows-refusal seams."""
-    if sys.platform == "win32":
-        monkeypatch.setattr(secrets_file_module, "assert_supported_platform", lambda: None)
-        from modulo.launcher import initdb as initdb_module
-
-        monkeypatch.setattr(initdb_module, "assert_supported_platform", lambda: None)
+    bypass_platform_seams(
+        monkeypatch,
+        "modulo.launcher.secrets_file",
+        "modulo.launcher.initdb",
+        "modulo.launcher.entry",
+    )
 
 
 def _fake_initdb_runner(argv: list[str]) -> None:

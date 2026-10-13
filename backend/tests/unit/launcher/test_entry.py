@@ -27,7 +27,7 @@ import modulo.settings as settings_module
 from modulo.launcher.entry import BootError, default_data_dir, resolve_bin_dir, run_start
 from modulo.launcher.env_safety import AmbientEnvironmentError
 from modulo.launcher.supervisor import DataDirLockError
-from modulo.settings import get_settings
+from tests.unit.launcher.test_launcher_shared import bypass_platform_seams, launcher_state_reset
 
 FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 SECRET_KEY = "a" * 32
@@ -35,22 +35,19 @@ SECRET_KEY = "a" * 32
 
 @pytest.fixture(autouse=True)
 def _reset_launcher_state() -> Iterator[None]:
-    """Snapshot + restore the module-level pin/guard and the get_settings cache."""
-    get_settings.cache_clear()
-    yield
-    settings_module._pinned_env_file = None
-    settings_module._first_boot_guard = None
-    get_settings.cache_clear()
+    """The shared snapshot/restore body lives in the launcher-test module."""
+    yield from launcher_state_reset()
 
 
 @pytest.fixture(autouse=True)
 def _bypass_platform_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     """Logic tests run on any OS: bypass the Windows-refusal seams."""
-    if sys.platform == "win32":
-        monkeypatch.setattr(secrets_file_module, "assert_supported_platform", lambda: None)
-        import modulo.launcher.initdb as initdb_module
-
-        monkeypatch.setattr(initdb_module, "assert_supported_platform", lambda: None)
+    bypass_platform_seams(
+        monkeypatch,
+        "modulo.launcher.secrets_file",
+        "modulo.launcher.initdb",
+        "modulo.launcher.entry",
+    )
 
 
 def _raise_boot_error(message: str) -> Path:

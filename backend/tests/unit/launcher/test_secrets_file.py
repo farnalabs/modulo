@@ -24,13 +24,13 @@ from modulo.launcher.secrets_file import (
     SecretsFileError,
     load_or_create,
 )
+from tests.unit.launcher.test_launcher_shared import bypass_platform_seams
 
 
 @pytest.fixture(autouse=True)
 def _bypass_platform_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     """Logic tests run on any OS: bypass the Windows-refusal seam."""
-    if sys.platform == "win32":
-        monkeypatch.setattr(secrets_file_module, "assert_supported_platform", lambda: None)
+    bypass_platform_seams(monkeypatch, "modulo.launcher.secrets_file")
 
 
 def test_first_boot_generates_all_credentials(tmp_path: Path) -> None:
