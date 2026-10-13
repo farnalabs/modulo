@@ -9,6 +9,11 @@ In reverse topological order (pipelines → agents → schemas): unmodified
 entities are deleted; modified entities have their provenance detached.
 Per-item savepoints: a blocked deletion (e.g. governance decision records
 present) is reported and the batch continues.
+
+The ``CollectionInstall`` provenance row itself is SOFT-deleted (``deleted_at``
+stamped), never hard-deleted: it is append-only history and its
+``collection_install_entity`` children must survive the uninstall. A second
+uninstall of the same install raises ``InstallNotFoundError``.
 """
 
 from __future__ import annotations
@@ -17,7 +22,7 @@ import logging
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,6 +54,14 @@ async def _load_install(
     """
     install = await session.get(CollectionInstall, install_id)
     if install is None or install.organisation_id != org_id:
+        raise InstallNotFoundError(f"Install {install_id} not found for organisation {org_id}")
+    # ``session.get`` is NOT covered by the global soft-delete filter (the
+    # ``do_orm_execute`` listener injects ``deleted_at IS NULL`` into ORM
+    # SELECTs, but a get-by-PK can also resolve from the identity map), so an
+    # already-uninstalled row must be rejected explicitly — otherwise a second
+    # uninstall would "succeed" against a row the rest of the product treats as
+    # gone, and would re-run entity deletion for a retired provenance record.
+    if install.deleted_at is not None:
         raise InstallNotFoundError(f"Install {install_id} not found for organisation {org_id}")
     return install
 
@@ -196,8 +209,8 @@ async def uninstall_collection(
     for entity_row in sorted_entities:
         # The underlying entity may have been removed out-of-band. Skip it:
         # there is nothing to delete or detach, and reporting it as "detached"
-        # would be misleading. Its tracking row is cleaned up by the cascade
-        # below when the install record is deleted.
+        # would be misleading. Its tracking row is kept as provenance — the
+        # install record is soft-deleted (not cascaded away) below.
         if not await _entity_exists(
             session,
             entity_row.entity_type,
@@ -249,8 +262,13 @@ async def uninstall_collection(
                 }
             )
 
-    # Delete the CollectionInstall record + child rows (CASCADE deletes entities)
-    await session.delete(install)
+    # Retire the CollectionInstall provenance row via SOFT delete — the row is
+    # append-only history (its ``collection_install_entity`` children stay for
+    # audit), so a hard ``session.delete`` would destroy the provenance trail.
+    # The partial unique index (org, collection) WHERE deleted_at IS NULL then
+    # permits a reinstall, and the global soft-delete filter hides the retired
+    # row from every read path.
+    install.deleted_at = func.now()
     await session.flush()
 
     return {

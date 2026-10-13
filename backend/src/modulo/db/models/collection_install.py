@@ -4,12 +4,25 @@
 primitive into an organisation. ``CollectionInstallEntity`` is the per-entity
 child recording exactly which schemas/agents/pipelines an install wrote.
 
-The ORM metadata here is kept byte-for-byte consistent with migration
-``0207_collection_install_tracking`` — the primary key is ``install_id`` (NOT
-``id``), the table carries ``created_at`` only (no ``updated_at``), and the child
-FK targets ``collection_install.install_id``. A conformance test
-(``tests/unit/db/test_migration_0207_collection_install_tracking.py``) pins these
-invariants so model/migration drift cannot silently pass the mocked unit tests.
+The ORM metadata here was originally kept byte-for-byte consistent with
+migration ``0207_collection_install_tracking`` — the primary key is
+``install_id`` (NOT ``id``), the table carries ``created_at`` only (no
+``updated_at``), and the child FK targets ``collection_install.install_id``. A
+conformance test (``tests/unit/db/test_migration_0207_collection_install_tracking.py``)
+pins those invariants so model/migration drift cannot silently pass the mocked
+unit tests.
+
+Migration ``0308_library_cluster_db_hardening`` then extended the table with the
+two columns a provenance row was missing: ``deleted_at`` (soft delete — an
+uninstall marks the row instead of destroying the audit trail, and the
+``SoftDeleteMixin`` global filter hides it from reads) and ``created_by`` (the
+account that performed the install). The ``0207`` ``UniqueConstraint`` on
+``organisation_id``/``collection_id`` was converted to a partial unique index
+with the SAME name and a ``WHERE deleted_at IS NULL`` predicate, so an
+install → uninstall → reinstall cycle does not collide with the retired row.
+``collection_install`` is NOT ``OrgScoped``-derived (explicit columns only, and
+deliberately no ``updated_at`` — provenance rows are history), so
+``SoftDeleteMixin`` is mixed in directly rather than through ``OrgScoped``.
 """
 
 from __future__ import annotations
@@ -23,20 +36,28 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    ForeignKey,
     ForeignKeyConstraint,
+    Index,
     PrimaryKeyConstraint,
     String,
-    UniqueConstraint,
     Uuid,
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import Base
+from modulo.db.models.base import ONDELETE_SET_NULL, Base, SoftDeleteMixin
+
+# Repeated column type (S1192): JSON with PostgreSQL JSONB variant. The three
+# provenance payload columns are jsonb in the DB (migration 0207); the PG
+# variant keeps the ORM honest against the migrated schema while the generic
+# JSON keeps SQLite parity (the repo-wide multi-backend convention).
+_JSONB_COL = JSON().with_variant(JSONB(), "postgresql")
 
 
-class CollectionInstall(Base):
+class CollectionInstall(SoftDeleteMixin, Base):
     """One row per install attempt of a library primitive into an organisation.
 
     ``status`` is ``'installed'`` or ``'failed'``; ``resolved_manifest`` /
@@ -45,7 +66,9 @@ class CollectionInstall(Base):
 
     The primary key is ``install_id`` (the migration does NOT use the
     ``OrgScoped``-inherited ``id`` column, and the table has no ``updated_at``
-    — provenance rows are append-only history).
+    — provenance rows are append-only history). ``deleted_at`` (soft delete)
+    is the one exception to "no schema changes after 0207": an uninstall now
+    stamps it instead of destroying the row (see the module docstring).
     """
 
     __tablename__ = "collection_install"
@@ -70,9 +93,15 @@ class CollectionInstall(Base):
         nullable=False,
         server_default=text("false"),
     )
-    resolved_manifest: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    connector_checklist: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
-    installed_entities: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    resolved_manifest: Mapped[dict[str, Any] | None] = mapped_column(_JSONB_COL, nullable=True)
+    connector_checklist: Mapped[list[dict[str, Any]] | None] = mapped_column(_JSONB_COL, nullable=True)
+    installed_entities: Mapped[list[dict[str, Any]] | None] = mapped_column(_JSONB_COL, nullable=True)
+    created_by: Mapped[UUID | None] = mapped_column(
+        Uuid(),
+        ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL),
+        nullable=True,
+        index=True,
+    )
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -91,7 +120,15 @@ class CollectionInstall(Base):
             "status IN ('installed', 'failed')",
             name="ck_collection_install_status",
         ),
-        UniqueConstraint("organisation_id", "collection_id", name="uq_collection_install_org_collection"),
+        # Partial unique (0306): one LIVE install per (org, collection); a
+        # soft-deleted (uninstalled) row no longer blocks a reinstall.
+        Index(
+            "uq_collection_install_org_collection",
+            "organisation_id",
+            "collection_id",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
     )
 
 

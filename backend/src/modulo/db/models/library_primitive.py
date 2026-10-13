@@ -14,9 +14,16 @@ from sqlalchemy import (
     Uuid,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped, SoftDeleteMixin
+
+# Repeated column type (S1192): JSON with PostgreSQL JSONB variant. Every JSON
+# column on this table is jsonb in the DB (migration 0147 standardised them);
+# the PG variant keeps the ORM honest against the migrated schema while the
+# generic JSON keeps SQLite parity (the repo-wide multi-backend convention).
+_JSONB_COL = JSON().with_variant(JSONB(), "postgresql")
 
 
 class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
@@ -86,6 +93,19 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        # Slug lookup: get_primitive_by_slug filters primitive_type + slug and is
+        # called once per manifest pin on collection install/upgrade. The partial
+        # unique above cannot serve it (wrong leading column).
+        Index("ix_library_primitives_type_slug", "primitive_type", "slug"),
+        # Community catalogue listing: _fetch_published_community_from_db filters
+        # published + community visibility and orders by created_at.
+        Index(
+            "ix_library_primitives_visibility_contribution",
+            "organisation_id",
+            "visibility",
+            "contribution_status",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
     )
 
     source: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -95,8 +115,8 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
     description: Mapped[str | None] = mapped_column(String(2000))
     author: Mapped[str] = mapped_column(String(255), nullable=False)
     version: Mapped[str] = mapped_column(String(50), nullable=False)
-    tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
-    content_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    tags: Mapped[list[str]] = mapped_column(_JSONB_COL, nullable=False, default=list)
+    content_json: Mapped[dict[str, Any]] = mapped_column(_JSONB_COL, nullable=False)
     source_url: Mapped[str | None] = mapped_column(String(2000))
     forked_from: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("library_primitives.id", ondelete="RESTRICT"), index=True
@@ -120,6 +140,7 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
     version_group_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
         nullable=True,
+        index=True,
     )
     update_available_version_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("library_primitives.id", ondelete="SET NULL"), nullable=True, index=True
@@ -127,5 +148,5 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
     tier: Mapped[str] = mapped_column(String(20), nullable=False, server_default="native")
     # Collection authoring lifecycle fields (FAR-760).
     status: Mapped[str | None] = mapped_column(String(20))
-    manifest_pins: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
-    trust_header: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    manifest_pins: Mapped[list[dict[str, Any]] | None] = mapped_column(_JSONB_COL)
+    trust_header: Mapped[dict[str, Any] | None] = mapped_column(_JSONB_COL)

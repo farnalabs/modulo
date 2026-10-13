@@ -1313,6 +1313,7 @@ class TestUninstallCollectionService:
             install = MagicMock()
             install.organisation_id = _ORG_ID
             install.collection_id = uuid.uuid4()
+            install.deleted_at = None
             mock_session.get = AsyncMock(return_value=install)
             await uninstall_collection(
                 mock_session,
@@ -1332,6 +1333,7 @@ class TestUninstallCollectionService:
             install = MagicMock()
             install.organisation_id = _ORG_ID
             install.collection_id = uuid.uuid4()
+            install.deleted_at = None
             mock_session.get = AsyncMock(return_value=install)
 
             # Tracking row points at an entity that no longer exists.

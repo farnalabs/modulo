@@ -51,11 +51,17 @@ def _make_install(
     install_id: uuid.UUID | None = None,
     collection_id: uuid.UUID | None = None,
 ) -> MagicMock:
-    """Create a mock CollectionInstall with the required fields."""
+    """Create a mock CollectionInstall with the required fields.
+
+    ``deleted_at`` is explicitly None: a bare ``MagicMock`` auto-creates the
+    attribute as a truthy mock, which ``_load_install``'s soft-delete guard
+    rejects as already-uninstalled.
+    """
     inst = MagicMock()
     inst.install_id = install_id or _install_id()
     inst.organisation_id = org_id or _org_id()
     inst.collection_id = collection_id or _collection_id()
+    inst.deleted_at = None
     return inst
 
 
@@ -153,6 +159,19 @@ class TestLoadInstall:
         wrong_org = uuid.uuid4()
         with pytest.raises(InstallNotFoundError):
             await _load_install(session, wrong_org, iid)
+
+    @pytest.mark.asyncio
+    async def test_soft_deleted_install_is_not_found(self):
+        """A second uninstall of a soft-deleted install must raise (C1 guard)."""
+        session = AsyncMock()
+        org = _org_id()
+        iid = _install_id()
+        inst = _make_install(org_id=org, install_id=iid)
+        inst.deleted_at = "2026-10-13T00:00:00+00:00"
+        session.get = AsyncMock(return_value=inst)
+
+        with pytest.raises(InstallNotFoundError):
+            await _load_install(session, org, iid)
 
 
 # ---------------------------------------------------------------------------
@@ -483,7 +502,10 @@ class TestUninstallCollection:
         assert not result["deleted"]
         assert not result["detached"]
         assert result["install_id"] == str(iid)
-        session.delete.assert_awaited_once_with(inst)
+        # The provenance row is SOFT-deleted (append-only history), never
+        # hard-deleted — no session.delete(install) call is made.
+        session.delete.assert_not_awaited()
+        assert inst.deleted_at is not None
         session.flush.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -625,10 +647,10 @@ class TestUninstallCollection:
         _configure_savepoints(session)
 
         await uninstall_collection(session, org, iid)
-        # The install itself is deleted last — verify it was called
-        session.delete.assert_called_with(inst)
-        # Three entity deletes + one install delete
-        assert session.delete.call_count == 4
+        # The install itself is soft-deleted, not passed to session.delete —
+        # only the three unmodified ENTITY deletes reach session.delete.
+        assert inst.deleted_at is not None
+        assert session.delete.call_count == 3
 
     @pytest.mark.asyncio
     async def test_collection_id_match_allowed(self):
