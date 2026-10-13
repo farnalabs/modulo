@@ -36,6 +36,7 @@ lookup indexes:
   ``0300_benign_facts_repair`` then
   ``0301_oauth_consent_state_preauth_rls`` then
   ``0302_runs_run_grouping`` then
+  ``0303_feedback_records_lookup_indexes`` then
   ``0304_metrics_staging_recorded_at_index`` now the single linear head)
   so the pre-commit check-migration-heads hook and every ``test_single_head_*``
   pin cannot be ambushed by a renumber;

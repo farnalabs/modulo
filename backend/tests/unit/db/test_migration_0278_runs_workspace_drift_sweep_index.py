@@ -41,6 +41,7 @@ index and dropping the sweep back to a full-table scan of ``runs`` every
 ``0300_benign_facts_repair``, then
 ``0301_oauth_consent_state_preauth_rls``, then
 ``0302_runs_run_grouping``, then
+``0303_feedback_records_lookup_indexes``, then
 ``0304_metrics_staging_recorded_at_index`` as the single linear head) and the
 ``ORDER BY id`` / ``LIMIT 200`` access shape
 the ``(id)`` key is chosen to serve.

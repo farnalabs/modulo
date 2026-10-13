@@ -47,6 +47,7 @@ Lenses:
     0300_benign_facts_repair chains onto 0299_accounts_service_identity,
     0301_oauth_consent_state_preauth_rls chains onto 0300_benign_facts_repair,
     0302_runs_run_grouping chains onto 0301_oauth_consent_state_preauth_rls, and
+    0303_feedback_records_lookup_indexes chains onto 0302_runs_run_grouping, and
     0304_metrics_staging_recorded_at_index chains onto 0303_feedback_records_lookup_indexes as the
     single linear head (0259's test documents the run-up through 0288).
 * **Structure (mocked ``op``)** - upgrade emits THREE statements IN ORDER: the

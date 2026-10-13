@@ -169,6 +169,7 @@ _MIGRATION_PATH = (
 # 0300_benign_facts_repair chained onto 0299_accounts_service_identity,
 # 0301_oauth_consent_state_preauth_rls chained onto 0300_benign_facts_repair,
 # 0302_runs_run_grouping chained onto 0301_oauth_consent_state_preauth_rls, and
+# 0303_feedback_records_lookup_indexes chained onto 0302_runs_run_grouping, and
 # 0304_metrics_staging_recorded_at_index chained onto 0303_feedback_records_lookup_indexes as the chain head.
 # (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
 # migration under test, not the head.)
