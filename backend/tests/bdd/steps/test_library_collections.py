@@ -110,10 +110,10 @@ def _mk_collection_primitive(
     """Build the ``LibraryPrimitive``-shaped object authoring routes return.
 
     The create/update/publish routes read ``id`` / ``name`` / ``slug`` /
-    ``description`` / ``status`` / ``manifest_pins`` / ``trust_header`` /
-    ``created_at`` / ``updated_at`` / ``organisation_id`` / ``primitive_type``
-    off the object before shaping the ``CollectionResponse`` or enforcing draft
-    state in ``_load_draft_collection``.
+    ``description`` / ``status`` / ``version`` / ``manifest_pins`` /
+    ``trust_header`` / ``created_at`` / ``updated_at`` / ``organisation_id`` /
+    ``primitive_type`` off the object before shaping the ``CollectionResponse``
+    or enforcing draft state in ``_load_draft_collection``.
     """
     prim = MagicMock()
     prim.id = ctx.get("collection_id") or uuid.uuid4()
@@ -123,6 +123,7 @@ def _mk_collection_primitive(
     prim.slug = slug
     prim.description = "A collection of test primitives"
     prim.status = status
+    prim.version = ctx.get("collection_version") or "1.0"
     prim.manifest_pins = pins or [
         {"slug": "input-schema", "version": "1.0"},
         {"slug": "output-schema", "version": "2.0"},
