@@ -128,7 +128,8 @@ neither is valid; see Behaviours.)
       `parse_and_verify`), never trusted on mere presence, at every
       licence-reading surface: the `/viewmodel/current` plan tier
       (`viewmodel._resolve_tier` rung 3 — an unverifiable key falls through to
-      community instead of reporting "team"), the admin feature-flag list's
+      community instead of reporting "team"; already verified by FAR-1720 and
+      now routed through the shared helper), the admin feature-flag list's
       `license.has_license_key` and `license.is_valid`
       (`admin_feature_flags._build_registry` / `_license_is_valid` — `is_valid`
       is no longer hardcoded `true`), the MCP `list_feature_flags` tool's
@@ -158,16 +159,18 @@ neither is valid; see Behaviours.)
 ## QA History
 
 - 2026-10-13: **FAR-1733** — replaced env-var licence-key PRESENCE-trust with
-  verification at the five remaining surfaces. `viewmodel._resolve_tier` rung 3
-  returned `"team"` for ANY non-empty `settings.modulo_license_key`;
-  `admin_feature_flags._build_registry` and the MCP `list_feature_flags` tool
-  counted the env key on presence for `has_license_key` AND hardcoded
-  `license.is_valid = True`; `sso.is_saml_available` treated a present env key
-  as enabling env-SAML; and `auth.sso._resolve_saml_config` accepted any
-  non-empty key as satisfying the Team-feature gate (fail-open). All five now
+  verification at the remaining surfaces. `viewmodel._resolve_tier` rung 3 had
+  already been made to verify via `parse_and_verify` by **FAR-1720** earlier the
+  same day, so FAR-1733 only routes it through the shared helper (behaviour
+  unchanged); the surfaces actually fixed here are `admin_feature_flags`'s
+  `_build_registry` and the MCP `list_feature_flags` tool (which counted the
+  env key on presence for `has_license_key` AND hardcoded
+  `license.is_valid = True`), `sso.is_saml_available` (a present env key
+  enabled env-SAML), and `auth.sso._resolve_saml_config` (any non-empty key
+  satisfied the Team-feature gate — fail-open). All now
   verify the key through one shared helper (`core.license.verify_license_key`,
-  the session-free form of the canonical `_resolve_paid_plan` rung-3 check): an
-  unverifiable/expired key falls through to community / `false` on the
+  the session-free form of the canonical `_resolve_paid_plan` rung-3 check):
+  an unverifiable/expired key falls through to community / `false` on the
   reporting surfaces and FAILS CLOSED on the SSO security gates (the env-SAML
   config gate raises the same 400 "requires a license key" message as an
   absent key, so the pre-auth surface never discloses whether a key is
@@ -175,8 +178,7 @@ neither is valid; see Behaviours.)
   licence actually resolved (in-memory, verified env key, or verified
   org-level key), which resolves the residual "hardcoded `is_valid: true`"
   gap FAR-1720 left for this entry. Proved by regression tests that FAIL
-  against the old code: `test_viewmodel_resolve_tier.py` (invalid/expired env
-  key → community, payload-tier verbatim), `test_admin_feature_flags.py`
+  against the old code at those fixed surfaces: `test_admin_feature_flags.py`
   (`TestBuildRegistryEnvKeyVerification`, `TestLicenseIsValid`, and the
   endpoint `is_valid` block), `test_mcp_governance_read_tools.py`
   (invalid env key → `has_license_key=false`/`is_valid=false`; verified org
@@ -184,8 +186,10 @@ neither is valid; see Behaviours.)
   (invalid key → env-SAML unavailable / config raises / login route 400;
   valid key still enables each surface end-to-end). The SAML BDD steps
   (`sso_saml.feature`, `sso_team_mapping.feature`) now carry a genuinely
-  signed key. Status stays `partial` (the manifest's universal-gating
-  deferral is unchanged).
+  signed key. `test_viewmodel_resolve_tier.py` pins the FAR-1720-verified rung
+  against the shared-helper refactor (it passes against main too — the rung
+  was already verified). Status stays `partial` (the manifest's
+  universal-gating deferral is unchanged).
 
 - 2026-10-13: **FAR-1720** — unified the public `/api/v1/license` surface
   with the real licence resolution. `viewmodel.license_info` previously

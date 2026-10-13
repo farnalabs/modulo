@@ -1,11 +1,15 @@
 """Unit tests for ``viewmodel._resolve_tier`` — the ``/viewmodel/current`` plan.tier ladder.
 
-FAR-1733: rung 3 of this ladder previously trusted the env-var licence key on
-mere PRESENCE (any non-empty ``settings.modulo_license_key`` returned
-``"team"``). It now mirrors the canonical ladder
-(``core.feature_flags._resolve_paid_plan`` rungs 2-3): the in-memory licence
-wins, the env-var key is only trusted after ``parse_and_verify``, and an
-unverifiable key falls through to ``"community"``.
+FAR-1720 made rung 3 verify the env-var licence key via ``parse_and_verify``
+(before that it trusted mere presence — any non-empty
+``settings.modulo_license_key`` returned ``"team"``). FAR-1733 routes that rung
+through the shared ``core.license.verify_license_key`` helper, so the ladder
+mirrors ``core.feature_flags._resolve_paid_plan`` rungs 2-3 exactly: the
+in-memory licence wins, the env-var key is trusted only after verification,
+and an unverifiable key falls through to ``"community"``.
+
+These tests pin rung 2 (in-memory win) and rung 3 (verified env key) so the
+shared-helper refactor cannot silently change the ladder.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ import pytest
 
 from modulo.api.routes.viewmodel import _resolve_tier
 from modulo.core.license import (
+    _LICENSE_PUBLIC_KEY_HEX,
     LicenseData,
     clear_license,
     set_public_key,
@@ -83,19 +88,21 @@ def _reset_license_state() -> Generator[None, None, None]:
     set_public_key(_TEST_PUB)
     yield
     clear_license()
+    set_public_key(_LICENSE_PUBLIC_KEY_HEX)
 
 
 class TestResolveTierEnvKeyVerification:
-    """FAR-1733: the env-var rung verifies the key instead of trusting presence."""
+    """FAR-1733: the env-var rung is verified through the shared helper (FAR-1720 semantics)."""
 
     def test_no_env_key_returns_community(self) -> None:
         assert _resolve_tier(_settings()) == "community"
 
     def test_invalid_env_key_is_not_trusted(self) -> None:
-        """An env-var key present but failing parse_and_verify -> community.
+        """An env-var key present but failing verification -> community.
 
-        FAR-1733 prove-the-fix: the old rung 3 returned "team" for ANY
-        non-empty env-var key, so this assertion fails against the old code.
+        Regression guard for the shared-helper refactor: a present-but-invalid
+        env-var key must never be trusted on presence (the pre-FAR-1720 rung 3
+        returned "team" for ANY non-empty key).
         """
         assert _resolve_tier(_settings(modulo_license_key="not-a-valid-key")) == "community"
 
@@ -110,7 +117,7 @@ class TestResolveTierEnvKeyVerification:
         assert _resolve_tier(_settings(modulo_license_key=key)) == "team"
 
     def test_valid_env_key_reports_payload_tier_verbatim(self) -> None:
-        """The tier comes from the verified payload — the old code hardcoded "team"."""
+        """The tier comes from the verified payload, not a presence-based default."""
         key = _sign_license_payload(_valid_payload(tier="pilot"))
         assert _resolve_tier(_settings(modulo_license_key=key)) == "pilot"
 
