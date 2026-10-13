@@ -95,23 +95,19 @@ def test_w2_boundary_exact_key_without_suffix_is_rejected() -> None:
         assert_write_authorisation("eval", "eval")
 
 
-def test_w2_reserved_producers_write_nothing() -> None:
-    """The still-reserved ``policy_gate`` producer has an empty namespace:
-    any key is unauthorised."""
-    producer_type = "policy_gate"
-    assert not KEY_NAMESPACE_OWNERSHIP[producer_type]
+@pytest.mark.parametrize("producer_type", ["policy_gate", "derived"])
+def test_w2_reserved_producers_write_nothing(producer_type: str) -> None:
+    """A producer writes nothing outside the namespace it owns.
+
+    ``policy_gate`` is still reserved-empty (owns no keys); ``derived`` owns
+    the ``changed_set_`` prefix (FAR-1691). Both reject a key outside their
+    namespace; the ``derived`` positive case is covered by
+    ``test_w1_authorised_write_accepted``.
+    """
+    owned = {"policy_gate": set(), "derived": {"changed_set_"}}[producer_type]
+    assert KEY_NAMESPACE_OWNERSHIP[producer_type] == owned
     with pytest.raises(EvidenceWriteAuthorisationError):
         assert_write_authorisation(producer_type, "eval_passed")
-
-
-def test_w2_derived_producer_is_scoped_to_changed_set_keys() -> None:
-    """``derived`` is no longer reserved-empty (FAR-1691): it owns the
-    ``changed_set_`` prefix for the changed-set facts, and rejects any key
-    outside that namespace."""
-    assert KEY_NAMESPACE_OWNERSHIP["derived"] == {"changed_set_"}
-    assert_write_authorisation("derived", "changed_set_evaluated")  # does not raise
-    with pytest.raises(EvidenceWriteAuthorisationError):
-        assert_write_authorisation("derived", "node_has_work")
 
 
 # ---------------------------------------------------------------------------
