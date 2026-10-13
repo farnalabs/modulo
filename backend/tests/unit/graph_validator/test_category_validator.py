@@ -282,6 +282,33 @@ async def test_validator_returns_category_error():
     assert any(i.code == "CATEGORY_NOT_FOUND" for i in result.issues)
 
 
+async def test_category_check_does_not_block_topology_errors():
+    """A category reference error must not prevent the topology check from running.
+
+    Full ``validate()`` runs the topology check before the category check, so a
+    graph that both references an absent category and has a topology error must
+    still surface the topology error. If the category check were moved ahead of
+    the topology check and were allowed to short-circuit on error, the topology
+    error would be masked — this pins that ordering (the previous version of
+    this test used an empty graph, where ``TOPOLOGY_NO_NODES`` fired before any
+    category reference could be evaluated, so it never exercised the interplay).
+    """
+    cat_id = uuid.uuid4()
+    graph = {
+        "nodes": [_node(nid="n1", category_id=str(cat_id))],
+        "edges": [{"source": "n1", "target": "ghost"}],
+    }
+
+    session = _session_with_category(None)
+
+    snap = _snapshot(graph_json=graph)
+
+    validator = GraphValidator()
+    result = await validator.validate(snap, session)
+    assert not result.is_valid
+    assert any(i.code == "TOPOLOGY_UNKNOWN_TARGET" for i in result.issues)
+
+
 async def test_validator_category_check_in_validate_for_run():
     """GraphValidator.validate_for_run() should also run category check."""
     cat_id = uuid.uuid4()
