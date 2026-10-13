@@ -157,6 +157,33 @@ def test_adopt_retries_until_the_winner_finishes_writing(
     assert calls["n"] == 2
 
 
+def test_adopt_exhaustion_refuses_the_boot_with_attempts_in_message(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A file that stays unparsable for the whole adopt window fails the boot.
+
+    Retry-forever is the wrong default: the exhaustion error must name the
+    attempt count (the operator-visible retry budget) and carry the LAST
+    parse error, and the loser's own draw must never be written over the
+    winner's file.
+    """
+    path = tmp_path / "secrets.json"
+    # The file never becomes valid across the whole retry window.
+    path.write_bytes(b'{"state_hmac_key": "truncated"')
+    monkeypatch.setattr(secrets_file_module, "_ADOPT_ATTEMPTS", 20)
+    monkeypatch.setattr(secrets_file_module, "_ADOPT_RETRY_DELAY_SECONDS", 0.0)
+    # exists() misses so the loser reaches the EEXIST branch (adopt path).
+    monkeypatch.setattr(Path, "exists", lambda _self: False)
+    with pytest.raises(SecretsFileError) as excinfo:
+        load_or_create(path)
+    message = str(excinfo.value)
+    assert "after 20 attempts" in message
+    assert "not valid JSON" in message
+    # No orphaned draw was written over the winner's (broken) file.
+    assert path.read_bytes() == b'{"state_hmac_key": "truncated"'
+
+
 def test_write_failure_leaves_no_credential_file_behind(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
