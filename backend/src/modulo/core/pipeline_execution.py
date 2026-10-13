@@ -3158,9 +3158,7 @@ async def stale_run_recovery_sweep(
 _RESUME_CLAIM_UPDATE_SQL = text(
     "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, "  # nosec B608  # noqa: S608 - concatenates module constants only (never caller data)
     "dispatch_phase='claimed', dispatch_phase_entered_at=now(), "
-    + _CLAIM_HISTORY_APPEND
-    + "guardrail_override_resume_pending=false "
-    "WHERE id=:rid AND organisation_id=:oid "
+    "guardrail_override_resume_pending=false, " + _CLAIM_HISTORY_APPEND + "WHERE id=:rid AND organisation_id=:oid "
     "AND (status IN ('awaiting_human', 'claimed', 'hitl_parked') "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
     "AND claim_count < :claim_cap "
@@ -3170,9 +3168,7 @@ _RESUME_CLAIM_UPDATE_SQL = text(
 _RESUME_CLAIM_UPDATE_SQL_WITH_TOKEN = text(
     "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok, "  # nosec B608  # noqa: S608 - concatenates module constants only (never caller data)
     "dispatch_phase='claimed', dispatch_phase_entered_at=now(), "
-    + _CLAIM_HISTORY_APPEND
-    + "guardrail_override_resume_pending=false "
-    "WHERE id=:rid AND organisation_id=:oid "
+    "guardrail_override_resume_pending=false, " + _CLAIM_HISTORY_APPEND + "WHERE id=:rid AND organisation_id=:oid "
     "AND (status IN ('awaiting_human', 'claimed', 'hitl_parked') "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
     "AND claim_count < :claim_cap "
