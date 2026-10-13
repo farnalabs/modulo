@@ -242,7 +242,7 @@ construction:
 
 ```
 WARNING: INSECURE: Docker endpoint 'tcp://my-proxy:2375' accepted without TLS
-(MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT is set) — credentials will be
+(MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT is set) - credentials will be
 transmitted in cleartext
 ```
 

@@ -249,7 +249,7 @@ to the proxy/backend bridge is not blocked by the engine.**
 containment claim):**
 
 ```bash
-# iptables backend — expect DOCKER-ISOLATION-STAGE-1/2 chains:
+# iptables backend - expect DOCKER-ISOLATION-STAGE-1/2 chains:
 sudo iptables -S | grep DOCKER-ISOLATION
 
 # nftables backend:

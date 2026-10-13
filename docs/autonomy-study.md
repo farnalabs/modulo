@@ -46,9 +46,9 @@ because it must change between runs without a pipeline edit. Behind the
 `autonomy_gating` feature flag (default OFF), every HITL gate resolves its
 `base` level from the earned level instead of the pinned default:
 
-- **Demotion is immediate and safe** — lowering autonomy only adds human review,
+- **Demotion is immediate and safe** - lowering autonomy only adds human review,
   so it takes effect at the run's *next* gate, including in-flight runs.
-- **Promotion is never automatic** — an admin or the pipeline's owner team
+- **Promotion is never automatic** - an admin or the pipeline's owner team
   approves it, capped at `max_autonomy_level`, and it applies only to runs
   created after the approval. In-flight runs keep the lower level: the gate
   resolves `min(pinned-at-run-start, live earned)`.
@@ -79,7 +79,7 @@ Discovered by reading the codebase at implementation time:
 | **Per-run effective autonomy** actually applied | ✅ | `run.autonomy_level_applied` (`core/run_context/autonomy_telemetry.py`) |
 | **Gate-fire** (human path taken vs bypassed) per run | ✅ | `gate_outcome` in the same event |
 | **Defect-escape** (autonomous change later reverted/fixed) | ❌ | Not yet – see §6 |
-| Autonomy level in the analytics fact table | ✅ | `run_daily_facts.autonomy_level` (FAR-1175) — populated at fact-write time from the run's latest `run.autonomy_level_applied` event |
+| Autonomy level in the analytics fact table | ✅ | `run_daily_facts.autonomy_level` (FAR-1175) - populated at fact-write time from the run's latest `run.autonomy_level_applied` event |
 
 The two gaps closed by this change (`run.autonomy_level_applied`) are the
 minimum required to *measure* the claim. Everything else in §6 is a roadmap

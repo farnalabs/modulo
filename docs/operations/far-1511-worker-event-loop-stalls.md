@@ -23,7 +23,7 @@ The readiness payload on the app machine confirms one machine serves everything
 on the worker side:
 
 ```
-saq_workers: ok — saq workers live on all queues
+saq_workers: ok - saq workers live on all queues
               (fleet: {'runs': {'<worker>'}, 'system': {'<worker>'}})
 ```
 
