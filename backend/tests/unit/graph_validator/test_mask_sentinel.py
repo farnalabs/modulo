@@ -113,6 +113,13 @@ def test_unresolved_none_stored_marks_every_finding() -> None:
     assert [f.node_id for f in find_unresolved_mask_sentinels(incoming, None)] == ["n1"]
 
 
+def test_unresolved_matching_id_missing_field_is_unresolved() -> None:
+    """A stored counterpart that omits the sentinel field fails closed (unresolved)."""
+    incoming = [{"id": "n1", "env_vars": {"K": SENSITIVE_VALUE_MASK}}]
+    stored = [{"id": "n1"}]
+    assert [f.node_id for f in find_unresolved_mask_sentinels(incoming, stored)] == ["n1"]
+
+
 def test_format_detail_truncates_and_counts_the_remainder() -> None:
     findings = [MaskSentinelFinding(node_id=f"n{i}", field="env_vars", path=("K",)) for i in range(3)]
     assert format_mask_sentinel_detail(findings, limit=1) == ("sub-node 'n0' field 'env_vars' key 'K'; (+2 more)")

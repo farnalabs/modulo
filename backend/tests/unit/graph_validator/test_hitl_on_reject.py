@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from modulo.core.graph_validator import GraphValidator, ValidationResult
+from tests.unit.graph_validator._helpers import codes_of as _codes
 
 _UUID_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 _UUID_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
@@ -79,10 +80,6 @@ async def test_edge_level_invalid_on_reject_names_the_edge():
     issues = [i for i in result.issues if i.code == "HITL_ON_REJECT_INVALID"]
     assert len(issues) == 1
     assert f"edge '{_UUID_A}->{_UUID_B}'" in issues[0].message
-
-
-def _codes(result: ValidationResult) -> set[str]:
-    return {i.code for i in result.issues}
 
 
 class TestCheckHitlOnReject:
