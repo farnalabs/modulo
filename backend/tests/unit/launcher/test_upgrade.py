@@ -492,6 +492,40 @@ def test_perform_upgrade_full_flow(upgrade_plant, patched_trust_store):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="posix symlinks only (TODO(P3) windows seam)")
+def test_perform_upgrade_from_file_flow(upgrade_plant, patched_trust_store):
+    """The offline escape hatch: no fetch — manifest+sig read from beside the tarball."""
+    boot_record = []
+
+    default_timeout = upgrade_module._DEFAULT_BOOT_TIMEOUT
+    default_poll = upgrade_module._BOOT_POLL_INTERVAL
+
+    def _boot(boot_argv, *, api_port, timeout=default_timeout, poll_interval=default_poll):
+        boot_record.append((boot_argv, api_port))
+        return 0
+
+    release = upgrade_plant.release
+    # The from-file contract: the SIGNED manifest sits BESIDE the tarball.
+    assert release.manifest.parent == release.tarball.parent
+    result = upgrade_module.perform_upgrade(
+        upgrade_plant.data_dir,
+        install_root=upgrade_plant.install_root,
+        from_file=release.tarball,
+        boot=_boot,
+    )
+    # The version came FROM the tarball name, not from a target_version arg.
+    assert result.version == "1.2.0"
+    assert result.previous_version == "1.1.0"
+    current_link = upgrade_plant.install_root / "current"
+    assert (current_link.parent).is_dir()
+    assert current_link.resolve(strict=True) == (upgrade_plant.install_root / "versions" / "1.2.0").resolve(strict=True)
+    assert result.snapshot is not None
+    assert result.snapshot.is_dir()
+    marker = json.loads((upgrade_plant.data_dir / upgrade_module.UPGRADE_MARKER_FILENAME).read_text(encoding="utf-8"))
+    assert marker["target_version"] == "1.2.0"
+    assert len(boot_record) == 1
+
+
+@pytest.mark.skipif(os.name != "posix", reason="posix symlinks only (TODO(P3) windows seam)")
 def test_perform_upgrade_pg_major_mismatch_refuses(tmp_path, monkeypatch, patched_trust_store):
     """PG major (17 target) vs the data dir's PG_VERSION (16): HARD refusal."""
     from modulo.launcher import upgrade as upgrade_module
