@@ -51,6 +51,30 @@ def _make_session_context(session: AsyncMock) -> AsyncMock:
     return cm
 
 
+def _make_sync_result() -> MagicMock:
+    """Shape the sync ``Result``-object contract for awaited session reads.
+
+    The tools in this file exercise three production readers that all
+    ``await session.execute(...)`` and then touch the returned ``Result`` with
+    SYNC methods:
+
+    - ``get_trigger_streak_status`` (FAR-251): ``scalar_one()`` for the count
+      walker and ``all()`` for the last-N outcome reader;
+    - ``pipeline_owner_team_id`` (team-scope gate): ``scalar_one_or_none()``.
+
+    The awaited call on a bare ``AsyncMock`` returns another AsyncMock, so
+    those sync reads came back as un-awaited coroutines; the streak reader's
+    best-effort wrapper swallowed the resulting ``TypeError`` and the
+    coroutines surfaced as ``PytestUnraisableExceptionWarning`` (never
+    awaited).
+    """
+    result = MagicMock()
+    result.scalar_one.return_value = 0
+    result.scalar_one_or_none.return_value = None
+    result.all.return_value = []
+    return result
+
+
 def _make_add_session(trigger_id: uuid.UUID | None = None) -> AsyncMock:
     """Return a session whose ``add`` assigns the model's PK, like a real flush.
 
@@ -62,6 +86,12 @@ def _make_add_session(trigger_id: uuid.UUID | None = None) -> AsyncMock:
     session = AsyncMock()
     generated_id = trigger_id or uuid.uuid4()
     session.add = MagicMock(side_effect=lambda obj: setattr(obj, "id", generated_id))
+    # FAR-1639: the create tool computes streak_status for covered trigger
+    # types (ongoing/cron) via the FAR-251 helper, whose reads await
+    # session.execute then call sync scalar_one()/all() on the Result — shape
+    # that sync contract (see _make_sync_result) instead of leaving the
+    # awaited return value as a leaky AsyncMock child.
+    session.execute = AsyncMock(return_value=_make_sync_result())
     return session
 
 
@@ -501,6 +531,11 @@ class TestListTriggersSuccess(_AuthContext):
         t2 = _make_mock_trigger()
         mock_db_list.return_value = _make_list_result([t1, t2], total=2, next_cursor=None, has_more=False)
         mock_sesh = AsyncMock()
+        # FAR-1639: the FAR-251 streak serializer runs behind a NON-EMPTY list
+        # result — its reads await session.execute then call sync scalar_one()/
+        # all() on the Result (see _make_sync_result); bare AsyncMock then
+        # leaves un-awaited coroutines for the best-effort reader to swallow.
+        mock_sesh.execute = AsyncMock(return_value=_make_sync_result())
         mock_session.return_value = _make_session_context(mock_sesh)
 
         result = await list_triggers()
@@ -534,6 +569,12 @@ class TestListTriggersSuccess(_AuthContext):
     ) -> None:
         mock_db_list.return_value = _make_list_result([], total=0, next_cursor=None, has_more=False)
         mock_sesh = AsyncMock()
+        # FAR-1639: the pipeline_id filter routes the team-scope owner read
+        # (crud/team_scope.pipeline_owner_team_id) through this session —
+        # its awaited execute is followed by a sync scalar_one_or_none() on
+        # the Result (see _make_sync_result); bare AsyncMock leaks that sync
+        # call's coroutine even though the list itself is mocked empty.
+        mock_sesh.execute = AsyncMock(return_value=_make_sync_result())
         mock_session.return_value = _make_session_context(mock_sesh)
 
         pid = uuid.uuid4()
