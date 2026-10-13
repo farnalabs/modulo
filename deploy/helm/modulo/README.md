@@ -201,6 +201,7 @@ with a deny-by-default egress rule plus an exact-target (CIDR + port) allowlist.
 workspaceNetworkPolicy:
   enabled: true                # off by default
   allowDns: true               # permit cluster DNS (UDP/TCP 53)
+  dnsNamespace: ""             # narrow the DNS rule to one namespace when set
   egressAllowlist:
     - cidr: 10.0.0.0/8
       ports:
@@ -216,14 +217,21 @@ workspaceNetworkPolicy:
 |---|---|---|
 | `workspaceNetworkPolicy.enabled` | `false` | Render the workspace egress NetworkPolicy |
 | `workspaceNetworkPolicy.allowDns` | `true` | Permit UDP/TCP 53 so deny-by-default does not break DNS |
+| `workspaceNetworkPolicy.dnsNamespace` | `""` | Namespace holding cluster DNS; when set the DNS rule's `namespaceSelector` is narrowed to it, otherwise left cluster-wide (`{}`) |
 | `workspaceNetworkPolicy.egressAllowlist` | `[]` | Exact-target egress entries: `{cidr, ports: [{protocol, port}]}` |
+
+Allowlist entries are validated at render: `protocol` must be TCP/UDP/SCTP
+(case-insensitive) and `port` must be in 1-65535, so typos fail fast instead of
+being silently rejected by the API server.
 
 **Posture and prerequisites.** Modulo authors the manifest and the cluster CNI
 enforces it; Modulo records that as a **`declared`** egress posture (never an
 observation — Modulo does not see network traffic). This requires a CNI that
 enforces NetworkPolicy (e.g. Calico, Cilium); `kindnet` (kind's default) does
 not, so a policy applied there proves nothing. A NetworkPolicy cannot express a
-hostname — resolve targets to CIDRs before listing them.
+hostname — resolve targets to CIDRs before listing them — and some CNIs silently
+drop fragmented traffic under NetworkPolicy, a CNI limitation this manifest
+cannot express.
 
 ## EKS Deployment
 

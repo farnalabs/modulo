@@ -19,12 +19,22 @@
     - exact-target allowlist entries are CIDR + port (a NetworkPolicy cannot
       express a hostname — resolve names upstream if that is required);
     - cluster DNS is permitted by default so a deny-by-default policy does
-      not break name resolution.
+      not break name resolution; the namespaceSelector is narrowed to
+      `workspaceNetworkPolicy.dnsNamespace` when set (see values.yaml) and
+      left cluster-wide (`{}`) when empty.
 
-  This does NOT create a per-CNI policy-dialect matrix and performs NO
-  policy pre-assertion/validation — it is one vanilla networking.k8s.io/v1
-  manifest, off by default. Enabling it asserts a deny-by-default egress
-  posture for workspace pods, so confirm your CNI enforces NetworkPolicy.
+  Two constraints this manifest cannot express, and that bound what a
+  `declared` posture guarantees:
+    - some CNIs silently DROP fragmented traffic under NetworkPolicy — that is
+      a CNI limitation, not a policy authorable here;
+    - enforcement belongs to the CNI, not Modulo: enabling this asserts a
+      deny-by-default egress posture for workspace pods, so confirm your CNI
+      enforces NetworkPolicy.
+
+  This is one vanilla networking.k8s.io/v1 manifest, off by default, and does
+  NOT create a per-CNI policy-dialect matrix. Allowlist protocol/port entries
+  are validated (TCP/UDP/SCTP casing, 1-65535 range) so typos fail fast at
+  render rather than being silently rejected by the API server.
 */}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -42,11 +52,18 @@ spec:
     - Egress
   egress:
     {{- if .Values.workspaceNetworkPolicy.allowDns }}
-    # Cluster DNS is permitted unconditionally so a deny-by-default policy
-    # never breaks service/name resolution. Narrow the namespaceSelector to
-    # your DNS namespace(s) if your cluster does not use kube-system.
+    # Cluster DNS is permitted by default so a deny-by-default policy never
+    # breaks service/name resolution. namespaceSelector is narrowed to
+    # .Values.workspaceNetworkPolicy.dnsNamespace when set, and left
+    # cluster-wide ({}) when empty (e.g. DNS outside kube-system).
     - to:
+        {{- if .Values.workspaceNetworkPolicy.dnsNamespace }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.workspaceNetworkPolicy.dnsNamespace | quote }}
+        {{- else }}
         - namespaceSelector: {}
+        {{- end }}
       ports:
         - protocol: UDP
           port: 53
@@ -59,8 +76,16 @@ spec:
             cidr: {{ required "workspaceNetworkPolicy.egressAllowlist[].cidr is required" .cidr | quote }}
       ports:
         {{- range .ports }}
-        - protocol: {{ .protocol | default "TCP" }}
-          port: {{ required "workspaceNetworkPolicy.egressAllowlist[].ports[].port is required" .port }}
+        {{- $protocol := .protocol | default "TCP" | upper }}
+        {{- if not (has $protocol (list "TCP" "UDP" "SCTP")) }}
+        {{- fail (printf "workspaceNetworkPolicy.egressAllowlist[].ports[].protocol must be one of TCP/UDP/SCTP (got %q)" (.protocol | toString)) }}
+        {{- end }}
+        {{- $port := required "workspaceNetworkPolicy.egressAllowlist[].ports[].port is required" .port | int }}
+        {{- if or (lt $port 1) (gt $port 65535) }}
+        {{- fail (printf "workspaceNetworkPolicy.egressAllowlist[].ports[].port must be between 1 and 65535 (got %v)" .port) }}
+        {{- end }}
+        - protocol: {{ $protocol }}
+          port: {{ $port }}
         {{- end }}
     {{- end }}
 {{- end }}

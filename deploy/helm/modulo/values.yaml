@@ -76,6 +76,12 @@ workspaceNetworkPolicy:
   # Permit cluster DNS (UDP/TCP 53) so deny-by-default does not break name
   # resolution. Set false only if your DNS is covered by an allowlist entry.
   allowDns: true
+  # Namespace holding cluster DNS. When set, the DNS allow-rule's
+  # namespaceSelector is narrowed to that namespace (matchLabels
+  # kubernetes.io/metadata.name) instead of being cluster-wide ({}). Leave
+  # empty for the cluster-wide default; set it when your DNS (e.g. coredns)
+  # runs outside kube-system.
+  dnsNamespace: ""
   # Exact-target egress allowlist. Each entry is a CIDR plus the ports allowed
   # to it. A NetworkPolicy cannot express a hostname — resolve to CIDRs first.
   #

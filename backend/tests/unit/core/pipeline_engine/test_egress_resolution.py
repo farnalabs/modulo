@@ -795,7 +795,13 @@ def test_kubernetes_tier_restrictive_posture_target_is_declared() -> None:
 
 
 def _expected_posture(tier: str, expected_policy: str | None, expect_refusal: bool) -> EgressPosture:
-    """The posture a case must yield: NONE unless a restrictive policy resolves."""
+    """The posture a case must yield: NONE unless a restrictive policy resolves.
+
+    Today this reaches ``_TIER_RESTRICTIVE_POSTURE`` only for tiers that resolve
+    a restrictive policy; the ``kubernetes``/``t3`` DECLARED row is a TARGET,
+    not a live assertion — the resolver still refuses a restrictive Kubernetes
+    policy until the FAR-1690 authoring slice flips it (see egress.py).
+    """
     if expect_refusal or expected_policy is None:
         return EgressPosture.NONE
     return egress_mod._TIER_RESTRICTIVE_POSTURE[tier]
