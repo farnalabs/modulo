@@ -390,7 +390,7 @@ jobs:
           # release exist? An API failure is NOT "no release" - proceed with
           # skip=false so the fetch step reports it loudly (fail-closed).
           set +e
-          releases="$(gh api "repos/${{ github.repository }}/releases?per_page=100" \
+          releases="$(gh api "repos/${{ github.repository }}/releases?per_page=100" --paginate \
             --jq '[.[] | select(.tag_name | startswith("bundle-v")) | select(.draft == false) | .tag_name] | join("\n")' 2>/tmp/gate-err)"
           rc=$?
           set -e
