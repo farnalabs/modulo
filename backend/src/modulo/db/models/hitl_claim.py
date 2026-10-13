@@ -16,7 +16,7 @@ class HitlClaim(OrgScoped):
         # (HITLManager._decide's _DECISION_* constants); crud paths do not
         # validate, so a bad value would persist unchecked and be silently
         # ignored by the sweep alarm's decision.in_ filter. NULL-tolerant:
-        # undecided gates carry NULL. Mirrors migration 0306.
+        # undecided gates carry NULL. Mirrors migration 0308.
         CheckConstraint(
             "decision IS NULL OR decision IN ('approved', 'rejected', 'deliver_manual')",
             name="ck_hitl_claims_decision",
@@ -26,7 +26,7 @@ class HitlClaim(OrgScoped):
         # decision_at >= ?. The single-column organisation_id / decided_by
         # legs force a bitmap-and plus heap time filter; the composite
         # serves it in one descent. Partial: undecided gates never enter.
-        # Mirrors migration 0306.
+        # Mirrors migration 0308.
         Index(
             "ix_hitl_claims_sweep_actor_window",
             "organisation_id",
