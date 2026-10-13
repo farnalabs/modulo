@@ -47,46 +47,13 @@ from modulo.launcher.doctor import (
 )
 from modulo.launcher.secrets_file import LauncherSecrets
 from modulo.launcher.state import LauncherState, save_state
+from tests.unit.launcher.test_launcher_shared import all_pass_probes
 
 
 def _probes(**overrides: object) -> DoctorProbes:
-    probes = DoctorProbes(
-        disk_free_bytes=lambda _root: 40 * 1024 * 1024 * 1024,
-        assert_writable=lambda _root: None,
-        listening_on=lambda _port: ["127.0.0.1"],
-        probe_postgres=lambda: None,
-        role_violations=list,
-        probe_redis=lambda: None,
-        migrations_at_head=lambda: True,
-        effective_uid=lambda: 1000,
-        username_of_uid=lambda _uid: "operator",
-        file_owner=lambda _path: "operator",
-        secrets_mode=lambda _data_dir: 0o600,
-        ambient_env_names=list,
-        env_value=lambda _name: None,
-        service_installed=lambda: False,
-        service_enabled=lambda: False,
-        service_linger=lambda: False,
-        available_memory_bytes=lambda: 8 * 1024 * 1024 * 1024,
-        data_dir_pg_version=lambda: "16.4",
-        bundle_pg_version=lambda: "16.4",
-        installed_bundle_pg_version=lambda: None,
-        bundled_binaries=list,
-        port_owner_description=lambda _port: None,
-        second_install_hint=lambda: None,
-        modulo_on_path=lambda: None,
-        install_root=lambda: str(Path("/install")),
-        degraded_reason=lambda: None,
-        last_backup_at=lambda: time.time(),
-        tls_expiry=lambda: time.time() + 400 * 86400,
-        cloud_sync_hit=lambda _root: None,
-        cwd_env_file=None,
-        env_file_pinned=lambda: True,
-        launcher_running=lambda: True,
-    )
-    for key, value in overrides.items():
-        setattr(probes, key, value)
-    return probes
+    """The all-pass injection — the behavior-identical canonical factory
+    lives in the shared launcher-test module."""
+    return all_pass_probes(**overrides)
 
 
 def _state() -> LauncherState:
@@ -296,6 +263,61 @@ def test_tls_near_expiry(tmp_path: Path):
     res = check_tls_expiry(tmp_path, None, _probes(tls_expiry=lambda: time.time() + 5 * 86400))
     assert res.ok is True
     assert res.warning is True
+
+
+def _selfsigned_cert(lifetime_seconds: float) -> tuple[object, bytes]:
+    """A real self-signed certificate (Ed25519) valid for ~lifetime_seconds.
+
+    Returns (cert, PEM bytes) so tests can assert against the exact
+    not_valid_after_utc the production probe will read.
+    """
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.x509.oid import NameOID
+
+    key = Ed25519PrivateKey.generate()
+    now = datetime.now(UTC)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "modulo-tls-test")])
+    builder = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(seconds=lifetime_seconds))
+    )
+    cert = builder.sign(key, algorithm=None)
+    return cert, cert.public_bytes(serialization.Encoding.PEM)
+
+
+def test_tls_keypair_expiry_earliest_cert_wins(tmp_path: Path):
+    """A real keypair in <data_dir>/tls drives the expiry; the EARLIEST
+    notAfter across the PEM chain (incl. concatenated chain files) wins."""
+    tls_dir = tmp_path / "tls"
+    tls_dir.mkdir()
+    short_cert, short_pem = _selfsigned_cert(10 * 86400)
+    _, long_pem = _selfsigned_cert(400 * 86400)
+    (tls_dir / "chain.pem").write_bytes(short_pem + long_pem)
+    (tls_dir / "server.pem").write_bytes(long_pem)
+
+    expiry = doctor_module._tls_keypair_expiry(tmp_path)
+
+    expected = short_cert.not_valid_after_utc.timestamp()
+    assert expiry is not None
+    assert abs(expiry - expected) < 5
+
+
+def test_tls_keypair_expiry_absent_or_unparseable_is_none(tmp_path: Path):
+    """No tls dir, or an unparseable PEM file, honestly returns None."""
+    assert doctor_module._tls_keypair_expiry(tmp_path) is None
+
+    garbage_dir = tmp_path / "tls-garbage"
+    (garbage_dir / "tls").mkdir(parents=True)
+    (garbage_dir / "tls" / "server.pem").write_bytes(b"not a certificate")
+    (garbage_dir / "tls" / "nested_dir").mkdir()  # non-file entry is skipped
+    assert doctor_module._tls_keypair_expiry(garbage_dir) is None
 
 
 def test_stale_backup_probe_failure(tmp_path: Path):
