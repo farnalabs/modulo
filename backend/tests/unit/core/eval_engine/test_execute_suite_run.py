@@ -222,6 +222,58 @@ async def test_failure_sink_transitions_run_to_failed(session) -> None:
     assert "llm_judge" in (run.error_detail or "")
 
 
+async def test_execute_suite_run_runs_llm_judge_when_callable_provided(session) -> None:
+    """The counterpart to the refusal test: a wired callable runs the judge.
+
+    Prove-the-fix (FAR-1712): the runner hard-refuses a judge-bearing suite when
+    no callable is provided (the test above). With a callable provided — the
+    state the SAQ job now wires — the runner must score the case, persist the
+    judge's score on the EvalResult, and reach the terminal state.
+    """
+    org = await _org()
+    suite, dataset, _, backend = await seed_suite(session, org)
+    await seed_cases(session, org, dataset, [{"category": "billing"}])
+    llm_def = Eval(
+        organisation_id=org,
+        pipeline_id=uuid.uuid4(),
+        name="judge",
+        eval_type="llm_judge",
+        config_json={"field": "output", "model_backend_id": str(uuid.uuid4())},
+        eval_suite_id=suite.id,
+        account_id=org,
+    )
+    session.add(llm_def)
+    await session.flush()
+
+    calls: list[uuid.UUID] = []
+
+    def _callable(output: dict[str, Any], eval_def: Any) -> dict[str, Any]:
+        calls.append(eval_def.id)
+        return {"passed": True, "score": 0.66, "detail": "stub judge"}
+
+    run = await build_suite_run(
+        session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
+    )
+    stats = await execute_suite_run(session, run, llm_judge_callable=_callable)
+    await session.flush()
+
+    assert stats["state"] == SuiteRunState.COMPLETED.value
+    assert stats["passed_cases"] == 1
+    assert calls == [llm_def.id]
+
+    rows = list(
+        (
+            await session.execute(__import__("sqlalchemy").select(EvalResult).where(EvalResult.suite_run_id == run.id))
+        ).scalars()
+    )
+    # One result per suite definition (the seeded regex def + the judge def).
+    assert len(rows) == 2
+    judge_rows = [r for r in rows if r.eval_id == llm_def.id]
+    assert len(judge_rows) == 1
+    assert judge_rows[0].score == pytest.approx(0.66)
+    assert judge_rows[0].passed is True
+
+
 async def test_failure_sink_ingests_error_event(session, monkeypatch) -> None:
     """The monitored failure sink escalates to the Error Dashboard.
 
