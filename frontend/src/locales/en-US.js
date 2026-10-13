@@ -1163,6 +1163,7 @@ export default {
       "autonomy_panel_earned_none": "Not set - using the pipeline default",
       "autonomy_panel_earned_at": "Set {when}",
       "autonomy_panel_unknown": "Unknown level",
+      "autonomy_panel_status_label": "Autonomy change status",
       "autonomy_panel_target": "Target level",
       "autonomy_panel_reason": "Reason (optional) - recorded on the audit event",
       "autonomy_panel_demote": "Demote",

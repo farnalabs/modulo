@@ -134,16 +134,17 @@
       </button>
     </div>
 
-    <!-- Async outcome: a polite live region that stays mounted so an update is
-         announced (WCAG 4.1.3). -->
-    <div
-      role="status"
+    <!-- Async outcome: the native <output> element is an implicit polite live
+         region (role=status, aria-live=polite), so an update is announced
+         (WCAG 4.1.3) without an explicit status role. -->
+    <output
       aria-live="polite"
-      class="text-[11px] text-muted-foreground"
+      :aria-label="$t('views.PipelineEditorView.autonomy_panel_status_label')"
+      class="block text-[11px] text-muted-foreground"
       data-testid="progressive-autonomy-status"
     >
       <span v-if="statusMessage">{{ statusMessage }}</span>
-    </div>
+    </output>
 
     <!-- Refusals (403 not-admin/not-owner) and 422 direction/ceiling
          violations surface the server's own detail: never a silent failure. -->
