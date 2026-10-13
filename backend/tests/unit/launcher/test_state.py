@@ -300,6 +300,51 @@ def test_find_free_port_bumps_when_taken(monkeypatch: pytest.MonkeyPatch) -> Non
     assert result == 15433
 
 
+def test_find_free_port_raises_when_nothing_binds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exhausting the port range surfaces StateIntegrityError, not a hang."""
+    import modulo.launcher.state as state_module
+
+    class _DeadSocket:
+        def __init__(self, _family: int, _type: int) -> None:
+            pass
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_exc: object) -> bool:
+            return False
+
+        def bind(self, _addr: tuple[str, int]) -> None:
+            raise OSError("address already in use")
+
+    monkeypatch.setattr(state_module.socket, "socket", _DeadSocket)
+    with pytest.raises(StateIntegrityError, match="No free port found at or above 15432"):
+        find_free_port(15432)
+
+
+def test_find_free_port_raises_when_excluded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The exclude set can drain the whole remaining range on its own."""
+    import modulo.launcher.state as state_module
+
+    class _FreeSocket:
+        def __init__(self, _family: int, _type: int) -> None:
+            pass
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_exc: object) -> bool:
+            return False
+
+        def bind(self, _addr: tuple[str, int]) -> None:
+            return None
+
+    monkeypatch.setattr(state_module.socket, "socket", _FreeSocket)
+    everything = frozenset(range(1024, 65536))
+    with pytest.raises(StateIntegrityError, match="No free port found at or above 15432"):
+        find_free_port(15432, exclude=everything)
+
+
 def test_find_free_port_returns_preferred_when_free(monkeypatch: pytest.MonkeyPatch) -> None:
     import modulo.launcher.state as state_module
 

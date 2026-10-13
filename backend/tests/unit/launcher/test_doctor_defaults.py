@@ -8,6 +8,7 @@ branches not exercised elsewhere.
 """
 
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import ClassVar
 
@@ -132,6 +133,14 @@ class _FakeRedis:
         return True
 
 
+@pytest.fixture(autouse=True)
+def _reset_fake_redis_instances() -> Iterator[None]:
+    """The class-level recorder never leaks across tests (run before + after)."""
+    _FakeRedis.instances.clear()
+    yield
+    _FakeRedis.instances.clear()
+
+
 class _FakeEngine:
     async def dispose(self) -> None:
         return None
@@ -202,7 +211,6 @@ def test_default_probes_redis_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     state = _write_state_secrets(tmp_path)
     probes = default_probes(tmp_path, state)
     monkeypatch.setattr(redis, "Redis", _FakeRedis)
-    _FakeRedis.instances.clear()
     probes.probe_redis()  # must not raise (ping returns True)
     # a client was constructed against the composed loopback redis port
     assert _FakeRedis.instances, "redis probe did not instantiate a client"

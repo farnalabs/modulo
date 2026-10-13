@@ -27,13 +27,13 @@ from modulo.launcher.initdb import (
     postgres_server_argv,
     validate_target_dir,
 )
+from tests.unit.launcher.test_launcher_shared import bypass_platform_seams
 
 
 @pytest.fixture(autouse=True)
 def _bypass_platform_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     """Logic tests run on any OS: bypass the Windows-refusal seam."""
-    if sys.platform == "win32":
-        monkeypatch.setattr(initdb_module, "assert_supported_platform", lambda: None)
+    bypass_platform_seams(monkeypatch, "modulo.launcher.initdb")
 
 
 def _touch(path: Path, name: str = "content.bin") -> Path:

@@ -50,50 +50,13 @@ from modulo.launcher.doctor import (
 from modulo.launcher.entry import PGDATA_DIRNAME
 from modulo.launcher.secrets_file import LauncherSecrets, _parse
 from modulo.launcher.state import LauncherState, load_state, save_state
+from tests.unit.launcher.test_launcher_shared import all_pass_probes
 
 
 def _probes(**overrides: object) -> DoctorProbes:
-    probes = DoctorProbes(
-        disk_free_bytes=lambda _root: 40 * 1024 * 1024 * 1024,
-        assert_writable=lambda _root: None,
-        listening_on=lambda _port: ["127.0.0.1"],
-        probe_postgres=lambda: None,
-        role_violations=list,
-        probe_redis=lambda: None,
-        migrations_at_head=lambda: True,
-        effective_uid=lambda: 1000,
-        username_of_uid=lambda _uid: "operator",
-        file_owner=lambda _path: "operator",
-        secrets_mode=lambda _data_dir: 0o600,
-        ambient_env_names=list,
-        env_value=_env_probe,
-        service_installed=lambda: False,
-        service_enabled=lambda: False,
-        service_linger=lambda: False,
-        available_memory_bytes=lambda: 8 * 1024 * 1024 * 1024,
-        data_dir_pg_version=lambda: "16.4",
-        bundle_pg_version=lambda: "16.4",
-        installed_bundle_pg_version=lambda: None,
-        bundled_binaries=list,
-        port_owner_description=lambda _port: None,
-        second_install_hint=lambda: None,
-        modulo_on_path=lambda: None,
-        install_root=lambda: str(Path("/install")),
-        degraded_reason=lambda: None,
-        last_backup_at=lambda: time.time(),
-        tls_expiry=lambda: time.time() + 400 * 86400,
-        cloud_sync_hit=lambda _root: None,
-        cwd_env_file=None,
-        env_file_pinned=lambda: True,
-        launcher_running=lambda: True,
-    )
-    for key, value in overrides.items():
-        setattr(probes, key, value)
-    return probes
-
-
-def _env_probe(name: str) -> str | None:
-    return None
+    """The all-pass injection — the behavior-identical canonical factory
+    lives in the shared launcher-test module."""
+    return all_pass_probes(**overrides)
 
 
 def _state() -> LauncherState:
