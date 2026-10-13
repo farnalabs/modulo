@@ -325,7 +325,7 @@ async def test_health_check_failure_still_attempts_queries_as_error_samples() ->
     repos = samples[0]
     assert repos.resource == "repos"
     assert repos.connector_id == ci.id
-    assert repos.records == []
+    assert not repos.records
     assert repos.sample_count == 0
     assert repos.error is not None
     assert "401" in repos.error

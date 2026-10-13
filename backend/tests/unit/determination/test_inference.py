@@ -332,7 +332,7 @@ def test_unknown_resource_samples_are_ignored() -> None:
 def test_finding_defaults_and_optional_fields() -> None:
     """A minimal Finding carries empty uncertainty and no related connector unless supplied."""
     minimal = Finding(category="stage", finding="Test finding", evidence="Some evidence", confidence="high")
-    assert minimal.uncertainty == ""
+    assert not minimal.uncertainty
     assert minimal.related_connector is None
 
     cid = uuid.uuid4()
