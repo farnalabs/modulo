@@ -184,8 +184,12 @@ async def _fetch_run(db_engine: AsyncEngine, run_id: uuid.UUID) -> dict[str, obj
 
 async def _teardown_env(db_engine: AsyncEngine, env: _Env) -> None:
     async with db_engine.begin() as conn:
-        await conn.execute(text("DELETE FROM error_events WHERE organisation_id = :oid"), {"oid": str(env.org_id)})
-        await conn.execute(text("DELETE FROM error_groups WHERE organisation_id = :oid"), {"oid": str(env.org_id)})
+        # ``error_events`` is append-only (0285's guard raises on a direct
+        # DELETE) — and the sweep's real ``_ingest_saq_error`` writes rows here
+        # in the non-mocked tests. The organisation FK is ON DELETE CASCADE and
+        # 0285 lets the RI cascade through the guard, so deleting the org below
+        # removes both ``error_events`` and ``error_groups``. Never DELETE from
+        # the guarded table directly.
         await conn.execute(text("DELETE FROM runs WHERE organisation_id = :oid"), {"oid": str(env.org_id)})
         await conn.execute(
             text("DELETE FROM pipeline_snapshots WHERE organisation_id = :oid"),
