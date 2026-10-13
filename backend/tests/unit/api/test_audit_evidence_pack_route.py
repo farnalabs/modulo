@@ -116,6 +116,24 @@ class TestEvidencePackRoute:
         assert pack["manifest"]["audit_chain"]["event_count"] == 1
         assert verify_evidence_pack(pack, public_key_pem=public_pem).valid is True
 
+    async def test_http_exception_passes_through(self) -> None:
+        def _raising(**_: Any) -> AsyncIterator[dict[str, Any]]:
+            raise HTTPException(status_code=418, detail="teapot")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _call_pack(key_pem="unused", stream=_raising)
+
+        assert exc_info.value.status_code == 418
+
+    async def test_unexpected_error_maps_to_500(self) -> None:
+        def _raising(**_: Any) -> AsyncIterator[dict[str, Any]]:
+            raise RuntimeError("boom")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _call_pack(key_pem="unused", stream=_raising)
+
+        assert exc_info.value.status_code == 500
+
 
 class TestVerificationKeyRoute:
     async def test_publishes_the_pem_and_key_id(self) -> None:

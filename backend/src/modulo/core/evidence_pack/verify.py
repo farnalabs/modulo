@@ -17,7 +17,6 @@ recompute, and never raises on malformed input — a hostile artefact is a
 from __future__ import annotations
 
 import base64
-import binascii
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -127,14 +126,21 @@ def _validate_manifest(manifest: Mapping[str, Any]) -> list[str]:
         errors.extend(f"manifest audit_chain is missing {field!r}" for field in _CHAIN_FIELDS if field not in chain)
     entries = manifest.get("files")
     if isinstance(entries, list):
-        for entry in entries:
-            if not isinstance(entry, Mapping):
-                errors.append("manifest file entries must be objects")
-                continue
-            if not all(isinstance(entry.get(field), str) for field in ("path", "sha256")):
-                errors.append("manifest file entries need string 'path' and 'sha256'")
-            if not isinstance(entry.get("size"), int):
-                errors.append("manifest file entries need an integer 'size'")
+        errors.extend(_file_entry_errors(entries))
+    return errors
+
+
+def _file_entry_errors(entries: list[Any]) -> list[str]:
+    """Shape-check each manifest file entry (path/sha256 strings, integer size)."""
+    errors: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            errors.append("manifest file entries must be objects")
+            continue
+        if not all(isinstance(entry.get(field), str) for field in ("path", "sha256")):
+            errors.append("manifest file entries need string 'path' and 'sha256'")
+        if not isinstance(entry.get("size"), int):
+            errors.append("manifest file entries need an integer 'size'")
     return errors
 
 
@@ -259,7 +265,7 @@ def _file_bytes(files: Mapping[str, Any], path: str) -> bytes | None:
         return None
     try:
         return base64.b64decode(content_b64, validate=True)
-    except (binascii.Error, ValueError):
+    except ValueError:
         return None
 
 

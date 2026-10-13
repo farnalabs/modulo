@@ -19,8 +19,26 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
+
+if TYPE_CHECKING:
+    from modulo.core.evidence_pack import OfflineVerificationResult
+
+
+def _format_result(result: OfflineVerificationResult) -> str:
+    """Render an offline verification result for a human (non-JSON output)."""
+    status = {True: "ok", False: "FAILED"}
+    lines = [
+        "VALID" if result.valid else "INVALID",
+        f"  authorship:  {status[result.authorship_ok]}",
+        f"  files:       {status[result.files_ok]}",
+        f"  audit chain: {status[result.chain_ok]}",
+        f"  manifest:    {status[result.manifest_ok]}",
+    ]
+    lines.extend(f"  error: {message}" for message in result.errors)
+    return "\n".join(lines)
 
 
 @click.group("evidence")
@@ -58,13 +76,7 @@ def verify(ctx: click.Context, pack: Path, public_key_path: Path, as_json: bool)
     if as_json:
         click.echo(json.dumps(result.to_dict(), indent=2, sort_keys=True))
     else:
-        click.echo("VALID" if result.valid else "INVALID")
-        click.echo(f"  authorship:  {'ok' if result.authorship_ok else 'FAILED'}")
-        click.echo(f"  files:       {'ok' if result.files_ok else 'FAILED'}")
-        click.echo(f"  audit chain: {'ok' if result.chain_ok else 'FAILED'}")
-        click.echo(f"  manifest:    {'ok' if result.manifest_ok else 'FAILED'}")
-        for message in result.errors:
-            click.echo(f"  error: {message}")
+        click.echo(_format_result(result))
     ctx.exit(0 if result.valid else 1)
 
 
