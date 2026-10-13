@@ -30,7 +30,7 @@ from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.db.models.base import Base
 from modulo.db.models.daily_run_count import OrgDailyRunCount
-from modulo.db.models.eval_definition import EvalDefinition
+from modulo.db.models.eval import Eval
 from modulo.db.models.eval_result import EvalResult
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
@@ -1210,7 +1210,7 @@ class TestTrendQueriesOrgLevelScope:
                     tables=[
                         OrgDailyRunCount.__table__,
                         EvalResult.__table__,
-                        EvalDefinition.__table__,
+                        Eval.__table__,
                     ],
                 )
             )

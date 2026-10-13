@@ -4,6 +4,7 @@ Covers:
   - ``admin._eval_coverage_gaps`` (eval coverage gap analysis)
   - ``admin._eval_summary`` (dashboard definition count)
   - ``admin._eval_by_type`` (dashboard type breakdown)
+  - ``admin._eval_recent_results`` (dashboard recent results)
 
 The test asserts the emitted WHERE clause contains ``deleted_at`` so a future
 regression that drops the filter is caught. Uses a mocked session — no DB
@@ -11,6 +12,13 @@ required.
 
 Without the FAR-1009 filter the WHERE clause omits ``deleted_at`` and the test
 fails on the assertion.
+
+FAR-1725 adds the table-source pins at the bottom: all four reads feed ONE
+``EvalDashboardResponse``, so every one of them must read the live ``evals``
+table. A revert of any single read to the frozen ``eval_definitions`` snapshot
+makes the payload self-contradict (a post-cutover node is counted by one
+figure and reported as uncovered by another) and makes the guardrail exclusion
+match nothing.
 """
 
 from __future__ import annotations
@@ -245,3 +253,121 @@ async def test_eval_by_type_where_clause_contains_deleted_at():
     assert len(captured_stmts) >= 1
     where_clause = str(captured_stmts[0].whereclause)
     assert "deleted_at" in where_clause, f"Expected 'deleted_at' in by_type WHERE clause but got: {where_clause}"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1725 — table-source pins: all four dashboard reads source ``evals``
+# ---------------------------------------------------------------------------
+
+
+def _recording_session(results: list[Any]) -> tuple[AsyncMock, list[Any]]:
+    """A session whose execute() records each statement and replays *results*.
+
+    Returns the session and the live list of captured statements (mutated in
+    place as the helper runs). Statements beyond the scripted results replay
+    the last one, so a helper that gains an extra query does not blow up.
+    """
+    captured: list[Any] = []
+    index = {"n": 0}
+
+    async def _execute(stmt: Any, *_args: Any, **_kwargs: Any) -> Any:
+        captured.append(stmt)
+        result = results[min(index["n"], len(results) - 1)]
+        index["n"] += 1
+        return result
+
+    session = AsyncMock(spec=AsyncSession)
+    session.execute = _execute
+    return session, captured
+
+
+def _pipeline_row(graph_nodes: list[Any]) -> MagicMock:
+    row = MagicMock()
+    row.id = uuid.uuid4()
+    row.name = "pipeline"
+    row.graph_nodes_json = graph_nodes
+    return row
+
+
+def _all_result(rows: list[Any]) -> MagicMock:
+    result = MagicMock()
+    result.all.return_value = rows
+    return result
+
+
+async def test_eval_coverage_gaps_reads_evals_not_frozen_snapshot():
+    """coverage_gaps must read ``evals`` — the same source as ``by_type``.
+
+    A revert to ``eval_definitions`` reintroduces the self-contradictory
+    payload: a node whose only eval postdates the cutover is reported by
+    ``by_type`` but still listed here as a coverage gap.
+    """
+    from modulo.api.routes.admin import _eval_coverage_gaps
+
+    pipelines_result = _all_result([_pipeline_row([{"id": "node-1"}])])
+    session, captured = _recording_session([pipelines_result, _all_result([])])
+
+    await _eval_coverage_gaps(session, uuid.uuid4())
+
+    assert len(captured) >= 2
+    sql = str(captured[1])
+    assert "FROM evals" in sql
+    assert "eval_definitions" not in sql
+
+
+async def test_eval_summary_definition_count_reads_evals_not_frozen_snapshot():
+    """``total_definitions`` must count ``evals`` — the same source as ``by_type``.
+
+    A revert to ``eval_definitions`` makes ``summary.total_definitions`` and
+    ``by_type`` disagree inside one ``EvalDashboardResponse``.
+    """
+    from modulo.api.routes.admin import _eval_summary
+
+    summary_result = MagicMock()
+    summary_result.one.return_value = MagicMock(total_results=10, passed=8, failed=2)
+    defs_result = MagicMock()
+    defs_result.scalar.return_value = 5
+
+    session, captured = _recording_session([summary_result, defs_result])
+
+    await _eval_summary(session)
+
+    assert len(captured) >= 2
+    sql = str(captured[1])
+    assert "FROM evals" in sql
+    assert "eval_definitions" not in sql
+
+
+async def test_eval_by_type_reads_evals_not_frozen_snapshot():
+    """``by_type`` must read ``evals`` — its guardrail exclusion is a no-op otherwise."""
+    from modulo.api.routes.admin import _eval_by_type
+
+    session, captured = _recording_session([_all_result([])])
+
+    await _eval_by_type(session, uuid.uuid4())
+
+    assert len(captured) >= 1
+    sql = str(captured[0])
+    assert "FROM evals" in sql
+    assert "eval_definitions" not in sql
+
+
+async def test_eval_recent_results_reads_evals_and_scopes_the_join_to_the_org():
+    """``recent_results`` joins ``evals`` and pins the join side to this org.
+
+    The table pin is the FAR-1725 guard (a revert drops every post-cutover
+    result). The ``ed.organisation_id`` predicate is defence in depth matching
+    the sibling raw-SQL sites in ``regression.py``/``suite_run.py``/``okr.py``:
+    the join side must not be trusted to inherit scope from ``er`` alone.
+    """
+    from modulo.api.routes.admin import _eval_recent_results
+
+    session, captured = _recording_session([_all_result([])])
+
+    await _eval_recent_results(session, uuid.uuid4())
+
+    assert len(captured) == 1
+    sql = str(captured[0])
+    assert "JOIN evals ed ON ed.id = er.eval_id" in sql
+    assert "eval_definitions" not in sql
+    assert "ed.organisation_id = :org_id" in sql

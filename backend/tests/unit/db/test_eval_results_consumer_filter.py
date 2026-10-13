@@ -1,11 +1,18 @@
 """FAR-223 item 11 §4d — eval_results consumer filter contract (SQLite).
 
-Guardrail results live in eval_results (rows whose eval_id points at an
-eval_type='guardrail' definition). Every consumer must either include or
+Guardrail results live in eval_results (rows whose ``eval_id`` points at an
+``eval_type='guardrail'`` definition). Every consumer must either include or
 exclude them explicitly. These tests prove the run-detail reader
-(``get_run_evals``) and the dashboard eval-rate reader exclude guardrail rows:
-a guardrail's ``passed=True`` (regex matched) must never inflate a normal-eval
-pass rate.
+(``get_run_evals``), the dashboard eval-rate reader and the prompt-optimizer
+feed exclude guardrail rows: a guardrail's ``passed=True`` (regex matched)
+must never inflate a normal-eval pass rate.
+
+Definitions are seeded into ``evals`` — the storage source since the
+FAR-1100/1101 cutover and the table ``eval_results.eval_id`` references.
+Seeding ``eval_definitions`` here would silently make the exclusion a no-op
+(the FAR-1725 regression); the container-tier twin in
+``tests/integration/db/test_far1725_guardrail_clause.py`` pins the real
+Postgres storage model.
 """
 
 import uuid
@@ -21,7 +28,7 @@ from modulo.api.routes.dashboard import _eval_rate_window
 from modulo.db.crud.eval_run import get_run_evals
 from modulo.db.models.account import Account
 from modulo.db.models.base import Base
-from modulo.db.models.eval_definition import EvalDefinition
+from modulo.db.models.eval import Eval
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
@@ -39,7 +46,7 @@ _TABLES: list[Table] = cast(
         Pipeline.__table__,
         Account.__table__,
         Run.__table__,
-        EvalDefinition.__table__,
+        Eval.__table__,
         EvalResult.__table__,
     ],
 )
@@ -84,7 +91,7 @@ async def _seed_run(session: AsyncSession) -> uuid.UUID:
 
 
 async def _seed_eval_def(session: AsyncSession, *, eval_type: str) -> uuid.UUID:
-    eval_def = EvalDefinition(
+    eval_def = Eval(
         id=uuid.uuid4(),
         organisation_id=_ORG,
         pipeline_id=_PIPELINE,
@@ -92,7 +99,6 @@ async def _seed_eval_def(session: AsyncSession, *, eval_type: str) -> uuid.UUID:
         name=f"{eval_type}-eval",
         eval_type=eval_type,
         config_json={},
-        failure_behaviour="warn",
         account_id=_ACCOUNT,
     )
     session.add(eval_def)

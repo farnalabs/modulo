@@ -140,17 +140,21 @@ def _days_between(from_date: datetime, target_date_str: str | None) -> int | Non
         return None
 
 
+# FAR-1725: both OKR reads source ``evals`` (the current storage) rather than
+# the frozen ``eval_definitions`` snapshot — a post-cutover suite definition
+# exists only in ``evals``, so reading the legacy table reports def_count=0
+# (raising "Suite not found") and makes the guardrail exclusion below a no-op.
 _INFO_QUERY: Final = text("""
     SELECT
         COUNT(*) AS def_count,
         MAX(pass_threshold) AS pass_threshold
-    FROM eval_definitions
+    FROM evals
     WHERE suite_id = :suite_id AND organisation_id = :org_id
 """)
 
 _TREND_QUERY: Final = text("""
     WITH suite_eval_ids AS (
-        SELECT id FROM eval_definitions
+        SELECT id FROM evals
         WHERE suite_id = :suite_id AND organisation_id = :org_id
           AND eval_type != 'guardrail'
     )
