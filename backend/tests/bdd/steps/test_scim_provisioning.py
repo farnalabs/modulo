@@ -131,6 +131,12 @@ def _make_scim_settings() -> Settings:
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    # FAR-1639 (FAR-1629 sweep): in_transaction() and add() are SYNC
+    # AsyncSession methods — bare-AsyncMock children type them as async, so
+    # production code reaching set_rls_* (db/rls.py) passes the guard
+    # vacuously (an unawaited coroutine is truthy).
+    session.in_transaction = MagicMock(return_value=True)
+    session.add = MagicMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -147,6 +153,12 @@ def _make_audit_session() -> AsyncMock:
     itself, including its fail-closed policy, still runs.
     """
     session = AsyncMock()
+    # FAR-1639 (FAR-1629 sweep): in_transaction() and add() are SYNC
+    # AsyncSession methods — bare-AsyncMock children type them as async, so
+    # production code reaching set_rls_* (db/rls.py) passes the guard
+    # vacuously (an unawaited coroutine is truthy).
+    session.in_transaction = MagicMock(return_value=True)
+    session.add = MagicMock()
     result = MagicMock()
     result.scalar.return_value = None
     result.scalar_one_or_none.return_value = None

@@ -33,6 +33,12 @@ with contextlib.suppress(FileNotFoundError, OSError):
 
 def _make_mock_session() -> Any:
     session = AsyncMock()
+    # FAR-1639 (FAR-1629 sweep): in_transaction() and add() are SYNC
+    # AsyncSession methods — bare-AsyncMock children type them as async, so
+    # production code reaching set_rls_* (db/rls.py) passes the guard
+    # vacuously (an unawaited coroutine is truthy).
+    session.in_transaction = MagicMock(return_value=True)
+    session.add = MagicMock()
 
     mock_scalars = MagicMock()
     mock_scalars.all.return_value = []
