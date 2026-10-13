@@ -381,6 +381,11 @@ __all__ = [
     "detect_workspace_input_drift",
     "workspace_drift",
     "workspace_drift_detected",
+    # --- FAR-1690 A1 credential-issuance seam (CredentialIssuer.revoke_for_run).
+    #     The seam declares the revoke half now; its production caller lands with
+    #     the joint-revoke slice (A3, RunTeardownSeal), so vulture cannot see a
+    #     prod call site yet. ---
+    "revoke_for_run",
     # --- FAR-801 workspace input audit persistence (lazy-imported by
     #     node_runner._sandbox_agent_impl; vulture cannot see prod call sites) ---
     "AUDIT_NODE_ID",
