@@ -72,8 +72,13 @@ class TestIssuedRunCredentialProvenance:
             _issued(provenance="something_else")
 
     def test_rejects_observed_attestation_kind(self) -> None:
-        with pytest.raises(ValueError, match="never be 'observed'"):
+        with pytest.raises(ValueError, match="invalid issuance provenance kind"):
             _issued(provenance_kind="observed")
+
+    def test_rejects_any_kind_outside_the_positive_set(self) -> None:
+        # Allowlist, not denylist: an arbitrary unlisted kind is rejected too.
+        with pytest.raises(ValueError, match="invalid issuance provenance kind"):
+            _issued(provenance_kind="fabricated")
 
     def test_secret_is_absent_from_repr(self) -> None:
         cred = _issued()

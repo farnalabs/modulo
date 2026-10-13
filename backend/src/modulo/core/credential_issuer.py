@@ -18,8 +18,9 @@ Every issued credential carries a typed issuance provenance:
 
 ``observed`` is NEVER a valid issuance provenance: Modulo does not observe an
 external mint, it either performs it (attested) or is told about it (declared).
-:class:`IssuedRunCredential` rejects an ``observed`` attestation kind at
-construction so the forbidden value cannot enter the run metadata by accident.
+:class:`IssuedRunCredential` admits ONLY the ``attested``/``declared``
+attestation kinds — every other value, ``observed`` included, is rejected at
+construction so a forbidden/unlisted value cannot enter the run metadata.
 
 The provenance is stamped where the run actually reads its credential — the
 ``MODULO_CREDENTIAL_PROVENANCE`` sandbox env var (kept unspoofable by the
@@ -52,10 +53,15 @@ ISSUANCE_PROVENANCES: frozenset[str] = frozenset({ISSUANCE_PROVENANCE_MODULO_MIN
 
 # The evidence class of a provenance value. ``attested`` = Modulo performed the
 # mint; ``declared`` = Modulo reports a third party's claim. ``observed`` is
-# forbidden for issuance (see module docstring) and rejected at construction.
+# forbidden for issuance (see module docstring): it is not a member of the
+# admitted set, so :class:`IssuedRunCredential` rejects it at construction.
 PROVENANCE_KIND_ATTESTED = "attested"
 PROVENANCE_KIND_DECLARED = "declared"
-_FORBIDDEN_PROVENANCE_KIND = "observed"
+
+# The admitted attestation kinds, validated positively (allowlist). A denylist
+# that rejected only ``observed`` would silently admit any other unlisted kind
+# (a typo, a future taxonomy value used out of context); the allowlist cannot.
+PROVENANCE_KINDS: frozenset[str] = frozenset({PROVENANCE_KIND_ATTESTED, PROVENANCE_KIND_DECLARED})
 
 # The sandbox env var the run reads its issuance provenance from. Reserved via
 # ``db.runner_binding_constraints.RESERVED_ENV_VAR_PREFIXES`` (``MODULO_``) and
@@ -86,8 +92,10 @@ class IssuedRunCredential:
             raise ValueError(
                 f"invalid issuance provenance {self.provenance!r}; valid values: {sorted(ISSUANCE_PROVENANCES)}"
             )
-        if self.provenance_kind == _FORBIDDEN_PROVENANCE_KIND:
-            raise ValueError("issuance provenance must never be 'observed'")
+        if self.provenance_kind not in PROVENANCE_KINDS:
+            raise ValueError(
+                f"invalid issuance provenance kind {self.provenance_kind!r}; valid values: {sorted(PROVENANCE_KINDS)}"
+            )
 
 
 @runtime_checkable
