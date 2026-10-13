@@ -1,15 +1,18 @@
-"""FAR-1009: soft-deleted EvalDefinitions must not appear in analytics counts.
+"""FAR-1009 / FAR-1729: analytics eval-definition counts — soft-delete filter + live source table.
 
 Covers:
-  - ``product_analytics.metrics_dump._aggregate_entity_counts`` (per-org
-    eval_definitions count)
+  - ``product_analytics.metrics_dump._count_entities`` (per-org eval-definition
+    count): the query must filter ``deleted_at`` (FAR-1009) AND must read the
+    live ``evals`` table, not the frozen ``eval_definitions`` snapshot (the
+    0254 cutover froze that table — no production write path post-cutover, so
+    counting it under-reports every post-cutover definition).
 
-The test asserts the emitted WHERE clause contains ``deleted_at`` so a future
-regression that drops the filter is caught. Uses a mocked session — no DB
-required.
+The tests assert the emitted WHERE clause contains ``deleted_at`` and the
+statement source is ``evals``. Uses a mocked session — no DB required.
 
 Without the FAR-1009 filter the WHERE clause omits ``deleted_at`` and the test
-fails on the assertion.
+fails on the assertion. Reverting the source to ``eval_definitions``
+(FAR-1729) fails the source-table pin.
 """
 
 from __future__ import annotations
@@ -22,10 +25,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def test_eval_definitions_count_where_clause_contains_deleted_at():
-    """_aggregate_entity_counts must add deleted_at IS NULL to the eval_definitions query.
+    """_count_entities must add deleted_at IS NULL to the eval-definition query.
 
     This is the direct regression guard: if the filter is dropped, soft-deleted
-    definitions inflate the analytics count.
+    definitions inflate the analytics count. FAR-1729: the query must also
+    source the count from the live ``evals`` table.
     """
     from modulo.core.product_analytics.metrics_dump import _count_entities
 
@@ -46,13 +50,17 @@ async def test_eval_definitions_count_where_clause_contains_deleted_at():
 
     await _count_entities(session, [org_id])
 
-    # The eval_definitions query is one of the captured statements.
-    # Find it by checking which statement references EvalDefinition.
-    eval_def_stmts = [s for s in captured_stmts if "eval_definition" in str(s).lower()]
-    assert len(eval_def_stmts) >= 1, f"Expected at least one EvalDefinition query, got {len(captured_stmts)} statements"
+    # The eval-definition count is one of the captured statements. Since the
+    # FAR-1729 repoint it references the live ``evals`` table.
+    eval_def_stmts = [s for s in captured_stmts if "FROM evals" in str(s)]
+    assert len(eval_def_stmts) >= 1, f"Expected at least one evals-table query, got {len(captured_stmts)} statements"
 
     for stmt in eval_def_stmts:
         where_clause = str(stmt.whereclause)
         assert "deleted_at" in where_clause, (
-            f"Expected 'deleted_at' in eval_definitions WHERE clause but got: {where_clause}"
+            f"Expected 'deleted_at' in the eval-definition WHERE clause but got: {where_clause}"
+        )
+        # FAR-1729 source-table pin: the count must never read the frozen table.
+        assert "eval_definitions" not in str(stmt), (
+            f"eval-definition count must read evals, not the frozen table, got: {stmt}"
         )

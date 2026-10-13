@@ -432,7 +432,7 @@ async def _count_entities(session: AsyncSession, org_ids: list[uuid.UUID]) -> di
     from modulo.db.models.agent import Agent
     from modulo.db.models.connector_instance import ConnectorInstance
     from modulo.db.models.environment_profile import EnvironmentProfile
-    from modulo.db.models.eval_definition import EvalDefinition
+    from modulo.db.models.eval import Eval
     from modulo.db.models.model_backend import ModelBackend
     from modulo.db.models.pipeline import Pipeline
     from modulo.db.models.schema import Schema
@@ -472,10 +472,12 @@ async def _count_entities(session: AsyncSession, org_ids: list[uuid.UUID]) -> di
     )
     counts["triggers"] = result.scalar_one() or 0
 
+    # FAR-1729: count the live ``evals`` table — the frozen ``eval_definitions``
+    # snapshot stops at the cutover, so counting it under-reports every
+    # post-cutover definition. The ``eval_definitions`` KEY is retained as the
+    # analytics contract name for this metric.
     result = await session.execute(
-        select(func.count())
-        .select_from(EvalDefinition)
-        .where(EvalDefinition.organisation_id.in_(org_ids), EvalDefinition.deleted_at.is_(None))
+        select(func.count()).select_from(Eval).where(Eval.organisation_id.in_(org_ids), Eval.deleted_at.is_(None))
     )
     counts["eval_definitions"] = result.scalar_one() or 0
 

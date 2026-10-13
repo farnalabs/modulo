@@ -2157,3 +2157,55 @@ class TestRunVariantWeightedPromptVersion:
         overrides = result["frozen_snapshot"]["_run_overrides"]
         assert overrides["prompt_version"] == "v9"
         assert "prompt_templates" not in overrides
+
+
+# --------------------------------------------------------------------------- #
+# FAR-1729: source-table pins — variant-group eval reads query ``evals``     #
+# --------------------------------------------------------------------------- #
+class TestFar1729EvalSourcePins:
+    """Coverage-gap and default-eval probes must query ``evals``, not the frozen table.
+
+    ``eval_definitions`` was frozen by the 0254 cutover (no production write
+    path post-cutover): reading it drops every post-cutover definition from
+    the gap calculation and wrongly reports "no evals" for a pipeline whose
+    defaults postdate the cutover. Each pin fails if the source is reverted.
+    """
+
+    @staticmethod
+    def _capture_session() -> tuple[AsyncMock, list[str]]:
+        captured: list[str] = []
+
+        def _execute(stmt, params=None):
+            captured.append(str(stmt))
+            result = MagicMock()
+            result.scalars = MagicMock(return_value=result)
+            result.all = MagicMock(return_value=[])
+            result.__iter__ = MagicMock(return_value=iter([]))
+            result.scalar_one_or_none = MagicMock(return_value=None)
+            return result
+
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=_execute)
+        return session, captured
+
+    async def test_get_coverage_gaps_compiles_against_evals_table(self) -> None:
+        group = MagicMock()
+        group.pipeline_id = uuid.uuid4()
+        group.variants = []
+
+        session, captured = self._capture_session()
+        gaps = await get_coverage_gaps(session, group)
+        assert gaps == []
+
+        stale = [s for s in captured if "eval_definitions" in s]
+        assert not stale, f"get_coverage_gaps must not read the frozen table: {stale}"
+        assert any("FROM evals" in s for s in captured), f"no evals read captured: {captured}"
+
+    async def test_has_pipeline_default_evals_compiles_against_evals_table(self) -> None:
+        session, captured = self._capture_session()
+        has_evals = await has_pipeline_default_evals(session, uuid.uuid4())
+        assert has_evals is False
+
+        stale = [s for s in captured if "eval_definitions" in s]
+        assert not stale, f"has_pipeline_default_evals must not read the frozen table: {stale}"
+        assert any("FROM evals" in s for s in captured), f"no evals read captured: {captured}"
