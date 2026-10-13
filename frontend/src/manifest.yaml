@@ -5324,6 +5324,9 @@ elements:
         type: button
         dynamic_testid: false
     /variants/compare:
+      - testid: variant-compare-loading-skeleton
+        type: element
+        dynamic_testid: false
       - testid: variant-compare-group-select
         type: select
         dynamic_testid: false
