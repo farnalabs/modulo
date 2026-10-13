@@ -1090,17 +1090,20 @@ async def _resolve_sandbox_envs_with_script_setup(
     input_json: str,
     provider: str,
 ) -> tuple[dict[str, str], bool]:
-    """Resolve sandbox env vars and perform script-mode pre-run setup.
+    """Resolve sandbox env vars and perform pre-run setup.
 
-    Returns ``(sandbox_envs, script_lease_claimed)``.  In script mode this
-    also claims the script lease, mints a run API key, and checks the
-    wallclock budget (raising :class:`ScriptBudgetKilledError` on overrun).
+    Returns ``(sandbox_envs, script_lease_claimed)``. In script mode this also
+    claims the script lease, mints a run API key, and checks the wallclock
+    budget (raising :class:`ScriptBudgetKilledError` on overrun). EVERY mode
+    (script AND llm) issues a run-scoped credential through the
+    ``CredentialIssuer`` seam (FAR-1690 A1) and stamps its issuance provenance.
     """
+    from modulo.core.credential_issuer import RUN_CREDENTIAL_PROVENANCE_ENV
     from modulo.core.pipeline_engine.node_runner import (
         ScriptBudgetKilledError,
         _build_sandbox_envs,
         _emit_script_span_event,
-        _sandbox_mint_run_api_key_for_sandbox,
+        _sandbox_issue_run_credential_for_sandbox,
         _sandbox_resolve_secret_ref,
         _sandbox_store_script_lease,
         _sandbox_wallclock_budget_exceeded,
@@ -1153,15 +1156,22 @@ async def _resolve_sandbox_envs_with_script_setup(
             "script.lease_claimed",
             {"run_id": run_id, "node_id": node_def.get("node_id", "")},
         )
-        run_api_key = await _sandbox_mint_run_api_key_for_sandbox(
-            session_factory=session_factory,
-            org_id=org_id,
-            run_id=run_id,
-            node_id=node_def.get("node_id", ""),
-            sandbox_timeout=sandbox_timeout,
-        )
-        if run_api_key:
-            sandbox_envs["MODULO_API_KEY"] = run_api_key
+
+    # FAR-1690 slice A1: EVERY dispatch mode (script AND llm) issues a
+    # short-TTL, run-scoped credential through the CredentialIssuer seam and
+    # stamps its issuance provenance (``modulo_minted`` — attested, NEVER
+    # ``observed``). Fail-open: an issuance failure leaves the key absent (the
+    # workspace still runs).
+    issued = await _sandbox_issue_run_credential_for_sandbox(
+        session_factory=session_factory,
+        org_id=org_id,
+        run_id=run_id,
+        node_id=node_def.get("node_id", ""),
+        sandbox_timeout=sandbox_timeout,
+    )
+    if issued is not None:
+        sandbox_envs["MODULO_API_KEY"] = issued.secret
+        sandbox_envs[RUN_CREDENTIAL_PROVENANCE_ENV] = issued.provenance
 
     return sandbox_envs, script_lease_claimed
 

@@ -40,6 +40,7 @@ from modulo.core.bundled_runner.runner_dispatch import (
     _source_contains_sentinel,
     _write_file_via_exec,
 )
+from modulo.core.credential_issuer import IssuedRunCredential
 from modulo.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError as _RealSandboxNodeFailedError,
 )
@@ -118,7 +119,9 @@ def _patch_node_runner(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
         "_sandbox_acquire_dispatch_marker": AsyncMock(return_value="attempt-key"),
         "_sandbox_clear_dispatch_marker": AsyncMock(),
-        "_sandbox_mint_run_api_key_for_sandbox": AsyncMock(return_value="apikey"),
+        "_sandbox_issue_run_credential_for_sandbox": AsyncMock(
+            return_value=IssuedRunCredential(run_id=uuid.uuid4(), node_id="node-1", secret="apikey")
+        ),
         "_sandbox_resolve_secret_ref": AsyncMock(return_value="secret"),
         "_sandbox_store_dispatch_marker_sandbox": AsyncMock(),
         "_sandbox_store_script_lease": AsyncMock(),
