@@ -430,6 +430,14 @@ def _enrich_view(view: SavedView, user_id: uuid.UUID) -> ViewInfo:
 
 
 def _resolve_tier(settings: Settings, org: Any | None = None) -> str:
+    """Resolve the deployment tier for ``/viewmodel/current``'s ``plan.tier``.
+
+    Mirrors the canonical licence ladder (``core.feature_flags._resolve_paid_plan``):
+    org-level key, then the in-memory licence, then the env-var key — each key
+    trusted only after ``parse_and_verify`` (never on mere presence) so this
+    resolver cannot disagree with ``_resolve_license_info`` for the same
+    deployment state. Falls back to ``community``.
+    """
     from modulo.core.license import get_license, parse_and_verify
 
     if org is not None:
@@ -442,8 +450,11 @@ def _resolve_tier(settings: Settings, org: Any | None = None) -> str:
     lic = get_license()
     if lic is not None:
         return lic.tier
-    if settings.modulo_license_key:
-        return "team"
+    raw_key: str = getattr(settings, "modulo_license_key", "") or ""
+    if raw_key:
+        validation = parse_and_verify(raw_key)
+        if validation.valid and validation.license_data is not None:
+            return validation.license_data.tier
     return "community"
 
 

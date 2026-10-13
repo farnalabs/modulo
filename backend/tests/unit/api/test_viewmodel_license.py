@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.dependencies import get_settings as dep_get_settings
 from modulo.api.main import app
+from modulo.api.routes.viewmodel import _resolve_tier
 from modulo.core.license import LicenseData, clear_license, set_public_key, store_license
 from modulo.core.registry.crypto import generate_keypair, sign_primitive
 from modulo.settings import Settings, get_settings
@@ -182,3 +183,61 @@ class TestLicenseInfo:
         """The /api/v1/license endpoint requires no auth."""
         resp = client.get(self.URL)
         assert resp.status_code == 200
+
+
+class TestResolveTier:
+    """``viewmodel._resolve_tier`` mirrors the canonical licence ladder.
+
+    FAR-1720 review follow-up: the in-file sibling still trusted
+    ``settings.modulo_license_key`` on mere presence, so it could disagree
+    with the now-verified ``_resolve_license_info`` for the same deployment
+    state. It now verifies the key via ``parse_and_verify`` like the sibling
+    and the canonical ladder (org key -> in-memory licence -> env key).
+    """
+
+    def test_invalid_env_key_is_not_trusted(self) -> None:
+        """A present-but-unverifiable env key -> community (prove-the-fix).
+
+        The pre-change resolver returned ``"team"`` for any non-empty key.
+        """
+        assert _resolve_tier(_make_settings(modulo_license_key="not-a-valid-key")) == "community"
+
+    def test_valid_env_key_reports_verified_tier(self) -> None:
+        """A signed env key verifies -> its own tier."""
+        key = _sign_license_payload(_valid_payload(tier="team"))
+        assert _resolve_tier(_make_settings(modulo_license_key=key)) == "team"
+
+    def test_no_license_is_community(self) -> None:
+        """No in-memory licence and no env key -> community."""
+        assert _resolve_tier(_make_settings()) == "community"
+
+    def test_stored_license_wins_over_env_key(self) -> None:
+        """The in-memory licence (rung 2) beats the env-var rung (rung 3)."""
+        stored = LicenseData(
+            tier="team",
+            features=["sso"],
+            expires_at=(datetime.now(UTC) + timedelta(days=30)).isoformat(),
+            org_id="stored-org",
+            raw_payload={},
+            raw_key="stored-key",
+        )
+        store_license("stored-key", stored)
+        assert _resolve_tier(_make_settings(modulo_license_key="not-a-valid-key")) == "team"
+
+    def test_org_key_takes_precedence(self) -> None:
+        """A valid org-level key (rung 1) is resolved before the env-var rung."""
+        org = MagicMock()
+        org.settings_json = {"license_key": _sign_license_payload(_valid_payload(tier="team"))}
+        assert _resolve_tier(_make_settings(modulo_license_key="not-a-valid-key"), org=org) == "team"
+
+    def test_invalid_org_key_falls_through(self) -> None:
+        """An unverifiable org key is not trusted; resolution falls through."""
+        org = MagicMock()
+        org.settings_json = {"license_key": "garbage"}
+        assert _resolve_tier(_make_settings(), org=org) == "community"
+
+    def test_org_without_key_falls_through(self) -> None:
+        """An org present but carrying no license_key resolves via the deployment rungs."""
+        org = MagicMock()
+        org.settings_json = {}
+        assert _resolve_tier(_make_settings(modulo_license_key="not-a-valid-key"), org=org) == "community"

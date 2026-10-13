@@ -160,8 +160,13 @@ neither is valid; see Behaviours.)
   `test_viewmodel_license.py` (stored-licence precedence, invalid-env-key
   fall-through, unlicensed `is_valid: false`, exact response-shape pin) and
   two new `feature_flag_inspection.feature` scenarios (unlicensed public
-  endpoint, stored-licence public endpoint). The previously-tracked "public
-  `/api/v1/license` is_valid/tier inconsistent with the real licence
+  endpoint, stored-licence public endpoint). A review follow-up also unified
+  the in-file sibling `viewmodel._resolve_tier` (which feeds
+  `/viewmodel/current`'s `plan.tier`) to verify the env-var key via
+  `parse_and_verify` instead of trusting its presence, so it can no longer
+  disagree with `_resolve_license_info` for the same deployment state
+  (`TestResolveTier` in `test_viewmodel_license.py`). The previously-tracked
+  "public `/api/v1/license` is_valid/tier inconsistent with the real licence
   resolution" gap is resolved; the narrower `admin_feature_flags` /
   MCP `list_feature_flags` hardcoded `is_valid: true` residue stays tracked
   under Known Gaps (out of scope here). Status stays `partial` (the
