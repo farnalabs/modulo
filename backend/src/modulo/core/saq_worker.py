@@ -92,6 +92,10 @@ _CRON_EVERY_MINUTE = "* * * * *"
 _CRON_EVERY_5_MINUTES = "*/5 * * * *"
 _CRON_EVERY_15_MINUTES = "*/15 * * * *"
 _CRON_HOURLY = "0 * * * *"
+#: Once-daily cadence (03:00) — used by the guardrail kill-switch drill
+#: (FAR-1707). Distinct from analytics_facts_maintenance's 01:00 slot so the
+#: two daily crons never contend.
+_CRON_DAILY = "0 3 * * *"
 
 # Scheduled run-retention window (FAR-1549). Pinned explicitly so the purge
 # and its audit record read the SAME cutoff: ``batch_delete_old_terminal_runs``
@@ -2335,6 +2339,7 @@ def _system_functions() -> list[Any]:
     """Functions registered on the ``system`` worker (under their ``__qualname__``,
     which is the name SAQ's cron scheduler uses when enqueueing).
     """
+    from modulo.core.guardrails.kill_switch_drill import run_kill_switch_drill
     from modulo.core.worker_memory import memory_monitor_cron
 
     return [
@@ -2363,11 +2368,13 @@ def _system_functions() -> list[Any]:
         connector_health_checks,
         health_readiness_alert,
         memory_monitor_cron,
+        run_kill_switch_drill,
     ]
 
 
 def _system_cron_jobs() -> list[CronJob[Any]]:
     """System cron jobs (plan F1) — all knobs explicit."""
+    from modulo.core.guardrails.kill_switch_drill import run_kill_switch_drill
     from modulo.core.worker_memory import memory_monitor_cron
 
     return [
@@ -2711,6 +2718,21 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
             cron=_CRON_EVERY_5_MINUTES,
             unique=True,
             timeout=60,
+            heartbeat=30,
+            retries=1,
+            ttl=300,
+        ),
+        # kill_switch_drill: daily (FAR-1707) — a non-mutating self-test of the
+        # org guardrail kill-switch's two invariants (downgrade-to-observe, and
+        # fail-closed read), appended as ONE system_audit_events fact. unique=True
+        # so overlapping multi-machine ticks cannot double-record; retries=1
+        # because a *record-write* failure is fail-closed (the ledger append must
+        # not be silently lost, so a transient DB error is retried once).
+        CronJob(
+            run_kill_switch_drill,
+            cron=_CRON_DAILY,
+            unique=True,
+            timeout=120,
             heartbeat=30,
             retries=1,
             ttl=300,
