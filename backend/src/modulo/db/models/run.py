@@ -566,7 +566,7 @@ class Run(OrgScoped):
     # Entries are non-decreasing in ``entered_at`` (the monotonic guard on
     # ``_PHASE_UPDATE_SQL`` pairs every append with ``entered_at=now()``).
     # INTERNAL ONLY: not API-projected (like ``dispatch_phase`` above).
-    # NULL for rows that predate migration 0306.
+    # NULL for rows that predate migration 0307.
     dispatch_phase_history: Mapped[list[dict[str, Any]] | None] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql"),
         nullable=True,
@@ -581,7 +581,7 @@ class Run(OrgScoped):
     # life, additive-only so no attempt can stomp another's count). NOT
     # claim-token fenced for the same reason. NOT API-projected; aggregate
     # with ``SUM(dispatch_phase_write_drops)`` over runs for the org-level
-    # saturation view. NOT NULL DEFAULT 0: rows that predate migration 0306
+    # saturation view. NOT NULL DEFAULT 0: rows that predate migration 0307
     # never recorded a drop.
     dispatch_phase_write_drops: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     # FAR-583 B1: the legacy blob columns (outputs_json / node_telemetry_json /
