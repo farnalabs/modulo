@@ -119,6 +119,110 @@ def test_nodeless_in_flight_floor_equal_to_the_requirement_is_accepted() -> None
 
 
 # ---------------------------------------------------------------------------
+# saq_zero_progress_max_age_minutes — DERIVED-unset knob with a load-time
+# floor at the worst window of EVERY consumer (FAR-1715; pre-PR QA M1: the
+# floor also covers the mid-graph age gate, which shares the knob)
+# ---------------------------------------------------------------------------
+
+
+def _zero_progress_required_minutes(grace_seconds: int, saq_run_timeout: int = 7200) -> int:
+    """The knob's floor = max(pre-node window, mid-graph gate floor).
+
+    Two consumers share the knob: the zero-progress consumers (pre-node
+    window, ceiling-divided to minutes) and the mid-graph age gate (a run may
+    legitimately execute up to ``saq_run_timeout``, floored at 2h, plus a
+    15-min skew). The binding requirement is the MAX of the two — a pin below
+    the mid-graph floor would falsely fail a still-progressing run
+    ``no_progress`` (FAR-1715 pre-PR QA M1).
+    """
+    pre_node = (grace_seconds + MAX_NODE_TIMEOUT_SECONDS + 59) // 60
+    mid_graph = max(saq_run_timeout // 60, 120) + 15
+    return max(pre_node, mid_graph)
+
+
+def test_saq_zero_progress_max_age_default_is_none() -> None:
+    """Unset -> None. cron_helpers derives the historical ~135m bound from
+    the module constant at call time; Settings leaves the field None so
+    behaviour is unchanged at the default."""
+    assert _make().saq_zero_progress_max_age_minutes is None
+
+
+def test_saq_zero_progress_max_age_env_alias() -> None:
+    assert _make(SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES="200").saq_zero_progress_max_age_minutes == 200
+
+
+def test_saq_zero_progress_max_age_default_covers_every_consumer_floor() -> None:
+    """The derived default (~135m) must sit above BOTH consumer floors — the
+    bound can never kill a legitimately slow-starting run, nor a still-
+    progressing mid-graph run."""
+    from modulo.core.cron_helpers import _MID_GRAPH_WEDGE_MAX_AGE_MINUTES
+
+    assert _zero_progress_required_minutes(600) <= _MID_GRAPH_WEDGE_MAX_AGE_MINUTES
+    # At the shipped defaults the mid-graph floor (135) BINDS over the
+    # pre-node window (65).
+    assert _zero_progress_required_minutes(600) == 135
+
+
+def test_saq_zero_progress_max_age_equal_to_the_requirement_is_accepted() -> None:
+    """Equality is the boundary — the guard is ``>=``, matching the shield's
+    own boundary semantics (mirrors the nodeless floor test above). At the
+    shipped defaults the binding floor is the mid-graph one (135)."""
+    required = _zero_progress_required_minutes(600)
+    assert required == 135
+    settings = _make(SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES=str(required))
+
+    assert settings.saq_zero_progress_max_age_minutes == required
+
+
+def test_saq_zero_progress_pin_below_the_mid_graph_floor_refuses_to_load() -> None:
+    """FAR-1715 pre-PR QA M1 regression: a pin that covers the pre-node
+    window (65) but sits BELOW the mid-graph floor (135) must be refused —
+    it would drop the shared mid-graph bound under the maximum legitimate run
+    duration and falsely fail a still-progressing run ``no_progress``."""
+    with pytest.raises(ValidationError, match="SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES"):
+        _make(SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES="100")
+
+
+def test_saq_zero_progress_max_age_below_the_requirement_refuses_to_load() -> None:
+    """FAIL (never warn): a pin below the binding floor (one minute under the
+    shipped 135) would falsely fail a still-progressing mid-graph run."""
+    required = _zero_progress_required_minutes(600)
+    with pytest.raises(ValidationError, match="SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES"):
+        _make(SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES=str(required - 1))
+
+
+def test_max_setup_grace_keeps_the_mid_graph_floor_binding() -> None:
+    """Within the fields' own bounds the pre-node arm can never outgrow the
+    mid-graph floor: the largest valid grace (3600s) yields a 115m pre-node
+    window, still under the 135m mid-graph floor — so the requirement stays
+    135 and the mid-graph arm is what binds. (The pre-node arm still guards
+    the arithmetic should the grace bound ever widen.)"""
+    required_3600 = _zero_progress_required_minutes(3600)
+    assert required_3600 == 135
+    with pytest.raises(ValidationError, match="SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES"):
+        _make(SAQ_SETUP_GRACE_SECONDS="3600", SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES=str(required_3600 - 1))
+    settings = _make(SAQ_SETUP_GRACE_SECONDS="3600", SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES=str(required_3600))
+    assert settings.saq_zero_progress_max_age_minutes == required_3600
+
+
+def test_raising_saq_run_timeout_raises_the_zero_progress_requirement() -> None:
+    """The mid-graph floor tracks THIS Settings' ``saq_run_timeout`` — a
+    3h-ceiling deployment needs a 195m floor, so a 150m pin (accepted at the
+    shipped 7200s ceiling) must be refused there."""
+    required_10800 = _zero_progress_required_minutes(600, saq_run_timeout=10800)
+    assert required_10800 == 195
+    with pytest.raises(ValidationError, match="SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES"):
+        _make(SAQ_RUN_TIMEOUT="10800", SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES="150")
+    settings = _make(SAQ_RUN_TIMEOUT="10800", SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES=str(required_10800))
+    assert settings.saq_zero_progress_max_age_minutes == required_10800
+
+
+def test_saq_zero_progress_max_age_rejects_below_min() -> None:
+    with pytest.raises(ValidationError):
+        _make(SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES="0")
+
+
+# ---------------------------------------------------------------------------
 # saq_nodeless_early_detect_minutes vs saq_claimed_nodeless_minutes — WARN only
 # ---------------------------------------------------------------------------
 

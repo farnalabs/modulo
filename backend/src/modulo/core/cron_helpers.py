@@ -242,6 +242,22 @@ _NODELESS_ZOMBIE_ERROR_CODE = "executor_stalled"
 # the class is alertable per tick instead of visible only after ~2h of wasted
 # budget.
 
+# FAR-1715: the STABLE zero-node zombie error message — the Error Dashboard
+# groups by fingerprint (message + source), so this exact string is ONE shared
+# constant: the FAR-714 chokepoint (``_fail_nodeless_run``'s zero-node arm)
+# AND the stale_run_recovery zero-progress sweep
+# (``pipeline_execution._sweep_org_saq_zero_progress_runs``) emit into the
+# SAME ``source='saq'`` group. When the sweep wins the race against
+# dispatcher_reconcile (the degraded-fleet scenario it exists to cover) the
+# class signal must not split into a second group or vanish — the sweep
+# imports this constant, never re-spells it. The writer rides in the event's
+# ``context_json.function``, not in the message (a message change would mint a
+# new fingerprint and orphan the group's alert history).
+_NODELESS_ZOMBIE_STABLE_MESSAGE = (
+    "dispatcher_reconcile: claimed-but-never-dispatched zombie terminal-failed "
+    "(SAQ claimed the run but no node was ever dispatched)"
+)
+
 # ---------------------------------------------------------------------------
 # Durable dispatch recovery (PR dist/runtime-reconcile, B2/B3).
 # dispatch_run now leaves a failed-enqueue run ``pending`` with
@@ -306,6 +322,22 @@ _DISPATCH_FAILED_ERROR_DETAIL = "Run was never dispatched (enqueue/Redis failure
 # the mid-graph stall can outlive the SAQ timeout window). Default is the max
 # SAQ run timeout in minutes, floored at 2h, plus a 15-minute skew (~135 min).
 #
+# FAR-1715: the LIVE bound is now the Settings knob
+# ``saq_zero_progress_max_age_minutes`` (``SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES``),
+# read at call time via :func:`_saq_zero_progress_max_age_minutes` — this
+# constant is the DEFAULT-config derivation AND the fallback for a settings
+# double that predates the field, mirroring
+# ``_NODELESS_IN_FLIGHT_FLOOR_SECONDS``. The knob is shared with the
+# stale_run_recovery sweep's independent SAQ zero-progress branch
+# (``pipeline_execution._sweep_org_saq_zero_progress_runs``); an explicit pin
+# is validated at Settings load
+# (``Settings._saq_zero_progress_max_age_invariant``) so it can never sit
+# below the worst-case legitimate window of ANY consumer — the pre-node
+# window AND this gate's own floor (a run may legitimately execute up to
+# ``SAQ_RUN_TIMEOUT``; a pin in [65, 134] at the shipped defaults would drop
+# this gate under the maximum legitimate run duration and falsely fail a
+# still-progressing run ``no_progress``).
+#
 # FAR-1329 — this is an AGE gate and says so. Its predicate
 # (``status='running' AND dispatcher='saq' AND started_at < now() - age``)
 # never compares runs, so stamping the legacy ``executor_superseded`` code made
@@ -316,6 +348,43 @@ _DISPATCH_FAILED_ERROR_DETAIL = "Run was never dispatched (enqueue/Redis failure
 # within the bound, with the row's node/attempt counts appended by the UPDATE.
 # ---------------------------------------------------------------------------
 _MID_GRAPH_WEDGE_MAX_AGE_MINUTES = max(SAQ_RUN_TIMEOUT // 60, 120) + 15
+
+
+def _saq_zero_progress_max_age_minutes(settings: Any | None = None) -> int:
+    """Resolve the zero-progress age bound (minutes) — the Settings knob.
+
+    FAR-1715: ``Settings.saq_zero_progress_max_age_minutes``
+    (``SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES``) is the ONE bound shared by this
+    module's dispatcher_reconcile nodeless router / mid-graph age gate and the
+    stale_run_recovery sweep's independent SAQ zero-progress branch. UNSET
+    (None) keeps the pre-FAR-1715 constant exactly — the default-config
+    derivation :data:`_MID_GRAPH_WEDGE_MAX_AGE_MINUTES` (135 min at the
+    shipped ``SAQ_RUN_TIMEOUT=7200``) — so the default behaviour is unchanged.
+    An explicit pin is validated at Settings load
+    (``_saq_zero_progress_max_age_invariant``) against the worst-case
+    legitimate window of EVERY consumer (the pre-node window AND the mid-graph
+    gate's own max-legitimate-run-duration floor), so it can never be below
+    that binding floor (~135 min at the shipped defaults).
+
+    *settings* is an optional already-resolved Settings (or settings double)
+    — callers that hold one (e.g. ``stale_run_recovery_sweep``, whose tests
+    patch ``pipeline_execution.get_settings``) pass it so the knob is read
+    from THAT object instead of re-entering ``get_settings()``. Omitted, the
+    module's own ``get_settings()`` is used (the dispatcher_reconcile path).
+
+    The settings read is deliberately NOT wrapped in a try/except (same
+    contract as :func:`_nodeless_in_flight_floor_seconds`): a Settings that
+    cannot build must fail here as loudly as everywhere else. A settings
+    DOUBLE that merely lacks the field (a MagicMock standing in for
+    ``get_settings``) falls back to the default-config derivation above.
+    """
+    resolved = get_settings() if settings is None else settings
+    minutes = getattr(resolved, "saq_zero_progress_max_age_minutes", None)
+    if isinstance(minutes, int):
+        return minutes
+    return _MID_GRAPH_WEDGE_MAX_AGE_MINUTES
+
+
 # Raw spelling written into ``runs.error_code``; registered (and aliased) in
 # ``pipeline_engine.error_codes`` as ``run.no_progress`` in the same change.
 _NO_PROGRESS_ERROR_CODE = "no_progress"
@@ -1124,7 +1193,7 @@ async def _log_ongoing_event(
 
 
 async def _ingest_saq_error(
-    _session: AsyncSession,
+    _session: Any,
     org_id: uuid.UUID,
     *,
     function: str,
@@ -1134,12 +1203,15 @@ async def _ingest_saq_error(
     """Ingest an error event with source='saq' (plan F3d/F1 enqueue-failure alert).
 
     Runs in its own session/transaction (the caller's transaction stays intact
-    — ``_session`` is vestigial and kept only for caller symmetry) and never
-    raises — error ingestion must not crash the scheduler tick.
+    — ``_session`` is vestigial and kept only for caller symmetry, so its type
+    is ``Any``: reconcile callers pass their ORM ``AsyncSession``, the
+    stale_run_recovery zero-progress sweep passes its raw ``AsyncConnection``
+    — neither is ever executed on) and never raises — error ingestion must not
+    crash the scheduler tick.
 
     If ``org_id`` is the nil UUID (system error without tenant context), the
-    error is logged and skipped — the ``error_events`` FK constraint requires a
-    real organisation row.
+    error is logged and skipped — the ``error_events`` FK constraint requires
+    a real organisation row.
     """
     if org_id == SYSTEM_ORG_ID:
         _log.error(
@@ -5129,10 +5201,10 @@ async def _fail_nodeless_run(
             "(first node STARTED but no super-step completed within the nodeless window)"
         )
     else:
-        stable_message = (
-            "dispatcher_reconcile: claimed-but-never-dispatched zombie terminal-failed "
-            "(SAQ claimed the run but no node was ever dispatched)"
-        )
+        # FAR-1715: SHARED constant — the stale_run_recovery zero-progress
+        # sweep emits the same message so both writers land in ONE Error
+        # Dashboard group (see ``_NODELESS_ZOMBIE_STABLE_MESSAGE``).
+        stable_message = _NODELESS_ZOMBIE_STABLE_MESSAGE
     await _ingest_saq_error(
         session,
         org_id,
@@ -6533,14 +6605,15 @@ async def dispatcher_reconcile() -> dict[str, Any]:
 
     Per-org DB-only terminalizers (before the row select):
       * FAR-1329 nodeless router: any ``running`` + ``dispatcher='saq'`` row
-        older than ``_MID_GRAPH_WEDGE_MAX_AGE_MINUTES`` (~135m) with ZERO node
+        older than the zero-progress age bound (the Settings knob
+        ``saq_zero_progress_max_age_minutes``, ~135m at the default) with ZERO node
         progress (no attempts, no token usage, no ``__final__`` row, no
         checkpoints) is failed through ``_fail_nodeless_run``
         (``executor_stalled`` -> ``agent.stall``, "Claimed by SAQ but
         dispatched no node") — NOT the mid-graph gate below.
       * B4 age-bound: any ``running`` + ``dispatcher='saq'`` row with node
-        progress whose ``started_at`` is older than
-        ``_MID_GRAPH_WEDGE_MAX_AGE_MINUTES`` (~135m) is terminal-failed
+        progress whose ``started_at`` is older than the zero-progress age
+        bound (the same Settings knob, ~135m at the default) is terminal-failed
         ``no_progress`` (FAR-1329: the truthful age-gate code — this
         predicate never compares runs, so it must never write the supersede
         vocabulary).
@@ -6690,7 +6763,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     # the shared helper so the runner-capacity sweep composes the SAME branch.
     early_detect_minutes = resolve_nodeless_early_detect_minutes(settings, nodeless_window)
     capacity_redispatch_seconds = CAPACITY_REDISPATCH_SECONDS
-    max_age_minutes = _MID_GRAPH_WEDGE_MAX_AGE_MINUTES
+    max_age_minutes = _saq_zero_progress_max_age_minutes()
     claim_cap = _saq_run_claim_cap()
     hitl_review_cancel_grace = int(settings.hitl_review_cancel_grace_seconds)
     # FAR-720: the tick's tuning knobs travel as one frozen unit.

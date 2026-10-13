@@ -950,9 +950,11 @@ class TestStaleRunRecoverySweep:
         assert result["never_dispatched_swept"] == 0
         assert result["worker_lost_swept"] == 0
         assert result["capacity_timeout_swept"] == 0
+        assert result["saq_zero_progress_swept"] == 0
         assert result["stranded_capacity_redispatched"] == 0
-        # Per-org: org enumeration + set_config + the four UPDATE branches.
-        assert len(statements) == 6
+        # Per-org: org enumeration + set_config + the four UPDATE branches +
+        # the FAR-1715 zero-progress branch (its own set_config + UPDATE).
+        assert len(statements) == 8
         joined = " ".join(statements)
         assert "never_dispatched" in joined
         assert "RETURNING id, organisation_id" in joined
