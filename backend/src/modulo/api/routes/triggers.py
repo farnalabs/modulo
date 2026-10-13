@@ -65,6 +65,7 @@ from modulo.core.exceptions import (
     PipelineNotRunnableError,
     SnapshotLockNotAvailableError,
 )
+from modulo.core.secret_patterns import TRIGGER_CONFIG_SECRET_KEYS
 from modulo.core.team_visibility import (
     ConnectorBindingMissingError,
     connector_team_mismatch_detail,
@@ -492,7 +493,10 @@ def _merge_trigger_config(current: dict[str, Any] | None, update: dict[str, Any]
     return merge_masked_config_json(current or {}, update)
 
 
-_SECRET_CONFIG_KEYS = frozenset({"hmac_secret", "signing_secret"})
+# The CANONICAL trigger-config secret-key set (FAR-1732) lives in core so the
+# write path here, the Fernet rotation service (core.fernet_rotation) and the
+# migration-0305 parity test share ONE definition without core importing api.
+_SECRET_CONFIG_KEYS = TRIGGER_CONFIG_SECRET_KEYS
 
 
 def _encrypt_trigger_config_secrets(config: dict[str, Any] | None, fernet_key: str) -> dict[str, Any]:

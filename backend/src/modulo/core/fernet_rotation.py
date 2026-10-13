@@ -14,6 +14,8 @@ from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.secret_patterns import TRIGGER_CONFIG_SECRET_KEYS
+
 _log = logging.getLogger(__name__)
 
 
@@ -118,24 +120,26 @@ async def _rotate_triggers(session: AsyncSession, new_fernet: Fernet, old_fernet
     encryption shipped) are the data migration's job — rotation only
     re-encrypts values that already decrypt as Fernet tokens, so a rotation
     run over rows the migration has not yet reached changes nothing.
+
+    The candidate keys are the CANONICAL shared set
+    (:data:`modulo.core.secret_patterns.TRIGGER_CONFIG_SECRET_KEYS`, the same
+    object the write path persists through). The SELECT is deliberately NOT
+    narrowed by a key list in SQL: a second, module-local key list is exactly
+    how a future secret key escapes — it would sit in the rotation loop while
+    the WHERE clause never selected the rows carrying it as their only secret.
+    Every row's ``config_json`` is checked in Python against the ONE shared
+    set instead; ``triggers`` is a small config table and rotation is a rare
+    admin operation, so the scan costs nothing next to the drift it removes.
     """
 
     from modulo.auth.secret_storage import _is_encrypted_token
 
-    rows = (
-        await session.execute(
-            text(
-                "SELECT id, config_json FROM triggers "
-                "WHERE config_json->>'hmac_secret' IS NOT NULL "
-                "OR config_json->>'signing_secret' IS NOT NULL"
-            )
-        )
-    ).all()
+    rows = (await session.execute(text("SELECT id, config_json FROM triggers"))).all()
     count = 0
     for row in rows:
         config: dict[str, Any] = row.config_json
         changed = False
-        for key in ("hmac_secret", "signing_secret"):
+        for key in TRIGGER_CONFIG_SECRET_KEYS:
             stored = config.get(key)
             if not isinstance(stored, str) or not _is_encrypted_token(stored):
                 continue

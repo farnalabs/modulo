@@ -7382,7 +7382,16 @@ async def create_trigger(
 
 
 def _trigger_detail_dict(trigger: Any, in_flight: int, streak_status: Any) -> dict[str, Any]:
-    """Serialize a trigger row to the MCP response shape."""
+    """Serialize a trigger row to the MCP response shape.
+
+    FAR-1732: ``config_json`` is MASKED through the same shipped
+    :func:`mask_config_json` the REST serializer uses — an operator-scoped
+    MCP token must never receive a stored webhook secret (plaintext on
+    legacy rows, a recoverable Fernet ciphertext on new ones). The
+    ``input_template`` echo derives from the MASKED config so it cannot
+    bypass the mask either.
+    """
+    config = mask_config_json(trigger.config_json or {})
     return {
         "id": str(trigger.id),
         "pipeline_id": str(trigger.pipeline_id),
@@ -7390,12 +7399,12 @@ def _trigger_detail_dict(trigger: Any, in_flight: int, streak_status: Any) -> di
         "active": trigger.active,
         "max_concurrent_runs": trigger.max_concurrent_runs,
         "daily_spend_limit": float(trigger.daily_spend_limit) if trigger.daily_spend_limit is not None else None,
-        "config_json": trigger.config_json or {},
+        "config_json": config,
         "cron_expression": trigger.cron_expression,
         "cron_timezone": trigger.cron_timezone,
         "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
         "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
-        "input_template": (trigger.config_json or {}).get("input_template"),
+        "input_template": config.get("input_template"),
         "in_flight": in_flight,
         "streak_status": streak_status,
     }

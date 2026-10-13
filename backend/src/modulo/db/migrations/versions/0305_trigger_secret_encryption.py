@@ -71,16 +71,22 @@ def _fernet_key() -> str:
 def _candidate_rows(bind: Any) -> list[Any]:
     """Rows whose config_json carries either secret key.
 
-    The SQL narrows by JSONB key existence on Postgres; non-Postgres dialects
-    (the structural unit tests never have a real table) get the broad select
-    and the Python-side skip semantics below do the real filtering.
+    The SQL narrows with the ``->>`` text-extraction operator (the same
+    type-agnostic form ``core.fernet_rotation._rotate_triggers`` uses): it
+    works on both ``json`` and ``jsonb`` columns, so the migration does not
+    depend on 0147 having converted ``config_json`` to ``jsonb`` (the
+    jsonb-only ``?`` operator would). ``->>`` returns NULL for an absent key,
+    so ``IS NOT NULL`` matches exactly the rows that carry the key at any
+    JSON type — the Python-side skip semantics below then filter to the
+    rows that actually need encryption. Non-Postgres dialects (the
+    structural unit tests never have a real table) run the same statement
+    against their mock and get the broad behaviour for free.
     """
-    if bind.dialect.name == "postgresql":
-        stmt = text(
-            "SELECT id, config_json FROM triggers WHERE config_json ? 'hmac_secret' OR config_json ? 'signing_secret'"
-        )
-    else:
-        stmt = text("SELECT id, config_json FROM triggers WHERE config_json IS NOT NULL")
+    stmt = text(
+        "SELECT id, config_json FROM triggers "
+        "WHERE config_json->>'hmac_secret' IS NOT NULL "
+        "OR config_json->>'signing_secret' IS NOT NULL"
+    )
     return list(bind.execute(stmt).all())
 
 

@@ -80,12 +80,13 @@ def _update_calls(bind: MagicMock) -> list[tuple[str, dict[str, Any]]]:
 def _bind(configs: list[dict[str, Any]]) -> MagicMock:
     """A mocked ``bind`` as ``op.get_bind()`` returns.
 
-    The SELECT (dialect: postgresql, to exercise the JSONB key-existence
-    query) returns fake rows built from ``configs``; the mock records all
-    later ``execute`` calls for assertion.
+    The SELECT (the type-agnostic ``->>`` candidate-narrowing statement)
+    returns fake rows built from ``configs``; the mock records all later
+    ``execute`` calls for assertion. The real-Postgres execution of that
+    statement — and of the UPDATE — is covered by
+    ``tests/integration/db/test_migration_0305_trigger_secret_encryption.py``.
     """
     bind = MagicMock()
-    bind.dialect.name = "postgresql"
     select_result = MagicMock()
     select_result.all.return_value = _fake_rows(configs)
     bind.execute.return_value = select_result
@@ -134,7 +135,7 @@ class TestUpgrade:
         ):
             op.get_bind.return_value = bind
             module.upgrade()
-        assert _update_calls(bind) == []
+        assert not _update_calls(bind)
 
     def test_plaintext_rows_are_encrypted_with_other_keys_preserved(self) -> None:
         from cryptography.fernet import Fernet as _Fernet
@@ -160,19 +161,19 @@ class TestUpgrade:
         """Idempotency: after encryption a re-run performs zero UPDATEs."""
         bind, _module = _run_upgrade([{"hmac_secret": _TOKEN, "signing_secret": _TOKEN}])
         updates = _update_calls(bind)
-        assert updates == [], "already-encrypted rows must never be rewritten"
+        assert not updates, "already-encrypted rows must never be rewritten"
 
     def test_masked_sentinel_empty_and_nonstring_values_skip(self) -> None:
         bind, _module = _run_upgrade(
             [{"hmac_secret": SENSITIVE_VALUE_MASK}, {"hmac_secret": ""}, {"hmac_secret": 12345}]
         )
         updates = _update_calls(bind)
-        assert updates == [], "non-plaintext values must never be rewritten"
+        assert not updates, "non-plaintext values must never be rewritten"
 
     def test_config_without_secret_keys_skips(self) -> None:
         bind, _module = _run_upgrade([{"url": "https://example.com"}])
         updates = _update_calls(bind)
-        assert updates == []
+        assert not updates
 
     def test_plaintext_mixed_rows_only_rewrites_secret_rows(self) -> None:
         bind, _module = _run_upgrade(
@@ -203,7 +204,7 @@ class TestUpgrade:
             else:
                 expected_abort = False
         assert expected_abort
-        assert _update_calls(bind) == []
+        assert not _update_calls(bind)
 
 
 class TestVocabularyParity:
@@ -211,7 +212,8 @@ class TestVocabularyParity:
         from modulo.api.routes.triggers import _SECRET_CONFIG_KEYS
 
         module = _load_migration()
-        assert module._SECRET_CONFIG_KEYS == _SECRET_CONFIG_KEYS == {"hmac_secret", "signing_secret"}
+        assert module._SECRET_CONFIG_KEYS == _SECRET_CONFIG_KEYS
+        assert {"hmac_secret", "signing_secret"} == _SECRET_CONFIG_KEYS
 
 
 class TestDowngrade:

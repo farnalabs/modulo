@@ -30,11 +30,13 @@ from modulo.core.fernet_rotation import (
     _rotate_notification_endpoints,
     _rotate_otel_config,
     _rotate_secrets_table,
+    _rotate_triggers,
     decrypt_with_fallback,
     re_encrypt_bytes,
     re_encrypt_str,
     rotate_all_encrypted_data,
 )
+from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
 
 
 def _new_key() -> str:
@@ -243,6 +245,155 @@ class TestRotateNotificationEndpoints:
         session = _make_session([])
         count = await _rotate_notification_endpoints(session, Fernet(_new_key()), None)
         assert count == 0
+
+
+class TestRotateTriggers:
+    """Behavioural coverage for ``_rotate_triggers`` (FAR-1732 review).
+
+    The orchestration test below patches EVERY rotator out of
+    ``rotate_all_encrypted_data``, so this body had never actually executed.
+    These tests drive the real function: re-encryption under the new key,
+    byte-for-byte preservation of non-secret config keys, plaintext/mask
+    skip semantics, the old-key fallback, and fail-loud when no key applies.
+    """
+
+    @pytest.mark.asyncio
+    async def test_re_encrypts_secret_preserving_non_secret_keys(self) -> None:
+        new_fernet = Fernet(_new_key())
+        old_fernet = Fernet(_new_key())
+        old_ct = old_fernet.encrypt(b"webhook-hmac").decode()
+        config = {
+            "hmac_secret": old_ct,
+            "url": "https://example.com",
+            "event_filters": {"accepted_events": ["push"]},
+            "work_item_ref_paths": [".agents"],
+        }
+        session = _make_session([SimpleNamespace(id="t-1", config_json=config)])
+
+        count = await _rotate_triggers(session, new_fernet, old_fernet)
+
+        assert count == 1
+        select_sql, _ = session.calls[0]
+        assert "FROM triggers" in select_sql
+        update_sql, params = session.calls[1]
+        assert "UPDATE triggers" in update_sql
+        assert "config_json = :config" in update_sql
+        assert params["id"] == "t-1"
+        updated = json.loads(params["config"])
+        # Every non-secret key survives byte-for-byte (nested dicts/lists too).
+        assert {k: v for k, v in updated.items() if k != "hmac_secret"} == {
+            k: v for k, v in config.items() if k != "hmac_secret"
+        }
+        # The secret is re-encrypted under the NEW key (old key no longer applies).
+        assert updated["hmac_secret"] != old_ct
+        assert new_fernet.decrypt(updated["hmac_secret"].encode()) == b"webhook-hmac"
+        with pytest.raises(InvalidToken):
+            old_fernet.decrypt(updated["hmac_secret"].encode())
+
+    @pytest.mark.asyncio
+    async def test_rotates_both_canonical_secret_keys(self) -> None:
+        """Both keys of the shared canonical set rotate in one pass — the loop
+        is driven by ``TRIGGER_CONFIG_SECRET_KEYS``, not a partial literal."""
+        new_fernet = Fernet(_new_key())
+        old_fernet = Fernet(_new_key())
+        hmac_ct = old_fernet.encrypt(b"hmac-value").decode()
+        signing_ct = old_fernet.encrypt(b"signing-value").decode()
+        config = {"hmac_secret": hmac_ct, "signing_secret": signing_ct, "max_depth": 3}
+        session = _make_session([SimpleNamespace(id="t-2", config_json=config)])
+
+        count = await _rotate_triggers(session, new_fernet, old_fernet)
+
+        assert count == 1
+        _, params = session.calls[1]
+        updated = json.loads(params["config"])
+        assert new_fernet.decrypt(updated["hmac_secret"].encode()) == b"hmac-value"
+        assert new_fernet.decrypt(updated["signing_secret"].encode()) == b"signing-value"
+        assert updated["max_depth"] == 3
+
+    @pytest.mark.asyncio
+    async def test_skips_plaintext_secret(self) -> None:
+        """A plaintext secret is the data migration's job — rotation rewrites
+        nothing (a second run over already-migrated rows changes nothing)."""
+        config = {"hmac_secret": "legacy-plaintext", "url": "https://example.com"}
+        session = _make_session([SimpleNamespace(id="t-3", config_json=config)])
+
+        count = await _rotate_triggers(session, Fernet(_new_key()), None)
+
+        assert count == 0
+        assert len(session.calls) == 1
+        assert "UPDATE" not in session.calls[0][0]
+
+    @pytest.mark.asyncio
+    async def test_skips_masked_sentinel(self) -> None:
+        config = {"hmac_secret": SENSITIVE_VALUE_MASK, "signing_secret": SENSITIVE_VALUE_MASK}
+        session = _make_session([SimpleNamespace(id="t-4", config_json=config)])
+
+        count = await _rotate_triggers(session, Fernet(_new_key()), None)
+
+        assert count == 0
+        assert len(session.calls) == 1
+        assert "UPDATE" not in session.calls[0][0]
+
+    @pytest.mark.asyncio
+    async def test_rows_without_secret_keys_are_not_written(self) -> None:
+        config = {"url": "https://example.com", "accepted_events": ["push"]}
+        session = _make_session([SimpleNamespace(id="t-5", config_json=config)])
+
+        count = await _rotate_triggers(session, Fernet(_new_key()), None)
+
+        assert count == 0
+        assert len(session.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_third_canonical_key_rotates_too(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A THIRD key added to the canonical shared set is rotated.
+
+        This is the hardening under review: the loop must be driven by
+        ``TRIGGER_CONFIG_SECRET_KEYS`` (the write path's own vocabulary),
+        not a forked literal — with a literal tuple a newly declared secret
+        key would silently escape rotation. The SELECT carries no key list
+        either, so a row whose ONLY secret is the new key still arrives.
+        """
+        monkeypatch.setattr(
+            fernet_rotation,
+            "TRIGGER_CONFIG_SECRET_KEYS",
+            frozenset({"hmac_secret", "signing_secret", "whatsapp_secret"}),
+        )
+        new_fernet = Fernet(_new_key())
+        old_fernet = Fernet(_new_key())
+        new_key_ct = old_fernet.encrypt(b"third-key-value").decode()
+        config = {"whatsapp_secret": new_key_ct, "url": "https://example.com"}
+        session = _make_session([SimpleNamespace(id="t-7", config_json=config)])
+
+        count = await _rotate_triggers(session, new_fernet, old_fernet)
+
+        assert count == 1
+        _, params = session.calls[1]
+        updated = json.loads(params["config"])
+        assert new_fernet.decrypt(updated["whatsapp_secret"].encode()) == b"third-key-value"
+        assert updated["url"] == "https://example.com"
+
+    @pytest.mark.asyncio
+    async def test_fails_loud_when_no_key_decrypts(self) -> None:
+        """A token no available key decrypts raises — rotation never silently
+        leaves a stale ciphertext behind (no silent failure path)."""
+        alien_ct = Fernet(_new_key()).encrypt(b"alien").decode()
+        config = {"hmac_secret": alien_ct}
+        session = _make_session([SimpleNamespace(id="t-6", config_json=config)])
+
+        with pytest.raises(InvalidToken):
+            await _rotate_triggers(session, Fernet(_new_key()), None)
+
+        # The failed pass must not have written anything.
+        assert len(session.calls) == 1
+        assert "UPDATE" not in session.calls[0][0]
+
+    @pytest.mark.asyncio
+    async def test_no_rows_returns_zero(self) -> None:
+        session = _make_session([])
+        count = await _rotate_triggers(session, Fernet(_new_key()), None)
+        assert count == 0
+        assert len(session.calls) == 1
 
 
 class TestRotateOtelConfig:

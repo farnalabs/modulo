@@ -1,6 +1,7 @@
 """Unit tests for the get_trigger / update_trigger / delete_trigger MCP tools."""
 
 import base64
+import json
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -258,6 +259,87 @@ class TestGetTriggerSuccess(_AuthContext):
         assert result["last_fired_at"] == fired.isoformat()
         assert result["next_fire_at"] == next_fire.isoformat()
         assert result["input_template"] == {"foo": "bar"}
+
+
+# ---------------------------------------------------------------------------
+# get_trigger / update_trigger — stored secrets are MASKED (FAR-1732)
+# ---------------------------------------------------------------------------
+
+
+class TestTriggerDetailMasksSecrets(_AuthContext):
+    """The MCP trigger detail serializer masks ``hmac_secret``/``signing_secret``.
+
+    REST masks ``config_json`` through ``mask_config_json`` in
+    ``_trigger_to_dict``; the MCP ``_trigger_detail_dict`` must match, or an
+    operator-scoped MCP token receives the stored webhook secret — legacy
+    plaintext or a recoverable Fernet ciphertext alike. The ``input_template``
+    echo derives from the MASKED config so it cannot bypass the mask either.
+    """
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_get_trigger_masks_both_secret_keys(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        fern = Fernet(_VALID_FERNET_KEY.encode())
+        stored_token = fern.encrypt(b"ciphertext-secret").decode()
+        trigger = _make_mock_trigger(
+            config_json={
+                "url": "https://example.com",
+                "hmac_secret": "plaintext-secret",
+                "signing_secret": stored_token,
+                "input_template": {"api_token": "tmpl-token"},
+            }
+        )
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        result = await get_trigger(trigger_id=str(trigger.id))
+
+        assert result.get("error") is None
+        config = result["config_json"]
+        assert config["hmac_secret"] == SENSITIVE_VALUE_MASK
+        assert config["signing_secret"] == SENSITIVE_VALUE_MASK
+        assert config["url"] == "https://example.com"
+        # The input_template echo is derived from the masked config too.
+        assert result["input_template"] == {"api_token": SENSITIVE_VALUE_MASK}
+        # Neither the plaintext nor the ciphertext appears anywhere in the response.
+        blob = json.dumps(result, default=str)
+        assert "plaintext-secret" not in blob
+        assert stored_token not in blob
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_update_trigger_response_masks_secrets(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from modulo.api.mcp_server import _ctx_role
+
+        _ctx_role.set("operator")
+        trigger = _make_mock_trigger(config_json={"hmac_secret": "real-secret", "accepted_events": ["push"]})
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        with _patch_fernet_settings():
+            result = await update_trigger(trigger_id=str(trigger.id), config_json={"hmac_secret": SENSITIVE_VALUE_MASK})
+
+        assert result.get("error") is None
+        # The stored value survives the masked round-trip, encrypted at rest.
+        stored = trigger.config_json["hmac_secret"]
+        assert stored.startswith("gAAAA")
+        assert _decrypt_stored(stored) == "real-secret"
+        # ...but the RESPONSE carries only the mask — no plaintext, no token.
+        assert result["config_json"]["hmac_secret"] == SENSITIVE_VALUE_MASK
+        assert result["config_json"]["accepted_events"] == ["push"]
+        blob = json.dumps(result, default=str)
+        assert stored not in blob
+        assert "real-secret" not in blob
 
 
 class _TrackingSessionCtx:
