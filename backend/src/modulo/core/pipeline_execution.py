@@ -167,10 +167,15 @@ DROP_COUNTER_WRITE_TIMEOUT_SECONDS = 0.5
 #   is always the timestamp of the LAST history entry, and an out-of-order
 #   commit can neither move the phase backwards nor splice an older entry
 #   after a newer one (history stays non-decreasing).
+# ``:phase`` is used twice (the scalar SET and the JSONB append), so the
+# append's occurrence is CAST to ``text`` explicitly: without it asyncpg/
+# Postgres cannot infer the parameter's type from the variadic-``any``
+# ``jsonb_build_object`` and the statement fails with "could not determine
+# data type of parameter $1".
 _PHASE_UPDATE_SQL = text(
     "UPDATE runs SET dispatch_phase=:phase, dispatch_phase_entered_at=now(), "
     "dispatch_phase_history=coalesce(dispatch_phase_history, '[]'::jsonb)"
-    "||jsonb_build_array(jsonb_build_object('phase', :phase, 'entered_at', now())) "
+    "||jsonb_build_array(jsonb_build_object('phase', CAST(:phase AS text), 'entered_at', now())) "
     "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok "
     "AND (dispatch_phase_entered_at IS NULL OR dispatch_phase_entered_at <= now()) "
     "RETURNING id"
@@ -811,7 +816,7 @@ _CLAIM_HISTORY_APPEND = (
     "||jsonb_build_array(jsonb_build_object('phase', 'claimed', 'entered_at', now())) "
 )
 _CLAIM_UPDATE_SQL = text(
-    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, "  # nosec B608  # noqa: S608 - concatenates module constants only, never caller data
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, "  # nosec B608  # noqa: S608 - concatenates module constants only (never caller data)
     "dispatch_phase='claimed', dispatch_phase_entered_at=now(), "
     + _CLAIM_HISTORY_APPEND
     + "WHERE id=:rid AND organisation_id=:oid "
@@ -822,7 +827,7 @@ _CLAIM_UPDATE_SQL = text(
 )
 
 _CLAIM_UPDATE_SQL_WITH_TOKEN = text(
-    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok, "  # nosec B608  # noqa: S608 - concatenates module constants only, never caller data
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok, "  # nosec B608  # noqa: S608 - concatenates module constants only (never caller data)
     "dispatch_phase='claimed', dispatch_phase_entered_at=now(), "
     + _CLAIM_HISTORY_APPEND
     + "WHERE id=:rid AND organisation_id=:oid "
@@ -3141,7 +3146,7 @@ async def stale_run_recovery_sweep(
 # claimer moves the row to 'running', a concurrent claimer then sees a fresh
 # heartbeat and loses.
 _RESUME_CLAIM_UPDATE_SQL = text(
-    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, "  # nosec B608  # noqa: S608 - concatenates module constants only, never caller data
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, "  # nosec B608  # noqa: S608 - concatenates module constants only (never caller data)
     "dispatch_phase='claimed', dispatch_phase_entered_at=now(), "
     + _CLAIM_HISTORY_APPEND
     + "WHERE id=:rid AND organisation_id=:oid "
@@ -3152,7 +3157,7 @@ _RESUME_CLAIM_UPDATE_SQL = text(
 )
 
 _RESUME_CLAIM_UPDATE_SQL_WITH_TOKEN = text(
-    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok, "  # nosec B608  # noqa: S608 - concatenates module constants only, never caller data
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok, "  # nosec B608  # noqa: S608 - concatenates module constants only (never caller data)
     "dispatch_phase='claimed', dispatch_phase_entered_at=now(), "
     + _CLAIM_HISTORY_APPEND
     + "WHERE id=:rid AND organisation_id=:oid "

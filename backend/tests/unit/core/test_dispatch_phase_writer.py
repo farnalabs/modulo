@@ -582,7 +582,7 @@ class TestHistoryAppend:
     def test_phase_update_appends_inside_the_guarded_statement(self) -> None:
         sql = str(_PHASE_UPDATE_SQL)
         assert "dispatch_phase_history=coalesce(dispatch_phase_history, '[]'::jsonb)" in sql
-        assert "jsonb_build_array(jsonb_build_object('phase', :phase, 'entered_at', now()))" in sql
+        assert "jsonb_build_array(jsonb_build_object('phase', CAST(:phase AS text), 'entered_at', now()))" in sql
         # The append inherits BOTH guards — it is never a second, unfenced write.
         assert "claim_token=:tok" in sql
         assert "dispatch_phase_entered_at IS NULL OR dispatch_phase_entered_at <=" in sql
@@ -685,6 +685,19 @@ class TestDropCounter:
             writer.record(PHASE_STREAMING)
             await writer.flush()  # must not raise
         assert "dispatch_phase.drop_counter_timeout" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_cancelled_bump_propagates_and_is_not_swallowed(self) -> None:
+        """Worker/job shutdown is not ours to swallow — a cancelled bump re-raises."""
+        eng = _FakeEngine(_fwd_row())
+        writer = _writer(eng)
+
+        async def _cancel() -> None:
+            raise asyncio.CancelledError
+
+        writer._bump_drop_counter = _cancel  # type: ignore[method-assign]
+        with pytest.raises(asyncio.CancelledError):
+            await writer._record_drop()
 
     def test_drop_counter_sql_is_additive_and_not_token_fenced(self) -> None:
         sql = str(_DROP_COUNTER_UPDATE_SQL)
