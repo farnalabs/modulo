@@ -1282,6 +1282,91 @@ def _assemble_edges(
     return target_ids
 
 
+def _effective_gate_edges_for_source(
+    source: str,
+    src_edges: list[dict[str, Any]],
+    source_node_def: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """The forwarding edges of *source* that will actually compile a HITL gate.
+
+    Mirrors :func:`_link_sources`' dispatch precedence exactly (Router node
+    config > HITL node config > loop edges > LLM routing mode > conditional
+    edges > normal edges): only the paths that reach
+    :func:`_add_normal_edges` → :func:`_add_hitl_review_edge` insert a gate
+    node, and an HITL-typed node stamps its own ``hitl_config`` onto EVERY
+    normal edge (:func:`_inject_node_hitl_configs`) so each one compiles a
+    gate. Used by the chunk-12 fail-closed human-mode validation.
+    """
+    conditional, loop_edges, normal = _classify_outgoing_edges(src_edges)
+    node_type = source_node_def.get("node_type", "agent")
+    if node_type == "router":
+        return []
+    if node_type == "hitl":
+        # Injection stamps every normal edge (an absent/empty node-level
+        # hitl_config still becomes {"review_id": ...}), so each compiles
+        # a gate.
+        return list(normal)
+    if loop_edges:
+        return []
+    if source_node_def.get("routing_mode") == "llm":
+        return []
+    if conditional:
+        return []
+    return [e for e in normal if e.get("hitl_review_config")]
+
+
+def _validate_human_mode_pause_edges(
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    eval_definitions_by_node: dict[str, list[EvalDefDTO]] | None,
+) -> None:
+    """FAR-939 chunk 12 §3.3 — fail-closed graph-build validation.
+
+    A node whose eval list contains a HUMAN-mode-governed DTO must be the
+    source of EXACTLY ONE edge that compiles an HITL review gate, and that
+    gate's config must not carry an explicit ``human_only: false``. Without
+    a pause edge the human-governed eval would be skipped with nothing to
+    decide it (a silent no-decision hole); with two, one gate would raise
+    two interrupts for a single evaluation; and a human-decided gate is
+    definitionally human-only (FAR-609), so an explicit opt-out is
+    rejected. Violations raise ``ValueError`` — run start fails loudly, the
+    run never begins.
+    """
+    if not eval_definitions_by_node:
+        return
+    human_nodes = {
+        str(node_id)
+        for node_id, dtos in eval_definitions_by_node.items()
+        if any(getattr(dto, "policy_gate_evaluation_mode", None) == "human" for dto in dtos)
+    }
+    if not human_nodes:
+        return
+
+    nodes_by_id: dict[str, dict[str, Any]] = {str(n["id"]): n for n in nodes if n.get("id")}
+    source_edges = _group_forwarding_edges(edges)
+
+    for node_id in sorted(human_nodes):
+        source_node_def = nodes_by_id.get(node_id, {})
+        gate_edges = _effective_gate_edges_for_source(node_id, source_edges.get(node_id, []), source_node_def)
+        if len(gate_edges) != 1:
+            raise ValueError(
+                f"human-mode policy-gate eval on node {node_id} requires EXACTLY ONE outgoing edge "
+                f"that compiles an HITL review gate; found {len(gate_edges)}. A human-governed eval "
+                "with no pause edge would never be decided (chunk 12 §3.3)."
+            )
+        hitl_config = gate_edges[0].get("hitl_review_config")
+        if hitl_config is None and source_node_def.get("node_type") == "hitl":
+            # The edge-level config is stamped at compile time from the
+            # node-level hitl_config; validate the source of the stamp.
+            hitl_config = source_node_def.get("hitl_config")
+        if isinstance(hitl_config, dict) and hitl_config.get("human_only") is False:
+            raise ValueError(
+                f"human-mode policy-gate eval on node {node_id}: the HITL review config sets "
+                "human_only=false — a human-decided gate is definitionally human-only "
+                "(chunk 12 §3.3 / FAR-609)."
+            )
+
+
 def build_graph_from_json(
     graph_json: dict[str, Any],
     *,
@@ -1348,6 +1433,12 @@ def build_graph_from_json(
     # source node's type to split the envelope. Derived from the immutable
     # graph_json, so it is identical for every compiled snapshot.
     node_type_map = {str(n["id"]): (n.get("node_type") or DEFAULT_NODE_TYPE) for n in nodes if n.get("id")}
+
+    # FAR-939 chunk 12 §3.3 — fail closed BEFORE compiling: a human-mode
+    # governed eval without exactly one HITL pause edge (or with an explicit
+    # human_only=false opt-out) must refuse to start rather than silently
+    # decide nothing at runtime.
+    _validate_human_mode_pause_edges(nodes, edges, eval_definitions_by_node)
 
     _assemble_nodes(
         graph,

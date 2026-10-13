@@ -127,3 +127,46 @@ class TestBuildDecisionRowIsPure:
 
         assert row.policy_gate_id == review_id
         assert row.eval_id == eval_id
+
+
+class TestResolvedActionVocabularyUnchanged:
+    """FAR-939 chunk 12 criterion 13: the ``resolved_action`` vocabulary is
+    untouched by this chunk.
+
+    The shipped vocabulary is ``('continue', 'warn', 'block', 'escalate')`` —
+    widened from ``('continue', 'warn', 'block')`` by FAR-1694 migration
+    0305 (a guardrail-action change, NOT this chunk). Chunk 12 adds NO value
+    to it: in particular there is no ``'timeout'`` and no human-path
+    ``'escalate'`` — human-path resolutions never write a
+    ``PolicyGateDecision`` row at all (they are grounded on an Evidence row;
+    criterion 11 proves the row-absence end to end).
+    """
+
+    def test_resolved_action_values_constant_unchanged(self) -> None:
+        from modulo.db.models.policy_gate_decision import RESOLVED_ACTION_VALUES
+
+        assert RESOLVED_ACTION_VALUES == ("continue", "warn", "block", "escalate")
+
+    def test_human_resolver_never_emits_timeout_or_escalate(self) -> None:
+        """Every action ``resolve_human_evaluation`` can return is inside the
+        shipped vocabulary — and never ``'timeout'`` (a run-level record, not
+        a decision-row action, per chunk 12 §3.5)."""
+        import uuid as _uuid
+
+        from modulo.core.eval_engine.policy_gate import (
+            HumanDecision,
+            HumanGateView,
+            resolve_human_evaluation,
+        )
+
+        view = HumanGateView(
+            policy_gate_id=_uuid.uuid4(),
+            eval_id=_uuid.uuid4(),
+            action="block",
+            version=1,
+        )
+        for action in ("approved", "rejected", "deliver_manual", "timeout", "escalated", ""):
+            outcome = resolve_human_evaluation(view, HumanDecision(action=action))  # type: ignore[arg-type]
+            assert outcome.action in ("continue", "warn", "block")
+            assert outcome.action != "timeout"
+            assert outcome.action != "escalate"

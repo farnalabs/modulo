@@ -13,8 +13,11 @@ from modulo.core.eval_engine.policy_gate import (
     EvalPolicySnapshot,
     EvalResultView,
     EvalView,
+    HumanDecision,
+    HumanGateView,
     PolicyGateBindingViolationError,
     PolicyGateView,
+    resolve_human_evaluation,
     resolve_policy_gate,
     validate_binding,
 )
@@ -537,3 +540,78 @@ class TestC11NodeIdReCheck:
         outcome = resolve_policy_gate(snap)
         assert outcome.result is None
         assert outcome.error == "node_id_mismatch"
+
+
+# ---------------------------------------------------------------------------
+# Human evaluation mode (FAR-939 chunk 12) — criteria 2-6
+# ---------------------------------------------------------------------------
+
+
+def _human_gate_view(*, action: str = "block") -> HumanGateView:
+    return HumanGateView(
+        policy_gate_id=uuid.uuid4(),
+        eval_id=uuid.uuid4(),
+        action=action,  # type: ignore[arg-type]
+        version=2,
+    )
+
+
+class TestResolveHumanEvaluation:
+    """Chunk 12 criteria 2-6: the human resolver's closed mapping."""
+
+    def test_c2_approved_yields_pass_continue(self) -> None:
+        """Criterion 2: approved -> result=True, action='continue', no result id."""
+        outcome = resolve_human_evaluation(_human_gate_view(), HumanDecision(action="approved"))
+        assert outcome.result is True
+        assert outcome.action == "continue"
+        assert outcome.eval_result_id is None
+        assert outcome.error is None
+
+    @pytest.mark.parametrize("gate_action", ["block", "warn"])
+    def test_c3_rejected_yields_configured_action(self, gate_action: str) -> None:
+        """Criterion 3: rejected -> result=False, action=<configured action>."""
+        outcome = resolve_human_evaluation(_human_gate_view(action=gate_action), HumanDecision(action="rejected"))
+        assert outcome.result is False
+        assert outcome.action == gate_action
+        assert outcome.eval_result_id is None
+        assert outcome.error is None
+
+    def test_c4_deliver_manual_yields_pass_continue(self) -> None:
+        """Criterion 4: deliver_manual -> result=True, action='continue'
+        (manual delivery is a form of approval)."""
+        outcome = resolve_human_evaluation(_human_gate_view(), HumanDecision(action="deliver_manual"))
+        assert outcome.result is True
+        assert outcome.action == "continue"
+        assert outcome.eval_result_id is None
+
+    def test_c5_unrecognized_action_fails_closed_undefined(self) -> None:
+        """Criterion 5: anything else -> result=None, action=<configured>,
+        error='unrecognized_human_action'."""
+        outcome = resolve_human_evaluation(
+            _human_gate_view(action="block"),
+            HumanDecision(action="escalated"),  # type: ignore[arg-type]
+        )
+        assert outcome.result is None
+        assert outcome.action == "block"
+        assert outcome.error == "unrecognized_human_action"
+        assert outcome.eval_result_id is None
+
+    def test_c6_never_yields_an_eval_result_id(self) -> None:
+        """Criterion 6: for EVERY input, Outcome.eval_result_id is None — a
+        human decision is not a measurement (no EvalResult exists)."""
+        for action in ("approved", "rejected", "deliver_manual", "exploded"):
+            for gate_action in ("block", "warn"):
+                outcome = resolve_human_evaluation(
+                    _human_gate_view(action=gate_action),
+                    HumanDecision(action=action),  # type: ignore[arg-type]
+                )
+                assert outcome.eval_result_id is None, f"action={action} gate={gate_action}"
+
+    def test_human_decision_carries_optional_provenance_fields(self) -> None:
+        """decided_by/reason are carried on the decision object (who/why live
+        on the claim + audit events; they are never written to Evidence)."""
+        decision = HumanDecision(action="approved", decided_by="user-1", reason="lgtm")
+        assert decision.decided_by == "user-1"
+        assert decision.reason == "lgtm"
+        outcome = resolve_human_evaluation(_human_gate_view(), decision)
+        assert outcome.result is True

@@ -3,7 +3,7 @@
 Structural contract (no Postgres needed):
 
 * **Revision chain** — 0304 revises ``0303_feedback_records_lookup_indexes``; the
-  migrations directory has exactly one head (``0305_guardrail_escalate_action``,
+  migrations directory has exactly one head (``0306_policy_gate_evaluation_mode``,
   pinned by all sibling chain tests), the revision id matches the filename, and
   neither ``branch_labels`` nor ``depends_on`` is set (the pre-commit
   check-migration-heads hook and every ``test_single_head_*`` pin depend on
@@ -41,7 +41,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0304_metrics_staging_recorded_at_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0303_feedback_records_lookup_indexes"
-_CHAIN_HEAD_MIGRATION = "0305_guardrail_escalate_action"
+_CHAIN_HEAD_MIGRATION = "0306_policy_gate_evaluation_mode"
 _INDEX_NAME = "ix_metrics_staging_recorded_at"
 
 
@@ -77,7 +77,7 @@ def _migration_calls(entry_point: str) -> list[tuple[str, tuple[Any, ...], dict[
 
 
 class TestChain:
-    def test_single_head_is_0305_guardrail_escalate_action(self) -> None:
+    def test_single_head_is_0306_policy_gate_evaluation_mode(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
 

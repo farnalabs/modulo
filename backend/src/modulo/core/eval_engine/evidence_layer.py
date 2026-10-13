@@ -50,7 +50,11 @@ KEY_NAMESPACE_OWNERSHIP: dict[str, set[str]] = {
     "eval": {"eval_"},
     "system_state": {"connector_", "sandbox_", "capability_"},
     "run": {"node_"},
-    "policy_gate": set(),  # reserved, empty in chunk 7
+    # FAR-939 chunk 12 (CO-6): opened for the human-gate decision grounding
+    # rows — key ``gate_decision_<policy_gate_id>`` (§3.4). Any other
+    # producer writing under ``policy_gate`` must use the same prefix
+    # contract.
+    "policy_gate": {"gate_"},
     "derived": set(),  # reserved, empty in chunk 7
 }
 

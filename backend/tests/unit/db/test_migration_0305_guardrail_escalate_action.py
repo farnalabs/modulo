@@ -39,7 +39,7 @@ from modulo.db.models.policy_gate_decision import (
 
 _MIGRATION_REVISION = "0305_guardrail_escalate_action"
 _MIGRATION_DOWN_REVISION = "0304_metrics_staging_recorded_at_index"
-_HEAD_MIGRATION = "0305_guardrail_escalate_action"
+_HEAD_MIGRATION = "0306_policy_gate_evaluation_mode"
 _GATES_CHECK = "ck_policy_gates_action"
 _DECISIONS_CHECK = "ck_policy_gate_decisions_resolved_action"
 
@@ -88,7 +88,7 @@ def _executed_sql(op: MagicMock) -> list[str]:
 
 
 class TestChain:
-    def test_single_head_is_0305_guardrail_escalate_action(self) -> None:
+    def test_single_head_is_0306_policy_gate_evaluation_mode(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 

@@ -64,7 +64,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, TypeGuard
+from typing import TYPE_CHECKING, Any, NamedTuple, TypeGuard, cast
 
 import httpx
 import jinja2
@@ -5238,6 +5238,157 @@ async def _hitl_review_resume_result(
     return (True, ar_result)
 
 
+#: The closed human-decision vocabulary the resume path resolves (FAR-541).
+_HUMAN_DECISION_ACTIONS = ("approved", "rejected", "deliver_manual")
+
+#: The gate-action vocabulary a human-mode gate may carry (the live
+#: ``policy_gates.action`` CHECK — ``escalate`` added by FAR-1694/0305).
+_HUMAN_GATE_ACTIONS = ("warn", "block", "escalate")
+
+
+async def _ground_human_gate_evidence(
+    decision: Any,
+    eval_definitions: Sequence[EvalDefDTO] | None,
+    *,
+    session_factory: Any,
+    org_id: Any,
+    run_id: Any,
+    review_id: str,
+) -> None:
+    """Ground a human gate decision on Evidence rows (FAR-939 chunk 12 §3.4).
+
+    For EACH human-governed eval DTO baked into this gate, append ONE
+    Evidence row through the store's single write path
+    (``append_evidence`` → ``assert_write_authorisation``, which fails
+    CLOSED on an unowned key):
+
+    * ``key`` = ``gate_decision_<policy_gate_id>``
+    * ``subject_type`` / ``subject_id`` = ``run`` / ``<run_id>``
+    * ``value`` = the gate's boolean evaluation result — ``true`` for
+      ``approved`` / ``deliver_manual``, ``false`` for ``rejected``
+      (resolved through ``resolve_human_evaluation``; the configured
+      enforcement ``warn``/``block`` is NOT duplicated into ``value``)
+    * ``producer_type`` / ``producer_id`` = ``policy_gate`` /
+      ``<policy_gate_id>``
+
+    The human's decision has ALREADY committed in the route transaction
+    before resume runs, so the grounding write is **fail-open with a
+    structured log** — it must never retro-fail an already-committed
+    decision (mirrors chunk 4's fail-open decision-record philosophy).
+    ``CancelledError`` propagates.
+
+    Called from the gate node's RESUME path only — the write happens after
+    the human's decision exists, never before. No ``PolicyGateDecision``
+    row is written here (chunk 12 §3.5 — the reconciler's NULL
+    ``eval_result_id`` invariant stays absolute).
+    """
+    if not eval_definitions:
+        return
+    human_dtos = [
+        dto
+        for dto in eval_definitions
+        if getattr(dto, "policy_gate_evaluation_mode", None) == "human" and dto.policy_gate_id is not None
+    ]
+    if not human_dtos:
+        return
+
+    if session_factory is None or org_id is None or run_id is None:
+        _log.warning(
+            "hitl_review.human_gate_evidence_grounding_skipped",
+            extra={
+                "review_id": review_id,
+                "run_id": str(run_id),
+                "human_action": decision.get("action") if isinstance(decision, dict) else None,
+                "reason": "missing_session_org_or_run",
+            },
+        )
+        return
+
+    from modulo.core.eval_engine.evidence_layer import append_evidence
+    from modulo.core.eval_engine.policy_gate import (
+        HumanDecision,
+        HumanGateView,
+        resolve_human_evaluation,
+    )
+
+    action = decision.get("action") if isinstance(decision, dict) else None
+    human_decision = HumanDecision(
+        # The resume path only resolves the three recognised actions
+        # (anything else fails closed before this call); the cast carries a
+        # stray value through to the resolver's fail-closed branch.
+        action=cast("Any", action),
+        decided_by=decision.get("decided_by") if isinstance(decision, dict) else None,
+        reason=decision.get("reason") if isinstance(decision, dict) else None,
+    )
+
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            for dto in human_dtos:
+                # Re-checked here so mypy narrows policy_gate_id (the list
+                # comprehension filter above does not narrow the element type).
+                if dto.policy_gate_id is None:
+                    continue
+                gate_action = dto.failure_behaviour
+                if gate_action not in _HUMAN_GATE_ACTIONS:
+                    _log.warning(
+                        "hitl_review.human_gate_evidence_invalid_gate_action",
+                        extra={
+                            "review_id": review_id,
+                            "policy_gate_id": str(dto.policy_gate_id),
+                            "action": gate_action,
+                        },
+                    )
+                    continue
+                outcome = resolve_human_evaluation(
+                    HumanGateView(
+                        policy_gate_id=dto.policy_gate_id,
+                        eval_id=dto.id,
+                        action=cast("Any", gate_action),
+                        version=dto.policy_gate_version or 1,
+                    ),
+                    human_decision,
+                )
+                if not isinstance(outcome.result, bool):
+                    # result=None (unrecognised action) is not a decision —
+                    # nothing to ground.
+                    _log.warning(
+                        "hitl_review.human_gate_evidence_unresolved_decision",
+                        extra={
+                            "review_id": review_id,
+                            "policy_gate_id": str(dto.policy_gate_id),
+                            "human_action": action,
+                        },
+                    )
+                    continue
+                append_evidence(
+                    session,
+                    organisation_id=org_id,
+                    key=f"gate_decision_{dto.policy_gate_id}",
+                    subject_type="run",
+                    subject_id=str(run_id),
+                    value=outcome.result,
+                    producer_type="policy_gate",
+                    producer_id=dto.policy_gate_id,
+                )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # Fail-OPEN: the human's decision already committed in the route
+        # transaction — a grounding failure must never retro-fail it.
+        _log.warning(
+            "hitl_review.human_gate_evidence_grounding_failed",
+            extra={
+                "review_id": review_id,
+                "run_id": str(run_id),
+                "organisation_id": str(org_id),
+                "human_action": action,
+            },
+            exc_info=True,
+        )
+
+
 #: Deterministic cap for each serialised ``condition_result`` member carried
 #: in the interrupt payload (FAR-688). The matched value is derived from run
 #: STATE (node outputs — redacted, then bounded); the expression is
@@ -5546,6 +5697,18 @@ def make_hitl_review_fn(
             org_id,
         )
         if resumed:
+            # FAR-939 chunk 12 §3.4: ground each human-governed gate's
+            # decision on an Evidence row (fail-open, after the human's
+            # decision has committed). Ordinary automatic-mode gates have no
+            # human-governed DTOs and pay only the list scan.
+            await _ground_human_gate_evidence(
+                state.get("_hitl_decision"),
+                eval_definitions,
+                session_factory=session_factory,
+                org_id=org_id,
+                run_id=state.get("_run_id"),
+                review_id=review_id,
+            )
             return resume_result  # type: ignore[return-value]
 
         # --- Conditional gate (Section 8.17) — evaluate condition against state. ---

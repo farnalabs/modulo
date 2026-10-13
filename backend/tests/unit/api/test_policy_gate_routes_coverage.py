@@ -181,6 +181,10 @@ def _gate_row(*, action: str = "warn", version: int | None = 1, node_id: uuid.UU
     row.organisation_id = _ORG_ID
     row.node_id = node_id
     row.action = action
+    # FAR-939 chunk 12: the routes read the gate's evaluation mode (response
+    # construction + the update snapshot); the stand-in must carry a real
+    # string, not an auto-spied MagicMock child.
+    row.evaluation_mode = "automatic"
     row.version = version
     row.pre_version_raw = None
     row.deleted_at = None
@@ -477,7 +481,9 @@ def test_update_gate_success_bumps_version(client: tuple[TestClient, AsyncMock])
     body = resp.json()
     assert body["action"] == "block"
     assert body["version"] == 2
-    assert body["pre_version_raw"] == {"action": "warn"}
+    # FAR-939 chunk 12: the snapshot key set equals the mutable set
+    # ({action, evaluation_mode}); the pre-edit values are captured.
+    assert body["pre_version_raw"] == {"action": "warn", "evaluation_mode": "automatic"}
 
 
 def test_update_gate_version_none_defaults_to_one(client: tuple[TestClient, AsyncMock]) -> None:

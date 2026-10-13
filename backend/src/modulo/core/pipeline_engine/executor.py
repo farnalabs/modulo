@@ -2680,7 +2680,7 @@ class PipelineExecutor:
         *,
         pinned_universe: bool,
         pipeline_id: uuid.UUID,
-    ) -> tuple[str, uuid.UUID | None, int | None, uuid.UUID | None]:
+    ) -> tuple[str, uuid.UUID | None, int | None, uuid.UUID | None, str | None]:
         """Resolve the gate that governs THIS run for one node-scoped eval.
 
         FAR-967 chunk 10 (§3.1, §5.2, §6.1):
@@ -2699,13 +2699,32 @@ class PipelineExecutor:
           from the evaluated set, never add them (§5.4 interleaving 2).
 
         Returns ``(failure_behaviour, policy_gate_id, policy_gate_version,
-        policy_gate_node_id)``.  When no gate governs the eval the return is
-        ``("warn", None, None, None)``: no ``PolicyGateDecision`` row can be
-        written for it (``policy_gate_id is None`` downstream), the eval
-        still runs, and it can never block.  A node-scoped non-guardrail
-        eval with no gate row AND no pin keeps its pre-existing
-        ``eval_defs.node_without_gate`` anomaly warning.
+        policy_gate_node_id, evaluation_mode)``.  When no gate governs the
+        eval the return is ``("warn", None, None, None, None)``: no
+        ``PolicyGateDecision`` row can be written for it
+        (``policy_gate_id is None`` downstream), the eval still runs, and it
+        can never block.  A node-scoped non-guardrail eval with no gate row
+        AND no pin keeps its pre-existing ``eval_defs.node_without_gate``
+        anomaly warning.
+
+        ``evaluation_mode`` (FAR-939 chunk 12) is the live gate's
+        ``policy_gates.evaluation_mode``, read ONLY when the gate governs —
+        ``"human"`` marks the eval for the shared-helper skip (chunk 12
+        §3.3). It is resolved once at DTO assembly and run-frozen for the
+        run's duration: ``policy_gate_pins`` do not carry the mode, so the
+        live row's mode governs in BOTH the live-fallback and the pinned
+        path (named foreclosure, chunk 12 §10).
         """
+
+        def _mode(gate: PolicyGate) -> str:
+            # Normalise to the closed vocabulary on the DTO. Production rows
+            # always carry the NOT NULL column (migration 0306); the
+            # attribute fallback keeps pre-0306 ORM stand-ins and legacy
+            # fixtures (no attribute at all) on today's behaviour —
+            # automatic.
+            raw = getattr(gate, "evaluation_mode", None)
+            return "human" if raw == "human" else "automatic"
+
         eval_id = str(eval_row.id)
         eval_type = eval_row.eval_type
         pipeline_key = str(pipeline_id)
@@ -2720,10 +2739,10 @@ class PipelineExecutor:
                     "eval_defs.pinned_gate_unavailable",
                     extra={"eval_id": eval_id, "pipeline_id": pipeline_key},
                 )
-                return ("warn", None, None, None)
+                return ("warn", None, None, None, None)
             if eval_type == "guardrail":
                 # Guardrail-typed Evals keep warn semantics by design.
-                return ("warn", None, None, None)
+                return ("warn", None, None, None, None)
             # Anomaly: node-scoped non-guardrail Eval without a gate. This
             # means its PolicyGate binding was rejected during backfill —
             # log a warning but do not crash.
@@ -2735,7 +2754,7 @@ class PipelineExecutor:
                     "pipeline_id": pipeline_key,
                 },
             )
-            return ("warn", None, None, None)
+            return ("warn", None, None, None, None)
 
         # Pin membership first: a gate absent from the pin set is never
         # evaluated for this run, whatever the live state (§3.1).
@@ -2744,7 +2763,7 @@ class PipelineExecutor:
                 "eval_defs.gate_not_pinned",
                 extra={"eval_id": eval_id, "pipeline_id": pipeline_key},
             )
-            return ("warn", None, None, None)
+            return ("warn", None, None, None, None)
 
         # Operator control (§5.2): a disabled live row removes the gate from
         # evaluation — it overrides the pin. STRICT attribute read (FAR-967
@@ -2761,11 +2780,11 @@ class PipelineExecutor:
                     "policy_gate_id": str(policy_gate.id),
                 },
             )
-            return ("warn", None, None, None)
+            return ("warn", None, None, None, None)
 
         # Live fallback (§6.1 case (i)): the live action governs.
         if not pinned_universe:
-            return (policy_gate.action, policy_gate.id, policy_gate.version, policy_gate.node_id)
+            return (policy_gate.action, policy_gate.id, policy_gate.version, policy_gate.node_id, _mode(policy_gate))
 
         # Pinned universe, live row present and enabled: the PIN governs
         # (criterion 10) — not the live ``action``. ``pin`` is non-None here
@@ -2779,7 +2798,7 @@ class PipelineExecutor:
                 "eval_defs.pinned_gate_replaced",
                 extra={"eval_id": eval_id, "pipeline_id": pipeline_key},
             )
-            return ("warn", None, None, None)
+            return ("warn", None, None, None, None)
 
         pin_action = pin.get("action")
         if pin_action not in ("warn", "block"):
@@ -2790,7 +2809,7 @@ class PipelineExecutor:
                 "eval_defs.pin_action_invalid",
                 extra={"eval_id": eval_id, "pipeline_id": pipeline_key, "action": str(pin_action)},
             )
-            return ("warn", None, None, None)
+            return ("warn", None, None, None, None)
 
         gate_node_id = policy_gate.node_id
         pin_node_id = pin.get("node_id")
@@ -2802,7 +2821,7 @@ class PipelineExecutor:
                     "eval_defs.pin_node_id_invalid",
                     extra={"eval_id": eval_id, "pipeline_id": pipeline_key},
                 )
-        return (str(pin_action), policy_gate.id, policy_gate.version, gate_node_id)
+        return (str(pin_action), policy_gate.id, policy_gate.version, gate_node_id, _mode(policy_gate))
 
     @staticmethod
     def _build_eval_defs_by_node(
@@ -2858,12 +2877,14 @@ class PipelineExecutor:
             if not node_key:
                 continue
             pin = pinned_by_eval.get(str(eval_row.id)) if pinned_universe else None
-            failure_behaviour, gate_id, gate_version, gate_node_id = PipelineExecutor._resolve_governed_gate(
-                eval_row,
-                policy_gate,
-                pin,
-                pinned_universe=pinned_universe,
-                pipeline_id=pipeline_id,
+            failure_behaviour, gate_id, gate_version, gate_node_id, evaluation_mode = (
+                PipelineExecutor._resolve_governed_gate(
+                    eval_row,
+                    policy_gate,
+                    pin,
+                    pinned_universe=pinned_universe,
+                    pipeline_id=pipeline_id,
+                )
             )
             eval_defs_by_node.setdefault(node_key, []).append(
                 EvalDefDTO(
@@ -2886,6 +2907,10 @@ class PipelineExecutor:
                     policy_gate_id=gate_id,
                     policy_gate_version=gate_version,
                     policy_gate_node_id=gate_node_id,
+                    # FAR-939 chunk 12: the governing gate's evaluation mode
+                    # (None when no gate governs). Drives the shared-helper
+                    # skip for human-mode gates.
+                    policy_gate_evaluation_mode=evaluation_mode,
                 )
             )
         return eval_defs_by_node

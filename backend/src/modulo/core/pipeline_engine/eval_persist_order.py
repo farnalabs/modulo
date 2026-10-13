@@ -86,6 +86,13 @@ class EvalDefDTO:
     policy_gate_id: uuid.UUID | None = None
     policy_gate_version: int | None = None
     policy_gate_node_id: uuid.UUID | None = None
+    # FAR-939 chunk 12 — the governing gate's evaluation mode
+    # (``policy_gates.evaluation_mode``): ``"automatic"`` (current
+    # behaviour) or ``"human"`` (the human's HITL decision is the gate's
+    # evaluation result). ``None`` when no gate governs this eval. Read
+    # once at DTO assembly (run start) and run-frozen for the run's
+    # duration (pins do not carry the mode — chunk 12 §10).
+    policy_gate_evaluation_mode: str | None = None
 
 
 _log = logging.getLogger(__name__)
@@ -543,6 +550,25 @@ async def run_evals_persist_before_decide(
             _log.warning(
                 "evals.guardrail_typed_def_skipped_in_eval_loop",
                 extra={"eval_name": eval_def.name, "node_id": node_id},
+            )
+            continue
+
+        # FAR-939 chunk 12 (§3.3): an eval governed by a HUMAN-mode
+        # PolicyGate is skipped ENTIRELY here — the one skip site both loops
+        # (_run_gate_evals and _run_post_node_evals) honour. No compute, no
+        # EvalResult row, no PolicyGateDecision row, no EvalBlockedError: the
+        # gate's evaluation result is the human's decision at the existing
+        # HITL pause (grounded on an Evidence row on resume). Evals governed
+        # by automatic gates on the same node still run normally below.
+        if getattr(eval_def, "policy_gate_evaluation_mode", None) == "human":
+            _log.info(
+                "evals.human_governed_eval_skipped",
+                extra={
+                    "eval_name": eval_def.name,
+                    "eval_id": str(eval_def.id),
+                    "node_id": node_id,
+                    "policy_gate_id": str(eval_def.policy_gate_id),
+                },
             )
             continue
 

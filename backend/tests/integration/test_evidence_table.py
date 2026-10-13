@@ -431,6 +431,40 @@ async def test_e9_every_valid_producer_type_is_accepted(db_engine: AsyncEngine, 
 
 
 # ---------------------------------------------------------------------------
+# FAR-939 chunk 12 — the policy_gate key namespace (CO-6) is open for
+# ``gate_decision_<policy_gate_id>`` and nothing else
+# ---------------------------------------------------------------------------
+
+
+class TestPolicyGateKeyNamespace:
+    """Chunk 12 §3.4 / CO-6: ``KEY_NAMESPACE_OWNERSHIP['policy_gate']`` was
+    shipped reserved-and-empty by chunk 7 and is opened by this chunk for
+    exactly the ``gate_`` prefix (the human-decision grounding rows)."""
+
+    def test_gate_decision_keys_are_authorised(self) -> None:
+        from modulo.core.eval_engine.evidence_layer import assert_write_authorisation
+
+        gate_id = uuid.uuid4()
+        assert_write_authorisation("policy_gate", f"gate_decision_{gate_id}")
+
+    def test_non_prefixed_keys_are_refused(self) -> None:
+        """A policy_gate producer writing outside the ``gate_`` namespace
+        fails CLOSED (EvidenceWriteAuthorisationError)."""
+        from modulo.core.eval_engine.evidence_layer import (
+            EvidenceWriteAuthorisationError,
+            assert_write_authorisation,
+        )
+
+        with pytest.raises(EvidenceWriteAuthorisationError):
+            assert_write_authorisation("policy_gate", f"eval_guardrail_{uuid.uuid4()}")
+
+    def test_owned_prefixes_are_exactly_gate(self) -> None:
+        from modulo.core.eval_engine.evidence_layer import KEY_NAMESPACE_OWNERSHIP
+
+        assert KEY_NAMESPACE_OWNERSHIP["policy_gate"] == {"gate_"}
+
+
+# ---------------------------------------------------------------------------
 # sup — RLS org-isolation proofs on the shipped policy
 # ---------------------------------------------------------------------------
 

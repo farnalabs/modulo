@@ -36,7 +36,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from modulo.db.models.policy_gate_decision import PolicyGateDecision
@@ -162,6 +162,74 @@ def resolve_policy_gate(snapshot: EvalPolicySnapshot) -> Outcome:
         action=pg.action,
         eval_result_id=er.id,
         error=None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Human evaluation mode (FAR-939 chunk 12)
+# ---------------------------------------------------------------------------
+
+#: The gate-action vocabulary a human-mode gate may carry (the live
+#: ``policy_gates.action`` CHECK — widened to ``escalate`` by FAR-1694
+#: migration 0305; this chunk adds nothing to it).
+HumanGateAction = Literal["warn", "block", "escalate"]
+
+
+@dataclass(frozen=True)
+class HumanDecision:
+    """Closed vocabulary for human gate decisions."""
+
+    action: Literal["approved", "rejected", "deliver_manual"]
+    decided_by: str | None = None  # who decided, when carried by the payload
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class HumanGateView:
+    """Read-only view of the governing gate for the human resolver."""
+
+    policy_gate_id: uuid.UUID
+    eval_id: uuid.UUID
+    action: HumanGateAction  # the gate's configured action
+    version: int
+
+
+def resolve_human_evaluation(
+    gate_view: HumanGateView,
+    decision: HumanDecision,
+) -> Outcome:
+    """Resolve the Outcome for a human evaluation-mode gate.
+
+    - ``"approved"``       -> ``Outcome(result=True,  action="continue", ...)``
+    - ``"deliver_manual"`` -> ``Outcome(result=True,  action="continue", ...)``
+      (manual delivery is a form of approval)
+    - ``"rejected"``       -> ``Outcome(result=False, action=<gate_view.action>, ...)``
+    - anything else        -> ``Outcome(result=None,  action=<gate_view.action>, ...,
+      error="unrecognized_human_action")``
+
+    ``eval_result_id`` is ``None`` BY CONSTRUCTION: a human decision is not
+    a measurement, and no ``EvalResult`` exists for a human-governed eval
+    (chunk 12 §3.3). The returned ``Outcome`` is NEVER persisted as a
+    ``PolicyGateDecision`` row (chunk 12 §3.5) — the human decision is
+    grounded on an Evidence row instead.
+
+    Called ONCE the human has decided — it does not trigger or consume the
+    interrupt; the gate node's existing machinery owns that. Sibling of
+    ``resolve_policy_gate`` (automatic mode), not a variant of it.
+    """
+    if decision.action == "approved":
+        return Outcome(result=True, action="continue", eval_result_id=None, error=None)
+    if decision.action == "deliver_manual":
+        # Manual delivery is a form of approval.
+        return Outcome(result=True, action="continue", eval_result_id=None, error=None)
+    if decision.action == "rejected":
+        return Outcome(result=False, action=gate_view.action, eval_result_id=None, error=None)
+    # Fail closed on anything outside the resume path's recognised set.
+    return Outcome(
+        result=None,
+        action=gate_view.action,
+        eval_result_id=None,
+        error="unrecognized_human_action",
     )
 
 

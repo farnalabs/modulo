@@ -208,6 +208,7 @@ async def create_or_update_eval(
     suite_id: str | None,
     eval_suite_id: uuid.UUID | None = None,
     existing_eval_id: uuid.UUID | None = None,
+    evaluation_mode: str = "automatic",
 ) -> Any:
     """Persist an ``Eval`` row and optionally a ``PolicyGate`` row.
 
@@ -220,12 +221,20 @@ async def create_or_update_eval(
        persist ``Eval`` row only (no ``PolicyGate``, never call ``validate_binding``).
     2. Else ``node_id is not None`` → call ``validate_binding``;
        on ``PolicyGateBindingViolationError`` re-raise for the caller.
-       Persist ``Eval`` + ``PolicyGate(action=failure_behaviour)``.
+       Persist ``Eval`` + ``PolicyGate(action=failure_behaviour,
+       evaluation_mode=evaluation_mode)``.
     3. Else (suite-scoped non-guardrail) → persist ``Eval`` row only
        (no ``PolicyGate``).
 
     ``failure_behaviour`` is internal — callers always pass ``"warn"``
     since FAR-1103 chunk 5a retired the public surface.
+
+    ``evaluation_mode`` (FAR-939 chunk 12) is persisted on BOTH gate
+    upsert paths (create and update), so it must be forwarded by every
+    caller that wants to preserve or set a non-default mode: the REST
+    update route resolves the live gate's current mode and forwards it
+    (mirroring ``failure_behaviour``); callers that do not forward it —
+    including the MCP write seam — inherit the ``'automatic'`` default.
 
     Version stamping lives inside the helper:
       - create → ``version=1``
@@ -349,6 +358,7 @@ async def create_or_update_eval(
             # Update existing gate
             existing_gate.action = pg_action
             existing_gate.node_id = node_id
+            existing_gate.evaluation_mode = evaluation_mode
         else:
             # Create new gate
             gate = PolicyGate(
@@ -356,6 +366,7 @@ async def create_or_update_eval(
                 eval_id=eval_row.id,
                 node_id=node_id,
                 action=pg_action,
+                evaluation_mode=evaluation_mode,
                 version=1,
             )
             session.add(gate)
