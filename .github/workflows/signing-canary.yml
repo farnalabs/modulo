@@ -1,0 +1,98 @@
+# "Signing canary" - nightly proof that Azure Artifact Signing works from CI.
+#
+# Why this workflow exists (FAR-687 / FAR-679)
+# --------------------------------------------
+# Release artifacts are signed with Azure Artifact Signing (formerly Trusted
+# Signing). Nothing exercises that path between releases, so a broken
+# credential, a revoked certificate profile or an expired identity validation
+# would only surface on release day. This canary signs a throwaway copy of a
+# Windows system executable every night and checks the Authenticode result, so
+# a failure here means signing or the identity validation has broken.
+#
+# Authentication is OIDC federation (no client secret). The federated
+# credential is bound to the `main` branch only, so the job is gated on
+# refs/heads/main; scheduled runs always use the default branch, and a manual
+# dispatch from any other branch is skipped instead of failing at login.
+#
+# Renewal: the identity validation for the FARNA LABS LTD certificate profile
+# expires 2029-01-13. Renewal reminders are tracked in FAR-679.
+#
+# Nothing secret is printed: tenant, client and subscription IDs live only in
+# GitHub secrets. Nothing binary is committed: the file to sign is copied from
+# the runner's System32 at run time.
+
+name: "Signing canary"
+
+on:
+  schedule:
+    - cron: "37 3 * * *" # nightly, off-peak
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signing-canary
+  cancel-in-progress: false
+
+jobs:
+  sign-and-verify:
+    name: Sign a throwaway exe and verify the signature
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      id-token: write # OIDC token for azure/login
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Log in to Azure (OIDC)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Create throwaway executable
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'canary'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Copy-Item -Path (Join-Path $env:WINDIR 'System32\whoami.exe') -Destination (Join-Path $dir 'canary.exe')
+          "CANARY_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Sign with Azure Artifact Signing
+        uses: Azure/trusted-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: farnasigning
+          certificate-profile-name: farna-public-trust
+          files-folder: ${{ env.CANARY_DIR }}
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify Authenticode signature
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature -FilePath (Join-Path $env:CANARY_DIR 'canary.exe')
+          if (-not $sig.SignerCertificate) {
+            Write-Error "No signer certificate found (status: $($sig.Status))"
+            exit 1
+          }
+          $subject = $sig.SignerCertificate.Subject
+          Write-Host "Status:     $($sig.Status)"
+          Write-Host "Subject:    $subject"
+          Write-Host "Thumbprint: $($sig.SignerCertificate.Thumbprint)"
+          if ($sig.Status -ne 'Valid') {
+            Write-Error "Signature status is $($sig.Status), expected Valid"
+            exit 1
+          }
+          if ($subject -notlike '*FARNA LABS LTD*') {
+            Write-Error 'Signer subject does not contain FARNA LABS LTD'
+            exit 1
+          }
