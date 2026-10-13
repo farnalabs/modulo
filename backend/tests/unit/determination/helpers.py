@@ -4,7 +4,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from modulo.connectors.base import ConnectorType
-from modulo.determination.inference import Finding
+from modulo.determination.draft import PipelineDraft, generate_draft
+from modulo.determination.inference import Finding, infer
 from modulo.determination.scanner import ScanSample
 
 
@@ -31,3 +32,12 @@ def make_sample(
 
 def make_finding(category: str, finding: str, confidence: str = "high") -> Finding:
     return Finding(category=category, finding=finding, evidence="test", confidence=confidence)
+
+
+def draft_for(samples: list[ScanSample]) -> PipelineDraft:
+    """Run the inference engine over *samples* and build the draft pipeline from it.
+
+    Every draft test needs the same infer-then-draft pair; doing it here keeps
+    each test focused on the draft behaviour it is actually asserting.
+    """
+    return generate_draft(samples, infer(samples))
