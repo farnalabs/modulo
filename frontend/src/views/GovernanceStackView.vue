@@ -37,28 +37,28 @@
           show-disabled
         >
           <div class="mt-4" :data-testid="`governance-level-body-${level.id}`">
-            <p
+            <output
               v-if="level.state.status === 'loading'"
-              role="status"
               aria-live="polite"
-              class="text-sm text-muted-foreground"
+              :aria-label="$t(level.titleKey)"
+              class="block text-sm text-muted-foreground"
               :data-testid="`governance-level-loading-${level.id}`"
             >
               {{ $t('views.GovernanceStackView.loading') }}
-            </p>
+            </output>
 
-            <div
+            <output
               v-else-if="level.state.status === 'restricted'"
-              role="status"
               aria-live="polite"
-              class="rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm"
+              :aria-label="$t(level.titleKey)"
+              class="block rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm"
               :data-testid="`governance-level-restricted-${level.id}`"
             >
               <p class="font-medium text-warning-text">{{ $t('views.GovernanceStackView.restricted_title') }}</p>
               <p class="mt-1 text-muted-foreground">
                 {{ $t('views.GovernanceStackView.restricted_body', { gate: $t(level.gateKey) }) }}
               </p>
-            </div>
+            </output>
 
             <div
               v-else-if="level.state.status === 'error'"
@@ -80,7 +80,11 @@
             </div>
 
             <div v-else :data-testid="`governance-level-ready-${level.id}`">
-              <div class="flex flex-wrap items-center gap-3" role="status" aria-live="polite">
+              <output
+                class="flex flex-wrap items-center gap-3"
+                aria-live="polite"
+                :aria-label="$t(level.titleKey)"
+              >
                 <Badge
                   :severity="level.state.configured ? 'success' : 'secondary'"
                   :data-testid="`governance-level-state-${level.id}`"
@@ -90,7 +94,7 @@
                 <span class="text-sm font-medium" :data-testid="`governance-level-count-${level.id}`">
                   {{ $t(level.countLabelKey, { count: level.state.count }) }}
                 </span>
-              </div>
+              </output>
               <p
                 v-if="level.state.detail"
                 class="mt-2 text-xs text-muted-foreground"

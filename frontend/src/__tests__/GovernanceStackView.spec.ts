@@ -251,3 +251,231 @@ describe('GovernanceStackView — per-level isolation', () => {
     expect(wrapper.find('[data-testid="governance-level-error-agents"]').exists()).toBe(false)
   })
 })
+
+const FORBIDDEN = {
+  data: undefined,
+  error: { status: 403, detail: 'forbidden' },
+  response: { status: 403 },
+}
+const FEATURE_GATED = {
+  data: undefined,
+  error: { status: 402, detail: 'feature required' },
+  response: { status: 402 },
+}
+const FAILURE = { data: undefined, error: { detail: 'boom' }, response: { status: 500 } }
+const EMPTY = { data: undefined, error: undefined, response: { status: 200 } }
+
+const PRIMARY_URLS = [
+  '/api/v1/model-backends',
+  '/api/v1/connectors',
+  '/api/v1/mcp/oauth/clients',
+  '/api/v1/agents',
+  '/api/v1/composite-templates',
+  '/api/v1/pipelines',
+  '/api/v1/settings/observability',
+] as const
+
+const ALL_URLS = [
+  ...PRIMARY_URLS,
+  '/api/v1/api-keys',
+  '/api/v1/libraries',
+  '/api/v1/errors',
+  '/api/v1/notifications',
+] as const
+
+function overridesFor(urls: readonly string[], value: unknown): Record<string, unknown> {
+  return Object.fromEntries(urls.map((url) => [url, value]))
+}
+
+function restricted(wrapper: ReturnType<typeof mountView>, id: string) {
+  return wrapper.find(`[data-testid="governance-level-restricted-${id}"]`).exists()
+}
+
+function errored(wrapper: ReturnType<typeof mountView>, id: string) {
+  return wrapper.find(`[data-testid="governance-level-error-${id}"]`).exists()
+}
+
+describe('GovernanceStackView — degraded responses', () => {
+  it('marks every level restricted when its primary endpoint is forbidden', async () => {
+    mockDefaults(overridesFor(PRIMARY_URLS, FORBIDDEN))
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    for (const id of LEVEL_IDS) {
+      expect(restricted(wrapper, id)).toBe(true)
+    }
+  })
+
+  it('treats a restricted secondary endpoint as restricted for that level only', async () => {
+    mockDefaults({
+      '/api/v1/api-keys': FORBIDDEN,
+      '/api/v1/libraries': FEATURE_GATED,
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    expect(restricted(wrapper, 'mcp')).toBe(true)
+    expect(restricted(wrapper, 'commands')).toBe(true)
+    expect(restricted(wrapper, 'models')).toBe(false)
+    expect(wrapper.find('[data-testid="governance-level-ready-models"]').exists()).toBe(true)
+  })
+
+  it('reads a gated status carried only on the error body', async () => {
+    mockDefaults({
+      '/api/v1/agents': {
+        data: undefined,
+        error: { status: 402, detail: 'gate' },
+        response: { status: 500 },
+      },
+      '/api/v1/model-backends': {
+        data: undefined,
+        error: { status: 403, detail: 'gate' },
+        response: { status: 500 },
+      },
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    expect(restricted(wrapper, 'agents')).toBe(true)
+    expect(restricted(wrapper, 'models')).toBe(true)
+  })
+
+  it('treats a non-object error value as a plain per-level failure', async () => {
+    mockDefaults({
+      '/api/v1/connectors': { data: undefined, error: 'oops', response: { status: 500 } },
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    expect(errored(wrapper, 'tools')).toBe(true)
+    expect(restricted(wrapper, 'tools')).toBe(false)
+  })
+
+  it('shows a per-level error when a primary endpoint fails with a non-gated error', async () => {
+    mockDefaults(overridesFor(PRIMARY_URLS, FAILURE))
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    for (const id of LEVEL_IDS) {
+      expect(errored(wrapper, id)).toBe(true)
+    }
+  })
+
+  it('shows a per-level error when a secondary endpoint fails', async () => {
+    mockDefaults({ '/api/v1/api-keys': FAILURE, '/api/v1/libraries': FAILURE })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    expect(errored(wrapper, 'mcp')).toBe(true)
+    expect(errored(wrapper, 'commands')).toBe(true)
+    expect(wrapper.find('[data-testid="governance-level-ready-models"]').exists()).toBe(true)
+  })
+
+  it('falls back to zero counts when list payloads omit their totals', async () => {
+    mockDefaults(overridesFor(ALL_URLS, EMPTY))
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    for (const id of LEVEL_IDS) {
+      expect(wrapper.find(`[data-testid="governance-level-ready-${id}"]`).exists()).toBe(true)
+    }
+    for (const id of ['models', 'tools', 'mcp', 'agents', 'commands', 'autonomy', 'telemetry']) {
+      expect(wrapper.find(`[data-testid="governance-level-count-${id}"]`).text()).toContain('0')
+    }
+  })
+
+  it('counts telemetry destinations even when OTel export is unconfigured', async () => {
+    mockDefaults({
+      '/api/v1/settings/observability': ok({
+        otlp_endpoint: '',
+        otlp_headers: {},
+        export_interval_seconds: 30,
+        langsmith_enabled: false,
+        has_langsmith_api_key: false,
+        effective_otlp_endpoint: '',
+        env_override_active: false,
+      }),
+      '/api/v1/errors': ok({ items: [], total: 3, limit: 1, offset: 0 }),
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    const detail = wrapper.find('[data-testid="governance-level-detail-telemetry"]').text()
+    expect(detail).toContain('not configured')
+    expect(detail).toContain('3')
+    expect(detail).toContain('2')
+  })
+
+  it('degrades telemetry enrichment to unavailable without failing the level', async () => {
+    mockDefaults({
+      '/api/v1/errors': FORBIDDEN,
+      '/api/v1/notifications': FORBIDDEN,
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="governance-level-ready-telemetry"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="governance-level-detail-telemetry"]').text()).toContain(
+      'unavailable',
+    )
+  })
+
+  it('treats a bare restricted status on telemetry enrichment as unavailable', async () => {
+    mockDefaults({
+      '/api/v1/errors': { data: undefined, error: undefined, response: { status: 403 } },
+      '/api/v1/notifications': { data: undefined, error: undefined, response: { status: 403 } },
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="governance-level-ready-telemetry"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="governance-level-detail-telemetry"]').text()).toContain(
+      'unavailable',
+    )
+  })
+
+  it('reads the autonomy rung from the pinned default when the earned level is null', async () => {
+    mockDefaults({
+      '/api/v1/pipelines': ok({
+        items: [{ earned_autonomy_level: null, default_autonomy_level: null }],
+        total: 1,
+        page: 1,
+        page_size: 100,
+        has_more: false,
+      }),
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="governance-level-detail-autonomy"]').text()).toContain(
+      'Manual approval: 1',
+    )
+  })
+
+  it('shows a retry-able error when a loader throws synchronously', async () => {
+    const impl = mockGet.getMockImplementation()
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/connectors') throw new Error('sync boom')
+      return impl ? impl(url) : Promise.resolve(EMPTY)
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    const error = wrapper.find('[data-testid="governance-level-error-tools"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('sync boom')
+    expect(wrapper.find('[data-testid="governance-level-ready-models"]').exists()).toBe(true)
+  })
+})
