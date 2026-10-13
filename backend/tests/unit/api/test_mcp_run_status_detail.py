@@ -149,10 +149,13 @@ class TestRunStatusDetailParityFields:
         assert alpha["stderr_length"] == 0
         assert alpha["delivery_done"] is True
 
-    def test_deadline_triage_none_when_no_markers(self) -> None:
+    def test_deadline_triage_empty_list_when_no_markers(self) -> None:
         result = _run_status_detail(_run_row(), _blobs(markers=None))
 
-        assert result["deadline_triage"] == []
+        # REST parity: a marker-less run projects [] (never None) on the detail
+        # body — None is reserved for the REST path's DB-failure degrade.
+        assert isinstance(result["deadline_triage"], list)
+        assert not result["deadline_triage"]
 
     def test_detail_body_still_carries_the_node_breakdown(self) -> None:
         """The parity fields are additive — the existing detail body is intact."""
@@ -201,7 +204,8 @@ class TestGetRunStatusImplParity(_McpCtx):
     async def test_detail_true_carries_empty_triage_when_no_markers(self) -> None:
         result = await self._call(_run_row(), _blobs(markers=None), detail=True)
 
-        assert result["deadline_triage"] == []
+        assert isinstance(result["deadline_triage"], list)
+        assert not result["deadline_triage"]
 
     async def test_detail_false_omits_both_fields(self) -> None:
         """The base read never touches the input payload or the markers."""
