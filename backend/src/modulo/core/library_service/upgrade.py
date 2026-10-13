@@ -266,6 +266,119 @@ _BUCKET_BY_TYPE = {
 }
 
 
+def _change_kind(old: dict[str, str] | None, new: dict[str, str] | None) -> str:
+    """Classify a pin as added / removed / changed / unchanged."""
+    if old is not None and new is None:
+        return "removed"
+    if old is None and new is not None:
+        return "added"
+    if old is not None and new is not None and old["version"] != new["version"]:
+        return "changed"
+    return "unchanged"
+
+
+def _action_for_change(change: str, entities: list[dict[str, Any]]) -> str:
+    """Resolve the operator action for a pin from its change and entities."""
+    if change != "changed":
+        return _ACTION_BY_CHANGE[change]
+    upgradable = any(not e["modified"] and e["entity_type"] in ("schema", "agent") for e in entities)
+    if upgradable:
+        return "upgrade"
+    only_structural = bool(entities) and any(e["entity_type"] == "pipeline" for e in entities)
+    return "manual" if only_structural else "report"
+
+
+def _pin_entities(
+    slug: str,
+    ptype: str,
+    pin_entity_ids: dict[str, dict[str, list[str]]],
+    entity_states: dict[str, str],
+    pipeline_entity_id: str | None,
+    pipeline_modified: bool,
+) -> list[dict[str, Any]]:
+    """Installed entities a pin maps to, prepending the embedded pipeline.
+
+    A workflow/pipeline_template pin carries the install's pipeline entity
+    plus its embedded schema/agent entities.
+    """
+    per_type = pin_entity_ids.get(slug) or {}
+    entries = [
+        {
+            "entity_type": etype,
+            "entity_id": eid,
+            "modified": entity_states.get(eid, "unmodified") == "modified",
+        }
+        for etype, ids in per_type.items()
+        for eid in ids
+    ]
+    if ptype in ("workflow", "pipeline_template") and pipeline_entity_id:
+        return [
+            {
+                "entity_type": "pipeline",
+                "entity_id": pipeline_entity_id,
+                "modified": pipeline_modified,
+            },
+            *entries,
+        ]
+    return entries
+
+
+def _bucket_for_pin(ptype: str, entities: list[dict[str, Any]]) -> str:
+    """Resolve the delta bucket for a pin, classifying unknown types by kind."""
+    bucket = _BUCKET_BY_TYPE.get(ptype)
+    if bucket is not None:
+        return bucket
+    kinds = {e["entity_type"] for e in entities}
+    if "agent" in kinds:
+        return "agents"
+    if "schema" in kinds:
+        return "schemas"
+    return "pipelines"
+
+
+def _append_synthesised_pipeline_entry(
+    delta: dict[str, list[dict[str, Any]]],
+    pipeline_entity_id: str | None,
+    pipeline_modified: bool,
+) -> None:
+    """Surface the install's pipeline entity when no pin produced it.
+
+    The install's pipeline entity always surfaces in the pipelines bucket,
+    even when no workflow/template pin exists (synthesised pipeline).
+    """
+    if not pipeline_entity_id:
+        return
+    covered = any(
+        e["entities"] and any(ent["entity_type"] == "pipeline" for ent in e["entities"])
+        for bucket in delta.values()
+        for e in bucket
+    )
+    if covered:
+        return
+    # The synthesised pipeline's node set changes only when agent pins
+    # are added/removed — content changes do not alter the graph.
+    structural = any(
+        e["change"] in ("added", "removed") and e["entity_type"] == "agent" for b in delta.values() for e in b
+    )
+    delta["pipelines"].append(
+        {
+            "entity_type": "pipeline",
+            "slug": None,
+            "from_version": None,
+            "to_version": None,
+            "change": "changed" if structural else "unchanged",
+            "action": "manual" if structural else "unchanged",
+            "entities": [
+                {
+                    "entity_type": "pipeline",
+                    "entity_id": pipeline_entity_id,
+                    "modified": pipeline_modified,
+                }
+            ],
+        }
+    )
+
+
 def build_collection_delta(
     old_pins: list[dict[str, str]],
     new_pins: list[dict[str, str]],
@@ -292,105 +405,24 @@ def build_collection_delta(
         if p.get("primitive_type"):
             types_by_slug.setdefault(p["slug"], p["primitive_type"])
 
-    def _entity_entries(slug: str) -> list[dict[str, Any]]:
-        per_type = pin_entity_ids.get(slug) or {}
-        return [
-            {
-                "entity_type": etype,
-                "entity_id": eid,
-                "modified": entity_states.get(eid, "unmodified") == "modified",
-            }
-            for etype, ids in per_type.items()
-            for eid in ids
-        ]
-
-    all_slugs = list(dict.fromkeys([*old_by_slug, *new_by_slug]))
-    for slug in all_slugs:
+    for slug in dict.fromkeys([*old_by_slug, *new_by_slug]):
         old = old_by_slug.get(slug)
         new = new_by_slug.get(slug)
-        if old is not None and new is None:
-            change = "removed"
-        elif old is None and new is not None:
-            change = "added"
-        elif old is not None and new is not None and old["version"] != new["version"]:
-            change = "changed"
-        else:
-            change = "unchanged"
-
+        change = _change_kind(old, new)
         ptype = types_by_slug.get(slug, "")
-        if ptype in ("workflow", "pipeline_template") and pipeline_entity_id:
-            entities = [
-                {
-                    "entity_type": "pipeline",
-                    "entity_id": pipeline_entity_id,
-                    "modified": pipeline_modified,
-                },
-                *_entity_entries(slug),
-            ]
-        else:
-            entities = _entity_entries(slug)
-
-        if change == "changed":
-            upgradable = any(not e["modified"] and e["entity_type"] in ("schema", "agent") for e in entities)
-            only_structural = (
-                bool(entities) and not upgradable and any(e["entity_type"] == "pipeline" for e in entities)
-            )
-            action = "upgrade" if upgradable else ("manual" if only_structural else "report")
-        else:
-            action = _ACTION_BY_CHANGE[change]
-
+        entities = _pin_entities(slug, ptype, pin_entity_ids, entity_states, pipeline_entity_id, pipeline_modified)
         entry = {
             "entity_type": ptype or ("pipeline" if pipeline_entity_id else "unknown"),
             "slug": slug,
             "from_version": old["version"] if old else None,
             "to_version": new["version"] if new else None,
             "change": change,
-            "action": action,
+            "action": _action_for_change(change, entities),
             "entities": entities,
         }
-        bucket = _BUCKET_BY_TYPE.get(ptype)
-        if bucket is None:
-            # Unknown pin type: classify by the entity kinds it produced.
-            kinds = {e["entity_type"] for e in entities}
-            if "agent" in kinds:
-                bucket = "agents"
-            elif "schema" in kinds:
-                bucket = "schemas"
-            else:
-                bucket = "pipelines"
-        delta[bucket].append(entry)
+        delta[_bucket_for_pin(ptype, entities)].append(entry)
 
-    # The install's pipeline entity always surfaces in the pipelines bucket,
-    # even when no workflow/template pin exists (synthesised pipeline).
-    pipeline_covered = any(
-        e["entities"] and any(ent["entity_type"] == "pipeline" for ent in e["entities"])
-        for bucket in delta.values()
-        for e in bucket
-    )
-    if pipeline_entity_id and not pipeline_covered:
-        # The synthesised pipeline's node set changes only when agent pins
-        # are added/removed — content changes do not alter the graph.
-        structural = any(
-            e["change"] in ("added", "removed") and e["entity_type"] == "agent" for b in delta.values() for e in b
-        )
-        change = "changed" if structural else "unchanged"
-        delta["pipelines"].append(
-            {
-                "entity_type": "pipeline",
-                "slug": None,
-                "from_version": None,
-                "to_version": None,
-                "change": change,
-                "action": "manual" if structural else "unchanged",
-                "entities": [
-                    {
-                        "entity_type": "pipeline",
-                        "entity_id": pipeline_entity_id,
-                        "modified": pipeline_modified,
-                    }
-                ],
-            }
-        )
+    _append_synthesised_pipeline_entry(delta, pipeline_entity_id, pipeline_modified)
     return delta
 
 
@@ -415,6 +447,50 @@ async def _entity_exists(
     return None
 
 
+async def _content_drifted(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    etype: str,
+    eid: str,
+    fingerprints: dict[str, str],
+) -> bool:
+    """Whether a stamped schema/agent's content drifted from its snapshot."""
+    stored = fingerprints.get(eid)
+    if not stored or etype not in ("schema", "agent"):
+        return False
+    current = await compute_entity_fingerprint(session, org_id, etype, uuid.UUID(eid))
+    return current is not None and current != stored
+
+
+async def _classify_entity(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    install: CollectionInstall,
+    fingerprints: dict[str, str],
+    etype: str,
+    eid: str,
+    states: dict[str, str],
+) -> None:
+    """Classify one installed entity, recording its state in ``states``.
+
+    Modified = provenance stamp cleared OR content drifted from the
+    install-time fingerprint snapshot. Missing = row no longer exists.
+    """
+    if eid in states:
+        return
+    entity = await _entity_exists(session, etype, uuid.UUID(eid))
+    if entity is None:
+        states[eid] = "missing"
+        return
+    if getattr(entity, "collection_install_id", None) != install.install_id:
+        states[eid] = "modified"
+        return
+    if await _content_drifted(session, org_id, etype, eid, fingerprints):
+        states[eid] = "modified"
+        return
+    states[eid] = "unmodified"
+
+
 async def _classify_entities(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -431,23 +507,7 @@ async def _classify_entities(
     for per_type in pin_entity_ids.values():
         for etype, ids in per_type.items():
             for eid in ids:
-                if eid in states:
-                    continue
-                entity = await _entity_exists(session, etype, uuid.UUID(eid))
-                if entity is None:
-                    states[eid] = "missing"
-                    continue
-                provenance = getattr(entity, "collection_install_id", None)
-                if provenance != install.install_id:
-                    states[eid] = "modified"
-                    continue
-                stored = fingerprints.get(eid)
-                if stored and etype in ("schema", "agent"):
-                    current = await compute_entity_fingerprint(session, org_id, etype, uuid.UUID(eid))
-                    if current is not None and current != stored:
-                        states[eid] = "modified"
-                        continue
-                states[eid] = "unmodified"
+                await _classify_entity(session, org_id, install, fingerprints, etype, eid, states)
     return states
 
 
@@ -472,11 +532,31 @@ async def _pipeline_state(
 # ---------------------------------------------------------------------------
 
 
+async def _legacy_add_pin(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    pin: dict[str, str],
+    id_maps: dict[str, dict[str, str]],
+    out: dict[str, dict[str, list[str]]],
+) -> None:
+    """Add one legacy pin's local entity id to ``out`` when resolvable."""
+    prim, resolved_type = await _resolve_pin_primitive(session, org_id, pin["slug"], pin["version"])
+    if prim is None:
+        return
+    use_type = pin.get("primitive_type", "") or resolved_type
+    id_map = id_maps.get(use_type)
+    if id_map is None:
+        return
+    local = id_map.get(str(prim.id))
+    if not local:
+        return
+    out.setdefault(pin["slug"], {}).setdefault(use_type, []).append(str(local))
+
+
 async def _legacy_pin_context(
     session: AsyncSession,
     org_id: uuid.UUID,
     install: CollectionInstall,
-    collection: LibraryPrimitive,
     old_pins: list[dict[str, str]],
 ) -> dict[str, dict[str, list[str]]]:
     """Best-effort pin→entity map for installs without the install snapshot.
@@ -486,23 +566,13 @@ async def _legacy_pin_context(
     mapped retroactively and are omitted.
     """
     manifest = install.resolved_manifest or {}
-    schema_map = manifest.get("schemas") or {}
-    agent_map = manifest.get("agents") or {}
+    id_maps: dict[str, dict[str, str]] = {
+        "schema": manifest.get("schemas") or {},
+        "agent": manifest.get("agents") or {},
+    }
     out: dict[str, dict[str, list[str]]] = {}
     for pin in old_pins:
-        ptype = pin.get("primitive_type", "")
-        prim, resolved_type = await _resolve_pin_primitive(session, org_id, pin["slug"], pin["version"])
-        use_type = ptype or resolved_type
-        if prim is None:
-            continue
-        if use_type == "schema":
-            local = schema_map.get(str(prim.id))
-            if local:
-                out.setdefault(pin["slug"], {}).setdefault("schema", []).append(str(local))
-        elif use_type == "agent":
-            local = agent_map.get(str(prim.id))
-            if local:
-                out.setdefault(pin["slug"], {}).setdefault("agent", []).append(str(local))
+        await _legacy_add_pin(session, org_id, pin, id_maps, out)
     return out
 
 
@@ -557,22 +627,9 @@ async def detect_collection_update(
         }
 
     warnings: list[str] = []
-    old_pins = _snapshot_pins(install, collection)
-    # Fill missing primitive types via the pin resolver (legacy snapshots).
-    for pin in old_pins:
-        if not pin.get("primitive_type"):
-            _, ptype = await _resolve_pin_primitive(session, org_id, pin["slug"], pin["version"])
-            pin["primitive_type"] = ptype
-
-    new_pin_dicts = _pins_from_manifest(newer.manifest_pins or (newer.content_json or {}).get("manifest_pins"))
-    new_pins: list[dict[str, str]] = []
-    for pin in new_pin_dicts:
-        _, ptype = await _resolve_pin_primitive(session, org_id, pin["slug"], pin["version"])
-        new_pins.append({**pin, "primitive_type": ptype})
-
-    pin_entity_ids = _pin_entity_map(install)
-    if not pin_entity_ids:
-        pin_entity_ids = await _legacy_pin_context(session, org_id, install, collection, old_pins)
+    old_pins = await _load_old_pins(session, org_id, install, collection)
+    new_pins, _ = await _load_new_pins(session, org_id, newer)
+    pin_entity_ids = await _load_pin_entity_ids(session, org_id, install, old_pins)
 
     entity_states = await _classify_entities(session, org_id, install, pin_entity_ids)
     pipeline_id, pipeline_modified = await _pipeline_state(
@@ -750,6 +807,261 @@ def _schema_slug_map(pin_entity_ids: dict[str, dict[str, list[str]]]) -> dict[st
 # ---------------------------------------------------------------------------
 
 
+class _CollectionReconciler:
+    """Applies a collection delta in place, recording what changed and why.
+
+    Holds the reconciliation state (warnings, reconciled / preserved /
+    reported lists) and the refreshed fingerprint map for one upgrade so each
+    step stays small and independently testable.
+    """
+
+    def __init__(
+        self,
+        session: AsyncSession,
+        org_id: uuid.UUID,
+        pin_entity_ids: dict[str, dict[str, list[str]]],
+        new_pin_prims: dict[str, LibraryPrimitive],
+        schema_map: dict[str, uuid.UUID],
+        new_fingerprints: dict[str, str],
+    ) -> None:
+        self._session = session
+        self._org_id = org_id
+        self._pin_entity_ids = pin_entity_ids
+        self._new_pin_prims = new_pin_prims
+        self._schema_map = schema_map
+        self._new_fingerprints = new_fingerprints
+        self.warnings: list[str] = []
+        self.reconciled: list[dict[str, str]] = []
+        self.preserved: list[dict[str, str]] = []
+        self.reported: list[dict[str, str]] = []
+
+    async def reconcile_delta(self, delta: dict[str, list[dict[str, Any]]]) -> None:
+        """Reconcile changed pins: schemas first (agents may reference them), then agents, then workflows."""
+        for bucket in ("schemas", "agents", "pipelines"):
+            for entry in delta[bucket]:
+                await self._reconcile_entry(entry)
+
+    async def _reconcile_entry(self, entry: dict[str, Any]) -> None:
+        change = entry["change"]
+        slug = entry["slug"]
+        if change in ("added", "removed"):
+            self.reported.append({"slug": slug or "", "change": change, "entity_type": entry["entity_type"]})
+            return
+        if change == "unchanged":
+            return
+        ptype = entry["entity_type"]
+        new_prim = self._new_pin_prims.get(slug) if slug else None
+        if ptype == "schema":
+            await self._reconcile_schema_pin(entry, slug, new_prim)
+        elif ptype == "agent":
+            await self._reconcile_agent_pin(entry, slug, new_prim)
+        elif ptype in ("workflow", "pipeline_template"):
+            await self._reconcile_embedded_pin(entry, slug, new_prim)
+
+    async def _reconcile_schema_pin(self, entry: dict[str, Any], slug: str, new_prim: LibraryPrimitive | None) -> None:
+        if new_prim is None:
+            self._warn_unresolved(entry, slug)
+            return
+        definition = _schema_definition_from_content(new_prim.content_json or {})
+        for ent in entry["entities"]:
+            if ent["entity_type"] != "schema":
+                continue
+            if ent["modified"]:
+                self.preserved.append({"slug": slug, "entity_type": "schema", "entity_id": ent["entity_id"]})
+                continue
+            eid = uuid.UUID(ent["entity_id"])
+            ok = await _reconcile_schema_entity(
+                self._session,
+                self._org_id,
+                eid,
+                definition,
+                new_prim.description,
+                (new_prim.content_json or {}).get("abstract_name"),
+                self.warnings,
+            )
+            if ok:
+                await self._fingerprint_and_record("schema", ent["entity_id"], slug)
+
+    async def _reconcile_agent_pin(self, entry: dict[str, Any], slug: str, new_prim: LibraryPrimitive | None) -> None:
+        if new_prim is None:
+            self._warn_unresolved(entry, slug)
+            return
+        for ent in entry["entities"]:
+            if ent["entity_type"] != "agent":
+                continue
+            if ent["modified"]:
+                self.preserved.append({"slug": slug, "entity_type": "agent", "entity_id": ent["entity_id"]})
+                continue
+            eid = uuid.UUID(ent["entity_id"])
+            ok = await _reconcile_agent_entity(
+                self._session,
+                self._org_id,
+                eid,
+                new_prim.content_json or {},
+                self._schema_map,
+                self.warnings,
+            )
+            if ok:
+                await self._fingerprint_and_record("agent", ent["entity_id"], slug)
+
+    async def _reconcile_embedded_pin(
+        self, entry: dict[str, Any], slug: str, new_prim: LibraryPrimitive | None
+    ) -> None:
+        for ent in entry["entities"]:
+            if ent["entity_type"] == "pipeline":
+                # The pipeline graph is never auto-rewritten.
+                self.preserved.append(
+                    {"slug": slug, "entity_type": "pipeline", "entity_id": ent["entity_id"], "reason": "structural"}
+                )
+                continue
+            if ent["modified"]:
+                self.preserved.append(
+                    {
+                        "slug": slug,
+                        "entity_type": ent["entity_type"],
+                        "entity_id": ent["entity_id"],
+                        "reason": "modified",
+                    }
+                )
+                continue
+            if new_prim is None:
+                self._warn_unresolved(entry, slug)
+                continue
+            await self._reconcile_embedded_entity(entry, slug, ent, new_prim)
+
+    async def _reconcile_embedded_entity(
+        self, entry: dict[str, Any], slug: str, ent: dict[str, Any], new_prim: LibraryPrimitive
+    ) -> None:
+        eid = uuid.UUID(ent["entity_id"])
+        if ent["entity_type"] == "agent":
+            ok = await self._reconcile_embedded_agent(ent, slug, eid, new_prim)
+        else:
+            ok = await self._reconcile_embedded_schema(ent, slug, eid, new_prim)
+        if ok:
+            await self._fingerprint_and_record(ent["entity_type"], ent["entity_id"], slug)
+
+    async def _reconcile_embedded_agent(
+        self, ent: dict[str, Any], slug: str, eid: uuid.UUID, new_prim: LibraryPrimitive
+    ) -> bool:
+        embedded = _embedded_agent_contents(new_prim)
+        idx = self._embedded_index(slug, "agent", ent["entity_id"], embedded)
+        if idx < 0:
+            self.warnings.append(f"Embedded agent {ent['entity_id']} of pin '{slug}' not aligned; skipped.")
+            return False
+        return await _reconcile_agent_entity(
+            self._session, self._org_id, eid, embedded[idx], self._schema_map, self.warnings
+        )
+
+    async def _reconcile_embedded_schema(
+        self, ent: dict[str, Any], slug: str, eid: uuid.UUID, new_prim: LibraryPrimitive
+    ) -> bool:
+        embedded_schemas = _embedded_schema_contents(new_prim)
+        idx = self._embedded_index(slug, "schema", ent["entity_id"], embedded_schemas)
+        if idx < 0:
+            self.warnings.append(f"Embedded schema {ent['entity_id']} of pin '{slug}' not aligned; skipped.")
+            return False
+        entry_content = embedded_schemas[idx]
+        return await _reconcile_schema_entity(
+            self._session,
+            self._org_id,
+            eid,
+            entry_content.get("definition_json"),
+            entry_content.get("description"),
+            entry_content.get("abstract_name"),
+            self.warnings,
+        )
+
+    def _embedded_index(self, slug: str, etype: str, entity_id: str, embedded: list[dict[str, Any]]) -> int:
+        """Resolve an embedded entity's index in the new pin, or -1 when unaligned."""
+        old_ids = (self._pin_entity_ids.get(slug) or {}).get(etype) or []
+        idx = old_ids.index(entity_id) if entity_id in old_ids else -1
+        if idx < 0 or idx >= len(embedded):
+            return -1
+        return idx
+
+    def _warn_unresolved(self, entry: dict[str, Any], slug: str) -> None:
+        self.warnings.append(f"Pin '{slug}' could not be resolved at version {entry['to_version']}; skipped.")
+
+    async def _fingerprint_and_record(self, etype: str, entity_id: str, slug: str) -> None:
+        """Refresh the reconciled entity's fingerprint and record it."""
+        fp = await compute_entity_fingerprint(self._session, self._org_id, etype, uuid.UUID(entity_id))
+        if fp:
+            self._new_fingerprints[entity_id] = fp
+        self.reconciled.append({"slug": slug, "entity_type": etype, "entity_id": entity_id})
+
+
+async def _load_old_pins(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    install: CollectionInstall,
+    collection: LibraryPrimitive,
+) -> list[dict[str, str]]:
+    """Snapshot pins, filling missing primitive types via the pin resolver."""
+    old_pins = _snapshot_pins(install, collection)
+    for pin in old_pins:
+        if not pin.get("primitive_type"):
+            _, ptype = await _resolve_pin_primitive(session, org_id, pin["slug"], pin["version"])
+            pin["primitive_type"] = ptype
+    return old_pins
+
+
+async def _load_new_pins(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    newer: LibraryPrimitive,
+) -> tuple[list[dict[str, str]], dict[str, LibraryPrimitive]]:
+    """Resolve the newer version's manifest pins and the primitives they map to."""
+    new_pin_dicts = _pins_from_manifest(newer.manifest_pins or (newer.content_json or {}).get("manifest_pins"))
+    new_pins: list[dict[str, str]] = []
+    new_pin_prims: dict[str, LibraryPrimitive] = {}
+    for pin in new_pin_dicts:
+        prim, ptype = await _resolve_pin_primitive(session, org_id, pin["slug"], pin["version"])
+        new_pins.append({**pin, "primitive_type": ptype})
+        if prim is not None:
+            new_pin_prims[pin["slug"]] = prim
+    return new_pins, new_pin_prims
+
+
+async def _load_pin_entity_ids(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    install: CollectionInstall,
+    old_pins: list[dict[str, str]],
+) -> dict[str, dict[str, list[str]]]:
+    """Install-time pin→entity map, falling back to the legacy context."""
+    pin_entity_ids = _pin_entity_map(install)
+    if not pin_entity_ids:
+        pin_entity_ids = await _legacy_pin_context(session, org_id, install, old_pins)
+    return pin_entity_ids
+
+
+def _apply_new_snapshot(
+    install: CollectionInstall,
+    collection: LibraryPrimitive,
+    newer: LibraryPrimitive,
+    new_pins: list[dict[str, str]],
+    pin_entity_ids: dict[str, dict[str, list[str]]],
+    new_fingerprints: dict[str, str],
+) -> None:
+    """Point the install at the new version row and refresh its snapshot."""
+    new_snapshot_pins = [
+        {"slug": p["slug"], "version": p["version"], "primitive_type": p["primitive_type"]} for p in new_pins
+    ]
+    new_pin_entity_ids: dict[str, dict[str, list[str]]] = {
+        slug: per_type for slug, per_type in pin_entity_ids.items() if slug in {p["slug"] for p in new_pins}
+    }
+    manifest = dict(install.resolved_manifest or {})
+    manifest["pins"] = new_snapshot_pins
+    manifest["pin_entity_ids"] = new_pin_entity_ids
+    manifest["entity_fingerprints"] = new_fingerprints
+    install.resolved_manifest = manifest
+    install.collection_id = newer.id
+    install.collection_version = newer.version
+    # The old row's back-propagation stamp is now stale — the install moved on.
+    if collection.update_available_version_id is not None:
+        collection.update_available_version_id = None
+
+
 async def upgrade_collection(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -784,32 +1096,14 @@ async def upgrade_collection(
             f"'{install.collection_version or collection.version}'"
         )
 
-    warnings: list[str] = []
     from_version = install.collection_version or collection.version
-    old_pins = _snapshot_pins(install, collection)
-    for pin in old_pins:
-        if not pin.get("primitive_type"):
-            _, ptype = await _resolve_pin_primitive(session, org_id, pin["slug"], pin["version"])
-            pin["primitive_type"] = ptype
-
-    new_pin_dicts = _pins_from_manifest(newer.manifest_pins or (newer.content_json or {}).get("manifest_pins"))
-    new_pins: list[dict[str, str]] = []
-    new_pin_prims: dict[str, LibraryPrimitive] = {}
-    for pin in new_pin_dicts:
-        prim, ptype = await _resolve_pin_primitive(session, org_id, pin["slug"], pin["version"])
-        new_pins.append({**pin, "primitive_type": ptype})
-        if prim is not None:
-            new_pin_prims[pin["slug"]] = prim
-
-    pin_entity_ids = _pin_entity_map(install)
-    if not pin_entity_ids:
-        pin_entity_ids = await _legacy_pin_context(session, org_id, install, collection, old_pins)
-
+    old_pins = await _load_old_pins(session, org_id, install, collection)
+    new_pins, new_pin_prims = await _load_new_pins(session, org_id, newer)
+    pin_entity_ids = await _load_pin_entity_ids(session, org_id, install, old_pins)
     entity_states = await _classify_entities(session, org_id, install, pin_entity_ids)
     pipeline_id, pipeline_modified = await _pipeline_state(
         session, install, (install.resolved_manifest or {}).get("pipeline_id")
     )
-
     delta = build_collection_delta(
         old_pins,
         new_pins,
@@ -819,167 +1113,26 @@ async def upgrade_collection(
         pipeline_modified,
     )
 
-    schema_map = _schema_slug_map(pin_entity_ids)
-    reconciled: list[dict[str, str]] = []
-    preserved: list[dict[str, str]] = []
-    reported: list[dict[str, str]] = []
     new_fingerprints: dict[str, str] = dict((install.resolved_manifest or {}).get("entity_fingerprints") or {})
+    reconciler = _CollectionReconciler(
+        session,
+        org_id,
+        pin_entity_ids,
+        new_pin_prims,
+        _schema_slug_map(pin_entity_ids),
+        new_fingerprints,
+    )
+    await reconciler.reconcile_delta(delta)
 
-    def _record_reconciled(slug: str, etype: str, eid: str) -> None:
-        reconciled.append({"slug": slug, "entity_type": etype, "entity_id": eid})
-
-    # Reconcile changed pins: schemas first (agents may reference them), then
-    # agents, then workflow/template embedded entities.
-    for bucket in ("schemas", "agents", "pipelines"):
-        for entry in delta[bucket]:
-            change = entry["change"]
-            slug = entry["slug"]
-            if change in ("added", "removed"):
-                reported.append({"slug": slug or "", "change": change, "entity_type": entry["entity_type"]})
-                continue
-            if change == "unchanged":
-                continue
-
-            ptype = entry["entity_type"]
-            new_prim = new_pin_prims.get(slug) if slug else None
-
-            if ptype == "schema":
-                if new_prim is None:
-                    warnings.append(f"Pin '{slug}' could not be resolved at version {entry['to_version']}; skipped.")
-                    continue
-                definition = _schema_definition_from_content(new_prim.content_json or {})
-                for ent in entry["entities"]:
-                    if ent["entity_type"] != "schema":
-                        continue
-                    if ent["modified"]:
-                        preserved.append({"slug": slug, "entity_type": "schema", "entity_id": ent["entity_id"]})
-                        continue
-                    eid = uuid.UUID(ent["entity_id"])
-                    ok = await _reconcile_schema_entity(
-                        session,
-                        org_id,
-                        eid,
-                        definition,
-                        new_prim.description,
-                        (new_prim.content_json or {}).get("abstract_name"),
-                        warnings,
-                    )
-                    if ok:
-                        fp = await compute_entity_fingerprint(session, org_id, "schema", eid)
-                        if fp:
-                            new_fingerprints[ent["entity_id"]] = fp
-                        _record_reconciled(slug, "schema", ent["entity_id"])
-
-            elif ptype == "agent":
-                if new_prim is None:
-                    warnings.append(f"Pin '{slug}' could not be resolved at version {entry['to_version']}; skipped.")
-                    continue
-                for ent in entry["entities"]:
-                    if ent["entity_type"] != "agent":
-                        continue
-                    if ent["modified"]:
-                        preserved.append({"slug": slug, "entity_type": "agent", "entity_id": ent["entity_id"]})
-                        continue
-                    eid = uuid.UUID(ent["entity_id"])
-                    ok = await _reconcile_agent_entity(
-                        session,
-                        org_id,
-                        eid,
-                        new_prim.content_json or {},
-                        schema_map,
-                        warnings,
-                    )
-                    if ok:
-                        fp = await compute_entity_fingerprint(session, org_id, "agent", eid)
-                        if fp:
-                            new_fingerprints[ent["entity_id"]] = fp
-                        _record_reconciled(slug, "agent", ent["entity_id"])
-
-            elif ptype in ("workflow", "pipeline_template"):
-                for ent in entry["entities"]:
-                    if ent["entity_type"] == "pipeline":
-                        # The pipeline graph is never auto-rewritten.
-                        preserved.append(
-                            {
-                                "slug": slug,
-                                "entity_type": "pipeline",
-                                "entity_id": ent["entity_id"],
-                                "reason": "structural",
-                            }
-                        )
-                        continue
-                    if ent["modified"]:
-                        preserved.append(
-                            {
-                                "slug": slug,
-                                "entity_type": ent["entity_type"],
-                                "entity_id": ent["entity_id"],
-                                "reason": "modified",
-                            }
-                        )
-                        continue
-                    if new_prim is None:
-                        warnings.append(
-                            f"Pin '{slug}' could not be resolved at version {entry['to_version']}; skipped."
-                        )
-                        continue
-                    eid = uuid.UUID(ent["entity_id"])
-                    if ent["entity_type"] == "agent":
-                        embedded = _embedded_agent_contents(new_prim)
-                        old_ids = (pin_entity_ids.get(slug) or {}).get("agent") or []
-                        idx = old_ids.index(ent["entity_id"]) if ent["entity_id"] in old_ids else -1
-                        if idx < 0 or idx >= len(embedded):
-                            warnings.append(f"Embedded agent {ent['entity_id']} of pin '{slug}' not aligned; skipped.")
-                            continue
-                        ok = await _reconcile_agent_entity(session, org_id, eid, embedded[idx], schema_map, warnings)
-                    else:
-                        embedded_schemas = _embedded_schema_contents(new_prim)
-                        old_ids = (pin_entity_ids.get(slug) or {}).get("schema") or []
-                        idx = old_ids.index(ent["entity_id"]) if ent["entity_id"] in old_ids else -1
-                        if idx < 0 or idx >= len(embedded_schemas):
-                            warnings.append(f"Embedded schema {ent['entity_id']} of pin '{slug}' not aligned; skipped.")
-                            continue
-                        entry_content = embedded_schemas[idx]
-                        ok = await _reconcile_schema_entity(
-                            session,
-                            org_id,
-                            eid,
-                            entry_content.get("definition_json"),
-                            entry_content.get("description"),
-                            entry_content.get("abstract_name"),
-                            warnings,
-                        )
-                    if ok:
-                        fp = await compute_entity_fingerprint(session, org_id, ent["entity_type"], eid)
-                        if fp:
-                            new_fingerprints[ent["entity_id"]] = fp
-                        _record_reconciled(slug, ent["entity_type"], ent["entity_id"])
-
-    # Point the install at the new version row and refresh the snapshot.
-    new_snapshot_pins = [
-        {"slug": p["slug"], "version": p["version"], "primitive_type": p["primitive_type"]} for p in new_pins
-    ]
-    new_pin_entity_ids: dict[str, dict[str, list[str]]] = {
-        slug: per_type for slug, per_type in pin_entity_ids.items() if slug in {p["slug"] for p in new_pins}
-    }
-    manifest = dict(install.resolved_manifest or {})
-    manifest["pins"] = new_snapshot_pins
-    manifest["pin_entity_ids"] = new_pin_entity_ids
-    manifest["entity_fingerprints"] = new_fingerprints
-    install.resolved_manifest = manifest
-    install.collection_id = newer.id
-    install.collection_version = newer.version
-    # The old row's back-propagation stamp is now stale — the install moved on.
-    if collection.update_available_version_id is not None:
-        collection.update_available_version_id = None
+    _apply_new_snapshot(install, collection, newer, new_pins, pin_entity_ids, new_fingerprints)
     await session.flush()
 
     return {
         "install_id": str(install_id),
         "from_version": from_version,
         "to_version": newer.version,
-        "reconciled": reconciled,
-        "preserved": preserved,
-        "reported": reported,
-        "warnings": warnings,
+        "reconciled": reconciler.reconciled,
+        "preserved": reconciler.preserved,
+        "reported": reconciler.reported,
+        "warnings": reconciler.warnings,
     }

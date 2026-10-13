@@ -542,7 +542,6 @@ class TestLegacyPinContext:
     async def test_maps_schema_and_agent(self) -> None:
         org = uuid.uuid4()
         install = _install(org_id=org, manifest={"schemas": {"prim-s": "local-s"}, "agents": {"prim-a": "local-a"}})
-        collection = _prim()
         old_pins = [
             {"slug": "s", "version": "1.0", "primitive_type": "schema"},
             {"slug": "a", "version": "1.0", "primitive_type": "agent"},
@@ -562,7 +561,7 @@ class TestLegacyPinContext:
             return None, "schema"
 
         with patch.object(upgrade, "_resolve_pin_primitive", side_effect=_resolve):
-            out = await _legacy_pin_context(AsyncMock(), org, install, collection, old_pins)
+            out = await _legacy_pin_context(AsyncMock(), org, install, old_pins)
         assert out == {"s": {"schema": ["local-s"]}, "a": {"agent": ["local-a"]}}
 
     async def test_unmapped_local_id_skipped(self) -> None:
@@ -576,7 +575,7 @@ class TestLegacyPinContext:
 
         with patch.object(upgrade, "_resolve_pin_primitive", side_effect=_resolve):
             out = await _legacy_pin_context(
-                AsyncMock(), org, install, _prim(), [{"slug": "s", "version": "1.0", "primitive_type": ""}]
+                AsyncMock(), org, install, [{"slug": "s", "version": "1.0", "primitive_type": ""}]
             )
         assert out == {}
 
@@ -598,7 +597,6 @@ class TestLegacyPinContext:
                 AsyncMock(),
                 org,
                 install,
-                _prim(),
                 [
                     {"slug": "a", "version": "1.0", "primitive_type": ""},
                     {"slug": "wf", "version": "1.0", "primitive_type": ""},

@@ -21,6 +21,7 @@ import hashlib
 import json
 import logging
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import inspect as sa_inspect
@@ -751,6 +752,67 @@ async def snapshot_entity_fingerprints(
     return fingerprints
 
 
+def _map_embedded_pin_entities(
+    pin: LibraryPrimitive,
+    agent_pool: list[str],
+    schema_pool: list[str],
+    agent_cursor: int,
+    schema_cursor: int,
+    add: Callable[[str, str, str], None],
+) -> tuple[int, int]:
+    """Map one workflow / pipeline_template pin's embedded entities.
+
+    Consumes the id-map pools in bundle order for the embedded agents (and,
+    for a workflow, its embedded schemas), matching how
+    ``_build_bundle_from_pins`` emitted them per pin. Returns the advanced
+    pool cursors.
+    """
+    content = pin.content_json or {}
+    if pin.primitive_type == "workflow":
+        content = content.get("bundle") or content
+        schemas = content.get("schemas") or []
+    else:
+        schemas = []
+    agents = content.get("agents") or []
+    for local_id in agent_pool[agent_cursor : agent_cursor + len(agents)]:
+        add(pin.slug, "agent", str(local_id))
+    agent_cursor += len(agents)
+    for local_id in schema_pool[schema_cursor : schema_cursor + len(schemas)]:
+        add(pin.slug, "schema", str(local_id))
+    schema_cursor += len(schemas)
+    return agent_cursor, schema_cursor
+
+
+def _map_standalone_pin(
+    pin: LibraryPrimitive,
+    schemas_map: dict[str, str],
+    agents_map: dict[str, str],
+    add: Callable[[str, str, str], None],
+) -> None:
+    """Add a standalone schema/agent pin's local entity id when present."""
+    if pin.primitive_type == "schema":
+        local = schemas_map.get(str(pin.id))
+        etype = "schema"
+    else:
+        local = agents_map.get(str(pin.id))
+        etype = "agent"
+    if local:
+        add(pin.slug, etype, str(local))
+
+
+def _pin_embed_pools(
+    resolved_pins: list[LibraryPrimitive],
+    agents_map: dict[str, str],
+    schemas_map: dict[str, str],
+) -> tuple[list[str], list[str]]:
+    """Embedded id-map pools: map values excluding standalone pin exports."""
+    standalone_agent_exports = {str(p.id) for p in resolved_pins if p.primitive_type == "agent"}
+    standalone_schema_exports = {str(p.id) for p in resolved_pins if p.primitive_type == "schema"}
+    agent_pool = [v for k, v in agents_map.items() if k not in standalone_agent_exports]
+    schema_pool = [v for k, v in schemas_map.items() if k not in standalone_schema_exports]
+    return agent_pool, schema_pool
+
+
 def _map_pin_entity_ids(
     resolved_pins: list[LibraryPrimitive],
     result: dict[str, Any],
@@ -766,10 +828,7 @@ def _map_pin_entity_ids(
     """
     agents_map: dict[str, str] = result.get("agents", {}) or {}
     schemas_map: dict[str, str] = result.get("schemas", {}) or {}
-    standalone_agent_exports = {str(p.id) for p in resolved_pins if p.primitive_type == "agent"}
-    standalone_schema_exports = {str(p.id) for p in resolved_pins if p.primitive_type == "schema"}
-    agent_pool = [v for k, v in agents_map.items() if k not in standalone_agent_exports]
-    schema_pool = [v for k, v in schemas_map.items() if k not in standalone_schema_exports]
+    agent_pool, schema_pool = _pin_embed_pools(resolved_pins, agents_map, schemas_map)
 
     out: dict[str, dict[str, list[str]]] = {}
 
@@ -779,30 +838,12 @@ def _map_pin_entity_ids(
     agent_cursor = 0
     schema_cursor = 0
     for pin in resolved_pins:
-        content = pin.content_json or {}
-        if pin.primitive_type == "schema":
-            local = schemas_map.get(str(pin.id))
-            if local:
-                _add(pin.slug, "schema", str(local))
-        elif pin.primitive_type == "agent":
-            local = agents_map.get(str(pin.id))
-            if local:
-                _add(pin.slug, "agent", str(local))
-        elif pin.primitive_type == "workflow":
-            workflow_content = content.get("bundle") or content
-            n_agents = len(workflow_content.get("agents") or [])
-            n_schemas = len(workflow_content.get("schemas") or [])
-            for local_id in agent_pool[agent_cursor : agent_cursor + n_agents]:
-                _add(pin.slug, "agent", str(local_id))
-            agent_cursor += n_agents
-            for local_id in schema_pool[schema_cursor : schema_cursor + n_schemas]:
-                _add(pin.slug, "schema", str(local_id))
-            schema_cursor += n_schemas
-        elif pin.primitive_type == "pipeline_template":
-            n_agents = len(content.get("agents") or [])
-            for local_id in agent_pool[agent_cursor : agent_cursor + n_agents]:
-                _add(pin.slug, "agent", str(local_id))
-            agent_cursor += n_agents
+        if pin.primitive_type in ("schema", "agent"):
+            _map_standalone_pin(pin, schemas_map, agents_map, _add)
+        elif pin.primitive_type in ("workflow", "pipeline_template"):
+            agent_cursor, schema_cursor = _map_embedded_pin_entities(
+                pin, agent_pool, schema_pool, agent_cursor, schema_cursor, _add
+            )
     return out
 
 
