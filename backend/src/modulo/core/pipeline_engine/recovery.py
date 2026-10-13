@@ -190,6 +190,37 @@ async def _run_has_resumable_checkpoint(
     return result.first() is not None
 
 
+async def _resolve_override_node_started(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    run: Run,
+    run_id: uuid.UUID,
+) -> bool:
+    """Resolve the override's node-progress discriminator, enforcing FAR-1711 M1.
+
+    Returns ``True`` for a node-STARTED run (the durable ``first_node_dispatched``
+    phase a node-scoped ``block`` eval leaves behind when it terminalizes the run
+    from a completed node) and ``False`` for the genuine zero-node block
+    (run-level interception at creation, NULL / pre-node phase).
+
+    FAR-1711 (M1): a node-STARTED block is remediable ONLY by resuming from
+    checkpoint (FAR-1649 — never re-execute a node-started run), so a run whose
+    thread carries no root checkpoint cannot be remediated by
+    :func:`guardrail_override` at all. Fail CLOSED here — before the guardrail
+    pass and before any state write — so the run stays terminal
+    ``eval_failed``/``eval_blocked`` (still overridable / repairable) rather than
+    being flipped and then silently re-executed by a ``resume_run`` that finds
+    nothing to resume.
+    """
+    node_started = run.dispatch_phase == PHASE_FIRST_NODE_DISPATCHED
+    if not node_started:
+        return False
+    if not await _run_has_resumable_checkpoint(session, org_id=org_id, thread_id=run.langgraph_thread_id):
+        raise GuardrailOverrideNoCheckpointError(run_id)
+    return True
+
+
 def _immediately_claimable_heartbeat() -> datetime:
     """A heartbeat stamped one full claim-stale window (plus skew) in the past.
 
@@ -203,6 +234,25 @@ def _immediately_claimable_heartbeat() -> datetime:
 
     stale_seconds = int(get_settings().run_claim_stale_seconds)
     return datetime.now(UTC) - timedelta(seconds=stale_seconds + _CLAIM_STALE_SKEW_GUARD_SECONDS)
+
+
+def _override_flip_values(node_started: bool) -> tuple[str, dict[str, Any], datetime | None]:
+    """Status UPDATE values for a guardrail override (FAR-1711).
+
+    A node-STARTED run flips to ``running`` (the recover-node lock status whose
+    stale-running arm the resume claim matches) and carries a ``heartbeat_at``
+    stamped one claim-stale window into the past so the resume claim is
+    IMMEDIATELY claimable; the genuine zero-node block flips to ``pending`` with
+    no heartbeat stamp. Returns ``(new_status, update_values, stale_heartbeat)``.
+    """
+    if not node_started:
+        return "pending", {"status": "pending"}, None
+    stale_heartbeat = _immediately_claimable_heartbeat()
+    return (
+        _RECOVERY_LOCK_STATUS,
+        {"status": _RECOVERY_LOCK_STATUS, "heartbeat_at": stale_heartbeat},
+        stale_heartbeat,
+    )
 
 
 def guardrail_override_job_type(run: Run) -> str:
@@ -597,23 +647,14 @@ async def guardrail_override(
             f"{POLICY_GATE_PIN_MISMATCH_MARKER} — not overridable; create a new run",
         )
 
-    # FAR-1711 (M1): a node-STARTED block is remediable ONLY by resuming from
-    # checkpoint (FAR-1649 — never re-execute a node-started run), so a run
-    # whose thread carries no root checkpoint cannot be remediated here at
-    # all. Fail CLOSED before the guardrail pass and before any state write:
-    # the run stays terminal ``eval_failed``/``eval_blocked`` (overridable /
-    # repairable later) instead of being flipped and then silently
-    # re-executed by a ``resume_run`` that finds nothing to resume. The
-    # reachable shape is a NON-interactive pipeline (no HITL gate, no
-    # ``manual`` node) whose node-scoped ``block`` eval terminalized the run —
-    # the executor attaches no checkpointer there (FAR-432), so none was
-    # ever persisted. Same precondition grouping as the pin-mismatch refusal
-    # above: a mechanism/state failure no input can remediate.
-    node_started = run.dispatch_phase == PHASE_FIRST_NODE_DISPATCHED
-    if node_started and not await _run_has_resumable_checkpoint(
-        session, org_id=org_id, thread_id=run.langgraph_thread_id
-    ):
-        raise GuardrailOverrideNoCheckpointError(run_id)
+    # FAR-1711 (M1): resolve the node-progress discriminator AND enforce its
+    # resumable-checkpoint precondition (fail CLOSED) here — before the
+    # guardrail pass and before any state write — so a node-started block with
+    # no checkpoint to resume from is refused while it is still terminal rather
+    # than flipped and silently re-executed. Same precondition grouping as the
+    # pin-mismatch refusal above: a mechanism/state failure no input can
+    # remediate. See :func:`_resolve_override_node_started`.
+    node_started = await _resolve_override_node_started(session, org_id=org_id, run=run, run_id=run_id)
 
     # Re-run the guardrail pass on the operator-supplied input BEFORE flipping
     # the run (re-block safe default). Persisted state is post-redaction.
@@ -660,33 +701,19 @@ async def guardrail_override(
         )
 
     # FAR-1711: node-progress gate. A node-SCOPED ``block`` eval terminalizes
-    # the run from a COMPLETED node (executor maps EvalBlockedError ->
-    # eval_failed/eval_blocked), so the "blocked run never executed" premise
+    # the run from a COMPLETED node, so the "blocked run never executed" premise
     # is FALSE for that class: such a row carries the durable
-    # ``first_node_dispatched`` phase (FAR-1422 — the phase never advances
-    # past it). FAR-1649: a node-started run may only be resumed from
-    # checkpoint, never re-executed, so the flip target branches here and the
-    # caller re-dispatches ``resume_run`` for the ``running`` outcome — the
-    # recover-node lock status, whose stale-running arm the resume claim
-    # matches. The genuine zero-node block (run-level interception at
-    # creation, NULL / pre-node phase) keeps the original ``pending`` flip +
-    # ``execute_run`` re-dispatch from run start. ``PHASE_FIRST_NODE_DISPATCHED``
-    # is the ONE shared discriminator every reconcile re-dispatch decision
-    # binds (cron belt, F6a leg, slot sweep) — never a bare literal.
+    # ``first_node_dispatched`` phase (FAR-1422). FAR-1649: a node-started run
+    # may only be resumed from checkpoint, never re-executed, so the flip target
+    # branches — ``running`` (the recover-node lock status the resume claim
+    # matches, with its heartbeat stamped stale so the claim is immediately
+    # claimable — FAR-1711 C1) for a node-started run, ``pending`` for the
+    # genuine zero-node block (re-dispatched ``execute_run`` from run start).
+    # ``PHASE_FIRST_NODE_DISPATCHED`` is the ONE shared discriminator every
+    # reconcile re-dispatch decision binds — never a bare literal.
     # ``node_started`` was resolved (and its resumable-checkpoint precondition
     # enforced) BEFORE the guardrail pass above.
-    new_status = _RECOVERY_LOCK_STATUS if node_started else "pending"
-    flip_values: dict[str, Any] = {"status": new_status}
-    stale_heartbeat: datetime | None = None
-    if node_started:
-        # FAR-1711 (C1): the flip must leave the row IMMEDIATELY claimable.
-        # The resume claim matches a ``running`` row only when its heartbeat is
-        # older than ``run_claim_stale_seconds``; a run terminalised at block
-        # time keeps a FRESH heartbeat, so a bare status flip is unclaimable
-        # for a whole stale window and the override is silently lost. Stamp the
-        # heartbeat back in the SAME UPDATE (atomic with the flip).
-        stale_heartbeat = _immediately_claimable_heartbeat()
-        flip_values["heartbeat_at"] = stale_heartbeat
+    new_status, flip_values, stale_heartbeat = _override_flip_values(node_started)
 
     # Optimistic status UPDATE — a concurrent override loses the WHERE match.
     stmt = (

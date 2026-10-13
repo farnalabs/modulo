@@ -402,6 +402,43 @@ async def test_guardrail_override_node_started_run_without_checkpoint_fails_clos
     assert session.execute.await_count == 4
 
 
+@pytest.mark.asyncio
+async def test_guardrail_override_node_started_run_without_thread_id_fails_closed():
+    """FAR-1711 (M1): a node-STARTED run whose ``langgraph_thread_id`` is NULL
+    can never carry a root checkpoint, so the override fails closed WITHOUT even
+    probing the ``checkpoints`` table — the ``not thread_id`` short-circuit the
+    existence probe exists for. Same refusal as the no-checkpoint case, reached
+    before any SQL probe (3 execute calls: run, pipeline lock, run re-read)."""
+    run = _make_run(
+        input_payload={"body": "clean"},
+        dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
+    )
+    run.langgraph_thread_id = None
+    session = _mock_session()
+    _session_execute_results(session, run=run, rows=[_guardrail_row()], node_started=True, has_checkpoint=True)
+
+    with (
+        patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
+        pytest.raises(GuardrailOverrideNoCheckpointError),
+    ):
+        await guardrail_override(
+            session,
+            org_id=_ORG_ID,
+            run_id=_RUN_ID,
+            input_data={"body": "clean replacement text"},
+            actor_id=_ACTOR_ID,
+        )
+
+    # Fail CLOSED before any state write; the run keeps its terminal block state.
+    assert run.status == "eval_failed"
+    assert run.error_code == "eval_blocked"
+    assert run.is_replay is False
+    mock_audit.assert_not_called()
+    # The checkpoint probe short-circuits on the NULL thread id: run, pipeline
+    # lock, run re-read — and NO checkpoint SELECT.
+    assert session.execute.await_count == 3
+
+
 def test_guardrail_override_job_type_follows_the_flip_target():
     """FAR-1711 (m1): the re-dispatch job type comes from the ONE shared
     predicate ``guardrail_override_job_type`` (owned by the module that owns
