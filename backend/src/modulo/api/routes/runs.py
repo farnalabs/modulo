@@ -2520,7 +2520,7 @@ async def _do_get_run_logs(
     events = [
         {
             "event_type": row.event_type,
-            "detail": sanitize_error_text(str((row.payload_json or {}).get("detail", ""))),
+            "detail": sanitize_error_text((row.payload_json or {}).get("detail")),
             "recorded_at": row.created_at,
         }
         for row in event_rows
