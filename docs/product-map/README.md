@@ -89,6 +89,7 @@ Fresh entries for these features are added to the graph below as behaviour track
 - **feat-library-collections** - Install, uninstall, and manage library collection installs into runnable org entities (flag-gated behind `library_collection`; see FAR-760 / FAR-762 / FAR-764) - routes: `/library/collections/new`, `/library/collections/:id`
 - **feat-runs** - Run execution, history, and detail (Output Diff deferred from the MVP nav – hidden via private_preview; see FAR-542) - routes: `/runs`, `/runs/:id`
 - **feat-lifecycle-maps** - Lifecycle maps and stage workflows - routes: `/lifecycle-maps`, `/lifecycle-maps/:id/editor`, `/lifecycle-maps/:id`
+- **feat-governance-stack** - Read-only governance-hierarchy taxonomy readout over existing list APIs - routes: `/governance`
 
 ### Monitor
 - **feat-observability** - Error dashboard and observability exports (Error Forwarders and Browser Monitoring deferred from the MVP nav – hidden via private_preview; see FAR-547 / FAR-543) - routes: `/settings/observability`, `/admin/errors`, `/admin/errors/:id`
@@ -1209,6 +1210,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 ### Build
 - [feat-dashboard](build/dashboard.md) => PRD 8.20
 - [feat-runs](build/runs.md) => PRD N/A
+- [feat-governance-stack](governance/governance-stack.md) => PRD N/A
 
 ### Configure
 - [feat-apply](configure/apply.md) => PRD N/A

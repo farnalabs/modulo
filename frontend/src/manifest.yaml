@@ -23,6 +23,18 @@ routes:
         deprecated: false
         exact: true
 
+    /governance:
+        name: governance-stack
+        breadcrumb: Governance Stack
+        parent: /
+        product_map: [feat-governance-stack]
+        sidebar_group: build
+        sidebar_order: 0
+        type: page
+        <<: *community
+        deprecated: false
+        exact: true
+
     /analytics:
         name: analytics
         breadcrumb: Analytics
@@ -5705,6 +5717,19 @@ features:
             - "[x] Saved Views ship end to end as the admin CRUD surface: `/admin/views` renders AdminViewsView.vue with create/edit/delete over GET/POST/PATCH/DELETE /api/v1/views (gated by the `view_modes` feature flag), covering custom filters (JSON), column layouts, view type, and sort configuration — locked by views.feature BDD + test_view_endpoint.py"
         deferrals:
             - "Saved Views are a private_preview surface (FAR-546): the /admin/views route is hidden from the sidebar nav and the `saved_views` plan toggle is default-off per org; the ViewToggle 'apply to list' frontend component ships but is not yet wired into the runs/pipelines list pages, so a saved view is created/edited from /admin/views rather than applied in-context"
+    feat-governance-stack:
+        description: Read-only governance-hierarchy taxonomy readout (/governance)
+        status: covered
+        behaviours:
+            - "[x] The /governance route renders Modulo's seven-level governance hierarchy (Models, Tools, MCP, Agents, Commands, Autonomy, Telemetry) as a single read-only inventory, each level composing an existing list API client-side (no new backend endpoint, no migration, no schema change)"
+            - "[x] Each level loads independently and shows a live count plus a configured/empty state, or its own restricted (402 feature-gated / 403 permission) state, or a retry-able per-level error state; one level's failure or restriction never blanks another level or the page"
+            - "[x] Levels deep-link to their existing management surfaces: /admin/model-backends, /admin/connectors, /settings/mcp, /library, /pipelines, /settings/observability, /admin/errors, /admin/notification-delivery"
+            - "[x] Level 6 (Autonomy) summarises the pipeline list as total pipelines plus the distribution across the three rungs from earned_autonomy_level, falling back to default_autonomy_level when earned is null"
+            - "[x] Plan-gated levels reuse the same FeatureGate as their management page (model_backend_management, plugin_management, mcp_server, observability); every user-facing string is i18n-backed and per-level status regions use role=status/aria-live (assertive for errors); covered by the GovernanceStackView Vitest spec"
+        deferrals:
+            - "Upstream MCP-server inventory and a pinned tool-definition allowlist are not yet governed (Beta, G3); the MCP card states the boundary and draws no fabricated data"
+            - "An org-wide inventory of agents Modulo did not dispatch is not yet governed (Beta, G3); the Agents card states the boundary"
+            - "The interactive earned-autonomy panel and promote/demote controls are FAR-1696(b) / ADR-043-S5; this surface is a readout only"
     feat-environments:
         description: Environment profiles
         status: covered

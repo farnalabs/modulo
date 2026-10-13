@@ -51,6 +51,7 @@ for (const [path, entry] of Object.entries(manifestRoutes)) {
 
 const AnalyticsView = () => import('../views/AnalyticsView.vue')
 const DashboardView = () => import('../views/DashboardView.vue')
+const GovernanceStackView = () => import('../views/GovernanceStackView.vue')
 const LibraryView = () => import('../views/LibraryView.vue')
 const LibraryPipelineWizard = () => import('../views/LibraryPipelineWizard.vue')
 const CollectionCreateView = () => import('../views/CollectionCreateView.vue')
@@ -191,6 +192,11 @@ const router = createRouter({
       path: '/',
       name: 'dashboard',
       component: DashboardView,
+    },
+    {
+      path: '/governance',
+      name: 'governance-stack',
+      component: GovernanceStackView,
     },
     {
       path: '/analytics',
