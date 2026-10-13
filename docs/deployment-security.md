@@ -402,7 +402,7 @@ trivy image --severity CRITICAL,HIGH ghcr.io/farnalabs/modulo:latest
 
 ### 5.2 Minimal Base Images
 
-- Backend image: `python:3.14-slim` (Debian-based, ~120 MB).
+- Backend image: `python:3.15-slim` (Debian-based, ~120 MB).
 - Frontend image: multi-stage `node:22-alpine` (build stage) → `nginx:alpine`
   (final stage, serves the compiled assets); the published prod image runs as
   `USER nginx` (`frontend/Dockerfile.prod`). In dev the Vite server runs as
