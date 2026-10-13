@@ -923,6 +923,55 @@ async def _enqueue_suite_run_execution(suite_run_id: str, org_id: str) -> str | 
             await redis_client.aclose()
 
 
+async def _maybe_wire_suite_judge(
+    session: Any,
+    run: Any,
+    run_kwargs: dict[str, Any],
+) -> Any:
+    """Wire an org-scoped LLM-judge callable into the run kwargs when needed (FAR-1712).
+
+    Loads the suite's live definition rows from ``evals`` — the SAME source the
+    runner reads (FAR-1729) — scoped unconditionally to ``run.organisation_id``.
+    When the suite has NO ``llm_judge`` definition the kwargs are left untouched
+    and no hub is built. When it HAS one, an org-scoped ``ModelBackendHub`` is
+    built from the org's ACTIVE backends and a per-definition dispatch callable
+    is set on ``run_kwargs``; the hub is returned so the caller tears it down in
+    a ``finally``.
+
+    When the org has no ACTIVE backend, nothing is set and ``None`` is returned
+    — the runner's own loud refusal ("suite contains llm_judge definitions but
+    no judge callable was provided") is then preserved, never a silent pass.
+    """
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from modulo.core.eval_engine.execute_suite_run import (
+        SuiteRunExecutionError,
+        _sql_error_status,
+        load_suite_definitions,
+    )
+    from modulo.core.eval_engine.suite_run_judge import (
+        build_org_model_backend_hub,
+        build_suite_run_llm_judge_callable,
+    )
+
+    try:
+        definitions = await load_suite_definitions(session, run.organisation_id, run.suite_id)
+    except SQLAlchemyError as exc:
+        # A raw DB error here is an orchestration failure, exactly as it is in
+        # the runner. Translate it the same way (status-coded typed error) so the
+        # job's committed-transaction failure path terminalises the run and the
+        # after_process sink sees a typed error — never a bare driver exception.
+        raise SuiteRunExecutionError(f"{_sql_error_status(exc)}: {exc}") from exc
+    if not any(str(getattr(d, "eval_type", "")) == "llm_judge" for d in definitions):
+        return None
+
+    hub = await build_org_model_backend_hub(session, run.organisation_id)
+    if hub is None:
+        return None
+    run_kwargs["llm_judge_callable"] = build_suite_run_llm_judge_callable(hub)
+    return hub
+
+
 async def execute_suite_run(ctx: dict[str, Any], *, suite_run_id: str, org_id: str) -> dict[str, Any]:
     """SAQ ``execute_suite_run`` job — run a scheduled SuiteRun to terminal (FAR-377).
 
@@ -999,9 +1048,28 @@ async def execute_suite_run(ctx: dict[str, Any], *, suite_run_id: str, org_id: s
             # the (already-``None``) value from ``run.extra``.
             if suite_ceiling_raw is not None:
                 run_kwargs["suite_ceiling"] = Decimal(str(suite_ceiling_raw))
-            stats = await _run_exec(session, run, **run_kwargs)
-            run.extra = {**extra, "execution": stats}
-            await session.flush()
+            # FAR-1712: wire the org-scoped LLM-judge callable when the suite has
+            # an llm_judge definition. No judge definition -> kwargs untouched and
+            # no hub built. A judge suite with no ACTIVE backend also leaves the
+            # kwargs untouched, so the runner's loud refusal is preserved (never
+            # a silent pass). The hub is torn down in the finally below so its
+            # transport resources never leak; a teardown failure is logged and
+            # never masks the run result.
+            suite_judge_hub = await _maybe_wire_suite_judge(session, run, run_kwargs)
+            try:
+                stats = await _run_exec(session, run, **run_kwargs)
+                run.extra = {**extra, "execution": stats}
+                await session.flush()
+            finally:
+                if suite_judge_hub is not None:
+                    # Reuse the executor's cancellation-shielded teardown
+                    # (``_teardown_hub``): a cancellation arriving mid-cleanup
+                    # must not abort the hub's ``__aexit__`` (``asyncio.shield``
+                    # keeps it running to completion), and a teardown failure is
+                    # logged there without ever masking the run result.
+                    from modulo.core.pipeline_engine.executor import _teardown_hub
+
+                    await _teardown_hub(suite_judge_hub)
         _log.info(
             "saq.execute_suite_run.done",
             extra={"suite_run_id": str(rid), "state": stats.get("state"), "org": str(oid)},
