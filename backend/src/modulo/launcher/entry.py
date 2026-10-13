@@ -839,7 +839,7 @@ def _ensure_app_database(launcher_state: Any, secrets: Any) -> None:
         # constructed (no sslmode), so this yields the explicit plaintext
         # ``ssl=False`` the loopback cluster needs; routing it through the
         # shared translator keeps the fail-closed invariant in one place.
-        from modulo.db.bootstrap import split_postgres_sslmode
+        from modulo.db.url_utils import split_postgres_sslmode
 
         root_url, root_ssl = split_postgres_sslmode(root_url)
         conn = await asyncpg.connect(root_url, ssl=root_ssl)
