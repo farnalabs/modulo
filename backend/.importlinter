@@ -159,6 +159,13 @@ ignore_imports =
     # DTO conversion + deterministic hash); same cross-boundary category as
     # the guardrail pin exemption above.
     modulo.db.crud.pipeline_snapshot -> modulo.core.eval_engine.policy_gate
+    # FAR-1743 / ADR 037 rev 2 — snapshot mint resolves each sandbox_agent
+    # node's ``model_class`` registry class and bakes ``_resolved_model`` /
+    # ``_model_origin`` (the pure decision function + registry read live in
+    # core.model_class_registry; the DB layer only invokes it at the mint
+    # seam) — same narrow cross-boundary category as the guardrail/policy-pin
+    # exemptions above.
+    modulo.db.crud.pipeline_snapshot -> modulo.core.model_class_registry
     # FAR-189 — the shared fenced terminal write (update_run_status / the fenced
     # variant / transition_run / request_cancellation) invokes the run-outcome
     # classifier inline, so every terminalizer that funnels through db.crud.run

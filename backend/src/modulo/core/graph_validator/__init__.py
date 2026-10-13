@@ -601,6 +601,53 @@ def _check_sandbox_jinja(node: dict[str, Any], nid: str, result: ValidationResul
         result.error("SANDBOX_BAD_JINJA_TEMPLATE", err, node_id=nid)
 
 
+# FAR-1743 / ADR 037 rev 2: the top-level `{{ model }}` template variable.
+# Segment 1 finds Jinja expression/statement blocks; token 2 matches `model`
+# as a STANDALONE identifier — `input.model` / `run_context...model` /
+# `parameter.model` are preceded by `.` and `mymodel` / `model_x` are bound by
+# the word-char lookarounds, so only the dedicated resolution channel matches.
+_MODEL_TEMPLATE_SEGMENT_RE = re.compile(r"\{\{.*?\}\}|\{%.*?%\}", re.DOTALL)
+_MODEL_TEMPLATE_TOKEN_RE = re.compile(r"(?<![\w.])model(?![\w])")
+
+
+def _check_sandbox_model_var(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check: ``{{ model }}`` requires ``model_class`` on the node (ADR 037 rev 2).
+
+    ``model_class`` is the node's explicit opt-in to first-class model
+    resolution — the save-time validator cannot consult the (external,
+    devtools-owned) registry, so the node field is the proxy for "a class was
+    resolved here". Without it a ``{{ model }}`` reference would render as the
+    empty string under the sandbox environment's lenient Undefined and dispatch
+    the sandbox with a blank ``--model`` — exactly the silent-default failure
+    ADR 037 forbids. Only llm mode is checked: script mode runs verbatim and
+    never renders templates.
+    """
+    if (node.get("mode") or "llm") != "llm" or node.get("model_class"):
+        return
+    texts: list[str] = []
+    commands = node.get("agent_commands")
+    if isinstance(commands, list):
+        texts.extend(str(c) for c in commands)
+    elif isinstance(commands, str):
+        texts.append(commands)
+    prompt = node.get("agent_prompt")
+    if isinstance(prompt, str):
+        texts.append(prompt)
+    for text in texts:
+        for segment in _MODEL_TEMPLATE_SEGMENT_RE.findall(text):
+            if _MODEL_TEMPLATE_TOKEN_RE.search(segment):
+                result.error(
+                    "SANDBOX_MODEL_VAR_REQUIRES_MODEL_CLASS",
+                    f"Node '{nid}': the `{{{{ model }}}}` template variable requires the "
+                    "experimental `model_class` field on this node (FAR-1743 / ADR 037) — "
+                    "without a resolved class the reference would render empty and dispatch "
+                    "the sandbox with a blank model. Set `model_class` on the node, or use "
+                    "an explicit source such as `{{ input.model }}`.",
+                    node_id=nid,
+                )
+                return
+
+
 def _check_sandbox_template(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
     """Sandbox check 2: template_id must be set to a known-good sandbox template."""
     template_id = node.get("template_id")
@@ -3137,6 +3184,9 @@ class GraphValidator:
             (FAR-664) — the join operator would corrupt the terminator.
         16. git-sourced content refs (FAR-220) parse and are SHA-pinned so
             run snapshots surface the resolved commit for audit.
+        17. ``{{ model }}`` on an llm-mode node requires the experimental
+            ``model_class`` field (FAR-1743 / ADR 037 rev 2) — a stray
+            reference can never render empty and dispatch a blank model.
         """
         _reserved_env_prefixes = ("MODULO_", "OPENCODE_API_KEY")
 
@@ -3147,6 +3197,7 @@ class GraphValidator:
             nid = _string_or_default(node.get("id"))
             _check_sandbox_command(node, nid, result)
             _check_sandbox_jinja(node, nid, result)
+            _check_sandbox_model_var(node, nid, result)
             _check_sandbox_template(node, nid, result)
             _check_sandbox_timeout(node, nid, result)
             _check_sandbox_timeout_e2b_cap(node, nid, result)

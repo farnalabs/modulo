@@ -1077,6 +1077,42 @@ def test_pipeline_graph_node_single_pr_per_run_rejected_off_sandbox_nodes() -> N
     assert agent_node.single_pr_per_run is False
 
 
+def test_pipeline_graph_node_model_class_round_trip() -> None:
+    """FAR-1743 (EXPERIMENTAL): model_class is an additive, optional field on
+    sandbox_agent nodes — present round-trips, absent defaults to None (every
+    existing literal pipeline keeps working unchanged)."""
+    node = PipelineGraphNode.model_validate({**_sandbox_node_json(), "model_class": "builder"})
+    assert node.model_class == "builder"
+
+    legacy = PipelineGraphNode.model_validate(_sandbox_node_json())
+    assert legacy.model_class is None
+
+
+def test_pipeline_graph_node_model_class_trimmed() -> None:
+    """A present value is normalised to a non-blank class name."""
+    node = PipelineGraphNode.model_validate({**_sandbox_node_json(), "model_class": "  builder  "})
+    assert node.model_class == "builder"
+
+    with pytest.raises(ValidationError, match="model_class"):
+        PipelineGraphNode.model_validate({**_sandbox_node_json(), "model_class": "   "})
+
+
+def test_pipeline_graph_node_model_class_rejected_off_sandbox_nodes() -> None:
+    """model_class is sandbox-only: the class resolves only for sandbox_agent
+    nodes and is consumed through the sandbox `{{ model }}` variable, so on any
+    other node type it would be a declared-but-unread reference."""
+    with pytest.raises(ValidationError, match="Only sandbox_agent nodes can set model_class"):
+        PipelineGraphNode.model_validate(
+            {
+                "id": uuid.uuid4(),
+                "node_type": "agent",
+                "position": {"x": 0, "y": 0},
+                "agent_id": uuid.uuid4(),
+                "model_class": "builder",
+            }
+        )
+
+
 def test_pipeline_graph_node_idempotent_round_trip() -> None:
     """FAR-295: PipelineGraphNode carries ``idempotent`` on every executor type
     and defaults it to true for legacy nodes."""

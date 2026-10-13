@@ -528,6 +528,71 @@ def test_sandbox_script_mode_jinja_not_checked():
     assert result.is_valid
 
 
+# ---------------------------------------------------------------------------
+# FAR-1743 / ADR 037 rev 2 — `{{ model }}` requires model_class
+# ---------------------------------------------------------------------------
+
+
+def test_model_var_without_model_class_errors():
+    """ADR 037: a stray `{{ model }}` on a node with no model_class is a hard
+    save error — it would render empty and dispatch a blank --model."""
+    graph = {"nodes": [_sandbox_node(agent_commands=["opencode run --model {{ model }} --auto"])], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_MODEL_VAR_REQUIRES_MODEL_CLASS" in _codes(result)
+    assert not result.is_valid
+    issue = next(i for i in result.issues if i.code == "SANDBOX_MODEL_VAR_REQUIRES_MODEL_CLASS")
+    assert issue.node_id == graph["nodes"][0]["id"]
+
+
+def test_model_var_with_model_class_accepted():
+    """The same command passes once the node declares model_class (the value is
+    interpolated from the snapshot-baked `_resolved_model` at render)."""
+    graph = {
+        "nodes": [_sandbox_node(model_class="builder", agent_commands=["opencode run --model {{ model }} --auto"])],
+        "edges": [],
+    }
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_MODEL_VAR_REQUIRES_MODEL_CLASS" not in _codes(result)
+    assert result.is_valid
+
+
+def test_qualified_model_references_do_not_false_positive():
+    """`input.model` / `parameter.model` / `run_context....model` are DIFFERENT
+    sources that predate this feature — the token matcher must not flag them
+    (the `.` binds the identifier), with or without model_class."""
+    commands = [
+        "opencode run --model {{ input.model }} --auto",
+        "opencode run --model {{ run_context._run_overrides.model }} --auto",
+        "opencode run --model {{ parameter.model }} --auto",
+        "opencode run --model {{ input.model | default('x') }} --auto",
+    ]
+    graph = {"nodes": [_sandbox_node(agent_commands=commands)], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_MODEL_VAR_REQUIRES_MODEL_CLASS" not in _codes(result)
+    assert result.is_valid
+
+
+def test_model_var_in_agent_prompt_errors():
+    """The prompt is a rendered surface too — the rule scans agent_prompt as
+    well as agent_commands."""
+    graph = {"nodes": [_sandbox_node(agent_prompt="Work with {{ model }}")], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_MODEL_VAR_REQUIRES_MODEL_CLASS" in _codes(result)
+
+
+def test_model_var_in_statement_block_errors():
+    """`{% if model %}` is a reference to the same variable as `{{ model }}` —
+    statements are scanned as well as expressions."""
+    graph = {"nodes": [_sandbox_node(agent_commands=["{% if model %}opencode run{% endif %}"])], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_MODEL_VAR_REQUIRES_MODEL_CLASS" in _codes(result)
+
+
 def test_sandbox_jinja_gate_renders_through_shared_runtime_environment(monkeypatch) -> None:
     """FAR-226: the save-time Jinja gate parses through the shared helper.
 

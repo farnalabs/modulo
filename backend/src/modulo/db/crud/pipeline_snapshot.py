@@ -15,6 +15,7 @@ from sqlalchemy.pool import NullPool
 
 from modulo.core.composite_engine.expander import expand_composites_in_graph
 from modulo.core.exceptions import SnapshotLockNotAvailableError
+from modulo.core.model_class_registry import ModelClassResolutionError, resolve_graph_model_classes
 from modulo.db.models.agent import Agent
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.model_backend import ModelBackend
@@ -1028,6 +1029,34 @@ async def create_snapshot_from_live_graph(
         agents, _, parameter_schema_ids = await _materialize_agent_fields(session, nodes)
         parameter_bindings = await _resolve_parameter_bindings(session, nodes, parameter_schema_ids)
         connectors_by_id, schema_models_by_id, backends_by_id = await _load_reference_models(session, nodes, agents)
+
+        # FAR-1743 / ADR 037 rev 2 (EXPERIMENTAL): resolve every sandbox_agent
+        # node's model_class HERE — the per-run mint seam that already bakes
+        # prompt/backend/guardrail pins — and bake `_resolved_model` /
+        # `_model_origin` into the node metadata, so every later render
+        # replays the SNAPSHOT, never the live registry (deterministic
+        # replay). Fail closed (D3) for a RUN snapshot: an unknown class or a
+        # missing/unreadable/corrupt registry raises ModelClassResolutionError
+        # BEFORE any snapshot row is inserted, so the run is refused
+        # pre-dispatch — no sandbox, zero cost. An EDIT snapshot fails OPEN
+        # (logged) so a broken registry can never lock authors out of graph
+        # saves; any run that later consumes such an unbaked node still fails
+        # closed at render (node_runner / runner_dispatch backstop).
+        try:
+            resolve_graph_model_classes(
+                nodes,
+                pipeline_name=str(pipeline.name),
+                registry_path=get_settings().model_class_registry_path,
+            )
+        except ModelClassResolutionError as exc:
+            if version_kind == "run":
+                raise
+            _log.warning(
+                "snapshot_model_class_resolution_failed pipeline_id=%s version_kind=%s: %s",
+                pipeline_id,
+                version_kind,
+                exc.detail,
+            )
 
         # FAR-1625: release the graph-copy lock BEFORE the allocation phase, so
         # its wait never holds the session-scoped graph lock (see the helper).
