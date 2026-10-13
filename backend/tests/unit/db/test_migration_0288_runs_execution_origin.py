@@ -21,7 +21,8 @@ database, plus ORM parity for both new columns:
    0303_feedback_records_lookup_indexes chains onto 0302_runs_run_grouping, and
    0304_metrics_staging_recorded_at_index chains onto 0303_feedback_records_lookup_indexes, and
    0305_guardrail_escalate_action chains onto 0304_metrics_staging_recorded_at_index, and
-   0306_runs_dispatch_phase_history chains onto 0305_guardrail_escalate_action as the single
+   0306_trigger_secret_encryption chains onto 0305_guardrail_escalate_action, and
+   0307_runs_dispatch_phase_history chains onto 0306_trigger_secret_encryption as the single
    linear head;
 2. the upgrade adds EXACTLY two nullable ``varchar(20)`` columns with NO
    server default and NO backfill (metadata-only on the hot ``runs`` table);
@@ -53,7 +54,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0288_runs_execution_origin"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0287_team_rls_lifecycle_evals"
-_CHAIN_HEAD_MIGRATION = "0306_runs_dispatch_phase_history"
+_CHAIN_HEAD_MIGRATION = "0307_runs_dispatch_phase_history"
 
 #: (table, column) pairs the upgrade must add — the two read surfaces ADR-042
 #: needs: the run row itself and the self-contained analytics fact.

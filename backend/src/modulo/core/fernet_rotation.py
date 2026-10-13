@@ -14,6 +14,8 @@ from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.secret_patterns import TRIGGER_CONFIG_SECRET_KEYS
+
 _log = logging.getLogger(__name__)
 
 
@@ -108,6 +110,47 @@ async def _rotate_notification_endpoints(session: AsyncSession, new_fernet: Fern
             {"ct": new_ct, "id": row.id},
         )
         count += 1
+    return count
+
+
+async def _rotate_triggers(session: AsyncSession, new_fernet: Fernet, old_fernet: Fernet | None) -> int:
+    """Re-encrypt HMAC/signing secrets inside triggers.config_json (FAR-1732).
+
+    Only Fernet-token-shaped values rotate: plaintext secrets (written before
+    encryption shipped) are the data migration's job — rotation only
+    re-encrypts values that already decrypt as Fernet tokens, so a rotation
+    run over rows the migration has not yet reached changes nothing.
+
+    The candidate keys are the CANONICAL shared set
+    (:data:`modulo.core.secret_patterns.TRIGGER_CONFIG_SECRET_KEYS`, the same
+    object the write path persists through). The SELECT is deliberately NOT
+    narrowed by a key list in SQL: a second, module-local key list is exactly
+    how a future secret key escapes — it would sit in the rotation loop while
+    the WHERE clause never selected the rows carrying it as their only secret.
+    Every row's ``config_json`` is checked in Python against the ONE shared
+    set instead; ``triggers`` is a small config table and rotation is a rare
+    admin operation, so the scan costs nothing next to the drift it removes.
+    """
+
+    from modulo.auth.secret_storage import _is_encrypted_token
+
+    rows = (await session.execute(text("SELECT id, config_json FROM triggers"))).all()
+    count = 0
+    for row in rows:
+        config: dict[str, Any] = row.config_json
+        changed = False
+        for key in TRIGGER_CONFIG_SECRET_KEYS:
+            stored = config.get(key)
+            if not isinstance(stored, str) or not _is_encrypted_token(stored):
+                continue
+            config[key] = re_encrypt_str(stored, new_fernet, old_fernet)
+            changed = True
+        if changed:
+            await session.execute(
+                text("UPDATE triggers SET config_json = :config WHERE id = :id"),
+                {"config": json.dumps(config), "id": row.id},
+            )
+            count += 1
     return count
 
 
@@ -253,7 +296,7 @@ async def rotate_all_encrypted_data(
 ) -> RotationResult:
     """Re-encrypt all Fernet-encrypted data across all stores.
 
-    Iterates all 8 data stores and re-encrypts each row with *new_key*,
+    Iterates all 9 data stores and re-encrypts each row with *new_key*,
     falling back to *old_key* for decryption of existing data.
 
     Args:
@@ -275,12 +318,13 @@ async def rotate_all_encrypted_data(
     old_fernet = Fernet(old_key.encode()) if old_key else None
 
     # Ordered: secrets first (most critical), then connectors/backends,
-    # then notifications, then observability, then checkpoints.
+    # then notifications, then triggers, then observability, then checkpoints.
     rotators: list[tuple[str, Any]] = [
         ("secrets", _rotate_secrets_table),
         ("connector_instances", _rotate_connector_instances),
         ("model_backends", _rotate_model_backends),
         ("notification_endpoints", _rotate_notification_endpoints),
+        ("triggers", _rotate_triggers),
         ("observability_config", _rotate_otel_config),
         ("checkpoints", _rotate_checkpoints),
         ("checkpoint_blobs", _rotate_checkpoint_blobs),

@@ -57,6 +57,7 @@ Masking is applied at these points:
 |---|---|---|
 | `GET /api/v1/connectors/{id}` | `mask_config_json()` on `config_json` | Top-level sensitive keys |
 | `GET /api/v1/triggers/{id}` | `mask_config_json()` on `config_json` | Top-level sensitive keys |
+| MCP `get_trigger` / `update_trigger` tools — FAR-1732 | `mask_config_json()` on `config_json` in `_trigger_detail_dict` (`mcp_server.py`) | Same masking as the REST trigger detail; the `input_template` echo derives from the masked config |
 | `GET /api/v1/settings/observability` | `_mask_headers()` on OTLP headers | Known header keys |
 | `GET /api/v1/runs/{run_id}/nodes/{node_id}/output` | `_mask_output_value()` recursive traversal | Nested sensitive keys, depth-limited to 20 |
 | `GET /api/v1/runs/{run_id}/io` | `_mask_output_value()` on `outputs_json` | Nested sensitive keys |

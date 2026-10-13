@@ -1,17 +1,17 @@
-"""FAR-1714: migration 0305 + the dispatch-phase timeline / drop counter round-trip.
+"""FAR-1714: migration 0307 + the dispatch-phase timeline / drop counter round-trip.
 
 Against REAL Postgres (testcontainers, private database per test — the
 ``test_migration_0276`` / ``test_migration_0302`` harness):
 
-* NEGATIVE CONTROL — at ``0304_metrics_staging_recorded_at_index`` (the chain
+* NEGATIVE CONTROL — at ``0306_trigger_secret_encryption`` (the chain
   head before this change) NEITHER column exists, so the post-migration
   assertions below cannot pass without the real upgrade;
-* the REAL alembic upgrade of ``0306_runs_dispatch_phase_history`` lands both
+* the REAL alembic upgrade of ``0307_runs_dispatch_phase_history`` lands both
   columns with the exact contract (``dispatch_phase_history`` nullable
   ``jsonb``; ``dispatch_phase_write_drops`` ``integer NOT NULL DEFAULT 0``);
 * the DOWNGRADE drops both columns, and the upgrade re-applies cleanly after
   a downgrade;
-* fresh-database path: the whole chain straight to 0306 replays on a
+* fresh-database path: the whole chain straight to 0307 replays on a
   brand-new database.
 
 Plus the composed ROUND-TRIP on the shared migrated database — the actual
@@ -52,8 +52,8 @@ from modulo.core.pipeline_execution import PHASE_LOADING_SETUP, PHASE_STREAMING,
 pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = Path(__file__).parents[2]  # backend/
-MIGRATION_REV = "0306_runs_dispatch_phase_history"
-PREV_REV = "0305_guardrail_escalate_action"
+MIGRATION_REV = "0307_runs_dispatch_phase_history"
+PREV_REV = "0306_trigger_secret_encryption"
 
 _HISTORY_COL = "dispatch_phase_history"
 _DROPS_COL = "dispatch_phase_write_drops"
@@ -187,20 +187,20 @@ async def _alembic_version(engine: AsyncEngine) -> str:
 
 class TestMigrationShape:
     async def test_columns_absent_then_land_with_the_exact_contract(self, pre_upgrade_db_url: str) -> None:
-        """NEGATIVE CONTROL first: at 0304 neither column exists — without
-        the real 0305 upgrade every assertion below fails."""
+        """NEGATIVE CONTROL first: at 0306 neither column exists — without
+        the real 0307 upgrade every assertion below fails."""
         engine = create_async_engine(pre_upgrade_db_url, poolclass=NullPool)
         try:
             before = await _run_column_shapes(engine)
-            assert _HISTORY_COL not in before, f"pre-0305 must lack {_HISTORY_COL}, got {before}"
-            assert _DROPS_COL not in before, f"pre-0305 must lack {_DROPS_COL}, got {before}"
+            assert _HISTORY_COL not in before, f"pre-0307 must lack {_HISTORY_COL}, got {before}"
+            assert _DROPS_COL not in before, f"pre-0307 must lack {_DROPS_COL}, got {before}"
 
             _migrate(pre_upgrade_db_url, MIGRATION_REV)
             assert await _alembic_version(engine) == MIGRATION_REV
 
             after = await _run_column_shapes(engine)
             history = after[_HISTORY_COL]
-            assert history["nullable"] == "YES", f"{_HISTORY_COL} must be nullable (pre-0305 rows), got {history}"
+            assert history["nullable"] == "YES", f"{_HISTORY_COL} must be nullable (pre-0307 rows), got {history}"
             assert history["type"] == "jsonb", f"{_HISTORY_COL} must be jsonb on Postgres, got {history}"
             assert history["default"] is None, f"{_HISTORY_COL} carries no default, got {history}"
 
@@ -233,7 +233,7 @@ class TestMigrationShape:
 
 class TestFreshDatabase:
     async def test_fresh_chain_carries_both_columns(self, fresh_chain_db_url: str) -> None:
-        """Safe on a fresh database: the whole chain to 0305 replays on a
+        """Safe on a fresh database: the whole chain to 0307 replays on a
         brand-new database (``runs`` created, then both columns added)."""
         engine = create_async_engine(fresh_chain_db_url, poolclass=NullPool)
         try:
