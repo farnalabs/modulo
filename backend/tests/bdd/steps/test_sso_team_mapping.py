@@ -5,6 +5,7 @@ import contextlib
 import json
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,7 +14,47 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.api.dependencies import get_anonymous_plan_context, get_plan_context
 from modulo.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
+from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, clear_license, set_public_key
+from modulo.core.registry.crypto import generate_keypair, sign_primitive
 from modulo.settings import Settings, get_settings
+
+# FAR-1733: the env-SAML licence gates verify the key (signature + expiry)
+# instead of trusting presence, so the SAML steps must carry a GENUINELY
+# valid signed key. The keypair below signs one at import time; the autouse
+# fixture installs the matching public key for every scenario.
+_TEST_KP = generate_keypair()
+_TEST_PRIV = _TEST_KP["private_key"]
+_TEST_PUB = _TEST_KP["public_key"]
+
+
+def _make_valid_license_key(tier: str = "team") -> str:
+    payload: dict[str, Any] = {
+        "tier": tier,
+        "features": ["sso", "team_rbac", "audit_viewer"],
+        "expires_at": (datetime.now(UTC) + timedelta(days=365)).isoformat(),
+        "org_id": "test-org",
+    }
+    sig_hex = sign_primitive(payload, _TEST_PRIV)
+    payload_b64 = (
+        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
+        .decode()
+        .rstrip("=")
+    )
+    sig_b64 = base64.urlsafe_b64encode(bytes.fromhex(sig_hex)).decode().rstrip("=")
+    return f"{payload_b64}.{sig_b64}"
+
+
+_VALID_LICENSE_KEY = _make_valid_license_key()
+
+
+@pytest.fixture(autouse=True)
+def _reset_license_state() -> Generator[None, None, None]:
+    """FAR-1733: in-memory licence + configured public key are module globals."""
+    clear_license()
+    set_public_key(_TEST_PUB)
+    yield
+    clear_license()
+    set_public_key(_LICENSE_PUBLIC_KEY_HEX)
 
 
 @pytest.fixture(autouse=True)
@@ -88,7 +129,7 @@ _SAML_RESPONSE_XML = """<?xml version="1.0" encoding="UTF-8"?>
 </samlp:Response>"""
 
 
-def _oidc_settings(license_key: str = "test-license-key") -> Settings:
+def _oidc_settings(license_key: str = _VALID_LICENSE_KEY) -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
         secret_key=_VALID_32,
@@ -110,7 +151,7 @@ def _oidc_settings(license_key: str = "test-license-key") -> Settings:
     )
 
 
-def _saml_settings(license_key: str = "test-license-key") -> Settings:
+def _saml_settings(license_key: str = _VALID_LICENSE_KEY) -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
         secret_key=_VALID_32,
@@ -152,7 +193,7 @@ def _sign_state(provider_id: str, secret_key: str = _VALID_32) -> str:
     return sign_state(f"{provider_id}:{uuid.uuid4().hex}", secret_key)
 
 
-def _setup_plan(license_key: str = "test-license-key") -> None:
+def _setup_plan(license_key: str = _VALID_LICENSE_KEY) -> None:
     from modulo.api.main import app as _app
 
     if not license_key:
@@ -172,7 +213,7 @@ def _setup_plan(license_key: str = "test-license-key") -> None:
     _app.dependency_overrides[get_anonymous_plan_context] = lambda: _plan
 
 
-def _setup_oidc_client(license_key: str = "test-license-key") -> None:
+def _setup_oidc_client(license_key: str = _VALID_LICENSE_KEY) -> None:
     from modulo.api.main import app as _app
 
     _app.dependency_overrides[get_settings] = lambda: _oidc_settings(license_key)
@@ -180,7 +221,7 @@ def _setup_oidc_client(license_key: str = "test-license-key") -> None:
     get_settings.cache_clear()
 
 
-def _setup_saml_client(license_key: str = "test-license-key") -> None:
+def _setup_saml_client(license_key: str = _VALID_LICENSE_KEY) -> None:
     from modulo.api.main import app as _app
 
     _app.dependency_overrides[get_settings] = lambda: _saml_settings(license_key)

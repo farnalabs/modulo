@@ -23,7 +23,9 @@ unit-tests:
   - backend/tests/unit/api/test_admin_tiers_endpoint.py
   - backend/tests/unit/api/test_stripe_webhook.py
   - backend/tests/unit/api/test_viewmodel_license.py
+  - backend/tests/unit/api/test_viewmodel_resolve_tier.py
   - backend/tests/unit/api/test_admin_orgs_coverage_gaps.py
+  - backend/tests/unit/mcp/test_mcp_governance_read_tools.py
   - backend/tests/unit/test_license_adversarial.py
   - backend/tests/unit/test_team_license_activation.py
 bdd:
@@ -110,6 +112,23 @@ signed/org licence; see Known Gaps.)
       already committed) (`test_admin_license.py`
       `TestLicenseCacheInvalidationSystemChange`,
       `test_admin_orgs_coverage_gaps.py` set/remove invalidation tests; FAR-1719)
+- [x] Env-var licence keys are VERIFIED (Ed25519 signature + expiry via
+      `parse_and_verify`), never trusted on mere presence, at every
+      licence-reading surface: the `/viewmodel/current` plan tier
+      (`viewmodel._resolve_tier` rung 3 — an unverifiable key falls through to
+      community instead of reporting "team"), the admin feature-flag list's
+      `license.has_license_key` and `license.is_valid`
+      (`admin_feature_flags._build_registry` / `_license_is_valid` — `is_valid`
+      is no longer hardcoded `true`), the MCP `list_feature_flags` tool's
+      licence block (same `has_key` rule plus a truthful `is_valid`), the
+      env-SAML availability boolean (`sso.is_saml_available`), and the
+      env-SAML config gate (`auth.sso._resolve_saml_config`, which fails CLOSED
+      with the same 400 message as an absent key). A valid signed key still
+      enables every one of those surfaces
+      (`test_viewmodel_resolve_tier.py`, `test_admin_feature_flags.py`
+      `TestBuildRegistryEnvKeyVerification` / `TestLicenseIsValid`,
+      `test_mcp_governance_read_tools.py`, `test_sso.py`
+      `TestSamlEnvLicenseVerification`, `sso_saml.feature`; FAR-1733)
 
 ## Known Gaps
 
@@ -128,11 +147,45 @@ signed/org licence; see Known Gaps.)
   is non-empty, returns a hardcoded `features: ["notifications"]`, and always
   reports `is_valid: True`; it never consults `get_license()` or the org-level key.
   The admin and feature-flag endpoints resolve the real licence, so the public
-  surface can disagree with them. `admin_feature_flags.list_feature_flags` likewise
-  hardcodes `license.is_valid = True` regardless of whether a key exists or has
-  expired. Unifying these is a product decision, not a mechanical fix.
+  surface can disagree with them. Unifying it is tracked separately from the
+  mechanical verification sweep: every OTHER licence-reading surface named here
+  (the `/viewmodel/current` plan tier, the admin/MCP feature-flag licence
+  blocks, and both env-SAML gates) now verifies the env-var key via
+  `parse_and_verify` instead of trusting presence (FAR-1733), and the admin/MCP
+  `license.is_valid` hardcode that used to sit beside this gap is gone — those
+  blocks report whether a valid licence actually resolved.
 
 ## QA History
+
+- 2026-10-13: **FAR-1733** — replaced env-var licence-key PRESENCE-trust with
+  verification at the five remaining surfaces. `viewmodel._resolve_tier` rung 3
+  returned `"team"` for ANY non-empty `settings.modulo_license_key`;
+  `admin_feature_flags._build_registry` and the MCP `list_feature_flags` tool
+  counted the env key on presence for `has_license_key` AND hardcoded
+  `license.is_valid = True`; `sso.is_saml_available` treated a present env key
+  as enabling env-SAML; and `auth.sso._resolve_saml_config` accepted any
+  non-empty key as satisfying the Team-feature gate (fail-open). All five now
+  verify the key through one shared helper (`core.license.verify_license_key`,
+  the session-free form of the canonical `_resolve_paid_plan` rung-3 check): an
+  unverifiable/expired key falls through to community / `false` on the
+  reporting surfaces and FAILS CLOSED on the SSO security gates (the env-SAML
+  config gate raises the same 400 "requires a license key" message as an
+  absent key, so the pre-auth surface never discloses whether a key is
+  configured). The admin/MCP `is_valid` blocks now report whether a valid
+  licence actually resolved (in-memory, verified env key, or verified
+  org-level key), which resolves the residual "hardcoded `is_valid: true`"
+  gap FAR-1720 left for this entry. Proved by regression tests that FAIL
+  against the old code: `test_viewmodel_resolve_tier.py` (invalid/expired env
+  key → community, payload-tier verbatim), `test_admin_feature_flags.py`
+  (`TestBuildRegistryEnvKeyVerification`, `TestLicenseIsValid`, and the
+  endpoint `is_valid` block), `test_mcp_governance_read_tools.py`
+  (invalid env key → `has_license_key=false`/`is_valid=false`; verified org
+  key distinction), and `test_sso.py` `TestSamlEnvLicenseVerification`
+  (invalid key → env-SAML unavailable / config raises / login route 400;
+  valid key still enables each surface end-to-end). The SAML BDD steps
+  (`sso_saml.feature`, `sso_team_mapping.feature`) now carry a genuinely
+  signed key. Status stays `partial` (the manifest's universal-gating
+  deferral is unchanged).
 
 - 2026-10-12: **Improve Architecture product-map walk** — Stripe fulfilment
   error-path hardening. `core/stripe_fulfilment.py::fulfil_team_purchase`

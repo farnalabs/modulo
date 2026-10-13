@@ -401,7 +401,7 @@ def _enrich_view(view: SavedView, user_id: uuid.UUID) -> ViewInfo:
 
 
 def _resolve_tier(settings: Settings, org: Any | None = None) -> str:
-    from modulo.core.license import get_license, parse_and_verify
+    from modulo.core.license import get_license, parse_and_verify, verify_license_key
 
     if org is not None:
         org_key = org.settings_json.get("license_key") if hasattr(org, "settings_json") else None
@@ -413,8 +413,11 @@ def _resolve_tier(settings: Settings, org: Any | None = None) -> str:
     lic = get_license()
     if lic is not None:
         return lic.tier
-    if settings.modulo_license_key:
-        return "team"
+    # FAR-1733: the env-var key is only trusted after verification — an
+    # unverifiable key falls through to community (never "team" on presence).
+    env_data = verify_license_key(getattr(settings, "modulo_license_key", "") or "")
+    if env_data is not None:
+        return env_data.tier
     return "community"
 
 

@@ -1,9 +1,13 @@
 """Unit tests for the admin feature-flags API endpoint."""
 
 import asyncio
+import base64
+import json
 import uuid
 from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,17 +18,34 @@ from sqlalchemy.exc import ProgrammingError
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.api.routes.admin_feature_flags import (
+    _build_registry,
     _emit_org_flag_override_audit,
     _enforce_team_tier_gate,
+    _license_is_valid,
     _resolve_tier,
 )
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import FeatureFlagRegistry
-from modulo.core.license import LicenseData, LicenseValidation
+from modulo.core.license import (
+    _LICENSE_PUBLIC_KEY_HEX,
+    LicenseData,
+    LicenseValidation,
+    clear_license,
+    set_public_key,
+    store_license,
+)
+from modulo.core.registry.crypto import generate_keypair, sign_primitive
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
+
+# FAR-1733: known test keypair — a signed payload verifies only while
+# set_public_key(_TEST_PUB) is in effect (the autouse fixture below manages
+# that per test), so the env-key verification paths run for real.
+_TEST_KP = generate_keypair()
+_TEST_PRIV = _TEST_KP["private_key"]
+_TEST_PUB = _TEST_KP["public_key"]
 
 
 def _make_settings() -> Settings:
@@ -34,6 +55,51 @@ def _make_settings() -> Settings:
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
     )
+
+
+def _settings_with_key(modulo_license_key: str) -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key=_VALID_32,
+        fernet_key=_VALID_32,
+        modulo_admin_password="testpass",
+        modulo_license_key=modulo_license_key,
+    )
+
+
+def _sign_license_payload(payload: dict[str, Any], private_key: str = _TEST_PRIV) -> str:
+    sig_hex = sign_primitive(payload, private_key)
+    payload_b64 = (
+        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
+        .decode()
+        .rstrip("=")
+    )
+    sig_b64 = base64.urlsafe_b64encode(bytes.fromhex(sig_hex)).decode().rstrip("=")
+    return f"{payload_b64}.{sig_b64}"
+
+
+def _valid_license_key(tier: str = "team") -> str:
+    payload: dict[str, Any] = {
+        "tier": tier,
+        "features": ["sso", "team_rbac", "audit_viewer"],
+        "expires_at": (datetime.now(UTC) + timedelta(days=365)).isoformat(),
+        "org_id": "test-org",
+    }
+    return _sign_license_payload(payload)
+
+
+@pytest.fixture(autouse=True)
+def _reset_license_state() -> Generator[None, None, None]:
+    """FAR-1733: in-memory licence + configured public key are module globals.
+
+    Reset both around every test so a stored licence or a test keypair never
+    leaks into a sibling test's licence resolution.
+    """
+    clear_license()
+    set_public_key(_TEST_PUB)
+    yield
+    clear_license()
+    set_public_key(_LICENSE_PUBLIC_KEY_HEX)
 
 
 @pytest.fixture
@@ -162,6 +228,28 @@ class TestListFeatureFlags:
         assert "license" in body
         assert body["license"]["tier"] in ("community", "team")
         assert "has_license_key" in body["license"]
+        # FAR-1733: is_valid is no longer hardcoded True — with no licence
+        # resolvable (no in-memory licence, no env key) it reports False.
+        # This assertion FAILS against the old code (constant True).
+        assert body["license"]["is_valid"] is False
+
+    def test_returns_license_block_valid_with_stored_license(self, client: TestClient) -> None:
+        """A stored in-memory licence makes the licence block report valid."""
+        stored = LicenseData(
+            tier="team",
+            features=["sso"],
+            expires_at=(datetime.now(UTC) + timedelta(days=30)).isoformat(),
+            org_id="stored-org",
+            raw_payload={},
+            raw_key="stored-key",
+        )
+        store_license("stored-key", stored)
+        with patch(
+            "modulo.api.routes.admin_feature_flags._build_registry",
+            return_value=_mock_registry(),
+        ):
+            resp = client.get("/api/v1/admin/feature-flags")
+        body = resp.json()
         assert body["license"]["is_valid"] is True
 
     def test_returns_flags_list(self, client: TestClient) -> None:
@@ -1160,6 +1248,131 @@ class TestResolveTierLicensing:
 
     async def test_community_plan_id_returns_community(self) -> None:
         assert await _resolve_tier_value(_org("community")) == "community"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1733 — env-var key verification for has_key / is_valid
+# ---------------------------------------------------------------------------
+# The list endpoint's licence block previously (a) counted the env-var key on
+# mere PRESENCE for has_license_key and (b) hardcoded is_valid=True. Both now
+# require a key that parse_and_verify confirms (signature + expiry).
+
+
+async def _build_registry_with(settings: Settings, org: MagicMock | None = None) -> FeatureFlagRegistry:
+    """Run the real _build_registry with the DB catalog reads stubbed empty.
+
+    The autouse _patch_resolve_tier fixture pins the tier path to "community";
+    get_license / verify_license_key run for real against the test keypair.
+    """
+    session = _session()
+    with (
+        patch(
+            "modulo.api.routes.admin_feature_flags.get_organisation",
+            new_callable=AsyncMock,
+            return_value=org,
+        ),
+        patch("modulo.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
+        patch("modulo.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=[]),
+    ):
+        return await _build_registry(settings, session, _principal())
+
+
+class TestBuildRegistryEnvKeyVerification:
+    async def test_invalid_env_key_is_not_counted(self) -> None:
+        """An env-var key present but failing verification must NOT set has_license_key.
+
+        FAR-1733 prove-the-fix: the old code counted any non-empty env key
+        (presence), so this assertion fails against the old code.
+        """
+        registry = await _build_registry_with(_settings_with_key("not-a-valid-key"))
+        assert registry.has_license_key is False
+
+    async def test_expired_env_key_is_not_counted(self) -> None:
+        key = _sign_license_payload(
+            {
+                "tier": "team",
+                "features": ["sso"],
+                "expires_at": (datetime.now(UTC) - timedelta(days=1)).isoformat(),
+                "org_id": "test-org",
+            }
+        )
+        registry = await _build_registry_with(_settings_with_key(key))
+        assert registry.has_license_key is False
+
+    async def test_valid_env_key_is_counted(self) -> None:
+        registry = await _build_registry_with(_settings_with_key(_valid_license_key()))
+        assert registry.has_license_key is True
+
+    async def test_in_memory_license_is_counted(self) -> None:
+        stored = LicenseData(
+            tier="team",
+            features=["sso"],
+            expires_at=(datetime.now(UTC) + timedelta(days=30)).isoformat(),
+            org_id="stored-org",
+            raw_payload={},
+            raw_key="stored-key",
+        )
+        store_license("stored-key", stored)
+        registry = await _build_registry_with(_settings_with_key(""))
+        assert registry.has_license_key is True
+
+    async def test_org_key_still_counts_by_presence(self) -> None:
+        """The org-level rung of has_key is presence (unchanged by FAR-1733)."""
+        org = _org("community", settings_json={"license_key": "org-key"})
+        registry = await _build_registry_with(_settings_with_key(""), org=org)
+        assert registry.has_license_key is True
+
+
+class TestLicenseIsValid:
+    """FAR-1733: the licence block's is_valid reflects a REAL resolution."""
+
+    async def test_no_licence_anywhere_reports_invalid(self) -> None:
+        assert await _license_is_valid(_settings_with_key(""), _session(), None) is False
+
+    async def test_invalid_env_key_reports_invalid(self) -> None:
+        """Prove-the-fix: the old endpoint hardcoded is_valid=True for any state."""
+        assert await _license_is_valid(_settings_with_key("not-a-valid-key"), _session(), None) is False
+
+    async def test_valid_env_key_reports_valid(self) -> None:
+        assert await _license_is_valid(_settings_with_key(_valid_license_key()), _session(), None) is True
+
+    async def test_in_memory_license_reports_valid(self) -> None:
+        stored = LicenseData(
+            tier="team",
+            features=["sso"],
+            expires_at=(datetime.now(UTC) + timedelta(days=30)).isoformat(),
+            org_id="stored-org",
+            raw_payload={},
+            raw_key="stored-key",
+        )
+        store_license("stored-key", stored)
+        assert await _license_is_valid(_settings_with_key(""), _session(), None) is True
+
+    async def test_valid_org_key_reports_valid(self) -> None:
+        org = _org("community", settings_json={"license_key": _valid_license_key()})
+        session = _session()
+        org_id = uuid.uuid4()
+        with patch("modulo.api.routes.admin_feature_flags.get_organisation", new_callable=AsyncMock, return_value=org):
+            assert await _license_is_valid(_settings_with_key(""), session, org_id) is True
+
+    async def test_invalid_org_key_reports_invalid(self) -> None:
+        """An org key that fails verification does not make the licence valid."""
+        org = _org("community", settings_json={"license_key": "not-a-valid-key"})
+        session = _session()
+        org_id = uuid.uuid4()
+        with patch("modulo.api.routes.admin_feature_flags.get_organisation", new_callable=AsyncMock, return_value=org):
+            assert await _license_is_valid(_settings_with_key(""), session, org_id) is False
+
+    async def test_org_read_failure_reports_invalid(self) -> None:
+        """A failed org read fails the report closed (False) instead of 500ing."""
+        session = _session()
+        org_id = uuid.uuid4()
+        with patch(
+            "modulo.api.routes.admin_feature_flags.get_organisation",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("boom"),
+        ):
+            assert await _license_is_valid(_settings_with_key(""), session, org_id) is False
 
 
 # ---------------------------------------------------------------------------

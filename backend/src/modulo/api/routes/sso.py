@@ -31,6 +31,7 @@ from modulo.auth.sso import (
     verify_saml_relay_state,
 )
 from modulo.core.audit_coverage import audited_system, bind_audit_org
+from modulo.core.license import verify_license_key
 from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.core.sanitize_log import sanitise_log_value
 from modulo.db.crud.sso_provider import (
@@ -141,17 +142,22 @@ async def is_saml_available(
 
     SAML is available when either:
     1. An enabled SAML provider exists in the DB with metadata configured, OR
-    2. The env-var SAML config is fully set (enabled + license + metadata URL/XML).
+    2. The env-var SAML config is fully set (enabled + a VERIFIED licence key
+       + metadata URL/XML).
 
     NOTE: SAML is single-provider-per-instance (``get_enabled_saml_provider``
     returns the first enabled provider globally via ``.limit(1)``).  This is
     therefore an instance-wide boolean — there is no per-org SAML support yet.
+
+    FAR-1733: the env-var licence key is verified (signature + expiry), never
+    trusted on mere presence — an unverifiable key does NOT enable the env
+    SAML path (fail-closed; the DB-provider path is unaffected).
     """
     db_saml = await _get_enabled_saml_global(system_session, app_session)
     db_saml_ok = db_saml is not None and bool(db_saml.metadata_xml or db_saml.metadata_url)
     return db_saml_ok or (
         settings.modulo_saml_enabled
-        and bool(settings.modulo_license_key)
+        and verify_license_key(getattr(settings, "modulo_license_key", "") or "") is not None
         and (bool(settings.modulo_saml_idp_metadata_url) or bool(settings.modulo_saml_idp_metadata_xml))
     )
 
