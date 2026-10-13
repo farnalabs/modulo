@@ -170,10 +170,13 @@ _MIGRATION_PATH = (
 # 0301_oauth_consent_state_preauth_rls chained onto 0300_benign_facts_repair,
 # 0302_runs_run_grouping chained onto 0301_oauth_consent_state_preauth_rls, and
 # 0303_feedback_records_lookup_indexes chained onto 0302_runs_run_grouping, and
-# 0306_policy_gate_evaluation_mode chained onto 0305_guardrail_escalate_action as the chain head.
+# 0305_guardrail_escalate_action chained onto 0304_metrics_staging_recorded_at_index, and
+# 0306_trigger_secret_encryption chained onto 0305_guardrail_escalate_action, and
+# 0307_runs_guardrail_override_resume_pending chained onto 0306_trigger_secret_encryption, and
+# 0308_policy_gate_evaluation_mode chained onto 0307_runs_guardrail_override_resume_pending as the chain head.
 # (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
 # migration under test, not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0306_policy_gate_evaluation_mode"
+_CHAIN_HEAD_MIGRATION_NAME = "0308_policy_gate_evaluation_mode"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

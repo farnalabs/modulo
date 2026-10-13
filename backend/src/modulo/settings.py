@@ -224,6 +224,19 @@ class Settings(BaseSettings):
     # closed until the operator configures it.
     modulo_license_private_key: str = Field(default="", repr=False)
 
+    # Offline-verifiable evidence (FAR-1697). Ed25519 private key (PEM) that
+    # signs the compliance export manifest, so a third party holding only the
+    # artefact + the published public key can verify authorship, re-verify the
+    # embedded audit chain and re-derive every derived value. The matching
+    # public key is derived and published via the admin verification-key
+    # endpoint and embedded in each pack. Empty (default) disables signed
+    # evidence - signing fails closed until the operator configures it.
+    # repr=False so the private key never leaks into logs/settings dumps.
+    modulo_evidence_signing_key: str = Field(default="", repr=False)
+    # Human-readable identity stamped into the signed manifest as the exporter.
+    # Empty (default) falls back to "modulo". Never a credential.
+    modulo_evidence_exporter_identity: str = Field("")
+
     # Stripe billing — purchase fulfilment webhook (FAR-178). Empty defaults
     # keep the app bootable without Stripe configured; when both keys are set,
     # ``stripe_enabled`` is True and the /api/v1/webhooks/stripe webhook is

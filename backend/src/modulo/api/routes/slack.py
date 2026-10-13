@@ -42,6 +42,7 @@ from modulo.api.dependencies import (
 from modulo.api.routes.runs import pipeline_not_runnable_http
 from modulo.api.trigger_busy import BUSY_ACK_DETAIL, record_busy_delivery
 from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.secret_storage import _is_encrypted_token, decode_stored_secret_scoped
 from modulo.core.audit_coverage import audited_system, bind_audit_org
 from modulo.core.dispatch import dispatch_run
 from modulo.core.error_tracking import ErrorIngestionService
@@ -221,7 +222,28 @@ async def _verify_slack_delivery(
         # (TriggerConfigInvalidError → 400 by the shared error map), so ``.get``
         # here cannot AttributeError on external ingress.
         cfg = trigger.config_json or {}
-        signing_secret: str | None = cfg.get("signing_secret")
+        # FAR-1732: the stored signing_secret may now be a Fernet token (this
+        # route's own path encrypts at write; the shared scope-bound decrypt
+        # mirrors the engine's ``_resolve_signing_secret`` — plaintext fallback
+        # keeps pre-encryption triggers delivering).
+        signing_secret: str | None
+        try:
+            signing_secret_raw = cfg.get("signing_secret")
+            if signing_secret_raw is None:
+                signing_secret = None
+            else:
+                signing_secret = await decode_stored_secret_scoped(
+                    session, signing_secret_raw, get_settings().fernet_key, org_id=org_id
+                )
+        except Exception:
+            if _is_encrypted_token(cfg.get("signing_secret")):
+                # Fail closed: ciphertext we cannot decrypt must never be
+                # sent to Slack's signature check as if it were the secret.
+                _log.exception("slack_route.signing_secret_decrypt_failed trigger=%s", trigger_id)
+                raise SlackSignatureError("Slack signing secret decryption failed") from None
+            # Best-effort plaintext fallback — log the degradation loudly.
+            _log.exception("slack_route.signing_secret_decrypt_failed trigger=%s", trigger_id)
+            signing_secret = str(cfg.get("signing_secret"))
 
         # Route-level signature + timestamp validation (belt-and-braces ahead
         # of the engine's own check — required for the challenge handshake).

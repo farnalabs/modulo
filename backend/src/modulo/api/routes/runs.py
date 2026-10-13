@@ -3166,7 +3166,9 @@ async def guardrail_override_run(
     resumable checkpoint (``GuardrailOverrideNoCheckpointError``, FAR-1711
     M1 — the reachable case is a non-interactive pipeline, which never
     persists one): resuming it would silently re-execute it, so the run is
-    left terminal ``eval_blocked`` rather than burned.
+    left terminal eval_blocked rather than burned. The checkpoint never
+    appears later, so re-calling this endpoint returns the same 409 — the
+    remediation for such a run is a NEW run, not another override attempt.
 
     Requires operator or admin role.
     """
@@ -3207,9 +3209,12 @@ async def guardrail_override_run(
             except GuardrailOverrideNoCheckpointError as exc:
                 # FAR-1711 (M1) fail-closed: the run started a node but has no
                 # resumable checkpoint, so a ``resume_run`` would re-execute it
-                # (FAR-1649). The run stays terminal eval_blocked — still
-                # overridable / repairable — and the operator gets a distinct
-                # 409 rather than a silently-burned run.
+                # (FAR-1649). The run stays terminal eval_blocked and the
+                # operator gets a distinct 409 rather than a silently-burned
+                # run. Re-calling this endpoint returns the SAME 409 — a
+                # ``first_node_dispatched`` thread with no root checkpoint
+                # never grows one — so the true remediation is a NEW run
+                # against the pipeline, not another override attempt.
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)[:200]) from exc
             except GuardrailOverrideError as exc:
                 # Not a guardrail-blocked terminal run — nothing to override.

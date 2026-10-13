@@ -55,7 +55,10 @@ KEY_NAMESPACE_OWNERSHIP: dict[str, set[str]] = {
     # producer writing under ``policy_gate`` must use the same prefix
     # contract.
     "policy_gate": {"gate_"},
-    "derived": set(),  # reserved, empty in chunk 7
+    # FAR-1691: the ``derived`` producer owns the changed-set facts — the
+    # resolved set is DERIVED from the platform-observed and agent-reported
+    # sets (see ``modulo.core.eval_engine.changed_sets``).
+    "derived": {"changed_set_"},
 }
 
 

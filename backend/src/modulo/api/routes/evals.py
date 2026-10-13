@@ -119,7 +119,7 @@ _CODE_EVALS_POLICY_GATE_DELETE = "evals.policy_gate.delete"
 _CODE_EVALS_POLICY_GATE_GET = "evals.policy_gate.get"
 _EVAL_TYPE_PATTERN = r"^(llm_judge|regex|json_schema|custom_function|guardrail|human_set)$"
 _POLICY_GATE_ACTION_PATTERN = r"^(warn|block)$"
-# FAR-939 chunk 12 — gate evaluation-mode vocabulary (migration 0306 CHECK).
+# FAR-939 chunk 12 — gate evaluation-mode vocabulary (migration 0308 CHECK).
 _POLICY_GATE_EVALUATION_MODE_PATTERN = r"^(automatic|human)$"
 _MSG_EVAL_SUITE_NOT_FOUND = "Eval suite not found"
 _MSG_POLICY_GATE_NOT_FOUND = "Policy gate not found for this eval"

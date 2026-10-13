@@ -38,6 +38,7 @@ from modulo.db.models.evidence import PRODUCER_TYPES
         ("system_state", "sandbox_region"),
         ("system_state", "capability_reasoning"),
         ("run", "node_has_work"),
+        ("derived", "changed_set_evaluated"),
     ],
 )
 def test_w1_authorised_write_accepted(producer_type: str, key: str) -> None:
@@ -94,10 +95,14 @@ def test_w2_boundary_exact_key_without_suffix_is_rejected() -> None:
         assert_write_authorisation("eval", "eval")
 
 
-def test_w2_reserved_producer_derived_writes_nothing() -> None:
-    """``derived`` remains reserved with an empty namespace: any key is
-    unauthorised (chunk 7 contract)."""
-    assert not KEY_NAMESPACE_OWNERSHIP["derived"]
+def test_w2_derived_namespace_owns_changed_set_prefix_only() -> None:
+    """``derived`` owns the ``changed_set_`` prefix (FAR-1691) and nothing
+    else: any other key is unauthorised. ``policy_gate`` — opened to the
+    ``gate_`` prefix by FAR-939 chunk 12 (CO-6) — is asserted by
+    ``test_w2_policy_gate_namespace_opened_to_the_gate_prefix_only``; its
+    positive case is covered by ``test_w1_every_registered_prefix_is_accepted_for_its_owner``.
+    """
+    assert KEY_NAMESPACE_OWNERSHIP["derived"] == {"changed_set_"}
     with pytest.raises(EvidenceWriteAuthorisationError):
         assert_write_authorisation("derived", "eval_passed")
 

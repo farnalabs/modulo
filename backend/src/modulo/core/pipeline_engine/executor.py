@@ -2729,8 +2729,8 @@ class PipelineExecutor:
 
         def _mode(gate: PolicyGate) -> str:
             # Normalise to the closed vocabulary on the DTO. Production rows
-            # always carry the NOT NULL column (migration 0306); the
-            # attribute fallback keeps pre-0306 ORM stand-ins and legacy
+            # always carry the NOT NULL column (migration 0308); the
+            # attribute fallback keeps pre-0308 ORM stand-ins and legacy
             # fixtures (no attribute at all) on today's behaviour —
             # automatic.
             raw = getattr(gate, "evaluation_mode", None)

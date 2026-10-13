@@ -12,7 +12,9 @@ from tests.unit._e2b_sandbox_bridge import install_bridge
 
 
 @pytest.fixture(autouse=True)
-def _isolated_audit_session(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+def _isolated_audit_session(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> Generator[None, None, None]:
     """Route the ``audited(...)`` fresh-session write to an in-memory double.
 
     See ``tests.helpers.audit_session`` for why the double exists and why
@@ -23,7 +25,25 @@ def _isolated_audit_session(monkeypatch: pytest.MonkeyPatch) -> Generator[None, 
     fixture's teardown - after the test body - rather than during ordinary
     finalization while in-flight ``fail_closed=True`` destroy routes are still
     finalizing.
+
+    GATED (same shape as ``_patch_verify_identity``'s auth-stack gate): the
+    STRING target ``install_audit_session_double`` resolves by importing
+    ``modulo.core.audit_coverage`` (fastapi + sqlalchemy + db.models; ~1.8-3.8
+    s measured 2026-10-13), and paying that for every unit test dragged
+    pure-logic packages onto the app import stack they never touch. The
+    install now runs only when the test can actually reach the audit path;
+    see ``_audit_session_double_needed`` for the conservative-correctness
+    argument (NOTE: unlike the auth gate, a false NEGATIVE here can be
+    SILENT — a skipped fail-open audited route dials the real shared engine
+    and logs-and-continues — so the predicate is pinned per-module by
+    ``tests/architecture/test_unit_audit_double_gate.py``). The skip path
+    still yields (a generator fixture must yield exactly once per invocation)
+    but installs nothing; the ``monkeypatch.context()`` + yield teardown
+    ordering above is unchanged on the install path.
     """
+    if not _audit_session_double_needed(request):
+        yield
+        return
     with monkeypatch.context() as scoped:
         install_audit_session_double(scoped)
         yield
@@ -253,6 +273,78 @@ def _verify_identity_patch_needed(request: pytest.FixtureRequest) -> bool:
     if any(marker in sys.modules for marker in _AUTH_STACK_MARKERS):
         return True
     return any(_test_module_mentions(request.node, token) for token in _AUTH_STACK_MENTION_TOKENS)
+
+
+#: ``sys.modules`` markers meaning "this session has already loaded a surface
+#: that can dial the audit factory". ``modulo.core.audit_coverage`` is the
+#: primary marker: every audited REST route module (~70 files under
+#: ``modulo/api/routes/``) imports ``audited`` from it at MODULE level, so
+#: loading any of them — including via ``modulo.api.main``'s router
+#: collection and via ``modulo.api.mcp_server`` (which imports route modules
+#: at module level) — puts it in ``sys.modules`` before any fixture runs. A
+#: test that imports ``audit_coverage`` directly lands here too. The three
+#: ``modulo.api.*`` entries are belt-and-braces for the MCP surface in case
+#: its module-level import chain ever stops pulling the route modules in
+#: (``mcp_audit._fresh_session`` itself lazy-imports ``audit_session`` only
+#: at call time): ``mcp_server`` defines the ``mcp_audited`` tools,
+#: ``mcp_audit`` defines the decorator, ``main`` is the app.
+_AUDIT_SURFACE_MARKERS: tuple[str, ...] = (
+    "modulo.core.audit_coverage",
+    "modulo.api.main",
+    "modulo.api.mcp_server",
+    "modulo.api.mcp_audit",
+)
+
+#: Source tokens whose appearance in a test module marks it as able to reach
+#: the audited surface INSIDE its body (a lazy ``from modulo.api... import`` /
+#: ``from modulo.core.audit_coverage import ...`` / an
+#: ``importlib.import_module("modulo.api...")`` literal — all are strings in
+#: its source). ``modulo.api`` is deliberately one hop wide: any
+#: ``modulo.api.*`` module either is an audited surface or transitively loads
+#: one. A false positive (token in a comment/docstring) costs only the
+#: already-cached import — a performance no-op for a module that names the
+#: surface, never a behaviour change. A false negative can be SILENT (a
+#: fail-open audited route dials the real engine, writes a real audit row on
+#: a live Postgres, and logs-and-continues), so the set errs wide and the
+#: corpus pin lives in ``tests/architecture/test_unit_audit_double_gate.py``.
+_AUDIT_SURFACE_MENTION_TOKENS: tuple[str, ...] = ("modulo.api", "modulo.core.audit_coverage")
+
+
+def _audit_session_double_needed(request: pytest.FixtureRequest) -> bool:
+    """Conservative gate for the audit-session-double autouse fixture.
+
+    Returns True (install the double) when EITHER:
+
+    1. ``sys.modules`` already holds one of ``_AUDIT_SURFACE_MARKERS`` — a
+       module-level import in the test module, a conftest, or any
+       earlier-loaded helper, resolved before fixture setup; or
+    2. the test module's source mentions ``modulo.api`` or
+       ``modulo.core.audit_coverage`` — the lazy in-body-import shape, where
+       the import happens during the test body, AFTER this fixture has
+       already decided.
+
+    Conservative by construction: a test can only dial
+    ``_shared_session_factory`` (the symbol the double replaces) by running
+    an ``audited(...)`` route dependency or an ``mcp_audited`` tool — both of
+    which require a module under ``modulo.api`` (REST routes / ``main`` /
+    ``mcp_server``) or ``modulo.core.audit_coverage`` itself to be imported,
+    and every such import is either already done (condition 1) or written
+    literally in the test module's source (condition 2). The corpus check
+    behind condition 2 (enumerated 2026-10-13): of ~1460 files under
+    ``tests/unit/``, 391 have a module-level surface import (condition 1),
+    61 more mention a token with no module-level import (condition 2), and
+    NONE of the remaining ~1005 has any path to the surface — the only
+    non-test modules under ``tests/`` that touch it are conftests (whose
+    module-level imports land in ``sys.modules``) and
+    ``tests/unit/mcp/helpers.py`` (lazy-only, imported exclusively by modules
+    that already carry a marker or token). Under-patching is the dangerous
+    direction here (silent real audit write, unlike the auth gate's loud
+    401), so both conditions err wide. Pinned by
+    ``tests/architecture/test_unit_audit_double_gate.py``.
+    """
+    if any(marker in sys.modules for marker in _AUDIT_SURFACE_MARKERS):
+        return True
+    return any(_test_module_mentions(request.node, token) for token in _AUDIT_SURFACE_MENTION_TOKENS)
 
 
 @pytest.fixture(autouse=True)

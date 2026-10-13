@@ -65,6 +65,7 @@ from modulo.core.exceptions import (
     PipelineNotRunnableError,
     SnapshotLockNotAvailableError,
 )
+from modulo.core.secret_patterns import TRIGGER_CONFIG_SECRET_KEYS
 from modulo.core.team_visibility import (
     ConnectorBindingMissingError,
     connector_team_mismatch_detail,
@@ -492,7 +493,10 @@ def _merge_trigger_config(current: dict[str, Any] | None, update: dict[str, Any]
     return merge_masked_config_json(current or {}, update)
 
 
-_SECRET_CONFIG_KEYS = frozenset({"hmac_secret", "signing_secret"})
+# The CANONICAL trigger-config secret-key set (FAR-1732) lives in core so the
+# write path here, the Fernet rotation service (core.fernet_rotation) and the
+# migration-0305 parity test share ONE definition without core importing api.
+_SECRET_CONFIG_KEYS = TRIGGER_CONFIG_SECRET_KEYS
 
 
 def _encrypt_trigger_config_secrets(config: dict[str, Any] | None, fernet_key: str) -> dict[str, Any]:
@@ -501,6 +505,11 @@ def _encrypt_trigger_config_secrets(config: dict[str, Any] | None, fernet_key: s
     Only encrypts values that are plaintext strings (not already encrypted
     bytes/base64 strings or masked placeholders). Existing encrypted values
     are left unchanged so updates are idempotent.
+
+    FAR-1732: encryption failure FAILS CLOSED — it re-raises (after a
+    structured log) rather than silently persisting the plaintext secret
+    under a failed key. A misconfigured ``fernet_key`` therefore aborts the
+    write instead of storing the secret in the clear.
     """
     if not config:
         return {}
@@ -512,6 +521,7 @@ def _encrypt_trigger_config_secrets(config: dict[str, Any] | None, fernet_key: s
                 result[key] = encrypt_stored_secret(val, fernet_key).decode()
             except Exception:
                 _log.exception("trigger_config_encrypt_failed key=%s", key)
+                raise
     return result
 
 

@@ -7,7 +7,6 @@ prior event in the same org, forming a tamper-evident chain.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import uuid
@@ -20,9 +19,15 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_logger.hashing import compute_event_hash
 from modulo.core.sanitize_log import sanitise_log_value
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.rls import set_rls_org, set_rls_user_context
+
+#: Back-compat alias: the hash lived here before FAR-1697 and call sites (plus
+#: the audit-chain unit tests) import the underscored name. It is the same
+#: function object as ``compute_event_hash`` — one implementation, two names.
+_compute_event_hash = compute_event_hash
 
 _log = logging.getLogger(__name__)
 
@@ -55,6 +60,7 @@ SCAN_CSV_COLUMNS = (
 __all__ = [
     "append_audit_event",
     "append_audit_event_isolated",
+    "compute_event_hash",
     "export_chain",
     "get_audit_events_batch",
     "get_chain_head",
@@ -62,51 +68,6 @@ __all__ = [
     "stream_export_chain",
     "verify_chain",
 ]
-
-
-def _uuid_or_none(val: object) -> str | None:
-    """Convert a UUID (or str) to its string form, or return None."""
-    if val is None:
-        return None
-    return str(val)
-
-
-def _compute_event_hash(
-    event_type: str,
-    actor_user_id: object,
-    resource_type: str | None,
-    resource_id: object,
-    payload_json: dict[str, Any],
-    request_id: str | None,
-    previous_hash: str | None,
-    event_id: object,
-    organisation_id: object,
-    created_at: str,
-) -> str:
-    """Compute the SHA-256 hash of canonical event JSON.
-
-    UUID parameters (actor_user_id, resource_id, event_id, organisation_id)
-    are converted to strings internally so callers may pass UUID objects
-    or strings interchangeably.
-    """
-    canonical = json.dumps(
-        {
-            "event_type": event_type,
-            "actor_user_id": _uuid_or_none(actor_user_id),
-            "resource_type": resource_type,
-            "resource_id": _uuid_or_none(resource_id),
-            "payload_json": payload_json,
-            "request_id": request_id,
-            "previous_hash": previous_hash,
-            "event_id": _uuid_or_none(event_id),
-            "organisation_id": _uuid_or_none(organisation_id),
-            "created_at": created_at,
-        },
-        separators=(",", ":"),
-        sort_keys=True,
-        default=str,
-    )
-    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _audit_event_to_dict(e: AuditEvent) -> dict[str, Any]:

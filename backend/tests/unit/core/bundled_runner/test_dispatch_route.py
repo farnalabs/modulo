@@ -351,6 +351,9 @@ def test_workspace_spec_carries_structured_labels_and_network() -> None:
         "modulo.run.id": "run-123",
         "modulo.org.id": str(_ORG),
         "modulo.node.id": "node-9",
+        # FAR-1690: the typed egress posture rides the workspace metadata —
+        # never a boolean. The default (unrestricted) posture asserts none.
+        "modulo.egress.posture": "none",
     }
     assert spec.workspace_network == "modulo-runner-workspace"
     assert spec.egress_policy == "outbound"
@@ -515,7 +518,9 @@ def test_workspace_spec_blank_metadata_values_dropped() -> None:
     spec = _workspace_spec_for_dispatch(
         _profile("runner_docker"), org_id=None, run_id="", node_id="node-9", run_uuid=None
     )
-    assert spec.workspace_metadata == {"modulo.node.id": "node-9"}
+    # Empty run/org values are dropped; the FAR-1690 typed egress posture
+    # ("none" for the default posture) is always present.
+    assert spec.workspace_metadata == {"modulo.node.id": "node-9", "modulo.egress.posture": "none"}
 
 
 # ---------------------------------------------------------------------------
