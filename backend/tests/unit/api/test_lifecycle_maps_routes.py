@@ -782,7 +782,11 @@ def test_get_journey_detail_includes_run_history(client: tuple[TestClient, _Harn
     body = resp.json()
     assert body["ref"] == "FAR-100"
     assert len(body["runs"]) == 1
+    # The journey run-history `provenance` is the run's TRIGGER type (pinned by
+    # the journeys BDD feature), NOT the run taxonomy class — FAR-1693 must not
+    # clobber it when the shared serializer is composed for `execution_origin`.
     assert body["runs"][0]["provenance"] == "cron"
+    assert body["runs"][0]["execution_origin"] is None
 
 
 def test_get_journey_missing_journey_returns_404(client: tuple[TestClient, _Harness]) -> None:
