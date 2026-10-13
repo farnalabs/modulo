@@ -843,9 +843,14 @@ async def _live_worker_hostnames(queue_name: str) -> set[str]:
                 await r.aclose()
 
 
+def _uptime_seconds() -> float:
+    """Seconds since this process started — the deploy/boot reference clock."""
+    return (datetime.now(UTC) - _START_TIME).total_seconds()
+
+
 def _in_fleet_boot_grace() -> bool:
     """True within the fleet gates' post-boot grace window (ADR 043 Decision 3)."""
-    return (datetime.now(UTC) - _START_TIME).total_seconds() < _FLEET_BOOT_GRACE_SECONDS
+    return _uptime_seconds() < _FLEET_BOOT_GRACE_SECONDS
 
 
 async def _check_fleet_saq_workers() -> CheckResult:
@@ -1089,6 +1094,17 @@ async def _check_sweep_stats_advisory(
     ``error: probe_failed, orgs_probed: 0``), and "ok" otherwise. Fail-open
     on Redis read errors (never gates readiness).
 
+    FAR-1672 warm-up grace: a missing key is "never run" only once the
+    process has been up longer than *stale_seconds*. Inside that window the
+    absence is indistinguishable from the sweep simply not having had its
+    first tick yet (the cadences range from 60s to hourly, so a fresh
+    deploy has a legitimately key-less window), so it reports ok with an
+    explicit warm-up detail. Outside the window the sweep has had multiple
+    missed cadences in which to write at least once, so a still-missing key
+    keeps reporting degraded — the genuine dead-sweep signal is unchanged.
+    Behaviour-neutral for any sweep that has ticked at least once: a present
+    key never reaches this branch.
+
     FAR-1201: when *not_applicable* is provided (the deployment has no
     Docker endpoint, so the sweep skips every tick — see
     ``runner_reconciler.docker_endpoint_skip_reason``), the LIVENESS
@@ -1122,6 +1138,27 @@ async def _check_sweep_stats_advisory(
     if raw is None:
         if not_applicable is not None:
             return CheckResult(status="ok", detail=f"not applicable on this deployment: {not_applicable}")
+        # FAR-1672: a missing key is "never run" only once THIS process has
+        # been up longer than the sweep's own stale window. Inside that
+        # window the absence is indistinguishable from the sweep simply not
+        # having had its first tick yet (cadences range from 60s to hourly,
+        # so a fresh deploy has a legitimately key-less window — the 2026-10-11
+        # decision_record_reconcile page). The grace is the PER-SWEEP stale
+        # window rather than a fixed constant: it is already ~3x each
+        # sweep's cadence, so beyond it the sweep has had multiple missed
+        # cadences in which to write at least once and a still-missing key
+        # keeps reporting degraded — the genuine dead-sweep signal is
+        # unchanged. (Note: _check_dispatcher_reconcile deliberately does NOT
+        # share this reader — its missing-key tier is the readiness-GATING
+        # "unavailable" designed in FAR-199, not this advisory degraded.)
+        uptime = _uptime_seconds()
+        if uptime < stale_seconds:
+            return CheckResult(
+                status="ok",
+                detail=(
+                    f"sweep has not run yet (within {stale_seconds}s post-boot warm-up grace, uptime={uptime:.0f}s)"
+                ),
+            )
         return CheckResult(status="degraded", detail="sweep has never run")
     try:
         data = json.loads(raw)
