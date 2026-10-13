@@ -19,7 +19,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -32,6 +32,7 @@ from modulo.launcher.upgrade import (
     main,
     pre_upgrade_dump,
 )
+from tests.unit.launcher.test_launcher_shared import clock_steps
 
 _RESTORE_MANIFEST_NAME = "backup-info.json"
 
@@ -1789,7 +1790,7 @@ class TestRunBootHealthy:
             patch("modulo.launcher.upgrade.urllib.request.urlopen", return_value=mock_response),
             patch("modulo.launcher.upgrade._terminate_boot_process_group"),
             patch("modulo.launcher.upgrade.time.sleep"),
-            patch("modulo.launcher.upgrade.time.monotonic", side_effect=[0.0, 0.1, 0.2]),
+            patch("modulo.launcher.upgrade.time.monotonic", side_effect=clock_steps(0.0, 0.1, 0.2)),
         ):
             result = upgrade_module.run_boot(
                 [str(launcher), "start"],
@@ -1821,7 +1822,7 @@ class TestRunBootHealthy:
             patch("modulo.launcher.upgrade.tempfile.TemporaryFile", return_value=stderr_file),
             patch("modulo.launcher.upgrade._terminate_boot_process_group"),
             patch("modulo.launcher.upgrade.time.sleep"),
-            patch("modulo.launcher.upgrade.time.monotonic", side_effect=[0.0, 10.0]),
+            patch("modulo.launcher.upgrade.time.monotonic", side_effect=clock_steps(0.0, 10.0)),
             pytest.raises(UpgradeError, match="did not reach a healthy /healthz"),
         ):
             upgrade_module.run_boot(
@@ -1860,7 +1861,7 @@ class TestRunBootHealthy:
             patch("modulo.launcher.upgrade.urllib.request.urlopen", return_value=bad_response),
             patch("modulo.launcher.upgrade._terminate_boot_process_group"),
             patch("modulo.launcher.upgrade.time.sleep"),
-            patch("modulo.launcher.upgrade.time.monotonic", side_effect=[0.0, 0.1, 10.0]),
+            patch("modulo.launcher.upgrade.time.monotonic", side_effect=clock_steps(0.0, 0.1, 10.0)),
             pytest.raises(UpgradeError, match="did not reach a healthy /healthz"),
         ):
             upgrade_module.run_boot(
@@ -1877,12 +1878,17 @@ class TestTerminateBootProcessGroup:
         mock_process.poll.return_value = 0
         upgrade_module._terminate_boot_process_group(mock_process)
         mock_process.terminate.assert_not_called()
+        # An already-dead child short-circuits before ANY teardown act.
+        mock_process.wait.assert_not_called()
 
     def test_living_process_gets_sigterm_then_sigkill(self):
         mock_process = MagicMock()
         mock_process.poll.side_effect = [None, None]
         mock_process.pid = 12345
-        mock_process.wait.side_effect = [None, None, subprocess.TimeoutExpired("pg", 10)]
+        # wait(30) succeeding short-circuits BEFORE the escalation, so the
+        # stuck child raises on BOTH waits (the exception instance raises on
+        # every call - never a finite list that a call-count change exhausts).
+        mock_process.wait.side_effect = subprocess.TimeoutExpired("pg", 30)
 
         with (
             patch.object(upgrade_module.os, "getpgid", return_value=12345, create=True),
@@ -1890,17 +1896,29 @@ class TestTerminateBootProcessGroup:
             patch.object(upgrade_module.sys, "platform", "linux"),
         ):
             upgrade_module._terminate_boot_process_group(mock_process)
-        mock_killpg.assert_any_call(12345, upgrade_module.signal.SIGTERM)
+        # The FULL ordered escalation: SIGTERM -> wait(30) -> SIGKILL -> wait(10).
+        assert mock_killpg.call_args_list == [
+            call(12345, upgrade_module.signal.SIGTERM),
+            call(12345, upgrade_module.signal.SIGKILL),
+        ]
+        mock_process.wait.assert_any_call(timeout=30)
+        mock_process.wait.assert_any_call(timeout=10)
+        assert mock_process.wait.call_count == 2
 
     def test_windows_terminate_path(self):
         mock_process = MagicMock()
         mock_process.poll.side_effect = [None, None]
         mock_process.pid = 12345
-        mock_process.wait.side_effect = [None, subprocess.TimeoutExpired("pg", 10)]
+        # Same stuck-child contract: terminate first, escalate to kill on the
+        # timeout (one exception instance, never an exhaustible list).
+        mock_process.wait.side_effect = subprocess.TimeoutExpired("pg", 30)
 
         with patch.object(upgrade_module.sys, "platform", "win32"):
             upgrade_module._terminate_boot_process_group(mock_process)
-        mock_process.terminate.assert_called()
+        mock_process.terminate.assert_called_once()
+        assert mock_process.kill.call_count == 1
+        mock_process.wait.assert_any_call(timeout=30)
+        mock_process.wait.assert_any_call(timeout=10)
 
     def test_process_lookup_error_on_killpg(self):
         mock_process = MagicMock()
@@ -1910,27 +1928,32 @@ class TestTerminateBootProcessGroup:
 
         with (
             patch.object(upgrade_module.os, "getpgid", side_effect=ProcessLookupError, create=True),
-            patch.object(upgrade_module.os, "killpg", side_effect=ProcessLookupError, create=True),
+            patch.object(upgrade_module.os, "killpg", side_effect=ProcessLookupError, create=True) as mock_killpg,
             patch.object(upgrade_module.sys, "platform", "linux"),
         ):
             assert upgrade_module._terminate_boot_process_group(mock_process) is None
+        # Neither killpg act ever fired (both died on getpgid) and the residual
+        # failure is LOUD (the fail-closed teardown path logs, never silently).
+        mock_killpg.assert_not_called()
+        mock_process.wait.assert_any_call(timeout=30)
 
-    def test_with_custom_fetch(self, tmp_path):
-        fetched_urls = []
 
-        def _fake_fetch(url, target):
-            fetched_urls.append(url)
-            target.write_text("data", encoding="utf-8")
+def test_custom_fetch_seam_records_all_asset_urls(tmp_path):
+    fetched_urls = []
 
-        with patch.object(upgrade_module, "_host_arch", return_value="amd64"):
-            result = upgrade_module.fetch_release_assets(
-                "1.0.0",
-                tmp_path,
-                fetch=_fake_fetch,
-            )
-        assert result.version == "1.0.0"
-        assert len(fetched_urls) == 3
-        assert any("modulo-1.0.0-linux-amd64.tar.gz" in u for u in fetched_urls)
+    def _fake_fetch(url, target):
+        fetched_urls.append(url)
+        target.write_text("data", encoding="utf-8")
+
+    with patch.object(upgrade_module, "_host_arch", return_value="amd64"):
+        result = upgrade_module.fetch_release_assets(
+            "1.0.0",
+            tmp_path,
+            fetch=_fake_fetch,
+        )
+    assert result.version == "1.0.0"
+    assert len(fetched_urls) == 3
+    assert any("modulo-1.0.0-linux-amd64.tar.gz" in u for u in fetched_urls)
 
 
 class TestExtractAndVerifyBundle:
@@ -2100,9 +2123,15 @@ class TestStopRunningStack:
 
 
 class TestRestartUnitBestEffort:
-    def test_no_unit_file_returns_silently(self, tmp_path, monkeypatch):
+    def test_no_unit_file_returns_silently(self, tmp_path, monkeypatch, caplog):
         monkeypatch.setattr("modulo.launcher.service.default_unit_path", lambda: tmp_path / "no.unit")
-        assert upgrade_module._restart_unit_best_effort(why="test") is None
+        no_restart = patch("modulo.launcher.upgrade.subprocess.run")
+        with no_restart as restart_mock, caplog.at_level(logging.WARNING, logger="modulo.launcher.upgrade"):
+            assert upgrade_module._restart_unit_best_effort(why="test") is None
+        # Nothing to restart means NOTHING ran and NOTHING was logged.
+        restart_mock.assert_not_called()
+        probes = [r for r in caplog.records if r.name == "modulo.launcher.upgrade"]
+        assert not probes
 
     def test_unit_restart_success(self, tmp_path, monkeypatch, caplog):
         unit_file = tmp_path / "test.service"
@@ -2136,9 +2165,26 @@ class TestRestartUnitBestEffort:
         errors = [record.getMessage() for record in caplog.records if record.levelno == logging.ERROR]
         assert any("unit_restart_after_abort_FAILED" in message for message in errors)
 
-    def test_import_error_caught(self):
-        with patch("builtins.__import__", side_effect=ImportError("no service module")):
+    def test_import_error_caught(self, monkeypatch, caplog):
+        """The best-effort guard survives a broken service module - and logs.
+
+        The seam removes the module's ONLY entry point, so the inner import
+        is reached and the AttributeError path is exercised (the broad
+        `except Exception` fallback that must never mask the primary error).
+        """
+        monkeypatch.delattr("modulo.launcher.service.default_unit_path", raising=False)
+        with (
+            caplog.at_level(logging.ERROR, logger="modulo.launcher.upgrade"),
+            patch("modulo.launcher.upgrade.subprocess.run"),
+        ):
             assert upgrade_module._restart_unit_best_effort(why="test") is None
+
+        fallback_errors = [
+            record.getMessage()
+            for record in caplog.records
+            if record.name == "modulo.launcher.upgrade" and record.levelno == logging.ERROR
+        ]
+        assert any("unit_restart_best_effort_failed" in m for m in fallback_errors)
 
 
 class TestApiPortOf:

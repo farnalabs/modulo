@@ -125,7 +125,13 @@ def test_existing_file_is_adopted_never_regenerated_under_race(
     winner = load_or_create(path)
     # Simulate the race: exists() misses (file created concurrently) so the
     # loser reaches the exclusive create — which hits EEXIST and must adopt.
-    monkeypatch.setattr(Path, "exists", lambda _self: False)
+    real_exists = Path.exists
+
+    def _target_absent(self: Path) -> bool:
+        """False for the target only; every other path keeps the real stat."""
+        return real_exists(self) if self != path else False
+
+    monkeypatch.setattr(Path, "exists", _target_absent)
     monkeypatch.setattr(secrets_file_module, "_ADOPT_RETRY_DELAY_SECONDS", 0.0)
     loser = load_or_create(path)
     assert loser == winner
@@ -140,7 +146,13 @@ def test_adopt_retries_until_the_winner_finishes_writing(
     """A partial read during adoption retries instead of failing the boot."""
     path = tmp_path / "secrets.json"
     winner = load_or_create(path)
-    monkeypatch.setattr(Path, "exists", lambda _self: False)
+    real_exists = Path.exists
+
+    def _target_absent(self: Path) -> bool:
+        """False for the target only; every other path keeps the real stat."""
+        return real_exists(self) if self != path else False
+
+    monkeypatch.setattr(Path, "exists", _target_absent)
     monkeypatch.setattr(secrets_file_module, "_ADOPT_RETRY_DELAY_SECONDS", 0.0)
     real_parse = secrets_file_module._parse
     calls = {"n": 0}
@@ -174,7 +186,13 @@ def test_adopt_exhaustion_refuses_the_boot_with_attempts_in_message(
     monkeypatch.setattr(secrets_file_module, "_ADOPT_ATTEMPTS", 20)
     monkeypatch.setattr(secrets_file_module, "_ADOPT_RETRY_DELAY_SECONDS", 0.0)
     # exists() misses so the loser reaches the EEXIST branch (adopt path).
-    monkeypatch.setattr(Path, "exists", lambda _self: False)
+    real_exists = Path.exists
+
+    def _target_absent(self: Path) -> bool:
+        """False for the target only; every other path keeps the real stat."""
+        return real_exists(self) if self != path else False
+
+    monkeypatch.setattr(Path, "exists", _target_absent)
     with pytest.raises(SecretsFileError) as excinfo:
         load_or_create(path)
     message = str(excinfo.value)
@@ -196,7 +214,7 @@ def test_write_failure_leaves_no_credential_file_behind(
     monkeypatch.setattr(secrets_file_module.os, "write", _broken_write)
     with pytest.raises(OSError, match="disk full"):
         load_or_create(path)
-    monkeypatch.undo()
+    # (no monkeypatch.undo() - the fixture restores everything)
     assert not path.exists()
     leftovers = list(tmp_path.iterdir())
     assert not leftovers
@@ -239,7 +257,7 @@ def test_create_fails_closed_when_mode_cannot_be_pinned(
     monkeypatch.setattr(Path, "stat", _widened_stat)
     with pytest.raises(SecretsFileError, match="could not be pinned"):
         load_or_create(path)
-    monkeypatch.undo()
+    # (no monkeypatch.undo() - the fixture restores everything)
     assert not path.exists()  # the partially-created file was cleaned up
 
 

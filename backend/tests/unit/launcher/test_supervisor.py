@@ -20,6 +20,7 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from subprocess import Popen
 
 import pytest
 
@@ -626,7 +627,10 @@ def test_lock_refuses_anonymous_flock_without_holder_record(tmp_path: Path) -> N
     marker = tmp_path / "locked.marker"
     # Popen (not run+timeout): the holder must STILL hold the flock during the
     # in-process acquire — subprocess.run's timeout kills the child first.
-    proc = subprocess.Popen(  # noqa: S603 — test driver, fixed argv below
+    # Imported as a bare name because subprocess.Popen does not accept a
+    # construction-time timeout keyword; the finally below bounds the child
+    # with terminate + wait(timeout=10).
+    proc = Popen(  # noqa: S603 — test driver, fixed argv below
         [sys.executable, "-c", _LOCK_FLOCK_SCRIPT, str(data_dir) + ".lock", str(marker)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
