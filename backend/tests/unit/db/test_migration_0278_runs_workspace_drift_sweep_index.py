@@ -35,6 +35,7 @@ index and dropping the sweep back to a full-table scan of ``runs`` every
 ``0294_eval_results_org_fk``, then
 ``0295_decision_record_event_identity``, then
 ``0296_benign_run_outcomes``, then
+``0297_autonomy_gating_s1``, then
 ``0298_accounts_kind``, then
 ``0299_accounts_service_identity``, then
 ``0300_benign_facts_repair``, then
