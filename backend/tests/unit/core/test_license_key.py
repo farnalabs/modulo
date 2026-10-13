@@ -21,6 +21,7 @@ from modulo.core.license import (
     parse_and_verify,
     set_public_key,
     store_license,
+    verify_license_key,
 )
 from modulo.core.registry.crypto import generate_keypair, sign_primitive
 
@@ -230,6 +231,57 @@ class TestParseAndVerifySigned:
         result = parse_and_verify(f"{tampered_payload}.{sig_b64}")
         assert result.valid is False
         assert result.error == "Signature verification failed"
+
+
+# ---------------------------------------------------------------------------
+# verify_license_key — sync, session-free verifier (FAR-1733)
+# ---------------------------------------------------------------------------
+
+
+class TestVerifyLicenseKey:
+    """FAR-1733: the sync verifier used by presence-trusting call sites.
+
+    ``verify_license_key`` resolves a key to ``LicenseData`` or ``None``; it
+    must never raise and must never trust a key on mere presence.
+    """
+
+    @pytest.fixture
+    def kp(self) -> dict:
+        kp = generate_keypair()
+        set_public_key(kp["public_key"])
+        return kp
+
+    def test_empty_key_returns_none(self) -> None:
+        assert verify_license_key("") is None
+
+    def test_invalid_key_returns_none(self) -> None:
+        assert verify_license_key("not-a-valid-key") is None
+
+    def test_valid_key_returns_license_data(self, kp: dict) -> None:
+        key = _build_signed_key(
+            {"tier": "team", "org_id": "o1", "features": ["hitl"], "expires_at": "2999-01-01T00:00:00+00:00"},
+            kp["private_key"],
+        )
+        data = verify_license_key(key)
+        assert data is not None
+        assert data.tier == "team"
+        assert data.org_id == "o1"
+
+    def test_expired_key_returns_none(self, kp: dict) -> None:
+        key = _build_signed_key(
+            {"tier": "team", "org_id": "o1", "expires_at": "2000-01-01T00:00:00+00:00"},
+            kp["private_key"],
+        )
+        assert verify_license_key(key) is None
+
+    def test_parse_exception_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An unexpected parse failure fails closed (None) with a warning, never raising."""
+
+        def _raise(_key: str) -> None:
+            raise RuntimeError("unexpected parse failure")
+
+        monkeypatch.setattr("modulo.core.license.parse_and_verify", _raise)
+        assert verify_license_key("any-key") is None
 
 
 # ---------------------------------------------------------------------------

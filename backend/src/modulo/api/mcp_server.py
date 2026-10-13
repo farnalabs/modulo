@@ -9336,7 +9336,7 @@ async def list_feature_flags() -> dict[str, Any]:
             }
 
         from modulo.core.feature_flags import FeatureFlagRegistry
-        from modulo.core.license import get_license
+        from modulo.core.license import get_license, verify_license_key
         from modulo.db.crud.organisation import get_organisation
 
         settings = get_settings()
@@ -9346,10 +9346,21 @@ async def list_feature_flags() -> dict[str, Any]:
             org = await get_organisation(s, org_id)
             plan_ctx = await resolve_plan_context(settings, s, org)
             lic = get_license()
-            has_key = bool(settings.modulo_license_key) or lic is not None
+            # FAR-1733: the env-var key is only counted after verification
+            # (never on mere presence); is_valid reports whether any rung of
+            # the licence ladder resolved a VALID licence — in-memory, a
+            # verified env key, or a verified org-level key.
+            env_data = verify_license_key(getattr(settings, "modulo_license_key", "") or "")
+            has_key = env_data is not None or lic is not None
             org_settings = getattr(org, "settings_json", None)
-            if not has_key and isinstance(org_settings, dict):
-                has_key = bool(org_settings.get("license_key"))
+            org_key = org_settings.get("license_key") if isinstance(org_settings, dict) else None
+            if not has_key and org_key:
+                has_key = True
+            license_valid = (
+                lic is not None
+                or env_data is not None
+                or (bool(org_key) and verify_license_key(str(org_key)) is not None)
+            )
             registry = await FeatureFlagRegistry.from_db(s, plan_ctx.tier(), has_license_key=has_key)
 
             # Best-effort overlay of the org's per-flag overrides (same
@@ -9365,7 +9376,7 @@ async def list_feature_flags() -> dict[str, Any]:
             "license": {
                 "tier": registry.current_tier,
                 "has_license_key": registry.has_license_key,
-                "is_valid": True,
+                "is_valid": license_valid,
             },
             "dev_mode": settings.modulo_dev_mode,
             "flags": [

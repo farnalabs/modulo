@@ -19,6 +19,7 @@ from modulo.auth.oidc_verify import OidcVerifyError, verify_id_token
 from modulo.auth.saml_handler import ModuloSamlAuth, SamlAuthError
 from modulo.auth.secret_storage import decode_stored_secret
 from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
+from modulo.core.license import verify_license_key
 from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.core.ssrf import (
     derive_oidc_allowed_hosts,
@@ -1136,7 +1137,14 @@ async def _resolve_saml_config(
     # a config that should be refused must still be refused.
     if not settings.modulo_saml_enabled:
         raise ValueError("SAML is not enabled")
-    if not settings.modulo_license_key:
+    # FAR-1733: the env-var key must VERIFY (Ed25519 signature + expiry), not
+    # merely exist. An unverifiable key fails closed with the SAME message as
+    # an absent one, so the pre-auth 400 surface never discloses whether a key
+    # is configured; the server-side warning is the operator diagnostic.
+    env_key = getattr(settings, "modulo_license_key", "") or ""
+    if verify_license_key(env_key) is None:
+        if env_key:
+            _log.warning("saml.env_license_key_unverified")
         raise ValueError("SAML requires a license key (Team feature)")
 
     return await _saml_config_from_env(settings)

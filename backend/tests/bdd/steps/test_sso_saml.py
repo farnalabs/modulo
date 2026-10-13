@@ -1,8 +1,11 @@
 """Step definitions for SSO SAML 2.0 — SP metadata, ACS callback, JIT provisioning, group mapping, gating."""
 
 import base64
+import json
 import uuid
+from collections.abc import Generator
 from contextlib import suppress
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,6 +14,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.api.dependencies import get_anonymous_plan_context, get_plan_context
 from modulo.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
+from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, clear_license, set_public_key
+from modulo.core.registry.crypto import generate_keypair, sign_primitive
 from modulo.settings import Settings, get_settings
 
 with suppress(FileNotFoundError, OSError):
@@ -18,6 +23,45 @@ with suppress(FileNotFoundError, OSError):
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+# FAR-1733: the env-SAML licence gates verify the key (signature + expiry)
+# instead of trusting presence, so these steps must carry a GENUINELY valid
+# signed key. The keypair below signs one at import time; the autouse fixture
+# installs the matching public key for every scenario and restores it after.
+_TEST_KP = generate_keypair()
+_TEST_PRIV = _TEST_KP["private_key"]
+_TEST_PUB = _TEST_KP["public_key"]
+
+
+def _make_valid_license_key(tier: str = "team") -> str:
+    payload: dict[str, Any] = {
+        "tier": tier,
+        "features": ["sso", "team_rbac", "audit_viewer"],
+        "expires_at": (datetime.now(UTC) + timedelta(days=365)).isoformat(),
+        "org_id": "test-org",
+    }
+    sig_hex = sign_primitive(payload, _TEST_PRIV)
+    payload_b64 = (
+        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
+        .decode()
+        .rstrip("=")
+    )
+    sig_b64 = base64.urlsafe_b64encode(bytes.fromhex(sig_hex)).decode().rstrip("=")
+    return f"{payload_b64}.{sig_b64}"
+
+
+_VALID_LICENSE_KEY = _make_valid_license_key()
+
+
+@pytest.fixture(autouse=True)
+def _reset_license_state() -> Generator[None, None, None]:
+    """FAR-1733: in-memory licence + configured public key are module globals."""
+    clear_license()
+    set_public_key(_TEST_PUB)
+    yield
+    clear_license()
+    set_public_key(_LICENSE_PUBLIC_KEY_HEX)
+
 
 _SAMPLE_IDP_METADATA = """<?xml version="1.0"?>
 <md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
@@ -66,7 +110,7 @@ def _make_saml_response(email: str, display_name: str, groups: list[str] | None 
     return base64.b64encode(xml.encode()).decode()
 
 
-def _saml_settings(license_key: str = "test-license-key") -> Settings:
+def _saml_settings(license_key: str = _VALID_LICENSE_KEY) -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
         secret_key=_VALID_32,
@@ -81,7 +125,7 @@ def _saml_settings(license_key: str = "test-license-key") -> Settings:
     )
 
 
-def _setup_saml_client(license_key: str = "test-license-key") -> None:
+def _setup_saml_client(license_key: str = _VALID_LICENSE_KEY) -> None:
     from modulo.api.main import app as _app
 
     if not license_key:
@@ -162,7 +206,7 @@ def group_mapping_configured(idp_group: str, team_id: str, role: str, ctx: dict[
 
 @when("I initiate SAML login")
 def initiate_saml_login(request: Any, ctx: dict[str, Any], client: Any) -> None:
-    _setup_saml_client(ctx.get("license_key", "test-license-key"))
+    _setup_saml_client(ctx.get("license_key", _VALID_LICENSE_KEY))
     with patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch:
         mock_fetch.return_value = _SAMPLE_IDP_METADATA
         resp = client.get("/api/v1/auth/saml/login", follow_redirects=False)
@@ -174,7 +218,7 @@ def initiate_saml_login(request: Any, ctx: dict[str, Any], client: Any) -> None:
 
 @when("I request the SAML SP metadata endpoint")
 def request_sp_metadata(request: Any, ctx: dict[str, Any], client: Any) -> None:
-    _setup_saml_client(ctx.get("license_key", "test-license-key"))
+    _setup_saml_client(ctx.get("license_key", _VALID_LICENSE_KEY))
     resp = client.get("/api/v1/auth/saml/metadata", follow_redirects=False)
     _store_response(request, ctx, resp)
 

@@ -23,6 +23,7 @@ from modulo.core.license import (
     get_license,
     parse_and_verify,
     store_license,
+    verify_license_key,
 )
 from modulo.core.license_signing import TEAM_FEATURES, generate_team_license
 from modulo.core.stripe_fulfilment import email_team_license
@@ -91,13 +92,16 @@ def _license_status(data: LicenseData, *, has_license: bool = True) -> LicenseSt
 
 
 def _resolve_license_key(raw_key: str) -> LicenseStatusResponse | None:
-    """Validate ``raw_key`` and return its license status, or ``None`` if unusable."""
-    if not raw_key:
+    """Validate ``raw_key`` via the shared verifier and return its status, or ``None``.
+
+    Delegates to ``core.license.verify_license_key`` (the session-free form of
+    the canonical licence-ladder check) so the absent/bad-signature/expired/
+    parse-error rule lives in exactly one place.
+    """
+    data = verify_license_key(raw_key)
+    if data is None:
         return None
-    validation = parse_and_verify(raw_key)
-    if not validation.valid or validation.license_data is None:
-        return None
-    return _license_status(validation.license_data)
+    return _license_status(data)
 
 
 def _resolve_effective_license(settings: Settings, org: Organisation | None = None) -> LicenseStatusResponse:

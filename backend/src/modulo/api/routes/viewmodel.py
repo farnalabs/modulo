@@ -434,11 +434,12 @@ def _resolve_tier(settings: Settings, org: Any | None = None) -> str:
 
     Mirrors the canonical licence ladder (``core.feature_flags._resolve_paid_plan``):
     org-level key, then the in-memory licence, then the env-var key — each key
-    trusted only after ``parse_and_verify`` (never on mere presence) so this
-    resolver cannot disagree with ``_resolve_license_info`` for the same
-    deployment state. Falls back to ``community``.
+    trusted only after verification (``parse_and_verify`` / the shared
+    ``verify_license_key`` wrapper, never on mere presence) so this resolver
+    cannot disagree with ``_resolve_license_info`` for the same deployment
+    state. Falls back to ``community``.
     """
-    from modulo.core.license import get_license, parse_and_verify
+    from modulo.core.license import get_license, parse_and_verify, verify_license_key
 
     if org is not None:
         org_key = org.settings_json.get("license_key") if hasattr(org, "settings_json") else None
@@ -450,11 +451,11 @@ def _resolve_tier(settings: Settings, org: Any | None = None) -> str:
     lic = get_license()
     if lic is not None:
         return lic.tier
-    raw_key: str = getattr(settings, "modulo_license_key", "") or ""
-    if raw_key:
-        validation = parse_and_verify(raw_key)
-        if validation.valid and validation.license_data is not None:
-            return validation.license_data.tier
+    # FAR-1733: the env-var key is only trusted after verification — an
+    # unverifiable key falls through to community (never "team" on presence).
+    env_data = verify_license_key(getattr(settings, "modulo_license_key", "") or "")
+    if env_data is not None:
+        return env_data.tier
     return "community"
 
 
