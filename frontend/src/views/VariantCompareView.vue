@@ -56,9 +56,10 @@
           {{ $t('views.variantCompare.newComparison') }}
         </Button>
 
-        <template v-if="selectedGroup">
-          <span class="text-xs text-muted-foreground">{{ groupSummary }}</span>
-        </template>
+        <span v-if="selectedGroup" class="text-xs text-muted-foreground">
+          {{ $t('views.variantCompare.runs', { count: selectedGroup.run_count ?? 0 }) }} ·
+          {{ selectedGroup.selection_strategy || '—' }}
+        </span>
       </div>
 
       <template v-if="selectedGroup">
@@ -333,12 +334,6 @@ const groups = computed(() => {
 const selectedGroupId = ref<string | null>(null)
 const selectedGroup = ref<VariantGroup | null>(null)
 const isUnmounted = ref(false)
-
-const groupSummary = computed(() => {
-  const group = selectedGroup.value
-  if (!group) return ''
-  return `${t('views.variantCompare.runs', { count: group.run_count ?? 0 })} · ${group.selection_strategy || '—'}`
-})
 
 // The variant-group builder lives on this page (FAR-936 retired the separate
 // AB Test Models page). It opens automatically for the `pipeline_id` deep-link
