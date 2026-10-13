@@ -241,7 +241,7 @@ class TestC9ResolvedActionCheck:
     async def test_all_vocabulary_values_accepted(self, db_engine: AsyncEngine) -> None:
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
         _, eval_id, review_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
-        for action in ("continue", "warn", "block"):
+        for action in ("continue", "warn", "block", "escalate"):
             did = await _insert_decision_full(db_engine, org_id, review_id, eval_id, resolved_action=action)
             assert did is not None
 

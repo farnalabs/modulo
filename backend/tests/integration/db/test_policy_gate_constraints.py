@@ -129,6 +129,30 @@ class TestC4PartialUniqueIndex:
 
 
 # ---------------------------------------------------------------------------
+# FAR-1694 S1: the policy_gates.action vocabulary accepts 'escalate' (0305)
+# ---------------------------------------------------------------------------
+
+
+class TestActionVocabulary:
+    @pytest.mark.asyncio
+    async def test_all_vocabulary_values_accepted(self, db_engine: AsyncEngine) -> None:
+        org_id, acc_id, pipe_id = await _setup_org(db_engine)
+        for action in ("warn", "block", "escalate"):
+            node_id = uuid.uuid4()
+            eval_id = await _insert_eval(db_engine, org_id, pipe_id, acc_id, node_id)
+            gate_id = await _insert_gate(db_engine, org_id, eval_id, node_id, action=action)
+            assert gate_id is not None
+
+    @pytest.mark.asyncio
+    async def test_unknown_action_rejected(self, db_engine: AsyncEngine) -> None:
+        org_id, acc_id, pipe_id = await _setup_org(db_engine)
+        node_id = uuid.uuid4()
+        eval_id = await _insert_eval(db_engine, org_id, pipe_id, acc_id, node_id)
+        with pytest.raises(IntegrityError):
+            await _insert_gate(db_engine, org_id, eval_id, node_id, action="explode")
+
+
+# ---------------------------------------------------------------------------
 # C12: All THREE composite FKs rejected on cross-organisation inserts
 # ---------------------------------------------------------------------------
 
