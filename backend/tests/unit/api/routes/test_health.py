@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 import pytest
 
+import modulo.api.routes.health as health_mod
 from modulo.api.routes.health import (
     _check_decision_record_reconcile,
     _check_dispatcher_reconcile,
@@ -36,8 +37,6 @@ def _reset_repo_heads_cache() -> Generator[None, None, None]:
     """FAR-1439: ``_check_migrations`` memoizes the parsed alembic heads in a
     process-wide cache; reset it around every test so one test's canned heads
     can never leak into another test's assertions."""
-    from modulo.api.routes import health as health_mod
-
     health_mod._REPO_HEADS_CACHE = None
     yield
     health_mod._REPO_HEADS_CACHE = None
@@ -56,8 +55,6 @@ def _skip_sweep_warmup_grace() -> Generator[None, None, None]:
     while active), as does the hourly decision_record_reconcile
     outside-grace test, which needs > 3h.
     """
-    from modulo.api.routes import health as health_mod
-
     start_time_patch = patch.object(health_mod, "_START_TIME", datetime.now(UTC) - timedelta(hours=1))
     start_time_patch.start()
     yield
@@ -953,8 +950,6 @@ class TestSweepStatsWarmupGrace:
 
     async def _read_missing_key(self, check: Any, *, started: datetime) -> Any:
         """Run a sweep check with NO stats key and a given process start time."""
-        import modulo.api.routes.health as health_mod
-
         with (
             patch.object(health_mod, "_START_TIME", started),
             patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
@@ -1005,8 +1000,6 @@ class TestSweepStatsWarmupGrace:
         """Behaviour-neutral once the sweep has ticked: a present fresh key
         takes the NORMAL stats path even inside the grace window — the grace
         only covers key absence, it never masks a content reading."""
-        import modulo.api.routes.health as health_mod
-
         fake = _FakeStatsRedis(blob=_rhp_payload().encode())
         with (
             patch.object(health_mod, "_START_TIME", datetime.now(UTC)),
