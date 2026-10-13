@@ -2005,6 +2005,39 @@ elements:
       - testid: paramschema-set-save
         type: button
         dynamic_testid: false
+      - testid: paramschema-save
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-cancel
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-add-param
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-delete-confirm
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-delete-cancel
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-add-option
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-set-desc
+        type: input
+        dynamic_testid: false
+      - testid: paramschema-set-cancel
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-delete-set-confirm
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-delete-set-cancel
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-validate
+        type: button
+        dynamic_testid: false
     /admin/plugins:
       - testid: admin-plugins-refresh
         type: button
