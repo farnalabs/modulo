@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -10,7 +10,32 @@ from modulo.db.models.base import OrgScoped
 
 class HitlClaim(OrgScoped):
     __tablename__ = "hitl_claims"
-    __table_args__ = (UniqueConstraint("run_id", "review_id", name="uq_hitl_claims_run_review"),)
+    __table_args__ = (
+        UniqueConstraint("run_id", "review_id", name="uq_hitl_claims_run_review"),
+        # Decision vocabulary is otherwise enforced only at the write layer
+        # (HITLManager._decide's _DECISION_* constants); crud paths do not
+        # validate, so a bad value would persist unchecked and be silently
+        # ignored by the sweep alarm's decision.in_ filter. NULL-tolerant:
+        # undecided gates carry NULL. Mirrors migration 0306.
+        CheckConstraint(
+            "decision IS NULL OR decision IN ('approved', 'rejected', 'deliver_manual')",
+            name="ck_hitl_claims_decision",
+        ),
+        # Per-actor sweep-alarm window (sweep_alarm.py): WHERE
+        # organisation_id = ? AND decided_by = ? AND decision IN (...) AND
+        # decision_at >= ?. The single-column organisation_id / decided_by
+        # legs force a bitmap-and plus heap time filter; the composite
+        # serves it in one descent. Partial: undecided gates never enter.
+        # Mirrors migration 0306.
+        Index(
+            "ix_hitl_claims_sweep_actor_window",
+            "organisation_id",
+            "decided_by",
+            "decision_at",
+            postgresql_where=text("decided_by IS NOT NULL AND decision IS NOT NULL"),
+            sqlite_where=text("decided_by IS NOT NULL AND decision IS NOT NULL"),
+        ),
+    )
 
     run_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
