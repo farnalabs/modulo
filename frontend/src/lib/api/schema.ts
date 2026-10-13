@@ -4725,7 +4725,9 @@ export interface paths {
          *     resumable checkpoint (``GuardrailOverrideNoCheckpointError``, FAR-1711
          *     M1 — the reachable case is a non-interactive pipeline, which never
          *     persists one): resuming it would silently re-execute it, so the run is
-         *     left terminal ``eval_blocked`` rather than burned.
+         *     left terminal eval_blocked rather than burned. The checkpoint never
+         *     appears later, so re-calling this endpoint returns the same 409 — the
+         *     remediation for such a run is a NEW run, not another override attempt.
          *
          *     Requires operator or admin role.
          */
