@@ -732,7 +732,25 @@ def _sweep_revoke_result(rowcount: int) -> MagicMock:
     return r
 
 
+@pytest.fixture
+def _stub_run_workspace_destroy(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """FAR-1690 A3: the sweep now SEALS; stub the remote workspace-destroy leg.
+
+    ``revoke_run_api_key_sweep`` drives ``seal_run_teardown``, whose destroy leg
+    would otherwise build runtime-provider tier sources and reach the substrate.
+    The seal's revoke and audit-fact legs still run against the test session
+    double, so the sweep's revoke behaviour remains the subject of these tests.
+    """
+    mock = AsyncMock(return_value={"scanned": 0, "destroyed": 0, "errors": 0})
+    monkeypatch.setattr(
+        "modulo.core.bundled_runner.runner_reconciler.destroy_workspaces_for_run",
+        mock,
+    )
+    return mock
+
+
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_stub_run_workspace_destroy")
 async def test_revoke_run_api_key_sweep_revokes_terminal_run_keys() -> None:
     """A terminal run's un-revoked per-run key is revoked and counted."""
     org_id = uuid.uuid4()
@@ -757,6 +775,7 @@ async def test_revoke_run_api_key_sweep_revokes_terminal_run_keys() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_stub_run_workspace_destroy")
 async def test_revoke_run_api_key_sweep_skips_non_terminal_runs() -> None:
     """The keys-driven query filters by TERMINAL_STATUSES — an ACTIVE run
     (e.g. ``running``) is never selected for revocation, so its key survives
@@ -795,6 +814,7 @@ async def test_revoke_run_api_key_sweep_never_raises() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_stub_run_workspace_destroy")
 async def test_revoke_run_api_key_sweep_org_self_selection_works_with_autobegin_false() -> None:
     """The org self-selection path (``org_ids=None`` — the ONLY path production
     takes via ``dispatcher_reconcile``) must work on an ``autobegin=False``

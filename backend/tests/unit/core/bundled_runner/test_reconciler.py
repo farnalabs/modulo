@@ -37,6 +37,7 @@ from modulo.core.bundled_runner.runner_reconciler import (
     ReconcilerSweepError,
     _LabelledContainer,
     deployment_identity,
+    destroy_workspaces_for_run,
     docker_endpoint_skip_reason,
     reconcile_runner_workspaces,
 )
@@ -1164,3 +1165,94 @@ async def test_sweep_envelope_dedupes_a_tier_reason_identical_to_dockers(
     assert result == {"scanned": 0, "orphans_destroyed": 0, "skipped": "engine-unavailable"}
     assert "scope=e2b" not in caplog.text
     assert "scope=kubernetes" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# destroy_workspaces_for_run (FAR-1690 A3 — the RunTeardownSeal destroy leg)
+# ---------------------------------------------------------------------------
+
+
+def _docker_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make ONLY the Docker tier applicable for a run-scoped destroy pass."""
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value="k8s-off"))
+    monkeypatch.setattr(runner_reconciler, "e2b_endpoint_skip_reason", AsyncMock(return_value="e2b-off"))
+
+
+async def test_destroy_workspaces_for_run_targets_only_the_matching_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only workspaces labelled with the target run id are destroyed."""
+    source = _fake_source(
+        [
+            _container("target-run", 9999.0, "match-1"),
+            _container("other-run", 9999.0, "other-1"),
+        ]
+    )
+    monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: source)
+    _docker_only(monkeypatch)
+
+    result = await destroy_workspaces_for_run("target-run")
+
+    assert result == {"scanned": 1, "destroyed": 1, "errors": 0}
+    source.destroy_by_container_id.assert_has_awaits([(("match-1",), {})])
+    source.close.assert_awaited_once()
+
+
+async def test_destroy_workspaces_for_run_counts_per_workspace_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One stubborn workspace is logged + counted, and the loop continues."""
+    source = _fake_source(
+        [
+            _container("target-run", 1.0, "bad-1"),
+            _container("target-run", 2.0, "good-1"),
+        ]
+    )
+
+    async def _destroy(cid: str) -> None:
+        if cid == "bad-1":
+            raise RuntimeError("cannot destroy bad-1")
+
+    source.destroy_by_container_id = AsyncMock(side_effect=_destroy)
+    monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: source)
+    _docker_only(monkeypatch)
+
+    result = await destroy_workspaces_for_run("target-run")
+
+    assert result == {"scanned": 2, "destroyed": 1, "errors": 1}
+    source.destroy_by_container_id.assert_has_awaits([(("bad-1",), {}), (("good-1",), {})])
+    source.close.assert_awaited_once()
+
+
+async def test_destroy_workspaces_for_run_propagates_a_listing_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A configured-but-unreachable substrate surfaces, never reads as empty."""
+    source = _fake_source([])
+    source.list_labelled_workspaces = AsyncMock(side_effect=OSError("engine unreachable"))
+    monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: source)
+    _docker_only(monkeypatch)
+
+    with pytest.raises(OSError, match="engine unreachable"):
+        await destroy_workspaces_for_run("target-run")
+
+    # The source is still closed in the finally — no leaked client.
+    source.close.assert_awaited_once()
+
+
+async def test_destroy_workspaces_for_run_closes_every_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each applicable tier's source is closed exactly once."""
+    source = _fake_source([_container("target-run", 1.0, "c-1")])
+    monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: source)
+    e2b_source = _fake_source([])
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value="k8s-off"))
+    monkeypatch.setattr(runner_reconciler, "e2b_endpoint_skip_reason", AsyncMock(return_value=None))
+    monkeypatch.setattr(runner_reconciler, "_E2BWorkspaceSource", lambda: e2b_source)
+
+    result = await destroy_workspaces_for_run("target-run")
+
+    assert result == {"scanned": 1, "destroyed": 1, "errors": 0}
+    source.close.assert_awaited_once()
+    e2b_source.close.assert_awaited_once()
