@@ -241,35 +241,6 @@ def _test_module_mentions(node: object, token: str) -> bool:
     return mentions
 
 
-def _verify_identity_patch_needed(request: pytest.FixtureRequest) -> bool:
-    """Conservative gate for the two auth-stack autouse fixtures.
-
-    Returns True (install the patch/stub) when EITHER:
-
-    1. ``sys.modules`` already holds ``modulo.auth.dependencies`` or
-       ``modulo.api.dependencies`` — a module-level import in the test
-       module or any earlier-loaded conftest, resolved before fixture setup;
-       or
-    2. the test module's source mentions ``modulo.api`` or ``modulo.auth``
-       — the lazy in-body-import shape, where the import happens during the
-       test body, AFTER this fixture has already decided.
-
-    Conservative by construction: a test can only reach ``_verify_identity``
-    (or observe the system-settings stub) by importing the module that
-    defines it, and every such import is either already done (condition 1)
-    or written literally in the test module's source (condition 2). The
-    corpus check behind condition 2: no test module under ``tests/unit/``
-    that lacks both tokens has an in-body import whose chain reaches
-    ``modulo.api.dependencies`` / ``modulo.auth.dependencies``. An
-    under-patch fails LOUDLY anyway (the real ``_verify_identity`` queries a
-    live DB -> 401/503), never as a silently-wrong green. Pinned by
-    ``tests/architecture/test_unit_auth_patch_gate.py``.
-    """
-    if any(marker in sys.modules for marker in _AUTH_STACK_MARKERS):
-        return True
-    return any(_test_module_mentions(request.node, token) for token in _AUTH_STACK_MENTION_TOKENS)
-
-
 #: The module that owns the four provider seams the e2b bridge patches
 #: (``_build_dispatch_provider`` / ``_build_file_io_provider`` /
 #: ``_build_log_tail_provider`` / ``_build_isolation_provider``). Importing it
@@ -346,6 +317,35 @@ def _e2b_bridge_needed(request: pytest.FixtureRequest) -> bool:
     if _E2B_BRIDGE_MARKER in sys.modules:
         return True
     return any(_test_module_mentions(request.node, token) for token in _E2B_BRIDGE_MENTION_TOKENS)
+
+
+def _verify_identity_patch_needed(request: pytest.FixtureRequest) -> bool:
+    """Conservative gate for the two auth-stack autouse fixtures.
+
+    Returns True (install the patch/stub) when EITHER:
+
+    1. ``sys.modules`` already holds ``modulo.auth.dependencies`` or
+       ``modulo.api.dependencies`` — a module-level import in the test
+       module or any earlier-loaded conftest, resolved before fixture setup;
+       or
+    2. the test module's source mentions ``modulo.api`` or ``modulo.auth``
+       — the lazy in-body-import shape, where the import happens during the
+       test body, AFTER this fixture has already decided.
+
+    Conservative by construction: a test can only reach ``_verify_identity``
+    (or observe the system-settings stub) by importing the module that
+    defines it, and every such import is either already done (condition 1)
+    or written literally in the test module's source (condition 2). The
+    corpus check behind condition 2: no test module under ``tests/unit/``
+    that lacks both tokens has an in-body import whose chain reaches
+    ``modulo.api.dependencies`` / ``modulo.auth.dependencies``. An
+    under-patch fails LOUDLY anyway (the real ``_verify_identity`` queries a
+    live DB -> 401/503), never as a silently-wrong green. Pinned by
+    ``tests/architecture/test_unit_auth_patch_gate.py``.
+    """
+    if any(marker in sys.modules for marker in _AUTH_STACK_MARKERS):
+        return True
+    return any(_test_module_mentions(request.node, token) for token in _AUTH_STACK_MENTION_TOKENS)
 
 
 @pytest.fixture(autouse=True)
