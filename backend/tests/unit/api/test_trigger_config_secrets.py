@@ -50,3 +50,17 @@ def test_encrypt_trigger_config_secrets_encrypts_both_secret_keys() -> None:
 def test_encrypt_trigger_config_secrets_empty_config_returns_empty() -> None:
     assert not _encrypt_trigger_config_secrets(None, _FERNET_KEY)
     assert not _encrypt_trigger_config_secrets({}, _FERNET_KEY)
+
+
+def test_encrypt_trigger_config_secrets_fails_closed_on_bad_key() -> None:
+    """FAR-1732: an unusable Fernet key must abort the write — re-raise — not
+    silently leave the plaintext secret intact in the returned config."""
+    from modulo.auth.secret_storage import InvalidFernetKeyError
+
+    try:
+        _encrypt_trigger_config_secrets({"hmac_secret": "plaintext"}, "a" * 32)
+    except InvalidFernetKeyError:
+        expected_fail_closed = True
+    else:
+        expected_fail_closed = False
+    assert expected_fail_closed

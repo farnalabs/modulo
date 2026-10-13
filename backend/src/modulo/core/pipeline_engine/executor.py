@@ -4706,38 +4706,39 @@ class PipelineExecutor:
             final_status=final_status,
             completed_node_outputs=completed_node_outputs,
         )
-        # FAR-296 Phase 3b: revoke the per-run runner-role API key (if any was
-        # minted for a script-mode sandbox). Failure-isolated — a revocation
-        # failure never crashes terminalization (the key's short-TTL expiry in
-        # validate_api_key is the backstop).
+        # FAR-1690 A3 (run_teardown.RunTeardownSeal): the sealed terminal step —
+        # revoke the run's per-run API key (FAR-296 Phase 3b), then destroy every
+        # workspace labelled modulo.run.id = run_id, then write one
+        # run.teardown_sealed fact. Revoke-first, fail-closed. Failure-isolated
+        # so a seal failure never crashes terminalization (the key's short-TTL
+        # expiry in validate_api_key is the credential backstop; the
+        # workspace-orphan reconciler reclaims a workspace the seal could not).
         try:
-            await self._revoke_run_api_key(run_id=run_id, org_id=org_id)
+            await self._seal_run_teardown(run_id=run_id, org_id=org_id)
         except asyncio.CancelledError:
             raise
         except Exception:
-            _log.exception("run_api_key.revoke_failed", extra={"run_id": str(run_id)})
+            _log.exception("run_teardown.seal_failed", extra={"run_id": str(run_id)})
         return final_run
 
-    async def _revoke_run_api_key(self, *, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
-        """Revoke the per-run runner-role API key minted for a script-mode sandbox.
+    async def _seal_run_teardown(self, *, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
+        """Run the sealed joint revoke+destroy step for a terminalized run (FAR-1690 A3).
 
-        Failure-isolated at the call site — a revocation failure never crashes
-        terminalization (the key's short-TTL expiry in validate_api_key is the
-        backstop).
+        Failure-isolated at the call site — a seal failure never crashes
+        terminalization. ``seal_run_teardown`` itself raises
+        ``RunTeardownSealError`` when the credential revoke could not be
+        confirmed (after writing the ``sealed=False`` fact); that surfaces here
+        as a loud log line, and the compensating sweep retries.
         """
         if self._session_factory is None:
             return
-        try:
-            from modulo.auth.api_key import revoke_run_api_key
+        from modulo.core.run_teardown import seal_run_teardown
 
-            async with self._session_factory() as session, session.begin():
-                await set_rls_org(session, org_id)
-                await set_rls_execution_context(session)
-                await revoke_run_api_key(session, run_id=run_id, org_id=org_id)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("run_api_key.revoke_failed", extra={"run_id": str(run_id)})
+        await seal_run_teardown(
+            run_id=run_id,
+            org_id=org_id,
+            session_factory=self._session_factory,
+        )
 
     async def execute(
         self,

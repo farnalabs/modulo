@@ -28,6 +28,10 @@ RESERVED_ENV_VARS: frozenset[str] = frozenset(
         "MODULO_ORG_ID",
         "MODULO_INPUT_PAYLOAD",
         "MODULO_ALLOWED_TOOLS",
+        # FAR-1690 A1: the run-scoped credential's issuance provenance is
+        # stamped by the platform, never by a node — reserving it keeps a
+        # pipeline from spoofing ``modulo_minted`` / ``broker_issued``.
+        "MODULO_CREDENTIAL_PROVENANCE",
         "MODULO_BRIDGE_ENDPOINT",
         "MODULO_BRIDGE_CONFIG",
         "APP_MODULO_OPENCODE_API_KEY",

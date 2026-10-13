@@ -22,6 +22,7 @@ from modulo.auth.jwt import create_access_token
 from modulo.core.feature_flags import LicenseData, LicenseKeyTier
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_org
+from tests.integration.conftest import EvalMirrorDefinition, insert_evals_mirror
 
 os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
@@ -238,6 +239,21 @@ async def _seed_eval_definition(
                 "name": name,
                 "uid": str(user_id),
             },
+        )
+        # FAR-1729: post-cutover reads (e.g. /evals/coverage) source the live
+        # ``evals`` table, so the legacy ``eval_definitions`` row needs its
+        # same-UUID ``evals`` mirror — the 0254 backfill shape.
+        await insert_evals_mirror(
+            conn,
+            EvalMirrorDefinition(
+                id=eval_id,
+                organisation_id=org_id,
+                pipeline_id=pipeline_id,
+                name=name,
+                eval_type="regex",
+                account_id=user_id,
+                node_id=node_id,
+            ),
         )
     return eval_id
 

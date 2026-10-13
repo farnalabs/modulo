@@ -101,6 +101,11 @@ from modulo.core.cost_controller.breakdown.params import (
     coerce_reported_token,
     is_proven_zero_token_usage,
 )
+from modulo.core.credential_issuer import (
+    RUN_CREDENTIAL_PROVENANCE_ENV,
+    IssuedRunCredential,
+    default_credential_issuer,
+)
 from modulo.core.eval_engine import EvalEngine, EvalResult
 from modulo.core.guardrails.loop_intercept import LoopInterceptConfig
 from modulo.core.node_output_split import (
@@ -7863,89 +7868,45 @@ async def _sandbox_store_script_lease(
         raise
 
 
-async def _sandbox_mint_run_api_key_for_sandbox(
+async def _sandbox_issue_run_credential_for_sandbox(
     *,
     session_factory: Callable[..., Any] | None,
     org_id: str,
     run_id: str,
     node_id: str,
     sandbox_timeout: int,
-) -> str | None:
-    """Mint a short-TTL runner-role API key for this script-mode sandbox (FAR-296 Phase 3b).
+) -> IssuedRunCredential | None:
+    """Issue a run-scoped Modulo credential for this sandbox (FAR-1690 slice A1).
 
-    Returns the raw key value, or None when minting is unavailable/failed
-    (fail-open — the sandbox runs without the key rather than failing the
-    dispatch). TTL = max(15 min, node_timeout + 5 min), capped by the
-    org-level max (default 1 hour). The raw value is returned to the
-    caller only, which injects it into the sandbox envs — it is NEVER
-    logged, checkpointed, or placed in LangGraph state.
+    EVERY sandbox dispatch — script AND llm mode — issues a short-TTL,
+    run-scoped runner-role API key through the :class:`CredentialIssuer` seam
+    (``core.credential_issuer``). The default Modulo-minted provider computes
+    the TTL as ``max(15 min, node_timeout + 5 min)`` capped by the org max
+    (default 1 hour), links the key to the run (``OrgApiKey.run_id``), and
+    stamps the issuance provenance ``modulo_minted`` (attested — NEVER
+    ``observed``).
+
+    Fail-open: a mint failure returns ``None`` — the sandbox runs without the
+    key rather than failing the dispatch. The raw secret rides on the returned
+    handle only; it is NEVER logged, checkpointed, or placed in LangGraph state.
     """
-    if session_factory is None:
-        return None
-    org_id_raw = org_id
-    try:
-        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
-    except (TypeError, ValueError):
-        org_uuid = None
-    if org_uuid is None:
-        return None
-    try:
-        run_uuid = uuid.UUID(str(run_id))
-    except (TypeError, ValueError):
-        return None
-    try:
-        from modulo.auth.api_key import mint_run_api_key
-        from modulo.db.crud.run import get_run_api_key_ttl_seconds
-
-        ttl_seconds = await get_run_api_key_ttl_seconds(session_factory, org_uuid, sandbox_timeout)
-        async with session_factory() as session, session.begin():
-            await set_rls_org(session, org_uuid)
-            await set_rls_execution_context(session)
-            # account_id: the run's triggering user; fall back to the
-            # first active admin in the org when the run row has none.
-            from sqlalchemy import text as _sql_text
-
-            row = (
-                await session.execute(
-                    _sql_text("SELECT account_id FROM runs WHERE id=:rid AND organisation_id=:oid"),
-                    {"rid": str(run_uuid), "oid": str(org_uuid)},
-                )
-            ).fetchone()
-            account_id_raw = row[0] if row else None
-            if account_id_raw is None:
-                admin_row = (
-                    await session.execute(
-                        _sql_text(
-                            "SELECT a.id FROM accounts a JOIN org_memberships om ON om.account_id = a.id "
-                            "WHERE om.organisation_id=:oid AND om.role='admin' AND om.deactivated_at IS NULL "
-                            "ORDER BY a.created_at LIMIT 1"
-                        ),
-                        {"oid": str(org_uuid)},
-                    )
-                ).fetchone()
-                account_id_raw = admin_row[0] if admin_row else None
-            if account_id_raw is None:
-                return None
-            minted = await mint_run_api_key(
-                session,
-                org_id=org_uuid,
-                run_id=run_uuid,
-                node_id=node_id,
-                account_id=uuid.UUID(str(account_id_raw)),
-                ttl_seconds=ttl_seconds,
-            )
-            if minted is None:
-                return None
-            _key_row, full_key = minted
-            return full_key
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.exception(
-            "sandbox_agent.run_api_key_mint_failed",
-            extra={"run_id": run_id, "node_id": node_id},
+    issuer = default_credential_issuer()
+    issued = await issuer.issue_for_run(
+        session_factory=session_factory,
+        org_id=org_id,
+        run_id=run_id,
+        node_id=node_id,
+        sandbox_timeout=sandbox_timeout,
+    )
+    if issued is not None:
+        # Provenance is stamped on the run's telemetry (attested evidence), in
+        # addition to the ``MODULO_CREDENTIAL_PROVENANCE`` env stamp applied by
+        # the dispatch site.
+        _emit_script_span_event(
+            "credential.issued",
+            {"run_id": run_id, "node_id": node_id, **issuer.describe()},
         )
-        return None
+    return issued
 
 
 async def _sandbox_clear_dispatch_marker(
@@ -9896,17 +9857,16 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             via_provider=True,
         )
 
-    async def _mint_run_api_key_for_sandbox() -> str | None:
-        """Mint a short-TTL runner-role API key for this script-mode sandbox (FAR-296 Phase 3b).
+    async def _issue_run_credential_for_sandbox() -> IssuedRunCredential | None:
+        """Issue a short-TTL run-scoped credential for this sandbox (FAR-1690 A1).
 
-        Returns the raw key value, or None when minting is unavailable/failed
-        (fail-open — the sandbox runs without the key rather than failing the
-        dispatch). TTL = max(15 min, node_timeout + 5 min), capped by the
-        org-level max (default 1 hour). The raw value is returned to the
-        caller only, which injects it into the sandbox envs — it is NEVER
-        logged, checkpointed, or placed in LangGraph state.
+        Returns the issued credential handle (secret + issuance provenance), or
+        None when issuance is unavailable/failed (fail-open — the sandbox runs
+        without the key rather than failing the dispatch). The raw secret is
+        returned to the caller only, which injects it into the sandbox envs —
+        it is NEVER logged, checkpointed, or placed in LangGraph state.
         """
-        return await _sandbox_mint_run_api_key_for_sandbox(
+        return await _sandbox_issue_run_credential_for_sandbox(
             session_factory=session_factory,
             org_id=org_id,
             run_id=run_id,
@@ -10173,6 +10133,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             raise SandboxTierRefusedError(
                 f"Node '{node_id}' egress refused on {_egress_tier} tier: {_egress_resolved.refusal}"
             )
+        # FAR-1690: record the TYPED egress posture (never a boolean) on the
+        # workspace, riding the same provider-neutral workspace_metadata carrier
+        # as the allowlist below. Full rationale lives on EgressPosture in
+        # core/pipeline_engine/egress.py and the mirrored comment in
+        # runner_dispatch._workspace_spec_for_dispatch; kept as a pointer here so
+        # the two dispatch sites cannot drift.
+        _metadata["modulo.egress.posture"] = _egress_resolved.posture.value
         if _egress_resolved.policy == "selected" and _egress_resolved.allowlist:
             _metadata["egress_allowlist"] = json.dumps(_egress_resolved.allowlist)
         # FAR-1051 (qa-iterate): run/org/node attribution rides the spec's
@@ -10846,15 +10813,18 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         "node_id": node_id,
                     },
                 )
-                # FAR-296 Phase 3b: mint a short-TTL runner-role API key so
-                # the script can authenticate to the Modulo API with a
-                # restricted identity. The key is per-run, revoked at run
-                # finalization, and never the long-lived host credentials.
-                # Fail-open: a mint failure leaves the key absent (the
-                # sandbox still runs).
-                _run_api_key = await _mint_run_api_key_for_sandbox()
-                if _run_api_key:
-                    sandbox_envs["MODULO_API_KEY"] = _run_api_key
+            # FAR-1690 slice A1: EVERY sandbox dispatch (script AND llm mode)
+            # issues a short-TTL, run-scoped runner-role API key through the
+            # CredentialIssuer seam, so the workspace always holds a run-scoped
+            # token and never only the long-lived host credentials. The key is
+            # per-run, revoked at run finalization (and by the compensating
+            # sweep), and its issuance provenance is stamped as
+            # ``modulo_minted`` (attested — NEVER ``observed``). Fail-open: an
+            # issuance failure leaves the key absent (the sandbox still runs).
+            _issued_credential = await _issue_run_credential_for_sandbox()
+            if _issued_credential is not None:
+                sandbox_envs["MODULO_API_KEY"] = _issued_credential.secret
+                sandbox_envs[RUN_CREDENTIAL_PROVENANCE_ENV] = _issued_credential.provenance
             _bridge_wrapped_command = rendered_agent_command
             # FAR-211: start the loop-interception callback server + write
             # the bridge client into the sandbox. Best-effort and

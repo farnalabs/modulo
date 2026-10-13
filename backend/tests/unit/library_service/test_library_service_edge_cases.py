@@ -65,6 +65,15 @@ def _scalar_one_result(value: object) -> MagicMock:
     return r
 
 
+def _scalars_first_result(value: object) -> MagicMock:
+    """Result double for the ``scalars().first()`` extraction (FAR-759)."""
+    r = MagicMock()
+    scalars = MagicMock()
+    scalars.first = MagicMock(return_value=value)
+    r.scalars = MagicMock(return_value=scalars)
+    return r
+
+
 # ---------------------------------------------------------------------------
 # get_primitive — non-transaction + error paths
 # ---------------------------------------------------------------------------
@@ -134,7 +143,7 @@ async def test_get_primitive_by_slug_found_in_db():
 
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch.object(session, "execute", new_callable=AsyncMock, return_value=_scalar_one_result(prim)),
+        patch.object(session, "execute", new_callable=AsyncMock, return_value=_scalars_first_result(prim)),
     ):
         result = await get_primitive_by_slug(session, org_id, "schema", "test-prim")
 
@@ -148,7 +157,7 @@ async def test_get_primitive_by_slug_uses_own_transaction_when_not_in_one():
 
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch.object(session, "execute", new_callable=AsyncMock, return_value=_scalar_one_result(prim)),
+        patch.object(session, "execute", new_callable=AsyncMock, return_value=_scalars_first_result(prim)),
     ):
         result = await get_primitive_by_slug(session, org_id, "schema", "test-prim")
 
@@ -163,11 +172,26 @@ async def test_get_primitive_by_slug_falls_back_to_modulo():
 
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch.object(session, "execute", new_callable=AsyncMock, return_value=_scalar_one_result(None)),
+        patch.object(session, "execute", new_callable=AsyncMock, return_value=_scalars_first_result(None)),
     ):
         result = await get_primitive_by_slug(session, org_id, native.primitive_type, native.slug)
 
     assert result is native
+
+
+async def test_get_primitive_by_slug_version_mismatch_on_registry_fallback():
+    """FAR-759: an exact-version lookup never falls back to a different-version registry row."""
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    native = _MODULO_PRIMITIVES[0]
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch.object(session, "execute", new_callable=AsyncMock, return_value=_scalars_first_result(None)),
+    ):
+        result = await get_primitive_by_slug(session, org_id, native.primitive_type, native.slug, version="999.0")
+
+    assert result is None
 
 
 async def test_get_primitive_by_slug_returns_none_when_unmatched():
@@ -176,7 +200,7 @@ async def test_get_primitive_by_slug_returns_none_when_unmatched():
 
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch.object(session, "execute", new_callable=AsyncMock, return_value=_scalar_one_result(None)),
+        patch.object(session, "execute", new_callable=AsyncMock, return_value=_scalars_first_result(None)),
     ):
         result = await get_primitive_by_slug(session, org_id, "schema", "zzz-no-such-slug")
 

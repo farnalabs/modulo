@@ -44,7 +44,7 @@ Lenses:
     0301_oauth_consent_state_preauth_rls chains onto 0300_benign_facts_repair,
     0302_runs_run_grouping chains onto 0301_oauth_consent_state_preauth_rls, and
     0303_feedback_records_lookup_indexes chains onto 0302_runs_run_grouping, and
-    0306_hitl_claims_decision_sweep chains onto 0305_guardrail_escalate_action as the
+    0307_hitl_claims_decision_sweep chains onto 0306_trigger_secret_encryption as the
     current single linear head.
 * **Structure (mocked ``op``)** - upgrade adds BOTH columns existence-gated,
   adds the ``ck_pipelines_hitl_review_window`` CHECK (NOT VALID then VALIDATE on
@@ -71,7 +71,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0265_hitl_review_window"
 _MIGRATION_DOWN_REVISION = "0264_pipelines_max_autonomy_ge_default"
-_HEAD_MIGRATION = "0306_hitl_claims_decision_sweep"
+_HEAD_MIGRATION = "0307_hitl_claims_decision_sweep"
 _CHECK_CONSTRAINT = "ck_pipelines_hitl_review_window"
 _SWEEP_INDEX = "ix_hitl_claims_terminalize_sweep"
 _ENVELOPE = (60, 604800)

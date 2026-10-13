@@ -118,6 +118,13 @@ def _make_mock_session(
 ) -> AsyncMock:
     """Build a mock session that handles team gate + route queries."""
     session = AsyncMock(spec=AsyncSession)
+    # FAR-1639: an AsyncMock spec can still return un-awaited coroutines from
+    # SYNC call sites like ``session.in_transaction()`` (RLS preamble) and
+    # ``session.add()`` (writer paths) — the result is always-truthy, so the
+    # active-transaction guard (rls._ensure_active_transaction) would pass
+    # vacuously. Type the sync contract explicitly.
+    session.in_transaction = MagicMock(return_value=True)
+    session.add = MagicMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -349,6 +356,11 @@ class TestTriggerRunTeamScopeResolver:
         pid = uuid.uuid4()
 
         mock_session = AsyncMock()
+        # FAR-1639: sync ``in_transaction``/``add`` contract typed explicitly
+        # (see _make_mock_session) so a bare AsyncMock child can never return
+        # an un-awaited, always-truthy coroutine at a SYNC call site.
+        mock_session.in_transaction = MagicMock(return_value=True)
+        mock_session.add = MagicMock()
         result_mock = MagicMock()
         # Return a Row-like tuple: (owner_team_id, visibility)
         result_mock.first.return_value = (_TEAM_ID, "team")
@@ -369,6 +381,9 @@ class TestTriggerRunTeamScopeResolver:
 
         pid = uuid.uuid4()
         mock_session = AsyncMock()
+        # FAR-1639: sync contract typed explicitly (see _make_mock_session).
+        mock_session.in_transaction = MagicMock(return_value=True)
+        mock_session.add = MagicMock()
         result_mock = MagicMock()
         result_mock.first.return_value = None
         mock_session.execute = AsyncMock(return_value=result_mock)
@@ -385,6 +400,9 @@ class TestTriggerRunTeamScopeResolver:
         from modulo.api.team_scope import resolve_trigger_run_team_scope
 
         mock_session = AsyncMock()
+        # FAR-1639: sync contract typed explicitly (see _make_mock_session).
+        mock_session.in_transaction = MagicMock(return_value=True)
+        mock_session.add = MagicMock()
         request = MagicMock()
         request.body = AsyncMock(return_value=b"{}")
 
@@ -397,6 +415,9 @@ class TestTriggerRunTeamScopeResolver:
         from modulo.api.team_scope import resolve_trigger_run_team_scope
 
         mock_session = AsyncMock()
+        # FAR-1639: sync contract typed explicitly (see _make_mock_session).
+        mock_session.in_transaction = MagicMock(return_value=True)
+        mock_session.add = MagicMock()
         request = MagicMock()
         request.body = AsyncMock(return_value=b'{"pipeline_id": "not-a-uuid"}')
 
@@ -428,6 +449,9 @@ class TestResolveTriggerTeamScope:
     @staticmethod
     def _session(row: tuple[uuid.UUID | None, str] | None) -> AsyncMock:
         session = AsyncMock(spec=AsyncSession)
+        # FAR-1639: sync contract typed explicitly (see _make_mock_session).
+        session.in_transaction = MagicMock(return_value=True)
+        session.add = MagicMock()
         result = MagicMock()
         result.first.return_value = row
         session.execute = AsyncMock(return_value=result)
