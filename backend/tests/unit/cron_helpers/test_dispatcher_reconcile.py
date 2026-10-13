@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -16,8 +17,11 @@ from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import Delete, Select, Update
 
 from modulo.core import cron_helpers as ch
+from modulo.db.crud.run import ERROR_CODE_PIPELINE_CAPACITY
+from modulo.db.models.pipeline import Pipeline
 from tests.unit.cron_helpers._helpers import _Begin as _MockBegin
 from tests.unit.cron_helpers._helpers import _org_result, _patch_env, _rows_result
 
@@ -35,6 +39,71 @@ def _result_row(row: Any) -> MagicMock:
     result = MagicMock()
     result.first.return_value = row
     return result
+
+
+def _classify_statement(stmt: Any, params: dict[str, Any]) -> str:
+    """Classify an executed statement by STRUCTURE — rendered SQL text is dead.
+
+    ORM statements route on their mapped entity; raw SQL (TextClause) routes on
+    the bind-parameter SIGNATURE (names plus the discriminating bound code
+    values), never on WHERE-shape substrings such as ``"node_attempt_count"``
+    or ``"created_at < now()"`` — those change freely as a predicate evolves,
+    and a routing mock that follows them silently starves a terminalizer when
+    the shape drifts. The operation's IDENTITY (which operation ran, not how
+    its SQL is spelled) is all the mock needs for its FIFO/rows contract.
+
+    Kinds and their production producers:
+
+      select               any ORM read (run rows, org ids, drift-sweep reads...) — FIFO pop
+      pipeline_admission   ``select(Pipeline)`` (capacity admission, FAR-1025)
+      orm_write            ORM ``update()``/``delete()`` (e.g. drift-sweep flagging)
+      set_config           lock/statement timeouts + RLS context (op name)
+      clear_dispatch_marker ``_clear_previous_attempt_marker``
+      dispatch_failed      ``_fail_run_dispatch_failed`` (enqueue-failed TTL backstop)
+      capacity_mark        ``_capacity_defer_pending_run``'s marking UPDATE
+      claim_cap            ``_terminalize_claim_cap_exhausted``
+      mid_graph_wedge      ``_terminalize_mid_graph_wedges``
+      aged_nodeless        ``_terminalize_aged_nodeless_zombies``' router SELECT (FAR-1329)
+      hitl_expired         ``_terminalize_expired_hitl_reviews`` (FAR-648)
+      hitl_missing         ``_terminalize_hitl_review_missing`` (FAR-721)
+      hitl_guard           F6a guard SELECTs (``{oid, rid}`` params) — FIFO pop
+
+    Anything else raises AssertionError — the router never guesses.
+    """
+    if isinstance(stmt, Select):
+        descriptions = getattr(stmt, "column_descriptions", None) or []
+        entity = descriptions[0]["entity"] if descriptions else None
+        if entity is Pipeline:
+            return "pipeline_admission"
+        return "select"
+    if isinstance(stmt, (Update, Delete)):
+        return "orm_write"
+    raw = getattr(stmt, "text", None)
+    if raw is None:
+        raise AssertionError(f"Unclassifiable statement of {type(stmt).__name__}: {stmt!r:.200}")
+    keys = set(params)
+    if raw.strip().upper().startswith("SELECT SET_CONFIG("):
+        return "set_config"
+    if "marker_seen" in keys:
+        return "clear_dispatch_marker"
+    if {"rid", "code", "detail"} <= keys and params["code"] == ch._DISPATCH_FAILED_ERROR_CODE:
+        return "dispatch_failed"
+    if {"cap", "stale"} <= keys:
+        return "claim_cap"
+    if "max_age_minutes" in keys:
+        return "mid_graph_wedge" if "code" in keys else "aged_nodeless"
+    if {"grace_seconds", "awaiting_status"} <= keys:
+        if params["code"] == ch._HITL_REVIEW_EXPIRED_ERROR_CODE:
+            return "hitl_expired"
+        if params["code"] == ch._HITL_REVIEW_MISSING_ERROR_CODE:
+            return "hitl_missing"
+        raise AssertionError(f"Unrouted HITL terminalizer code: {params.get('code')!r}")
+    if {"oid", "rid"} <= keys:
+        return "hitl_guard"
+    bindparams = getattr(stmt, "_bindparams", {})
+    if not keys and {"rid", "code"} <= set(bindparams) and bindparams["code"].value == ERROR_CODE_PIPELINE_CAPACITY:
+        return "capacity_mark"
+    raise AssertionError(f"Unrouted raw-SQL statement: {raw[:160]!r} params={params!r}")
 
 
 class _MockSession:
@@ -77,56 +146,42 @@ class _MockSession:
         )
 
     async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
-        self.executed.append((stmt, params))
-        s = str(stmt)
-        if "set_config" in s:
-            return MagicMock()
-        if s.startswith("SELECT id FROM runs"):
-            # FAR-1329 aged-nodeless router: collects age-bound ZERO-progress
-            # rows so they can be failed through _fail_nodeless_run. Keyed by
-            # statement shape (its error code is written by the ORM, not here).
-            ids = self.terminalizer_rows.get("aged_nodeless", [])
-            r = MagicMock()
-            r.all.return_value = [(uid,) for uid in ids]
-            r.rowcount = len(ids)
-            return r
-        if "UPDATE runs SET" in s:
-            # Dedicated org-scoped terminalizer UPDATEs (B4/B5/FAR-648/
-            # FAR-721) — zero rows matched by default; individual tests
-            # configure terminalizer_rows.
-            ids = self.terminalizer_rows.get("dispatch_failed", [])
-            if "node_attempt_count" in s:
-                # FAR-1329 age-bound wedge gate — its error code is a bound
-                # param, so it is keyed by its distinctive node-progress
-                # exclusion rather than by code text.
-                ids = self.terminalizer_rows.get("no_progress", [])
-            elif "claim_cap_exhausted" in s:
-                ids = self.terminalizer_rows.get("claim_cap_exhausted", [])
-            elif "created_at < now()" in s:
-                # FAR-721 zero-claim-awaiting_human terminalizer — keyed by
-                # its age-bound predicate since it references hitl_claims in
-                # its NOT EXISTS guard (like the FAR-648 sweep) and its error
-                # code is a bound param.
-                ids = self.terminalizer_rows.get("hitl_review_missing", [])
-            elif "hitl_claims" in s:
-                # FAR-648 expired-HITL-gate terminalizer — the EXISTS-gated
-                # UPDATE-runs statement (error code is a bound param, so it
-                # cannot be keyed by code).
-                ids = self.terminalizer_rows.get("hitl_review_expired", [])
-            r = MagicMock()
-            r.all.return_value = [(uid,) for uid in ids]
-            r.rowcount = len(ids)
-            return r
-        if s.startswith("SELECT pipelines."):
+        sent_params = dict(params or {})
+        self.executed.append((stmt, sent_params))
+        kind = _classify_statement(stmt, sent_params)
+        r = MagicMock()
+        if kind == "pipeline_admission":
             # FAR-1025: capacity admission resolves the pipeline via
             # execute(select(Pipeline)...) instead of session.get(...). Mirror
             # the historical get() double: a live pipeline at 5 max slots.
-            r = MagicMock()
             r.scalar_one_or_none.return_value = SimpleNamespace(max_concurrent_runs=5, status="running")
             return r
-        if not self._results:
+        if kind in {"select", "hitl_guard"}:
+            # Reads (and the F6a guard SELECTs) consume the FIFO queue.
+            if not self._results:
+                return MagicMock()
+            return self._results.pop(0)
+        if kind in {"set_config", "orm_write"}:
             return MagicMock()
-        return self._results.pop(0)
+        # Statement rows. Keyed on the operation identity; a test wanting a
+        # terminalizer to collect N rows configures terminalizer_rows under
+        # its key. The marker/capacity-mark/backstop kinds historically fell
+        # in the old "UPDATE runs SET" branch with dispatch_failed's
+        # (empty-by-default) rows — the mapping preserves that.
+        rows_key = {
+            "clear_dispatch_marker": "dispatch_failed",
+            "capacity_mark": "dispatch_failed",
+            "dispatch_failed": "dispatch_failed",
+            "claim_cap": "claim_cap_exhausted",
+            "mid_graph_wedge": "no_progress",
+            "aged_nodeless": "aged_nodeless",
+            "hitl_expired": "hitl_review_expired",
+            "hitl_missing": "hitl_review_missing",
+        }[kind]
+        ids = self.terminalizer_rows.get(rows_key, [])
+        r.all.return_value = [(uid,) for uid in ids]
+        r.rowcount = len(ids)
+        return r
 
 
 def _run_row(
@@ -287,6 +342,20 @@ async def _run_reconcile(
     return summary, reenqueue, ingest, redis_client, awaiting_guard, session
 
 
+# The two equivalent PostgreSQL spellings of "now() minus N seconds" — literal
+# renderings flip between the multiplied-interval and the single-interval
+# idiom (and around SQLAlchemy's re-assembled clauses), so compiled-render
+# checks match the idiom pair instead of one exact string.
+_PG_AGE_BOUND_SECONDS_FMT = r"now\(\)\s*-\s*(?:{value}\s*\*\s*interval\s*'1 second'|interval\s*'{value} seconds')"
+
+
+def _pg_age_bound(sql: str, seconds: int) -> bool:
+    return re.search(_PG_AGE_BOUND_SECONDS_FMT.format(value=seconds), sql) is not None
+
+
+_NOT_IN_BOTH_MARKERS_FMT = r"NOT IN\s*\([^()]*(?:'{a}'[^()]*'{b}'|'{b}'[^()]*'{a}')[^()]*\)"
+
+
 def _pipeline_capacity_marker_update(session: _MockSession, run_id: uuid.UUID) -> tuple[Any, Any] | None:
     """Return the recorded FAR-225 marking UPDATE for *run_id*, if any.
 
@@ -294,15 +363,13 @@ def _pipeline_capacity_marker_update(session: _MockSession, run_id: uuid.UUID) -
     ``error_code='pipeline_capacity'`` so the never_dispatched kill sweep
     excludes it and the capacity_marked_stale branch can rescue it. The
     statement carries its params via ``.bindparams()`` (not the execute
-    ``params`` dict), so the bound values are read from the compiled
-    statement (``stmt.compile().params``).
+    ``params`` dict), so the bound values are read from the compiled statement
+    (``stmt.compile().params``); the statement is identified by its operation
+    class (the same structural signature the mock's router keys on), never by
+    rendered SQL text.
     """
     for stmt, params in session.executed:
-        if (
-            "UPDATE runs SET error_code" in str(stmt)
-            and "IS DISTINCT FROM" in str(stmt)
-            and stmt.compile().params.get("rid") == run_id
-        ):
+        if _classify_statement(stmt, params) == "capacity_mark" and stmt.compile().params.get("rid") == run_id:
             return stmt, params
     return None
 
@@ -357,8 +424,13 @@ class TestReconcilePredicateMatrix:
         marker = _pipeline_capacity_marker_update(session, RUN_PENDING_UNDISPATCHED)
         assert marker is not None
         stmt, _params = marker
-        # The idempotence guard travels with the statement.
-        assert "IS DISTINCT FROM" in str(stmt)
+        # The idempotence guard travels with the statement: the WHERE compares
+        # the row's CURRENT code against the bound marker with IS DISTINCT
+        # FROM — the NULL-safe spelling (a plain <> would skip rows whose
+        # error_code is still NULL, un-rescuing never-marked orphans) — so
+        # re-marking an already-marked run is a no-op. Whitespace-normalized:
+        # the idiom is semantic, only its rendering offsets may vary.
+        assert re.search(r"IS\s+DISTINCT\s+FROM", str(stmt)), str(stmt)
         assert stmt.compile().params.get("code") == "pipeline_capacity"
 
     @pytest.mark.asyncio
@@ -1805,12 +1877,16 @@ class TestAgedNodelessRouting:
         assert routed == []
         assert summary["claimed_but_never_dispatched"] == 0
         stmt, params = session.executed[-1]
-        assert str(stmt).startswith("SELECT id FROM runs")
+        assert _classify_statement(stmt, params) == "aged_nodeless"
         assert params["max_rows"] == ch._TERMINALIZE_UNLIMITED_ROWS
-        # The router's row predicate is the age bound PLUS the zero-progress
-        # shape — never a bare age bound.
-        assert "node_attempt_count" in str(stmt)
         assert params["max_age_minutes"] == 135
+        # The router's row predicate is the age bound PLUS the zero-progress
+        # shape — never a bare age bound: the raw-SQL statement is the
+        # production router template with the shared zero-progress shape
+        # composed in (identical composition to the wedge gate's NOT-arm —
+        # see test_mid_graph_wedge_excludes_zero_progress_runs).
+        expect_router_sql = ch._NODELESS_ROUTER_SQL.replace(ch._ZERO_PROGRESS_SHAPE_TOKEN, ch._ZERO_PROGRESS_SHAPE_SQL)
+        assert stmt.text == expect_router_sql
 
 
 class TestCapacityMarkerExclusion:
@@ -1847,15 +1923,15 @@ class TestCapacityMarkerExclusion:
         marker fails the whole exclusion predicate and is never re-dispatched
         (unless the stale-heartbeat carve-out below admits it)."""
         sql = self._sql()
-        assert "NOT IN ('org_capacity_limited', 'pipeline_capacity')" in sql
+        assert re.search(_NOT_IN_BOTH_MARKERS_FMT.format(a="org_capacity_limited", b="pipeline_capacity"), sql)
 
     def test_stale_heartbeat_capacity_marked_pending_admitted(self) -> None:
         """FAR-108 carve-out: a pending capacity-marked run whose heartbeat is
         stale passes the exclusion so the 60s reconcile can re-dispatch it."""
         sql = self._sql()
         assert "runs.status = 'pending'" in sql
-        assert "runs.heartbeat_at IS NULL" in sql
-        assert "now() - 120 * interval '1 second'" in sql
+        assert "heartbeat_at IS NULL" in sql
+        assert _pg_age_bound(sql, 120)
 
     def test_fresh_heartbeat_capacity_marked_pending_excluded(self) -> None:
         """The carve-out only admits a run whose heartbeat is NULL or older
@@ -1865,7 +1941,7 @@ class TestCapacityMarkerExclusion:
         claim/demote churn."""
         sql = self._sql()
         assert "heartbeat_at IS NULL" in sql
-        assert "now() - 120 * interval '1 second'" in sql
+        assert _pg_age_bound(sql, 120)
         assert "NOT IN" in sql
 
 
@@ -2012,11 +2088,15 @@ class TestTerminalizerSyntheticErrorDetail:
         session = _MockSession([])
         await ch._terminalize_mid_graph_wedges(session, ORG, max_age_minutes=135)
         stmt, params = session.executed[-1]
-        assert "error_detail" in str(stmt)
+        # The detail travels as a named bind param ("error_detail = :detail").
+        assert "detail" in stmt._bindparams
         # FAR-1329: the age gate's detail states the TRUTHFUL cause (no node
-        # progress within the bound) and the per-row node/attempt counts ride
-        # the same UPDATE — never the supersede wording.
-        assert params["detail"].startswith("No node progress within the 135m age bound")
+        # progress within the bound) — the module's own prefix constant, not a
+        # re-typed literal — and the per-row node/attempt counts ride the same
+        # UPDATE (SQL-side ||-concatenation of the bound prefix, so the counts
+        # cannot live in bindparams; no structural substitute exists for the
+        # tail substrings) — never the supersede wording.
+        assert params["detail"] == ch._NO_PROGRESS_ERROR_DETAIL_PREFIX_FMT.format(age=135)
         assert "node_attempts=" in str(stmt)
         assert "claims=" in str(stmt)
         assert params["detail"] != "Superseded by a newer run."
@@ -2045,20 +2125,29 @@ class TestTerminalizerSyntheticErrorDetail:
         session = _MockSession([])
         await ch._terminalize_mid_graph_wedges(session, ORG, max_age_minutes=135)
         sql = str(session.executed[-1][0])
-        assert "node_attempt_count" in sql
-        assert "node_token_usage IS NULL" in sql
-        assert "run_node_outputs" in sql
-        assert "checkpoints" in sql
         # The exclusion is an AND-arm of the row predicate, not a filter on
         # the code/detail: a progress-bearing row still matches the gate.
-        assert "AND NOT (" in sql
+        # The statement is the production wedge template with the SHARED
+        # zero-progress shape composed in as the NOT-arm — the same shape the
+        # router selects positively, so the two cannot diverge. (The raw-SQL
+        # constant is hand-typed text, so the meaningful test-side claim here
+        # is the provenance relationship, not a re-typed substring sweep.
+        # TestNodelessZombiePredicateCompiled, in this module, pins only the
+        # shape's NOT-EXISTS/final-key legs and the retired outputs_json leg.
+        # Coverage for the remaining legs (zero-attempts, no token usage,
+        # absent checkpoints) is split between the row-shape tests in
+        # test_nodeless_dispatch_phase.py and the real-Postgres wedge in
+        # test_org_sandbox_capacity.py.)
+        expect_wedge_sql = ch._MID_GRAPH_WEDGE_SQL.replace(ch._ZERO_PROGRESS_SHAPE_TOKEN, ch._ZERO_PROGRESS_SHAPE_SQL)
+        assert sql == expect_wedge_sql
 
     @pytest.mark.asyncio
     async def test_claim_cap_exhausted_writes_synthetic_detail(self) -> None:
         session = _MockSession([])
         await ch._terminalize_claim_cap_exhausted(session, ORG, claim_cap=20, stale_seconds=600)
         stmt, params = session.executed[-1]
-        assert "error_detail" in str(stmt)
+        # The detail travels as a named bind param ("error_detail = :detail").
+        assert "detail" in stmt._bindparams
         assert params["detail"] == ch._CLAIM_CAP_EXHAUSTED_ERROR_DETAIL
 
     @pytest.mark.asyncio
@@ -2066,7 +2155,8 @@ class TestTerminalizerSyntheticErrorDetail:
         session = _MockSession([])
         await ch._fail_run_dispatch_failed(session, RUN_EVICTED, ORG)
         stmt, params = session.executed[-1]
-        assert "error_detail" in str(stmt)
+        # The detail travels as a named bind param ("error_detail = :detail").
+        assert "detail" in stmt._bindparams
         assert params["detail"] == ch._DISPATCH_FAILED_ERROR_DETAIL
 
 
@@ -2080,10 +2170,6 @@ class TestAwaitingHumanHasCommittedDecision:
     identity the run is currently waiting at (claimed-undecided rows skip
     unconditionally as of iteration 4 / FIX C; the no-undecided-rows branch
     accepts only identity-consumable actions)."""
-
-    _LATEST_SQL = "SELECT decision, decision_payload, review_id FROM hitl_claims"
-    _CLAIMED_SQL = "SELECT review_id FROM hitl_claims"
-    _UNDECIDED_SQL = "SELECT 1 FROM hitl_claims"
 
     def _mock_session(self, results: list[Any]) -> AsyncMock:
         """Session whose ``execute`` pops one result per call (the guard runs
@@ -2099,17 +2185,26 @@ class TestAwaitingHumanHasCommittedDecision:
         session.execute = AsyncMock(side_effect=result_mocks)
         return session
 
-    def _assert_query_order(self, session: AsyncMock) -> None:
+    async def _assert_query_order(self, session: AsyncMock) -> None:
         """The guard's queries must arrive in dependency order: latest decision
-        first, then the pending-gate discovery."""
-        calls = [str(c.args[0]) for c in session.execute.await_args_list]
-        assert self._LATEST_SQL in calls[0]
+        first, then the pending-gate discovery. The decision read is IDENTIFIED
+        as the statement ``_latest_committed_decision_row`` issues — invoke the
+        shared helper against the same mock and compare STATEMENT TEXT to the
+        guard's first call: guard and resume reconstruction demonstrably issue
+        the same query. No test-re-typed SQL; production-vs-production
+        comparison retains the order discrimination."""
+        calls = [c.args[0] for c in session.execute.await_args_list]
+        session.execute.side_effect = None
+        await ch._latest_committed_decision_row(session, ORG, RUN_AWAITING)
+        decision_stmt = session.execute.await_args_list[-1].args[0]
+        assert calls[0].text == decision_stmt.text
+        assert sum(1 for stmt in calls if stmt.text == decision_stmt.text) == 1
 
     @pytest.mark.asyncio
     async def test_no_decision_row_returns_false(self) -> None:
         session = self._mock_session([None])
         assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is False
-        self._assert_query_order(session)
+        await self._assert_query_order(session)
 
     @pytest.mark.asyncio
     async def test_legacy_payload_less_approved_is_not_committed_stranded(self) -> None:

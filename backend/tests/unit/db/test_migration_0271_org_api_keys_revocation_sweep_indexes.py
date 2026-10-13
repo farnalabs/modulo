@@ -5,7 +5,12 @@ database, and pin model/migration parity for the two new ``org_api_keys``
 lookup indexes:
 
 * the chain is pinned (0271 -> ``0270_pipeline_snapshots_max_autonomy_ge_default``,
-  with ``0277_run_daily_facts_trigger_dispatch_phase`` then
+  with ``0272_oauth_client_revoke_lookup_indexes`` then
+  ``0273_runs_dispatch_phase`` then
+  ``0274_policy_gate_pin_fingerprint_operator_control`` then
+  ``0275_run_cancel_reason_vocabulary`` then
+  ``0276_runs_autovacuum_enabled`` then
+  ``0277_run_daily_facts_trigger_dispatch_phase`` then
   ``0278_runs_workspace_drift_sweep_index`` then
   ``0279_table_autovacuum_tuning`` then
   ``0280_runs_node_deadline_watchdog_fired_count`` then
@@ -25,6 +30,7 @@ lookup indexes:
   ``0294_eval_results_org_fk`` then
   ``0295_decision_record_event_identity`` then
   ``0296_benign_run_outcomes`` then
+  ``0297_autonomy_gating_s1`` then
   ``0298_accounts_kind`` then
   ``0299_accounts_service_identity`` then
   ``0300_benign_facts_repair`` then

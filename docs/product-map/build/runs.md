@@ -256,6 +256,26 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       "Dispatched" badge (`frontend/src/utils/runUtils.ts`,
       `frontend/src/lib/api/runs.ts`, `api/routes/{runs,viewmodel,dashboard,
       lifecycle_maps,analytics}.py`)
+- [x] The governed-run provenance VOCABULARY is ONE taxonomy (FAR-1693,
+      ADR-042 unified 2026-10-12): `core/provenance.py` single-sources the
+      closed four-class set — `observed` (Modulo observed it through a
+      credential it holds), `derived` (Modulo computed it from observed facts),
+      `reported` (arrived from ANY external surface, incl. a dispatched runtime,
+      stamped `witnessed_via: <connector/channel>`), `attested` (governance
+      events Modulo records natively). The dispatch arm's `witnessed_via` is the
+      CHANNEL STAMP of a `reported` datum, not a class of its own: a dispatch
+      node's folded-back data is stamped `provenance: reported` (NEVER
+      `attested` — the binding foreclosure is that substrate data stays the
+      substrate's report, and no governed badge implies anything about a
+      customer's CI internals). Every claim-ready run payload composes the
+      `provenance` class alongside `execution_origin` from the ONE serializer
+      (`core/run_provenance.py`), engine-derived (`reported` for a dispatched
+      run, `NULL` for an executed/legacy run — never a guessed `observed`); the
+      class is engine-assigned, never self-asserted, so a prompt-injected
+      substrate result cannot claim a stronger provenance
+      (`core/provenance.py`, `core/run_provenance.py`,
+      `core/pipeline_engine/node_runner.py`, `core/node_output_split.py`,
+      `api/routes/runs.py`, `tests/unit/core/test_provenance_taxonomy.py`)
 - _Output Diff (`/runs/diff`, `POST /runs/diff`, `core/line_diff.py`) deferred from the
   MVP nav (hidden via `visibility: private_preview`). Behaviour detail removed for the
   MVP cut – restore from git history when re-enabling. See FAR-542._

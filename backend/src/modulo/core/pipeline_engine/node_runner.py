@@ -144,6 +144,7 @@ from modulo.core.pipeline_engine.sandbox_mode import (
     _validate_sandbox_mode_config,
     sandbox_jinja_environment,
 )
+from modulo.core.provenance import DISPATCH_DATUM_PROVENANCE, PROVENANCE_KEY, WITNESSED_VIA_KEY
 from modulo.core.run_context.autonomy import (
     AutonomyResolution,
     is_autonomy_gating_enabled,
@@ -6390,12 +6391,17 @@ async def _await_dispatch_terminal(
 
 
 def _stamp_dispatch_provenance(result: Any, instance_id: str) -> Any:
-    """Stamp FAR-1141 provenance onto a dispatch node's output.
+    """Stamp FAR-1141 / FAR-1693 provenance onto a dispatch node's output.
 
     A dispatch node WITNESSES state on the customer's own substrate — it never
-    executed anything — so its output carries:
+    executed anything — so its output carries, all ENGINE-ASSIGNED:
 
-    * ``witnessed_via``          the connector instance id it read through
+    * ``provenance``             the unified taxonomy class ``reported`` — the
+      substrate's datum arrived from an external surface (FAR-1693). NEVER
+      ``attested``: that would imply the substrate's data is true, which the
+      contract forecloses.
+    * ``witnessed_via``          the connector instance id it read through —
+      the CHANNEL STAMP of the ``reported`` class, not a class of its own.
     * ``execution_identity``     ``"customer_substrate"`` (never ``modulo``)
     * ``declared_external_cost`` ``None`` — Modulo declares NO cost for work it
       did not run
@@ -6407,11 +6413,16 @@ def _stamp_dispatch_provenance(result: Any, instance_id: str) -> Any:
     pass through unstamped, so a witnessed run list read as an array Modulo
     produced. The key set is the one
     :data:`modulo.core.node_output_split.DISPATCH_PROVENANCE_FIELDS` lifts back
-    out on the failed-artifact path, so the two cannot drift. Never raises.
+    out on the failed-artifact path, so the two cannot drift.
+
+    Each provenance key is OVERWRITTEN, never merged — a hostile or
+    prompt-injected substrate result cannot assert its own class or channel
+    (ADR-034's engine-assignment rule). Never raises.
     """
     if isinstance(result, dict):
         stamped = dict(result)
-        stamped["witnessed_via"] = instance_id
+        stamped[PROVENANCE_KEY] = DISPATCH_DATUM_PROVENANCE
+        stamped[WITNESSED_VIA_KEY] = instance_id
         stamped["execution_identity"] = "customer_substrate"
         stamped["declared_external_cost"] = None
         if "status" in stamped:
@@ -6419,7 +6430,8 @@ def _stamp_dispatch_provenance(result: Any, instance_id: str) -> Any:
         return stamped
     return {
         "result": result,
-        "witnessed_via": instance_id,
+        PROVENANCE_KEY: DISPATCH_DATUM_PROVENANCE,
+        WITNESSED_VIA_KEY: instance_id,
         "execution_identity": "customer_substrate",
         "declared_external_cost": None,
     }

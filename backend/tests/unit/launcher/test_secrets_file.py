@@ -24,13 +24,13 @@ from modulo.launcher.secrets_file import (
     SecretsFileError,
     load_or_create,
 )
+from tests.unit.launcher.test_launcher_shared import bypass_platform_seams
 
 
 @pytest.fixture(autouse=True)
 def _bypass_platform_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     """Logic tests run on any OS: bypass the Windows-refusal seam."""
-    if sys.platform == "win32":
-        monkeypatch.setattr(secrets_file_module, "assert_supported_platform", lambda: None)
+    bypass_platform_seams(monkeypatch, "modulo.launcher.secrets_file")
 
 
 def test_first_boot_generates_all_credentials(tmp_path: Path) -> None:
@@ -125,7 +125,13 @@ def test_existing_file_is_adopted_never_regenerated_under_race(
     winner = load_or_create(path)
     # Simulate the race: exists() misses (file created concurrently) so the
     # loser reaches the exclusive create — which hits EEXIST and must adopt.
-    monkeypatch.setattr(Path, "exists", lambda _self: False)
+    real_exists = Path.exists
+
+    def _target_absent(self: Path) -> bool:
+        """False for the target only; every other path keeps the real stat."""
+        return real_exists(self) if self != path else False
+
+    monkeypatch.setattr(Path, "exists", _target_absent)
     monkeypatch.setattr(secrets_file_module, "_ADOPT_RETRY_DELAY_SECONDS", 0.0)
     loser = load_or_create(path)
     assert loser == winner
@@ -140,7 +146,13 @@ def test_adopt_retries_until_the_winner_finishes_writing(
     """A partial read during adoption retries instead of failing the boot."""
     path = tmp_path / "secrets.json"
     winner = load_or_create(path)
-    monkeypatch.setattr(Path, "exists", lambda _self: False)
+    real_exists = Path.exists
+
+    def _target_absent(self: Path) -> bool:
+        """False for the target only; every other path keeps the real stat."""
+        return real_exists(self) if self != path else False
+
+    monkeypatch.setattr(Path, "exists", _target_absent)
     monkeypatch.setattr(secrets_file_module, "_ADOPT_RETRY_DELAY_SECONDS", 0.0)
     real_parse = secrets_file_module._parse
     calls = {"n": 0}
@@ -157,6 +169,57 @@ def test_adopt_retries_until_the_winner_finishes_writing(
     assert calls["n"] == 2
 
 
+def test_adopt_exhaustion_refuses_the_boot_with_attempts_in_message(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A file that stays unparsable for the whole adopt window fails the boot.
+
+    Retry-forever is the wrong default: the exhaustion error must name the
+    attempt count (the operator-visible retry budget) and carry the LAST
+    parse error, and the loser's own draw must never be written over the
+    winner's file.
+
+    The number in the message is interpolated from ``_ADOPT_ATTEMPTS`` — the
+    same constant patched below — so the string assertion alone could never
+    disagree with the budget. The counting ``_parse`` seam pins the MAGNITUDE
+    instead: the number of actually observed parse attempts must equal the
+    configured budget exactly, so an off-by-one in the adopt loop fails here.
+    """
+    path = tmp_path / "secrets.json"
+    # The file never becomes valid across the whole retry window.
+    path.write_bytes(b'{"state_hmac_key": "truncated"')
+    attempts = 20
+    monkeypatch.setattr(secrets_file_module, "_ADOPT_ATTEMPTS", attempts)
+    monkeypatch.setattr(secrets_file_module, "_ADOPT_RETRY_DELAY_SECONDS", 0.0)
+    # exists() misses so the loser reaches the EEXIST branch (adopt path).
+    real_exists = Path.exists
+
+    def _target_absent(self: Path) -> bool:
+        """False for the target only; every other path keeps the real stat."""
+        return real_exists(self) if self != path else False
+
+    monkeypatch.setattr(Path, "exists", _target_absent)
+    real_parse = secrets_file_module._parse
+    parse_calls = {"n": 0}
+
+    def _counting_parse(data: bytes) -> LauncherSecrets:
+        parse_calls["n"] += 1
+        return real_parse(data)  # always refuses on the truncated payload
+
+    monkeypatch.setattr(secrets_file_module, "_parse", _counting_parse)
+    with pytest.raises(SecretsFileError) as excinfo:
+        load_or_create(path)
+    message = str(excinfo.value)
+    # The observed retry count is exactly the configured budget — a mutation
+    # of the loop's trip count by +-1 changes this and fails the test.
+    assert parse_calls["n"] == attempts
+    assert f"after {attempts} attempts" in message
+    assert "not valid JSON" in message
+    # No orphaned draw was written over the winner's (broken) file.
+    assert path.read_bytes() == b'{"state_hmac_key": "truncated"'
+
+
 def test_write_failure_leaves_no_credential_file_behind(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -169,7 +232,7 @@ def test_write_failure_leaves_no_credential_file_behind(
     monkeypatch.setattr(secrets_file_module.os, "write", _broken_write)
     with pytest.raises(OSError, match="disk full"):
         load_or_create(path)
-    monkeypatch.undo()
+    # (no monkeypatch.undo() - the fixture restores everything)
     assert not path.exists()
     leftovers = list(tmp_path.iterdir())
     assert not leftovers
@@ -212,7 +275,7 @@ def test_create_fails_closed_when_mode_cannot_be_pinned(
     monkeypatch.setattr(Path, "stat", _widened_stat)
     with pytest.raises(SecretsFileError, match="could not be pinned"):
         load_or_create(path)
-    monkeypatch.undo()
+    # (no monkeypatch.undo() - the fixture restores everything)
     assert not path.exists()  # the partially-created file was cleaned up
 
 

@@ -53,6 +53,7 @@ from modulo.launcher.initdb import (
     bootstrap_pgdata,
     validate_target_dir,
 )
+from tests.unit.launcher.test_launcher_shared import bypass_platform_seams, minimal_probes
 
 requires_posix = pytest.mark.skipif(sys.platform == "win32", reason="POSIX fault mechanics; runs on Linux CI")
 
@@ -60,11 +61,12 @@ requires_posix = pytest.mark.skipif(sys.platform == "win32", reason="POSIX fault
 @pytest.fixture(autouse=True)
 def _bypass_platform_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     """Logic tests run on any OS: bypass the Windows-refusal seams."""
-    if sys.platform == "win32":
-        monkeypatch.setattr(secrets_file_module, "assert_supported_platform", lambda: None)
-        from modulo.launcher import initdb as initdb_module
-
-        monkeypatch.setattr(initdb_module, "assert_supported_platform", lambda: None)
+    bypass_platform_seams(
+        monkeypatch,
+        "modulo.launcher.secrets_file",
+        "modulo.launcher.initdb",
+        "modulo.launcher.entry",
+    )
 
 
 def _fake_initdb_runner(argv: list[str]) -> None:
@@ -534,7 +536,7 @@ def test_occupied_persisted_port_gets_a_precise_error_and_remediation(
     tmp_path: Path,
 ) -> None:
     """A pre-squatted port from state.json: doctor names the collision."""
-    from modulo.launcher.doctor import DoctorProbes, check_port_collisions
+    from modulo.launcher.doctor import check_port_collisions
     from modulo.launcher.state import LauncherState
 
     pg_port = 15432
@@ -546,17 +548,7 @@ def test_occupied_persisted_port_gets_a_precise_error_and_remediation(
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", pg_port))
         sock.listen(1)
-        probes = DoctorProbes(
-            disk_free_bytes=lambda _root: 40 * 1024 * 1024 * 1024,
-            assert_writable=lambda _root: None,
-            listening_on=lambda _port: ["127.0.0.1"],
-            probe_postgres=lambda: None,
-            role_violations=list,
-            probe_redis=lambda: None,
-            migrations_at_head=lambda: True,
-            effective_uid=lambda: 1000,
-            username_of_uid=lambda _uid: "operator",
-            file_owner=lambda _path: "operator",
+        probes = minimal_probes(
             port_owner_description=lambda _port: "foreign service bound to 0.0.0.0",
             launcher_running=lambda: True,
         )
@@ -578,25 +570,17 @@ def test_occupied_persisted_port_gets_a_precise_error_and_remediation(
 )
 def test_unwritable_datadir_refuses_the_boot_with_actionable_message(tmp_path: Path) -> None:
     """chmod 0500 the data dir; doctor must fail it with the actionable fix."""
-    from modulo.launcher.doctor import DoctorProbes, check_data_dir
+    from modulo.launcher.doctor import check_data_dir
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     data_dir.chmod(0o500)
     try:
-        probes = DoctorProbes(
-            disk_free_bytes=lambda _root: 40 * 1024 * 1024 * 1024,
+        probes = minimal_probes(
             assert_writable=lambda root: (_ for _ in ()).throw(
                 PermissionError(f"data dir {root} is not writable by this user")
             ),
             listening_on=lambda _port: [],
-            probe_postgres=lambda: None,
-            role_violations=list,
-            probe_redis=lambda: None,
-            migrations_at_head=lambda: True,
-            effective_uid=lambda: 1000,
-            username_of_uid=lambda _uid: "operator",
-            file_owner=lambda _path: "operator",
             launcher_running=lambda: False,
         )
         result = check_data_dir(data_dir, None, probes)

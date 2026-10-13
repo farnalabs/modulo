@@ -237,10 +237,11 @@ def test_uninstall_round_trip_stops_disables_and_disables_linger(linux_only: Non
     unit_path.parent.mkdir(parents=True)
     unit_path.write_text(render_unit(tmp_path / "modulo"), encoding="utf-8")
     runner = FakeRunner()
+    linger_users: list[str] = []
     result = uninstall(
         runner=runner,
         unit_path=unit_path,
-        linger_argv_builder=lambda user: ["pkexec", "loginctl", "disable-linger", user],
+        linger_argv_builder=lambda user: (linger_users.append(user), ["pkexec", "loginctl", "disable-linger", user])[1],
     )
     assert result.stopped is True
     assert result.disabled is True
@@ -249,6 +250,7 @@ def test_uninstall_round_trip_stops_disables_and_disables_linger(linux_only: Non
     assert not unit_path.exists()
     assert runner.calls[0] == ["systemctl", "--user", "stop", "modulo.service"]
     assert runner.calls[1] == ["systemctl", "--user", "disable", "modulo.service"]
+    assert linger_users == [resolve_username()]
 
 
 def test_uninstall_tolerates_a_missing_unit(linux_only: None, tmp_path: Path) -> None:
