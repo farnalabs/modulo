@@ -39,7 +39,7 @@ _EXPECTED_LEGACY_SQL = """
                     WHERE er.evaluated_at >= :recent_start AND NOT er.passed
                 )                      AS affected_run_ids
             FROM eval_results er
-            JOIN eval_definitions ed ON ed.id = er.eval_id
+            JOIN evals ed ON ed.id = er.eval_id
             JOIN runs r ON r.id = er.run_id
             WHERE er.organisation_id = :org_id
               AND ed.organisation_id = :org_id
