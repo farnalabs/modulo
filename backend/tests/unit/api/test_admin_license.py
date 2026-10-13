@@ -231,6 +231,25 @@ class TestParseAndVerify:
         assert not result.license_data.expires_at
 
 
+class TestResolveLicenseKey:
+    """``admin_license._resolve_license_key`` delegates to the shared verifier."""
+
+    def test_returns_none_for_empty_key(self) -> None:
+        assert admin_license._resolve_license_key("") is None
+
+    def test_returns_none_for_invalid_key(self) -> None:
+        assert admin_license._resolve_license_key("not-a-valid-key") is None
+
+    def test_returns_status_for_valid_key(self) -> None:
+        key = _sign_license_payload(_make_valid_payload())
+        status = admin_license._resolve_license_key(key)
+        assert status is not None
+        assert status.has_license is True
+        assert status.tier == "team"
+        assert "sso" in status.features
+        assert status.org_id == "test-org"
+
+
 class TestStoreAndGetLicense:
     def test_store_license(self) -> None:
         assert get_license() is None

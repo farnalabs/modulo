@@ -327,6 +327,12 @@ class TestRealPostgresResumeClaim:
                 actor_id=_ACTOR,
             )
             assert flipped.status == "running"
+            # FAR-1728: the node-started flip sets the dedicated marker column
+            # (the reconcile self-heal leg's discriminator) and leaves
+            # ``error_detail`` untouched — an observation column never carries
+            # a control-flow marker.
+            assert flipped.guardrail_override_resume_pending is True
+            assert "FAR-1728" not in (flipped.error_detail or "")
             await session.commit()
 
         token = await claim_resume_run_async(seeded_engine, str(run_id), str(_ORG))
@@ -334,11 +340,13 @@ class TestRealPostgresResumeClaim:
         assert isinstance(token, str)
         assert token
 
-        # The claim actually moved the row: phase reset + fresh heartbeat.
+        # The claim actually moved the row: phase reset + fresh heartbeat, and
+        # the resume claim is the marker's SINGLE CLEARER (FAR-1728).
         async with maker() as session:
             claimed = (await session.execute(sa.select(Run).where(Run.id == run_id))).scalar_one()
             assert claimed.status == "running"
             assert claimed.dispatch_phase == "claimed"
+            assert claimed.guardrail_override_resume_pending is False
             assert claimed.heartbeat_at is not None
 
     async def test_node_started_run_without_checkpoint_is_refused_and_stays_terminal(
@@ -346,8 +354,9 @@ class TestRealPostgresResumeClaim:
     ) -> None:
         """M1 (real seam): no root checkpoint -> fail closed with
         ``GuardrailOverrideNoCheckpointError``; the run is left the terminal
-        ``eval_failed``/``eval_blocked`` block it was, so it stays overridable
-        and is never handed to a re-executing resume."""
+        ``eval_failed``/``eval_blocked`` block it was — re-calling the override
+        returns the same 409 (the checkpoint never appears), so the
+        remediation is a NEW run — and it is never handed to a re-executing resume."""
         maker = _session_maker(seeded_engine)
         async with maker() as session:
             run_id = await _node_started_blocked_run(session)

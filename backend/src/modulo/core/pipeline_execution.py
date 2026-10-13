@@ -3145,11 +3145,22 @@ async def stale_run_recovery_sweep(
 # strand it forever. Atomicity fences concurrent claims instead: the first
 # claimer moves the row to 'running', a concurrent claimer then sees a fresh
 # heartbeat and loses.
+# FAR-1728: both resume claim variants also clear
+# ``guardrail_override_resume_pending`` — the dedicated marker column the
+# guardrail-override flip sets (recovery.guardrail_override, node-started
+# branch only) and the reconcile self-heal leg selects on. This statement is
+# the SINGLE CLEARER: a successful claim stamps ``dispatch_phase='claimed'``
+# AND clears the marker in the same UPDATE, so the row leaves the self-heal
+# class and the flag never lingers past a successful claim. The clear is
+# unconditional and safe for every other resume-claim caller (HITL resume,
+# recover-node): those rows already carry false, so the write is a no-op
+# for them.
 _RESUME_CLAIM_UPDATE_SQL = text(
     "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, "  # nosec B608  # noqa: S608 - concatenates module constants only (never caller data)
     "dispatch_phase='claimed', dispatch_phase_entered_at=now(), "
     + _CLAIM_HISTORY_APPEND
-    + "WHERE id=:rid AND organisation_id=:oid "
+    + "guardrail_override_resume_pending=false "
+    "WHERE id=:rid AND organisation_id=:oid "
     "AND (status IN ('awaiting_human', 'claimed', 'hitl_parked') "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
     "AND claim_count < :claim_cap "
@@ -3160,7 +3171,8 @@ _RESUME_CLAIM_UPDATE_SQL_WITH_TOKEN = text(
     "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok, "  # nosec B608  # noqa: S608 - concatenates module constants only (never caller data)
     "dispatch_phase='claimed', dispatch_phase_entered_at=now(), "
     + _CLAIM_HISTORY_APPEND
-    + "WHERE id=:rid AND organisation_id=:oid "
+    + "guardrail_override_resume_pending=false "
+    "WHERE id=:rid AND organisation_id=:oid "
     "AND (status IN ('awaiting_human', 'claimed', 'hitl_parked') "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
     "AND claim_count < :claim_cap "
@@ -3206,9 +3218,15 @@ def build_resume_claim_update(
     FAR-1088: both resume claim variants stamp ``dispatch_phase='claimed'`` +
     its entry timestamp in this same statement, exactly like the execute
     claim variants (``build_claim_update``) — a resumed run's phase floor is
-    written atomically with the resume claim, so every claim site stamps and
+    written atomically with the resume claim, and every claim site stamps and
     a re-claim always resets the phase (see the note above
     ``_CLAIM_UPDATE_SQL``).
+
+    FAR-1728: both variants ALSO clear ``runs.guardrail_override_resume_pending``
+    in this same statement — the single clearer of the guardrail-override
+    resume self-heal marker (see the template comment above), so a successful
+    claim takes the row out of the self-heal class and clears the flag in one
+    atomic write.
     """
     if claim_token is not None:
         return _RESUME_CLAIM_UPDATE_SQL_WITH_TOKEN

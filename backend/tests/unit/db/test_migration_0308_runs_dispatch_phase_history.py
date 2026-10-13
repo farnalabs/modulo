@@ -1,9 +1,9 @@
-"""Unit tests for migration 0307_runs_dispatch_phase_history (FAR-1714).
+"""Unit tests for migration 0308_runs_dispatch_phase_history (FAR-1714).
 
 Structural contract (no Postgres needed):
 
-* **Revision chain** — 0307 revises ``0306_trigger_secret_encryption``;
-  the migrations directory has exactly one head (``0307_runs_dispatch_phase_history``,
+* **Revision chain** — 0307 revises ``0307_runs_guardrail_override_resume_pending``;
+  the migrations directory has exactly one head (``0308_runs_dispatch_phase_history``,
   pinned by all sibling chain tests), the revision id matches the filename, and
   neither ``branch_labels`` nor ``depends_on`` is set (the pre-commit
   check-migration-heads hook and every ``test_single_head_*`` pin depend on
@@ -33,10 +33,10 @@ from sqlalchemy.dialects import postgresql
 from modulo.db.models.run import Run
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0307_runs_dispatch_phase_history"
+_MIGRATION_NAME = "0308_runs_dispatch_phase_history"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
-_DOWN_REVISION = "0306_trigger_secret_encryption"
-_CHAIN_HEAD_MIGRATION = "0307_runs_dispatch_phase_history"
+_DOWN_REVISION = "0307_runs_guardrail_override_resume_pending"
+_CHAIN_HEAD_MIGRATION = "0308_runs_dispatch_phase_history"
 _HISTORY_COLUMN = "dispatch_phase_history"
 _DROPS_COLUMN = "dispatch_phase_write_drops"
 
@@ -73,11 +73,11 @@ def _migration_calls(entry_point: str) -> list[tuple[str, tuple[Any, ...], dict[
 
 
 class TestChain:
-    def test_single_head_is_0307_runs_dispatch_phase_history(self) -> None:
+    def test_single_head_is_0308_runs_dispatch_phase_history(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
-    def test_down_revision_is_0306_trigger_secret_encryption(self) -> None:
+    def test_down_revision_is_0307_runs_guardrail_override_resume_pending(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
 
     def test_revision_id_matches_filename(self) -> None:
@@ -100,7 +100,7 @@ class TestUpgrade:
         calls = [c for c in _migration_calls("upgrade") if c[0] == "add_column"]
         columns = {args[1].name: args[1] for _name, args, _kwargs in calls}
         col = columns[_HISTORY_COLUMN]
-        # Nullable: pre-0307 rows simply have no timeline.
+        # Nullable: pre-0308 rows simply have no timeline.
         assert col.nullable is True
         # Multi-backend convention: generic JSON, JSONB compiled on Postgres.
         assert isinstance(col.type, sa.JSON)
@@ -110,7 +110,7 @@ class TestUpgrade:
         calls = [c for c in _migration_calls("upgrade") if c[0] == "add_column"]
         columns = {args[1].name: args[1] for _name, args, _kwargs in calls}
         col = columns[_DROPS_COLUMN]
-        # NOT NULL DEFAULT 0: pre-0307 rows never recorded a drop.
+        # NOT NULL DEFAULT 0: pre-0308 rows never recorded a drop.
         assert col.nullable is False
         assert col.server_default is not None
         assert str(col.server_default.arg) == "0"
@@ -129,8 +129,8 @@ class TestModelParity:
     def test_model_maps_both_columns(self) -> None:
         """Model and migration ship both columns in the SAME change."""
         columns = {c.name: c for c in Run.__table__.columns}
-        assert _HISTORY_COLUMN in columns, "Run must map dispatch_phase_history (migration 0307 parity)"
-        assert _DROPS_COLUMN in columns, "Run must map dispatch_phase_write_drops (migration 0307 parity)"
+        assert _HISTORY_COLUMN in columns, "Run must map dispatch_phase_history (migration 0308 parity)"
+        assert _DROPS_COLUMN in columns, "Run must map dispatch_phase_write_drops (migration 0308 parity)"
 
     def test_model_history_column_matches_migration(self) -> None:
         col = Run.__table__.columns[_HISTORY_COLUMN]

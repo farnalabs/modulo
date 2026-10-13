@@ -21,10 +21,10 @@ Lenses:
   ``0301_oauth_consent_state_preauth_rls`` chains onto 0300_benign_facts_repair,
   ``0302_runs_run_grouping`` chains onto 0301_oauth_consent_state_preauth_rls, and
   ``0303_feedback_records_lookup_indexes`` chains onto 0302_runs_run_grouping, and
-  ``0304_metrics_staging_recorded_at_index`` chains onto 0303_feedback_records_lookup_indexes, and
   ``0305_guardrail_escalate_action`` chains onto 0304_metrics_staging_recorded_at_index, and
   ``0306_trigger_secret_encryption`` chains onto 0305_guardrail_escalate_action, and
-  ``0307_runs_dispatch_phase_history`` chains onto 0306_trigger_secret_encryption as the single
+  ``0307_runs_guardrail_override_resume_pending`` chains onto 0306_trigger_secret_encryption, and
+  ``0308_runs_dispatch_phase_history`` chains onto ``0307_runs_guardrail_override_resume_pending`` as the single
   linear head; the revision id matches the filename, and neither
   branch_labels nor depends_on is set (the pre-commit check-migration-heads
   hook and every ``test_single_head_*`` pin depend on that shape).
@@ -57,7 +57,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0289_pipelines_environment_profile"
 _MIGRATION_DOWN_REVISION = "0288_runs_execution_origin"
-_HEAD_MIGRATION = "0307_runs_dispatch_phase_history"
+_HEAD_MIGRATION = "0308_runs_dispatch_phase_history"
 _TABLE = "pipelines"
 _COLUMN = "environment_profile_id"
 _FK_NAME = "fk_pipelines_environment_profile_id"

@@ -403,7 +403,15 @@ class TestPendingLegRedispatchesTheFencedResetRow:
         sql = str(compiled)
         assert sql.count("dispatch_phase IS NULL") == 1
         phase_params = [v for v in dict(compiled.params).values() if v == PHASE_FIRST_NODE_DISPATCHED]
-        assert len(phase_params) == 1
+        # FAR-1728: the phase constant is now bound TWICE — once by the single
+        # EXCLUSION leg above (the running stale-heartbeat leg, pinned at
+        # exactly one "IS NULL") and once by the guardrail-override resume
+        # leg's POSITIVE match (``dispatch_phase = ...`` + the flip's
+        # dedicated ``guardrail_override_resume_pending`` marker column —
+        # NOT ``is_replay``, which webhook/manual replay also set).
+        # A third binding would mean another leg started binding the phase —
+        # inspect before relaxing this.
+        assert len(phase_params) == 2
 
     async def test_pending_node_started_reset_row_is_redispatched(self, monkeypatch: Any) -> None:
         """The REGRESSION test: a pending + dispatcher='saq' + old-

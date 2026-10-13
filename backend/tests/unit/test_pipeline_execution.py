@@ -1663,6 +1663,8 @@ class TestSaqWorkerSettings:
         # + health_readiness_alert (FAR-1446) — readiness-degradation alert cron.
         # + decision_record_reconcile (FAR-1108 chunk 8b) — hourly read-only
         #   decision-record corruption-detection sweep.
+        # + run_kill_switch_drill (FAR-1707) — daily kill-switch self-test that
+        #   records one system-audit fact per run.
         cron_names = {c.function.__name__ for c in settings["cron_jobs"]}
         assert cron_names == {
             "analytics_facts_maintenance",
@@ -1690,6 +1692,7 @@ class TestSaqWorkerSettings:
             "runner_marker_sweep",
             "runner_health_probe",
             "health_readiness_alert",
+            "run_kill_switch_drill",
         }
         assert settings["after_process"] is not None
 

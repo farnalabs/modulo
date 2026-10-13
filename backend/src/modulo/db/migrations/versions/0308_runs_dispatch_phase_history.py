@@ -1,7 +1,7 @@
 """FAR-1714: runs.dispatch_phase_history + runs.dispatch_phase_write_drops.
 
-Revision ID: 0307_runs_dispatch_phase_history
-Revises: 0306_trigger_secret_encryption
+Revision ID: 0308_runs_dispatch_phase_history
+Revises: 0307_runs_guardrail_override_resume_pending
 Create Date: 2026-10-13
 
 Two additive columns on ``runs`` making the dispatch-phase story reconstructable
@@ -45,8 +45,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0307_runs_dispatch_phase_history"
-down_revision: str | None = "0306_trigger_secret_encryption"
+revision: str = "0308_runs_dispatch_phase_history"
+down_revision: str | None = "0307_runs_guardrail_override_resume_pending"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

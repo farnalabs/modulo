@@ -517,6 +517,29 @@ class Run(OrgScoped):
     # Enqueue-failure audit timestamp (migration 0074) — set when a SAQ
     # dispatch enqueue fails so dispatcher_reconcile can fail the run.
     enqueue_failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # FAR-1728 (migration 0307): the guardrail-override resume self-heal's
+    # DEDICATED discriminator — a BOOLEAN column, never a sentinel string in
+    # the observation column ``error_detail`` (which is exposed on REST/MCP
+    # responses; a healthy overridden run must not carry a control-flow marker
+    # on the wire). SINGLE WRITER: only ``recovery.guardrail_override``'s flip
+    # sets it, and only for a node-started (``first_node_dispatched``)
+    # eval-blocked run — in the same atomic optimistic UPDATE that flips the
+    # status. SINGLE CLEARER: the resume claim
+    # (``pipeline_execution._RESUME_CLAIM_UPDATE_SQL`` / ``..._WITH_TOKEN``)
+    # clears it in the same statement that stamps
+    # ``dispatch_phase='claimed'``, so a successful claim takes the row out of
+    # the self-heal class and clears the flag in one write. The zero-node
+    # override flip (``pending`` — nothing to resume, re-dispatched
+    # ``execute_run``) never sets it. INTERNAL ONLY: not API-projected.
+    # NOT NULL DEFAULT false (server_default in the migration): pre-existing
+    # rows read false, no backfill. Inert on a terminal row left behind by the
+    # age gate (the flag is only consulted together with the
+    # ``running`` + ``first_node_dispatched`` + stale-heartbeat shape) — the
+    # claim-clear covers the healthy path; a wedged row's lingering flag is
+    # never read and never surfaces.
+    guardrail_override_resume_pending: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
     # Sandbox dispatch lifecycle state (migration 0074) — the persistent handle
     # dispatch.py reads to resume/retry a sandbox_agent node after a crash.
     # D8 (FAR-594) JSON vocabulary (written by ``runner_capacity`` /
