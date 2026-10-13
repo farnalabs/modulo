@@ -28,7 +28,7 @@
           <dd class="font-medium text-foreground">
             <span data-testid="progressive-autonomy-earned">{{ earnedLabel }}</span>
             <span
-              v-if="hasEarned && earnedUpdatedAt"
+              v-if="hasEarned && formattedUpdatedAt"
               class="ml-1 text-[10px] text-muted-foreground"
             >{{ $t('views.PipelineEditorView.progressive_autonomy_updated_at', { date: formattedUpdatedAt }) }}</span>
           </dd>
@@ -59,6 +59,7 @@
         :class="btnSecondary"
         :disabled="!canDemote || busy !== null"
         :title="demoteTitle"
+        :aria-label="demoteTitle"
         data-testid="progressive-autonomy-demote"
         @click="change('demote')"
       >
@@ -69,6 +70,7 @@
         :class="btnSecondary"
         :disabled="!canPromote || busy !== null"
         :title="promoteTitle"
+        :aria-label="promoteTitle"
         data-testid="progressive-autonomy-promote"
         @click="change('promote')"
       >
@@ -76,12 +78,12 @@
       </button>
     </div>
 
-    <p
-      role="status"
+    <output
       aria-live="polite"
-      class="mt-1 text-[10px] text-muted-foreground"
+      :aria-label="$t('views.PipelineEditorView.progressive_autonomy_title')"
+      class="mt-1 block text-[10px] text-muted-foreground"
       data-testid="progressive-autonomy-status"
-    >{{ busy === null ? statusMessage : $t('views.PipelineEditorView.progressive_autonomy_applying') }}</p>
+    >{{ busy === null ? statusMessage : $t('views.PipelineEditorView.progressive_autonomy_applying') }}</output>
 
     <p
       v-if="errorMessage"
@@ -153,7 +155,7 @@ const promoteTarget = computed(() => {
   const next = currentRank.value + 1
   if (next >= AUTONOMY_LEVELS.length) return null
   if (next > ceilingRank.value) return null
-  return AUTONOMY_LEVELS[next] ?? null
+  return AUTONOMY_LEVELS[next]
 })
 const canDemote = computed(() => demoteTarget.value !== null)
 const canPromote = computed(() => promoteTarget.value !== null)

@@ -181,4 +181,63 @@ describe('ProgressiveAutonomyPanel', () => {
     expect(wrapper.find(ERROR).text()).toContain('network down')
     wrapper.unmount()
   })
+
+  it('falls back to the pinned default when no levels are set', () => {
+    const wrapper = mountPanel({ defaultLevel: null, maxLevel: null, earnedLevel: null })
+
+    expect(wrapper.find(PANEL).text()).toContain('Manual approval')
+    expect(wrapper.find(EARNED).text()).toContain('Not set')
+    wrapper.unmount()
+  })
+
+  it('hides the updated-at stamp when the earned level carries no timestamp', () => {
+    const wrapper = mountPanel({ earnedLevel: 'notify_on_complete', earnedUpdatedAt: null })
+
+    expect(wrapper.find(EARNED).text()).toBe('Notify on complete')
+    expect(wrapper.find(PANEL).text()).not.toContain('updated')
+    wrapper.unmount()
+  })
+
+  it('falls back to the target level when the success response omits the earned level', async () => {
+    vi.mocked(api.POST).mockResolvedValueOnce({ data: {}, error: undefined } as never)
+    const wrapper = mountPanel({ earnedLevel: 'manual_approval', maxLevel: 'fully_autonomous' })
+
+    await wrapper.find(PROMOTE).trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find(STATUS).text()).toContain('Notify on complete')
+    wrapper.unmount()
+  })
+
+  it('surfaces a generic failure for a non-403/422 error', async () => {
+    vi.mocked(api.POST).mockResolvedValueOnce({
+      data: undefined,
+      error: { type: 'about:blank', title: 'Server Error', status: 500, detail: 'upstream boom' },
+      response: { status: 500 },
+    } as never)
+    const wrapper = mountPanel({ earnedLevel: 'manual_approval', maxLevel: 'fully_autonomous' })
+
+    await wrapper.find(PROMOTE).trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find(ERROR).text()).toContain('Failed to change autonomy')
+    wrapper.unmount()
+  })
+
+  it('ignores a second change while one is already in flight', async () => {
+    let release: (value: unknown) => void = () => {}
+    const pending = new Promise((resolve) => {
+      release = resolve
+    })
+    vi.mocked(api.POST).mockReturnValueOnce(pending as never)
+    const wrapper = mountPanel({ earnedLevel: 'manual_approval', maxLevel: 'fully_autonomous' })
+
+    void wrapper.find(PROMOTE).trigger('click')
+    void wrapper.find(PROMOTE).trigger('click')
+    release({ data: {}, error: undefined })
+    await flushPromises()
+
+    expect(api.POST).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
 })
