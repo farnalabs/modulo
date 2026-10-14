@@ -198,7 +198,20 @@ async def _seed_run(
         existing_columns = await conn.run_sync(
             lambda sync_conn: {col["name"] for col in inspect(sync_conn).get_columns("runs")}
         )
+    # A head-shaped database has every column the ORM maps; a database pinned at
+    # an earlier revision does not. At head, every column this seeder sets must
+    # exist — silently dropping one there would mask a dropped/renamed column.
+    # On a pinned-revision database the omission is expected, so only assert at
+    # head.
+    if set(Run.__table__.c.keys()) <= existing_columns:
+        missing = set(values) - existing_columns
+        assert not missing, f"_seed_run sets runs columns absent at head: {sorted(missing)}"
     columns = [name for name in values if name in existing_columns]
+    # id/status/organisation_id always exist, so ``columns`` is never empty in
+    # practice; guard anyway — insert() with zero columns is a compile-time
+    # error, and an explicit message names the real cause.
+    if not columns:
+        raise RuntimeError("runs table lacks every column _seed_run sets — stale pinned revision?")
     runs_table = table("runs", *(column(name, Run.__table__.c[name].type) for name in columns))
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
