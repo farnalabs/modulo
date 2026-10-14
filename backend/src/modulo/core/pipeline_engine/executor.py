@@ -5078,6 +5078,7 @@ class PipelineExecutor:
             error_code=error_code,
             error_detail=error_detail,
             completed_node_outputs=completed_node_outputs,
+            node_type_map=node_type_map,
             model_backend_hub=model_backend_hub,
             connector_hub=connector_hub,
         )
@@ -6172,6 +6173,7 @@ class PipelineExecutor:
         error_code: str | None,
         error_detail: str | None,
         completed_node_outputs: dict[str, Any],
+        node_type_map: dict[str, str] | None = None,
     ) -> tuple[str, str | None, str | None]:
         """Post-stream tail: agent_signal firing, gated publish.
 
@@ -6196,6 +6198,7 @@ class PipelineExecutor:
                         run_id=run_id,
                         pipeline_id=pipeline_id,
                         completed_node_outputs=completed_node_outputs,
+                        node_type_map=node_type_map,
                     )
             # FAR-228 / FAR-1534: a gated run completes without re-executing
             # the node; its ``run_completed`` is published post-finalize like
@@ -6218,11 +6221,12 @@ class PipelineExecutor:
         completed_node_outputs: dict[str, Any],
         model_backend_hub: ModelBackendHub | None,
         connector_hub: Any | None,
+        node_type_map: dict[str, str] | None = None,
     ) -> tuple[str, str | None, str | None]:
         """Run the post-stream tail then tear down the run's execution environment.
 
-        The teardown (contextvars, hub teardown, broker registry close) runs in
-        a ``finally`` so it fires even when the tail re-raises (e.g. a
+        The teardown (contextvars, hub teardown, broker registry close) runs in a
+        ``finally`` so it fires even when the tail re-raises (e.g. a
         ``CancelledError``), preserving the original inline try/finally
         semantics in ``execute``. Returns the (possibly mutated) triplet from
         the tail.
@@ -6237,6 +6241,7 @@ class PipelineExecutor:
                 error_code=error_code,
                 error_detail=error_detail,
                 completed_node_outputs=completed_node_outputs,
+                node_type_map=node_type_map,
             )
             tail_ok = True
         finally:
@@ -6264,6 +6269,7 @@ class PipelineExecutor:
         run_id: uuid.UUID,
         pipeline_id: uuid.UUID,
         completed_node_outputs: dict[str, Any],
+        node_type_map: dict[str, str] | None = None,
     ) -> None:
         """Fire agent_signal triggers for each completed node.
 
@@ -6271,6 +6277,12 @@ class PipelineExecutor:
         is a SKIPPED delivery (guard A/B) — it must not re-fire child
         pipelines. Keyed ONLY on the marker, never on status == "skipped"
         (template-error skips fire today).
+
+        FAR-131: each node's resolved type is passed through so
+        ``fire_agent_signal`` embeds the node's PURE RETURN (not the legacy
+        mixed envelope) in the child run's input payload. A node absent from
+        the map (e.g. an edge-synthesized HITL gate) resolves to ``None`` and
+        keeps the legacy verbatim behaviour.
         """
         for node_id, node_output in completed_node_outputs.items():
             if _node_output_has_idempotency_gate(node_output):
@@ -6282,6 +6294,7 @@ class PipelineExecutor:
                 pipeline_id=pipeline_id,
                 node_id=node_id,
                 node_output=node_output,
+                node_type=(node_type_map or {}).get(node_id),
             )
 
     async def _fire_agent_signal_for_node(
@@ -6293,6 +6306,7 @@ class PipelineExecutor:
         pipeline_id: uuid.UUID,
         node_id: str,
         node_output: Any,
+        node_type: str | None = None,
     ) -> None:
         """Fire one node's agent_signal triggers, failure-isolated + logged."""
         try:
@@ -6303,6 +6317,7 @@ class PipelineExecutor:
                 source_pipeline_id=pipeline_id,
                 completed_node_id=node_id,
                 node_output=node_output,
+                node_type=node_type,
             )
             for sr in signal_results:
                 _log.info(

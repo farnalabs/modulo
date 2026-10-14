@@ -22,6 +22,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
+from modulo.core.node_output_split import resolve_node_contract_output
 from modulo.core.trigger_engine import is_guardrail_blocked_run, record_dependent_suppressed
 from modulo.db.crud.run import create_run
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
@@ -34,6 +35,26 @@ _log = logging.getLogger(__name__)
 _ACTIVE_STATUSES = ACTIVE_RUN_STATUSES
 
 
+def _resolve_child_node_output(
+    node_output: Any,
+    node_type: str | None,
+) -> Any:
+    """Resolve the value a child pipeline receives under ``node_output`` (FAR-131).
+
+    After the Agent Return split, a child pipeline must receive the completed
+    node's PURE RETURN rather than the legacy mixed envelope. For a node whose
+    resolved type has a dedicated splitter (``resolve_node_contract_output``
+    reports ``found``) the pure return is embedded; for an unknown/unsplittable
+    type -- or when the caller supplied no node type at all (a caller that
+    cannot resolve it) -- the value is returned VERBATIM, preserving the
+    pre-split legacy behaviour. A non-dict value is never split.
+    """
+    if node_type is None or not isinstance(node_output, dict):
+        return node_output
+    found, contract_output = resolve_node_contract_output(node_output, node_type)
+    return contract_output if found else node_output
+
+
 async def fire_agent_signal(
     session: AsyncSession,
     *,
@@ -42,12 +63,19 @@ async def fire_agent_signal(
     source_pipeline_id: uuid.UUID,
     completed_node_id: str,
     node_output: dict[str, Any] | None = None,
+    node_type: str | None = None,
 ) -> list[dict[str, Any]]:
     """Check for and fire agent_signal triggers matching the completed node.
 
     Queries active Trigger rows where ``trigger_type='agent_signal'`` and
     ``config_json->>'source_pipeline_id'`` + ``source_node_id`` match the
     completed pipeline + node. Creates a child pipeline run for each match.
+
+    ``node_output`` is the completed node's RAW legacy envelope; ``node_type``
+    is the node's resolved type. When the type has a dedicated splitter the
+    child run's ``input_payload["node_output"]`` carries the node's PURE RETURN
+    (FAR-131) -- never the legacy mixed envelope. When ``node_type`` is omitted
+    or unknown/unsplittable the value is embedded verbatim.
 
     Returns a list of ``{trigger_id, run_id, status}`` dicts describing each
     attempted fire.
@@ -77,6 +105,7 @@ async def fire_agent_signal(
                 str_source_pipeline_id=str_source_pipeline_id,
                 completed_node_id=completed_node_id,
                 node_output=node_output,
+                node_type=node_type,
             )
         )
 
@@ -93,6 +122,7 @@ async def _process_trigger(
     str_source_pipeline_id: str,
     completed_node_id: str,
     node_output: dict[str, Any] | None,
+    node_type: str | None = None,
 ) -> list[dict[str, Any]]:
     """Evaluate a single agent_signal trigger against the completed node.
 
@@ -179,14 +209,17 @@ async def _process_trigger(
             }
         ]
 
-    # Build input payload from node output.
+    # Build input payload from node output. FAR-131: embed the node's PURE
+    # RETURN (not the legacy mixed envelope) when its type is splittable, so
+    # the child pipeline's /io never surfaces runtime telemetry; unknown or
+    # unsplittable types keep the value verbatim.
     input_payload: dict[str, Any] = {
         "source_run_id": str(source_run_id),
         "source_pipeline_id": str_source_pipeline_id,
         "source_node_id": completed_node_id,
     }
     if node_output is not None:
-        input_payload["node_output"] = node_output
+        input_payload["node_output"] = _resolve_child_node_output(node_output, node_type)
 
     # Resolve snapshot ID from trigger config (pinned, or latest on pipeline).
     snapshot_id, snapshot_skip = await _resolve_snapshot_id(session, trigger, org_id)
