@@ -2,10 +2,12 @@
 
 ``seed_org_guardrail_rows_for_pipeline`` runs inside every pipeline create and
 clone. These tests pin its branches: nothing applied (fast no-op), a stored
-snapshot the config parser rejects (logged degrade, never a crash), an empty
-applied set, the create path, the update path, and a node-bound name collision
-that must be left alone. The end-to-end behaviour — a pipeline created through
-``POST /api/v1/pipelines`` after an apply carrying the org rows — is covered by
+snapshot the config parser rejects (FAILS CLOSED — HTTP 422 rolls the caller's
+transaction back so no unguarded pipeline is ever committed), an empty applied
+set, the create path, the update path, and a node-bound name collision that
+must be left alone. The end-to-end behaviour — a pipeline created through
+``POST /api/v1/pipelines`` after an apply carrying the org rows, and a CLONE
+doing the same — is covered by
 ``tests/integration/test_guardrail_pipeline_creation_freshness.py`` against
 real Postgres.
 """
@@ -14,6 +16,7 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException, status
 
 from modulo.core.guardrails.config import GuardrailPin
 from modulo.core.guardrails.materialise import seed_org_guardrail_rows_for_pipeline
@@ -75,9 +78,16 @@ class TestSeedOrgGuardrailRowsForPipeline:
         mock_create.assert_not_called()
         session.flush.assert_not_awaited()
 
-    async def test_invalid_stored_snapshot_degrades_to_noop(self) -> None:
-        """A snapshot the config parser rejects must log and seed NOTHING —
-        it must never raise out of pipeline creation."""
+    async def test_invalid_stored_snapshot_fails_closed(self) -> None:
+        """A snapshot the config parser rejects must FAIL CLOSED (FAR-1593 QA).
+
+        Silently seeding nothing would commit the pipeline with zero org-level
+        guardrail rows while the drift surface still reads clean — exactly the
+        unguarded-pipeline gap this seed exists to close. The seed must raise
+        the same typed HTTP 422 the adjacent ``validate_guardrail_request``
+        path uses, so the caller's transaction rolls back and no unguarded
+        pipeline is ever committed.
+        """
         session = AsyncMock()
         with (
             patch(
@@ -89,14 +99,17 @@ class TestSeedOrgGuardrailRowsForPipeline:
                 "modulo.core.guardrails.materialise.create_or_update_eval",
                 new_callable=AsyncMock,
             ) as mock_create,
+            pytest.raises(HTTPException) as exc_info,
         ):
-            created = await seed_org_guardrail_rows_for_pipeline(
+            await seed_org_guardrail_rows_for_pipeline(
                 session,
                 org_id=_ORG_ID,
                 pipeline_id=_PIPELINE_ID,
                 account_id=_ACCOUNT_ID,
             )
-        assert created == 0
+        assert exc_info.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+        # Actionable: the operator is told what to do, not just that it broke.
+        assert "re-apply" in exc_info.value.detail
         mock_create.assert_not_called()
 
     async def test_empty_applied_set_is_a_noop(self) -> None:

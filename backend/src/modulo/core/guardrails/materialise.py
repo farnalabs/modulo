@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 import uuid
 
+from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.eval_engine.eval_definition_write import create_or_update_eval
@@ -132,8 +133,16 @@ async def seed_org_guardrail_rows_for_pipeline(
 
     No applied config (no pin, no snapshot, an empty set) is a fast no-op —
     one PK read of the organisation row. A stored snapshot the config parser
-    rejects is logged and treated as nothing to materialise (the same degrade
-    the export/drift readers apply); the pin is never rewritten here.
+    rejects FAILS CLOSED (raises, rolling back the caller's transaction) so an
+    unguarded pipeline is never committed while an applied pin exists: silently
+    degrading to zero rows here reproduces exactly the gap FAR-1593 closes
+    (runs unguarded while ``GET /guardrails/config/drift`` reads ``clean``),
+    and the standing principle is that security paths fail closed. The error
+    surfaces as HTTP 422 out of ``create_pipeline`` / ``_clone_pipeline_config``
+    — the same seam and status the adjacent ``create_or_update_eval`` →
+    ``validate_guardrail_request`` guardrail validation uses — and MCP's
+    ``create_pipeline`` tool maps it to ``validation_failed`` with the same
+    detail. The pin is never rewritten here; an admin must re-apply the config.
 
     Returns the number of guardrail rows created (0 when nothing was seeded).
     """
@@ -152,12 +161,31 @@ async def seed_org_guardrail_rows_for_pipeline(
         return 0
     try:
         config_set = load_config_set(pin.serialized_snapshot)
-    except GuardrailConfigError:
+    except GuardrailConfigError as exc:
+        # Fail closed (FAR-1593 QA): an applied pin whose snapshot no longer
+        # parses means the org's safety controls cannot be materialised onto
+        # the new pipeline. Committing the pipeline with zero guardrail rows
+        # would silently reproduce the unguarded-pipeline gap this module
+        # exists to close — the drift surface would still read clean because
+        # the drift hash deduplicates org-level rows by name across pipelines.
+        # The caller's transaction rolls back, so no unguarded pipeline is
+        # ever committed. Typed as the same HTTP 422 the adjacent
+        # ``create_or_update_eval`` → ``validate_guardrail_request`` path
+        # already raises out of ``create_pipeline`` (REST passthrough via
+        # ``handle_db_errors``; MCP ``create_pipeline`` maps it to
+        # ``validation_failed``).
         _log.exception(
             "guardrail.seed.invalid_applied_snapshot",
             extra={"org_id": str(org_id)},
         )
-        return 0
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "The applied guardrail snapshot is unreadable; an admin must "
+                "re-apply the config (POST /api/v1/guardrails/config/apply) "
+                "before pipelines can be created or cloned."
+            ),
+        ) from exc
     if not config_set.guardrails:
         return 0
 

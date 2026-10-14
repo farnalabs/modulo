@@ -3,8 +3,8 @@
 Real Postgres (testcontainers) + real migrations + the real FastAPI routes.
 This module is the observation, not an inference from source: it applies an
 org-level guardrail config set while one pipeline exists, creates a NEW
-pipeline afterwards, and reads ``evals`` with raw SQL plus
-``GET /api/v1/guardrails/config/drift``.
+pipeline afterwards (and separately CLONES one), and reads ``evals`` with raw
+SQL plus ``GET /api/v1/guardrails/config/drift``.
 
 Before FAR-1593 the empirical result was: the new pipeline carried ZERO
 org-level rows (both via ``POST /api/v1/pipelines`` and a raw
@@ -186,3 +186,51 @@ async def test_pipeline_created_without_applied_config_seeds_nothing(
     # A never-applied org reads clean, not drift — creation must not invent one.
     assert drift["status"] == "clean"
     assert drift["applied_hash"] is None
+
+
+async def test_cloned_pipeline_inherits_org_guardrails(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+):
+    """The CLONE path materialises the applied config too (FAR-1593).
+
+    A clone does NOT go through ``create_pipeline`` — it goes through
+    ``_clone_pipeline_config`` — and evals are never cloned (FAR-1666), so the
+    clone starts with zero guardrail rows and must rely on the clone-path seed
+    call. This test is DISCRIMINATING for that call: deleting the
+    ``seed_org_guardrail_rows_for_pipeline`` invocation in
+    ``_clone_pipeline_config`` fails this test while every create-path
+    freshness assertion above stays green (the create-path seed cannot cover
+    the clone).
+    """
+    org_id = await _seed_org(db_engine, "GR-Fresh-Clone")
+    admin_id = await _seed_user(db_engine, org_id, "gr-fresh-clone-admin@test.local")
+    source_id = await _seed_pipeline(db_engine, org_id, admin_id, "GR-Fresh-Clone-Source")
+
+    # Apply while the source pipeline exists — the apply fan-out covers it.
+    await _propose(integration_client, org_id, admin_id, _CONFIG_YAML)
+    applied = await _apply(integration_client, org_id, admin_id)
+    assert applied["applied"] is True
+
+    resp = await integration_client.post(
+        f"/api/v1/pipelines/{source_id}/clone",
+        json={"name": "GR-Fresh-Clone-Copy"},
+        headers=_auth_headers(org_id, admin_id),
+    )
+    assert resp.status_code == 201, resp.text
+    clone_id = uuid.UUID(resp.json()["id"])
+
+    # Discriminating assertion: the clone — which never touched
+    # create_pipeline — carries the org-level rows from its own seed call.
+    clone_rows = await _org_level_rows_for_pipeline(db_engine, org_id, clone_id)
+    assert clone_rows == ["no-aws-keys", "valid-payload"]
+    assert await _enforcement_rows(db_engine, org_id, clone_id) == 2
+    # The source keeps its apply-time rows (clone shares nothing).
+    assert await _org_level_rows_for_pipeline(db_engine, org_id, source_id) == [
+        "no-aws-keys",
+        "valid-payload",
+    ]
+    # Drift stays clean: the clone's rows match the applied pin.
+    drift = await _drift(integration_client, org_id, admin_id)
+    assert drift["status"] == "clean"
+    assert drift["current_hash"] == drift["applied_hash"]
