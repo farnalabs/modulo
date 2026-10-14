@@ -148,23 +148,26 @@ async def _append_drift_audit(
     actor_user_id: uuid.UUID | None,
     previous_hash: str | None,
 ) -> None:
-    """Best-effort audit append for a NEW drift event (fail-open, savepoint)."""
+    """Best-effort audit append for a NEW drift event (fail-open).
+
+    ``append_audit_event`` already wraps each attempt in its own savepoint, so a
+    failure here cannot roll back the observation itself.
+    """
     try:
-        async with session.begin_nested():
-            await append_audit_event(
-                session,
-                org_id=org_id,
-                event_type=_DRIFT_AUDIT_EVENT_TYPE,
-                actor_user_id=actor_user_id,
-                resource_type="mcp_server",
-                resource_id=server.id,
-                payload_json={
-                    "name": server.name,
-                    "previous_tools_hash": previous_hash,
-                    "observed_tools_hash": server.tools_hash,
-                    "approved_hash": server.approved_hash,
-                },
-            )
+        await append_audit_event(
+            session,
+            org_id=org_id,
+            event_type=_DRIFT_AUDIT_EVENT_TYPE,
+            actor_user_id=actor_user_id,
+            resource_type="mcp_server",
+            resource_id=server.id,
+            payload_json={
+                "name": server.name,
+                "previous_tools_hash": previous_hash,
+                "observed_tools_hash": server.tools_hash,
+                "approved_hash": server.approved_hash,
+            },
+        )
     except SQLAlchemyError:
         _log.exception("mcp.tool_pinning.drift_audit_failed mcp_server_id=%s", server.id)
 
@@ -208,9 +211,10 @@ async def apply_tool_observation(
 
     Stores ``tools_json``/``tools_hash``/``last_observed_at`` and the decided
     ``approval_status``. On a NEW drift (a previously-approved tool set changed)
-    it also appends an audit event and raises an operator notification, each in
-    its own savepoint so an alerting failure can never roll back the observation
-    itself. Caller owns the transaction and RLS context.
+    it also appends an audit event and raises an operator notification; both are
+    best-effort (each runs in its own savepoint) so an alerting failure can never
+    roll back the observation itself. Caller owns the transaction and RLS
+    context.
 
     Raises :class:`ToolPinningError` for a malformed tool set (never persists).
     """

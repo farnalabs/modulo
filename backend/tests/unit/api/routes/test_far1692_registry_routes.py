@@ -522,6 +522,14 @@ def test_observe_tools_malformed_tools(client: TestClient) -> None:
     assert resp.status_code == 422
 
 
+def test_observe_tools_rejects_oversized_tool_list(client: TestClient) -> None:
+    # The observation set is stored verbatim, so it is capped: one request cannot
+    # persist an unbounded document. Validation rejects it before the route runs.
+    tools = [{"name": f"tool-{i}"} for i in range(mcp_mod._MAX_OBSERVED_TOOLS + 1)]
+    resp = client.post(f"{SERVERS}/{_SERVER_ID}/observe-tools", json={"tools": tools})
+    assert resp.status_code == 422
+
+
 @pytest.mark.parametrize(("exc", "status"), _ERRORS)
 def test_observe_tools_error_arms(client: TestClient, exc: Exception, status: int) -> None:
     with (

@@ -78,6 +78,11 @@ router = APIRouter(prefix="/api/v1/mcp-servers", tags=["mcp_servers"])
 
 _Transport = Literal["stdio", "sse", "http", "websocket"]
 
+#: Upper bound on the number of tool definitions accepted in a single
+#: observation. The set is stored verbatim in ``tools_json``, so an unbounded
+#: list would let one request persist an arbitrarily large document.
+_MAX_OBSERVED_TOOLS = 1000
+
 
 class McpServerCreate(TeamVisibilityMixin):
     name: str = Field(min_length=1, max_length=255)
@@ -105,7 +110,7 @@ class McpServerUpdate(TeamVisibilityMixin):
 class McpServerToolsObservation(BaseModel):
     """A reported MCP tool-definition set (each entry a JSON object with a name)."""
 
-    tools: list[dict[str, Any]] = Field(default_factory=list)
+    tools: list[dict[str, Any]] = Field(default_factory=list, max_length=_MAX_OBSERVED_TOOLS)
 
 
 class McpServerResponse(BaseModel):
