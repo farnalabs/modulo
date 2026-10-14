@@ -8,6 +8,10 @@ ingestion slices (S3/S4) and policies read from.
 Org-scoped (RLS) with team visibility; the DB ``rls_team_isolation`` policy is
 the team boundary (no request-time team gate is wired — the core team-scoped
 tables' DB-RLS-only posture, FAR-1514).
+
+TODO(FAR-1692 S3/S4): the model/CRUD carry ``first_seen``/``last_seen`` but no
+create/update request field sets them yet — they are populated by the ingestion
+slice, not manual CRUD.
 """
 
 import logging
