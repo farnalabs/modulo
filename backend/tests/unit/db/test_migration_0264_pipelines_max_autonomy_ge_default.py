@@ -54,7 +54,8 @@ Lenses:
     0308_runs_dispatch_phase_history chains onto 0307_runs_guardrail_override_resume_pending, and
     0309_hitl_claims_decision_sweep chains onto 0308_runs_dispatch_phase_history, and
     0310_library_cluster_db_hardening chains onto 0309_hitl_claims_decision_sweep, and
-    0311_policy_gate_evaluation_mode chains onto 0310_library_cluster_db_hardening as the
+    0311_library_cluster_schema_hygiene chains onto 0310_library_cluster_db_hardening, and
+    0312_policy_gate_evaluation_mode chains onto 0311_library_cluster_schema_hygiene as the
     single linear head (0259's test documents the run-up through 0288).
 * **Structure (mocked ``op``)** - upgrade emits THREE statements IN ORDER: the
   existence-gated ``ADD ... NOT VALID`` FIRST (so its ACCESS EXCLUSIVE is taken
@@ -90,7 +91,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0264_pipelines_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0263_evidence_layer"
-_HEAD_MIGRATION = "0311_policy_gate_evaluation_mode"
+_HEAD_MIGRATION = "0312_policy_gate_evaluation_mode"
 _CONSTRAINT = "ck_pipelines_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - a

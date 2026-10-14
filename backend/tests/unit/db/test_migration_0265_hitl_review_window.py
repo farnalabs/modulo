@@ -50,7 +50,8 @@ Lenses:
     0308_runs_dispatch_phase_history chains onto 0307_runs_guardrail_override_resume_pending, and
     0309_hitl_claims_decision_sweep chains onto 0308_runs_dispatch_phase_history, and
     0310_library_cluster_db_hardening chains onto 0309_hitl_claims_decision_sweep, and
-    0311_policy_gate_evaluation_mode chains onto 0310_library_cluster_db_hardening as the
+    0311_library_cluster_schema_hygiene chains onto 0310_library_cluster_db_hardening, and
+    0312_policy_gate_evaluation_mode chains onto 0311_library_cluster_schema_hygiene as the
     current single linear head.
 * **Structure (mocked ``op``)** - upgrade adds BOTH columns existence-gated,
   adds the ``ck_pipelines_hitl_review_window`` CHECK (NOT VALID then VALIDATE on
@@ -77,7 +78,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0265_hitl_review_window"
 _MIGRATION_DOWN_REVISION = "0264_pipelines_max_autonomy_ge_default"
-_HEAD_MIGRATION = "0311_policy_gate_evaluation_mode"
+_HEAD_MIGRATION = "0312_policy_gate_evaluation_mode"
 _CHECK_CONSTRAINT = "ck_pipelines_hitl_review_window"
 _SWEEP_INDEX = "ix_hitl_claims_terminalize_sweep"
 _ENVELOPE = (60, 604800)

@@ -376,11 +376,11 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
 
 ## QA History
 
-- 2026-10-10: **qa-iterate product-map pass** — corrected drifted claims. Added
+- 2026-10-10: **qa-iterate product-map pass** - corrected drifted claims. Added
   the `kubernetes`/`k8s` provider to the summary, the built-in-providers
   behaviour and the tier-coverage boundary (it runs the same
   `install_gh_pr_guard_via_exec` machinery under `apply_isolation`). Removed the
-  false "node type marked deprecated in the UI" claim — there is no `shell` node
+  false "node type marked deprecated in the UI" claim - there is no `shell` node
   type (the editor vocabulary is `agent`/`manual`/`router`/`hitl`/`dispatch`).
   Fixed the ADR 040 slug
   (`runtime-provider-contract-and-tier-conformance`), restated the `apply_isolation`

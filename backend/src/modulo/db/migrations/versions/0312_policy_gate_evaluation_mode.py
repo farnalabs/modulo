@@ -1,13 +1,14 @@
 """Add ``policy_gates.evaluation_mode`` (FAR-939 chunk 12).
 
-Revision ID: 0311_policy_gate_evaluation_mode
-Revises: 0310_library_cluster_db_hardening
+Revision ID: 0312_policy_gate_evaluation_mode
+Revises: 0311_library_cluster_schema_hygiene
 Create Date: 2026-10-13
 
-Renumbered from ``0310_policy_gate_evaluation_mode`` to ``0311`` when a
-concurrent main-branch migration claimed the ``0310`` prefix
-(``0310_library_cluster_db_hardening``); it now chains onto that head so the
-migration graph keeps a single head.
+Renumbered twice as concurrent main-branch migrations claimed each prefix in
+turn: first ``0310`` (``0310_library_cluster_db_hardening``) and then ``0311``
+(``0311_library_cluster_schema_hygiene``). It now chains onto
+``0311_library_cluster_schema_hygiene`` so the migration graph keeps a single
+head.
 
 Chunk 12 makes human review a NATIVE evaluation mode for a Policy Gate: a
 gate whose ``evaluation_mode`` is ``'human'`` takes its evaluation result
@@ -48,8 +49,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0311_policy_gate_evaluation_mode"
-down_revision: str | None = "0310_library_cluster_db_hardening"
+revision: str = "0312_policy_gate_evaluation_mode"
+down_revision: str | None = "0311_library_cluster_schema_hygiene"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

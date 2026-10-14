@@ -55,12 +55,12 @@ authorization cleanup.
 - [x] `OrgMembership`: `(account_id, organisation_id)` unique, role check constraint
       `admin | operator | runner | viewer`, `joined_at`, `deactivated_at`
 - [x] System-admin org CRUD (`/api/v1/admin/orgs`): create/list, create user in org,
-      delete org — 403 for non-system-admins, 409 on slug collision / duplicate
+      delete org - 403 for non-system-admins, 409 on slug collision / duplicate
       membership, 422 on invalid slug/role/weak password, 404 when missing
 - [x] Self-service org profile (`/api/v1/admin/org`): get/update name/logo, regenerate
-      API key — admin role gate → 403
+      API key - admin role gate → 403
 - [x] Org deletion workflow: `deletion-request` (202 + token + export bundle),
-      `deletion-confirm` (within 24h), `deletion-cancel`, `export`, immediate `DELETE` —
+      `deletion-confirm` (within 24h), `deletion-cancel`, `export`, immediate `DELETE` -
       token single-use, audit event on request, terminal runs batch-deleted before FK cascade
 - [x] Org-lifecycle evidence survives the hard delete (FAR-1517): because the
       `audit_events` chain is FK-cascaded from the org, request / confirm /
@@ -82,35 +82,35 @@ authorization cleanup.
 
 ## Known Gaps
 
-- **Stale `created_by` FK design** — deliberately not an FK (bootstrap), so no
+- **Stale `created_by` FK design** - deliberately not an FK (bootstrap), so no
   referential integrity on the creator field.
-- **No E2E smoke test for `AdminOrgSettingsView`** — vitest coverage only.
+- **No E2E smoke test for `AdminOrgSettingsView`** - vitest coverage only.
 
 ## QA History
 
-- 2026-10-06: **Improve Architecture product-map walk** — tracked the FAR-1517
+- 2026-10-06: **Improve Architecture product-map walk** - tracked the FAR-1517
   org-lifecycle durable audit ledger: the deletion workflow now mirrors its
   events into the org-independent `system_audit_events` table before the org
   row is removed, so the evidence is not destroyed by the `audit_events`
   cascade. Added the checked behaviour line, the
   `core/system_audit_logger.py` code citation and the
   `test_system_audit_org_deletion.py` integration citation.
-- 2026-09-21: **product-map walk** — closed the "No org-CRUD BDD feature
+- 2026-09-21: **product-map walk** - closed the "No org-CRUD BDD feature
   file" gap. `system_admin_orgs.feature` gained org-listing coverage (system-admin
-  list success, the reserved infrastructure orgs — nil-UUID error-ingest and
-  modulo-library registry — filtered from the list, and a regular-admin 403) and
+  list success, the reserved infrastructure orgs - nil-UUID error-ingest and
+  modulo-library registry - filtered from the list, and a regular-admin 403) and
   `system_admin_users.feature` gained the create-user error paths (an email
   already a member of the org → 409, a local account holding a password in
   another org → 409 (SECURITY #1189 cross-tenant takeover refusal), an invalid
   `org_role` → 422, a weak password → 422, a missing org → 404), all driving the
   real `/api/v1/admin/orgs` routes with DB seams patched
   (`steps/test_system_admin.py`).
-- 2026-08-29: **product-map review pass** — removed the stale
+- 2026-08-29: **product-map review pass** - removed the stale
   "no ``organisation exists`` shared BDD step" Known Gap: the step
   ``Given the organisation exists`` is now defined once in the top-level
   ``tests/bdd/conftest.py`` (shared by every BDD module) and reused by the
   library and assistant feature files.
-- 2026-08-25: **product-map review pass** — restored this entry as part of
+- 2026-08-25: **product-map review pass** - restored this entry as part of
   rebuilding the `docs/product-map/` feature graph. The entry is referenced by ADR 047/018
   (centralized-authorization cleanup). Re-verified model columns, the RLS exclusion, the
   org deletion workflow, and member role constraints against the current tree. Status:

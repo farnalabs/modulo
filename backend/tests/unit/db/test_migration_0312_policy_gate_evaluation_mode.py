@@ -1,4 +1,4 @@
-"""FAR-939 chunk 12: migration 0311 — ``policy_gates.evaluation_mode`` SQLite round-trip.
+"""FAR-939 chunk 12: migration 0312 — ``policy_gates.evaluation_mode`` SQLite round-trip.
 
 Executes the migration against an in-memory SQLite engine (the 0190
 portable-DDL harness). The chunk shipped with the column added by a raw
@@ -39,7 +39,7 @@ from alembic.operations import Operations
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
-_REVISION = "0311_policy_gate_evaluation_mode"
+_REVISION = "0312_policy_gate_evaluation_mode"
 _PRE_UPGRADE_COLUMNS = {"id", "organisation_id", "eval_id", "node_id", "action", "version"}
 
 
