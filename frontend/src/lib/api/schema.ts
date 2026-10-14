@@ -9983,11 +9983,19 @@ export interface paths {
         /**
          * List Redaction Rules Endpoint
          * @description List the caller org's redaction rules (admin only).
+         *
+         *     DB failures are translated by ``@handle_db_errors``; a read cannot produce a
+         *     rule conflict, so no local ``IntegrityError`` arm re-labels one as such.
          */
         get: operations["list_redaction_rules_endpoint_api_v1_evidence_redaction_rules_get"];
         /**
          * Upsert Redaction Rule Endpoint
          * @description Create or update one redaction rule for the caller org (admin only).
+         *
+         *     DB failures (including the unique-constraint ``IntegrityError`` that a
+         *     concurrent upsert of the same ``(key_pattern, role)`` can raise) are
+         *     translated to their status codes by ``@handle_db_errors`` — one shared
+         *     mapping instead of a duplicated per-route chain.
          */
         put: operations["upsert_redaction_rule_endpoint_api_v1_evidence_redaction_rules_put"];
         post?: never;
@@ -10007,6 +10015,9 @@ export interface paths {
         /**
          * Get Evidence Endpoint
          * @description Return one evidence row for the caller org, redacted for their role.
+         *
+         *     The 404 for a missing row is raised inside the body and passed through
+         *     untouched by ``@handle_db_errors``; DB failures use the shared mapping.
          */
         get: operations["get_evidence_endpoint_api_v1_evidence__evidence_id__get"];
         put?: never;
@@ -10027,6 +10038,12 @@ export interface paths {
         /**
          * List Evidence Endpoint
          * @description List a run's evidence rows for the caller org, redacted for their role.
+         *
+         *     At most :data:`_EVIDENCE_LIST_LIMIT` rows are returned.
+         *
+         *     The org's redaction rules are loaded ONCE per request and each row resolved
+         *     in memory from that list — never one rule query per row. DB failures use the
+         *     shared ``@handle_db_errors`` mapping; a read cannot produce a rule conflict.
          */
         get: operations["list_evidence_endpoint_api_v1_evidence_get"];
         put?: never;
