@@ -87,6 +87,7 @@
                   rows="4"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
                   placeholder='{ "token": "ghp_..." }'
+                  data-testid="admin-connectors-credentials-input"
                   :aria-invalid="invalidField === 'credentials'"
                   :aria-describedby="invalidField === 'credentials' ? 'adminconnectors-add-form-error' : undefined"
                 ></textarea>
@@ -259,6 +260,7 @@
                   v-model="formData.credentials"
                   rows="4"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
+                  data-testid="admin-connectors-edit-credentials-input"
                   :aria-invalid="invalidField === 'credentials'"
                   :aria-describedby="invalidField === 'credentials' ? 'adminconnectors-edit-form-error' : 'adminconnectors-edit-credentials-help'"
                 ></textarea>

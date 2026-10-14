@@ -627,7 +627,7 @@ describe('AdminConnectorsView — FAR-617 add/delete/error-state coverage', () =
     // credentials. Config goes to config_json (merged with the description), and
     // the separate credentials box goes to the credentials payload.
     await wrapper.find('[data-testid="admin-connectors-config-input"]').setValue('{ "host": "db.local", "port": 5432 }')
-    await wrapper.find('#adminconnectors-credentials-input').setValue('{ "password": "s3cret" }')
+    await wrapper.find('[data-testid="admin-connectors-credentials-input"]').setValue('{ "password": "s3cret" }')
     await wrapper.find('form').trigger('submit')
     await nextTick()
     await nextTick()
@@ -703,7 +703,7 @@ describe('AdminConnectorsView — FAR-617 add/delete/error-state coverage', () =
     await wrapper.find('[data-testid="admin-connectors-add"]').trigger('click')
     await nextTick()
     await wrapper.find('[data-testid="admin-connectors-name-input"]').setValue('Broken Creds')
-    await wrapper.find('#adminconnectors-credentials-input').setValue('{ "token": ')
+    await wrapper.find('[data-testid="admin-connectors-credentials-input"]').setValue('{ "token": ')
     await wrapper.find('form').trigger('submit')
     await nextTick()
     await nextTick()
@@ -726,7 +726,7 @@ describe('AdminConnectorsView — FAR-617 add/delete/error-state coverage', () =
     await nextTick()
     await wrapper.find('[data-testid="admin-connectors-name-input"]').setValue('GH')
     // Token-keyed connector types accept a bare scalar credential (FAR-496).
-    await wrapper.find('#adminconnectors-credentials-input').setValue('ghp_example_token')
+    await wrapper.find('[data-testid="admin-connectors-credentials-input"]').setValue('ghp_example_token')
     await wrapper.find('form').trigger('submit')
     await nextTick()
     await nextTick()
@@ -1014,7 +1014,7 @@ describe('AdminConnectorsView — FAR-617 add/delete/error-state coverage', () =
 
     await openEdit(wrapper, 'sl-1')
     // The credentials box is blank on open (write-only in the API).
-    expect((wrapper.find('#adminconnectors-edit-credentials-input').element as HTMLTextAreaElement).value).toBe('')
+    expect((wrapper.find('[data-testid="admin-connectors-edit-credentials-input"]').element as HTMLTextAreaElement).value).toBe('')
     await wrapper.find('form').trigger('submit')
     await nextTick()
     await nextTick()
@@ -1025,7 +1025,7 @@ describe('AdminConnectorsView — FAR-617 add/delete/error-state coverage', () =
 
     // A whitespace-only keystroke is not a real edit either.
     await openEdit(wrapper, 'sl-1')
-    await wrapper.find('#adminconnectors-edit-credentials-input').setValue('   ')
+    await wrapper.find('[data-testid="admin-connectors-edit-credentials-input"]').setValue('   ')
     await wrapper.find('form').trigger('submit')
     await nextTick()
     await nextTick()
@@ -1034,7 +1034,7 @@ describe('AdminConnectorsView — FAR-617 add/delete/error-state coverage', () =
 
     // A real credential edit re-sends it.
     await openEdit(wrapper, 'sl-1')
-    await wrapper.find('#adminconnectors-edit-credentials-input').setValue('{ "bot_token": "xoxb-1" }')
+    await wrapper.find('[data-testid="admin-connectors-edit-credentials-input"]').setValue('{ "bot_token": "xoxb-1" }')
     await wrapper.find('form').trigger('submit')
     await nextTick()
     await nextTick()
@@ -1169,13 +1169,13 @@ describe('AdminConnectorsView — FAR-617 add/delete/error-state coverage', () =
     await nextTick()
 
     await openEdit(wrapper, 'pg-3')
-    await wrapper.find('#adminconnectors-edit-credentials-input').setValue('{ "token": ')
+    await wrapper.find('[data-testid="admin-connectors-edit-credentials-input"]').setValue('{ "token": ')
     await wrapper.find('form').trigger('submit')
     await nextTick()
     await nextTick()
 
     expect(mockPatch).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('Credentials must be valid JSON')
-    expect(wrapper.find('#adminconnectors-edit-credentials-input').attributes('aria-invalid')).toBe('true')
+    expect(wrapper.find('[data-testid="admin-connectors-edit-credentials-input"]').attributes('aria-invalid')).toBe('true')
   })
 })

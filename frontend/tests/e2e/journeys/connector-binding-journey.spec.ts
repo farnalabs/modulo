@@ -88,7 +88,7 @@ test.describe('Real-stack journeys: connector binding', { tag: '@regression' }, 
       await page.getByTestId('admin-connectors-type-select').click()
       await page.locator('[data-value="filesystem"]').click()
       await page.getByTestId('admin-connectors-description-input').fill('Created by the FAR-1242 real-stack e2e journey')
-      await page.locator('#adminconnectors-credentials-input').fill('e2e-journey-noop-credentials')
+      await page.getByTestId('admin-connectors-credentials-input').fill('e2e-journey-noop-credentials')
       await page.getByTestId('admin-connectors-submit').click()
 
       // Observable effect: the row renders in the connector list...
