@@ -2214,8 +2214,17 @@ async def _after_process_hook(ctx: dict[str, Any]) -> None:
 
 
 async def _startup_event_bus_hook(_ctx: dict[str, Any]) -> None:
-    """SAQ ``startup`` hook: wire the worker into the event pipeline (FAR-250).
+    """SAQ ``startup`` hook: install stall attribution + wire the event pipeline.
 
+    0. (FAR-1771) ``install_event_loop_stall_attribution()`` — opt-in
+       worker-side event-loop stall attribution, gated on
+       ``MODULO_SLOW_CALLBACK_WARN_MS`` (0/off = a pure no-op): when enabled
+       it arms asyncio's slow-callback warning and starts the stack sampler
+       that lets the readiness stall log name the blocking callback
+       (file:line). Installed HERE because this hook is the ONE startup
+       path shared by both worker flavours (``run_system_web`` and the plain
+       ``python -m saq ...runs_settings`` CLI) and runs on the worker's
+       event loop — the exact thread the sampler must watch.
     1. ``register_listeners()`` so worker-side ORM inserts publish locally
        and (for non-notification resources) to Redis.
     2. ``configure_event_bus(RedisEventBroker(settings.redis_url))`` so those
@@ -2229,6 +2238,18 @@ async def _startup_event_bus_hook(_ctx: dict[str, Any]) -> None:
     re-attempts connect+subscribe until it succeeds.
     """
     from modulo.core.events import configure_event_bus, register_listeners
+
+    try:
+        from modulo.core.health_alerts import install_event_loop_stall_attribution
+
+        install_event_loop_stall_attribution()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # Attribution is observability, never a boot requirement — a failure
+        # here must leave the worker serving (same fail-open contract as the
+        # steps below; the log line IS the signal).
+        _log.exception("saq_worker.event_loop_stall_attribution_install_failed")
 
     try:
         register_listeners()

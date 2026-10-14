@@ -15,14 +15,14 @@ status: covered
 
 # SSRF-safe Outbound URL Validation
 
-The shared SSRF guard for every outbound network hop in Modulo — blocks
+The shared SSRF guard for every outbound network hop in Modulo - blocks
 private / loopback / link-local / cloud-metadata / CGNAT targets via DNS
 resolution, and owns the *pinned-IP* connection transport that closes the
 DNS-rebinding window a validate-then-connect pattern leaves open. Consumed by
 the SSO test-connection path (`admin_sso.py`), notification delivery
 (`notifications.py`), observability test hooks (`observability.py`),
 error-forwarder config (``error_forwarder_config.py``), the library-sync client
-and the REST connector composition root (ADR 025). Infra-only surface — no UI
+and the REST connector composition root (ADR 025). Infra-only surface - no UI
 route, so it is tracked here rather than in the manifest registry.
 
 ## Behaviours
@@ -38,7 +38,7 @@ route, so it is tracked here rather than in the manifest registry.
       scope/percent-encoded zone ids) are rejected before reaching DNS
 - [x] A hostname that resolves to **any** blocked address is refused
       (fail-closed across the whole resolved set, IPv4 and IPv6)
-- [x] An empty resolution fails closed with a clear error — never a
+- [x] An empty resolution fails closed with a clear error - never a
       usable ``ips[0]`` IndexError crash
 - [x] DNS resolution is bounded (``SSRF_DNS_TIMEOUT``, default 10s); a
       hung or failed resolver fails closed rather than stalling the caller
@@ -60,7 +60,7 @@ route, so it is tracked here rather than in the manifest registry.
 - [x] Sync validation (``validate_outbound_url``, Pydantic validators /
       sync call sites) and async validation
       (``validate_outbound_url_async``, non-blocking ``loop.getaddrinfo``)
-- [x] Pinned transport — ``resolve_pinned_ip`` /
+- [x] Pinned transport - ``resolve_pinned_ip`` /
       ``pinned_async_transport`` / ``pinned_async_client`` resolve and
       validate once, then force the TCP connection to the validated
       address while keeping the **original** hostname for TLS SNI and
@@ -81,24 +81,24 @@ route, so it is tracked here rather than in the manifest registry.
 - **Pinning rides a private httpcore seam.** ``_PinnedAsyncNetworkBackend``
   is installed by overriding httpcore's private ``_pool._network_backend``
   attribute; if a future httpcore version stops routing that attribute into
-  connection creation, pinning would silently drop — the module offers an
+  connection creation, pinning would silently drop - the module offers an
   **opt-in** runtime guard (``loudness_guard=True`` → ``PinDroppedError``)
   that makes that un-pin loud where enabled; it defaults to off and is not a
   public API contract.
 
 ## QA History
 
-- 2026-10-10: **qa-iterate product-map pass** — corrected the hard-floor
+- 2026-10-10: **qa-iterate product-map pass** - corrected the hard-floor
   behaviour line: loopback is blocked by default but is deliberately
   **allowlistable** (`_is_blocked_ip` consults `SSRF_ALLOW_PRIVATE_RANGES` before
   the private fall-through), so it does not belong in the non-negotiable floor.
   Also noted the `loudness_guard` un-pin guard is opt-in (default off). Status:
   covered.
 
-- 2026-09-18: **product-map review pass** — closed the
+- 2026-09-18: **product-map review pass** - closed the
   tracked "No BDD feature files" gap. Registered ``security/ssrf_guard.feature``
   into the executing BDD suite (``steps/test_ssrf_guard.py``), driving the real
-  ``modulo.core.ssrf`` seams — literal-IP fail-closed blocking (loopback /
+  ``modulo.core.ssrf`` seams - literal-IP fail-closed blocking (loopback /
   private / link-local metadata / CGNAT / Aliyun metadata / current-network),
   pre-DNS syntax rejection (scheme, userinfo, hostname, port, non-canonical IP
   literals), injected-resolution sync/async validation including the any-blocked
@@ -106,10 +106,10 @@ route, so it is tracked here rather than in the manifest registry.
   allowlists with the non-negotiable floor, ``resolve_pinned_ip`` target shape
   (original hostname + full validated IP set), the pinned transport's
   ``UnpinnedHostError`` refusal, and the pinned-client ``transport``-kwarg
-  rejection — all network-free. ``_ORPHANED_BDD_FEATURES`` stays empty.
+  rejection - all network-free. ``_ORPHANED_BDD_FEATURES`` stays empty.
   The private-httpcore-seam gap above remains tracked.
 
-- 2026-08-27: **product-map review pass** — entry added to
+- 2026-08-27: **product-map review pass** - entry added to
   close the feature-graph gap for a shipped infra-only surface whose tests
   and call sites were previously invisible to the product map. Behaviours
   verified against ``backend/src/modulo/core/ssrf.py`` and the 73-test-function

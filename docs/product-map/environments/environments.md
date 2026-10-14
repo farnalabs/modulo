@@ -103,8 +103,8 @@ into the Runners page as redirects.)
       enumerated in the product map
 - [x] The environment-profile create/edit form offers the `kubernetes` provider
       as a first-class option (FAR-1559): the provider select renders the three
-      manually-creatable provider types — `local_docker`, `e2b` and `kubernetes`
-      (labelled "External Runner (Kubernetes)") — while `local` and
+      manually-creatable provider types - `local_docker`, `e2b` and `kubernetes`
+      (labelled "External Runner (Kubernetes)") - while `local` and
       `runner_docker` stay system-seeded and are deliberately NOT offered for
       manual creation; the form drives the single backend `provider_type`
       vocabulary (`PROVIDER_TYPES` = `{local_docker, e2b, local, runner_docker,
@@ -117,7 +117,7 @@ into the Runners page as redirects.)
       (FAR-1558): `PATCH /api/v1/pipelines/{pipeline_id}` accepts
       `environment_profile_id` (omit to leave unchanged, explicit `null` clears
       and restores the default route), validated in the route against the
-      EFFECTIVE post-update owner team — the profile must exist in the caller's
+      EFFECTIVE post-update owner team - the profile must exist in the caller's
       organisation and be either org-visible or a team profile owned by that
       team; a foreign or cross-team id is 422 (never 404, which would confirm it
       exists) and a team/visibility change re-validates a STORED binding so a
@@ -126,7 +126,7 @@ into the Runners page as redirects.)
       (`db/crud/pipeline_snapshot.create_snapshot_from_live_graph`), which is the
       value dispatch reads; `NULL` keeps the historical default behaviour. The
       team rule is enforced at ALL THREE writers of the invariant (bind time, a
-      pipeline scope change, and a profile scope change — the profile side
+      pipeline scope change, and a profile scope change - the profile side
       refuses a `PUT` that would strand an existing binding with 422
       `environment_profile_binding_team_mismatch` BEFORE any write), through ONE
       shared predicate + shared wire-code constants in `core/team_visibility.py`

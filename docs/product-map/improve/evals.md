@@ -98,9 +98,9 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
       `test_policy_gate_acceptance.py` for the FK RESTRICT guard, and
       `test_admin_housekeeping_decision_block.py` for the housekeeping
       `blocked_by` surfacing)
-- [x] Eval definitions are org-scoped CRUD — create/update/delete are
+- [x] Eval definitions are org-scoped CRUD - create/update/delete are
       admin-gated while reads are runner-readable (`POST/GET/PUT/DELETE
-      /api/v1/evals`, `GET /api/v1/evals/{eval_id}`) — with pagination and
+      /api/v1/evals`, `GET /api/v1/evals/{eval_id}`) - with pagination and
       pipeline / eval_type filters, plus `POST /api/v1/evals/from-run` to
       author a definition from run data
 - [x] Policy-gate binding (`POST`/`PUT /api/v1/evals/{eval_id}/policy-gate`)
@@ -120,9 +120,9 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
       503), and the `/evals/editor` policy-gate panel exposes it as a
       `role=switch` `policy-gate-toggle` with a disable-confirmation dialog.
       At run start the executor re-verifies the snapshot's
-      `policy_gate_pins_fingerprint` — a mismatch means the pin set was
+      `policy_gate_pins_fingerprint` - a mismatch means the pin set was
       tampered with or drifted and the run terminalizes as a mechanism error
-      (`fingerprint_policy_gate_pins` digests every entry, `None` ≠ `[]`) —
+      (`fingerprint_policy_gate_pins` digests every entry, `None` ≠ `[]`) -
       and, for a pinned snapshot, pin MEMBERSHIP governs the run's evaluation
       universe and the PINNED `action` governs (`_resolve_governed_gate`): a
       live `action` edit cannot re-score an already-started run, a live gate

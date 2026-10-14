@@ -46,7 +46,6 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.eval_engine import EvalDefinition
-from modulo.core.eval_engine.eval_definition_write import create_or_update_eval
 from modulo.core.guardrails import GuardrailConfigError, to_engine_definition
 from modulo.core.guardrails.config import (
     ConfigChange,
@@ -59,9 +58,9 @@ from modulo.core.guardrails.config import (
     hash_config_set,
     load_config_set,
     mask_config_set,
-    to_eval_config,
     utc_now_iso,
 )
+from modulo.core.guardrails.materialise import upsert_org_guardrail_rows
 from modulo.db.crud.guardrail_config import get_guardrail_pin, set_guardrail_pin
 from modulo.db.models.eval import Eval
 from modulo.db.models.pipeline import Pipeline
@@ -286,54 +285,21 @@ async def _apply_guardrail_upserts(
 ) -> None:
     """Add missing guardrail rows and upsert the ones config-as-code owns.
 
-    For **new** guardrail items: creates an ``Eval`` row via the shared helper
-    with ``eval_type='guardrail'`` and ``node_id=None``. The helper's guardrail
-    branch (section 3.1) runs the config-vocabulary validator and persists the
-    ``Eval`` row only — no ``PolicyGate``, no ``validate_binding`` call.
-
-    For **existing** rows: updates ``config_json`` via the shared helper with
-    ``existing_eval_id`` set, so version-stamping is handled inside the helper
-    (bumps ``version``, snapshots ``pre_version_raw``).
+    Thin route wrapper over
+    :func:`modulo.core.guardrails.materialise.upsert_org_guardrail_rows` — the
+    SAME implementation the pipeline-creation seed (FAR-1593) uses, so the
+    apply/import fan-out and creation-time materialisation can never diverge
+    on how an org-level row is built.
     """
-    for gid, item in proposed_by_id.items():
-        row = rows_by_name.get(gid)
-        config_json = to_eval_config(
-            item,
-            max_guardrails_per_node=config_set.max_guardrails_per_node,
-            guardrail_timeout_seconds=config_set.guardrail_timeout_seconds,
-        )
-        if row is None:
-            # New guardrail — create via shared helper (W7)
-            await create_or_update_eval(
-                session,
-                org_id=org_id,
-                account_id=account_id,
-                pipeline_id=pipeline.id,
-                node_id=None,
-                name=gid,
-                eval_type="guardrail",
-                config_json=config_json,
-                failure_behaviour="warn",
-                pass_threshold=None,
-                suite_id=None,
-            )
-        elif row.node_id is None:
-            # Existing guardrail owned by config-as-code — update via shared
-            # helper with existing_eval_id so version-stamping is not skipped.
-            await create_or_update_eval(
-                session,
-                org_id=org_id,
-                account_id=account_id,
-                pipeline_id=pipeline.id,
-                node_id=None,
-                name=gid,
-                eval_type="guardrail",
-                config_json=config_json,
-                failure_behaviour="warn",
-                pass_threshold=None,
-                suite_id=None,
-                existing_eval_id=row.id,
-            )
+    await upsert_org_guardrail_rows(
+        session,
+        pipeline_id=pipeline.id,
+        rows_by_name=rows_by_name,
+        proposed_by_id=proposed_by_id,
+        config_set=config_set,
+        org_id=org_id,
+        account_id=account_id,
+    )
 
 
 async def _apply_guardrail_deletes(
