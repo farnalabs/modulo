@@ -79,6 +79,11 @@ jobs:
           install -m 0755 /tmp/actionlint "${HOME}/.local/bin/actionlint"
           echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
           "${HOME}/.local/bin/actionlint" --version
+          # Log the shellcheck version too: actionlint's SC* findings (the bulk
+          # of what this gate enforces) are produced by this binary, so when the
+          # runner image drifts and a finding's version-dependence is in
+          # question, the version it ran under is right here in the log.
+          shellcheck --version
 
       - name: Run actionlint on .github/workflows/**
         shell: bash
