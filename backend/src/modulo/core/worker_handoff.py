@@ -444,6 +444,183 @@ def _handback_decision(row: Any, graph_json: Any) -> _HandbackDecision:
     return _HandbackDecision(may_requeue=True, node_start_safe=node_start_safe, reason="")
 
 
+async def _handback_one_entry(
+    conn: AsyncConnection,
+    entry: InFlightRun,
+    org_id: uuid.UUID,
+) -> tuple[int, int, str | None]:
+    """Hand one observed entry back inside the org transaction — or refuse it.
+
+    Runs the requeue gate (:func:`_handback_decision`) and, when it permits,
+    issues the fenced reset (:data:`_HANDBACK_RESET_SQL`). Returns
+    ``(handed_back, skipped, terminal_reason)``: a non-refused entry contributes
+    exactly 1 to one of the first two, while ``terminal_reason`` is non-None
+    when the gate refused a safe re-run — the caller terminal-fails that run
+    OUTSIDE this transaction (its own bounded-lock write).
+    """
+    loaded = await _load_handback_row(conn, run_id=entry.run_id, org_id=org_id)
+    if loaded is None:
+        _log.info(
+            "worker_handoff.skipped run=%s org=%s (run row not visible under this org)",
+            entry.run_id,
+            org_id,
+        )
+        return 0, 1, None
+    row, graph_json = loaded
+    decision = _handback_decision(row, graph_json)
+    if not decision.may_requeue:
+        return 0, 0, decision.reason
+    result = await conn.execute(
+        _HANDBACK_RESET_SQL,
+        {
+            "rid": str(entry.run_id),
+            "oid": str(org_id),
+            "tok": entry.claim_token,
+            "code": WORKER_LOST_ERROR_CODE,
+            "detail": WORKER_LOST_DETAIL,
+            "first_node": PHASE_FIRST_NODE_DISPATCHED,
+            "node_start_safe": decision.node_start_safe,
+        },
+    )
+    if result.fetchone() is not None:
+        _log.warning(
+            "worker_handoff.released run=%s org=%s (worker shutdown mid-run; reset to pending with %s for re-dispatch)",
+            entry.run_id,
+            org_id,
+            WORKER_LOST_ERROR_CODE,
+        )
+        return 1, 0, None
+    _log.info(
+        "worker_handoff.skipped run=%s org=%s "
+        "(fenced out: fate already landed, claim rotated, or cancellation requested)",
+        entry.run_id,
+        org_id,
+    )
+    return 0, 1, None
+
+
+async def _handback_org(
+    async_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    org_entries: list[InFlightRun],
+) -> tuple[int, int, list[tuple[InFlightRun, str]]]:
+    """One org's RLS-scoped transaction: reads + resets, returning its totals.
+
+    Row-lock bounded (FAR-1592/1584 pattern shared with the periodic sweeps): a
+    55P03 row-lock-timeout expiry — or any other per-org failure — rolled the
+    transaction back whole, so NONE of its runs moved. It is counted as skipped
+    and the remaining orgs still run.
+    """
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    handed_back = 0
+    skipped = 0
+    terminals: list[tuple[InFlightRun, str]] = []
+    try:
+        async with async_engine.connect() as conn, conn.begin():
+            await set_mutation_row_lock_timeout(conn)
+            await conn.execute(text(_SQL_SET_ORG_ID), {"val": str(org_id)})
+            for entry in org_entries:
+                entry_handed_back, entry_skipped, reason = await _handback_one_entry(conn, entry, org_id)
+                handed_back += entry_handed_back
+                skipped += entry_skipped
+                if reason is not None:
+                    terminals.append((entry, reason))
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if is_row_lock_timeout(exc):
+            # FAR-1592 shape: the org transaction rolled back whole —
+            # NONE of its runs moved; they stay ``running`` and the
+            # heartbeat-TTL sweeps remain the backstop. WARNING, skip,
+            # continue with the remaining orgs.
+            _log.warning(
+                "worker_handoff.org_lock_timeout org=%s entries=%d "
+                "(SQLSTATE 55P03 from the bounded mutation_row_lock_timeout_ms wait) — "
+                "org transaction rolled back with NO runs released; they fall back to the "
+                "heartbeat-TTL sweeps",
+                org_id,
+                len(org_entries),
+                exc_info=True,
+            )
+        else:
+            _log.exception(
+                "worker_handoff.org_handback_failed org=%s entries=%d (falls back to the heartbeat-TTL sweeps)",
+                org_id,
+                len(org_entries),
+            )
+        return 0, len(org_entries), []
+    return handed_back, skipped, terminals
+
+
+async def _terminalise_entry(
+    async_engine: AsyncEngine,
+    entry: InFlightRun,
+    reason: str,
+) -> tuple[int, int]:
+    """Terminal-fail one run the gate refused to re-queue (its own transaction).
+
+    Used when the requeue gate refuses a safe re-run — the same terminal state
+    the age backstop would reach ~2h later, only prompt and correctly
+    attributed. Returns ``(terminalised, skipped)``: a 55P03 from
+    ``fail_run_terminal``'s own bounded lock (or any other write error) counts
+    the run as skipped and continues — it stays ``running`` and the sweeps
+    remain the backstop.
+    """
+    from modulo.core.pipeline_execution import fail_run_terminal
+
+    try:
+        ok = await fail_run_terminal(
+            async_engine,
+            str(entry.run_id),
+            str(entry.org_id),
+            error_code=WORKER_LOST_ERROR_CODE,
+            error_detail=f"{WORKER_LOST_NOT_REQUEUED_DETAIL}{reason}.",
+            claim_token=entry.claim_token,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "worker_handoff.terminal_failed_write_error run=%s org=%s "
+            "(stays running; falls back to the heartbeat-TTL sweeps)",
+            entry.run_id,
+            entry.org_id,
+        )
+        return 0, 1
+    if ok:
+        _log.warning(
+            "worker_handoff.terminalised run=%s org=%s reason=%s "
+            "(worker shutdown mid-run; re-run not safe, failed in place with %s)",
+            entry.run_id,
+            entry.org_id,
+            reason,
+            WORKER_LOST_ERROR_CODE,
+        )
+        return 1, 0
+    _log.info(
+        "worker_handoff.terminal_skipped run=%s org=%s "
+        "(fenced out: fate already landed, claim rotated, or cancellation requested)",
+        entry.run_id,
+        entry.org_id,
+    )
+    return 0, 1
+
+
+async def _terminalise_org(
+    async_engine: AsyncEngine,
+    terminals: list[tuple[InFlightRun, str]],
+) -> tuple[int, int]:
+    """Terminal-fail every refused entry for one committed org transaction."""
+    terminalised = 0
+    skipped = 0
+    for entry, reason in terminals:
+        entry_terminalised, entry_skipped = await _terminalise_entry(async_engine, entry, reason)
+        terminalised += entry_terminalised
+        skipped += entry_skipped
+    return terminalised, skipped
+
+
 async def handback_inflight_runs(
     async_engine: AsyncEngine,
     *,
@@ -515,133 +692,14 @@ async def handback_inflight_runs(
     skipped = unobserved
     try:
         for org_id, org_entries in by_org.items():
-            org_handed_back = 0
-            org_skipped = 0
-            org_terminals: list[tuple[InFlightRun, str]] = []
-            try:
-                async with async_engine.connect() as conn, conn.begin():
-                    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
-
-                    await set_mutation_row_lock_timeout(conn)
-                    await conn.execute(text(_SQL_SET_ORG_ID), {"val": str(org_id)})
-                    for entry in org_entries:
-                        loaded = await _load_handback_row(conn, run_id=entry.run_id, org_id=org_id)
-                        if loaded is None:
-                            org_skipped += 1
-                            _log.info(
-                                "worker_handoff.skipped run=%s org=%s (run row not visible under this org)",
-                                entry.run_id,
-                                org_id,
-                            )
-                            continue
-                        row, graph_json = loaded
-                        decision = _handback_decision(row, graph_json)
-                        if decision.may_requeue:
-                            result = await conn.execute(
-                                _HANDBACK_RESET_SQL,
-                                {
-                                    "rid": str(entry.run_id),
-                                    "oid": str(org_id),
-                                    "tok": entry.claim_token,
-                                    "code": WORKER_LOST_ERROR_CODE,
-                                    "detail": WORKER_LOST_DETAIL,
-                                    "first_node": PHASE_FIRST_NODE_DISPATCHED,
-                                    "node_start_safe": decision.node_start_safe,
-                                },
-                            )
-                            if result.fetchone() is not None:
-                                org_handed_back += 1
-                                _log.warning(
-                                    "worker_handoff.released run=%s org=%s "
-                                    "(worker shutdown mid-run; reset to pending with %s for re-dispatch)",
-                                    entry.run_id,
-                                    org_id,
-                                    WORKER_LOST_ERROR_CODE,
-                                )
-                            else:
-                                org_skipped += 1
-                                _log.info(
-                                    "worker_handoff.skipped run=%s org=%s "
-                                    "(fenced out: fate already landed, claim rotated, or cancellation requested)",
-                                    entry.run_id,
-                                    org_id,
-                                )
-                        else:
-                            org_terminals.append((entry, decision.reason))
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                if is_row_lock_timeout(exc):
-                    # FAR-1592 shape: the org transaction rolled back whole —
-                    # NONE of its runs moved; they stay ``running`` and the
-                    # heartbeat-TTL sweeps remain the backstop. WARNING, skip,
-                    # continue with the remaining orgs.
-                    _log.warning(
-                        "worker_handoff.org_lock_timeout org=%s entries=%d "
-                        "(SQLSTATE 55P03 from the bounded mutation_row_lock_timeout_ms wait) — "
-                        "org transaction rolled back with NO runs released; they fall back to the "
-                        "heartbeat-TTL sweeps",
-                        org_id,
-                        len(org_entries),
-                        exc_info=True,
-                    )
-                    skipped += len(org_entries)
-                    continue
-                _log.exception(
-                    "worker_handoff.org_handback_failed org=%s entries=%d (falls back to the heartbeat-TTL sweeps)",
-                    org_id,
-                    len(org_entries),
-                )
-                skipped += len(org_entries)
-                continue
-            # The org transaction COMMITTED — merge its resets, then run the
-            # terminal arm for the rows the gate refused to re-queue.
+            org_handed_back, org_skipped, terminals = await _handback_org(async_engine, org_id, org_entries)
             handed_back += org_handed_back
             skipped += org_skipped
-            for entry, reason in org_terminals:
-                try:
-                    from modulo.core.pipeline_execution import fail_run_terminal
-
-                    ok = await fail_run_terminal(
-                        async_engine,
-                        str(entry.run_id),
-                        str(entry.org_id),
-                        error_code=WORKER_LOST_ERROR_CODE,
-                        error_detail=f"{WORKER_LOST_NOT_REQUEUED_DETAIL}{reason}.",
-                        claim_token=entry.claim_token,
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    # Includes a 55P03 from fail_run_terminal's own bounded
-                    # lock: loud, counted as skipped, continue — the run
-                    # stays ``running`` and the sweeps remain the backstop.
-                    skipped += 1
-                    _log.exception(
-                        "worker_handoff.terminal_failed_write_error run=%s org=%s "
-                        "(stays running; falls back to the heartbeat-TTL sweeps)",
-                        entry.run_id,
-                        entry.org_id,
-                    )
-                    continue
-                if ok:
-                    terminalised += 1
-                    _log.warning(
-                        "worker_handoff.terminalised run=%s org=%s reason=%s "
-                        "(worker shutdown mid-run; re-run not safe, failed in place with %s)",
-                        entry.run_id,
-                        entry.org_id,
-                        reason,
-                        WORKER_LOST_ERROR_CODE,
-                    )
-                else:
-                    skipped += 1
-                    _log.info(
-                        "worker_handoff.terminal_skipped run=%s org=%s "
-                        "(fenced out: fate already landed, claim rotated, or cancellation requested)",
-                        entry.run_id,
-                        entry.org_id,
-                    )
+            # The org transaction COMMITTED — run the terminal arm for the
+            # rows the gate refused to re-queue.
+            org_terminalised, org_term_skipped = await _terminalise_org(async_engine, terminals)
+            terminalised += org_terminalised
+            skipped += org_term_skipped
     finally:
         reg.clear()
 
