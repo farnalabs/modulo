@@ -55,6 +55,7 @@ def _connector_instance(
     instance.id = instance_id
     instance.name = f"conn-{str(instance_id)[:8]}"
     instance.status = "active"
+    instance.visibility = "org"
     instance.allowed_operations = allowed_operations or []
     instance.connector_type_id = connector_type_id
     instance.config_json = {}
