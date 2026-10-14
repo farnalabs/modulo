@@ -83,14 +83,14 @@ class _RaisingAttr:
             id="string-value-passes-through",
         ),
         pytest.param(
-            Run(organisation_id=12345, id="run-1"),  # type: ignore[arg-type]
+            Run(organisation_id=12345, id="run-1"),
             "organisation_id",
             "12345",
             None,
             id="non-string-value-stringified",
         ),
         pytest.param(
-            Run(organisation_id=None, id="run-1"),  # type: ignore[arg-type]
+            Run(organisation_id=None, id="run-1"),
             "organisation_id",
             None,
             "event_listener.null_organisation_id",

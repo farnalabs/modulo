@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -335,7 +336,9 @@ def _blocking_method(started: asyncio.Event) -> Callable[..., Awaitable[None]]:
     return _block
 
 
-async def _cancel_during(started: asyncio.Event, start: Callable[[], Awaitable[None]]) -> asyncio.Task[None]:
+async def _cancel_during(
+    started: asyncio.Event, start: Callable[[], Coroutine[Any, Any, object]]
+) -> asyncio.Task[object]:
     """Start *start*() as a task, wait for *started*, then cancel it.
 
     Returns the cancelled task so the caller can assert the CancelledError
