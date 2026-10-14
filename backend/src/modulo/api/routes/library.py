@@ -143,6 +143,8 @@ _MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE = (
 )
 _CODE_LIBRARY_MANAGE = "library.manage"
 _CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE = "library.create_pipeline_from_template_endpoint"
+_CODE_LIBRARY_LIST_ABUSE_REPORTS = "library.list_abuse_reports_endpoint"
+_CODE_LIBRARY_REVIEW_ABUSE_REPORT = "library.review_abuse_report_endpoint"
 _MSG_ORGANISATION_ID_REQUIRED = "Organisation ID required"
 
 
@@ -1800,7 +1802,7 @@ async def submit_abuse_report_endpoint(
 
 
 @router.get("/admin/abuse-reports")
-@handle_db_errors("library.list_abuse_reports_endpoint")
+@handle_db_errors(_CODE_LIBRARY_LIST_ABUSE_REPORTS)
 async def list_abuse_reports_endpoint(
     status_filter: Literal["pending", "reviewed", "dismissed"] | None = Query(default=None, alias="status"),
     page: int = Query(1, ge=1),
@@ -1826,13 +1828,13 @@ async def list_abuse_reports_endpoint(
                 page_size=page_size,
             )
     except IntegrityError:
-        _log.exception("library.list_abuse_reports_endpoint")
+        _log.exception(_CODE_LIBRARY_LIST_ABUSE_REPORTS)
         raise _conflict_error() from None
     except ProgrammingError:
-        _log.exception("library.list_abuse_reports_endpoint")
+        _log.exception(_CODE_LIBRARY_LIST_ABUSE_REPORTS)
         raise _not_implemented_error() from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "library.list_abuse_reports_endpoint")
+        raise_session_contract_error(exc, _CODE_LIBRARY_LIST_ABUSE_REPORTS)
         _log.exception("list_abuse_reports_endpoint: SQLAlchemyError")
         raise _unavailable_error() from None
     return AbuseReportQueueResponse(
@@ -1845,7 +1847,7 @@ async def list_abuse_reports_endpoint(
     "/admin/abuse-reports/{report_id}/resolve",
     dependencies=[Depends(audited("abuse_report_reviewed", "abuse_report", principal_dep=get_current_tenant_user))],
 )
-@handle_db_errors("library.review_abuse_report_endpoint")
+@handle_db_errors(_CODE_LIBRARY_REVIEW_ABUSE_REPORT)
 async def review_abuse_report_endpoint(
     report_id: uuid.UUID,
     req: AbuseReportResolveRequest,
@@ -1878,13 +1880,13 @@ async def review_abuse_report_endpoint(
                 reviewer_account_id=principal.account_id,
             )
     except IntegrityError:
-        _log.exception("library.review_abuse_report_endpoint")
+        _log.exception(_CODE_LIBRARY_REVIEW_ABUSE_REPORT)
         raise _conflict_error() from None
     except ProgrammingError:
-        _log.exception("library.review_abuse_report_endpoint")
+        _log.exception(_CODE_LIBRARY_REVIEW_ABUSE_REPORT)
         raise _not_implemented_error() from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "library.review_abuse_report_endpoint")
+        raise_session_contract_error(exc, _CODE_LIBRARY_REVIEW_ABUSE_REPORT)
         _log.exception("review_abuse_report_endpoint: SQLAlchemyError")
         raise _unavailable_error() from None
     if report is None:
