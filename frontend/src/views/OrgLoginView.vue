@@ -33,6 +33,19 @@
         </button>
       </div>
 
+      <!-- FAR-1791: an SSO callback failure redirects back to the org login
+           page with a whitelisted code. Rendered above every state so it is
+           present in the first render and survives the org-context load. -->
+      <div v-if="ssoErrorKey" ref="ssoErrorRef" tabindex="-1" class="outline-none">
+        <ErrorAlert
+          :message="$t(ssoErrorKey)"
+          :retryable="false"
+          role="alert"
+          aria-live="assertive"
+          data-testid="org-login-sso-error"
+        />
+      </div>
+
       <div v-if="loading" class="text-center text-muted-foreground" data-testid="org-login-loading">
         {{ $t('common.loading') }}
       </div>
@@ -126,7 +139,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import { useMutation } from '../composables/useMutation'
@@ -142,6 +155,37 @@ type OrgLoginProviderInfo = components['schemas']['OrgLoginProviderInfo']
 const route = useRoute()
 const router = useRouter()
 const slug = route.params.slug as string
+
+// --- SSO callback error (FAR-1791) ---
+// The backend appends `?sso_error=<code>` when an SSO callback fails. Read
+// synchronously so the alert is present in the first render.
+const SSO_ERROR_CODES = ['not_invited', 'auth_failed', 'provider_unavailable'] as const
+type SsoErrorCode = (typeof SSO_ERROR_CODES)[number]
+
+/**
+ * Normalise the `sso_error` query value to a known code.
+ *
+ * Returns null when absent; an UNKNOWN/garbled value falls back to the generic
+ * `auth_failed` copy. The raw value is never rendered or echoed back.
+ */
+function normaliseSsoErrorCode(raw: unknown): SsoErrorCode | null {
+  if (raw === undefined || raw === null || raw === '') return null
+  const value = Array.isArray(raw) ? raw[0] : raw
+  if (typeof value === 'string' && (SSO_ERROR_CODES as readonly string[]).includes(value)) {
+    return value as SsoErrorCode
+  }
+  return 'auth_failed'
+}
+
+const ssoErrorCode = normaliseSsoErrorCode(route.query.sso_error)
+const ssoErrorKey = ssoErrorCode ? `auth.ssoError.${ssoErrorCode}` : null
+const ssoErrorRef = ref<HTMLElement | null>(null)
+
+// Announce and reach the alert once Vue mounts it (the block renders only when
+// a code is present, so the ref transitions null -> el exactly then).
+watch(ssoErrorRef, (el) => {
+  if (el) el.focus()
+})
 
 // --- Login preferences (last org slug + last-used method) ---
 const loginPrefs = useLoginPrefs()

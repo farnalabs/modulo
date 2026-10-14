@@ -292,7 +292,7 @@ async def jit_provision_user(
     if invitation is not None and invitation_used:
         if not await consume_invitation(session, invitation):
             # CAS lost the race — abort atomically, identical to accept-invite.
-            raise SsoProvisioningDeniedError(Constants.MSG_SSO_JOIN_DENIED)
+            raise SsoProvisioningDeniedError(Constants.MSG_SSO_JOIN_DENIED, org_id=org_id)
         await _audit_invite_consumed_fail_open(session, org_id, invitation.id)
 
     return account, org_id, org_role
@@ -307,11 +307,20 @@ class Constants:
 class SsoProvisioningDeniedError(ValueError):
     """FAR-855 join-gate denial.
 
-    Subclass of ``ValueError`` so the SSO callback routes map it to the
-    existing 401-with-detail error surface (never a 500) without any route
-    changes. The message is user-safe and reveals nothing beyond what the
-    login page already showed.
+    Subclass of ``ValueError`` so SSO callers can distinguish a policy denial
+    from a generic authentication failure. The message is user-safe and
+    reveals nothing beyond what the login page already showed.
+
+    ``org_id`` carries the org the identity was denied entry to (known at the
+    denial site) so the callback route can resolve that org's slug and send the
+    browser back to the org-scoped login page (FAR-1791). It is optional — the
+    message stays the sole positional argument, so existing raisers and tests
+    that construct ``SsoProvisioningDeniedError("...")`` keep working.
     """
+
+    def __init__(self, message: str, *, org_id: uuid.UUID | None = None) -> None:
+        super().__init__(message)
+        self.org_id = org_id
 
 
 def _sso_verified_domain(email: str) -> str | None:
@@ -357,7 +366,7 @@ async def _deny_join(provider: SsoProvider, org_id: uuid.UUID) -> None:
             "organisation_id": str(org_id),
         },
     )
-    raise SsoProvisioningDeniedError(Constants.MSG_SSO_JOIN_DENIED) from None
+    raise SsoProvisioningDeniedError(Constants.MSG_SSO_JOIN_DENIED, org_id=org_id) from None
 
 
 async def _audit_invite_consumed_fail_open(session: AsyncSession, org_id: uuid.UUID, invitation_id: uuid.UUID) -> None:

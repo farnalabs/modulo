@@ -8,12 +8,20 @@ fake session; the callback is mocked to perform a ``session.execute()`` (standin
 for the JIT-provisioning queries) so the pre-fix handler fails loudly.
 """
 
+import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import Request
+from sqlalchemy.exc import ProgrammingError
 
-from modulo.api.routes.sso import _resolve_saml_for_route, oidc_callback
+from modulo.api.routes.sso import (
+    _resolve_org_slug_for_error,
+    _resolve_saml_for_route,
+    _sso_error_redirect,
+    oidc_callback,
+)
+from modulo.auth.sso import SsoProvisioningDeniedError
 from modulo.settings import Settings
 
 _VALID_32 = "a" * 32
@@ -29,10 +37,15 @@ def _make_settings() -> Settings:
 
 
 class _AutobeginAwareSession:
-    """Fake session whose execute() requires an explicit begin() first."""
+    """Fake session whose execute() requires an explicit begin() first.
 
-    def __init__(self) -> None:
+    ``scalar`` is what every read returns via ``scalar_one_or_none()`` — used
+    by the FAR-1791 tests to make the org-slug lookup resolve a known slug.
+    """
+
+    def __init__(self, scalar: object = None) -> None:
         self._in_tx = False
+        self._scalar = scalar
 
     def in_transaction(self) -> bool:
         return self._in_tx
@@ -42,7 +55,9 @@ class _AutobeginAwareSession:
 
     async def execute(self, stmt: object, *args: object) -> MagicMock:
         assert self._in_tx, "execute() ran outside session.begin() (autobegin=False)"
-        return MagicMock()
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = self._scalar
+        return result
 
 
 class _BeginCtx:
@@ -151,3 +166,163 @@ async def test_saml_app_fallback_opens_scoped_transaction_when_caller_has_none()
 
     assert resolved is provider
     assert not fake.in_transaction()
+
+
+# ---------------------------------------------------------------------------
+# FAR-1791: SSO callback failures redirect to the login page with a code
+# ---------------------------------------------------------------------------
+# The IdP navigates the BROWSER to the callback endpoints, so a failure must
+# send it back to the login page with a whitelisted code (never a raw JSON
+# page, never exception text in the URL). The real error stays logged.
+
+
+def _make_request(query_string: bytes = b"") -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/auth/oidc/google/callback",
+            "query_string": query_string,
+            "headers": [],
+            "scheme": "http",
+            "server": ("test", 80),
+            "client": ("test", 123),
+            "root_path": "",
+        }
+    )
+
+
+async def test_oidc_callback_join_denied_redirects_to_org_login() -> None:
+    """A FAR-855 denial carries the org, so the user lands on THAT org's login."""
+    settings = _make_settings()
+    request = _make_callback_request()
+    org_id = uuid.uuid4()
+    fake = _AutobeginAwareSession(scalar="acme")
+
+    async def denying_callback(*_args: object, **_kwargs: object) -> dict[str, str]:
+        raise SsoProvisioningDeniedError("denied", org_id=org_id)
+
+    with patch("modulo.api.routes.sso.oidc_process_callback", new=denying_callback):
+        resp = await oidc_callback(
+            provider="google",
+            request=request,
+            _=None,
+            settings=settings,
+            session=fake,
+            system_session=fake,
+        )
+
+    assert resp.status_code == 303
+    assert resp.headers["location"].endswith("/login/acme?sso_error=not_invited")
+
+
+async def test_oidc_callback_join_denied_without_org_uses_base_login() -> None:
+    """A denial with no resolvable org falls back to the base /login target."""
+    settings = _make_settings()
+    request = _make_callback_request()
+    fake = _AutobeginAwareSession()
+
+    async def denying_callback(*_args: object, **_kwargs: object) -> dict[str, str]:
+        raise SsoProvisioningDeniedError("denied")
+
+    with patch("modulo.api.routes.sso.oidc_process_callback", new=denying_callback):
+        resp = await oidc_callback(
+            provider="google",
+            request=request,
+            _=None,
+            settings=settings,
+            session=fake,
+            system_session=fake,
+        )
+
+    assert resp.status_code == 303
+    assert resp.headers["location"].endswith("/login?sso_error=not_invited")
+
+
+async def test_oidc_callback_value_error_redirects_auth_failed() -> None:
+    settings = _make_settings()
+    request = _make_callback_request()
+    fake = _AutobeginAwareSession()
+
+    async def failing_callback(*_args: object, **_kwargs: object) -> dict[str, str]:
+        raise ValueError("Invalid state parameter — possible CSRF")
+
+    with patch("modulo.api.routes.sso.oidc_process_callback", new=failing_callback):
+        resp = await oidc_callback(
+            provider="google",
+            request=request,
+            _=None,
+            settings=settings,
+            session=fake,
+            system_session=fake,
+        )
+
+    assert resp.status_code == 303
+    location = resp.headers["location"]
+    assert location.endswith("/login?sso_error=auth_failed")
+    # The exception text must never reach the URL.
+    assert "CSRF" not in location
+
+
+async def test_oidc_callback_programming_error_redirects_provider_unavailable() -> None:
+    settings = _make_settings()
+    request = _make_callback_request()
+    fake = _AutobeginAwareSession()
+
+    async def failing_callback(*_args: object, **_kwargs: object) -> dict[str, str]:
+        raise ProgrammingError("SELECT 1", {}, Exception("missing table"))
+
+    with patch("modulo.api.routes.sso.oidc_process_callback", new=failing_callback):
+        resp = await oidc_callback(
+            provider="google",
+            request=request,
+            _=None,
+            settings=settings,
+            session=fake,
+            system_session=fake,
+        )
+
+    assert resp.status_code == 303
+    assert resp.headers["location"].endswith("/login?sso_error=provider_unavailable")
+
+
+async def test_oidc_callback_missing_code_or_state_redirects_auth_failed() -> None:
+    """The 400 missing-code/state case now redirects instead of rendering JSON."""
+    settings = _make_settings()
+    request = _make_request()
+    fake = _AutobeginAwareSession()
+
+    resp = await oidc_callback(
+        provider="google",
+        request=request,
+        _=None,
+        settings=settings,
+        session=fake,
+        system_session=fake,
+    )
+
+    assert resp.status_code == 303
+    assert resp.headers["location"].endswith("/login?sso_error=auth_failed")
+
+
+def test_sso_error_redirect_uses_303_and_a_whitelisted_url() -> None:
+    resp = _sso_error_redirect(_make_settings(), "auth_failed", None)
+    assert resp.status_code == 303
+    assert resp.headers["location"].endswith("/login?sso_error=auth_failed")
+
+
+async def test_resolve_org_slug_for_error_none_short_circuits() -> None:
+    assert await _resolve_org_slug_for_error(_AutobeginAwareSession(), None) is None
+
+
+async def test_resolve_org_slug_for_error_read_failure_is_swallowed() -> None:
+    """A slug-lookup fault must never mask the redirect on an already-failing path."""
+
+    class _BoomSession:
+        def in_transaction(self) -> bool:
+            return False
+
+        def begin(self) -> object:
+            raise RuntimeError("session unusable")
+
+    assert await _resolve_org_slug_for_error(_BoomSession(), uuid.uuid4()) is None

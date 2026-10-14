@@ -2,12 +2,15 @@
 
 import logging
 import secrets
+import urllib.parse
+import uuid
 import xml.sax.saxutils
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +23,7 @@ from modulo.api.dependencies import (
     resolve_anonymous_plan_context,
 )
 from modulo.auth.sso import (
+    SsoProvisioningDeniedError,
     _read_system_saml_provider_by_slug,
     _set_default_rls_org,
     oidc_get_authorize_url,
@@ -39,7 +43,7 @@ from modulo.db.crud.sso_provider import (
     get_provider_by_provider_id,
     list_enabled_oidc_providers,
 )
-from modulo.db.models.organisation import SYSTEM_ORG_ID
+from modulo.db.models.organisation import SYSTEM_ORG_ID, Organisation
 from modulo.db.models.sso_provider import SsoProvider
 from modulo.settings import Settings, get_settings
 
@@ -85,6 +89,65 @@ def _redirect_to_frontend(tokens: dict[str, str], settings: Settings) -> Redirec
         # the SPA can still present it on the cookie-only /auth/refresh call.
         _set_csrf_cookie(response, secrets.token_hex(32), settings, max_age_seconds=_refresh_cookie_ttl(settings))
     return response
+
+
+# ---------------------------------------------------------------------------
+# SSO callback failure -> frontend login page (FAR-1791)
+# ---------------------------------------------------------------------------
+# The IdP navigates the BROWSER to the callback routes, so a failure used to
+# surface as a raw JSON page (FastAPI's HTTPException renderer) — e.g. a user
+# who authenticated at the IdP but was never invited saw
+# ``{"detail":"You have not been invited to this organisation."}``. Instead we
+# 303-redirect back to the login page with a small, whitelisted error code the
+# SPA maps to friendly copy. The real error is still logged server-side.
+#
+# The vocabulary is a FIXED whitelist — exception text is NEVER placed in the
+# URL. The frontend falls back to the ``auth_failed`` copy for an unknown code.
+_SSO_ERROR_NOT_INVITED = "not_invited"
+_SSO_ERROR_AUTH_FAILED = "auth_failed"
+_SSO_ERROR_PROVIDER_UNAVAILABLE = "provider_unavailable"
+
+
+def _sso_error_redirect(settings: Settings, code: str, slug: str | None) -> RedirectResponse:
+    """303-redirect the browser to the frontend login page with an SSO error code.
+
+    The target is assembled ONLY from server-owned values — the configured
+    frontend base (``_frontend_url``) and a DB-resolved org slug — never from
+    caller-supplied input, so it cannot be abused as an open redirect. ``code``
+    is drawn from the fixed vocabulary above, so exception text never reaches
+    the URL.
+
+    303 (See Other), not the success path's 307, converts the IdP's POST
+    navigation (the SAML ACS) into a GET of the login page.
+    """
+    base = _frontend_url(settings)
+    suffix = f"/login/{urllib.parse.quote(slug)}" if slug else "/login"
+    return RedirectResponse(
+        url=f"{base}{suffix}?sso_error={code}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+async def _resolve_org_slug_for_error(session: AsyncSession, org_id: uuid.UUID | None) -> str | None:
+    """Best-effort org-slug lookup for the SSO error redirect target.
+
+    Sends a denied user back to *their* org's login page. Any read failure
+    (unbound RLS, missing row, DB error) returns ``None`` so the caller falls
+    back to the base ``/login`` URL — the redirect must never be masked by a
+    lookup fault on an already-failing path.
+    """
+    if org_id is None:
+        return None
+    try:
+        if session.in_transaction():
+            result = await session.execute(select(Organisation.slug).where(Organisation.id == org_id))
+        else:
+            async with session.begin():
+                result = await session.execute(select(Organisation.slug).where(Organisation.id == org_id))
+        return result.scalar_one_or_none()
+    except Exception:
+        _log.warning("sso.error_redirect_slug_lookup_failed", exc_info=True)
+        return None
 
 
 class OidcProviderInfo(BaseModel):
@@ -289,10 +352,9 @@ async def oidc_callback(
     code = request.query_params.get("code")
     state = request.query_params.get("state")
     if not code or not state:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing 'code' or 'state' query parameter",
-        )
+        # FAR-1791: a browser-facing callback failure redirects to the login
+        # page with an error code rather than rendering a raw JSON page.
+        return _sso_error_redirect(settings, _SSO_ERROR_AUTH_FAILED, None)
 
     public_url = get_public_url(settings).rstrip("/")
     redirect_uri = f"{public_url}/api/v1/auth/oidc/{provider}/callback"
@@ -300,6 +362,18 @@ async def oidc_callback(
     try:
         async with session.begin():
             tokens = await oidc_process_callback(code, state, settings, system_session, session, redirect_uri)
+    except SsoProvisioningDeniedError as exc:
+        # FAR-855 join gate: authenticated at the IdP but not authorised for the
+        # org. Exception ordering matters — this is a ValueError subclass, so it
+        # MUST precede the ``except ValueError`` arm below.
+        _log.warning(
+            "OIDC callback join denied for provider %s: %s",
+            sanitise_log_value(provider),
+            sanitise_log_value(exc),
+            exc_info=True,
+        )
+        slug = await _resolve_org_slug_for_error(session, exc.org_id)
+        return _sso_error_redirect(settings, _SSO_ERROR_NOT_INVITED, slug)
     except ValueError as exc:
         _log.warning(
             "OIDC callback failed for provider %s: %s",
@@ -307,31 +381,19 @@ async def oidc_callback(
             sanitise_log_value(exc),
             exc_info=True,
         )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(exc),
-        ) from None
+        return _sso_error_redirect(settings, _SSO_ERROR_AUTH_FAILED, None)
     except ProgrammingError as exc:
         _log.warning("OIDC callback failed — DB table missing: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from exc
+        return _sso_error_redirect(settings, _SSO_ERROR_PROVIDER_UNAVAILABLE, None)
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "sso.oidc_callback")
         _log.warning("OIDC callback DB error: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=MSG_DB_ERROR_PLEASE_TRY,
-        ) from exc
+        return _sso_error_redirect(settings, _SSO_ERROR_PROVIDER_UNAVAILABLE, None)
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         _log.exception("sso.oidc_callback.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
-        ) from e
+        return _sso_error_redirect(settings, _SSO_ERROR_PROVIDER_UNAVAILABLE, None)
 
     return _redirect_to_frontend(tokens, settings)
 
@@ -492,10 +554,10 @@ async def saml_acs_provider(
     form = await request.form()
     raw_saml: object = form.get("SAMLResponse", "")
     if not isinstance(raw_saml, str) or not raw_saml:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing 'SAMLResponse' in form data",
-        )
+        # FAR-1791: the IdP POSTs the browser here, so a failure redirects to
+        # the login page (303 converts the POST to a GET) rather than
+        # rendering a raw JSON page.
+        return _sso_error_redirect(settings, _SSO_ERROR_AUTH_FAILED, None)
 
     # RelayState verification (FAR-1003): when present, verify HMAC signature
     # and provider_id match. Absence is tolerated — IdP-initiated SSO may
@@ -508,24 +570,29 @@ async def saml_acs_provider(
                 "sso.saml_relay_state_invalid",
                 extra={"provider_id": provider_id},
             )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired RelayState",
-            )
+            return _sso_error_redirect(settings, _SSO_ERROR_AUTH_FAILED, None)
         relay_pid = relay_payload.get("pid")
         if relay_pid != provider_id:
             _log.warning(
                 "sso.saml_relay_state_provider_mismatch",
                 extra={"expected": provider_id, "relay_pid": relay_pid},
             )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="RelayState does not match the ACS provider",
-            )
+            return _sso_error_redirect(settings, _SSO_ERROR_AUTH_FAILED, None)
 
     try:
         async with session.begin():
             tokens = await saml_process_response(raw_saml, settings, system_session, session, provider_id=provider_id)
+    except SsoProvisioningDeniedError as exc:
+        # FAR-855 join gate — MUST precede the ``except ValueError`` arm (this
+        # is a ValueError subclass), so a denied identity maps to ``not_invited``.
+        _log.warning(
+            "SAML ACS join denied for provider %s: %s",
+            sanitise_log_value(provider_id),
+            sanitise_log_value(exc),
+            exc_info=True,
+        )
+        slug = await _resolve_org_slug_for_error(session, exc.org_id)
+        return _sso_error_redirect(settings, _SSO_ERROR_NOT_INVITED, slug)
     except ValueError as exc:
         _log.warning(
             "SAML ACS failed for provider %s: %s",
@@ -533,31 +600,19 @@ async def saml_acs_provider(
             sanitise_log_value(exc),
             exc_info=True,
         )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(exc),
-        ) from None
+        return _sso_error_redirect(settings, _SSO_ERROR_AUTH_FAILED, None)
     except ProgrammingError as exc:
         _log.warning("SAML ACS failed — DB table missing: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from exc
+        return _sso_error_redirect(settings, _SSO_ERROR_PROVIDER_UNAVAILABLE, None)
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "sso.saml_acs_provider")
         _log.warning("SAML ACS DB error: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=MSG_DB_ERROR_PLEASE_TRY,
-        ) from exc
+        return _sso_error_redirect(settings, _SSO_ERROR_PROVIDER_UNAVAILABLE, None)
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         _log.exception("sso.saml_acs_provider.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
-        ) from e
+        return _sso_error_redirect(settings, _SSO_ERROR_PROVIDER_UNAVAILABLE, None)
 
     return _redirect_to_frontend(tokens, settings)
 
@@ -716,41 +771,33 @@ async def saml_acs(
     form = await request.form()
     raw_saml: object = form.get("SAMLResponse", "")
     if not isinstance(raw_saml, str) or not raw_saml:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing 'SAMLResponse' in form data",
-        )
+        # FAR-1791: browser-facing callback failure -> login page (see the
+        # per-provider ACS route for the 303-over-POST rationale).
+        return _sso_error_redirect(settings, _SSO_ERROR_AUTH_FAILED, None)
 
     try:
         async with session.begin():
             tokens = await saml_process_response(raw_saml, settings, system_session, session)
+    except SsoProvisioningDeniedError as exc:
+        # FAR-855 join gate — MUST precede ``except ValueError`` (subclass).
+        _log.warning("SAML ACS join denied: %s", exc, exc_info=True)
+        slug = await _resolve_org_slug_for_error(session, exc.org_id)
+        return _sso_error_redirect(settings, _SSO_ERROR_NOT_INVITED, slug)
     except ValueError as exc:
         _log.warning("SAML ACS failed: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(exc),
-        ) from None
+        return _sso_error_redirect(settings, _SSO_ERROR_AUTH_FAILED, None)
     except ProgrammingError as exc:
         _log.warning("SAML ACS failed — DB table missing: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from exc
+        return _sso_error_redirect(settings, _SSO_ERROR_PROVIDER_UNAVAILABLE, None)
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "sso.saml_acs")
         _log.warning("SAML ACS DB error: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=MSG_DB_ERROR_PLEASE_TRY,
-        ) from exc
+        return _sso_error_redirect(settings, _SSO_ERROR_PROVIDER_UNAVAILABLE, None)
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         _log.exception("sso.saml_acs.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
-        ) from e
+        return _sso_error_redirect(settings, _SSO_ERROR_PROVIDER_UNAVAILABLE, None)
 
     return _redirect_to_frontend(tokens, settings)
 

@@ -4530,6 +4530,13 @@ export default {
     "seed_examples": "Seed example primitives",
     "dismiss_hint": "Click anywhere to dismiss this guide"
   },
+  "auth": {
+    "ssoError": {
+      "not_invited": "You're signed in, but you haven't been invited to this organisation yet. Ask an organisation admin to send you an invite, then try again.",
+      "auth_failed": "We couldn't complete the sign-in. Please try again.",
+      "provider_unavailable": "Sign-in is temporarily unavailable. Please try again in a moment."
+    }
+  },
   "errorCodes": {
     "_unknown": "Unknown error",
     "agent": {

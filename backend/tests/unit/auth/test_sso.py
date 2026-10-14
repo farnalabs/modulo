@@ -1463,6 +1463,7 @@ class TestSamlRoutesExtended:
             assert "access_token=at-saml" in resp.headers.get("location", "")
 
     def test_saml_acs_malformed_response(self, client: TestClient) -> None:
+        """FAR-1791: a browser-facing ACS failure redirects (303) to /login."""
         _override_settings(
             modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
@@ -1475,7 +1476,11 @@ class TestSamlRoutesExtended:
                 data={"SAMLResponse": base64.b64encode(b"<bad/>").decode()},
                 follow_redirects=False,
             )
-            assert resp.status_code == 401
+            assert resp.status_code == 303
+            location = resp.headers["location"]
+            assert location.endswith("/login?sso_error=auth_failed")
+            # The raw exception text must never reach the URL.
+            assert "validation" not in location
 
     def test_saml_metadata_served_for_db_provider_when_env_flag_off(self, client: TestClient) -> None:
         """FAR-464 CHANGES_REQUESTED #2: a DB-configured SAML provider is self-sufficient,
@@ -2372,6 +2377,15 @@ class TestSsoJoinGate:
         mocks.create.assert_not_awaited()
         mocks.consume.assert_not_awaited()
 
+    async def test_mode1_denial_carries_the_org_id_for_the_redirect(self) -> None:
+        """FAR-1791: the denial carries the org so the callback can target /login/{slug}."""
+        from modulo.auth.sso import SsoProvisioningDeniedError
+
+        stack, _mocks = self._gate_mocks()
+        with stack, pytest.raises(SsoProvisioningDeniedError) as exc_info:
+            await self._join(_override(), _mock_session(), _gate_provider(), "new@example.com")
+        assert exc_info.value.org_id == self.ORG_ID
+
     async def test_mode1_live_invitation_joins_with_invitation_role_and_consumes(self) -> None:
         stack, mocks = self._gate_mocks()
         invitation = _gate_invitation(role="operator")
@@ -3139,14 +3153,19 @@ class TestPerProviderSamlRouteErrorPaths:
             follow_redirects=False,
         )
 
-    def test_acs_missing_response_returns_400(self, client: TestClient) -> None:
+    # FAR-1791: the ACS is a browser-facing POST from the IdP, so every failure
+    # branch now 303-redirects to the login page with a whitelisted code instead
+    # of rendering a raw JSON HTTPException page.
+
+    def test_acs_missing_response_redirects_auth_failed(self, client: TestClient) -> None:
         _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
         with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
             mock_lookup.return_value = self._provider()
             resp = client.post("/api/v1/auth/saml/acs/okta-saml", data={"SAMLResponse": ""}, follow_redirects=False)
-        assert resp.status_code == 400
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=auth_failed")
 
-    def test_acs_value_error_returns_401(self, client: TestClient) -> None:
+    def test_acs_value_error_redirects_auth_failed(self, client: TestClient) -> None:
         _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
         with (
             patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
@@ -3155,9 +3174,10 @@ class TestPerProviderSamlRouteErrorPaths:
             mock_lookup.return_value = self._provider()
             mock_process.side_effect = ValueError("invalid response")
             resp = self._post_acs(client)
-        assert resp.status_code == 401
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=auth_failed")
 
-    def test_acs_programming_error_returns_501(self, client: TestClient) -> None:
+    def test_acs_programming_error_redirects_provider_unavailable(self, client: TestClient) -> None:
         from sqlalchemy.exc import ProgrammingError
 
         _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
@@ -3168,9 +3188,10 @@ class TestPerProviderSamlRouteErrorPaths:
             mock_lookup.return_value = self._provider()
             mock_process.side_effect = ProgrammingError("select 1", {}, Exception("missing table"))
             resp = self._post_acs(client)
-        assert resp.status_code == 501
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=provider_unavailable")
 
-    def test_acs_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+    def test_acs_sqlalchemy_error_redirects_provider_unavailable(self, client: TestClient) -> None:
         from sqlalchemy.exc import SQLAlchemyError
 
         _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
@@ -3181,7 +3202,8 @@ class TestPerProviderSamlRouteErrorPaths:
             mock_lookup.return_value = self._provider()
             mock_process.side_effect = SQLAlchemyError("db down")
             resp = self._post_acs(client)
-        assert resp.status_code == 503
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=provider_unavailable")
 
     def test_acs_http_exception_passthrough(self, client: TestClient) -> None:
         from fastapi import HTTPException
@@ -3196,7 +3218,7 @@ class TestPerProviderSamlRouteErrorPaths:
             resp = self._post_acs(client)
         assert resp.status_code == 418
 
-    def test_acs_unexpected_error_returns_500(self, client: TestClient) -> None:
+    def test_acs_unexpected_error_redirects_provider_unavailable(self, client: TestClient) -> None:
         _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
         with (
             patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
@@ -3205,7 +3227,8 @@ class TestPerProviderSamlRouteErrorPaths:
             mock_lookup.return_value = self._provider()
             mock_process.side_effect = RuntimeError("boom")
             resp = self._post_acs(client)
-        assert resp.status_code == 500
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=provider_unavailable")
 
     def test_login_value_error_returns_400(self, client: TestClient) -> None:
         _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
@@ -3409,7 +3432,7 @@ class TestSamlRelayStateRouteIntegration:
             assert "access_token=at-rs" in resp.headers["location"]
 
     def test_acs_rejects_tampered_relay_state(self, client: TestClient) -> None:
-        """POST /saml/{slug}/acs rejects a tampered RelayState."""
+        """POST /saml/{slug}/acs rejects a tampered RelayState (FAR-1791: 303)."""
         provider = _make_saml_provider(provider_id="okta-saml")
         _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
 
@@ -3426,8 +3449,8 @@ class TestSamlRelayStateRouteIntegration:
                 },
                 follow_redirects=False,
             )
-            assert resp.status_code == 401
-            assert "RelayState" in resp.json()["detail"]
+            assert resp.status_code == 303
+            assert resp.headers["location"].endswith("/login?sso_error=auth_failed")
             mock_process.assert_not_awaited()
 
     def test_acs_rejects_relay_state_signed_for_different_provider(self, client: TestClient) -> None:
@@ -3452,8 +3475,8 @@ class TestSamlRelayStateRouteIntegration:
                 },
                 follow_redirects=False,
             )
-            assert resp.status_code == 401
-            assert "does not match" in resp.json()["detail"]
+            assert resp.status_code == 303
+            assert resp.headers["location"].endswith("/login?sso_error=auth_failed")
             mock_process.assert_not_awaited()
 
     def test_acs_proceeds_normally_when_relay_state_absent(self, client: TestClient) -> None:
@@ -3581,3 +3604,28 @@ class TestSamlRelayStateRouteIntegration:
 
         assert resp.status_code == 307, resp.text
         mock_provider.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# FAR-1791: the denial carries its org so the callback can target /login/{slug}
+# ---------------------------------------------------------------------------
+
+
+def test_sso_provisioning_denied_error_carries_org_id() -> None:
+    from modulo.auth.sso import SsoProvisioningDeniedError
+
+    org_id = uuid.uuid4()
+    err = SsoProvisioningDeniedError("denied", org_id=org_id)
+    assert err.org_id == org_id
+    # Optional: the legacy one-argument construction still works.
+    assert SsoProvisioningDeniedError("denied").org_id is None
+
+
+async def test_deny_join_raises_with_the_org_id() -> None:
+    from modulo.auth.sso import SsoProvisioningDeniedError, _deny_join
+
+    provider = SimpleNamespace(provider_id="corporate", name="Corporate")
+    org_id = uuid.uuid4()
+    with pytest.raises(SsoProvisioningDeniedError) as exc_info:
+        await _deny_join(provider, org_id)
+    assert exc_info.value.org_id == org_id
