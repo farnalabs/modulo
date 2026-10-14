@@ -374,15 +374,15 @@ function emptyForm(): ConnectorFormState {
 // validateCredentialsJson).
 const invalidField = ref<'config' | 'credentials' | null>(null)
 
-function parseConfigJsonField(raw: string): { ok: true; value: Record<string, unknown> } | { ok: false } {
+function parseConfigJsonField(raw: string): { ok: boolean; value: Record<string, unknown> } {
   const text = raw.trim()
   if (!text) return { ok: true, value: {} }
   try {
     const parsed: unknown = JSON.parse(text)
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return { ok: false }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return { ok: false, value: {} }
     return { ok: true, value: parsed as Record<string, unknown> }
   } catch {
-    return { ok: false }
+    return { ok: false, value: {} }
   }
 }
 
@@ -726,8 +726,7 @@ function buildNonRestConfigJson(): Record<string, unknown> {
   // operational JSON can never clobber the first-class field (same ordering
   // invariant the REST path enforces, FAR-466 QA fix 3).
   const parsed = parseConfigJsonField(formData.config_json)
-  const operational: Record<string, unknown> = parsed.ok ? parsed.value : {}
-  return { ...operational, description: formData.description.trim() }
+  return { ...parsed.value, description: formData.description.trim() }
 }
 
 function buildCreateBody() {
@@ -773,7 +772,7 @@ function buildUpdateBody() {
     return body
   }
   const body: Record<string, unknown> = {
-    name: formData.name.trim() || null,
+    name: formData.name.trim(),
     // Send the FULL parsed operational config plus description — never a
     // description-only stub. The backend deep-merges this over the stored
     // config, so base_url and any other stored key survives an edit, and an
@@ -782,8 +781,9 @@ function buildUpdateBody() {
   }
   // Credentials are write-only. Only re-send when the operator actually typed
   // into the credentials box; otherwise omit the key entirely so the stored
-  // encrypted credential is preserved rather than wiped (FAR-1763).
-  if (nonRestCredsDirty.value) body.credentials = formData.credentials.trim() || '{}'
+  // encrypted credential is preserved rather than wiped (FAR-1763). A dirty box
+  // is by definition non-blank, which satisfies the API's min_length=1.
+  if (nonRestCredsDirty.value) body.credentials = formData.credentials.trim()
   return body
 }
 

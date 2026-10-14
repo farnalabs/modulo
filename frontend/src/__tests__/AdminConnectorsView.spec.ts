@@ -1087,4 +1087,95 @@ describe('AdminConnectorsView — FAR-617 add/delete/error-state coverage', () =
     const vm = wrapper.vm as unknown as { connectorTypes: Array<{ id: string }> }
     expect(vm.connectorTypes).toEqual([{ id: 'postgresql', display_name: 'PostgreSQL' }])
   })
+
+  it('add flow (generic connector): a JSON array, null or scalar operational config is rejected', async () => {
+    mockGet.mockResolvedValue({ data: { items: [] }, error: undefined })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="admin-connectors-add"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="admin-connectors-name-input"]').setValue('NotAnObject')
+    const config = wrapper.find('[data-testid="admin-connectors-config-input"]')
+
+    // Each is well-formed JSON, but none is a JSON object — the operational
+    // config must be an object (or blank), so every one is rejected.
+    for (const raw of ['[]', 'null', '42']) {
+      await config.setValue(raw)
+      await wrapper.find('form').trigger('submit')
+      await nextTick()
+      await nextTick()
+    }
+
+    expect(mockPost).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('Operational config must be valid JSON')
+  })
+
+  it('edit flow (non-REST connector): a connector with no stored config_json opens an empty operational editor', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        items: [
+          { id: 'nc-1', name: 'NoConfig', connector_type: 'filesystem', description: null, tier: 'native' },
+        ],
+      },
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    await openEdit(wrapper, 'nc-1')
+
+    expect((wrapper.find('[data-testid="admin-connectors-edit-config"]').element as HTMLTextAreaElement).value).toBe('')
+  })
+
+  it('edit flow (non-REST connector): invalid operational-config JSON blocks the PATCH with a clear error', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        items: [
+          { id: 'pg-2', name: 'PG', connector_type: 'postgresql', description: 'd', tier: 'native', config_json: {} },
+        ],
+      },
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    await openEdit(wrapper, 'pg-2')
+    await wrapper.find('[data-testid="admin-connectors-edit-config"]').setValue('{ "host": ')
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+    await nextTick()
+
+    expect(mockPatch).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('Operational config must be valid JSON')
+    expect(wrapper.find('[data-testid="admin-connectors-edit-config"]').attributes('aria-invalid')).toBe('true')
+    expect(wrapper.find('#adminconnectors-edit-form-error').attributes('role')).toBe('alert')
+  })
+
+  it('edit flow (non-REST connector): malformed credentials JSON blocks the PATCH', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        items: [
+          { id: 'pg-3', name: 'PG', connector_type: 'postgresql', description: 'd', tier: 'native', config_json: {} },
+        ],
+      },
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    await openEdit(wrapper, 'pg-3')
+    await wrapper.find('#adminconnectors-edit-credentials-input').setValue('{ "token": ')
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+    await nextTick()
+
+    expect(mockPatch).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('Credentials must be valid JSON')
+    expect(wrapper.find('#adminconnectors-edit-credentials-input').attributes('aria-invalid')).toBe('true')
+  })
 })
