@@ -152,6 +152,14 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
     )
     version_group_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
+        # Self-FK (FAR-1758): the service always points this at an EXISTING
+        # ``library_primitives.id`` in the same organisation
+        # (``version_group_id or existing.id``), mirroring the sibling
+        # self-references above. ``SET NULL`` so a hard-deleted group member
+        # never destroys its siblings' rows; migration 0311 adds the same
+        # ``enforce_same_organisation`` tenant trigger the siblings carry, so a
+        # cross-org (or dangling) value fails loudly instead of being skipped.
+        ForeignKey("library_primitives.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
