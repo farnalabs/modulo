@@ -18,6 +18,12 @@ import pytest
 
 from modulo.core.graph_validator import GraphValidator, ValidationResult
 from modulo.db.crud.schema import SchemaDeletionProtectedError, delete_schema
+from tests.unit.graph_validator._helpers import (
+    schema_version_row as _schema_version_row,
+)
+from tests.unit.graph_validator._helpers import (
+    schema_version_session as _schema_version_session,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -44,39 +50,49 @@ def _snapshot(**kw):
     return snap
 
 
-def _schema_version_row(schema_id, definition_json, *, version="1.0"):
-    sv = MagicMock()
-    sv.schema_id = schema_id
-    sv.version = version
-    sv.definition_json = definition_json
-    return sv
+def _mock_session_for_schema_versions(rows, *, use_scalar_one=True):
+    """Back-compat shim: all remaining call sites use scalar-one lookups, which is
+    what the structural helper resolves."""
+    assert use_scalar_one, "non scalar_one lookups were removed with the dead branch"
+    return _schema_version_session(rows)
 
 
-def _mock_session_for_schema_versions(rows, *, use_scalar_one=False):
+def _deletion_session(
+    *,
+    get_schema_row,
+    agent_count: int = 0,
+    pin_count: int = 0,
+    library_count: int = 0,
+):
+    """Mock session for ``delete_schema`` keyed by each query's OWN FROM table.
+
+    ``delete_schema`` issues four distinct SELECTs (the schema lookup, then the
+    Agent / SnapshotSchemaPin / LibraryPrimitive reference counts). Keying by
+    the statement's final FROM clause instead of call order means reordering
+    the queries inside the CRUD function cannot silently break these tests:
+    each query always answers with its own table's result, and any NEW query
+    fails loudly instead of scavenging a positional slot.
+    """
+    counts = {
+        "agents": agent_count,
+        "snapshot_schema_pins": pin_count,
+        "library_primitives": library_count,
+    }
     session = AsyncMock()
-    exc_result = MagicMock()
-    if use_scalar_one:
-        if len(rows) > 1:
-            _rows = list(rows)
 
-            def _make_call(_row):
-                r = MagicMock()
-                r.scalar_one_or_none.return_value = _row
-                r.scalar_one.return_value = _row
-                return r
-
-            results = [_make_call(r) for r in _rows]
-            session.execute = AsyncMock(side_effect=results)
+    def _exec(stmt, *_a, **_kw):
+        tables = [f.name for f in stmt.get_final_froms() if hasattr(f, "name")]
+        table = tables[0] if tables else None
+        result = MagicMock()
+        if table == "schemas":
+            result.scalar_one_or_none.return_value = get_schema_row
+        elif table in counts:
+            result.scalar_one.return_value = counts[table]
         else:
-            rv = rows[0] if rows else None
-            exc_result.scalar_one_or_none.return_value = rv
-            exc_result.scalar_one.return_value = rv
-            session.execute = AsyncMock(return_value=exc_result)
-    else:
-        scalars = MagicMock()
-        scalars.all.return_value = rows
-        exc_result.scalars.return_value = scalars
-        session.execute = AsyncMock(return_value=exc_result)
+            raise AssertionError(f"Unexpected query in delete_schema test: FROM {tables}")
+        return result
+
+    session.execute = AsyncMock(side_effect=_exec)
     return session
 
 
@@ -381,27 +397,12 @@ async def test_schema_deletion_blocked_when_pinned():
     schema_mock.id = schema_id
     schema_mock.system = False
 
-    # Mock session to simulate SnapshotSchemaPin count > 0
-    session = AsyncMock()
-
-    get_schema_result = MagicMock()
-    get_schema_result.scalar_one_or_none.return_value = schema_mock
-
-    agent_count_result = MagicMock()
-    agent_count_result.scalar_one.return_value = 0
-
-    pin_count_result = MagicMock()
-    pin_count_result.scalar_one.return_value = 1
-
-    lib_count_result = MagicMock()
-    lib_count_result.scalar_one.return_value = 0
-
-    session.execute.side_effect = [
-        get_schema_result,
-        agent_count_result,
-        pin_count_result,
-        lib_count_result,
-    ]
+    session = _deletion_session(
+        get_schema_row=schema_mock,
+        agent_count=0,
+        pin_count=1,
+        library_count=0,
+    )
 
     with pytest.raises(SchemaDeletionProtectedError) as exc_info:
         await delete_schema(session, schema_id)
@@ -416,26 +417,12 @@ async def test_schema_deletion_allowed_when_not_pinned():
     schema_mock.id = schema_id
     schema_mock.system = False
 
-    session = AsyncMock()
-
-    get_schema_result = MagicMock()
-    get_schema_result.scalar_one_or_none.return_value = schema_mock
-
-    agent_count_result = MagicMock()
-    agent_count_result.scalar_one.return_value = 0
-
-    pin_count_result = MagicMock()
-    pin_count_result.scalar_one.return_value = 0
-
-    lib_count_result = MagicMock()
-    lib_count_result.scalar_one.return_value = 0
-
-    session.execute.side_effect = [
-        get_schema_result,
-        agent_count_result,
-        pin_count_result,
-        lib_count_result,
-    ]
+    session = _deletion_session(
+        get_schema_row=schema_mock,
+        agent_count=0,
+        pin_count=0,
+        library_count=0,
+    )
 
     result = await delete_schema(session, schema_id)
     assert result is True
