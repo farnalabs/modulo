@@ -736,6 +736,7 @@ routes:
         product_map: [feat-product-analytics]
         sidebar_group:
         sidebar_order:
+        system_admin_only: true
         type: page
         <<: *team
         deprecated: false
@@ -747,6 +748,7 @@ routes:
         product_map: [feat-system-config]
         sidebar_group:
         sidebar_order:
+        system_admin_only: true
         type: page
         <<: *community
         deprecated: false
@@ -758,6 +760,7 @@ routes:
         product_map: [feat-system-orgs]
         sidebar_group:
         sidebar_order:
+        system_admin_only: true
         type: page
         <<: *community
         deprecated: false
