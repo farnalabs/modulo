@@ -1032,3 +1032,147 @@ def test_effective_gate_edges_delegates_to_the_shared_classifier() -> None:
 
     classifier.assert_called_once()
     assert result == [sentinel_edge]
+
+
+# ---------------------------------------------------------------------------
+# FAR-939 chunk 12 §3.3 — human-mode pause-edge validation
+# ---------------------------------------------------------------------------
+
+
+def _human_mode_dto(node_id: str, *, mode: str = "human") -> Any:
+    """A governed EvalDefDTO whose governing gate carries *mode*."""
+    from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
+
+    return EvalDefDTO(
+        id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        node_id=node_id,
+        name="human-gate-eval",
+        eval_type="regex",
+        config={},
+        failure_behaviour="block",
+        policy_gate_id=uuid.uuid4(),
+        policy_gate_version=1,
+        policy_gate_node_id=uuid.uuid4(),
+        policy_gate_evaluation_mode=mode,
+    )
+
+
+_TWO_NODES: list[dict[str, Any]] = [{"id": "node-a", "role": None}, {"id": "node-b", "role": None}]
+
+
+def test_validate_human_mode_returns_when_no_eval_is_human_governed() -> None:
+    """An automatic-mode (or ungoverned) eval places NO pause-edge
+    constraint on its node — a plain agent edge compiles without a gate and
+    without a validation error. A validator that wrongly demanded a pause
+    edge for automatic evals would refuse this graph at run start."""
+    automatic = _human_mode_dto("node-a", mode="automatic")
+    graph_json = {
+        "nodes": list(_TWO_NODES),
+        "edges": [{"source": "node-a", "target": "node-b", "type": "normal"}],
+    }
+
+    compiled = build_graph_from_json(graph_json, eval_definitions_by_node={"node-a": [automatic]})
+
+    gate_nodes = {name for name in compiled.get_graph().nodes if name.startswith("hitl_review_")}
+    assert not gate_nodes
+
+
+def test_validate_human_mode_rejects_a_human_eval_with_no_gate_edge() -> None:
+    """A human-governed eval whose node has no edge compiling an HITL gate
+    would never be decided (the silent no-decision hole) — fail closed."""
+    from modulo.core.pipeline_engine.graph_cache import _validate_human_mode_pause_edges
+
+    human = _human_mode_dto("node-a", mode="human")
+
+    with pytest.raises(ValueError, match="EXACTLY ONE"):
+        _validate_human_mode_pause_edges(
+            nodes=list(_TWO_NODES),
+            edges=[{"source": "node-a", "target": "node-b", "type": "normal"}],
+            eval_definitions_by_node={"node-a": [human]},
+        )
+
+
+def test_validate_human_mode_rejects_two_gate_edges() -> None:
+    """An HITL-typed source with two normal edges compiles TWO gates for one
+    evaluation — two interrupts for a single decision. Fail closed."""
+    from modulo.core.pipeline_engine.graph_cache import _validate_human_mode_pause_edges
+
+    human = _human_mode_dto("node-a", mode="human")
+    nodes = [
+        {"id": "node-a", "node_type": "hitl", "hitl_config": {"human_only": True}},
+        {"id": "node-b", "role": None},
+        {"id": "node-c", "role": None},
+    ]
+    edges = [
+        {"source": "node-a", "target": "node-b", "type": "normal"},
+        {"source": "node-a", "target": "node-c", "type": "normal"},
+    ]
+
+    with pytest.raises(ValueError, match="EXACTLY ONE"):
+        _validate_human_mode_pause_edges(
+            nodes=nodes,
+            edges=edges,
+            eval_definitions_by_node={"node-a": [human]},
+        )
+
+
+def test_validate_human_mode_accepts_exactly_one_human_only_gate_edge() -> None:
+    """The legal shape: one outgoing edge whose review config is
+    human-only — the gate is the eval's pause point, and the graph compiles
+    with exactly that gate. A validator that rejected the legal shape would
+    refuse this graph at run start."""
+    human = _human_mode_dto("node-a", mode="human")
+    graph_json = {
+        "nodes": list(_TWO_NODES),
+        "edges": [dict(_HTL_EDGE)],
+    }
+
+    compiled = build_graph_from_json(graph_json, eval_definitions_by_node={"node-a": [human]})
+
+    gate_nodes = {name for name in compiled.get_graph().nodes if name.startswith("hitl_review_")}
+    assert gate_nodes == {"hitl_review_node-a_node-b"}
+
+
+def test_validate_human_mode_rejects_a_falsy_human_only_opt_out() -> None:
+    """``human_only`` resolved falsy (``""`` here — the runtime's
+    ``human_only_effective`` treats any falsy value as opt-out) is
+    definitionally incompatible with a human-decided gate — fail closed."""
+    from modulo.core.pipeline_engine.graph_cache import _validate_human_mode_pause_edges
+
+    human = _human_mode_dto("node-a", mode="human")
+    opted_out_edge = {
+        "source": "node-a",
+        "target": "node-b",
+        "type": "normal",
+        "hitl_review_config": {"human_only": ""},
+    }
+
+    with pytest.raises(ValueError, match="human_only"):
+        _validate_human_mode_pause_edges(
+            nodes=list(_TWO_NODES),
+            edges=[opted_out_edge],
+            eval_definitions_by_node={"node-a": [human]},
+        )
+
+
+def test_validate_human_mode_reads_node_level_config_when_the_edge_has_none() -> None:
+    """An HITL-typed source stamps its node-level ``hitl_config`` onto its
+    edges at compile time; when the edge carries no config the validator must
+    validate the STAMP SOURCE — a node-level falsy ``human_only`` (the
+    Pydantic-model bypass) is rejected the same way."""
+    from modulo.core.pipeline_engine.graph_cache import _validate_human_mode_pause_edges
+
+    human = _human_mode_dto("node-a", mode="human")
+    nodes = [
+        {"id": "node-a", "node_type": "hitl", "hitl_config": {"human_only": False}},
+        {"id": "node-b", "role": None},
+    ]
+    edges = [{"source": "node-a", "target": "node-b", "type": "normal"}]
+
+    with pytest.raises(ValueError, match="human_only"):
+        _validate_human_mode_pause_edges(
+            nodes=nodes,
+            edges=edges,
+            eval_definitions_by_node={"node-a": [human]},
+        )
