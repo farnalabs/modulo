@@ -35,7 +35,7 @@ def main():
 
     client = httpx.Client(base_url=BASE_URL, timeout=30)
 
-    # Step 1: Login — get access + refresh tokens
+    # Step 1: Login - get access + refresh tokens
     print(f"Logging in as {EMAIL} ...")
     resp = client.post(
         "/api/v1/auth/login",

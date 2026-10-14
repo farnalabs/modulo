@@ -213,7 +213,7 @@ def main():
                 connector_id = connector["id"]
                 print(f"  Created connector: {connector.get('name', 'N/A')} ({connector_id})")
             else:
-                print(f"  Connector creation skipped ({resp.status_code}) — continuing without")
+                print(f"  Connector creation skipped ({resp.status_code}) - continuing without")
 
         # ═══════════════════════════════════════════════════════════
         # STEP 6: Set Pipeline Graph (add agent node)
@@ -239,7 +239,7 @@ def main():
         if resp.status_code == 200:
             print(f"  Graph saved with 1 node (agent: {agent_id})")
         else:
-            print(f"  Graph update: {resp.status_code} — {resp.text}")
+            print(f"  Graph update: {resp.status_code} - {resp.text}")
 
         # ═══════════════════════════════════════════════════════════
         # STEP 7: Trigger a Run
@@ -287,7 +287,7 @@ def main():
             ws_url = f"{ws_scheme}://{urlparse(BASE_URL).netloc}"
             print(f"  WebSocket available: {ws_url}/api/v1/runs/{run_id}/ws?token={ws_token[:20]}...")
         else:
-            print("  WebSocket token not available — falling back to polling")
+            print("  WebSocket token not available - falling back to polling")
 
         # Poll until terminal
         terminal = {"completed", "failed", "cancelled"}
@@ -305,7 +305,7 @@ def main():
             if status in terminal:
                 break
         else:
-            print(f"  Run did not complete in {MAX_POLLS * POLL_INTERVAL}s — cancelling")
+            print(f"  Run did not complete in {MAX_POLLS * POLL_INTERVAL}s - cancelling")
             client.post(f"/api/v1/runs/{run_id}/cancel", headers=headers)
             final_status = "cancelled"
 

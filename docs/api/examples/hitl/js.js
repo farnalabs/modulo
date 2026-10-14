@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Modulo API Example: Human-in-the-Loop (HITL) — fetch
+ * Modulo API Example: Human-in-the-Loop (HITL) - fetch
  *
  * Demonstrates listing, claiming, and approving HITL gates.
  *
