@@ -90,9 +90,9 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
 - [x] Composite library-primitive credential masking (FAR-1380): the shared
       `LibraryPrimitiveResponse._mask_composite_graph_credentials` validator masks
       credential-bearing node fields inside a **composite** primitive's `content_json`
-      on every read surface — library list/get/create/patch/delete/restore/adapt,
+      on every read surface - library list/get/create/patch/delete/restore/adapt,
       community contribute + contributions list + admin publish, community install and
-      the fixture contributions list — and the MCP `modulo://library/{type}/{slug}`
+      the fixture contributions list - and the MCP `modulo://library/{type}/{slug}`
       resource masks composite nodes before rendering; non-composite primitives pass
       through byte-identical. The FAR-1374 sentinel rule applies on write:
       `POST /api/v1/libraries`, `PATCH /api/v1/libraries/{id}` and

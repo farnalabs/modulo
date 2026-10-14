@@ -147,6 +147,10 @@ class CollectionInstallEntity(Base):
 
     __tablename__ = "collection_install_entity"
 
+    # NOTE: no ``index=True`` here — the PK below LEADS with ``install_id``, so
+    # a single-column index on it was pure duplication. Migration 0311 drops the
+    # redundant ``ix_collection_install_entity_install_id`` the ORM never
+    # declared (0207 created it in the DB only).
     install_id: Mapped[UUID] = mapped_column(Uuid(), nullable=False)
     entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
     entity_id: Mapped[UUID] = mapped_column(Uuid(), nullable=False)

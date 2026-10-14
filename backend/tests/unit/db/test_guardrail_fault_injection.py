@@ -100,8 +100,10 @@ async def session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
         yield s
 
 
-def _seed_pipeline(session: AsyncSession, *, pipeline_id: uuid.UUID, snapshot_id: uuid.UUID) -> None:
-    session.add(Pipeline(id=pipeline_id, organisation_id=_ORG, name="pipeline", account_id=_ACCOUNT, visibility="org"))
+def _seed_pipeline(
+    session: AsyncSession, *, pipeline_id: uuid.UUID, snapshot_id: uuid.UUID, name: str = "pipeline"
+) -> None:
+    session.add(Pipeline(id=pipeline_id, organisation_id=_ORG, name=name, account_id=_ACCOUNT, visibility="org"))
     session.add(
         PipelineSnapshot(
             id=snapshot_id,
@@ -123,7 +125,10 @@ async def _seed(session: AsyncSession) -> None:
     session.add(Organisation(id=_ORG, name="test org", slug="test-org"))
     session.add(Account(id=_ACCOUNT, email="admin@example.com", display_name="admin"))
     _seed_pipeline(session, pipeline_id=_PIPELINE, snapshot_id=_SNAPSHOT)
-    _seed_pipeline(session, pipeline_id=_PIPELINE_NO_GR, snapshot_id=_SNAPSHOT_NO_GR)
+    # Distinct org-scoped name: 0156's partial unique (organisation_id, name)
+    # WHERE deleted_at IS NULL is declared on the ORM model, so SQLite
+    # create_all enforces it — two live pipelines cannot share a name.
+    _seed_pipeline(session, pipeline_id=_PIPELINE_NO_GR, snapshot_id=_SNAPSHOT_NO_GR, name="pipeline-no-gr")
     await session.flush()
 
 
