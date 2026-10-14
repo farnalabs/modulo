@@ -1,9 +1,12 @@
 """MCP tool-definition pinning: canonical hash + drift decision (FAR-1692 S2).
 
-Detect-and-surface only (ADR 055 — record, do not police). This module is pure
-and DB-free on purpose: the canonical hash and the drift decision are the
-security-relevant logic and are unit-tested directly, while the persistence and
-the notification/audit side effects live in the route layer.
+Detect-and-surface only (ADR 055 — record, do not police). The canonical hash
+(:func:`compute_tools_hash`) and the drift decision (:func:`decide_observation`)
+are pure and DB-free on purpose: they are the security-relevant logic and are
+unit-tested directly. :func:`apply_tool_observation` in this module layers the
+persistence (``tools_json``/``tools_hash``/``approval_status``) and the
+best-effort audit/notification side effects on top of them; the route layer owns
+the transaction, RLS context and HTTP/error mapping.
 
 The contract:
 
