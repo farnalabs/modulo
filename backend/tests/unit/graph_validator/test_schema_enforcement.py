@@ -50,13 +50,6 @@ def _snapshot(**kw):
     return snap
 
 
-def _mock_session_for_schema_versions(rows, *, use_scalar_one=True):
-    """Back-compat shim: all remaining call sites use scalar-one lookups, which is
-    what the structural helper resolves."""
-    assert use_scalar_one, "non scalar_one lookups were removed with the dead branch"
-    return _schema_version_session(rows)
-
-
 def _deletion_session(
     *,
     get_schema_row,
@@ -361,7 +354,7 @@ async def test_version_pinning_resolves_pinned_not_latest():
             version="1.0",
         ),
     ]
-    session = _mock_session_for_schema_versions(rows, use_scalar_one=True)
+    session = _schema_version_session(rows)
 
     definitions = await GraphValidator()._resolve_schema_definitions(
         {(schema_id, "1.0"): None},
@@ -375,7 +368,7 @@ async def test_version_pinning_resolves_pinned_not_latest():
 async def test_version_pinning_returns_empty_for_missing_version():
     """Pinned to a version that doesn't exist → empty dict (no crash)."""
     schema_id = uuid.uuid4()
-    session = _mock_session_for_schema_versions([], use_scalar_one=True)
+    session = _schema_version_session([])
 
     definitions = await GraphValidator()._resolve_schema_definitions(
         {(schema_id, "99.0"): None},
@@ -463,7 +456,7 @@ async def test_pre_existing_pipeline_logs_degraded_mode(caplog: pytest.LogCaptur
         _schema_version_row(out_id, {"type": "object", "properties": {"x": {"type": "string"}}}),
         _schema_version_row(in_id, {"type": "object", "properties": {"x": {"type": "integer"}}}),
     ]
-    session = _mock_session_for_schema_versions(rows, use_scalar_one=True)
+    session = _schema_version_session(rows)
 
     result = await GraphValidator().validate_for_run(snap, {}, session)
 
@@ -495,7 +488,7 @@ async def test_non_pre_existing_pipeline_blocks_on_incompatible():
         _schema_version_row(out_id, {"type": "object", "properties": {"x": {"type": "string"}}}),
         _schema_version_row(in_id, {"type": "object", "properties": {"x": {"type": "integer"}}}),
     ]
-    session = _mock_session_for_schema_versions(rows, use_scalar_one=True)
+    session = _schema_version_session(rows)
 
     result = await GraphValidator().validate_for_run(snap, {}, session)
 
