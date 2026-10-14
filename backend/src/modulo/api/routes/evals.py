@@ -306,8 +306,9 @@ class PolicyGateUpdateRequest(BaseModel):
     # FAR-939 chunk 12 — PUT is a full replace of the mutable config (like
     # ``action``), so this field joins the mutable set and the
     # ``pre_version_raw`` snapshot key set. Optional on the wire: omitted
-    # writes 'automatic' (callers that send only ``action`` stay
-    # byte-identical to today).
+    # PRESERVES the live gate's mode (a caller that sends only ``action``
+    # never resets a ``human`` gate); an explicit value — including
+    # ``'automatic'`` — writes it.
     evaluation_mode: str | None = Field(None, pattern=_POLICY_GATE_EVALUATION_MODE_PATTERN)
 
 
@@ -730,8 +731,10 @@ async def update_policy_gate(
     ALL currently-mutable fields as ``{"action": <value>,
     "evaluation_mode": <value>}`` — the snapshot key set equals the set of
     mutable fields (criteria 17/18). PUT is a full replace of the mutable
-    config: a caller that sends only ``action`` writes
-    ``evaluation_mode='automatic'`` (the request default).
+    config: a caller that sends only ``action`` PRESERVES the live
+    gate's ``evaluation_mode`` (an omitted field never resets a
+    ``human`` gate), while an explicit ``evaluation_mode`` — including
+    ``'automatic'`` — writes it.
 
     ``validate_binding`` is called to verify the gate-to-eval binding is
     still valid after the update.  Violations are logged at WARNING with
@@ -790,7 +793,11 @@ async def update_policy_gate(
             gate.pre_version_raw = snapshot
             gate.version = (gate.version or 1) + 1
             gate.action = req.action
-            gate.evaluation_mode = req.evaluation_mode or "automatic"
+            # §3.1 preserve-on-omit: an omitted field PRESERVES the live
+            # mode (the frontend gate write tracks only ``action``, so it
+            # must never reset a ``human`` gate); an explicit value —
+            # including ``"automatic"`` — writes it (the clear path).
+            gate.evaluation_mode = req.evaluation_mode or gate.evaluation_mode or "automatic"
 
             # Audit log (best-effort)
             try:

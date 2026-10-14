@@ -7259,8 +7259,10 @@ export interface paths {
          *     ALL currently-mutable fields as ``{"action": <value>,
          *     "evaluation_mode": <value>}`` — the snapshot key set equals the set of
          *     mutable fields (criteria 17/18). PUT is a full replace of the mutable
-         *     config: a caller that sends only ``action`` writes
-         *     ``evaluation_mode='automatic'`` (the request default).
+         *     config: a caller that sends only ``action`` PRESERVES the live
+         *     gate's ``evaluation_mode`` (an omitted field never resets a
+         *     ``human`` gate), while an explicit ``evaluation_mode`` — including
+         *     ``'automatic'`` — writes it.
          *
          *     ``validate_binding`` is called to verify the gate-to-eval binding is
          *     still valid after the update.  Violations are logged at WARNING with

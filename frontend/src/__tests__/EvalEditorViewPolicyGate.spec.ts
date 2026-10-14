@@ -253,7 +253,8 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
       .split(',')
       .map((s) => s.replace(/["'\s]/g, ''))
       .filter(Boolean)
-    expect(mutableFields).toEqual(['action'])
+    // FAR-939: evaluation_mode joined the mutable set — the two-field contract.
+    expect(mutableFields).toEqual(['action', 'evaluation_mode'])
 
     // The pre-delete snapshot iterates the mutable fields — not a hardcoded list.
     expect(source).toMatch(/for field in mutable_fields/)
@@ -265,9 +266,14 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     const nextClass = clsRest.indexOf('\nclass ', 1)
     const clsBody = nextClass === -1 ? clsRest : clsRest.slice(0, nextClass)
     const annotated = [...clsBody.matchAll(/^\s{4}(\w+)\s*:/gm)].map((m) => m[1])
-    expect(annotated).toEqual(['action'])
+    expect(annotated).toEqual(['action', 'evaluation_mode'])
 
-    // Runtime half: the view's gate update body carries exactly those fields.
+    // Runtime half: the view authors ONLY `action` (CO-1 — the mode's UI
+    // authoring surface is out of scope), so every key it sends must still
+    // be one of the backend's mutable fields — and the mutable field it
+    // omits must be PRESERVED by the route, never reset. The binding to
+    // the backend source is proven both ways: no unmutable key goes out,
+    // and the omitted key comes back unchanged.
     evalsList = [evalItem({ id: 'eval-1' })]
     gateResponses['eval-1'] = ok({ id: 'g1', action: 'warn', version: 2 })
     const wrapper = mountView()
@@ -282,7 +288,17 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
 
     const gatePuts = apiPUT.mock.calls.filter((c) => c[0] === GATE_URL)
     expect(gatePuts).toHaveLength(1)
-    expect(Object.keys(gatePuts[0][1].body).sort()).toEqual([...mutableFields].sort())
+    const bodyKeys = Object.keys(gatePuts[0][1].body).sort()
+    expect(bodyKeys).toEqual(['action'])
+    for (const key of bodyKeys) expect(mutableFields).toContain(key)
+
+    // The route's write preserves the omitted field: an omitted
+    // evaluation_mode falls back to the LIVE gate value before the
+    // 'automatic' default (a caller sending only `action` can never
+    // reset a human gate).
+    expect(source).toMatch(
+      /gate\.evaluation_mode\s*=\s*req\.evaluation_mode or gate\.evaluation_mode or "automatic"/,
+    )
   })
 
   // Criterion 21 — delete confirmation, block-gate warning wording, cancel.
