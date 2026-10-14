@@ -151,10 +151,17 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
       `ok`, so the SAME `health_readiness_alert` cron now emits the sustained-failure
       alert (and its matching recovery) it already emitted for a gating failure. The
       hysteresis is unchanged, so a single transient advisory blip still never emails
-      (FAR-1512). The benign/other-channel advisories are deliberately NOT in the set
-      and never page: `event_loop_lag` (a transient stall diagnostic), `break_glass`
-      (an expected config posture) and `db_hygiene` (a GRADED failure already gates
-      the aggregate, while its not-measured probe is advisory per FAR-1510).
+      (FAR-1512). The benign/other-channel advisories are deliberately NOT in the
+      set: `break_glass` (an expected config posture) and `db_hygiene` (a GRADED
+      failure already gates the aggregate, while its not-measured probe is advisory
+      per FAR-1510) never page, and `event_loop_lag` (a transient stall diagnostic)
+      is gated by magnitude rather than silenced outright (FAR-1771): under 250 ms
+      (`_LOOP_LAG_DEGRADED_MS`, `api/routes/health.py`) it reads `ok` and stays
+      quiet, 250 ms to 1 s reads `degraded` and is visible in the readiness payload
+      but never pages, and 1 s or above (`SEVERE_EVENT_LOOP_STALL_MS`,
+      `core/health_alerts.py`) reads `degraded`, flips `observed_state` and is
+      listed as a failing check so the incident email fires. Every band stays out
+      of the readiness aggregate, so it never gates bluegreen.
       `reported_status` never renders the misleading aggregate `ok` — an advisory
       alert reads `degraded`, `unavailable` when the aggregate is `unavailable` — and
       `_split_cleared_conditions` / `_recovery_summary` report only the alert-time
@@ -232,8 +239,10 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
   `HealthObservation.observed_state` treats their sustained failure as unhealthy
   even while the readiness aggregate reads `ok`, so the `health_readiness_alert`
   cron pages the same incident/recovery email pair it already sent for a gating
-  failure (hysteresis unchanged; benign `event_loop_lag` / `break_glass` /
-  not-measured `db_hygiene` advisories stay quiet). Added the behaviour bullet,
+  failure (hysteresis unchanged; benign `break_glass` / not-measured `db_hygiene`
+  advisories stay quiet, while `event_loop_lag` stays quiet below 250 ms, is
+  visible-but-non-paging from 250 ms to 1 s, and pages only at 1 s or above per
+  FAR-1771). Added the behaviour bullet,
   removed the now-stale Known Gap, and restored `status: covered` (the remaining
   total-outage residual and the no-PRD note are tracked separately and are not
   behaviours of this surface). No `code:`/`unit-tests:` citations changed –

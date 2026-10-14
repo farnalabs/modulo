@@ -12,6 +12,14 @@ Design decisions:
 - **Best-effort reads**: every ``/proc`` / ``/sys`` read is wrapped in
   try-except; a missing path or permission error skips that field and
   never crashes the worker.
+- **Off-loop reads (FAR-1776)**: the cron runs on the worker's event loop,
+  so the blocking ``/proc`` / ``/sys`` reads are dispatched with
+  ``asyncio.to_thread`` — the established pattern in this codebase (e.g.
+  the Alembic divergence parse and the repo-heads load in
+  ``api/routes/health.py``, both ``await asyncio.to_thread(...)``). A
+  synchronous FS read on the loop is the FAR-1439 stall class behind
+  ``dispatch_phase.write_timeout`` drops (FAR-1643). What is read, and the
+  values produced, are unchanged.
 - **Alarm transport**: a LOUD structured log line (``worker.guest_memory_alarm``,
   searchable by token) when thresholds are breached. No readiness gate
   impact — advisory only.
@@ -26,6 +34,7 @@ in-process via structured logs rather than Grafana alert rules.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -169,8 +178,13 @@ async def memory_monitor_cron(_ctx: dict[str, Any]) -> dict[str, Any]:
     structured log line and fires a LOUD alarm when thresholds indicate
     guest-memory pressure. Advisory only — never fails the worker, never
     gates readiness.
+
+    FAR-1776: the ``/proc`` + cgroup reads are synchronous FS I/O, so the
+    whole capture runs via ``asyncio.to_thread`` and never blocks the
+    worker's event loop. The captured values are identical to a direct
+    call — only the thread they are read on changed.
     """
-    stats = capture_memory_stats()
+    stats = await asyncio.to_thread(capture_memory_stats)
     alarm = evaluate_memory_alarm(stats)
 
     _log.info("worker.memory_stats", extra=stats)
