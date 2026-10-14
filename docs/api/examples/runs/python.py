@@ -94,7 +94,7 @@ def main():
         if status in terminal_states:
             break
     else:
-        print("  Run did not reach terminal state - cancelling ...")
+        print("  Run did not reach terminal state — cancelling ...")
         resp = client.post(f"/api/v1/runs/{run_id}/cancel", headers=headers)
         if resp.status_code != 202:
             bail(f"cancel failed: {resp.status_code} {resp.text}")

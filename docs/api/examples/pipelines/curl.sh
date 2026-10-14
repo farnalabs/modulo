@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Modulo API Example: Pipeline CRUD - curl
+# Modulo API Example: Pipeline CRUD — curl
 #
 # Demonstrates pipeline list, create, get, update, and delete with curl.
 #

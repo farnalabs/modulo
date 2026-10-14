@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Modulo API Example: Run Lifecycle - curl
+# Modulo API Example: Run Lifecycle — curl
 #
 # Demonstrates triggering a run, polling status, getting IO, and cancelling.
 #
