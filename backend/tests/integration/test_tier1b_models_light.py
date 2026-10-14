@@ -55,9 +55,18 @@ def ollama_service() -> Iterator[ContainerHandle]:
     except Tier1bFixtureError as exc:
         pytest.skip(f"Tier 1b ollama fixture unavailable on this Docker host (recorded skip): {exc}")
     # Pull a tiny real model inside the container (bounded by the harness's
-    # exec handling); then start serving via the OpenAI-compatible route.
+    # exec handling); then start serving via the OpenAI-compatible route. The
+    # model is fetched from the public ollama registry, exactly like the
+    # llamacpp/localai GGUF seeds — so a registry outage (a transient 503 after
+    # the blob download) is a "seed unavailable" fixture problem, not a test
+    # failure: record a skip rather than ERRORing every dependent test
+    # (observed 2026-10-13 on PR #1764: `ollama pull qwen2:0.5b` returned 503).
     try:
         handle.exec(["ollama", "pull", "qwen2:0.5b"])
+    except Tier1bFixtureError as exc:
+        handle.stop()
+        pytest.skip(f"Tier 1b ollama model seed unavailable (recorded skip): {exc}")
+    try:
         yield handle
     finally:
         handle.stop()
