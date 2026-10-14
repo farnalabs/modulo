@@ -57,6 +57,11 @@ _SYSTEM_ROLE = "modulo_system"
 _TABLE_EXTERNAL_AGENTS = "external_agents"
 _TABLE_MCP_SERVERS = "mcp_servers"
 
+# DDL fragments reused across the statement lists below, named once so the
+# literal is defined in a single place (Sonar S1192) and the intent is explicit.
+_ALTER_TABLE_PREFIX = 'ALTER TABLE "'
+_SET_NULL = "SET NULL"
+
 # Module-level tuple of the org-scoped tables this migration secures, so the
 # architecture test (tests/unit/db/test_rls_coverage.py) sees the coverage
 # without parsing the DDL below.
@@ -84,10 +89,10 @@ _TEAM_POLICY = (
 # argument to op.execute) keeps the migration-fstring-sql rule satisfied while
 # interpolating only module-level constants.
 _ENABLE_RLS_STATEMENTS: tuple[str, ...] = (
-    'ALTER TABLE "' + _TABLE_EXTERNAL_AGENTS + '" ENABLE ROW LEVEL SECURITY',
-    'ALTER TABLE "' + _TABLE_EXTERNAL_AGENTS + '" FORCE ROW LEVEL SECURITY',
-    'ALTER TABLE "' + _TABLE_MCP_SERVERS + '" ENABLE ROW LEVEL SECURITY',
-    'ALTER TABLE "' + _TABLE_MCP_SERVERS + '" FORCE ROW LEVEL SECURITY',
+    _ALTER_TABLE_PREFIX + _TABLE_EXTERNAL_AGENTS + '" ENABLE ROW LEVEL SECURITY',
+    _ALTER_TABLE_PREFIX + _TABLE_EXTERNAL_AGENTS + '" FORCE ROW LEVEL SECURITY',
+    _ALTER_TABLE_PREFIX + _TABLE_MCP_SERVERS + '" ENABLE ROW LEVEL SECURITY',
+    _ALTER_TABLE_PREFIX + _TABLE_MCP_SERVERS + '" FORCE ROW LEVEL SECURITY',
 )
 
 _CREATE_POLICY_STATEMENTS: tuple[str, ...] = (
@@ -98,8 +103,8 @@ _CREATE_POLICY_STATEMENTS: tuple[str, ...] = (
 _DROP_POLICY_STATEMENTS: tuple[str, ...] = (
     'DROP POLICY IF EXISTS rls_team_isolation ON "' + _TABLE_EXTERNAL_AGENTS + '"',
     'DROP POLICY IF EXISTS rls_team_isolation ON "' + _TABLE_MCP_SERVERS + '"',
-    'ALTER TABLE "' + _TABLE_EXTERNAL_AGENTS + '" DISABLE ROW LEVEL SECURITY',
-    'ALTER TABLE "' + _TABLE_MCP_SERVERS + '" DISABLE ROW LEVEL SECURITY',
+    _ALTER_TABLE_PREFIX + _TABLE_EXTERNAL_AGENTS + '" DISABLE ROW LEVEL SECURITY',
+    _ALTER_TABLE_PREFIX + _TABLE_MCP_SERVERS + '" DISABLE ROW LEVEL SECURITY',
 )
 
 _GRANT_CREATE_SCHEMA = "GRANT CREATE ON SCHEMA public TO " + _MIGRATE_ROLE
@@ -157,7 +162,7 @@ def _create_tables() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["owner_team_id"], ["teams.id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(["owner_team_id"], ["teams.id"], ondelete=_SET_NULL),
         sa.PrimaryKeyConstraint("id"),
         sa.CheckConstraint("visibility IN ('org', 'team')", name="ck_external_agents_visibility"),
         sa.CheckConstraint("visibility = 'org' OR owner_team_id IS NOT NULL", name="ck_external_agents_team_owner"),
@@ -195,9 +200,9 @@ def _create_tables() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["owner_team_id"], ["teams.id"], ondelete="SET NULL"),
-        sa.ForeignKeyConstraint(["owner_account_id"], ["accounts.id"], ondelete="SET NULL"),
-        sa.ForeignKeyConstraint(["approved_by"], ["accounts.id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(["owner_team_id"], ["teams.id"], ondelete=_SET_NULL),
+        sa.ForeignKeyConstraint(["owner_account_id"], ["accounts.id"], ondelete=_SET_NULL),
+        sa.ForeignKeyConstraint(["approved_by"], ["accounts.id"], ondelete=_SET_NULL),
         sa.PrimaryKeyConstraint("id"),
         sa.CheckConstraint("visibility IN ('org', 'team')", name="ck_mcp_servers_visibility"),
         sa.CheckConstraint("visibility = 'org' OR owner_team_id IS NOT NULL", name="ck_mcp_servers_team_owner"),
@@ -221,6 +226,11 @@ def upgrade() -> None:
     bind = op.get_bind()
     pg = _is_postgres(bind)
 
+    # migrate_role can only be True when pg (it is resolved under the pg guard
+    # below), so the later `if migrate_role` checks need no `and pg` conjunct.
+    migrate_role = False
+    app_role = False
+    system_role = False
     if pg:
         op.execute("SET search_path TO public")
         migrate_role = _role_exists(bind, _MIGRATE_ROLE)
@@ -231,17 +241,13 @@ def upgrade() -> None:
             op.execute(_GRANT_REFERENCES_ORGS)
             op.execute(_GRANT_REFERENCES_TEAMS)
             op.execute(_GRANT_REFERENCES_ACCOUNTS)
-    else:
-        migrate_role = False
-        app_role = False
-        system_role = False
 
-    if pg and migrate_role:
+    if migrate_role:
         op.execute(_SET_ROLE_MIGRATE)
 
     _create_tables()
 
-    if pg and migrate_role:
+    if migrate_role:
         op.execute("RESET ROLE")
         _assert_owner_is_migrate(bind, _TABLE_EXTERNAL_AGENTS)
         _assert_owner_is_migrate(bind, _TABLE_MCP_SERVERS)
