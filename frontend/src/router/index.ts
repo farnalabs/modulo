@@ -578,6 +578,9 @@ const router = createRouter({
       meta: {
         title: 'Web Vitals',
         testid: 'dev-metrics',
+        // Deliberately inline: /dev/metrics has no manifest entry, so the
+        // manifest-derived system-admin gate (hydrateManifestMeta) cannot
+        // cover it — this is the one intentional exception.
         requiresSystemAdmin: true,
       },
     },
@@ -701,10 +704,13 @@ export function hydrateManifestMeta(to: Parameters<Parameters<typeof router.befo
     ? (manifestPathToName.get(entry.parent) ?? entry.parent)
     : undefined
 
-  // FAR-938: derive requiresSystemAdmin from the manifest so it can never
-  // drift between the router and the sidebar filter. A route is gated when
-  // EITHER its own route entry carries `system_admin_only: true` OR its
-  // sidebar group has `system_admin_only: true` — the two signals OR together.
+  // FAR-938: derive requiresSystemAdmin from the manifest so the router gate
+  // can never drift from it. A route is gated when EITHER its own route entry
+  // carries `system_admin_only: true` OR its sidebar group has
+  // `system_admin_only: true` — the two signals OR together.
+  // NOTE: the SIDEBAR filter (config/navigation.ts) reads only the group-level
+  // flag today, so a route with route-entry gating inside a VISIBLE sidebar
+  // group would be router-gated yet still listed in the sidebar.
   const routePath = (entry as unknown as { path?: string }).path
     ?? manifestByName.get(routeName)?.path
   if (routePath) {
