@@ -120,7 +120,9 @@ from modulo.db.crud.rating import (
     RatingCooldownError,
     SelfRatingError,
     get_rating_aggregate,
+    list_abuse_reports,
     list_ratings_for_primitive,
+    review_abuse_report,
     submit_abuse_report,
     submit_rating,
     update_primitive_ratings_aggregate,
@@ -414,6 +416,46 @@ class AbuseReportResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class AbuseReportQueueItem(BaseModel):
+    """One report as the moderation queue renders it.
+
+    Field names mirror the ``PrimitiveAbuseReport`` ORM columns exactly
+    (``reporter_account_id`` — the submit response's ``reporter_user_id`` has
+    no ORM counterpart), so this shape validates against a real, flushed row.
+    """
+
+    id: uuid.UUID
+    primitive_id: uuid.UUID
+    rating_id: uuid.UUID | None
+    reporter_account_id: uuid.UUID | None
+    reason: str
+    status: str
+    reviewed_at: datetime | None
+    reviewer_account_id: uuid.UUID | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AbuseReportQueueResponse(BaseModel):
+    items: list[AbuseReportQueueItem]
+    total: int
+
+
+class AbuseReportResolveRequest(BaseModel):
+    """The moderation decision to RECORD on a report.
+
+    ``reviewed`` — the report is upheld (the flagged rating was judged to
+    violate the rules); ``dismissed`` — the report is rejected. Either value
+    only stamps ``status`` / ``reviewed_at`` / ``reviewer_account_id`` on the
+    REPORT row: resolving a report does NOT remove, hide or alter the rating
+    it points at. There is no rating-delete path in the product, and adding
+    one is a separate product decision.
+    """
+
+    status: Literal["reviewed", "dismissed"]
 
 
 class ImportBundleResponse(BaseModel):
@@ -1732,6 +1774,109 @@ async def submit_abuse_report_endpoint(
         _log.exception("submit_abuse_report_endpoint: SQLAlchemyError")
         raise _unavailable_error() from None
     return AbuseReportResponse.model_validate(report)
+
+
+# ---------------------------------------------------------------------------
+# Abuse-report moderation queue (FAR-1753)
+#
+# A report is FILED by any org member (POST /{primitive_id}/ratings/abuse)
+# and TRIAGED here by library managers. Resolving a report RECORDS A DECISION
+# on the report row — it never touches the reported rating itself.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/admin/abuse-reports")
+@handle_db_errors("library.list_abuse_reports_endpoint")
+async def list_abuse_reports_endpoint(
+    status_filter: Literal["pending", "reviewed", "dismissed"] | None = Query(default=None, alias="status"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> AbuseReportQueueResponse:
+    """List this organisation's abuse-report queue, newest first.
+
+    Read-only triage view: optionally narrowed with ``?status=pending`` (the
+    default queue), ``reviewed`` or ``dismissed``. Org-scoped by the caller's
+    ``organisation_id``; reporting a decision on a row is done via the resolve
+    endpoint, not here.
+    """
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            result = await list_abuse_reports(
+                session,
+                principal.organisation_id,
+                status_filter=status_filter,
+                page=page,
+                page_size=page_size,
+            )
+    except IntegrityError:
+        _log.exception("library.list_abuse_reports_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.list_abuse_reports_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "library.list_abuse_reports_endpoint")
+        _log.exception("list_abuse_reports_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    return AbuseReportQueueResponse(
+        items=[AbuseReportQueueItem.model_validate(report) for report in result.items],
+        total=result.total,
+    )
+
+
+@router.post(
+    "/admin/abuse-reports/{report_id}/resolve",
+    dependencies=[Depends(audited("abuse_report_reviewed", "abuse_report", principal_dep=get_current_tenant_user))],
+)
+@handle_db_errors("library.review_abuse_report_endpoint")
+async def review_abuse_report_endpoint(
+    report_id: uuid.UUID,
+    req: AbuseReportResolveRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> AbuseReportQueueItem:
+    """Record a moderation decision on one abuse report.
+
+    Sets ``status`` to ``reviewed`` (report upheld) or ``dismissed`` (report
+    rejected) and stamps ``reviewed_at`` and ``reviewer_account_id`` from the
+    authenticated principal.
+
+    **Resolving a report RECORDS A DECISION — it does NOT remove the rating.**
+    Only the report row changes; the flagged rating stays published, because
+    there is no rating-delete path in the product and adding one is a
+    separate product decision.
+
+    A report belonging to another organisation is invisible here (org-scoped
+    read + RLS), so it answers 404 rather than leaking its existence.
+    """
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            report = await review_abuse_report(
+                session,
+                report_id,
+                new_status=req.status,
+                reviewer_account_id=principal.account_id,
+            )
+    except IntegrityError:
+        _log.exception("library.review_abuse_report_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.review_abuse_report_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "library.review_abuse_report_endpoint")
+        _log.exception("review_abuse_report_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    if report is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Abuse report not found",
+        )
+    return AbuseReportQueueItem.model_validate(report)
 
 
 # ---------------------------------------------------------------------------
