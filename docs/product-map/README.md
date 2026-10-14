@@ -1187,6 +1187,27 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > deferral to production READS (`fetch()` / `map_run_evidence_to_evidence`)
 > and the parked predicate/`decide` (§4). `_ORPHANED_BDD_FEATURES` stays
 > empty.
+>
+> **Closed this walk (2026-10-14):** closed the feature-graph gap left by
+> FAR-759 (PR #1613) – the library collection version-upgrade /
+> update-available flow shipped with no product-map home in either layer (the
+> PR registered only the three `CollectionDetailView` testids in the manifest
+> `elements:` inventory). The `POST .../collections/{id}/versions`
+> author-version endpoint, the `GET .../installs/{install_id}/update` delta
+> surface, the `POST .../upgrade` reconcile endpoint (reconciled / preserved
+> / reported + warnings, operator-modified entities never clobbered, added
+> pins reported not materialised, removed pins reported not deleted,
+> structural pipeline-graph changes reported `manual`) and the detail-view
+> update-badge + Upgrade-button panel are now tracked in the manifest
+> `feat-library-collections` registry and in
+> `library/library-collections.md` (with the
+> `core/library_service/upgrade.py` + `test_collection_upgrade*.py` /
+> `test_install_snapshot.py` citations). Also reconciled `feat-audit`
+> (`audit/audit-trail.md`) with FAR-1697 (PR #1761): the offline-verifiable
+> evidence pack shipped a manifest-registry line but no tracker home – the
+> `evidence-pack` / `verification-key` endpoints, `core/evidence_pack/`, the
+> `modulo evidence verify` CLI and the `hashing.py` extraction now have one.
+> `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

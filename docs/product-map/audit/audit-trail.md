@@ -8,6 +8,9 @@ code:
   - backend/src/modulo/core/audit_logger/__init__.py
   - backend/src/modulo/core/audit_logger/append_only.py
   - backend/src/modulo/core/audit_logger/background.py
+  - backend/src/modulo/core/audit_logger/hashing.py
+  - backend/src/modulo/core/evidence_pack/
+  - backend/src/modulo/cli/evidence.py
   - backend/src/modulo/core/audit_coverage.py
   - backend/src/modulo/core/cron_helpers.py
   - backend/src/modulo/core/eval_engine/execute_suite_run.py
@@ -34,12 +37,14 @@ unit-tests:
   - backend/tests/unit/api/test_audit.py
   - backend/tests/unit/api/test_audit_bdd.py
   - backend/tests/unit/api/test_audit_gating.py
+  - backend/tests/unit/api/test_audit_evidence_pack_route.py
   - backend/tests/unit/api/test_audit_coverage.py
   - backend/tests/unit/api/test_far1464_route_arm_coverage.py
   - backend/tests/unit/api/test_webhooks_endpoint.py
   - backend/tests/unit/api/test_admin_system_audit.py
   - backend/tests/unit/core/test_background_audit_wiring.py
   - backend/tests/unit/core/eval_engine/test_execute_suite_run.py
+  - backend/tests/unit/core/evidence_pack/test_evidence_pack.py
   - backend/tests/unit/db/crud/test_pipeline_graph_updated_audit.py
   - backend/tests/unit/db/test_seed_users.py
   - backend/tests/unit/cli/test_users_cli.py
@@ -104,6 +109,24 @@ guarded against tampering at both the ORM and the database layer.
       `TestScanChain` in `tests/unit/api/test_audit.py`)
 - [x] `GET /api/v1/admin/audit/batch-detail` resolves a batch of event ids into
       full records
+- [x] An audit export can be emitted as offline-verifiable evidence (FAR-1697):
+      `GET /api/v1/admin/audit/evidence-pack` (`audit_viewer` + `audit.manage`)
+      returns a self-contained pack - the audit events as
+      `audit-events.ndjson`, a canonical manifest (organisation id, exporter
+      identity, `created_at`, run ids, per-file SHA-256 + size, and the
+      re-derived chain summary), an Ed25519 signature over the canonical
+      manifest, and the PEM verification key as an artefact - while `GET
+      /api/v1/admin/audit/verification-key` publishes the org's public key +
+      key-id fingerprint. A party holding ONLY the artefact + the
+      pre-published key verifies authorship, re-derives every file digest and
+      re-verifies the embedded audit chain with no Modulo service and no login
+      (the `modulo evidence verify` CLI); any tampered file, mutated event,
+      falsified chain claim or swapped key fails as `valid=false`. The event
+      hash lives in `core/audit_logger/hashing.py` so the offline verifier
+      re-derives it byte-identically without the DB layer
+      (`core/evidence_pack/`, `api/routes/audit.py` `evidence_pack_endpoint`
+      + `verification_key_endpoint`, `cli/evidence.py`,
+      `test_evidence_pack.py`, `test_audit_evidence_pack_route.py`)
 - [x] The audit surface is admin-only and gated by the `audit_viewer` feature
       key – 403 for non-admin, 401 unauthenticated (`test_audit_gating`,
       audit_export.feature)
@@ -248,6 +271,16 @@ guarded against tampering at both the ORM and the database layer.
   durable, filterable evidence storage, not a verifiable cross-org trail.
 
 ## QA History
+- 2026-10-14: **Improve Architecture product-map walk** - reconciled this
+  tracker with FAR-1697 (PR #1761): the offline-verifiable evidence pack
+  shipped with a manifest-registry behaviour line but no human-readable
+  tracker home, so a reader of the graph (or Assistant's docs indexer) could
+  not find the `evidence-pack` / `verification-key` endpoints, the
+  `core/evidence_pack/` module, the `modulo evidence verify` CLI, or the
+  `hashing.py` extraction. Added the behaviour bullet plus the `code:` /
+  `unit-tests:` citations; the manifest line is unchanged. No `code:`
+  behaviour change - documentation parity only. `_ORPHANED_BDD_FEATURES`
+  stays empty.
 - 2026-10-08: **Audit-cleanup reconciliation (FAR-1561)** - three cleanups out
   of the FAR-1472/1549/1561/1574 audit work. (1) Deleted `run_scheduled_suite`
   from `core/eval_engine/execute_suite_run.py`: an unwired public
