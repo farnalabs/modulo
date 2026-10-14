@@ -91,6 +91,7 @@ class WorkspaceNetworkValidationError(ValueError):
     """
 
     def __init__(self, value: str) -> None:
+        """Store the offending value and build a sanitised error message."""
         self.value = value
         # Bound and sanitise the echoed value: it is request-controlled input
         # and must not be able to forge log lines or bloat a 422 detail.
