@@ -852,6 +852,36 @@ class TestToolDbShell:
         result = await handler()
         assert result["error"] == "server_error"
 
+    async def test_callable_object_tool_body_still_gets_the_error_ladder(self) -> None:
+        """A tool body is only known to be callable — the ladder must still apply.
+
+        ``_tool_db_shell`` built its ``log_key`` from ``fn.__name__`` ABOVE the
+        ``try``. A tool body that is a callable object has no ``__name__``, so
+        the AttributeError escaped the wrapper entirely — bypassing the whole
+        error ladder this decorator exists to provide and crashing the MCP
+        dispatch instead of returning a structured error dict.
+        """
+
+        class _CallableObjectTool:
+            async def __call__(self) -> dict[str, Any]:
+                raise RuntimeError("oops")
+
+        body = _CallableObjectTool()
+        assert not hasattr(body, "__name__")
+
+        handler = _tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail")(body)
+        result = await handler()
+
+        assert result["error"] == "server_error"
+
+    async def test_callable_object_tool_body_happy_path(self) -> None:
+        class _CallableObjectTool:
+            async def __call__(self) -> dict[str, Any]:
+                return {"ok": True}
+
+        handler = _tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail")(_CallableObjectTool())
+        assert await handler() == {"ok": True}
+
     async def test_integrity_error_db_errors_to_fallback(self) -> None:
         @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail", db_errors_to_fallback=True)
         async def handler() -> dict[str, Any]:

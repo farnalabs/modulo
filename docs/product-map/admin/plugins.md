@@ -6,9 +6,11 @@ code:
   - backend/src/modulo/api/routes/plugins.py
   - backend/src/modulo/core/plugin_registry
   - backend/src/modulo/core/plugin_registry/__init__.py
+  - backend/src/modulo/util/__init__.py
 unit-tests:
   - backend/tests/unit/api/test_plugin_registry_bdd.py
   - backend/tests/unit/plugin_registry/test_plugin_registry.py
+  - backend/tests/unit/test_util.py
 bdd:
   - backend/tests/bdd/features/plugins/plugin_registry.feature
 depends-on:
@@ -45,6 +47,31 @@ API surface ships and is gated by the `plugin_management` feature and the
       detail — broken entry points are never silently dropped from the registry
 - [x] An entry point whose `load()` raises records `Failed to load entry point …`
       and is surfaced unhealthy through `health_check`
+- [x] NO distribution metadata problem can abort discovery: `dist.name` /
+      `dist.metadata` read and parse the distribution's `METADATA` file from
+      disk, and a corrupt or half-written `.dist-info` (interrupted install,
+      stripped image layer) makes that read raise. The read is now guarded, so
+      the plugin is surfaced unhealthy under `Failed to read distribution
+      metadata for plugin <id>`, remains visible in `list_plugins` /
+      `health_check` / `entry_point_errors`, and **sibling plugins in the same
+      scan are still discovered**. This matters because `discover_plugins` runs
+      unguarded on the startup critical path (`api/main.py::_discover_plugins`),
+      where an escaping raise made the whole instance unbootable because of one
+      broken third-party package
+      (`test_plugin_registry.py::test_unreadable_distribution_metadata_*`)
+- [x] Builders are only known to be *callable*, so `build_connector` /
+      `build_model_backend` label a failing builder safely: a callable object, a
+      `functools.partial` or any other `__name__`-less callable still yields the
+      documented `RuntimeError("Connector builder for type … failed")` /
+      `RuntimeError("Model backend builder for provider … failed")` **with the
+      original exception attached as `__cause__`**, instead of the error handler
+      itself raising an opaque `AttributeError` and discarding the cause. Such a
+      builder works on the happy path too
+      (`test_plugin_registry.py::test_*_without_dunder_name_*`,
+      `test_callable_object_builder_still_works_on_the_happy_path`;
+      `test_far1129_cap_plugins_registry.py` drives a REAL installed plugin whose
+      entry point resolves to a callable-object builder — the state no in-repo
+      unit test constructs, because every in-repo builder is a `def`)
 - [x] The routes are gated behind `require_feature("plugin_management")` and
       `require_permission("plugin.list")`
 - [x] The `plugin_management` feature gate FIRES: all three endpoints return 402
@@ -64,14 +91,40 @@ API surface ships and is gated by the `plugin_management` feature and the
 - Plugin management (install / uninstall / upgrade) is done via pip and is not
   exposed through this API.
 - The `/admin/plugins` UI is deferred from the MVP nav (private preview).
-- `PluginRegistry._load_entry_point` reads `dist.name` / `dist.metadata.get(…)`
-  *before* the guarded `ep.load()`. The load path now catches every exception
-  (a broken plugin can never abort startup), but a distribution whose `metadata`
-  is `None` would still raise `AttributeError` out of `discover_plugins()`. No
-  repro exists on a normal install (every wheel ships `METADATA`); hardening the
-  metadata read is deferred.
 
 ## QA History
+
+- 2026-10-14: **Improve Architecture product-map walk (index 400)** — two
+  MAJOR findings fixed, both on the "a broken third-party plugin must never take
+  the instance down" invariant the previous pass established. (1) MAJOR
+  (error-path quality / Lens 9 List C — *implemented but unreachable in tested
+  states*): `build_connector` and `build_model_backend` read `builder.__name__`
+  **inside their own `except Exception` handlers**. Builders are only known to
+  be callable — `register_connector_type` checks `callable(builder)` and an
+  entry point can resolve to a callable object, a `functools.partial`, or a
+  class instance, none of which define `__name__`. A failing such builder made
+  the *handler itself* raise: the caller received an opaque
+  `AttributeError: 'X' object has no attribute '__name__'` instead of the
+  documented `RuntimeError`, and `__cause__` was `None` so the plugin's real
+  exception was lost entirely. Now labelled with the new
+  `modulo.util.callable_label`, which falls back to `type(x).__qualname__`;
+  proved by unit tests AND by a real installed plugin whose entry point resolves
+  to a callable-object builder. (2) MAJOR (resilience — closes the
+  previously-deferred Known Gap below): `_load_entry_point` read
+  `dist.name` / `dist.metadata` **outside** the guarded `ep.load()` block, so a
+  distribution whose `METADATA` could not be read (a half-written or corrupt
+  `.dist-info` from an interrupted install or a stripped image layer) raised
+  straight out of `discover_plugins()` — aborting the whole scan with zero
+  plugins discovered, and, because `_discover_plugins` runs unguarded in the ASGI
+  lifespan, leaving the instance unbootable. Reproduced directly, then fixed:
+  the metadata read is now guarded, the plugin is surfaced unhealthy under a
+  descriptive detail, and sibling plugins keep discovering. Lens 8: extracted
+  `.semgrep/callable-dunder-name.yml` (2 rules) and swept the whole codebase —
+  it found 3 further instances of the same shape, all fixed
+  (`pipeline_engine/decorator.py::cancellable_node`, `api/mcp_server.py`'s
+  `_run_db_shell` log key, `launcher/doctor.py`'s crashing-check handler) plus
+  the `type`-annotated false positives excluded. `src/` is clean under the new
+  gate, and the gate is verified to flag the original `builder.__name__` file.
 
 - 2026-10-12: **Improve Architecture product-map walk (index 397)** — three
   findings fixed. MAJOR (resilience): `PluginRegistry._load_entry_point` caught
