@@ -15,7 +15,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.graph_validator import GraphValidator
+from modulo.connectors.base import connector_binding_required_acl_operations
+from modulo.core.graph_validator import GraphValidator, ValidationResult
 
 
 def _snapshot(
@@ -245,3 +246,93 @@ async def test_malformed_allowlist_fails_closed():
     result = await GraphValidator().validate(snap, _session_returning([instance]))
     assert not result.is_valid
     assert any(i.code == "CONNECTOR_MISSING_OPERATIONS" for i in result.issues)
+
+
+async def test_unknown_verb_derives_no_requirement():
+    """An unrecognised routed verb derives NO requirement: the engine raises on it.
+
+    A non-empty ``operation`` the engine never routes (it only routes
+    ``query`` / ``write`` / ``dispatch``) must not be guessed into a
+    requirement the runtime never exercises, so the binding validates.
+    """
+    cid = uuid.uuid4()
+    instance = _connector_instance(cid, allowed_operations=["read"])
+    node = {
+        "id": "a",
+        "node_type": "agent",
+        "connector_binding": {"instance_id": str(cid), "operation": "frobnicate"},
+    }
+    snap = _snapshot(graph_json=_node_graph(node), connector_bindings=[_binding(cid)])
+    result = await GraphValidator().validate(snap, _session_returning([instance]))
+    assert result.is_valid
+
+
+async def test_dispatch_unknown_action_derives_no_requirement():
+    """A dispatch binding with an unknown NON-EMPTY action derives no requirement.
+
+    The engine raises on the unknown action at graph build, so the save-time
+    check must not invent a write gate the runtime never applies.
+    """
+    cid = uuid.uuid4()
+    instance = _connector_instance(cid, connector_type_id="github_actions_ci", allowed_operations=["read"])
+    node = {
+        "id": "a",
+        "node_type": "agent",
+        "connector_binding": {"instance_id": str(cid), "operation": "dispatch", "dispatch_action": "frobnicate"},
+    }
+    snap = _snapshot(graph_json=_node_graph(node), connector_bindings=[_binding(cid)])
+    result = await GraphValidator().validate(snap, _session_returning([instance]))
+    assert result.is_valid
+
+
+def test_helper_returns_empty_for_unrouted_node():
+    """The helper's own guard: a node the engine never routes has no verb to gate."""
+    node = {
+        "id": "a",
+        "node_type": "agent",
+        "agent_id": "x",
+        "connector_binding": {"instance_id": "00000000-0000-0000-0000-000000000000", "operation": "write"},
+    }
+    assert connector_binding_required_acl_operations(node) == []
+
+
+async def test_binding_check_tolerates_unreadable_graph():
+    """A graph the check cannot read yields an empty node map (fail-open + log)."""
+    cid = uuid.uuid4()
+    instance = _connector_instance(cid, allowed_operations=["read"])
+    result = ValidationResult()
+    await GraphValidator()._check_connector_bindings(
+        [_binding(cid, node_id="a")],
+        _session_returning([instance]),
+        result,
+        graph_json=None,
+    )
+    assert result.is_valid
+
+
+async def test_binding_check_tolerates_graph_without_node_list():
+    """A graph whose ``nodes`` is not a list is unreadable: empty node map."""
+    cid = uuid.uuid4()
+    instance = _connector_instance(cid, allowed_operations=["read"])
+    result = ValidationResult()
+    await GraphValidator()._check_connector_bindings(
+        [_binding(cid, node_id="a")],
+        _session_returning([instance]),
+        result,
+        graph_json={"edges": []},
+    )
+    assert result.is_valid
+
+
+async def test_binding_check_skips_non_dict_and_idless_nodes():
+    """Malformed node entries never enter the id map; the binding then skips."""
+    cid = uuid.uuid4()
+    instance = _connector_instance(cid, allowed_operations=["read"])
+    result = ValidationResult()
+    await GraphValidator()._check_connector_bindings(
+        [_binding(cid, node_id="a")],
+        _session_returning([instance]),
+        result,
+        graph_json={"nodes": ["not-a-node", {"node_type": "agent"}], "edges": []},
+    )
+    assert result.is_valid
