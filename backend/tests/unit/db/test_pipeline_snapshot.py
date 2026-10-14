@@ -1334,7 +1334,10 @@ async def test_unbound_pipeline_freezes_a_null_binding() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _model_class_mint_setup(model_class: str | None) -> tuple[AsyncMock, uuid.UUID, str]:
+def _model_class_mint_setup(
+    model_class: str | None,
+    agent_commands: list[str] | None = None,
+) -> tuple[AsyncMock, uuid.UUID, str]:
     """Agent-less sandbox_agent pipeline (one node, optional ``model_class``)
     plus the six-read session mint needs: pipeline, edges, allocation lock,
     version max, guardrail rows, policy-gate rows. No agent / connector /
@@ -1345,7 +1348,7 @@ def _model_class_mint_setup(model_class: str | None) -> tuple[AsyncMock, uuid.UU
         "id": str(node_id),
         "node_type": "sandbox_agent",
         "template_id": "opencode",
-        "agent_commands": ["opencode run --model {{ model }} --auto < /home/user/prompt.md"],
+        "agent_commands": agent_commands or ["opencode run --model {{ model }} --auto < /home/user/prompt.md"],
     }
     if model_class is not None:
         node["model_class"] = model_class
@@ -1512,6 +1515,33 @@ async def test_mint_without_model_class_and_without_registry_leaves_nodes_untouc
 
     monkeypatch.setattr(get_settings(), "model_class_registry_path", None)
     session, pipeline_id, _node_id = _model_class_mint_setup(None)
+
+    with _bind_lock_connection(session, _lock_attempt_result(True)):
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    assert isinstance(snapshot, PipelineSnapshot)
+    node = snapshot.graph_json["nodes"][0]
+    assert "_resolved_model" not in node
+    assert "_model_origin" not in node
+
+
+async def test_mint_does_not_bake_unreferenced_registry_intent(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No dead provenance (FAR-1743 fix): a registry-covered sandbox node whose
+    commands never reference `{{ model }}` and that declares no ``model_class``
+    must NOT receive `_resolved_model` / `_model_origin` — the registry's
+    intent is not the model that ran. Before the bake gate the mint baked the
+    ``pipelines_default`` class into this literal node."""
+    from modulo.settings import get_settings
+
+    registry_path = _write_model_class_registry(
+        tmp_path,
+        {"classes": {"builder": {"model": "opencode-go/mimo-v2.6-flash"}}, "pipelines_default": "builder"},
+    )
+    monkeypatch.setattr(get_settings(), "model_class_registry_path", registry_path)
+    session, pipeline_id, _node_id = _model_class_mint_setup(
+        None,
+        agent_commands=["opencode run --model opencode-go/literal-model --auto < /home/user/prompt.md"],
+    )
 
     with _bind_lock_connection(session, _lock_attempt_result(True)):
         snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)

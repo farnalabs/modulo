@@ -22,6 +22,8 @@ from modulo.core.model_class_registry import (
     MODEL_ORIGIN_REGISTRY_PIPELINE_MAP,
     ModelClassResolutionError,
     effective_model_template_value,
+    model_var_registry_coverage,
+    node_references_model_var,
     resolve_graph_model_classes,
 )
 
@@ -137,6 +139,108 @@ def test_non_sandbox_nodes_are_never_touched(tmp_path: Path) -> None:
     resolve_graph_model_classes([agent_node], pipeline_name="Any Pipeline", registry_path=registry_path)
 
     assert "_resolved_model" not in agent_node
+
+
+# ---------------------------------------------------------------------------
+# Bake gate: `_resolved_model` / `_model_origin` only for consumable nodes
+# ---------------------------------------------------------------------------
+
+
+def test_unreferenced_registry_rung_is_not_baked(tmp_path: Path) -> None:
+    """No dead provenance (FAR-1743 fix): a registry-covered node whose
+    commands never reference `{{ model }}` gets NO `_resolved_model` /
+    `_model_origin` — the registry's intent must never be recorded as the
+    model that ran. Before the gate this node WAS baked from
+    ``pipelines_default`` even though nothing could ever consume the value."""
+    registry_path = _write_registry(tmp_path, _DEFAULT_REGISTRY)
+    node = _sandbox_node("n1", agent_commands=["opencode run --model opencode-go/literal-model --auto"])
+
+    resolve_graph_model_classes([node], pipeline_name="Any Pipeline", registry_path=registry_path)
+
+    assert "_resolved_model" not in node
+    assert "_model_origin" not in node
+
+
+def test_model_class_always_bakes_even_with_literal_commands(tmp_path: Path) -> None:
+    """The gate's other arm: a declared ``model_class`` is the node's own
+    opt-in to first-class resolution and always bakes, regardless of whether
+    the command text references ``{{ model }}`` (the validator accepts the
+    reference on such a node, and replay/audit read the baked value)."""
+    registry_path = _write_registry(tmp_path, _DEFAULT_REGISTRY)
+    node = _sandbox_node("n1", model_class="planner", agent_commands=["opencode run --auto"])
+
+    resolve_graph_model_classes([node], pipeline_name="Any Pipeline", registry_path=registry_path)
+
+    assert node["_resolved_model"] == "opencode-go/deepseek-v4.1-flash"
+    assert node["_model_origin"] == MODEL_ORIGIN_NODE_MODEL_CLASS
+
+
+# ---------------------------------------------------------------------------
+# `{{ model }}` reference detection + validation-side registry coverage
+# ---------------------------------------------------------------------------
+
+
+def test_node_references_model_var_matches_only_the_top_level_variable() -> None:
+    """The shared matcher: expressions and statement blocks that reference the
+    standalone `model` identifier match; qualified references (input.model /
+    run_context...model / parameter.model) and bound names (mymodel) do not."""
+    assert node_references_model_var({"agent_commands": ["opencode run --model {{ model }} --auto"]})
+    assert node_references_model_var({"agent_commands": ["opencode run"], "agent_prompt": "Use {{ model }}"})
+    assert node_references_model_var({"agent_commands": ["{% if model %}opencode run{% endif %}"]})
+    assert node_references_model_var({"agent_commands": "opencode run --model {{ model }}"})
+    assert not node_references_model_var({"agent_commands": ["opencode run --model opencode-go/literal"]})
+    assert not node_references_model_var({"agent_commands": ["{{ input.model }}", "{{ parameter.model }}"]})
+    assert not node_references_model_var({"agent_commands": ["opencode run"], "agent_prompt": "Do the thing"})
+
+
+def test_registry_coverage_map_default_and_exclusion(tmp_path: Path) -> None:
+    """Coverage mirrors the mint rungs: a pipelines map entry (string /
+    nodes override / in-entry default) or a valid pipelines_default covers;
+    an unmapped pipeline with no default does not; excluded pipelines never
+    are covered; no configured registry covers nothing."""
+    registry_path = _write_registry(
+        tmp_path,
+        {
+            **_DEFAULT_REGISTRY,
+            "pipelines": {
+                "Mapped Pipe": {"default": "planner", "nodes": {"n2": "reviewer"}},
+                "String Pipe": "reviewer",
+                "Nodes-Only Pipe": {"nodes": {"n9": "planner"}},
+            },
+            "excluded_pipelines": ["Excluded Pipe"],
+        },
+    )
+    assert model_var_registry_coverage("Mapped Pipe", "n1", registry_path=registry_path) is True
+    assert model_var_registry_coverage("String Pipe", "n1", registry_path=registry_path) is True
+    # In a nodes-only entry (no default), an UNMAPPED node falls through to
+    # pipelines_default — covered here; without a default it would not be.
+    assert model_var_registry_coverage("Nodes-Only Pipe", "n9", registry_path=registry_path) is True
+    assert model_var_registry_coverage("Nodes-Only Pipe", "other", registry_path=registry_path) is True
+    assert model_var_registry_coverage("Unlisted Pipe", "n1", registry_path=registry_path) is True  # default rung
+    assert model_var_registry_coverage("Excluded Pipe", "n1", registry_path=registry_path) is False
+    assert model_var_registry_coverage("Any", "n1", registry_path=None) is False
+
+
+def test_registry_coverage_without_pipelines_default(tmp_path: Path) -> None:
+    """Map-only registry: an unmapped pipeline is NOT covered (False); a
+    name-less query cannot consult the map, so it returns None (undeterminable)
+    unless the name-independent pipelines_default covers."""
+    registry_path = _write_registry(
+        tmp_path,
+        {
+            "classes": {"builder": {"model": "opencode-go/mimo-v2.6-flash"}},
+            "pipelines": {"Mapped Pipe": "builder"},
+        },
+    )
+    assert model_var_registry_coverage("Mapped Pipe", "n1", registry_path=registry_path) is True
+    assert model_var_registry_coverage("Unlisted Pipe", "n1", registry_path=registry_path) is False
+    assert model_var_registry_coverage(None, "n1", registry_path=registry_path) is None
+
+
+def test_registry_coverage_of_unreadable_registry_is_undeterminable(tmp_path: Path) -> None:
+    """A configured-but-broken registry refuses every run closed at mint (D3),
+    so coverage here is unknowable (None) — never a silent 'not covered'."""
+    assert model_var_registry_coverage("Any Pipe", "n1", registry_path=str(tmp_path / "missing.json")) is None
 
 
 # ---------------------------------------------------------------------------

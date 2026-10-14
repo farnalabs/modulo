@@ -43,6 +43,10 @@ from modulo.core.graph_validator.mask_sentinel import (
     MASK_SENTINEL_ISSUE_CODE,
     find_mask_sentinel_values,
 )
+from modulo.core.model_class_registry import (
+    model_var_registry_coverage,
+    node_references_model_var,
+)
 from modulo.db.models.agent import Agent
 from modulo.db.models.composite_template import CompositeTemplate
 from modulo.db.models.connector_instance import ConnectorInstance
@@ -602,50 +606,78 @@ def _check_sandbox_jinja(node: dict[str, Any], nid: str, result: ValidationResul
 
 
 # FAR-1743 / ADR 037 rev 2: the top-level `{{ model }}` template variable.
-# Segment 1 finds Jinja expression/statement blocks; token 2 matches `model`
-# as a STANDALONE identifier — `input.model` / `run_context...model` /
-# `parameter.model` are preceded by `.` and `mymodel` / `model_x` are bound by
-# the word-char lookarounds, so only the dedicated resolution channel matches.
-_MODEL_TEMPLATE_SEGMENT_RE = re.compile(r"\{\{.*?\}\}|\{%.*?%\}", re.DOTALL)
-_MODEL_TEMPLATE_TOKEN_RE = re.compile(r"(?<![\w.])model(?![\w])")
+# The expression/statement scan + standalone-token matcher live in
+# `model_class_registry.node_references_model_var` (shared with the mint bake
+# gate — one matcher, one meaning).
 
 
-def _check_sandbox_model_var(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
-    """Sandbox check: ``{{ model }}`` requires ``model_class`` on the node (ADR 037 rev 2).
+def _check_sandbox_model_var(
+    node: dict[str, Any],
+    nid: str,
+    result: ValidationResult,
+    *,
+    pipeline_name: str | None = None,
+    unverified_registry_ok: bool = False,
+) -> None:
+    """Sandbox check: ``{{ model }}`` requires a resolution source (ADR 037 rev 2).
 
-    ``model_class`` is the node's explicit opt-in to first-class model
-    resolution — the save-time validator cannot consult the (external,
-    devtools-owned) registry, so the node field is the proxy for "a class was
-    resolved here". Without it a ``{{ model }}`` reference would render as the
-    empty string under the sandbox environment's lenient Undefined and dispatch
-    the sandbox with a blank ``--model`` — exactly the silent-default failure
-    ADR 037 forbids. Only llm mode is checked: script mode runs verbatim and
-    never renders templates.
+    A node may reference ``{{ model }}`` when:
+
+    * it declares ``model_class`` (its own opt-in to first-class resolution), or
+    * the node carries a mint-baked ``_resolved_model`` (the snapshot proof the
+      registry rungs resolved a value for it), or
+    * the live model-class registry covers this pipeline/node — a ``pipelines``
+      map entry (string / ``nodes`` override / in-entry ``default``) or a valid
+      ``pipelines_default`` (:func:`model_var_registry_coverage`), consulted
+      with the real registry facts when the pipeline name is known.
+
+    Without a source the reference would render as the empty string under the
+    sandbox environment's lenient Undefined and dispatch the sandbox with a
+    blank ``--model`` — exactly the silent-default failure ADR 037 forbids.
+    Only llm mode is checked: script mode runs verbatim and never renders
+    templates.
+
+    *pipeline_name* is the save-time pipeline name when the caller knows it.
+    When it is None the registry map cannot be consulted; *unverified_registry_ok*
+    (the save-time surfaces) then permits the reference whenever a registry IS
+    configured — coverage cannot be ruled out here, and mint (fail-closed, D3)
+    plus run-start validation (which trusts only the snapshot's bake) enforce
+    the real facts. Run-time validation leaves it False: there the snapshot's
+    bake is the only legitimate source, never the live registry.
     """
-    if (node.get("mode") or "llm") != "llm" or node.get("model_class"):
+    if (node.get("mode") or "llm") != "llm":
         return
-    texts: list[str] = []
-    commands = node.get("agent_commands")
-    if isinstance(commands, list):
-        texts.extend(str(c) for c in commands)
-    elif isinstance(commands, str):
-        texts.append(commands)
-    prompt = node.get("agent_prompt")
-    if isinstance(prompt, str):
-        texts.append(prompt)
-    for text in texts:
-        for segment in _MODEL_TEMPLATE_SEGMENT_RE.findall(text):
-            if _MODEL_TEMPLATE_TOKEN_RE.search(segment):
-                result.error(
-                    "SANDBOX_MODEL_VAR_REQUIRES_MODEL_CLASS",
-                    f"Node '{nid}': the `{{{{ model }}}}` template variable requires the "
-                    "experimental `model_class` field on this node (FAR-1743 / ADR 037) — "
-                    "without a resolved class the reference would render empty and dispatch "
-                    "the sandbox with a blank model. Set `model_class` on the node, or use "
-                    "an explicit source such as `{{ input.model }}`.",
-                    node_id=nid,
-                )
-                return
+    if not node_references_model_var(node):
+        return
+    if node.get("model_class"):
+        return
+    baked = node.get("_resolved_model")
+    if isinstance(baked, str) and baked.strip():
+        return
+    if pipeline_name is not None:
+        coverage = model_var_registry_coverage(
+            pipeline_name,
+            nid,
+            registry_path=settings.get_settings().model_class_registry_path,
+        )
+        if coverage is not False:
+            # True = covered; None = undeterminable (unreadable registry —
+            # mint refuses such runs closed, so acceptance cannot silently
+            # render blank).
+            return
+    elif unverified_registry_ok and settings.get_settings().model_class_registry_path:
+        return
+    result.error(
+        "SANDBOX_MODEL_VAR_REQUIRES_MODEL_CLASS",
+        f"Node '{nid}': the `{{{{ model }}}}` template variable requires a resolution "
+        "source on this node (FAR-1743 / ADR 037): the experimental `model_class` "
+        "field, or registry pipeline-map / pipelines_default coverage for this "
+        "pipeline. Without a resolved value the reference would render empty and "
+        "dispatch the sandbox with a blank model. Set `model_class` on the node, "
+        "map the pipeline in the model-class registry, or use an explicit source "
+        "such as `{{ input.model }}`.",
+        node_id=nid,
+    )
 
 
 def _check_sandbox_template(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
@@ -1480,14 +1512,18 @@ class GraphValidator:
         model_backend_pins: list[dict[str, Any]] | None = None,
         environment_profile_id: uuid.UUID | None = None,
         guardrail_definitions: list[Any] | None = None,
+        pipeline_name: str | None = None,
     ) -> ValidationResult:
         """Validate a live graph definition or an immutable snapshot.
 
-        *guardrail_definitions*, when provided, are the pipeline's
+        *guardrail_definitions*, when provided, is the pipeline's
         ``eval_type='guardrail'`` ``Eval`` rows (the live storage since the
         0254 cutover) — used for the
-        per-node guardrail cap check (FAR-223 item 7). Returns warnings and
-        errors. Errors block execution; warnings are advisory.
+        per-node guardrail cap check (FAR-223 item 7). *pipeline_name*, when
+        provided, lets the ``{{ model }}`` check consult the live model-class
+        registry's pipeline map with real per-pipeline facts (FAR-1743).
+        Returns warnings and errors. Errors block execution; warnings are
+        advisory.
         """
         result = ValidationResult()
 
@@ -1510,7 +1546,17 @@ class GraphValidator:
 
         self._check_edges(graph_json, result)
         self._check_ports(graph_json, result)
-        self._check_sandbox_agent_config(graph_json, result)
+        # Save-time surface: a registry-configured ``{{ model }}`` reference
+        # whose per-pipeline coverage cannot be verified here is accepted
+        # (unverified_registry_ok) — mint (fail-closed, D3) and run-start
+        # validation (bake-only) enforce the real facts; a save must never
+        # lock authors out the way a broken registry must never lock saves.
+        self._check_sandbox_agent_config(
+            graph_json,
+            result,
+            pipeline_name=pipeline_name,
+            unverified_registry_ok=True,
+        )
         self._check_node_idempotent(graph_json, result)
         self._check_failure_and_retry(graph_json, result)
         await self._check_node_send_budget_bindings(graph_json, connector_bindings or [], session, result)
@@ -1595,7 +1641,10 @@ class GraphValidator:
         elif not result.is_valid:
             return self._strip_warnings(result)
 
-        # Sandbox agent config check.
+        # Sandbox agent config check. Run-time surface for the `{{ model }}`
+        # rule: defaults are strict — the SNAPSHOT's bake (or model_class) is
+        # the only legitimate source; the live registry is never consulted
+        # here (mint is the only resolution seam — replay determinism).
         self._check_sandbox_agent_config(snapshot.graph_json, result)
 
         # Node idempotency flag check (FAR-295).
@@ -3160,7 +3209,13 @@ class GraphValidator:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _check_sandbox_agent_config(graph_json: dict[str, Any], result: ValidationResult) -> None:
+    def _check_sandbox_agent_config(
+        graph_json: dict[str, Any],
+        result: ValidationResult,
+        *,
+        pipeline_name: str | None = None,
+        unverified_registry_ok: bool = False,
+    ) -> None:
         """Validate sandbox_agent node configurations.
 
         Checks:
@@ -3184,9 +3239,13 @@ class GraphValidator:
             (FAR-664) — the join operator would corrupt the terminator.
         16. git-sourced content refs (FAR-220) parse and are SHA-pinned so
             run snapshots surface the resolved commit for audit.
-        17. ``{{ model }}`` on an llm-mode node requires the experimental
-            ``model_class`` field (FAR-1743 / ADR 037 rev 2) — a stray
-            reference can never render empty and dispatch a blank model.
+        17. ``{{ model }}`` on an llm-mode node requires a resolution source:
+            the experimental ``model_class`` field, a mint-baked
+            ``_resolved_model``, or live registry coverage of this
+            pipeline/node (FAR-1743 / ADR 037 rev 2) — a stray reference can
+            never render empty and dispatch a blank model. See
+            :func:`_check_sandbox_model_var` for how *pipeline_name* /
+            *unverified_registry_ok* select the save-time vs run-time facts.
         """
         _reserved_env_prefixes = ("MODULO_", "OPENCODE_API_KEY")
 
@@ -3197,7 +3256,13 @@ class GraphValidator:
             nid = _string_or_default(node.get("id"))
             _check_sandbox_command(node, nid, result)
             _check_sandbox_jinja(node, nid, result)
-            _check_sandbox_model_var(node, nid, result)
+            _check_sandbox_model_var(
+                node,
+                nid,
+                result,
+                pipeline_name=pipeline_name,
+                unverified_registry_ok=unverified_registry_ok,
+            )
             _check_sandbox_template(node, nid, result)
             _check_sandbox_timeout(node, nid, result)
             _check_sandbox_timeout_e2b_cap(node, nid, result)

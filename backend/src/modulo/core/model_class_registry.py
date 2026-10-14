@@ -15,12 +15,21 @@ lookup is product-owned — the same split as ``connector_type``):
 * :func:`resolve_graph_model_classes` runs **at snapshot mint** (the per-run
   seam that already bakes prompt/backend/guardrail pins) and bakes
   ``_resolved_model`` (the concrete model id) + ``_model_origin`` (which
-  precedence rung supplied it) into each opted-in node's metadata, so every
-  later render replays the SNAPSHOT, never the live registry.
+  precedence rung supplied it) into each **consumable** node's metadata, so
+  every later render replays the SNAPSHOT, never the live registry. A node is
+  consumable when it declares ``model_class`` OR its ``agent_commands`` /
+  ``agent_prompt`` reference ``{{ model }}`` (:func:`node_references_model_var`)
+  — a node that can never legally consume the value gets NO bake, so the
+  registry's *intent* is never recorded as the model that ran (no prediction
+  presented as an observation).
 * :func:`effective_model_template_value` is the **render-side** read: the
   top-level ``{{ model }}`` template variable, with the run's frozen
   ``_run_overrides.model`` folded in pre-dispatch (run override wins over the
   baked value). It never consults the registry and never mutates ``input``.
+* :func:`model_var_registry_coverage` is the **validation-side** read: whether
+  the registry rungs (pipeline map / ``pipelines_default``) cover a given
+  pipeline/node, so the GraphValidator can ACCEPT ``{{ model }}`` on a
+  registry-covered node that declares no ``model_class``.
 
 **Fail closed (D3).** On resolution failure — unknown class, missing registry,
 unreadable or corrupt JSON — :class:`ModelClassResolutionError` rejects the
@@ -38,6 +47,12 @@ Precedence (ADR 037 rev 2)::
            ↓ absent
     registry pipeline default   → _model_origin: registry_pipeline_default
 
+The registry rungs (3/4) engage only for a node that can CONSUME the value —
+one that declares ``model_class`` or references ``{{ model }}``. Resolution
+still runs (and still fails closed, D3) for every covered node, but the bake
+is gated: a covered node that never references ``{{ model }}`` receives no
+``_resolved_model`` / ``_model_origin``.
+
 The org-level default rung from rev 1 is deliberately dropped (no speculative
 configuration). Registry rungs only apply when a registry is *configured*
 (``MODEL_CLASS_REGISTRY_PATH``); with no registry and no ``model_class``
@@ -48,6 +63,7 @@ unchanged.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +96,43 @@ class ModelClassResolutionError(HTTPException):
 
     def __init__(self, detail: str) -> None:
         super().__init__(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail)
+
+
+# FAR-1743 / ADR 037 rev 2: the top-level `{{ model }}` template variable.
+# Segment 1 finds Jinja expression/statement blocks; token 2 matches `model`
+# as a STANDALONE identifier — `input.model` / `run_context...model` /
+# `parameter.model` are preceded by `.` and `mymodel` / `model_x` are bound by
+# the word-char lookarounds, so only the dedicated resolution channel matches.
+# (Shared with the GraphValidator's save/run check — one matcher, one meaning.)
+_MODEL_TEMPLATE_SEGMENT_RE = re.compile(r"\{\{.*?\}\}|\{%.*?%\}", re.DOTALL)
+_MODEL_TEMPLATE_TOKEN_RE = re.compile(r"(?<![\w.])model(?![\w])")
+
+
+def node_references_model_var(node: dict[str, Any]) -> bool:
+    """True when the node's ``agent_commands`` / ``agent_prompt`` reference ``{{ model }}``.
+
+    This is the render-side consumption test: a node that references the
+    top-level ``model`` variable (in an expression or a statement block) is a
+    node that CAN consume a baked ``_resolved_model``. Qualified references
+    (``input.model`` etc.) are different, pre-existing sources and do not
+    match. Only llm-mode commands/prompt are ever rendered — script mode runs
+    verbatim — but the mode gate belongs to the caller (the validator checks
+    it; the mint bake gate treats a reference as consumption regardless).
+    """
+    texts: list[str] = []
+    commands = node.get("agent_commands")
+    if isinstance(commands, list):
+        texts.extend(str(c) for c in commands)
+    elif isinstance(commands, str):
+        texts.append(commands)
+    prompt = node.get("agent_prompt")
+    if isinstance(prompt, str):
+        texts.append(prompt)
+    for text in texts:
+        for segment in _MODEL_TEMPLATE_SEGMENT_RE.findall(text):
+            if _MODEL_TEMPLATE_TOKEN_RE.search(segment):
+                return True
+    return False
 
 
 def _read_registry(registry_path: str | None) -> dict[str, Any]:
@@ -197,6 +250,64 @@ def _pipeline_map_class(registry: dict[str, Any], pipeline_name: str, node_id: A
     )
 
 
+def model_var_registry_coverage(
+    pipeline_name: str | None,
+    node_id: Any,
+    *,
+    registry_path: str | None,
+) -> bool | None:
+    """Validation-side coverage read: do the registry rungs (3/4) cover this pipeline/node?
+
+    Tri-state, because the surfaces that ask have different facts available:
+
+    * ``True`` — the pipeline map resolves a class for this node, or a valid
+      ``pipelines_default`` covers every pipeline (a mapped-but-malformed entry
+      also counts: mint refuses such a run closed under D3, so the reference
+      can never silently render blank).
+    * ``False`` — the rungs definitely do not engage (no registry configured,
+      the pipeline is on ``excluded_pipelines``, or neither map nor default
+      supplies a class). This is the "stray ``{{ model }}``" case the
+      GraphValidator rejects.
+    * ``None`` — coverage cannot be determined here: the pipeline name is
+      unknown (the ``pipelines`` map is name-keyed) or the configured registry
+      is unreadable/corrupt (mint fails the run closed under D3 either way).
+
+    This is a SAVE-time fact check against the LIVE registry (the run-time
+    surface trusts only the snapshot's bake — mint is the only resolution
+    seam). Callers decide what ``None`` means for their surface.
+    """
+    if not registry_path:
+        return False
+    try:
+        registry = _read_registry(registry_path)
+    except ModelClassResolutionError:
+        # A configured-but-broken registry refuses every run pre-dispatch at
+        # mint (D3) — coverage is unknowable here, never silently blank.
+        return None
+    if pipeline_name is None:
+        default = registry.get("pipelines_default")
+        if isinstance(default, str) and default.strip():
+            # `pipelines_default` is name-independent — it covers every
+            # non-excluded pipeline; without the name the exclusion list
+            # cannot be consulted, which only narrows coverage further.
+            return True
+        return None
+    excluded = {str(name) for name in (registry.get("excluded_pipelines") or [])}
+    if pipeline_name in excluded:
+        return False
+    try:
+        mapped = _pipeline_map_class(registry, pipeline_name, node_id)
+    except ModelClassResolutionError:
+        # Malformed entry for THIS pipeline: mint refuses the run closed (D3).
+        return True
+    if mapped is not None:
+        return True
+    default = registry.get("pipelines_default")
+    # A valid default covers every pipeline; a malformed one does NOT fail
+    # closed at mint (no entry means no refusal) — so it is not coverage.
+    return bool(isinstance(default, str) and default.strip())
+
+
 def resolve_graph_model_classes(
     nodes: list[dict[str, Any]],
     *,
@@ -205,12 +316,22 @@ def resolve_graph_model_classes(
 ) -> None:
     """Resolve ``model_class`` for every sandbox_agent node and bake the result.
 
-    Called at snapshot mint. Mutates each participating node in place:
+    Called at snapshot mint. Mutates each **consumable** participating node in
+    place:
 
     * ``_resolved_model`` — the concrete model id;
     * ``_model_origin`` — the precedence rung that supplied it (one of
       ``node_model_class`` / ``registry_pipeline_map`` /
       ``registry_pipeline_default``).
+
+    A node is consumable when it declares ``model_class`` or its
+    ``agent_commands`` / ``agent_prompt`` reference ``{{ model }}``
+    (:func:`node_references_model_var`). A covered node that can never
+    legally consume the value gets NO bake — the registry's intent must
+    never be recorded as the model that ran. Resolution itself is NOT
+    gated: the selected class is still resolved (and still fails closed, D3)
+    so a broken registry entry is refused exactly as before; only the write
+    of the two metadata keys is gated.
 
     Resolution engages only when there is something to resolve: a node declares
     ``model_class`` (registry required — fail closed if absent/unreadable), or
@@ -275,7 +396,15 @@ def resolve_graph_model_classes(
                 mapped = default.strip()
                 origin = MODEL_ORIGIN_REGISTRY_PIPELINE_DEFAULT
             class_name = mapped
-        node["_resolved_model"] = _model_for_class(registry, class_name, node.get("id"))
+        resolved_model = _model_for_class(registry, class_name, node.get("id"))
+        if not node.get("model_class") and not node_references_model_var(node):
+            # Bake gate (FAR-1743 fix): the node can never legally consume
+            # `{{ model }}`, so recording `_resolved_model` / `_model_origin`
+            # would present the registry's prediction as the model that ran.
+            # `resolved_model` was computed (and may have failed closed, D3)
+            # on purpose — only the WRITE is gated.
+            continue
+        node["_resolved_model"] = resolved_model
         node["_model_origin"] = origin
 
 

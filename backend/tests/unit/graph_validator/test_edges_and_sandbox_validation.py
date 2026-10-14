@@ -593,6 +593,176 @@ def test_model_var_in_statement_block_errors():
     assert "SANDBOX_MODEL_VAR_REQUIRES_MODEL_CLASS" in _codes(result)
 
 
+# ---------------------------------------------------------------------------
+# FAR-1743 fix — registry-covered `{{ model }}` is a legitimate resolution
+# source (ADR 037 precedence rungs 3/4), and coverage is checked with the
+# real registry facts wherever they are available.
+# ---------------------------------------------------------------------------
+
+
+def _write_model_class_registry(tmp_path, payload) -> str:
+    import json
+    from pathlib import Path
+
+    path = Path(tmp_path) / "model-management.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return str(path)
+
+
+def _registry_with_pipelines_map(tmp_path) -> str:
+    return _write_model_class_registry(
+        tmp_path,
+        {
+            "classes": {"builder": {"model": "opencode-go/mimo-v2.6-flash"}},
+            "pipelines": {"Mapped Pipe": "builder"},
+        },
+    )
+
+
+def _registry_with_default_only(tmp_path) -> str:
+    return _write_model_class_registry(
+        tmp_path,
+        {
+            "classes": {"builder": {"model": "opencode-go/mimo-v2.6-flash"}},
+            "pipelines_default": "builder",
+        },
+    )
+
+
+def test_model_var_accepted_on_registry_map_covered_node(tmp_path, monkeypatch):
+    """(FAR-1743 fix, i) A pipeline-map-covered node (no model_class) may
+    reference `{{ model }}`: the validator consults the live registry with
+    the pipeline name and accepts — and the mint bakes the rung's value."""
+    from modulo.core.model_class_registry import (
+        MODEL_ORIGIN_REGISTRY_PIPELINE_MAP,
+        resolve_graph_model_classes,
+    )
+    from modulo.settings import get_settings
+
+    registry_path = _registry_with_pipelines_map(tmp_path)
+    monkeypatch.setattr(get_settings(), "model_class_registry_path", registry_path)
+    graph = {"nodes": [_sandbox_node(id="n1", agent_commands=["opencode run --model {{ model }} --auto"])], "edges": []}
+
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result, pipeline_name="Mapped Pipe")
+
+    assert "SANDBOX_MODEL_VAR_REQUIRES_MODEL_CLASS" not in _codes(result)
+    assert result.is_valid
+    # The same coverage the validator accepted is what the mint bakes.
+    resolve_graph_model_classes(graph["nodes"], pipeline_name="Mapped Pipe", registry_path=registry_path)
+    assert graph["nodes"][0]["_resolved_model"] == "opencode-go/mimo-v2.6-flash"
+    assert graph["nodes"][0]["_model_origin"] == MODEL_ORIGIN_REGISTRY_PIPELINE_MAP
+
+
+def test_model_var_accepted_on_pipelines_default_covered_node(tmp_path, monkeypatch):
+    """`pipelines_default` is the name-independent rung — a node in ANY
+    (non-excluded) pipeline is covered, so `{{ model }}` is accepted."""
+    from modulo.settings import get_settings
+
+    registry_path = _registry_with_default_only(tmp_path)
+    monkeypatch.setattr(get_settings(), "model_class_registry_path", registry_path)
+    graph = {"nodes": [_sandbox_node(agent_commands=["opencode run --model {{ model }} --auto"])], "edges": []}
+
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result, pipeline_name="Any Unlisted Pipe")
+
+    assert "SANDBOX_MODEL_VAR_REQUIRES_MODEL_CLASS" not in _codes(result)
+    assert result.is_valid
+
+
+def test_model_var_still_rejected_when_registry_does_not_cover_pipeline(tmp_path, monkeypatch):
+    """(FAR-1743 fix, iii) The earlier rejection still holds where there is no
+    resolution source: registry configured, but this pipeline is neither
+    mapped nor covered by a default — the stray reference is a hard error."""
+    from modulo.settings import get_settings
+
+    registry_path = _registry_with_pipelines_map(tmp_path)
+    monkeypatch.setattr(get_settings(), "model_class_registry_path", registry_path)
+    graph = {"nodes": [_sandbox_node(agent_commands=["opencode run --model {{ model }} --auto"])], "edges": []}
+
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result, pipeline_name="Unlisted Pipe")
+
+    assert "SANDBOX_MODEL_VAR_REQUIRES_MODEL_CLASS" in _codes(result)
+    assert not result.is_valid
+    issue = next(i for i in result.issues if i.code == "SANDBOX_MODEL_VAR_REQUIRES_MODEL_CLASS")
+    assert issue.node_id == graph["nodes"][0]["id"]
+
+
+def test_model_var_run_validation_trusts_snapshot_bake_not_live_registry(tmp_path, monkeypatch):
+    """Run-time surface (validate_for_run's defaults): the SNAPSHOT's bake is
+    the only legitimate source — a node with no model_class and no baked
+    `_resolved_model` is rejected even when the LIVE registry would cover it
+    (mint is the only resolution seam; replay determinism)."""
+    from modulo.settings import get_settings
+
+    registry_path = _registry_with_default_only(tmp_path)
+    monkeypatch.setattr(get_settings(), "model_class_registry_path", registry_path)
+    graph = {"nodes": [_sandbox_node(agent_commands=["opencode run --model {{ model }} --auto"])], "edges": []}
+
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)  # run-time defaults: strict
+
+    assert "SANDBOX_MODEL_VAR_REQUIRES_MODEL_CLASS" in _codes(result)
+    assert not result.is_valid
+
+
+def test_model_var_run_validation_accepts_the_mint_bake(monkeypatch):
+    """The covered run-snapshot shape: mint baked `_resolved_model` onto the
+    node, and run-time validation accepts it without consulting the live
+    registry at all (the registry path is even unset)."""
+    from modulo.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "model_class_registry_path", None)
+    node = _sandbox_node(agent_commands=["opencode run --model {{ model }} --auto"])
+    node["_resolved_model"] = "opencode-go/mimo-v2.6-flash"
+    node["_model_origin"] = "registry_pipeline_map"
+    graph = {"nodes": [node], "edges": []}
+
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+
+    assert "SANDBOX_MODEL_VAR_REQUIRES_MODEL_CLASS" not in _codes(result)
+    assert result.is_valid
+
+
+def test_model_var_save_time_accepts_unverifiable_coverage_when_registry_configured(tmp_path, monkeypatch):
+    """Save-time surface (unverified_registry_ok): the pipeline name is not
+    available on every save path, so when a registry IS configured but its
+    per-pipeline coverage cannot be verified, the save is accepted — mint
+    (fail-closed, D3) and run-start validation enforce the real facts. With
+    NO registry configured the reference is still rejected outright."""
+    from modulo.settings import get_settings
+
+    registry_path = _registry_with_pipelines_map(tmp_path)
+    monkeypatch.setattr(get_settings(), "model_class_registry_path", registry_path)
+    graph = {"nodes": [_sandbox_node(agent_commands=["opencode run --model {{ model }} --auto"])], "edges": []}
+
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result, unverified_registry_ok=True)
+
+    assert "SANDBOX_MODEL_VAR_REQUIRES_MODEL_CLASS" not in _codes(result)
+    assert result.is_valid
+
+    monkeypatch.setattr(get_settings(), "model_class_registry_path", None)
+    strict = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, strict, unverified_registry_ok=True)
+    assert "SANDBOX_MODEL_VAR_REQUIRES_MODEL_CLASS" in _codes(strict)
+
+
+def test_model_var_bake_presence_alone_is_accepted_without_registry(monkeypatch):
+    """A snapshot node carrying the mint bake is accepted even with no registry
+    configured — the bake IS the resolution proof."""
+    from modulo.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "model_class_registry_path", None)
+    node = _sandbox_node(agent_commands=["opencode run --model {{ model }} --auto"])
+    node["_resolved_model"] = "opencode-go/baked"
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config({"nodes": [node], "edges": []}, result)
+    assert "SANDBOX_MODEL_VAR_REQUIRES_MODEL_CLASS" not in _codes(result)
+
+
 def test_sandbox_jinja_gate_renders_through_shared_runtime_environment(monkeypatch) -> None:
     """FAR-226: the save-time Jinja gate parses through the shared helper.
 

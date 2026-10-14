@@ -1033,9 +1033,12 @@ async def create_snapshot_from_live_graph(
         # FAR-1743 / ADR 037 rev 2 (EXPERIMENTAL): resolve every sandbox_agent
         # node's model_class HERE — the per-run mint seam that already bakes
         # prompt/backend/guardrail pins — and bake `_resolved_model` /
-        # `_model_origin` into the node metadata, so every later render
-        # replays the SNAPSHOT, never the live registry (deterministic
-        # replay). Fail closed (D3) for a RUN snapshot: an unknown class or a
+        # `_model_origin` into the node metadata of every node that can
+        # CONSUME the value (declares model_class or references `{{ model }}`;
+        # a covered literal node gets no bake — the registry's intent is never
+        # recorded as the model that ran), so every later render replays the
+        # SNAPSHOT, never the live registry (deterministic replay). Fail closed
+        # (D3) for a RUN snapshot: an unknown class or a
         # missing/unreadable/corrupt registry raises ModelClassResolutionError
         # BEFORE any snapshot row is inserted, so the run is refused
         # pre-dispatch — no sandbox, zero cost. An EDIT snapshot fails OPEN
