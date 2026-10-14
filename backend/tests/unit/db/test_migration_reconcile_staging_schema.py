@@ -140,8 +140,9 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0303_feedback_records_lookup_indexes chains off 0302_runs_run_grouping, and
 # 0305_guardrail_escalate_action chains off 0304_metrics_staging_recorded_at_index, and
 # 0306_trigger_secret_encryption chains off 0305_guardrail_escalate_action, and
-# 0307_runs_guardrail_override_resume_pending chains off 0306_trigger_secret_encryption as the chain head.
-_CHAIN_HEAD_MIGRATION = "0307_runs_guardrail_override_resume_pending"
+# 0307_runs_guardrail_override_resume_pending chains off 0306_trigger_secret_encryption, and
+# 0308_runs_dispatch_phase_history chains off 0307_runs_guardrail_override_resume_pending as the chain head.
+_CHAIN_HEAD_MIGRATION = "0308_runs_dispatch_phase_history"
 
 
 def _source(name: str) -> str:
