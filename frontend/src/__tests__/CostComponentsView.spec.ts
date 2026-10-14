@@ -221,8 +221,9 @@ describe('CostComponentsView', () => {
     await flushPromises()
 
     expect(mockPut).toHaveBeenCalledOnce()
-    const [url, { body }] = mockPut.mock.calls[0] as [string, { body: { enabled: boolean } }]
-    expect(url).toContain('/comp-3')
+    const [url, { params, body }] = mockPut.mock.calls[0] as [string, { params: { path: { component_id: string } }; body: { enabled: boolean } }]
+    expect(url).toContain('/api/v1/admin/costs/components/{component_id}')
+    expect(params.path.component_id).toBe('comp-3')
     expect(body.enabled).toBe(true) // was false → toggled to true
   })
 
