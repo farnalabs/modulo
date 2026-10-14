@@ -654,6 +654,7 @@ async def test_connector_binding_mixed_valid_and_invalid():
     conn.id = good_id
     conn.name = "conn"
     conn.status = "active"
+    conn.visibility = "org"
     conn.connector_type_id = "filesystem"
     conn.allowed_operations = []
     session = AsyncMock()

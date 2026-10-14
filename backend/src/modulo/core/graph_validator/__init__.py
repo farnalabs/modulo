@@ -2559,9 +2559,10 @@ class GraphValidator:
         if isinstance(graph_json, dict):
             raw_nodes = graph_json.get("nodes")
             if isinstance(raw_nodes, list):
-                for node in raw_nodes:
-                    if isinstance(node, dict) and node.get("id") is not None:
-                        nodes_by_id[str(node["id"])] = node
+                # Reuse the module's node indexer (it already drops id-less
+                # nodes); filter to mapping nodes first so a malformed entry is
+                # dropped rather than raising on ``.get``.
+                nodes_by_id = _index_nodes_by_id([n for n in raw_nodes if isinstance(n, dict)])
 
         # FAR-1141 (MAJOR 8): a dispatch binding must target a connector whose
         # TYPE implements the CI-runner contract. Runs off the GRAPH (the
@@ -2614,9 +2615,12 @@ class GraphValidator:
             # Ask the REAL runtime ACL so save-time validation and the hub can
             # never disagree about what an ``allowed_operations`` value means
             # (None/[] unrestricted, a non-empty allowlist restricts, a
-            # malformed value fails closed — the ACL owns all of it).
+            # malformed value fails closed — the ACL owns all of it). The
+            # instance's own ``visibility`` is threaded through exactly as the
+            # hub does (``ci.visibility``); ``check`` does not enforce it today,
+            # but keeping the two construction sites identical avoids drift.
             acl = ConnectorACL(
-                visibility="org",
+                visibility=instance.visibility,
                 allowed_operations=instance.allowed_operations,
                 connector_type_id=instance.connector_type_id,
             )

@@ -52,6 +52,7 @@ def _connector_instance(
     c.id = cid
     c.name = f"conn-{cid}"
     c.status = "active"
+    c.visibility = "org"
     c.connector_type_id = connector_type_id
     c.allowed_operations = allowed_operations if allowed_operations is not None else []
     c.config_json = {}

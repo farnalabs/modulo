@@ -51,6 +51,7 @@ def _connector_instance(
     c.id = cid
     c.name = f"conn-{cid}"
     c.status = status
+    c.visibility = "org"
     c.allowed_operations = allowed_operations or []
     c.config_json = config_json or {}
     c.connector_type_id = connector_type_id
