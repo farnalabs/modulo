@@ -15,6 +15,7 @@ from modulo.core.graph_validator import (
     HITL_SUBJECT_PATH_MAX_LENGTH,
     GraphValidator,
 )
+from tests.unit.graph_validator._helpers import codes_of as _codes
 
 _UUID_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 _UUID_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
@@ -189,10 +190,6 @@ async def test_gateless_edge_not_flagged():
 # ---------------------------------------------------------------------------
 # Unit-level static method tests
 # ---------------------------------------------------------------------------
-
-
-def _codes(result) -> set[str]:
-    return {i.code for i in result.issues}
 
 
 class TestCheckHitlSubjectPath:

@@ -84,7 +84,7 @@ def _patch_verify_identity(request: pytest.FixtureRequest, monkeypatch: pytest.M
 
 
 @pytest.fixture(autouse=True)
-def _e2b_provider_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+def _e2b_provider_bridge(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """FAR-1050 R6: route the dispatch's provider seams at a mock-sandbox bridge.
 
     R6 deleted the legacy direct path, so ``_sandbox_agent_impl`` resolves its
@@ -104,8 +104,23 @@ def _e2b_provider_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
 
     ``E2B_API_KEY`` is seeded so the seam helpers' key pre-checks pass; tests
     that assert a missing-credential refusal ``delenv`` it themselves.
+
+    GATED by ``_e2b_bridge_needed`` (same conservative-predicate shape as
+    ``_patch_verify_identity`` / ``_provisioned_system_engine`` / the
+    ``_far681`` app gate): ``install_bridge`` imports
+    ``modulo.core.pipeline_engine.node_runner`` — a ~4.5 s chain measured
+    2026-10-13 — and paying that on the first setup of every unit session
+    dragged pure-logic packages onto the dispatch stack they never touch.
+    The gate skips ONLY the install; the ``E2B_API_KEY`` seed stays
+    unconditional so the environment every test observes is byte-identical
+    to the ungated fixture (the seed is not the cost, and gating it would
+    change env behaviour for no perf gain). See ``_e2b_bridge_needed`` for
+    the conservative-correctness argument and
+    ``tests/architecture/test_unit_e2b_bridge_gate.py`` for the pin.
     """
     monkeypatch.setenv("E2B_API_KEY", "bridge-test-key")
+    if not _e2b_bridge_needed(request):
+        return
     install_bridge(monkeypatch)
 
 
@@ -244,6 +259,84 @@ def _test_module_mentions(node: object, token: str) -> bool:
         mentions = token in source
     _MENTION_CACHE[key] = mentions
     return mentions
+
+
+#: The module that owns the four provider seams the e2b bridge patches
+#: (``_build_dispatch_provider`` / ``_build_file_io_provider`` /
+#: ``_build_log_tail_provider`` / ``_build_isolation_provider``). Importing it
+#: pulls a ~4.5 s chain (measured 2026-10-13), so the autouse
+#: ``_e2b_provider_bridge`` fixture only installs when a test can actually
+#: reach the dispatch. ``executor`` and ``graph_cache`` import ``node_runner``
+#: at module level, so ANY ``modulo.core.pipeline_engine`` load — package
+#: ``__init__`` included — puts this marker in ``sys.modules``.
+_E2B_BRIDGE_MARKER = "modulo.core.pipeline_engine.node_runner"
+
+#: Source tokens whose appearance in a test module marks it as able to reach
+#: the dispatch INSIDE its body: an in-body ``from
+#: modulo.core.pipeline_engine... import`` / ``from ...node_runner import`` /
+#: a ``monkeypatch.setattr("modulo.core.pipeline_engine.node_runner....")``
+#: string target is literally in the module's source, and the fixture decides
+#: BEFORE the body runs — so ``sys.modules`` alone would miss it. A comment
+#: mention costs only the already-cached import (a performance no-op, never a
+#: behaviour change); the cost of a miss is a real provider reaching for a live
+#: sandbox, so the set errs wide.
+_E2B_BRIDGE_MENTION_TOKENS: tuple[str, ...] = ("pipeline_engine", "node_runner")
+
+#: Seam tokens = the reaching set: a ``tests/unit`` module naming ANY of these
+#: patches, pulls or drives the dispatch seams the bridge installs. Every one of
+#: them must also carry an ``_E2B_BRIDGE_MENTION_TOKENS`` token, which is what
+#: makes ``_e2b_bridge_needed``'s source scan provably non-missing for that set
+#: (enforced by ``tests/architecture/test_unit_e2b_bridge_gate.py``).
+_E2B_BRIDGE_SEAM_TOKENS: tuple[str, ...] = (
+    "node_runner",
+    "_sandbox_agent_impl",
+    "install_fake_dispatch",
+    "fake_file_io",
+    "_build_dispatch_provider",
+    "_build_file_io_provider",
+    "_build_log_tail_provider",
+    "_build_isolation_provider",
+)
+
+
+def _e2b_bridge_needed(request: pytest.FixtureRequest) -> bool:
+    """Conservative gate for the autouse ``_e2b_provider_bridge`` fixture.
+
+    Returns True (install the bridge) when EITHER:
+
+    1. ``sys.modules`` already holds ``modulo.core.pipeline_engine.node_runner``
+       — a module-level import in the test module, a conftest, or the app
+       (``import modulo.api.main`` loads the executor chain), all resolved
+       during collection BEFORE fixture setup; the import is already paid, so
+       installing costs only the (cheap) seam patching; or
+    2. the test module's source mentions ``pipeline_engine`` or ``node_runner``
+       — the lazy in-body-import shape, where the import happens during the
+       test body, AFTER this fixture has already decided.
+
+    Conservative by construction (the enumeration behind condition 2,
+    re-verified 2026-10-13): the four seam call sites live ONLY inside
+    ``node_runner`` itself (``_build_log_tail_provider`` /
+    ``_build_isolation_provider`` / ``_build_file_io_provider`` /
+    ``_build_dispatch_provider`` — each called from ``_sandbox_agent_impl``
+    or its helpers), so a test cannot exercise them without loading that
+    module. The loading is either already done (condition 1) or written in the
+    test module's source (condition 2): every ``tests/unit`` module naming a
+    seam token also names a predicate token (arch-pinned), every consumer of
+    the ``e2b_bridge`` / ``install_fake_dispatch`` / ``fake_file_io`` /
+    ``current_bridge`` / ``original_seam`` helpers does too, and the
+    token-less ``e2b.AsyncSandbox`` patchers are provider-layer tests
+    (``tests/unit/{core/,}runtime_provider/``, ``db/crud`` org deletion) that
+    drive the ABC directly and never call the seams. An under-patch fails
+    LOUDLY anyway — without the bridge the real ``_build_dispatch_provider``
+    either fails closed (``RuntimeProviderError: ... refusing to provision
+    without a provider``) or, with a hub-recognisable key, reaches for a live
+    sandbox (observed: E2B HTTP 401 -> ``AuthenticationException``), never a
+    silently-wrong green. Pinned by
+    ``tests/architecture/test_unit_e2b_bridge_gate.py``.
+    """
+    if _E2B_BRIDGE_MARKER in sys.modules:
+        return True
+    return any(_test_module_mentions(request.node, token) for token in _E2B_BRIDGE_MENTION_TOKENS)
 
 
 def _verify_identity_patch_needed(request: pytest.FixtureRequest) -> bool:
