@@ -141,6 +141,27 @@ async def test_create_external_agent_persists_provenance(session: AsyncSession) 
     assert created.organisation_id == _ORG_A
 
 
+async def test_update_external_agent_updates_own_org(session: AsyncSession) -> None:
+    updated = await update_external_agent(session, _AGENT_B, {"name": "renamed"}, organisation_id=_ORG_B)
+
+    assert updated is not None
+    assert updated.name == "renamed"
+
+
+async def test_get_external_agent_without_org_scope(session: AsyncSession) -> None:
+    # organisation_id=None omits the org predicate entirely (the no-scope branch).
+    found = await get_external_agent(session, _AGENT_B)
+
+    assert found is not None
+    assert found.id == _AGENT_B
+
+
+async def test_list_external_agents_without_org_scope(session: AsyncSession) -> None:
+    page = await list_external_agents(session)
+
+    assert page.total >= 1
+
+
 # ---------------------------------------------------------------------------
 # mcp_servers
 # ---------------------------------------------------------------------------
@@ -208,3 +229,26 @@ async def test_mcp_server_pinning_fields_persist(session: AsyncSession) -> None:
 async def test_mcp_server_transport_constraint(session: AsyncSession) -> None:
     with pytest.raises(IntegrityError):
         await create_mcp_server(session, org_id=_ORG_A, name="bad", transport="carrier-pigeon")
+
+
+async def test_soft_delete_mcp_server_hides_row(session: AsyncSession) -> None:
+    assert await soft_delete_mcp_server(session, _SERVER_B, organisation_id=_ORG_B) is True
+
+    hidden = await get_mcp_server(session, _SERVER_B, organisation_id=_ORG_B)
+    assert hidden is None
+    listed = await list_mcp_servers(session, organisation_id=_ORG_B)
+    assert listed.total == 0
+
+
+async def test_get_mcp_server_without_org_scope(session: AsyncSession) -> None:
+    # organisation_id=None omits the org predicate entirely (the no-scope branch).
+    found = await get_mcp_server(session, _SERVER_B)
+
+    assert found is not None
+    assert found.id == _SERVER_B
+
+
+async def test_list_mcp_servers_without_org_scope(session: AsyncSession) -> None:
+    page = await list_mcp_servers(session)
+
+    assert page.total >= 1

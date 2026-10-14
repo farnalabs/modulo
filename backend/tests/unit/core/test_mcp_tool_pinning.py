@@ -17,9 +17,11 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.core.mcp.tool_pinning import (
@@ -131,6 +133,11 @@ def test_hash_accepts_snake_case_input_schema_alias() -> None:
 def test_hash_rejects_tool_without_name() -> None:
     with pytest.raises(ToolPinningError):
         compute_tools_hash([{"description": "nameless"}])
+
+
+def test_hash_rejects_non_mapping_tool() -> None:
+    with pytest.raises(ToolPinningError):
+        compute_tools_hash([["not", "a", "mapping"]])  # type: ignore[list-item]
 
 
 # ---------------------------------------------------------------------------
@@ -275,3 +282,41 @@ async def test_unapproved_server_observation_does_not_alert(session: AsyncSessio
     assert result.approval_status == APPROVAL_STATUS_UNAPPROVED
     assert result.drifted is False
     assert await _count(session, Notification) == 0
+
+
+async def test_drift_audit_failure_is_swallowed(session: AsyncSession) -> None:
+    # The audit append is best-effort: a DB failure there must not roll back the
+    # observation itself nor stop the notification attempt (fail-open savepoint).
+    tools_a = _tools("read")
+    hash_a = compute_tools_hash(tools_a)
+    server = await _seed_server(session, approved_hash=hash_a, status=APPROVAL_STATUS_APPROVED, tools=tools_a)
+
+    with patch(
+        "modulo.core.mcp.tool_pinning.append_audit_event",
+        AsyncMock(side_effect=SQLAlchemyError("audit down")),
+    ):
+        result = await apply_tool_observation(
+            session, server=server, org_id=_ORG, tools=_tools("read", "delete"), actor_user_id=None
+        )
+
+    assert result.approval_status == APPROVAL_STATUS_APPROVED_STALE
+    assert result.newly_drifted is True
+    # The notification leg still ran even though the audit leg raised.
+    assert await _count(session, Notification) == 1
+
+
+async def test_drift_notification_failure_is_swallowed(session: AsyncSession) -> None:
+    tools_a = _tools("read")
+    hash_a = compute_tools_hash(tools_a)
+    server = await _seed_server(session, approved_hash=hash_a, status=APPROVAL_STATUS_APPROVED, tools=tools_a)
+
+    with patch(
+        "modulo.core.mcp.tool_pinning.create_notification",
+        AsyncMock(side_effect=SQLAlchemyError("notify down")),
+    ):
+        result = await apply_tool_observation(
+            session, server=server, org_id=_ORG, tools=_tools("read", "delete"), actor_user_id=None
+        )
+
+    assert result.approval_status == APPROVAL_STATUS_APPROVED_STALE
+    assert result.newly_drifted is True
