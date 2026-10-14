@@ -835,10 +835,15 @@ def test_stall_attribution_names_the_blocking_callback_when_enabled(caplog: pyte
     # Names the source: this file, a real line, and the blocking function.
     assert re.search(r"test_health_alerts\.py:\d+ in _blocking_callback_window", attributed) is not None
     # m4: the helper logs NOTHING — no stall/attribution warning from any logger.
+    # Restrict to WARNING+ so the install notice (an INFO ``event_loop_stall.attribution_installed``
+    # line, emitted before the report and captured whenever the ambient root
+    # level is INFO/DEBUG — e.g. after configure_logging()) is not mistaken for
+    # the duplicate stall warning this test exists to forbid.
     attribution_logs = [
         record
         for record in caplog.records
-        if "event_loop_stall" in record.getMessage() or "event-loop stall" in record.getMessage()
+        if record.levelno >= logging.WARNING
+        and ("event_loop_stall" in record.getMessage() or "event-loop stall" in record.getMessage())
     ]
     assert not attribution_logs, [record.getMessage() for record in attribution_logs]
 
@@ -1000,10 +1005,15 @@ def test_stall_attribution_is_none_for_an_idle_parked_loop(caplog: pytest.LogCap
         assert len(window_samples) >= 1, "no samples landed inside the parked window"
 
         assert attributed is None
+        # WARNING+ only: the probe thread's install emits an INFO
+        # ``event_loop_stall.attribution_installed`` record, which caplog keeps
+        # whenever the ambient root level is INFO/DEBUG. A parked loop must
+        # produce no stall WARNING — the INFO install notice is not one.
         stall_logs = [
             record
             for record in caplog.records
-            if "event_loop_stall" in record.getMessage() or "event-loop stall" in record.getMessage()
+            if record.levelno >= logging.WARNING
+            and ("event_loop_stall" in record.getMessage() or "event-loop stall" in record.getMessage())
         ]
         assert not stall_logs, [record.getMessage() for record in stall_logs]
     finally:
