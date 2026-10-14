@@ -83,9 +83,9 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
 - 2026-10-08: **Improve Architecture product-map walk**: corrected the stale
   deferral that claimed "SCIM deprovisioning [is] not implemented yet". SCIM 2.0
   provisioning (`/scim/v2/*`, `MODULO_SCIM_TOKEN`, the `scim` plan feature) is
-  implemented end to end — including record-preserving user deprovisioning
+  implemented end to end - including record-preserving user deprovisioning
   (`DELETE /scim/v2/Users/{id}` and `PATCH active=false`) behind the
-  last-admin guard — and now has its own behaviour tracker
+  last-admin guard - and now has its own behaviour tracker
   (`feat-scim`, `auth/scim-provisioning.md`); the `feat-sso` deferral names only
   the genuinely-unshipped SAML single logout.
 - 2026-09-28: **Improve Architecture product-map walk**: closed the

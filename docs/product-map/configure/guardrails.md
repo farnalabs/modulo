@@ -143,7 +143,7 @@ compensation, and single-node self-correction. Built on the eval engine
 - [x] Output-side interception (FAR-209 Track B): a guardrail may declare
       `interception_point: "output"` in its config to intercept a completed
       node's output envelope at the executor's chain-end seam instead of the
-      run-creation ingestion edge — the output-point defs are split out of the
+      run-creation ingestion edge - the output-point defs are split out of the
       node-scoped eval loop (`GuardrailMisroutedError` can never fire), a
       block/redact outcome is evaluated against the envelope, a block raises
       ``GuardrailBlockedError`` (terminal ``eval_failed`` semantics unchanged),
@@ -157,15 +157,15 @@ compensation, and single-node self-correction. Built on the eval engine
       `backend/src/modulo/core/pipeline_engine/executor.py`,
       `backend/src/modulo/db/crud/run.py`)
 - [x] Destroy redaction mode (FAR-209 Track B): `mode: destroy` replaces each
-      candidate — the detection regex's matches inside a string leaf (the
-      untouched surroundings of a match stay readable), else the whole leaf —
+      candidate - the detection regex's matches inside a string leaf (the
+      untouched surroundings of a match stay readable), else the whole leaf -
       with a keyed HMAC token (`hmac-sha256:<digest>`) computed over the
       candidate plus a deployment-wide `guardrail_destroy_pepper` setting
       (keyed so tokens are deterministic and cross-referenceable but never
       reversible); a non-string leaf becomes one token over its compact JSON.
       Setting the pepper is mandatory: absent/empty yields a
       ``GuardrailRedactionMechanismError`` which the executor converts to a
-      terminal block (fail closed) — never a masks-only fallback and never an
+      terminal block (fail closed) - never a masks-only fallback and never an
       unredacted persist
       (`backend/src/modulo/core/guardrails/redaction_mode.py`)
 

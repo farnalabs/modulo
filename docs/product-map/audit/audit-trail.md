@@ -109,6 +109,29 @@ guarded against tampering at both the ORM and the database layer.
       `TestScanChain` in `tests/unit/api/test_audit.py`)
 - [x] `GET /api/v1/admin/audit/batch-detail` resolves a batch of event ids into
       full records
+- [x] An audit export can be emitted as offline-verifiable evidence
+      (FAR-1697): `GET /api/v1/admin/audit/evidence-pack` (`audit_viewer` +
+      `audit.manage`) returns a self-contained pack - the audit events as
+      `audit-events.ndjson`, a canonical manifest (organisation id, exporter
+      identity, `created_at`, run ids, per-file SHA-256 + size, and the
+      re-derived chain summary
+      `valid`/`event_count`/`head_hash`/`first_gap_index`/`first_tampered_id`/`truncated`),
+      an Ed25519 signature over the canonical manifest, and the PEM
+      verification key as an artefact - while
+      `GET /api/v1/admin/audit/verification-key` publishes the org's public
+      key + `key_id` fingerprint. A party holding ONLY the artefact + the
+      pre-published key verifies authorship, re-derives every file digest and
+      re-derives the embedded audit chain with no Modulo service and no login
+      (the `modulo evidence verify` CLI); any tampered file, mutated event,
+      falsified chain claim or swapped key fails as `valid=false`. The event
+      hash lives in `core/audit_logger/hashing.py` so the offline verifier
+      re-derives it without the DB layer (byte-identical, format unchanged);
+      signing key / exporter identity come from `MODULO_EVIDENCE_SIGNING_KEY`
+      / `MODULO_EVIDENCE_EXPORTER_IDENTITY`
+      (`core/evidence_pack/`, `api/routes/audit.py` `evidence_pack_endpoint`
+      + `verification_key_endpoint`, `cli/evidence.py`,
+      `docs/offline-verifiable-evidence.md`,
+      `test_evidence_pack.py`, `test_audit_evidence_pack_route.py`)
 - [x] The audit surface is admin-only and gated by the `audit_viewer` feature
       key – 403 for non-admin, 401 unauthenticated (`test_audit_gating`,
       audit_export.feature)
@@ -132,7 +155,7 @@ guarded against tampering at both the ORM and the database layer.
 - [x] Pre-auth and webhook routes are audited through the actor-less
       `audited_system` variant (FAR-1516): sign-in/out, token refresh, the
       SAML ACS POST, the public error ingest and inbound webhooks record the
-      same isolated-append event WITHOUT fabricating an actor — `actor_user_id`
+      same isolated-append event WITHOUT fabricating an actor - `actor_user_id`
       stays NULL, the payload carries the `SYSTEM_ACTOR` marker plus an
       `actor_source` string (`pre_auth` / `unauthenticated` /
       `signature_verified` / `authenticated`) stating HOW the request was
@@ -144,7 +167,7 @@ guarded against tampering at both the ORM and the database layer.
       (`audit_coverage.<event_type>.no_org_context`) and skipped rather than
       written into a fabricated tenant, and `bind_audit_actor_source()` lets
       the route STRENGTHEN its declared `actor_source` once a verified
-      signature or an authenticated principal lands — recorded provenance is
+      signature or an authenticated principal lands - recorded provenance is
       always the strongest TRUE admission statement
       (`core/audit_coverage.py` `audited_system` / `bind_audit_org` /
       `bind_audit_actor_source`, applied in `api/routes/auth.py`, `sso.py`,
@@ -186,14 +209,14 @@ guarded against tampering at both the ORM and the database layer.
       classified (FAR-1549). Writes that never see a request (SAQ system-cron
       sweeps, runs-worker tasks, reconcilers, boot seeds) either append a
       SYSTEM-actor event through the shared `append_background_audit_event` /
-      `record_run_state_change_audits` / `record_suite_run_audit` helpers —
+      `record_run_state_change_audits` / `record_suite_run_audit` helpers -
       `actor_user_id` stays NULL with
       a `SYSTEM_ACTOR` payload marker plus an `actor_source` naming the process,
       the org RLS context is set inside the helper's own fresh transaction, the
       batch helper re-selects each run and drops any whose live status is not an
       expected one (the phantom-event guard), and an append failure is logged and
       swallowed after the already-committed mutation (fail open) with
-      `CancelledError` always propagating — or carry a documented exemption from
+      `CancelledError` always propagating - or carry a documented exemption from
       a fixed reason vocabulary
       (`EXEMPT_REASONS`: trigger bookkeeping, notification-only, ephemeral
       log retention, derived cache/state/analytics, probe bookkeeping,
@@ -201,7 +224,7 @@ guarded against tampering at both the ORM and the database layer.
       demo fixture, infra-container GC). `tests/architecture/test_background_audit_coverage.py`
       mechanically enumerates every path from the SAQ registration functions,
       the `CronJob` list, the `_boot_seed(...)` labels, the `core/`
-      reconciler/sweep/seed functions and — since FAR-1574 — a caller scan
+      reconciler/sweep/seed functions and - since FAR-1574 - a caller scan
       seeded from `build_suite_run` (the single statement that INSERTs a
       `suite_runs` row) walking outward over PUBLIC callers, so a new
       background path, or an API route / CLI command wiring a SuiteRun
@@ -210,16 +233,16 @@ guarded against tampering at both the ORM and the database layer.
       SuiteRun lifecycle appends `suite_run_created` (fire, before enqueue) and
       `suite_run_started` / `suite_run_completed` (execution, post-commit) with
       the same re-select phantom guard, and the `modulo_users` boot seed appends
-      `user_seeded` / `user_rehashed` inside the seeding transaction — the
+      `user_seeded` / `user_rehashed` inside the seeding transaction - the
       credential and any admin-role grant commit atomically with their record,
       and the rehash payload's `role_granted` is computed from the ACTUAL
       previous role (true only on a genuine escalation to admin, false for an
-      admin email whose membership was already admin) — so no enumerated path
+      admin email whose membership was already admin) - so no enumerated path
       is classified `gap` any more. FAR-1574 added the CLI's own grant record:
       `modulo users add --admin` escalates the membership the seeder just
       created and appends `user_admin_escalated` (SYSTEM actor,
       `actor_source=cli_admin_escalation`, carrying `previous_role`) in the
-      same transaction, recorded only when a grant actually happens — never
+      same transaction, recorded only when a grant actually happens - never
       double-recorded when the seeder already granted admin
       (`core/audit_logger/background.py`,
       `core/cron_helpers.py`, `core/run_admission.py`,
@@ -229,34 +252,11 @@ guarded against tampering at both the ORM and the database layer.
       `test_background_audit_wiring.py`, `test_background_audit_coverage.py`,
       `test_seed_users.py`, `test_execute_suite_run.py`,
       `test_users_cli.py`)
-- [x] An audit export can be emitted as offline-verifiable evidence
-      (FAR-1697): `GET /api/v1/admin/audit/evidence-pack` (`audit_viewer` +
-      `audit.manage`) returns a self-contained pack — the audit events as
-      `audit-events.ndjson`, a canonical manifest (organisation id, exporter
-      identity, `created_at`, run ids, per-file SHA-256 + size, and the
-      re-derived chain summary
-      `valid`/`event_count`/`head_hash`/`first_gap_index`/`first_tampered_id`/`truncated`),
-      an Ed25519 signature over the canonical manifest, and the PEM
-      verification key as an artefact — while
-      `GET /api/v1/admin/audit/verification-key` publishes the org's public
-      key + `key_id` fingerprint. A party holding ONLY the artefact + the
-      pre-published key verifies authorship, re-derives every file digest and
-      re-derives the embedded audit chain with no Modulo service and no login
-      (the `modulo evidence verify` CLI); any tampered file, mutated event,
-      falsified chain claim or swapped key fails as `valid=false`. The event
-      hash lives in `core/audit_logger/hashing.py` so the offline verifier
-      re-derives it without the DB layer (byte-identical, format unchanged);
-      signing key / exporter identity come from `MODULO_EVIDENCE_SIGNING_KEY`
-      / `MODULO_EVIDENCE_EXPORTER_IDENTITY`
-      (`core/evidence_pack/`, `api/routes/audit.py` `evidence_pack_endpoint`
-      + `verification_key_endpoint`, `cli/evidence.py`,
-      `docs/offline-verifiable-evidence.md`,
-      `test_evidence_pack.py`, `test_audit_evidence_pack_route.py`)
 - [x] The durable org-lifecycle ledger has a system-admin read surface
       (FAR-1538): `GET /api/v1/admin/system-audit` lists the org-independent
       `system_audit_events` records read-only with offset pagination and
       event-type / org-id / date-range filters, gated purely by
-      `require_system_permission` (the `is_system_admin` claim — no RLS org
+      `require_system_permission` (the `is_system_admin` claim - no RLS org
       context, because the table has no `organisation_id` column, and no
       `audited()` dependency, because reads are not audited), and the
       `/admin/audit` page exposes a system source tab with the same filters,
@@ -270,13 +270,13 @@ guarded against tampering at both the ORM and the database layer.
 - **Chain is per-organisation**: the hash chain, verification, and export are
   scoped to one org (multi-tenant RLS); there is no system-wide cross-org
   chain. The org-independent `system_audit_events` ledger (FAR-1517) survives a
-  hard delete and now has a system-admin read surface (FAR-1538 —
+  hard delete and now has a system-admin read surface (FAR-1538 -
   `GET /api/v1/admin/system-audit` plus the `/admin/audit` system tab), but it
-  is deliberately **not** hash-chained and has no chain-verify endpoint — it is
+  is deliberately **not** hash-chained and has no chain-verify endpoint - it is
   durable, filterable evidence storage, not a verifiable cross-org trail.
 
 ## QA History
-- 2026-10-14: **Improve Architecture product-map walk** — reconciled this
+- 2026-10-14: **Improve Architecture product-map walk** - reconciled this
   tracker with FAR-1697 (PR #1761): the offline-verifiable evidence pack
   shipped with a manifest-registry behaviour line but no human-readable
   tracker home, so a reader of the graph (or Assistant's docs indexer) could
@@ -286,14 +286,14 @@ guarded against tampering at both the ORM and the database layer.
   `core/evidence_pack/`, `core/audit_logger/hashing.py`, `cli/evidence.py`
   code citations and the `test_evidence_pack.py` /
   `test_audit_evidence_pack_route.py` unit-test citations; the manifest
-  line is unchanged. No behaviour change — graph accuracy only.
+  line is unchanged. No behaviour change - graph accuracy only.
   `_ORPHANED_BDD_FEATURES` stays empty.
-- 2026-10-08: **Audit-cleanup reconciliation (FAR-1561)** — three cleanups out
+- 2026-10-08: **Audit-cleanup reconciliation (FAR-1561)** - three cleanups out
   of the FAR-1472/1549/1561/1574 audit work. (1) Deleted `run_scheduled_suite`
   from `core/eval_engine/execute_suite_run.py`: an unwired public
   `build_suite_run` caller whose docstring falsely claimed the SAQ job called
-  it — zero callers repo-wide (definition + `__all__` + the ratchet's
-  inventory entry were the only references, re-verified before deleting) —
+  it - zero callers repo-wide (definition + `__all__` + the ratchet's
+  inventory entry were the only references, re-verified before deleting) -
   removed together with its `unwired_entry_point` exemption, so the
   `EXEMPT_REASONS` vocabulary above is now exactly the set in use; the
   `build_suite_run` caller scan that enumerated it STAYS as the ratchet
@@ -307,7 +307,7 @@ guarded against tampering at both the ORM and the database layer.
   public-caller scan as a ratchet enumeration source, the `user_admin_escalated`
   CLI event, and the `cli/users.py` / `execute_suite_run.py` /
   `test_users_cli.py` citations.
-- 2026-10-07: **Improve Architecture product-map walk** — closed two untracked
+- 2026-10-07: **Improve Architecture product-map walk** - closed two untracked
   audit sub-surfaces merged after the 2026-10-06 walk. (1) FAR-1549 audited the
   background/cron/boot write paths with a new shared
   `core/audit_logger/background.py` helper plus an architecture ratchet
@@ -319,13 +319,13 @@ guarded against tampering at both the ORM and the database layer.
   + the `/admin/audit` system tab), narrowing the "no read API/UI" half of the
   per-organisation-chain Known Gap; added the checked behaviour line and
   citations. `_ORPHANED_BDD_FEATURES` stays empty.
-- 2026-10-06: **Improve Architecture product-map walk** — closed the untracked
+- 2026-10-06: **Improve Architecture product-map walk** - closed the untracked
   FAR-1516 surface: pre-auth and webhook routes (sign-in/out, token refresh,
   SAML ACS, public error ingest, inbound webhooks) ship an actor-less
-  `audited_system` audit variant that never fabricates an actor — recording a
+  `audited_system` audit variant that never fabricates an actor - recording a
   `SYSTEM_ACTOR` marker + `actor_source` admission basis with the tenant
   published by the route (`bind_audit_org`, unattributed `SYSTEM_ORG_ID`
-  sentinel fallback) and promotable via `bind_audit_actor_source` — but did not
+  sentinel fallback) and promotable via `bind_audit_actor_source` - but did not
   appear in either product-map layer. Added the checked behaviour line and the
   `code:` / `unit-tests:` citations (`core/audit_coverage.py`;
   `test_audit_coverage.py`, `test_webhooks_endpoint.py`,

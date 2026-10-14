@@ -193,7 +193,7 @@ see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-action
       `backend/src/modulo/cli/apply/pipeline_apply.py`,
       `backend/tests/unit/cli/test_apply_models.py`)
 - [x] Pipeline Paused execution state (FAR-1530): `modulo apply` can PAUSE a
-      pipeline declaratively with a declared `run_enabled: false` — an opt-in,
+      pipeline declaratively with a declared `run_enabled: false` - an opt-in,
       one-way management. `run_enabled: true` and an explicit `null` are rejected
       at config load with an actionable message (a config may pause, never
       force-resume, so a live operator / circuit-breaker cause is never

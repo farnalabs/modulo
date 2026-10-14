@@ -110,12 +110,19 @@ async def test_publish_removes_org_entry_when_last_subscriber_is_dropped(bus: Ev
 
 
 async def test_publish_does_not_fan_out_to_other_org_after_slow_drop(bus: EventBus) -> None:
+    """Ejecting a slow consumer must not touch another org's subscribers."""
     dropped = await bus.subscribe("org-1", maxsize=1)
+    other = await bus.subscribe("org-2")
     await bus.publish("org-1", "run", "r1", "created", 1)
-    await bus.publish("org-1", "run", "r2", "created", 2)
+    await bus.publish("org-1", "run", "r2", "created", 2)  # slow queue full -> ejected
     await bus.publish("org-1", "run", "r3", "created", 3)
 
-    assert dropped.qsize() == 1
+    assert [e["id"] for e in _drain(dropped)] == ["r1"]
+    assert other.empty(), "org-2 must not receive org-1 events"
+    # The surviving org-1 delivery path still reaches its healthy subscribers.
+    healthy = await bus.subscribe("org-1")
+    await bus.publish("org-1", "run", "r4", "created", 4)
+    assert [e["id"] for e in _drain(healthy)] == ["r4"]
 
 
 async def test_concurrent_publish_delivers_every_event(bus: EventBus) -> None:
@@ -250,6 +257,14 @@ async def test_publish_background_broadcast_is_discarded_after_completion() -> N
 # ---------------------------------------------------------------------------
 # subscribe
 # ---------------------------------------------------------------------------
+
+
+def test_redis_broker_property_exposes_configured_broker(bus: EventBus) -> None:
+    """The SSE relay reads the broker off the bus; None means no Redis leg."""
+    assert bus.redis_broker is None
+
+    broker = AsyncMock()
+    assert EventBus(redis_broker=broker).redis_broker is broker
 
 
 async def test_subscribe_creates_queue_with_default_maxsize(bus: EventBus) -> None:

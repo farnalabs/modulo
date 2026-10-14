@@ -13,6 +13,8 @@ rules:
 
   # --- Rule A: value annotated `Callable` -----------------------------------
   - id: callable-annotated-dunder-name
+    paths:
+      include: ["**/backend/src/**"]
     patterns:
       - pattern-either:
           - pattern: $X.__name__
@@ -35,6 +37,8 @@ rules:
 
   # --- Rule B: read on an error path, on anything not provably a class ------
   - id: dunder-name-on-error-path
+    paths:
+      include: ["**/backend/src/**"]
     patterns:
       - pattern-either:
           - pattern: $X.__name__

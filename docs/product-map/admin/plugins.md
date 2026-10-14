@@ -44,7 +44,7 @@ API surface ships and is gated by the `plugin_management` feature and the
       and 404s with `Plugin not found` for an unknown id
 - [x] An entry point referencing a package with no installed metadata
       (`dist is None`) is surfaced as an unhealthy plugin with a descriptive
-      detail — broken entry points are never silently dropped from the registry
+      detail - broken entry points are never silently dropped from the registry
 - [x] An entry point whose `load()` raises records `Failed to load entry point …`
       and is surfaced unhealthy through `health_check`
 - [x] NO distribution metadata problem can abort discovery: `dist.name` /
@@ -70,12 +70,12 @@ API surface ships and is gated by the `plugin_management` feature and the
       (`test_plugin_registry.py::test_*_without_dunder_name_*`,
       `test_callable_object_builder_still_works_on_the_happy_path`;
       `test_far1129_cap_plugins_registry.py` drives a REAL installed plugin whose
-      entry point resolves to a callable-object builder — the state no in-repo
+      entry point resolves to a callable-object builder - the state no in-repo
       unit test constructs, because every in-repo builder is a `def`)
 - [x] The routes are gated behind `require_feature("plugin_management")` and
       `require_permission("plugin.list")`
 - [x] The `plugin_management` feature gate FIRES: all three endpoints return 402
-      when the feature is disabled on the plan (negative-path tests — the gate
+      when the feature is disabled on the plan (negative-path tests - the gate
       was previously declared but never observed to deny)
       (`backend/tests/unit/api/test_plugin_registry_bdd.py`)
 - [x] The `/admin/plugins` view is READ-ONLY: it lists plugins and their health
@@ -94,13 +94,13 @@ API surface ships and is gated by the `plugin_management` feature and the
 
 ## QA History
 
-- 2026-10-14: **Improve Architecture product-map walk (index 400)** — two
+- 2026-10-14: **Improve Architecture product-map walk (index 400)** - two
   MAJOR findings fixed, both on the "a broken third-party plugin must never take
   the instance down" invariant the previous pass established. (1) MAJOR
-  (error-path quality / Lens 9 List C — *implemented but unreachable in tested
+  (error-path quality / Lens 9 List C - *implemented but unreachable in tested
   states*): `build_connector` and `build_model_backend` read `builder.__name__`
   **inside their own `except Exception` handlers**. Builders are only known to
-  be callable — `register_connector_type` checks `callable(builder)` and an
+  be callable - `register_connector_type` checks `callable(builder)` and an
   entry point can resolve to a callable object, a `functools.partial`, or a
   class instance, none of which define `__name__`. A failing such builder made
   the *handler itself* raise: the caller received an opaque
@@ -109,24 +109,24 @@ API surface ships and is gated by the `plugin_management` feature and the
   exception was lost entirely. Now labelled with the new
   `modulo.util.callable_label`, which falls back to `type(x).__qualname__`;
   proved by unit tests AND by a real installed plugin whose entry point resolves
-  to a callable-object builder. (2) MAJOR (resilience — closes the
+  to a callable-object builder. (2) MAJOR (resilience - closes the
   previously-deferred Known Gap below): `_load_entry_point` read
   `dist.name` / `dist.metadata` **outside** the guarded `ep.load()` block, so a
   distribution whose `METADATA` could not be read (a half-written or corrupt
   `.dist-info` from an interrupted install or a stripped image layer) raised
-  straight out of `discover_plugins()` — aborting the whole scan with zero
+  straight out of `discover_plugins()` - aborting the whole scan with zero
   plugins discovered, and, because `_discover_plugins` runs unguarded in the ASGI
   lifespan, leaving the instance unbootable. Reproduced directly, then fixed:
   the metadata read is now guarded, the plugin is surfaced unhealthy under a
   descriptive detail, and sibling plugins keep discovering. Lens 8: extracted
-  `.semgrep/callable-dunder-name.yml` (2 rules) and swept the whole codebase —
+  `.semgrep/callable-dunder-name.yml` (2 rules) and swept the whole codebase -
   it found 3 further instances of the same shape, all fixed
   (`pipeline_engine/decorator.py::cancellable_node`, `api/mcp_server.py`'s
   `_run_db_shell` log key, `launcher/doctor.py`'s crashing-check handler) plus
   the `type`-annotated false positives excluded. `src/` is clean under the new
   gate, and the gate is verified to flag the original `builder.__name__` file.
 
-- 2026-10-12: **Improve Architecture product-map walk (index 397)** — three
+- 2026-10-12: **Improve Architecture product-map walk (index 397)** - three
   findings fixed. MAJOR (resilience): `PluginRegistry._load_entry_point` caught
   only `(ImportError, TypeError, AttributeError, SyntaxError)` from `ep.load()`;
   any other raise (a non-`ImportError` missing dependency, a module-scope config
@@ -138,33 +138,33 @@ API surface ships and is gated by the `plugin_management` feature and the
   RuntimeError/ValueError/KeyError/OSError/LookupError and prove sibling plugins
   still discover (partial-failure isolation). MAJOR (frontend↔backend contract):
   `AdminPluginsView.vue` rendered an enable/disable toggle that called
-  `PUT /api/v1/plugins/{id}/toggle` — a route that does not exist (the registry
+  `PUT /api/v1/plugins/{id}/toggle` - a route that does not exist (the registry
   API is read-only by design, and the plugin unit test mocked only `api.GET`, so
   nothing exercised it). The dead control and its `activeStates` / `togglePlugin`
   machinery are removed; the status pill is now health-driven. MAJOR (coverage):
   the "[x] routes gated by `require_feature(\"plugin_management\")`" behaviour
-  was declaration-only — added 402 tests for all three endpoints. MINOR
+  was declaration-only - added 402 tests for all three endpoints. MINOR
   (coverage): added the missing 500 fallback tests for the list and health
   endpoints. 90 plugin backend tests pass (79 → 90); frontend eslint / vue-tsc
   clean and `AdminPluginsView.spec.ts` passes (4 tests).
 
-- 2026-09-29: **Improve Architecture product-map walk** — reconciled the
+- 2026-09-29: **Improve Architecture product-map walk** - reconciled the
   tracker frontmatter `status:` with the manifest `feat-plugins` registry: the
   entry now reads `status: partial` (matching the manifest's unchecked
   "lifecycle management is not exposed through the registry API" deferral)
   instead of `covered`. The two layers previously disagreed on the same
-  feature's coverage — a reader of the graph got the opposite answer from the
+  feature's coverage - a reader of the graph got the opposite answer from the
   machine layer Assistant reads from the manifest.
 
-- 2026-09-26: **Improve Architecture product-map walk** — sharpened the manifest
+- 2026-09-26: **Improve Architecture product-map walk** - sharpened the manifest
   `feat-plugins` registry entry: the unchecked "lifecycle management is partially
-  wired" gap now states exactly what remains — install / enable / disable / uninstall
+  wired" gap now states exactly what remains - install / enable / disable / uninstall
   are NOT exposed through the registry API; the registry is read-only
   (importlib.metadata discovery at startup) and plugin installation/removal/upgrade
   is deliberately left to pip. The `/admin/plugins` UI remains a private_preview
   surface (FAR-544). Status stays `partial`.
 
-- 2026-09-18: **product-map review pass** — closed the four
+- 2026-09-18: **product-map review pass** - closed the four
   `plugin_registry.feature` scenarios that were pinned `@awaiting-implementation`:
   added the missing `GET /api/v1/plugins/{plugin_id}` detail endpoint, changed
   the registry so an entry point with no package metadata is surfaced as an
@@ -172,7 +172,7 @@ API surface ships and is gated by the `plugin_management` feature and the
   unwired step modules. The four scenarios now execute in CI
   (`PINNED_AWAITING_IMPLEMENTATION` no longer lists plugin_registry.feature).
 
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass** - registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/plugins`
   and wired the two components into the reverse testid-coverage guard
@@ -180,7 +180,7 @@ API surface ships and is gated by the `plugin_management` feature and the
   surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass** - extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/admin/plugins`: the whole-page view(s) `AdminPluginsView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
