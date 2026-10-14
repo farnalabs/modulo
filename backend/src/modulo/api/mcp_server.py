@@ -4126,8 +4126,11 @@ async def _update_pipeline_graph_impl(
     "(env_vars, context_files, composite_parameter_values, parameter_overrides) are rendered "
     "as \u2022\u2022\u2022\u2022\u2022\u2022 on read, and a masked value you re-send is resolved back to the "
     "stored secret before the write persists — you CAN update a graph that contains secrets "
-    "without re-entering them. Only a new, non-masked value overwrites a stored secret; "
-    "omitting the field drops it, so re-send masked values unchanged rather than dropping them. "
+    "without re-entering them. Resolution is per node, matched by the node's unchanged id: a "
+    "masked echo is only resolved against the stored node with the same id, so a re-id'd "
+    "node's masked values are dropped rather than restored. Only a new, non-masked value "
+    "overwrites a stored secret; omitting the field drops it, so re-send masked values "
+    "unchanged rather than dropping them. "
     "Returns the updated graph."
 )
 @mcp_audited("pipeline_graph_updated", "pipeline", fail_closed=False)
