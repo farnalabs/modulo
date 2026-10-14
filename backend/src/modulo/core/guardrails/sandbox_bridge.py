@@ -14,6 +14,11 @@ The server's decision is enforced:
   block  -> the tool call is refused (``decide_before`` returns ``(False, ...)``;
             the ``--wrap`` CLI kills the child and exits non-zero after
             printing a ``MODULO_BRIDGE_BLOCKED`` marker).
+  escalate -> the tool call is refused like a block, but the loop is being
+            STOPPED for a human decision (FAR-1694): the ``--wrap`` CLI kills
+            the child, prints a typed ``MODULO_BRIDGE_ESCALATED:<json>`` marker
+            and exits with the dedicated ``ESCALATED_EXIT_CODE`` so the host
+            can tell an escalation from a block without parsing prose.
   redact -> ``masked_args`` replace the original args before execution.
   warn/pass -> proceed.
 
@@ -27,11 +32,13 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import hashlib
 import json
 import os
 import subprocess  # nosec B404 — subprocess is stdlib-only (sandbox file); only used to exec the configured agent command (no shell=True)
 import sys
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -52,8 +59,61 @@ DEFAULT_PATTERNS = (
 
 EVENT_MARKER = "MODULO_BRIDGE_EVENT:"
 BLOCKED_MARKER = "MODULO_BRIDGE_BLOCKED:"
+# FAR-1694 S2: emitted when an in-loop ``escalate`` verdict stops the loop. The
+# payload is a single line of JSON (see :func:`_escalation_payload`).
+ESCALATED_MARKER = "MODULO_BRIDGE_ESCALATED:"
+
+# Dedicated process exit codes for a bridge-enforced loop stop. Distinct so the
+# host can tell an escalation from a block without parsing prose — 3 = blocked,
+# 4 = escalated. The escalation code is the protocol's typed stop signal; the
+# mid-loop suspension that acts on it ships in a later FAR-1694 slice.
+BLOCKED_EXIT_CODE = 3
+ESCALATED_EXIT_CODE = 4
 
 DEFAULT_ENDPOINT = "http://127.0.0.1:8765"
+
+
+@dataclass(frozen=True)
+class _Refusal:
+    """A bridge decision that stops a ``before`` tool call.
+
+    ``action`` is ``"block"`` or ``"escalate"``. ``payload`` carries the
+    escalation context for the ``MODULO_BRIDGE_ESCALATED`` marker (empty for a
+    block, which marks only the tool name).
+    """
+
+    action: str
+    tool_name: str
+    payload: dict[str, Any]
+
+
+def _args_sha256(args: dict[str, Any]) -> str:
+    """Return a one-way SHA-256 of the serialised args (evidence, never args).
+
+    Recorded in the escalation marker so a human reviewing the escalation has
+    an args fingerprint without the raw (possibly credential-bearing) args
+    crossing the boundary or entering persistence.
+    """
+    try:
+        blob = json.dumps(args, sort_keys=True, separators=(",", ":"), default=str)
+    except (TypeError, ValueError):
+        blob = ""
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _escalation_payload(tool_name: str, args: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
+    """Build the ``MODULO_BRIDGE_ESCALATED`` marker payload for one event.
+
+    Summary-only by design: the tool name, direction, the firing guardrail, a
+    non-payload reason, and an args hash. Raw args are NEVER included.
+    """
+    return {
+        "tool": tool_name,
+        "direction": "before",
+        "guardrail": str(decision.get("guardrail") or ""),
+        "reason": str(decision.get("reason") or ""),
+        "args_sha256": _args_sha256(args),
+    }
 
 
 def _out(line: str = "") -> None:
@@ -84,6 +144,7 @@ class BridgeClient:
         self._endpoint = endpoint.rstrip("/")
         self._timeout = timeout
         self._patterns = tuple(patterns)
+        self._last_decision: dict[str, Any] | None = None
 
     @property
     def endpoint(self) -> str:
@@ -92,6 +153,17 @@ class BridgeClient:
     @property
     def timeout(self) -> float:
         return self._timeout
+
+    @property
+    def last_decision(self) -> dict[str, Any]:
+        """The most recent server decision (``{}`` before any event).
+
+        The wrapper handles tool-call events strictly serially, so the last
+        decision is always the one the current event produced. Recorded so the
+        wrapper can build the typed escalation marker payload (guardrail /
+        reason) from the server's decision without a second POST.
+        """
+        return self._last_decision or {}
 
     def should_intercept(self, tool_name: str) -> bool:
         return any(fnmatch.fnmatch(tool_name, pattern) for pattern in self._patterns)
@@ -144,6 +216,11 @@ class BridgeClient:
         ``masked_args`` carries the post-redaction args when ``action`` is
         ``redact``. Fail-open: any bridge failure returns ``(True, None, ...)``.
 
+        An ``escalate`` decision is ALWAYS a refusal: it means the loop is being
+        stopped for a human decision (FAR-1694), and — unlike block — there is
+        no record-only downgrade, because the server emits it only when a human
+        must decide.
+
         A block is refused only when the Modulo decision carries
         ``blocked: True`` (a ``before`` block with ``block_on_guardrail``).
         When the server returns ``action="block"`` with ``blocked: False`` —
@@ -154,7 +231,12 @@ class BridgeClient:
         to record-only inside the loop).
         """
         decision = self.notify(tool_name, args, "before")
+        # Record the decision so the wrapper can build the typed escalation
+        # marker payload (guardrail / reason) without a second POST.
+        self._last_decision = decision
         action = str(decision.get("action") or "pass")
+        if action == "escalate":
+            return False, None, "escalate"
         if action == "block":
             if decision.get("blocked"):
                 return False, None, "block"
@@ -208,9 +290,12 @@ def _wrap_command(argv: list[str], client: BridgeClient) -> int:
 
     The wrapped command emits tool-call events as stdout lines prefixed with
     ``MODULO_BRIDGE_EVENT: <json>``. Each event is forwarded to the Modulo
-    side; a ``before`` block decision refuses the call (the child is killed and
-    this wrapper exits non-zero after writing a ``MODULO_BRIDGE_BLOCKED:<tool>``
-    marker). Best-effort — a bridge failure never blocks the command.
+    side; a ``before`` refusal kills the child and this wrapper exits non-zero
+    after writing the matching marker — ``MODULO_BRIDGE_BLOCKED:<tool>`` with
+    exit code :data:`BLOCKED_EXIT_CODE` for a block, or
+    ``MODULO_BRIDGE_ESCALATED:<json>`` with exit code
+    :data:`ESCALATED_EXIT_CODE` for an escalate (FAR-1694 S2). Best-effort — a
+    bridge failure never blocks the command.
     """
     if not argv:
         _err("error: --wrap requires a command")
@@ -226,7 +311,8 @@ def _spawn_and_collect(process_args: list[str], client: BridgeClient) -> int:
     launch reports the error and returns 1, and a child started without a
     stdout stream raises instead of proceeding without event interception.
     The child's exit code is returned once its stdout is exhausted; a refused
-    ``before`` call kills the child and returns 3.
+    ``before`` call kills the child and returns :data:`BLOCKED_EXIT_CODE`
+    (block) or :data:`ESCALATED_EXIT_CODE` (escalate).
     """
     # Suppression on the Popen call below is deliberate — configured agent command (pipeline config, not untrusted
     # input) needs shell features; already suppressed for bandit (B603) and ruff (S603).
@@ -248,27 +334,30 @@ def _spawn_and_collect(process_args: list[str], client: BridgeClient) -> int:
             if not line.startswith(EVENT_MARKER):
                 _out(line)
                 continue
-            refused_tool = _forward_event_line(line, client)
-            if refused_tool is not None:
+            refusal = _forward_event_line(line, client)
+            if refusal is not None:
                 proc.kill()
                 proc.wait()
-                _out(f"{BLOCKED_MARKER}{refused_tool}")
-                return 3
+                if refusal.action == "escalate":
+                    _out(f"{ESCALATED_MARKER}{json.dumps(refusal.payload)}")
+                    return ESCALATED_EXIT_CODE
+                _out(f"{BLOCKED_MARKER}{refusal.tool_name}")
+                return BLOCKED_EXIT_CODE
     finally:
         proc.stdout.close()
     return proc.wait()
 
 
-def _forward_event_line(line: str, client: BridgeClient) -> str | None:
+def _forward_event_line(line: str, client: BridgeClient) -> _Refusal | None:
     """Forward one ``MODULO_BRIDGE_EVENT`` stdout line to the Modulo side.
 
-    Returns the refused tool name when the Modulo side REFUSES the call (the
-    caller must kill the child and exit non-zero), or ``None`` when the child
-    may continue. A malformed event payload is treated as an empty event and
-    forwarded with an empty tool name — fail-open, never an echo (event lines
-    are never written back to stdout). A redact decision emits the
-    ``MODULO_BRIDGE_REDACTED`` marker; an ``after`` event is reported via
-    ``notify_after``. Best-effort — a bridge failure never refuses
+    Returns a :class:`_Refusal` when the Modulo side REFUSES the call (the
+    caller must kill the child, emit the matching marker and exit non-zero), or
+    ``None`` when the child may continue. A malformed event payload is treated
+    as an empty event and forwarded with an empty tool name — fail-open, never
+    an echo (event lines are never written back to stdout). A redact decision
+    emits the ``MODULO_BRIDGE_REDACTED`` marker; an ``after`` event is reported
+    via ``notify_after``. Best-effort — a bridge failure never refuses
     (``BridgeClient.decide_before`` fails open).
     """
     event_text = line[len(EVENT_MARKER) :].strip()
@@ -284,9 +373,12 @@ def _forward_event_line(line: str, client: BridgeClient) -> str | None:
     direction = "after" if event.get("direction") == "after" else "before"
     result_summary = str(event.get("result_summary") or "")
     if direction == "before":
-        allowed, masked, _ = client.decide_before(tool_name, args)
+        allowed, masked, action = client.decide_before(tool_name, args)
         if not allowed:
-            return tool_name
+            if action == "escalate":
+                payload = _escalation_payload(tool_name, args, client.last_decision)
+                return _Refusal("escalate", tool_name, payload)
+            return _Refusal("block", tool_name, {})
         if masked is not None:
             _out(f"MODULO_BRIDGE_REDACTED:{json.dumps(masked)}")
         return None
@@ -329,11 +421,16 @@ def main(argv: list[str] | None = None) -> int:
             result_summary = str(event.get("result_summary") or "")
             decision = client.notify(tool_name, args_dict, direction, result_summary)
             _out(json.dumps(decision))
+            # An escalate is always a stop; emit the typed marker + dedicated
+            # code so the host can distinguish it from a block (FAR-1694 S2).
+            if decision.get("action") == "escalate":
+                _out(f"{ESCALATED_MARKER}{json.dumps(_escalation_payload(tool_name, args_dict, decision))}")
+                return ESCALATED_EXIT_CODE
             # Refuse only on an actual refusal (action=block AND blocked=true);
             # a block_on_guardrail:false downgrade (action=block, blocked=false)
             # is record-only and must NOT exit non-zero.
             blocked = bool(decision.get("blocked"))
-            return 0 if decision.get("action") != "block" or not blocked else 3
+            return 0 if decision.get("action") != "block" or not blocked else BLOCKED_EXIT_CODE
         _err("error: --notify requires a JSON object")
         return 2
     parser.print_help()

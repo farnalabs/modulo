@@ -64,6 +64,18 @@ from modulo.core.guardrails import (
     resolve_guardrail_timeout,
 )
 
+# The sandbox-side bridge client owns the protocol constants (it is the file
+# written into the sandbox and therefore cannot import from Modulo). The host
+# imports them so the marker string and the escalation exit code have a single
+# definition on both sides of the bridge (FAR-1694 S2).
+from modulo.core.guardrails.sandbox_bridge import (
+    ESCALATED_EXIT_CODE,
+    ESCALATED_MARKER,
+)
+
+BRIDGE_ESCALATED_MARKER = ESCALATED_MARKER
+BRIDGE_ESCALATED_EXIT_CODE = ESCALATED_EXIT_CODE
+
 _log = logging.getLogger(__name__)
 
 # Default per-call latency budget for the interception round-trip (milliseconds).
@@ -223,6 +235,68 @@ class LoopInterceptAuditRecord:
 
     event_type: str
     payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class BridgeEscalation:
+    """A parsed in-loop ``escalate`` request from the sandbox bridge (FAR-1694 S2).
+
+    Produced by :func:`parse_bridge_escalation_marker`. Summary-only by design:
+    ``args_sha256`` is a one-way fingerprint for evidence, never the raw args
+    (which may carry credentials). The mid-loop suspension that acts on this
+    (interrupt -> ``awaiting_human``) ships in a later FAR-1694 slice; S2
+    defines the typed payload and the marker/exit-code protocol only.
+    """
+
+    tool_name: str
+    direction: str
+    guardrail: str
+    reason: str
+    args_sha256: str
+
+    def describe(self) -> str:
+        """A summary-only human description (never raw args)."""
+        parts = [f"tool={self.tool_name!r}"]
+        if self.guardrail:
+            parts.append(f"guardrail={self.guardrail!r}")
+        if self.direction:
+            parts.append(f"direction={self.direction!r}")
+        if self.reason:
+            parts.append(f"reason={self.reason}")
+        return "; ".join(parts)
+
+
+def parse_bridge_escalation_marker(text: str) -> BridgeEscalation | None:
+    """Parse the last ``MODULO_BRIDGE_ESCALATED:`` marker in *text* (FAR-1694 S2).
+
+    The sandbox-side bridge client emits the marker on the agent command's
+    stdout when an in-loop ``escalate`` verdict stops the loop. Returns the
+    typed payload, or ``None`` when the marker is absent or malformed —
+    best-effort, so a malformed marker is treated as "no escalation" rather
+    than raising. The payload is a single line of JSON immediately after the
+    marker; raw args never appear in it (only an ``args_sha256`` fingerprint).
+    """
+    if not text:
+        return None
+    marker_at = text.rfind(BRIDGE_ESCALATED_MARKER)
+    if marker_at < 0:
+        return None
+    payload_line = text[marker_at + len(BRIDGE_ESCALATED_MARKER) :].split("\n", 1)[0].strip()
+    if not payload_line:
+        return None
+    try:
+        data = json.loads(payload_line)
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return BridgeEscalation(
+        tool_name=str(data.get("tool") or ""),
+        direction=str(data.get("direction") or ""),
+        guardrail=str(data.get("guardrail") or ""),
+        reason=str(data.get("reason") or ""),
+        args_sha256=str(data.get("args_sha256") or ""),
+    )
 
 
 def _consume_future(future: asyncio.Future[Any]) -> None:
@@ -830,9 +904,12 @@ def bridge_client_source() -> str:
 
 
 __all__ = [
+    "BRIDGE_ESCALATED_EXIT_CODE",
+    "BRIDGE_ESCALATED_MARKER",
     "DEFAULT_LOOP_INTERCEPT_LATENCY_BUDGET_MS",
     "DEFAULT_LOOP_INTERCEPT_PATTERNS",
     "MAX_LOOP_INTERCEPT_ARGS_BYTES",
+    "BridgeEscalation",
     "LoopInterceptAuditRecord",
     "LoopInterceptCallbackServer",
     "LoopInterceptConfig",
@@ -840,6 +917,7 @@ __all__ = [
     "LoopInterceptOutcome",
     "bridge_client_source",
     "load_loop_intercept_guardrails",
+    "parse_bridge_escalation_marker",
     "parse_loop_intercept_config",
     "persist_loop_interception_audit",
     "run_loop_interception",
