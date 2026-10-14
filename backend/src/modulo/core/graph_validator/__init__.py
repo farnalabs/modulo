@@ -88,9 +88,34 @@ _JSON_TYPE_MAP: MappingProxyType[str, type | tuple[type, ...]] = MappingProxyTyp
     }
 )
 
-# Phase 1 cutover: pipelines with snapshots created before this date
-# use degraded-mode validation (warnings instead of hard errors).
+# Phase 1 cutover: snapshots created before this date are flagged as DEGRADED
+# on a schema incompatibility rather than merely hard-blocked — validate_for_run
+# records a ``SCHEMA_DEGRADED`` marker (see ``_PRESERVED_WARNING_CODES``) so a
+# caller can tell a grace-period degradation from a plain block. The schema
+# errors themselves are still kept, so both cases block run start; only the
+# marker differs.
 _PHASE_1_CUTOVER = datetime(2026, 7, 22, tzinfo=UTC)
+
+# ``validate_for_run`` returns error-severity issues only (advisory warnings are
+# noise on a blocking result), with ONE deliberate exception: ``SCHEMA_DEGRADED``
+# is the caller-visible marker that a pre-Phase-1 snapshot hit the schema grace
+# period. Without it a grace-period block is indistinguishable from a plain
+# block — the log line is not on the result path, so stripping the marker left
+# callers with no way to tell them apart.
+_PRESERVED_WARNING_CODES = frozenset({"SCHEMA_DEGRADED"})
+
+
+def _error_count(result: ValidationResult) -> int:
+    """Error-severity issues recorded so far.
+
+    The grace-period branches in :meth:`GraphValidator.validate_for_run` need to
+    know whether *the check that just ran* produced errors — not whether the
+    result is invalid overall — otherwise an earlier schema error makes every
+    later ``not result.is_valid`` test fire and logs a degradation that did not
+    happen.
+    """
+    return sum(1 for issue in result.issues if issue.severity == "error")
+
 
 _DEFERRED_SCHEMA_KEYWORDS = frozenset({"$ref", "oneOf", "anyOf", "allOf", "not", "if", "then", "else"})
 
@@ -123,7 +148,7 @@ _RETRY_POLICY_MAX_RETRIES = 5
 # key — the timeout is a constructor parameter defaulted to ``_DEFAULT_TIMEOUT``
 # that the production composition root never overrides, so the connector ALWAYS
 # executes 30.0s per item in production. The send-budget reconcile applies the
-# SAME defaults, imported in _check_node_send_budget directly from the connector
+# SAME defaults, imported in _resolve_fanout_budget directly from the connector
 # module as the single source of truth, so it cannot diverge from what the
 # connector actually executes.
 
@@ -1494,58 +1519,74 @@ class GraphValidator:
     ) -> ValidationResult:
         """Pre-run validation — all save-time checks plus input schema checking.
 
-        Returns errors only (no warnings). Any error blocks run start,
-        unless the snapshot pre-dates the Phase 1 cutover (grace period).
+        Returns error-severity issues only, PLUS the warning-level
+        ``SCHEMA_DEGRADED`` marker for a snapshot that pre-dates the Phase 1
+        cutover and hit a schema incompatibility (see
+        ``_PRESERVED_WARNING_CODES``). Every error blocks run start; the marker
+        does not change that — it exists so a caller can tell a grace-period
+        degradation from a plain block, which the log line alone cannot do (it
+        is not on the result path).
         """
         result = ValidationResult()
 
         pre_existing = _is_pre_existing(snapshot)
 
-        # Topology: hard errors block immediately.
+        # Topology: hard errors block immediately (no grace period — the cutover
+        # covers schema enforcement only).
         self._check_topology(snapshot.graph_json, result)
         if not result.is_valid:
             return self._strip_warnings(result)
 
-        # Schema compatibility (field-level).
+        # Schema compatibility (field-level). Keyed on errors ADDED by this
+        # check, not on overall invalidity, so an earlier failure cannot make a
+        # later check report a degradation it did not find.
+        errors_before = _error_count(result)
         await self._check_schema_compatibility_deep(
             snapshot.graph_json,
             session,
             result,
         )
-        if not result.is_valid and pre_existing:
+        schema_errors = _error_count(result) > errors_before
+        if schema_errors and pre_existing:
             _log.warning(
-                "Schema incompatibility in pipeline %s (snapshot %s). Run proceeds in degraded mode.",
+                "Schema incompatibility in pipeline %s (snapshot %s): pre-Phase-1 snapshot "
+                "recorded as SCHEMA_DEGRADED (grace period); blocking schema errors remain.",
                 snapshot.pipeline_id,
                 snapshot.id,
             )
             result.warning(
                 "SCHEMA_DEGRADED",
-                "Schema incompatibility found. Run proceeds in degraded mode.",
+                "Schema incompatibility found on a pre-Phase-1 snapshot; recorded as "
+                "SCHEMA_DEGRADED (grace period). Blocking schema errors remain.",
             )
-        elif not result.is_valid:
+        elif schema_errors:
             return self._strip_warnings(result)
 
         # Input payload compatibility with entry node schema.
         if input_payload is None:
             result.error("INPUT_NULL_PAYLOAD", "Input payload cannot be None")
             return self._strip_warnings(result)
+        errors_before = _error_count(result)
         await self._check_input_schema_compatibility(
             snapshot.graph_json,
             input_payload,
             session,
             result,
         )
-        if not result.is_valid and pre_existing:
+        input_errors = _error_count(result) > errors_before
+        if input_errors and pre_existing:
             _log.warning(
-                "Input schema incompatibility in pipeline %s (snapshot %s). Run proceeds in degraded mode.",
+                "Input schema incompatibility in pipeline %s (snapshot %s): pre-Phase-1 snapshot "
+                "recorded as SCHEMA_DEGRADED (grace period); blocking input-schema errors remain.",
                 snapshot.pipeline_id,
                 snapshot.id,
             )
             result.warning(
                 "SCHEMA_DEGRADED",
-                "Input schema incompatibility found. Run proceeds in degraded mode.",
+                "Input schema incompatibility found on a pre-Phase-1 snapshot; recorded as "
+                "SCHEMA_DEGRADED (grace period). Blocking input-schema errors remain.",
             )
-        elif not result.is_valid:
+        elif input_errors:
             return self._strip_warnings(result)
 
         # Sandbox agent config check.
@@ -1568,8 +1609,9 @@ class GraphValidator:
         # port-type validation. Backward-compatible for legacy graphs.
         self._check_ports(snapshot.graph_json, result)
 
-        # Parallel fan-out / run_context writes (warnings are stripped by
-        # _strip_warnings below, but the check runs for consistency).
+        # Parallel fan-out / run_context writes (ordinary warnings are stripped
+        # by _strip_warnings below — only the SCHEMA_DEGRADED marker survives —
+        # but the check runs for consistency).
         self._check_parallel_run_context_writes(snapshot.graph_json, result)
 
         # Connector and backend checks.
@@ -1601,9 +1643,18 @@ class GraphValidator:
         return self._strip_warnings(result)
 
     def _strip_warnings(self, result: ValidationResult) -> ValidationResult:
-        """Return a copy containing only error-severity issues."""
+        """Return a copy containing error-severity issues plus preserved markers.
+
+        ``validate_for_run``'s contract is "errors only" — advisory warnings are
+        noise on a blocking result. The grace-period marker listed in
+        ``_PRESERVED_WARNING_CODES`` is the deliberate exception: it is the only
+        thing on the returned result that distinguishes "blocked, and this
+        snapshot predates the Phase 1 cutover" from a plain block.
+        """
         out = ValidationResult()
-        out.issues = [issue for issue in result.issues if issue.severity == "error"]
+        out.issues = [
+            issue for issue in result.issues if issue.severity == "error" or issue.code in _PRESERVED_WARNING_CODES
+        ]
         return out
 
     # ------------------------------------------------------------------
@@ -3239,80 +3290,16 @@ class GraphValidator:
 
     # ------------------------------------------------------------------
 
-    # Node send budget reconcile — FAR-410 flat node-key path.
-    # Kept so the branch's direct unit tests (GraphValidator._check_node_send_budget)
-    # still exercise the flat-key reconcile; the validate path uses the
-    # connector-config reconcile in :meth:`_check_node_send_budget_bindings`.
-    @staticmethod
-    def _node_send_budget_values(node: dict[str, Any]) -> tuple[float, float] | None:
-        """Resolve a fan-out node's (fanout_cardinality, per_item_budget) pair; None to skip.
-
-        A node without both keys — or with keys that do not parse as positive
-        numbers — contributes no send-budget warning.
-        """
-        fanout = node.get("fanout_cardinality")
-        per_item = node.get("per_item_budget")
-        if fanout is None and per_item is None:
-            return None
-        fanout_val = _as_positive_number(fanout)
-        per_item_val = _as_positive_number(per_item)
-        if fanout_val is None or per_item_val is None:
-            return None
-        return fanout_val, per_item_val
-
-    @staticmethod
-    def _resolve_node_wait_for(node: dict[str, Any]) -> float | None:
-        """The node's total budget: explicit ``node_wait_for`` else ``timeout_seconds``."""
-        wait_for = _as_positive_number(node.get("node_wait_for"))
-        if wait_for is None:
-            return _as_positive_number(node.get("timeout_seconds"))
-        return wait_for
-
-    @staticmethod
-    def _node_send_budget_inputs(node: dict[str, Any]) -> tuple[str, float, float, float] | None:
-        """Resolve (nid, fanout, per_item, wait_for) for a fan-out node; None to skip."""
-        resolved = GraphValidator._node_send_budget_values(node)
-        if resolved is None:
-            return None
-        wait_for = GraphValidator._resolve_node_wait_for(node)
-        if wait_for is None:
-            return None
-        return _string_or_default(node.get("id")), resolved[0], resolved[1], wait_for
-
-    @staticmethod
-    def _check_node_send_budget(graph_json: dict[str, Any], result: ValidationResult) -> None:
-        """Warn when a fan-out node's send budget exceeds its wait_for budget (FAR-410).
-
-        A connector node may fan out over ``fanout_cardinality`` items and run
-        each with a ``per_item_budget`` — but all of that must fit inside the
-        node's total ``wait_for`` budget (``node_wait_for`` or ``timeout_seconds``
-        when no explicit wait_for is set). When the per-item sends cannot
-        sequentially fit in the budget, retries collide with the node deadline
-        and every attempt gets cancelled mid-send (UNKNOWN outcomes). This is a
-        save-time warning, not a hard error: nodes without these config keys
-        (every existing graph) are unaffected, and it is advisory rather than
-        a blocker so an operator can still save while they reconcile.
-        """
-        for node in graph_json.get("nodes", []) or []:
-            if not isinstance(node, dict):
-                continue
-            resolved = GraphValidator._node_send_budget_inputs(node)
-            if resolved is None:
-                continue
-            nid, fanout_val, per_item_val, wait_for = resolved
-            total = fanout_val * per_item_val
-            if total > wait_for:
-                result.warning(
-                    "NODE_SEND_BUDGET_OVERSUBSCRIBED",
-                    f"Node '{nid}': fanout_cardinality={fanout_val} x per_item_budget={per_item_val} "
-                    f"({total:.1f}s) exceeds node wait_for budget {wait_for:.1f}s — retries will be "
-                    "cancelled mid-send, producing UNKNOWN outcomes. Raise node_wait_for or lower "
-                    "per_item_budget.",
-                    node_id=nid,
-                )
-
-    # Node send budget reconcile (FAR-410 / FAR-411)
+    # Node send budget reconcile (FAR-411)
     # ------------------------------------------------------------------
+    #
+    # The original FAR-410 flat-node-key path (``_check_node_send_budget`` and
+    # its ``_node_send_budget_values`` / ``_resolve_node_wait_for`` /
+    # ``_node_send_budget_inputs`` helpers) read ``fanout_cardinality`` /
+    # ``per_item_budget`` / ``node_wait_for`` off the node — a namespace no
+    # production writer populates — and had no production caller, only its own
+    # direct unit tests. It was removed rather than kept as test-only
+    # production code. The live reconcile is the connector-config path below.
 
     async def _check_node_send_budget_bindings(
         self,
@@ -3375,9 +3362,9 @@ class GraphValidator:
     ) -> None:
         """Emit NODE_SEND_BUDGET_OVERSUBSCRIBED for a single fan-out binding.
 
-        Mirrors :meth:`_check_node_send_budget`: a binding only counts when its
-        node resolves, its connector instance is found, and the instance's
-        ``fan_out`` config is genuinely fan-out-active (``items_path`` truthy).
+        A binding only counts when its node resolves, its connector instance is
+        found, and the instance's ``fan_out`` config is genuinely fan-out-active
+        (``items_path`` truthy).
         """
         node_id = str(binding.get("node_id")) if binding.get("node_id") else None
         if node_id is None:
