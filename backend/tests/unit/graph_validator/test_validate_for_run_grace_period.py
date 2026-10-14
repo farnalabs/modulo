@@ -212,3 +212,33 @@ async def test_marker_reaches_caller_on_null_payload_early_return():
     assert not result.is_valid
     assert "INPUT_NULL_PAYLOAD" in _codes(result)
     assert "SCHEMA_DEGRADED" in _codes(result)
+
+
+async def test_input_schema_degradation_marker_on_pre_existing_snapshot(caplog):
+    """A pre-cutover snapshot whose INPUT schema is incompatible records the marker.
+
+    This is the input-schema half of the grace period, independent of the
+    field-level schema check: a graph with no output→input edges passes schema
+    compatibility, so the input check is the only source of errors. Its
+    degradation must still be observable to the caller as SCHEMA_DEGRADED, and
+    must be announced with the input-schema log line.
+    """
+    caplog.set_level(logging.WARNING)
+    in_id = uuid.uuid4()
+    graph = {
+        "nodes": [
+            {"id": "entry", "input_schema_pin": {"schema_id": str(in_id), "schema_version": "1.0"}},
+        ],
+        "edges": [],
+    }
+    schema = {"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]}
+    snap = _snapshot(graph, created_at=_PRE_CUTOVER)
+    # One row for the pin-definition resolve, one for the input-schema lookup.
+    rows = [_schema_row(in_id, schema), _schema_row(in_id, schema)]
+
+    result = await GraphValidator().validate_for_run(snap, {}, _session_returning(rows))
+
+    assert not result.is_valid
+    assert "INPUT_SCHEMA_MISMATCH" in _codes(result)
+    assert "SCHEMA_DEGRADED" in _codes(result)
+    assert any("Input schema incompatibility in pipeline" in r.getMessage() for r in caplog.records)
