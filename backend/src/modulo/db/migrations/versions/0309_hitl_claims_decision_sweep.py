@@ -44,8 +44,8 @@ cannot fail on current data.
 
 Downgrade: drops the index and the constraint.
 
-Revision ID: 0308_hitl_claims_decision_sweep
-Revises: 0307_runs_guardrail_override_resume_pending
+Revision ID: 0309_hitl_claims_decision_sweep
+Revises: 0308_runs_dispatch_phase_history
 Create Date: 2026-10-13
 """
 
@@ -54,8 +54,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0308_hitl_claims_decision_sweep"
-down_revision: str | None = "0307_runs_guardrail_override_resume_pending"
+revision: str = "0309_hitl_claims_decision_sweep"
+down_revision: str | None = "0308_runs_dispatch_phase_history"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

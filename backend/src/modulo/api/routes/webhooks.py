@@ -44,7 +44,7 @@ from modulo.api.trigger_busy import BUSY_ACK_DETAIL, record_backpressure_deliver
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import PermissionDenied, assert_org_role
-from modulo.auth.secret_storage import decode_stored_secret_scoped
+from modulo.auth.secret_storage import SecretStorageError
 from modulo.core.audit_coverage import audited, audited_system, bind_audit_actor_source, bind_audit_org
 from modulo.core.dispatch import dispatch_run
 from modulo.core.error_tracking import ErrorIngestionService
@@ -76,6 +76,7 @@ from modulo.core.trigger_engine import (  # noqa: F401
     verify_timestamp,
 )
 from modulo.core.trigger_engine.pre_guardrail import GuardrailBlockedAtIntakeError
+from modulo.core.trigger_secrets import resolve_trigger_secret_scoped
 from modulo.db.crud.trigger import load_trigger_and_org_global
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.trigger import Trigger
@@ -221,9 +222,15 @@ async def _verify_webhook_auth(
     errors the inline path raised: ``TimestampExpiredError`` (400) and
     ``HmacValidationError`` (401), surfaced by the route's outer handler.
 
-    An HMAC-secret DECRYPT failure falls back to the raw stored secret with the
-    exception LOGGED (never silent) — the stored value may itself be the
-    plaintext secret, so refusing outright would break legitimate triggers.
+    FAR-1735: the stored hmac_secret is resolved by the shared resolver: a
+    value that decrypts under the configured key is decrypted and a
+    structurally complete token that cannot be decrypted FAILS CLOSED
+    (:class:`SecretStorageError`) — ciphertext is never used as the HMAC
+    key; a NON-decryptable, non-token value is legacy pre-0306 plaintext
+    accepted with a loud dated warning (the shim is warn-only, not
+    bounded — pre-migration deployments keep delivering, and a future
+    plaintext write is surfaced, never silently
+    accepted).
 
     FAR-1516 ordering is preserved: the ``signature_verified`` actor-source
     promotion fires only AFTER the HMAC check passes, and always BEFORE the
@@ -243,12 +250,21 @@ async def _verify_webhook_auth(
     hmac_secret: str | None = None
     if hmac_secret_raw is not None:
         try:
-            hmac_secret = await decode_stored_secret_scoped(
-                session, hmac_secret_raw, get_settings().fernet_key, org_id=org_id
+            hmac_secret = await resolve_trigger_secret_scoped(
+                session,
+                stored_raw=hmac_secret_raw,
+                fernet_key=get_settings().fernet_key,
+                org_id=org_id,
+                trigger_id=trigger_id,
+                config_key="hmac_secret",
+                context="webhooks_route",
             )
-        except Exception:
-            _log.exception("webhooks.hmac_secret_decrypt_failed trigger=%s", trigger_id)
-            hmac_secret = hmac_secret_raw
+        except SecretStorageError:
+            # Fail closed: undecryptable ciphertext is a server-side secret
+            # misconfiguration — surface it (500 via the route ladder), never
+            # verify the sender's signature against the ciphertext blob.
+            _log.exception("webhooks.hmac_secret_undecryptable trigger=%s", trigger_id)
+            raise
     if hmac_secret is not None:
         ts = verify_timestamp(modulo_timestamp)
         if not verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
@@ -409,9 +425,13 @@ async def _verify_replay_auth(
     ``HmacValidationError`` (401, including the no-hmac_secret-configured
     case), ``ReplayNotFoundError`` (404).
 
-    An HMAC-secret decrypt failure falls back to the raw stored secret with
-    the exception LOGGED (never silent). FAR-1516: on success the actor
-    source is promoted to ``signature_verified`` — same ordering contract as
+    FAR-1735: the stored hmac_secret is resolved by the shared resolver —
+    decryptable values decrypt and a structurally complete token that cannot
+    be decrypted FAILS CLOSED (:class:`SecretStorageError`, 500 via the
+    route ladder); a NON-decryptable, non-token value is legacy pre-0306
+    plaintext accepted with a loud dated warning (warn-only shim).
+    FAR-1516: on success the actor source is promoted to
+    ``signature_verified`` — same ordering contract as
     ``_verify_webhook_auth`` (promotion only after the check passes, always
     before the snapshot / engine work).
     """
@@ -429,12 +449,19 @@ async def _verify_replay_auth(
     if hmac_secret_raw is None:
         raise HmacValidationError
     try:
-        hmac_secret = await decode_stored_secret_scoped(
-            session, hmac_secret_raw, get_settings().fernet_key, org_id=org_id
+        hmac_secret = await resolve_trigger_secret_scoped(
+            session,
+            stored_raw=hmac_secret_raw,
+            fernet_key=get_settings().fernet_key,
+            org_id=org_id,
+            trigger_id=trigger_id,
+            config_key="hmac_secret",
+            context="webhooks_replay",
         )
-    except Exception:
-        _log.exception("webhooks.hmac_secret_decrypt_failed trigger=%s", trigger_id)
-        hmac_secret = hmac_secret_raw
+    except SecretStorageError:
+        # Fail closed: never verify the replay signature against ciphertext.
+        _log.exception("webhooks.hmac_secret_undecryptable trigger=%s", trigger_id)
+        raise
     payload_row = await session.execute(
         select(WebhookPayload).where(
             WebhookPayload.trigger_event_id == event_id,
