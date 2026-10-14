@@ -3616,6 +3616,11 @@ async def query_analytics_concurrency(
     description="Get the full graph (nodes + edges) of a pipeline by ID. "
     "Returns nodes with their configuration (agent_prompt, agent_commands, template_id, timeout_seconds, etc.) "
     "and edges with their source/target/type. "
+    "Secret-bearing node fields (env_vars, context_files, composite_parameter_values, "
+    "parameter_overrides) are masked as \u2022\u2022\u2022\u2022\u2022\u2022 here; those masked values are "
+    "safe to send back unchanged to update_pipeline_graph, which resolves them to the "
+    "stored secrets rather than overwriting them — so a graph containing secrets can be "
+    "read, edited and written back. "
     "For pipelines that use sandbox_agent nodes, this is how you read the current agent_commands before modifying it.",
 )
 @_RETRY_DB
@@ -4116,7 +4121,14 @@ async def _update_pipeline_graph_impl(
     "HITL gates (node hitl_config or edge hitl_review_config) must carry a human-provided "
     "description (min 20 chars) explaining why the gate exists; a graph write whose "
     "gates lack one is rejected with validation_failed (FAR-613: the MCP path enforces "
-    "the HITL description rule specifically). Returns the updated graph."
+    "the HITL description rule specifically). "
+    "Redacted secret values round-trip safely: the credential-bearing node fields "
+    "(env_vars, context_files, composite_parameter_values, parameter_overrides) are rendered "
+    "as \u2022\u2022\u2022\u2022\u2022\u2022 on read, and a masked value you re-send is resolved back to the "
+    "stored secret before the write persists — you CAN update a graph that contains secrets "
+    "without re-entering them. Only a new, non-masked value overwrites a stored secret; "
+    "omitting the field drops it, so re-send masked values unchanged rather than dropping them. "
+    "Returns the updated graph."
 )
 @mcp_audited("pipeline_graph_updated", "pipeline", fail_closed=False)
 @_RETRY_DB
