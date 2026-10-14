@@ -293,7 +293,7 @@ def test_helper_returns_empty_for_unrouted_node():
         "agent_id": "x",
         "connector_binding": {"instance_id": "00000000-0000-0000-0000-000000000000", "operation": "write"},
     }
-    assert connector_binding_required_acl_operations(node) == []
+    assert not connector_binding_required_acl_operations(node)
 
 
 async def test_binding_check_tolerates_unreadable_graph():
