@@ -118,12 +118,10 @@ def decide_observation(
         return ObservationOutcome(tools_hash=observed_hash, approval_status=APPROVAL_STATUS_BLOCKED, drifted=False)
 
     if approved_hash is None:
-        status = (
-            current_status
-            if current_status in (APPROVAL_STATUS_UNAPPROVED, APPROVAL_STATUS_BLOCKED)
-            else APPROVAL_STATUS_UNAPPROVED
-        )
-        return ObservationOutcome(tools_hash=observed_hash, approval_status=status, drifted=False)
+        # No approved hash to compare against: store the observed hash and reset
+        # to ``unapproved``. A defensive approved/approved-stale without a hash is
+        # untrustworthy; ``blocked`` never reaches here (returned above).
+        return ObservationOutcome(tools_hash=observed_hash, approval_status=APPROVAL_STATUS_UNAPPROVED, drifted=False)
 
     if observed_hash == approved_hash:
         return ObservationOutcome(tools_hash=observed_hash, approval_status=APPROVAL_STATUS_APPROVED, drifted=False)

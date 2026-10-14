@@ -9,8 +9,9 @@ client it does not control, so the honest posture is *detect and surface*.
 It is deliberately a dedicated table rather than a ``ConnectorInstance``
 (routed more, FAR-1692 Decision 1(a)): an MCP server has a distinct lifecycle —
 an observed tool-definition set and a pin/approval state — that the dispatch
-connector contract does not carry. Credentials, where held, reuse the same
-Fernet-at-rest helper as the connector CRUD so crypto does not diverge.
+connector contract does not carry. Credentials, where held, are Fernet-encrypted
+at rest via the shared ``modulo.auth.secret_storage.encrypt_stored_secret`` helper
+so at-rest crypto does not diverge.
 
 **Tool-definition pinning (S2).** ``tools_json`` is the last observed tool set;
 ``tools_hash`` is its canonical hash (``core.mcp.tool_pinning``). Approval

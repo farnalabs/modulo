@@ -22,7 +22,6 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
@@ -39,6 +38,7 @@ from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.api.team_scope import validate_owner_team_for_create, validate_team_transition_for_update
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.secret_storage import encrypt_stored_secret
 from modulo.core.audit_coverage import audited
 from modulo.core.mcp.tool_pinning import (
     ToolPinningError,
@@ -174,10 +174,6 @@ def _to_response(server: Any) -> McpServerResponse:
     )
 
 
-def _encrypt_credentials(credentials: str, fernet_key: str) -> bytes:
-    return Fernet(fernet_key.encode()).encrypt(credentials.encode())
-
-
 @router.get("")
 @handle_db_errors(_CODE_MCP_SERVERS_LIST)
 async def list_mcp_servers_endpoint(
@@ -231,7 +227,7 @@ async def create_mcp_server_endpoint(
     principal: TenantPrincipal = require_permission(_PERM_CREATE),
     settings: Settings = Depends(get_settings),
 ) -> McpServerResponse:
-    ciphertext = _encrypt_credentials(req.credentials, settings.fernet_key) if req.credentials else None
+    ciphertext = encrypt_stored_secret(req.credentials, settings.fernet_key) if req.credentials else None
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -327,7 +323,7 @@ async def update_mcp_server_endpoint(
     updates: dict[str, Any] = req.model_dump(exclude_unset=True)
     new_credentials: str | None = updates.pop("credentials", None)
     if new_credentials is not None:
-        updates["credentials_ciphertext"] = _encrypt_credentials(new_credentials, settings.fernet_key)
+        updates["credentials_ciphertext"] = encrypt_stored_secret(new_credentials, settings.fernet_key)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
