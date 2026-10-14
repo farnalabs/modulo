@@ -41,6 +41,9 @@ def _install(
     inst.collection_version = version
     inst.organisation_id = uuid.uuid4()
     inst.resolved_manifest = manifest if manifest is not None else {}
+    # Explicit None: a bare MagicMock auto-creates deleted_at as a truthy mock,
+    # which upgrade._load_install's soft-delete guard rejects as retired.
+    inst.deleted_at = None
     return inst
 
 

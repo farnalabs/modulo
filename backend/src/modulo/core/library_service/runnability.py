@@ -62,10 +62,16 @@ async def compute_runnable(
 
     Pure function on read: checks the connector checklist and org model
     backend presence.  Returns False when any connector is not configured+bound
-    or the org has no model backends.
+    or the org has no model backends.  A soft-deleted (uninstalled) install is
+    retired history and is never runnable — ``session.get`` can resolve such a
+    row from the session identity map, bypassing the global ``deleted_at IS
+    NULL`` filter, so the check is explicit (same rule as
+    ``uninstall._load_install``).
     """
     install = await session.get(CollectionInstall, install_id)
     if install is None:
+        return False
+    if install.deleted_at is not None:
         return False
 
     # Check connector requirements
