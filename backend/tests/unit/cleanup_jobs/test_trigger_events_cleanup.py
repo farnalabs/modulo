@@ -6,13 +6,11 @@ transaction convention that the system session factory requires.
 """
 
 import uuid
-from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import modulo.core.saq_worker as sw
 from modulo.core.cleanup_jobs.trigger_events_cleanup import (
@@ -20,7 +18,6 @@ from modulo.core.cleanup_jobs.trigger_events_cleanup import (
     DEFAULT_RETENTION_DAYS,
     cleanup_old_trigger_events,
 )
-from modulo.db.models.base import Base
 from modulo.db.models.trigger_event import TriggerEvent
 
 
@@ -235,20 +232,6 @@ class TestSaqTriggerEventsCleanupAutobeginTransaction:
     ``cleanup_old_trigger_events`` against an in-memory SQLite schema — not a
     mocked session.
     """
-
-    @pytest.fixture
-    async def autobegin_false_factory(self) -> AsyncGenerator[async_sessionmaker, None]:
-        engine = create_async_engine("sqlite+aiosqlite://", echo=False)
-        async with engine.begin() as conn:
-            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[TriggerEvent.__table__]))
-            # The trigger_events FK targets (organisations/triggers/runs) are
-            # not created here; foreign-key enforcement is disabled for the test.
-            await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
-        factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
-        try:
-            yield factory
-        finally:
-            await engine.dispose()
 
     async def test_cron_deletes_old_rows_against_autobegin_false_session(self, autobegin_false_factory) -> None:
         """Prove-the-fix: an old event survives WITHOUT the cleanup job and is
