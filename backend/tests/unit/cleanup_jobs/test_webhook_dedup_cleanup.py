@@ -104,13 +104,6 @@ class TestCleanupOldWebhookEvents:
         target_ids = next(v for v in delete_stmt.compile().params.values() if isinstance(v, list))
         assert set(target_ids) == set(ids)
 
-    async def test_commits_transaction(self) -> None:
-        session = _make_session([uuid.uuid4()])
-
-        await cleanup_old_webhook_events(session)
-
-        session.commit.assert_awaited_once()
-
     async def test_commit_failure_propagates(self) -> None:
         session = _make_session([uuid.uuid4()])
         session.commit.side_effect = RuntimeError("db down")

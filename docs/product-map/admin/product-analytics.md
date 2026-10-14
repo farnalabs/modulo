@@ -74,7 +74,7 @@ an eligible tier.
       `TestGetConsentingOrgsLicenseEnforcement`)
 - [ ] License/plan eligibility gating is not wired into request-time routes: the
       effective-plan resolution (`core/feature_flags.py` `resolve_plan_context` /
-      `require_feature`) never consults `should_degrade_to_community`, so a
+      `api/dependencies.py` `require_feature`) never consults `should_degrade_to_community`, so a
       degraded org keeps its paid tier on API routes until that half lands.
       The dump half above is done; the route half remains feature completion,
       not a QA fix - tracked for a follow-up ticket.
