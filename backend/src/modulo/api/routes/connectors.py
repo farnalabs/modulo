@@ -39,6 +39,7 @@ from modulo.connectors.github import GitHubConnector, GitHubNetworkError, is_fin
 from modulo.connectors.rest import RestConnector
 from modulo.core.audit_coverage import audited
 from modulo.core.connector_hub import ConnectorDecryptError, ConnectorHub, buildable_connector_type_ids
+from modulo.core.sanitize_log import sanitise_log_value
 from modulo.core.secrets_backend import (
     CredentialReferenceError,
     create_secrets_backend,
@@ -566,8 +567,8 @@ async def _verify_github_credentials(credentials: str, base_url: str | None = No
         )
         logger.warning(
             "connectors.github.verification_unreachable base_url=%s error=%s",
-            target,
-            exc,
+            sanitise_log_value(target),
+            sanitise_log_value(exc),
         )
         return warning
     except (HTTPStatusError, ValueError) as exc:

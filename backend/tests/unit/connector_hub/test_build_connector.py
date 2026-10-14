@@ -214,6 +214,15 @@ def test_build_github_blank_base_url_falls_back_to_default() -> None:
     assert connector._base_url == "https://api.github.com"
 
 
+@pytest.mark.parametrize("type_id", ["github", "github_actions_ci"])
+def test_build_github_family_null_base_url_falls_back_to_default(type_id: str) -> None:
+    """An explicit ``base_url: null`` is 'no instance configured' too — the
+    github.com default applies (the ``value is None`` arm of
+    ``_optional_base_url``), never a ``None`` passed through as the URL."""
+    connector = _build_connector(type_id, {"base_url": None}, {"token": "tok"})
+    assert connector._base_url == "https://api.github.com"
+
+
 def test_build_github_non_string_base_url_raises() -> None:
     """A mis-typed ``base_url`` fails loudly at build time, not at request time."""
     with pytest.raises(TypeError, match="base_url' must be a string"):
