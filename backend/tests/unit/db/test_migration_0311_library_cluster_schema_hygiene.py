@@ -8,7 +8,7 @@ Lenses:
 
 * **Chain** — 0311 revises ``0310_library_cluster_db_hardening``; the
   migrations directory has exactly one head
-  (``0311_library_cluster_schema_hygiene``, pinned by all sibling chain
+  (``0312_memberships_active_lookups``, pinned by all sibling chain
   tests); the revision id matches the filename; neither ``branch_labels`` nor
   ``depends_on`` is set.
 * **Upgrade** — drops the two redundant indexes, then adds the
@@ -44,7 +44,7 @@ from modulo.db.models.publisher import Publisher
 
 _MIGRATION_REVISION = "0311_library_cluster_schema_hygiene"
 _MIGRATION_DOWN_REVISION = "0310_library_cluster_db_hardening"
-_HEAD_MIGRATION = "0311_library_cluster_schema_hygiene"
+_HEAD_MIGRATION = "0312_memberships_active_lookups"
 
 _DROP_INSTALL_ENTITY_INDEX = "ix_collection_install_entity_install_id"
 _DROP_PUBLISHER_INDEX = "ix_publishers_public_key_hex"
@@ -103,7 +103,7 @@ def _joined(rec: _Recorder) -> str:
 
 
 class TestChain:
-    def test_single_head_is_0311_library_cluster_schema_hygiene(self) -> None:
+    def test_single_head_is_0312_memberships_active_lookups(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 

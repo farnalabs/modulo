@@ -1,10 +1,12 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, UniqueConstraint, Uuid, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, UniqueConstraint, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
+
+_ACTIVE_WHERE = "deactivated_at IS NULL"
 
 
 class OrgMembership(OrgScoped):
@@ -12,6 +14,20 @@ class OrgMembership(OrgScoped):
     __table_args__ = (
         UniqueConstraint("account_id", "organisation_id", name="uq_org_memberships_account_org"),
         CheckConstraint("role IN ('admin', 'operator', 'runner', 'viewer')", name="ck_org_memberships_role"),
+        # Active-admin lookup for (organisation, role): backs the
+        # last-admin guard count (assert_not_last_admin) and the SCIM
+        # admin scan, both filtering
+        # WHERE organisation_id = ? AND role = 'admin' plus the shared
+        # deactivated_at IS NULL liveness scope. The pre-existing
+        # single-column organisation_id index cannot serve the role
+        # equality; the partial predicate keeps tombstoned rows out.
+        Index(
+            "ix_org_memberships_org_role_active",
+            "organisation_id",
+            "role",
+            postgresql_where=text(_ACTIVE_WHERE),
+            sqlite_where=text(_ACTIVE_WHERE),
+        ),
     )
 
     account_id: Mapped[uuid.UUID] = mapped_column(
