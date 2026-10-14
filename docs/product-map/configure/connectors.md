@@ -98,13 +98,13 @@ and per-destination rate limiting.
       a Redis-atomic shared bucket when a `redis_client` is wired at the
       composition root (fleet-wide), otherwise the connector-local per-process
       bucket is authoritative (single-worker / dev parity); a configured shared
-      limiter FAILS CLOSED on a Redis outage — it never falls back to a
+      limiter FAILS CLOSED on a Redis outage - it never falls back to a
       per-process bucket that would multiply the effective cap by the worker
       count (`connectors/rest`)
 - [x] Fan-out emits items sequentially with redacted outcome records; cardinality
       exceeds max_cardinality fails CLOSED before any request
 - [x] The REST connector's health check issues the configured request with the
-      credentials applied and reports OK only for a 2xx status — redirects are
+      credentials applied and reports OK only for a 2xx status - redirects are
       never followed, so a 3xx is raised as the typed `RESTStatusError` before
       the sub-400 check and is reported unhealthy
       (`backend/tests/bdd/features/connectors/connector_health.feature`)
@@ -220,15 +220,15 @@ and per-destination rate limiting.
       (`connector_crud.feature`, `steps/test_connector_crud.py`)
 - [x] A connector's operation scope is UNRESTRICTED unless a non-empty
       allowlist restrains it (FAR-1564): the single shared
-      `unrestricted_allowed_operations` predicate — used by `ConnectorACL`, the
+      `unrestricted_allowed_operations` predicate - used by `ConnectorACL`, the
       graph validator's connector-binding check and the guardrail conformance
       reader so one stored value is never read restrictively on one path and
-      permissively on another — treats `None` AND the `[]` that every
+      permissively on another - treats `None` AND the `[]` that every
       REST/MCP/UI-created connector stores as unrestricted (a default-created
       connector is never locked out of every operation), a NON-EMPTY list is an
       allowlist (there is no explicit deny-all; removing the connector is the
       lock), and any MALFORMED non-list value fails CLOSED to the empty
-      allowlist so every operation is denied — malformed input restricts, never
+      allowlist so every operation is denied - malformed input restricts, never
       grants (`backend/src/modulo/connectors/base.py`,
       `backend/src/modulo/core/graph_validator/__init__.py`,
       `backend/src/modulo/core/guardrails/conformance.py`;
@@ -241,7 +241,7 @@ and per-destination rate limiting.
       / `canonical_capability` / `canonical_capability_set` live in the
       stdlib-only `connectors/base.py` leaf, so `ConnectorACL` (enforcement) and
       `core.guardrails.conformance` (certification) import the SAME code and can
-      never give opposite answers for one stored value — before FAR-1594
+      never give opposite answers for one stored value - before FAR-1594
       conformance certified a stored `["github.read"]` as `read` while the ACL
       denied the read. A stored ALLOWLIST entry is a declaration of GRANT, so a
       type qualifier is reduced to the bare `Capability` if it names the
@@ -249,7 +249,7 @@ and per-destination rate limiting.
       `github.write` -> `write`); the qualifier is only TRUSTED for that surface
       type (FAR-1616), so a mis-typed qualifier (`github.write` on a filesystem
       connector), or a qualified entry whose surface type cannot be verified, is
-      REJECTED fail-closed and logged (it grants nothing) — it is never dropped
+      REJECTED fail-closed and logged (it grants nothing) - it is never dropped
       to the bare capability and granted on the wrong surface. A conformance
       CLAIM is a binding REQUEST, so it keeps its qualifier (`github.read` binds
       to the github surface specifically). `ConnectorACL` builds its restricted
@@ -261,7 +261,7 @@ and per-destination rate limiting.
       entries that are not capabilities in any accepted spelling
       (`sandbox.egress`, `egress:github.com`) are never rewritten (a non-string
       list entry is dropped silently; a string entry that is not a capability is
-      dropped with a log — both grant nothing), while a non-list value yields the
+      dropped with a log - both grant nothing), while a non-list value yields the
       empty set matching the fail-closed FAR-1564 treatment
       (`backend/src/modulo/connectors/base.py`,
       `backend/src/modulo/core/guardrails/conformance.py`;
@@ -271,19 +271,19 @@ and per-destination rate limiting.
       restated by FAR-1618). Teams are a VISIBILITY GROUPING, not a
       credential trust boundary, so the rule has exactly one shape: a
       team-private connector (`visibility: team`) is only usable by a
-      pipeline owned by the SAME team — a different team's pipeline or an
-      org pipeline is refused — and an org-visibility connector
+      pipeline owned by the SAME team - a different team's pipeline or an
+      org pipeline is refused - and an org-visibility connector
       (`visibility: org`) is SHARED ACROSS THE ORGANISATION: it binds to ANY
       pipeline, including one owned by a team, and never produces a
-      mismatch. (FAR-1618 removed the reverse direction FAR-1515 had added —
+      mismatch. (FAR-1618 removed the reverse direction FAR-1515 had added -
       a TEAM pipeline pinning an org connector, mirrored at run time by the
-      FAR-516 `ConnectorACL.check` run-gate — because it contradicted this
+      FAR-516 `ConnectorACL.check` run-gate - because it contradicted this
       shared rule; there is no save-time or run-time rejection of an
       org-visibility connector on a team pipeline any more.) The
       candidate rows are read team-blind but org-scoped
       (`db.crud.team_scope.team_blind_org_scope`) because the
       `rls_team_isolation` policy would otherwise hide another team's
-      team-private row from the caller's session — the very binding under
+      team-private row from the caller's session - the very binding under
       judgement would look absent and the save would pass; with that widened
       read an absent id is DEFINITIVE and fails CLOSED as the same named
       `connector_team_mismatch` (`ConnectorBindingMissingError`), never a
@@ -313,14 +313,14 @@ and per-destination rate limiting.
 
 ## Known Gaps
 
-- Per-item fan-out outcome trace spans are deferred — operation-level OTel trace
+- Per-item fan-out outcome trace spans are deferred - operation-level OTel trace
   spans and per-destination outcome/latency metrics are emitted in v1; only the
   per-item spans are deferred.
 - A per-tenant weighted concurrency semaphore / bounded-concurrency fan-out fork
-  is deferred — fan-out emits items sequentially in v1 (no concurrent fork);
+  is deferred - fan-out emits items sequentially in v1 (no concurrent fork);
   throughput relies on pipeline-level concurrency limits and the connector's
   single connection-pooled client.
-- The distinct request-to-response classification layer is deferred — ingestion
+- The distinct request-to-response classification layer is deferred - ingestion
   classification currently runs as one opaque hop (a separate
   deduplicate/classify layer is not modelled).
 
@@ -330,7 +330,7 @@ and per-destination rate limiting.
   shared by the ACL and the guardrail conformance reader, merged in PR #1451):
   the vocabulary helpers (`qualified_capability` / `canonical_capability` /
   `canonical_capability_set`) shipped with NO coverage in either product-map
-  layer — the manifest `feat-connectors` registry had the FAR-1564
+  layer - the manifest `feat-connectors` registry had the FAR-1564
   `unrestricted_allowed_operations` semantics but not the canonicalisation that
   keeps enforcement and certification in step, and this tracker named neither.
   Added the checked behaviour line (ONE shared stdlib-only vocabulary in

@@ -84,13 +84,13 @@ purging old run data.
 ## Known Gaps
 
 ## QA History
-- 2026-09-26: **Improve Architecture product-map walk** — tracked the
+- 2026-09-26: **Improve Architecture product-map walk** - tracked the
   FAR-1102 decision-record housekeeping block surface that shipped without a
   product-map home: the typed `blocked_by: policy_gate_decisions` response on
   the REST + MCP housekeeping delete paths (with the shared
   `is_policy_gate_decision_fk_error` classification) is now a behaviour line
   with unit-test citations.
-- 2026-09-14: **product-map review pass** — closed the "no BDD for
+- 2026-09-14: **product-map review pass** - closed the "no BDD for
   rate-limit middleware integration with specific endpoint types" gap: wired
   `rate_limiting/rate_limiting.feature` into the executing suite via
   `steps/test_rate_limiting.py` (8 scenarios across independent endpoint budgets,
@@ -100,7 +100,7 @@ purging old run data.
   `auth_brute_force.feature` were removed from the draft (that coverage already
   executes in `steps/test_auth_rate_limiting.py`). Rate-limit middleware behaviour is
   no longer unit-tested only.
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass** - registered the shared
   `PageHeader` right-slot surface (`components/shared/PageHeader.vue`, static testid
   `page-header-right`) in the manifest `elements:` inventory for
   `/admin/housekeeping` and `/admin/run-retention`, whose owning views
@@ -110,7 +110,7 @@ purging old run data.
   (`test_mapped_route_elements_cover_owning_view_testids`) so the header action
   surface on both pages stays visible to Assistant's docs indexer / `/api/v1/manifest`.
 
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass** - registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/housekeeping`, `/admin/run-retention`,
   `/admin/runners/concurrency`, `/admin/runners/profiles`,
@@ -120,7 +120,7 @@ purging old run data.
   surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass** - extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/settings/rate-limits` and `/settings/runtime-config`: the whole-page view(s)
   `SettingsRateLimitsView.vue` / `SettingsRuntimeConfigView.vue` render static `data-testid`s that the
@@ -129,17 +129,17 @@ purging old run data.
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-11: **product-map review pass** — registered the
+- 2026-09-11: **product-map review pass** - registered the
   app-layout DB-capacity banner (`DbCapacityBanner.vue` static testids
   `db-capacity-banner`, `db-capacity-usage`, `db-capacity-run-retention-link`,
   `db-capacity-housekeeping-link`) on the `/admin/housekeeping` and
-  `/admin/run-retention` manifest `elements:` inventories — the banner renders
+  `/admin/run-retention` manifest `elements:` inventories - the banner renders
   organisation-wide via `AppLayout.vue` and its links land on those two pages,
   but its surface had no product-map home.
   `test_mapped_route_elements_cover_owning_view_testids` now maps both routes to
   their page views + `DbCapacityBanner.vue`, so the capacity banner cannot ship
   invisible to Assistant's docs indexer / `/api/v1/manifest`.
-- 2026-09-11: **product-map review pass** — closed the
+- 2026-09-11: **product-map review pass** - closed the
   `feat-runtime` element-inventory drift on the Runners concurrency tab: the
   effective-cap and preflight panels (`runner-concurrency-effective`,
   `runner-concurrency-preflight` in `RunnersConcurrencyTab.vue`) and the shared
@@ -148,7 +148,7 @@ purging old run data.
   `test_mapped_route_elements_cover_owning_view_testids` now maps that route to
   the layout + tab + status-strip owning views so the surface can no longer ship
   invisible to Assistant's docs indexer / `/api/v1/manifest`.
-- 2026-09-07: **product-map review pass** — added this
+- 2026-09-07: **product-map review pass** - added this
   behaviour-tracker for `feat-runtime`, which previously had no
   `docs/product-map/` entry. Behaviours verified against the runtime config,
   rate-limit, housekeeping, and run-retention routes and their test suites.
