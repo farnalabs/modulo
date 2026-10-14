@@ -381,9 +381,16 @@ class RatingSubmit(BaseModel):
 
 
 class RatingResponse(BaseModel):
+    """One rating as the API renders it.
+
+    ``account_id`` mirrors the ``PrimitiveRating`` ORM column exactly (an
+    earlier ``user_id`` name had no ORM counterpart, so ``model_validate``
+    failed on every real row); ``None`` for an anonymous/removed account.
+    """
+
     id: uuid.UUID
     primitive_id: uuid.UUID
-    user_id: uuid.UUID | None
+    account_id: uuid.UUID | None
     thumbs_up: bool
     comment: str | None
     created_at: datetime
@@ -407,10 +414,18 @@ class AbuseReportSubmit(BaseModel):
 
 
 class AbuseReportResponse(BaseModel):
+    """The 201 body of ``POST /{primitive_id}/ratings/abuse``.
+
+    ``reporter_account_id`` mirrors the ``PrimitiveAbuseReport`` ORM column
+    exactly (an earlier ``reporter_user_id`` name had no ORM counterpart, so
+    ``model_validate`` raised ``ValidationError`` — which ``handle_db_errors``
+    maps to 422 — on every real report).
+    """
+
     id: uuid.UUID
     primitive_id: uuid.UUID
     rating_id: uuid.UUID | None
-    reporter_user_id: uuid.UUID | None
+    reporter_account_id: uuid.UUID | None
     reason: str
     status: str
     created_at: datetime
@@ -421,9 +436,8 @@ class AbuseReportResponse(BaseModel):
 class AbuseReportQueueItem(BaseModel):
     """One report as the moderation queue renders it.
 
-    Field names mirror the ``PrimitiveAbuseReport`` ORM columns exactly
-    (``reporter_account_id`` — the submit response's ``reporter_user_id`` has
-    no ORM counterpart), so this shape validates against a real, flushed row.
+    Field names mirror the ``PrimitiveAbuseReport`` ORM columns exactly, so
+    this shape validates against a real, flushed row.
     """
 
     id: uuid.UUID
@@ -1849,8 +1863,9 @@ async def review_abuse_report_endpoint(
     there is no rating-delete path in the product and adding one is a
     separate product decision.
 
-    A report belonging to another organisation is invisible here (org-scoped
-    read + RLS), so it answers 404 rather than leaking its existence.
+    A report belonging to another organisation is invisible here (explicit
+    ``org_id`` predicate + RLS), so it answers 404 rather than leaking its
+    existence.
     """
     try:
         async with session.begin():
@@ -1858,6 +1873,7 @@ async def review_abuse_report_endpoint(
             report = await review_abuse_report(
                 session,
                 report_id,
+                org_id=principal.organisation_id,
                 new_status=req.status,
                 reviewer_account_id=principal.account_id,
             )

@@ -5977,8 +5977,9 @@ export interface paths {
          *     there is no rating-delete path in the product and adding one is a
          *     separate product decision.
          *
-         *     A report belonging to another organisation is invisible here (org-scoped
-         *     read + RLS), so it answers 404 rather than leaking its existence.
+         *     A report belonging to another organisation is invisible here (explicit
+         *     ``org_id`` predicate + RLS), so it answers 404 rather than leaking its
+         *     existence.
          */
         post: operations["review_abuse_report_endpoint_api_v1_libraries_admin_abuse_reports__report_id__resolve_post"];
         delete?: never;
@@ -10339,9 +10340,8 @@ export interface components {
          * AbuseReportQueueItem
          * @description One report as the moderation queue renders it.
          *
-         *     Field names mirror the ``PrimitiveAbuseReport`` ORM columns exactly
-         *     (``reporter_account_id`` — the submit response's ``reporter_user_id`` has
-         *     no ORM counterpart), so this shape validates against a real, flushed row.
+         *     Field names mirror the ``PrimitiveAbuseReport`` ORM columns exactly, so
+         *     this shape validates against a real, flushed row.
          */
         AbuseReportQueueItem: {
             /**
@@ -10397,7 +10397,15 @@ export interface components {
              */
             status: "reviewed" | "dismissed";
         };
-        /** AbuseReportResponse */
+        /**
+         * AbuseReportResponse
+         * @description The 201 body of ``POST /{primitive_id}/ratings/abuse``.
+         *
+         *     ``reporter_account_id`` mirrors the ``PrimitiveAbuseReport`` ORM column
+         *     exactly (an earlier ``reporter_user_id`` name had no ORM counterpart, so
+         *     ``model_validate`` raised ``ValidationError`` — which ``handle_db_errors``
+         *     maps to 422 — on every real report).
+         */
         AbuseReportResponse: {
             /**
              * Id
@@ -10411,8 +10419,8 @@ export interface components {
             primitive_id: string;
             /** Rating Id */
             rating_id: string | null;
-            /** Reporter User Id */
-            reporter_user_id: string | null;
+            /** Reporter Account Id */
+            reporter_account_id: string | null;
             /** Reason */
             reason: string;
             /** Status */
@@ -17745,7 +17753,14 @@ export interface components {
             /** Total */
             total: number;
         };
-        /** RatingResponse */
+        /**
+         * RatingResponse
+         * @description One rating as the API renders it.
+         *
+         *     ``account_id`` mirrors the ``PrimitiveRating`` ORM column exactly (an
+         *     earlier ``user_id`` name had no ORM counterpart, so ``model_validate``
+         *     failed on every real row); ``None`` for an anonymous/removed account.
+         */
         RatingResponse: {
             /**
              * Id
@@ -17757,8 +17772,8 @@ export interface components {
              * Format: uuid
              */
             primitive_id: string;
-            /** User Id */
-            user_id: string | null;
+            /** Account Id */
+            account_id: string | null;
             /** Thumbs Up */
             thumbs_up: boolean;
             /** Comment */

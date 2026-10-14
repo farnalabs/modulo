@@ -234,6 +234,7 @@ def test_resolve_records_decision_and_stamps_principal(client: TestClient, decis
     assert resp.status_code == 200, resp.text
     args = crud.await_args
     assert args.args[1] == report_id
+    assert args.kwargs["org_id"] == _ORG_ID
     assert args.kwargs["new_status"] == decision
     assert args.kwargs["reviewer_account_id"] == _USER_ID
     body = resp.json()
