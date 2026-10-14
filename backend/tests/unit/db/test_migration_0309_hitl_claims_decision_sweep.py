@@ -136,7 +136,7 @@ class TestUpgradeNonPostgres:
         the CHECK is Postgres-only; the model's ``create_all`` path supplies it
         on SQLite (the 0246 / 0291 precedent)."""
         rec = _OpRecorder("sqlite").run("upgrade")
-        assert rec.check_calls == []
+        assert not rec.check_calls
         assert len(rec.index_calls) == 1
 
 
@@ -156,7 +156,7 @@ class TestDowngrade:
 
     def test_non_postgres_drops_only_the_index(self) -> None:
         rec = _OpRecorder("sqlite").run("downgrade")
-        assert rec.drop_constraint_calls == []
+        assert not rec.drop_constraint_calls
         assert len(rec.drop_index_calls) == 1
 
 
