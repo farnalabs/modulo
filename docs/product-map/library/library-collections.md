@@ -38,8 +38,12 @@ gated behind the `library_collection` feature flag.
       (`core/library_service/install.py`, `test_library_collection_lifecycle.py`)
 - [x] Uninstall deletes unmodified entities (matching `collection_install_id`) and
       detaches provenance from modified entities (already-cleared
-      `collection_install_id`); the `CollectionInstall` record and entity tracking
-      rows are deleted (`core/library_service/uninstall.py`)
+      `collection_install_id`); the `CollectionInstall` record itself is
+      SOFT-deleted (`deleted_at` stamped) and its `collection_install_entity`
+      rows are retained as audit history, hidden from the normal read paths —
+      so a reinstall of the same collection is permitted afterwards (the
+      uniqueness is a partial unique index on `(organisation_id, collection_id)`
+      `WHERE deleted_at IS NULL`) (`core/library_service/uninstall.py`)
 - [x] Re-install of the same version is idempotent: missing entities are
       re-added via `materialize_import` without duplicating existing ones
       (`test_library_collection_lifecycle.py`)
