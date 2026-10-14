@@ -148,7 +148,7 @@ def _make_collection_primitive(
     p.author = _USER_ID.hex
     p.version = "1.0"
     p.tags = []
-    p.content_json = {"pins": manifest_pins or []}
+    p.content_json = {"manifest_pins": manifest_pins or []}
     p.source_url = None
     p.forked_from = None
     p.checksum = None
@@ -247,7 +247,11 @@ class TestCreateCollectionEndpoint:
         mock_prim = _make_collection_primitive()
         with (
             patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
-            patch("modulo.api.routes.library.create_library_primitive", new_callable=AsyncMock, return_value=mock_prim),
+            patch(
+                "modulo.api.routes.library.create_library_primitive",
+                new_callable=AsyncMock,
+                return_value=mock_prim,
+            ) as create_mock,
         ):
             resp = client.post(
                 "/api/v1/libraries/collections",
@@ -261,6 +265,11 @@ class TestCreateCollectionEndpoint:
         data = resp.json()
         assert data["status"] == "draft"
         assert data["manifest_pins"] == [{"slug": "my-schema", "version": "1.0"}]
+        # The pins must be persisted under the CANONICAL ``manifest_pins`` key —
+        # the one the install/upgrade readers look for — not the legacy ``pins``.
+        assert create_mock.call_args.kwargs["content_json"] == {
+            "manifest_pins": [{"slug": "my-schema", "version": "1.0"}]
+        }
 
     def test_create_collection_duplicate_slug(self, client: TestClient) -> None:
         existing = _make_collection_primitive()
@@ -1639,7 +1648,7 @@ def _make_published_collection(
     prim.description = "desc"
     prim.author = "test"
     prim.tags = []
-    prim.content_json = {"pins": []}
+    prim.content_json = {"manifest_pins": []}
     prim.manifest_pins = [{"slug": "my-schema", "version": "1.0"}]
     prim.owner_team_id = None
     prim.visibility = "org"

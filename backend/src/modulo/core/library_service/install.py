@@ -919,7 +919,15 @@ async def install_collection(
     # 2. Resolve manifest pins
     # Local org collections carry the pins on the ``manifest_pins`` column;
     # built-in modulo/community collections carry them in ``content_json``.
-    manifest_pins = collection.manifest_pins or (collection.content_json or {}).get("manifest_pins") or []
+    # The legacy ``content_json["pins"]`` key (written by an earlier version of
+    # the API routes) is accepted as a last resort so already-persisted rows
+    # keep resolving; the ``manifest_pins`` COLUMN stays the first source.
+    manifest_pins = (
+        collection.manifest_pins
+        or (collection.content_json or {}).get("manifest_pins")
+        or (collection.content_json or {}).get("pins")
+        or []
+    )
     resolved_pins: list[LibraryPrimitive] = []
     for pin in manifest_pins:
         slug = pin.get("slug", "")

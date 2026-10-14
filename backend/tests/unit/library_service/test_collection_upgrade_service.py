@@ -219,6 +219,15 @@ class TestSnapshotPins:
         out = _snapshot_pins(install, collection)
         assert out == [{"slug": "s3", "version": "3.0", "primitive_type": ""}]
 
+    def test_falls_back_to_legacy_content_json_pins_key(self) -> None:
+        """Tolerant read: a collection persisted by the earlier API routes (which
+        wrote its pins under the legacy ``content_json["pins"]`` key instead of
+        ``content_json["manifest_pins"]``) must still resolve its pins."""
+        install = _install(manifest={"pins": []})
+        collection = _prim(content_json={"pins": [{"slug": "s4", "version": "4.0"}]})
+        out = _snapshot_pins(install, collection)
+        assert out == [{"slug": "s4", "version": "4.0", "primitive_type": ""}]
+
 
 class TestPinEntityMap:
     def test_non_dict_returns_empty(self) -> None:

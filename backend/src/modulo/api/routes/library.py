@@ -2236,7 +2236,11 @@ async def create_collection_endpoint(
                 author=principal.account_id.hex,
                 version="1.0",
                 tags=[],
-                content_json={"pins": [p.model_dump() for p in req.manifest_pins]},
+                # ``manifest_pins`` is the CANONICAL key the install/upgrade
+                # readers look for (and what the in-code registry seed data
+                # writes). The previous ``"pins"`` key was never read back, so
+                # API-authored collections resolved no pins on install.
+                content_json={"manifest_pins": [p.model_dump() for p in req.manifest_pins]},
                 source_url=None,
                 forked_from=None,
                 checksum=None,
@@ -2289,7 +2293,7 @@ async def update_collection_endpoint(
             await _set_rls_context(session, principal)
             prim = await _load_draft_collection(session, org_id, primitive_id)
             prim.manifest_pins = [p.model_dump() for p in req.manifest_pins]
-            prim.content_json = {"pins": prim.manifest_pins}
+            prim.content_json = {"manifest_pins": prim.manifest_pins}
             await session.flush()
     except HTTPException:
         raise
