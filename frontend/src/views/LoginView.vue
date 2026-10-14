@@ -168,6 +168,7 @@ import { setMustChangePassword } from '../lib/mustChangePassword'
 import type { components } from '../lib/api/schema'
 import SsoBrandMark from '../components/SsoBrandMark.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { normaliseSsoErrorCode, ssoErrorI18nKey } from '../lib/ssoError'
 
 interface SsoProviderInfo {
   provider_id: string
@@ -189,28 +190,11 @@ const lastUsedMethod = ref<string | null>(loginPrefs.getLastMethod())
 // --- SSO callback error (FAR-1791) ---
 // The backend appends `?sso_error=<code>` to the login URL when an SSO
 // callback fails. The value is read synchronously so the alert is present in
-// the first render — never fetched.
-const SSO_ERROR_CODES = ['not_invited', 'auth_failed', 'provider_unavailable'] as const
-type SsoErrorCode = (typeof SSO_ERROR_CODES)[number]
-
-/**
- * Normalise the `sso_error` query value to a known code.
- *
- * Returns null when absent; an UNKNOWN/garbled value falls back to the generic
- * `auth_failed` copy. The raw value is never rendered or echoed back.
- */
-function normaliseSsoErrorCode(raw: unknown): SsoErrorCode | null {
-  if (raw === undefined || raw === null || raw === '') return null
-  const value = Array.isArray(raw) ? raw[0] : raw
-  if (typeof value === 'string' && (SSO_ERROR_CODES as readonly string[]).includes(value)) {
-    return value as SsoErrorCode
-  }
-  return 'auth_failed'
-}
-
+// the first render — never fetched. Vocabulary + normaliser are shared with
+// OrgLoginView (lib/ssoError.ts).
 const route = useRoute()
 const ssoErrorCode = normaliseSsoErrorCode(route.query.sso_error)
-const ssoErrorKey = ssoErrorCode ? `auth.ssoError.${ssoErrorCode}` : null
+const ssoErrorKey = ssoErrorI18nKey(ssoErrorCode)
 const ssoErrorRef = ref<HTMLElement | null>(null)
 
 // Announce and reach the alert: focus the container once Vue mounts it. The

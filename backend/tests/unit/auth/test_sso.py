@@ -26,8 +26,11 @@ from modulo.api.dependencies import (
     get_plan_context,
     get_system_db_session,
 )
+from modulo.api.exception_handlers import sso_callback_error_handler
 from modulo.api.routes.sso import router as sso_router
 from modulo.auth.sso import (
+    SsoCallbackError,
+    SsoProvisioningDeniedError,
     parse_oidc_providers,
     sign_saml_relay_state,
     sign_state,
@@ -137,6 +140,10 @@ def _set_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 _app = FastAPI()
 _app.include_router(sso_router)
+# FAR-1791: the callback routes RAISE SsoCallbackError and the app's registered
+# handler renders the 303 — mirror the production wiring from main.py so the
+# route tests exercise the real redirected response, not a bare exception.
+_app.add_exception_handler(SsoCallbackError, sso_callback_error_handler)  # type: ignore[arg-type]
 
 
 @pytest.fixture
@@ -2691,8 +2698,12 @@ class TestPerProviderSamlRoutes:
             call_kwargs = mock_process.call_args
             assert call_kwargs.kwargs.get("provider_id") == "okta-saml"
 
-    def test_per_provider_acs_unknown_slug_returns_404(self, client: TestClient) -> None:
-        """POST /saml/{slug}/acs returns uniform 404 for unknown slug."""
+    def test_per_provider_acs_unknown_slug_redirects_auth_failed(self, client: TestClient) -> None:
+        """FAR-1791: POST /saml/{slug}/acs 303s for an unknown slug (not JSON 404).
+
+        The ACS is browser-facing; the uniform redirect is exactly as opaque as
+        the uniform 404 (same code for every non-resolving slug — ADR 036).
+        """
         _override_settings(
             modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
@@ -2704,11 +2715,11 @@ class TestPerProviderSamlRoutes:
                 data={"SAMLResponse": base64.b64encode(b"<saml/>").decode()},
                 follow_redirects=False,
             )
-            assert resp.status_code == 404
-            assert resp.json()["detail"] == "Not Found"
+            assert resp.status_code == 303
+            assert resp.headers["location"].endswith("/login?sso_error=auth_failed")
 
-    def test_per_provider_acs_disabled_slug_returns_404(self, client: TestClient) -> None:
-        """POST /saml/{slug}/acs returns same 404 for disabled provider."""
+    def test_per_provider_acs_disabled_slug_redirects_same_code(self, client: TestClient) -> None:
+        """A disabled provider maps to the SAME code — no enumeration signal."""
         provider = _make_saml_provider(provider_id="okta-saml", enabled=False)
         _override_settings(
             modulo_license_key=_VALID_LICENSE_KEY,
@@ -2721,11 +2732,11 @@ class TestPerProviderSamlRoutes:
                 data={"SAMLResponse": base64.b64encode(b"<saml/>").decode()},
                 follow_redirects=False,
             )
-            assert resp.status_code == 404
-            assert resp.json()["detail"] == "Not Found"
+            assert resp.status_code == 303
+            assert resp.headers["location"].endswith("/login?sso_error=auth_failed")
 
-    def test_per_provider_acs_non_saml_slug_returns_404(self, client: TestClient) -> None:
-        """POST /saml/{slug}/acs returns same 404 for non-SAML provider type."""
+    def test_per_provider_acs_non_saml_slug_redirects_same_code(self, client: TestClient) -> None:
+        """A non-SAML provider type maps to the SAME code — no enumeration signal."""
         provider = _make_saml_provider(provider_id="google-oidc")
         provider.provider_type = "oidc"
         _override_settings(
@@ -2739,8 +2750,8 @@ class TestPerProviderSamlRoutes:
                 data={"SAMLResponse": base64.b64encode(b"<saml/>").decode()},
                 follow_redirects=False,
             )
-            assert resp.status_code == 404
-            assert resp.json()["detail"] == "Not Found"
+            assert resp.status_code == 303
+            assert resp.headers["location"].endswith("/login?sso_error=auth_failed")
 
     def test_per_provider_metadata_emits_own_entity_id_and_acs(self, client: TestClient) -> None:
         """GET /saml/{slug}/metadata emits provider-specific Entity ID and ACS Location."""
@@ -3164,6 +3175,51 @@ class TestPerProviderSamlRouteErrorPaths:
             resp = client.post("/api/v1/auth/saml/acs/okta-saml", data={"SAMLResponse": ""}, follow_redirects=False)
         assert resp.status_code == 303
         assert resp.headers["location"].endswith("/login?sso_error=auth_failed")
+
+    def test_acs_denied_redirects_to_org_login(self, client: TestClient) -> None:
+        """FAR-1791 Fix 4: a SAML join denial carries its org to /login/{slug}.
+
+        Also pins the ordering-critical ``except SsoProvisioningDeniedError``
+        arm (a ValueError subclass) living BEFORE ``except ValueError``.
+        """
+        org_id = uuid.uuid4()
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
+        slug_session = _mock_session(scalar="acme")
+
+        async def override_db() -> AsyncGenerator[AsyncMock, None]:
+            yield slug_session
+
+        _app.dependency_overrides[get_db_session] = override_db
+        try:
+            with (
+                patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
+                # The app-session RLS fallback runs on the same mock; no-op it so
+                # the slug-bearing mock's non-org scalar does not break it.
+                patch("modulo.api.routes.sso._set_default_rls_org", new_callable=AsyncMock),
+                patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process,
+            ):
+                mock_lookup.return_value = self._provider()
+                mock_process.side_effect = SsoProvisioningDeniedError("denied", org_id=org_id)
+                resp = self._post_acs(client)
+        finally:
+            _app.dependency_overrides.pop(get_db_session, None)
+
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login/acme?sso_error=not_invited")
+
+    def test_acs_denied_without_org_uses_base_login(self, client: TestClient) -> None:
+        """A denial with no resolvable org falls back to the base /login target."""
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
+        with (
+            patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process,
+        ):
+            mock_lookup.return_value = self._provider()
+            mock_process.side_effect = SsoProvisioningDeniedError("denied")
+            resp = self._post_acs(client)
+
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=not_invited")
 
     def test_acs_value_error_redirects_auth_failed(self, client: TestClient) -> None:
         _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
@@ -3629,3 +3685,108 @@ async def test_deny_join_raises_with_the_org_id() -> None:
     with pytest.raises(SsoProvisioningDeniedError) as exc_info:
         await _deny_join(provider, org_id)
     assert exc_info.value.org_id == org_id
+
+
+# ---------------------------------------------------------------------------
+# FAR-1791 Fix 4: the LEGACY /saml/acs denial routes to /login/{slug}
+# ---------------------------------------------------------------------------
+
+
+def _override_db_session(session: AsyncMock) -> None:
+    """Override the DI app session for the duration of one request."""
+
+    async def override_db() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    _app.dependency_overrides[get_db_session] = override_db
+
+
+def test_legacy_acs_denied_redirects_to_org_login(client: TestClient) -> None:
+    """A legacy-ACS join denial 303s to the denied org's login page."""
+    org_id = uuid.uuid4()
+    _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
+    _override_db_session(_mock_session(scalar="acme"))
+    try:
+        with patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process:
+            mock_process.side_effect = SsoProvisioningDeniedError("denied", org_id=org_id)
+            resp = client.post(
+                "/api/v1/auth/saml/acs",
+                data={"SAMLResponse": base64.b64encode(b"<saml/>").decode()},
+                follow_redirects=False,
+            )
+    finally:
+        _app.dependency_overrides.pop(get_db_session, None)
+
+    assert resp.status_code == 303
+    assert resp.headers["location"].endswith("/login/acme?sso_error=not_invited")
+
+
+def test_legacy_acs_denied_without_org_uses_base_login(client: TestClient) -> None:
+    """A legacy-ACS denial with no resolvable org falls back to base /login."""
+    _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
+    with patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process:
+        mock_process.side_effect = SsoProvisioningDeniedError("denied")
+        resp = client.post(
+            "/api/v1/auth/saml/acs",
+            data={"SAMLResponse": base64.b64encode(b"<saml/>").decode()},
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 303
+    assert resp.headers["location"].endswith("/login?sso_error=not_invited")
+
+
+# ---------------------------------------------------------------------------
+# FAR-1791 Fix 1: the saml_acs_attempted audit event records an HONEST outcome
+# ---------------------------------------------------------------------------
+# The ACS routes RAISE SsoCallbackError on failure (rather than returning the
+# redirect), so the audited_system("saml_acs_attempted", ...) dependency sees
+# the exception and records outcome="error". Returning the redirect would stamp
+# a FAILED sign-in "success" — a falsified security-audit record.
+
+
+def _audit_append_kwargs(mock: AsyncMock) -> dict[str, Any]:
+    assert mock.call_count == 1, f"expected exactly one audit event, got {mock.call_count}"
+    return cast("dict[str, Any]", mock.call_args.kwargs)
+
+
+def test_saml_acs_failed_post_audits_outcome_error(client: TestClient) -> None:
+    """A failed ACS POST is audited outcome=error (pre-Fix-1 it was 'success')."""
+    _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
+    append = AsyncMock()
+    with patch("modulo.core.audit_coverage.append_audit_event", new=append):
+        resp = client.post("/api/v1/auth/saml/acs", data={}, follow_redirects=False)
+
+    assert resp.status_code == 303
+    assert "sso_error=auth_failed" in resp.headers["location"]
+
+    kwargs = _audit_append_kwargs(append)
+    assert kwargs["event_type"] == "saml_acs_attempted"
+    assert kwargs["resource_type"] == "session"
+    assert kwargs["actor_user_id"] is None
+    assert kwargs["payload_json"]["outcome"] == "error"
+
+
+def test_saml_acs_successful_post_audits_outcome_success(client: TestClient) -> None:
+    """The success path still audits outcome=success (the Fix-1 counterpart)."""
+    _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
+    append = AsyncMock()
+    with (
+        patch("modulo.core.audit_coverage.append_audit_event", new=append),
+        patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process,
+    ):
+        mock_process.return_value = {
+            "access_token": "at-audit",
+            "refresh_token": "rt-audit",
+            "token_type": "bearer",
+        }
+        resp = client.post(
+            "/api/v1/auth/saml/acs",
+            data={"SAMLResponse": base64.b64encode(b"<saml/>").decode()},
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 307, resp.text
+    kwargs = _audit_append_kwargs(append)
+    assert kwargs["event_type"] == "saml_acs_attempted"
+    assert kwargs["payload_json"]["outcome"] == "success"

@@ -1,11 +1,13 @@
 import logging
 import traceback
+import urllib.parse
 
 from fastapi import Request, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from modulo.api.frontend_url import resolve_frontend_url
 from modulo.api.models.problem import (
     ProblemDetail,
     ProblemException,
@@ -13,7 +15,9 @@ from modulo.api.models.problem import (
     problem_from_http_exception,
     problem_from_validation_error,
 )
+from modulo.auth.sso import SsoCallbackError
 from modulo.db.capacity import StorageExhaustedError
+from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
 
@@ -133,3 +137,43 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         ).to_response()
     except Exception:
         return ProblemDetail.fallback_internal_error(rid)
+
+
+# ---------------------------------------------------------------------------
+# SSO callback failure -> frontend login page (FAR-1791)
+# ---------------------------------------------------------------------------
+
+
+def sso_error_redirect(settings: Settings, code: str, slug: str | None) -> RedirectResponse:
+    """303-redirect the browser to the frontend login page with an SSO error code.
+
+    The target is assembled ONLY from server-owned values — the configured
+    frontend base (``resolve_frontend_url``) and a DB-resolved org slug — never
+    from caller-supplied input, so it cannot be abused as an open redirect.
+    ``code`` is drawn from the fixed vocabulary in ``modulo.auth.sso``
+    (``SSO_ERROR_*``), so exception text never reaches the URL.
+
+    303 (See Other), not the success path's 307, converts the IdP's POST
+    navigation (the SAML ACS) into a GET of the login page.
+    """
+    base = resolve_frontend_url(settings)
+    suffix = f"/login/{urllib.parse.quote(slug)}" if slug else "/login"
+    return RedirectResponse(
+        url=f"{base}{suffix}?sso_error={code}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+async def sso_callback_error_handler(request: Request, exc: SsoCallbackError) -> RedirectResponse:
+    """Render a raised :class:`SsoCallbackError` as the login-page 303 redirect.
+
+    Registered for ``SsoCallbackError`` in ``main.py``. The callback routes
+    RAISE the error (rather than returning the redirect inline) so the
+    ``audited_system("saml_acs_attempted", ...)`` dependency observes the
+    failure and records an honest ``outcome="error"``; this handler is the
+    single place the redirect is built, over the shared
+    :func:`sso_error_redirect` mapping. ``request`` is part of the handler
+    signature FastAPI requires; the target derives only from server settings
+    and the exception, never from the request.
+    """
+    return sso_error_redirect(get_settings(), exc.code, exc.slug)

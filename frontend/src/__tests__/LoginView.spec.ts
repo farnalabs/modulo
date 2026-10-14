@@ -70,6 +70,7 @@ vi.mock('../composables/useMutation', async (importOriginal) => {
 
 import LoginView from '../views/LoginView.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { SSO_ERROR_CODES, normaliseSsoErrorCode, ssoErrorI18nKey } from '../lib/ssoError'
 
 describe('LoginView - login-context integration', () => {
   beforeEach(() => {
@@ -908,5 +909,36 @@ describe('LoginView - SSO callback error (FAR-1791)', () => {
     await vi.waitFor(() => {
       expect(location.href).toBe('/login/acme?sso_error=not_invited')
     })
+  })
+})
+
+// FAR-1791 Fix 6: the vocabulary + normaliser are shared by LoginView and
+// OrgLoginView (lib/ssoError.ts). Pin the normaliser's contract directly.
+describe('lib/ssoError - normaliseSsoErrorCode (FAR-1791)', () => {
+  it('maps every whitelisted code through unchanged', () => {
+    for (const code of SSO_ERROR_CODES) {
+      expect(normaliseSsoErrorCode(code)).toBe(code)
+    }
+  })
+
+  it('returns null for absent / empty values (no alert)', () => {
+    expect(normaliseSsoErrorCode(undefined)).toBeNull()
+    expect(normaliseSsoErrorCode(null)).toBeNull()
+    expect(normaliseSsoErrorCode('')).toBeNull()
+  })
+
+  it('falls back to auth_failed for an unknown value and never returns the raw value', () => {
+    expect(normaliseSsoErrorCode('totally-bogus')).toBe('auth_failed')
+    expect(normaliseSsoErrorCode('<script>alert(1)</script>')).toBe('auth_failed')
+  })
+
+  it('uses the first element of a repeated query param', () => {
+    expect(normaliseSsoErrorCode(['not_invited', 'auth_failed'])).toBe('not_invited')
+    expect(normaliseSsoErrorCode(['bogus'])).toBe('auth_failed')
+  })
+
+  it('builds the i18n key for a code, or null when there is none', () => {
+    expect(ssoErrorI18nKey('provider_unavailable')).toBe('auth.ssoError.provider_unavailable')
+    expect(ssoErrorI18nKey(null)).toBeNull()
   })
 })

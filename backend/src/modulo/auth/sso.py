@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 
 import httpx
 from defusedxml import ElementTree
+from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,6 +51,54 @@ _log = logging.getLogger(__name__)
 # Default OIDC scopes requested when a provider configures none (same default
 # in every branch of the scope resolution below).
 OIDC_DEFAULT_SCOPES = "openid email profile"
+
+
+# ---------------------------------------------------------------------------
+# SSO callback failure vocabulary + typed error (FAR-1791)
+# ---------------------------------------------------------------------------
+# The IdP navigates the BROWSER to the SSO callback routes (the OIDC callback
+# and the SAML ACS), so a failure must send it back to the login page with a
+# small, WHITELISTED error code the SPA maps to friendly copy — never a raw
+# JSON error page. The vocabulary is FIXED: exception text is NEVER placed in
+# the URL, and the frontend falls back to the ``auth_failed`` copy for an
+# unknown code.
+SSO_ERROR_NOT_INVITED = "not_invited"
+SSO_ERROR_AUTH_FAILED = "auth_failed"
+SSO_ERROR_PROVIDER_UNAVAILABLE = "provider_unavailable"
+
+
+class SsoCallbackError(HTTPException):
+    """A browser-facing SSO callback failure → a 303 redirect to the login page.
+
+    Raised by the OIDC callback / SAML ACS routes instead of RETURNING the
+    redirect, so the ``audited_system("saml_acs_attempted", ...)`` dependency
+    observes the failure and records ``outcome="error"`` for a failed sign-in
+    rather than a dishonest ``"success"`` (FAR-1791). The registered handler
+    (``modulo.api.exception_handlers.sso_callback_error_handler``) turns it into
+    the actual 303 response.
+
+    Subclasses ``HTTPException`` — deliberately NOT ``ValueError``:
+
+    * ``ValueError`` would be re-caught by the callback routes' own
+      ``except ValueError`` arm (the same ValueError-subclass trap
+      :class:`SsoProvisioningDeniedError` documents). Keeping the two error
+      types independent means a denial and a generic auth failure can never be
+      conflated by exception ordering.
+    * ``handle_db_errors`` passes ``HTTPException`` through unchanged
+      (``_translate_wrapped_exception``'s ``except HTTPException: raise`` arm),
+      so the error reaches the app's registered handler instead of being
+      mis-mapped to a generic 500.
+
+    ``code`` is drawn from the fixed vocabulary above (exception text never
+    reaches the URL); ``slug`` is a DB-resolved org slug (or ``None``), so the
+    redirect target is assembled only from server-owned values and cannot be
+    abused as an open redirect.
+    """
+
+    def __init__(self, code: str, slug: str | None = None) -> None:
+        super().__init__(status_code=status.HTTP_303_SEE_OTHER, detail=code)
+        self.code = code
+        self.slug = slug
 
 
 # ---------------------------------------------------------------------------

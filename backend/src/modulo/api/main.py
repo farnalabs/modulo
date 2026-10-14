@@ -28,6 +28,7 @@ from modulo.api.dependencies import (
 )
 from modulo.api.exception_handlers import (
     http_exception_handler,
+    sso_callback_error_handler,
     storage_exhausted_exception_handler,
     unhandled_exception_handler,
     validation_exception_handler,
@@ -132,6 +133,7 @@ from modulo.api.routes.variants import router as variants_router
 from modulo.api.routes.viewmodel import router as viewmodel_router
 from modulo.api.routes.views import router as views_router
 from modulo.api.routes.webhooks import router as webhooks_router
+from modulo.auth.sso import SsoCallbackError
 from modulo.core.events.event_bus import configure_event_bus
 from modulo.core.events.listeners import register_listeners
 from modulo.core.graceful_shutdown import ShutdownManager, ShutdownMiddleware
@@ -1323,6 +1325,10 @@ app.mount("/mcp", build_mcp_asgi_app())
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(StorageExhaustedError, storage_exhausted_exception_handler)  # type: ignore[arg-type]
+# FAR-1791: a raised SsoCallbackError renders the 303 login redirect (the
+# callback routes raise instead of returning it, so the saml_acs_attempted
+# audit dependency records an honest outcome="error" for a failed sign-in).
+app.add_exception_handler(SsoCallbackError, sso_callback_error_handler)  # type: ignore[arg-type]
 app.add_exception_handler(Exception, unhandled_exception_handler)
 
 
