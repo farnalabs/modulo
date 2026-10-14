@@ -209,8 +209,10 @@ and per-destination rate limiting.
       routes to a connector, the required ACL operation is DERIVED from the
       node's routed connector verb — `query` requires `read`, `write` requires
       `write`, and `dispatch` requires `write` (there is no `dispatch` ACL
-      capability: `trigger_run` mutates the remote system), plus `read` when the
-      binding sets `await_completion` (the wait loop polls status/logs); the
+      capability: `trigger_run` mutates the remote system; an omitted
+      `dispatch_action` defaults to `trigger_run`, matching the runtime), plus
+      `read` when the NODE sets `await_completion` (a node-level field, a
+      sibling of `connector_binding` — the wait loop polls status/logs); the
       other dispatch actions (`get_run_status` / `get_run_logs` / `list_runs`)
       require `read`, per `dispatch_action`. The derived operation is checked
       against the bound instance's `allowed_operations` through the real
@@ -345,7 +347,8 @@ and per-destination rate limiting.
   binding whose instance lacked the operation saved cleanly with no
   `CONNECTOR_MISSING_OPERATIONS`. Fixed by DERIVING the required ACL operations
   from the node's routed connector verb (`query`→`read`, `write`→`write`,
-  `dispatch`→`write` plus `read` when `await_completion`) and validating through
+  `dispatch`→`write` plus `read` when the NODE sets `await_completion`; an
+  omitted `dispatch_action` defaults to `trigger_run`) and validating through
   the shared `ConnectorACL`. The graph validator now consumes the
   `unrestricted_allowed_operations` predicate THROUGH the ACL (single
   enforcement) rather than re-implementing allowlist matching, so save-time

@@ -13,6 +13,8 @@ import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from modulo.core.graph_validator import GraphValidator
 
 
@@ -104,20 +106,64 @@ async def test_dispatch_trigger_run_requires_write():
 async def test_dispatch_trigger_run_await_completion_requires_write_and_read():
     """``await_completion`` adds a ``read`` leg (the wait loop polls status/logs).
 
-    The instance allows ``read`` only, so the missing operation is ``write`` and
-    the message must reflect that first failure.
+    ``await_completion`` is a NODE-level field (a sibling of
+    ``connector_binding``), so this pins both that it is read from the node and
+    that it ADDS the read leg: the instance allows ``write`` only, so the
+    derived ``read`` is the deciding failure — the test fails if the read leg is
+    not derived.
     """
     cid = uuid.uuid4()
-    instance = _connector_instance(cid, connector_type_id="github_actions_ci", allowed_operations=["read"])
+    instance = _connector_instance(cid, connector_type_id="github_actions_ci", allowed_operations=["write"])
+    node = {
+        "id": "a",
+        "node_type": "agent",
+        "await_completion": True,
+        "connector_binding": {
+            "instance_id": str(cid),
+            "operation": "dispatch",
+            "dispatch_action": "trigger_run",
+        },
+    }
+    snap = _snapshot(graph_json=_node_graph(node), connector_bindings=[_binding(cid)])
+    result = await GraphValidator().validate(snap, _session_returning([instance]))
+    assert not result.is_valid
+    issue = next(i for i in result.issues if i.code == "CONNECTOR_MISSING_OPERATIONS")
+    assert "read" in issue.message
+
+
+@pytest.mark.parametrize("action", ["get_run_status", "get_run_logs", "list_runs"])
+async def test_dispatch_read_only_action_requires_read(action):
+    """A read-only dispatch action is gated ``read`` at save time."""
+    cid = uuid.uuid4()
+    instance = _connector_instance(cid, connector_type_id="github_actions_ci", allowed_operations=["write"])
     node = {
         "id": "a",
         "node_type": "agent",
         "connector_binding": {
             "instance_id": str(cid),
             "operation": "dispatch",
-            "dispatch_action": "trigger_run",
-            "await_completion": True,
+            "dispatch_action": action,
         },
+    }
+    snap = _snapshot(graph_json=_node_graph(node), connector_bindings=[_binding(cid)])
+    result = await GraphValidator().validate(snap, _session_returning([instance]))
+    assert not result.is_valid
+    issue = next(i for i in result.issues if i.code == "CONNECTOR_MISSING_OPERATIONS")
+    assert "read" in issue.message
+
+
+async def test_dispatch_missing_action_defaults_to_trigger_run_requiring_write():
+    """An omitted ``dispatch_action`` is ``trigger_run`` at runtime (write-gated).
+
+    Mirrors ``node_runner._make_node_fn`` / ``node_fires_dispatch_job``; the
+    save-time check must derive the ``write`` requirement rather than skip.
+    """
+    cid = uuid.uuid4()
+    instance = _connector_instance(cid, connector_type_id="github_actions_ci", allowed_operations=["read"])
+    node = {
+        "id": "a",
+        "node_type": "agent",
+        "connector_binding": {"instance_id": str(cid), "operation": "dispatch"},
     }
     snap = _snapshot(graph_json=_node_graph(node), connector_bindings=[_binding(cid)])
     result = await GraphValidator().validate(snap, _session_returning([instance]))
