@@ -138,11 +138,12 @@ async def _abort_org_live_sandboxes(session: AsyncSession, org_id: uuid.UUID) ->
 
 
 async def _collect_org_export(session: AsyncSession, org: Organisation) -> dict[str, Any]:
-    """Bundle ALL org-owned data into a JSON-serialisable dict.
+    """Bundle the org-owned data this export covers into a JSON-serialisable dict.
 
-    Every org-scoped table that carries the organisation's own data belongs
-    here — the bundle is the pre-deletion archive the admin downloads, so a
-    table missing from it is data the org never gets back. Soft-deletable
+    This archive is a curated subset, not an exhaustive dump: it covers the
+    FAR-1758 library cluster plus the pre-existing org-owned tables selected
+    below, and a table missing from it is data the org never gets back — so
+    library-cluster tables must be added here when introduced. Soft-deletable
     tables are read through :func:`include_soft_deleted`: a soft-deleted row
     is still org-owned data awaiting purge, and dropping it silently would
     make the archive incomplete exactly when an org retires entities before
