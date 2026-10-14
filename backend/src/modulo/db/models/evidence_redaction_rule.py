@@ -12,7 +12,7 @@ store: org admins edit it through ``PUT /api/v1/evidence/redaction-rules``. It
 follows the same soft-delete + OrgScoped convention as the other configuration
 tables (e.g. ``parameter_schemas``, ``environment_profiles``) — CO-3.
 
-RLS org-isolation is enforced by migration ``0311_evidence_redaction_rules``.
+RLS org-isolation is enforced by migration ``0312_evidence_redaction_rules``.
 """
 
 from __future__ import annotations

@@ -28,8 +28,8 @@ unredacted, and EVERY other role â€” including the default org role ``runner`` â
 falls back to BOTH classes. (This deliberately narrows acceptance criterion 3's
 "no matching rule -> no redaction" to trusted roles only.)
 
-Revision ID: 0311_evidence_redaction_rules
-Revises: 0310_library_cluster_db_hardening
+Revision ID: 0312_evidence_redaction_rules
+Revises: 0311_library_cluster_schema_hygiene
 Create Date: 2026-10-14
 """
 
@@ -40,8 +40,8 @@ from alembic import op
 from sqlalchemy import inspect, text
 from sqlalchemy.dialects.postgresql import ARRAY
 
-revision = "0311_evidence_redaction_rules"
-down_revision = "0310_library_cluster_db_hardening"
+revision = "0312_evidence_redaction_rules"
+down_revision = "0311_library_cluster_schema_hygiene"
 branch_labels = None
 depends_on = None
 
