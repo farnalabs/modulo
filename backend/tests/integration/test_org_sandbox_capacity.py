@@ -157,9 +157,7 @@ async def _seed_run(
     heartbeat_at: datetime | None = None,
     dispatched_at: datetime | None = None,
 ) -> uuid.UUID:
-    from sqlalchemy import insert
-
-    from modulo.db.models.run import Run
+    from sqlalchemy import column, insert, inspect, table
 
     run_id = uuid.uuid4()
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -186,9 +184,20 @@ async def _seed_run(
             if value is not None
         }
     )
+    # INSERT restricted to the columns the LIVE table actually has. The
+    # test_migration_* suites seed a private database stalled at their own
+    # alembic revision, so an ORM ``insert(Run)`` — which emits EVERY mapped
+    # column — dies there on columns a later migration adds (FAR-1728's 0307
+    # ``runs.guardrail_override_resume_pending`` broke migration_0275 and
+    # migration_0300 this way). A lightweight table() carrying only the
+    # columns present keeps the seeder legal at any revision and identical at
+    # head, where every column exists.
+    existing_columns = {col["name"] for col in inspect(db_engine.sync_engine).get_columns("runs")}
+    columns = [name for name in values if name in existing_columns]
+    runs_table = table("runs", *(column(name) for name in columns))
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
-        await session.execute(insert(Run).values(**values))
+        await session.execute(insert(runs_table).values({name: values[name] for name in columns}))
     return run_id
 
 
