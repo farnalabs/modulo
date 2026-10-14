@@ -381,3 +381,107 @@ def test_run_override_alone_supplies_the_variable_without_model_class() -> None:
     value = effective_model_template_value({"id": "n1"}, {"_run_overrides": {"model": "opencode-go/variant-model"}})
 
     assert value == "opencode-go/variant-model"
+
+
+def test_empty_run_override_falls_back_to_the_baked_value() -> None:
+    """A present-but-blank `_run_overrides.model` is not a value: the override
+    rung does not engage and the snapshot's baked `_resolved_model` is used."""
+    node_def = {"_resolved_model": "opencode-go/baked-model"}
+    assert effective_model_template_value(node_def, {"_run_overrides": {"model": "   "}}) == "opencode-go/baked-model"
+    # A non-string override is likewise ignored.
+    assert effective_model_template_value(node_def, {"_run_overrides": {"model": 7}}) == "opencode-go/baked-model"
+
+
+# ---------------------------------------------------------------------------
+# Additional fail-closed + branch coverage (review hardening)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"classes": []},
+        {"pipelines": "not-an-object"},
+        {"classes": {"builder": {"model": "m"}}, "pipelines": [1, 2]},
+    ],
+)
+def test_registry_section_must_be_an_object(tmp_path: Path, payload: dict[str, Any]) -> None:
+    """`classes` / `pipelines` present but not an object is corrupt (D3)."""
+    path = tmp_path / "model-management.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    node = _sandbox_node("n1", model_class="builder")
+
+    with pytest.raises(ModelClassResolutionError) as excinfo:
+        resolve_graph_model_classes([node], pipeline_name="Any Pipeline", registry_path=str(path))
+
+    assert "corrupt" in str(excinfo.value.detail)
+
+
+def test_node_references_model_var_without_commands_or_prompt_is_false() -> None:
+    """A node whose `agent_commands` is absent (neither list nor str) has
+    nothing to scan and simply does not reference the variable."""
+    assert not node_references_model_var({})
+    assert not node_references_model_var({"agent_commands": None, "agent_prompt": None})
+
+
+def test_pipeline_map_entry_with_default_but_no_nodes_map(tmp_path: Path) -> None:
+    """A dict pipeline entry with a `default` and no `nodes` key resolves the
+    default for every node (the `nodes_map is None` branch)."""
+    registry_path = _write_registry(
+        tmp_path, {**_DEFAULT_REGISTRY, "pipelines": {"Default Only": {"default": "planner"}}}
+    )
+    node = _sandbox_node("n1")
+
+    resolve_graph_model_classes([node], pipeline_name="Default Only", registry_path=registry_path)
+
+    assert node["_resolved_model"] == "opencode-go/deepseek-v4.1-flash"
+    assert node["_model_origin"] == MODEL_ORIGIN_REGISTRY_PIPELINE_MAP
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "   ",
+        5,
+        {"nodes": "not-a-map"},
+        {"nodes": {"n1": 5}},
+        {"default": 5},
+        {"nodes": {"n1": "   "}},
+    ],
+)
+def test_malformed_pipeline_map_entry_fails_closed(tmp_path: Path, entry: Any) -> None:
+    """Every malformed `pipelines` entry shape fails the run closed (D3)."""
+    registry_path = _write_registry(tmp_path, {**_DEFAULT_REGISTRY, "pipelines": {"Bad Pipe": entry}})
+    node = _sandbox_node("n1")
+
+    with pytest.raises(ModelClassResolutionError):
+        resolve_graph_model_classes([node], pipeline_name="Bad Pipe", registry_path=registry_path)
+
+
+def test_pipelines_default_that_is_not_a_usable_class_skips_the_node(tmp_path: Path) -> None:
+    """An unclassified node under a registry whose `pipelines_default` is
+    blank/non-string gets no bake — no rung supplies a class."""
+    registry_path = _write_registry(
+        tmp_path, {"classes": {"builder": {"model": "opencode-go/mimo-v2.6-flash"}}, "pipelines_default": "   "}
+    )
+    node = _sandbox_node("n1")
+
+    resolve_graph_model_classes([node], pipeline_name="Any Pipe", registry_path=registry_path)
+
+    assert "_resolved_model" not in node
+
+
+def test_coverage_without_pipeline_name_uses_name_independent_default(tmp_path: Path) -> None:
+    """With no pipeline name the map cannot be consulted, but a valid
+    `pipelines_default` still covers every non-excluded pipeline (True)."""
+    registry_path = _write_registry(tmp_path, _DEFAULT_REGISTRY)  # pipelines_default: builder
+
+    assert model_var_registry_coverage(None, "n1", registry_path=registry_path) is True
+
+
+def test_coverage_of_malformed_pipeline_entry_is_true(tmp_path: Path) -> None:
+    """A mapped-but-malformed entry counts as covered: mint refuses such a run
+    closed (D3), so a `{{ model }}` reference can never render blank."""
+    registry_path = _write_registry(tmp_path, {**_DEFAULT_REGISTRY, "pipelines": {"Bad Pipe": 5}})
+
+    assert model_var_registry_coverage("Bad Pipe", "n1", registry_path=registry_path) is True

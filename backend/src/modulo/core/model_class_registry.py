@@ -201,6 +201,19 @@ def _model_for_class(registry: dict[str, Any], class_name: str, node_id: Any) ->
     )
 
 
+def _clean_class_name(value: Any, error_detail: str) -> str:
+    """Return a stripped, non-empty class name, or fail closed (D3).
+
+    The one place the "a class name must be a non-empty string" rule is
+    enforced, so every registry rung shares it: a bare string entry, a
+    per-node override, a pipeline ``default`` and a declared node
+    ``model_class`` all pass through here.
+    """
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    raise ModelClassResolutionError(error_detail)
+
+
 def _pipeline_map_class(registry: dict[str, Any], pipeline_name: str, node_id: Any) -> str | None:
     """Rung 3 — the registry ``pipelines`` map entry for this pipeline/node.
 
@@ -213,11 +226,10 @@ def _pipeline_map_class(registry: dict[str, Any], pipeline_name: str, node_id: A
     if entry is None:
         return None
     if isinstance(entry, str):
-        if entry.strip():
-            return entry.strip()
-        raise ModelClassResolutionError(
+        return _clean_class_name(
+            entry,
             f"model-class registry pipelines entry for '{pipeline_name}' is an empty class name "
-            "— run refused pre-dispatch (ADR 037 D3)"
+            "— run refused pre-dispatch (ADR 037 D3)",
         )
     if not isinstance(entry, dict):
         raise ModelClassResolutionError(
@@ -233,20 +245,18 @@ def _pipeline_map_class(registry: dict[str, Any], pipeline_name: str, node_id: A
             )
         hit = nodes_map.get(str(node_id))
         if hit is not None:
-            if isinstance(hit, str) and hit.strip():
-                return hit.strip()
-            raise ModelClassResolutionError(
+            return _clean_class_name(
+                hit,
                 f"model-class registry per-node class for pipeline '{pipeline_name}' node "
-                f"'{node_id}' is malformed — run refused pre-dispatch (ADR 037 D3)"
+                f"'{node_id}' is malformed — run refused pre-dispatch (ADR 037 D3)",
             )
     default = entry.get("default")
     if default is None:
         return None
-    if isinstance(default, str) and default.strip():
-        return default.strip()
-    raise ModelClassResolutionError(
+    return _clean_class_name(
+        default,
         f"model-class registry pipelines entry for '{pipeline_name}' has a malformed 'default' "
-        "— run refused pre-dispatch (ADR 037 D3)"
+        "— run refused pre-dispatch (ADR 037 D3)",
     )
 
 
@@ -308,6 +318,63 @@ def model_var_registry_coverage(
     return bool(isinstance(default, str) and default.strip())
 
 
+def _load_mint_registry(sandbox_nodes: list[dict[str, Any]], registry_path: str | None) -> dict[str, Any]:
+    """Read the registry for mint, attributing a read failure to the opting-in node.
+
+    D3: the refusal must name the NODE where one demanded the registry. When no
+    node opted in (a configured-but-broken registry consulted only for the
+    pipeline map/default rungs) the failure is attributed to the pipeline
+    instead — there is no node to name.
+    """
+    try:
+        return _read_registry(registry_path)
+    except ModelClassResolutionError as exc:
+        opt_in = next((n for n in sandbox_nodes if n.get("model_class")), None)
+        if opt_in is None:
+            raise
+        raise ModelClassResolutionError(
+            f"sandbox_agent node '{opt_in.get('id')}' declares model_class "
+            f"{opt_in.get('model_class')!r} but resolution failed: {exc.detail}"
+        ) from exc
+
+
+def _classify_node(
+    registry: dict[str, Any],
+    node: dict[str, Any],
+    pipeline_name: str,
+    pipeline_excluded: bool,
+) -> tuple[str, str] | None:
+    """Resolve the ``(class_name, origin)`` pair a node's precedence rung supplies.
+
+    Returns ``None`` when no rung applies: the node declares no ``model_class``
+    and is either in an excluded pipeline or covered by no map/default entry.
+    A declared ``model_class`` always wins and is validated here; the registry
+    rungs are gated by ``pipeline_excluded`` (an explicit per-node
+    ``model_class`` still wins inside an excluded pipeline).
+    """
+    declared = node.get("model_class")
+    if declared is not None:
+        return (
+            _clean_class_name(
+                declared,
+                f"sandbox_agent node '{node.get('id')}' declares a malformed model_class "
+                f"{declared!r} — run refused pre-dispatch (ADR 037 D3)",
+            ),
+            MODEL_ORIGIN_NODE_MODEL_CLASS,
+        )
+    if pipeline_excluded:
+        # The registry's own "do not auto-classify" list gates only the
+        # registry rungs — an explicit per-node model_class still wins.
+        return None
+    mapped = _pipeline_map_class(registry, pipeline_name, node.get("id"))
+    if mapped is not None:
+        return mapped, MODEL_ORIGIN_REGISTRY_PIPELINE_MAP
+    default = registry.get("pipelines_default")
+    if not isinstance(default, str) or not default.strip():
+        return None
+    return default.strip(), MODEL_ORIGIN_REGISTRY_PIPELINE_DEFAULT
+
+
 def resolve_graph_model_classes(
     nodes: list[dict[str, Any]],
     *,
@@ -354,48 +421,16 @@ def resolve_graph_model_classes(
         # registry rungs are unavailable, not failed — nothing participates.
         return
 
-    registry = None
-    try:
-        registry = _read_registry(registry_path)
-    except ModelClassResolutionError as exc:
-        # D3: the refusal must name the NODE where one demanded the registry.
-        # When no node opted in (a configured-but-broken registry consulted
-        # only for the pipeline map/default rungs) the failure is attributed
-        # to the pipeline instead — there is no node to name.
-        opt_in = next((n for n in sandbox_nodes if n.get("model_class")), None)
-        if opt_in is None:
-            raise
-        raise ModelClassResolutionError(
-            f"sandbox_agent node '{opt_in.get('id')}' declares model_class "
-            f"{opt_in.get('model_class')!r} but resolution failed: {exc.detail}"
-        ) from exc
+    registry = _load_mint_registry(sandbox_nodes, registry_path)
+
     excluded = {str(name) for name in (registry.get("excluded_pipelines") or [])}
     pipeline_excluded = pipeline_name in excluded
 
     for node in sandbox_nodes:
-        declared = node.get("model_class")
-        if declared is not None:
-            if not isinstance(declared, str) or not declared.strip():
-                raise ModelClassResolutionError(
-                    f"sandbox_agent node '{node.get('id')}' declares a malformed model_class "
-                    f"{declared!r} — run refused pre-dispatch (ADR 037 D3)"
-                )
-            class_name = declared.strip()
-            origin = MODEL_ORIGIN_NODE_MODEL_CLASS
-        else:
-            if pipeline_excluded:
-                # The registry's own "do not auto-classify" list gates only the
-                # registry rungs — an explicit per-node model_class still wins.
-                continue
-            mapped = _pipeline_map_class(registry, pipeline_name, node.get("id"))
-            origin = MODEL_ORIGIN_REGISTRY_PIPELINE_MAP
-            if mapped is None:
-                default = registry.get("pipelines_default")
-                if not isinstance(default, str) or not default.strip():
-                    continue
-                mapped = default.strip()
-                origin = MODEL_ORIGIN_REGISTRY_PIPELINE_DEFAULT
-            class_name = mapped
+        classified = _classify_node(registry, node, pipeline_name, pipeline_excluded)
+        if classified is None:
+            continue
+        class_name, origin = classified
         resolved_model = _model_for_class(registry, class_name, node.get("id"))
         if not node.get("model_class") and not node_references_model_var(node):
             # Bake gate (FAR-1743 fix): the node can never legally consume
