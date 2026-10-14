@@ -26,11 +26,13 @@ import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import modulo.core.pipeline_execution as pipeline_execution
 import modulo.core.saq_worker as sw
+import modulo.core.worker_handoff as wh
 from modulo.core.pipeline_engine.error_codes import (
     ERROR_CODE_REGISTRY,
     LEGACY_ALIASES,
@@ -44,6 +46,7 @@ from modulo.core.worker_handoff import (
     handback_inflight_runs,
     track_inflight_run,
 )
+from modulo.db.crud import row_lock
 
 
 def test_registry_register_discard_snapshot() -> None:
@@ -410,3 +413,308 @@ async def test_shutdown_handoff_hook_logs_handed_back_count(
         await sw._shutdown_handoff_hook({})
     assert any("handed_back=3" in r.message for r in caplog.records)
     assert any("terminalised=2" in r.message for r in caplog.records)
+
+
+async def test_shutdown_handoff_hook_propagates_cancelled_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A second signal cancelling the shutdown sequence must not be swallowed.
+
+    ``_shutdown_handoff_hook`` fail-opens on any ``Exception`` — but a
+    ``CancelledError`` is the shutdown sequence itself being cancelled again
+    and must propagate (never be downgraded to a logged degradation).
+    """
+
+    async def _cancel(_engine: object) -> dict[str, int]:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(sw, "_get_async_engine", lambda: MagicMock())
+    monkeypatch.setattr("modulo.core.worker_handoff.handback_inflight_runs", _cancel)
+    with pytest.raises(asyncio.CancelledError):
+        await sw._shutdown_handoff_hook({})
+
+
+async def test_shutdown_handoff_hook_stays_quiet_when_nothing_handed_back(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Nothing released and nothing terminalised: no shutdown summary WARNING.
+
+    The summary line is emitted only when a run actually moved
+    (``handed_back`` or ``terminalised``) — a clean sweep with only skipped
+    entries must not raise the shutdown alarm.
+    """
+    import logging
+
+    async def _nothing(_engine: object) -> dict[str, int]:
+        return {"handed_back": 0, "terminalised": 0, "skipped": 4}
+
+    monkeypatch.setattr(sw, "_get_async_engine", lambda: MagicMock())
+    monkeypatch.setattr("modulo.core.worker_handoff.handback_inflight_runs", _nothing)
+    with caplog.at_level(logging.WARNING):
+        await sw._shutdown_handoff_hook({})
+    assert not any("shutdown_handoff handed_back" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# The DB-orchestration body of ``handback_inflight_runs`` (FAR-1627)
+# ---------------------------------------------------------------------------
+#
+# The pure-logic gate above is fully covered; the orchestration that walks the
+# observed entries per org and issues the two fenced writes is only exercised
+# end-to-end by the integration suite (which does NOT feed the CI coverage
+# report — that comes from ``tests/unit`` alone). These unit tests drive every
+# arm with a mocked engine, so the changed-lines gate sees the module's
+# recovery branches covered: release, reset fence-out, run-not-visible,
+# terminal arm (success / fence-out / write error / cancellation), per-org
+# row-lock timeout, per-org generic failure, and per-org cancellation.
+
+
+class _ResetResult:
+    """Stand-in for a SQLAlchemy result with only ``fetchone`` consumed."""
+
+    def __init__(self, row: object) -> None:
+        self._row = row
+
+    def fetchone(self) -> object:
+        return self._row
+
+
+def _handback_engine(
+    *,
+    reset_rows: list[object] | None = None,
+    execute_error: BaseException | None = None,
+) -> MagicMock:
+    """Engine double for :func:`handback_inflight_runs`.
+
+    ``conn.execute`` answers the org ``set_config`` with a benign result and
+    each ``_HANDBACK_RESET_SQL`` with the next ``reset_rows`` entry (a non-None
+    value means the reset matched a row; None means it was fenced out). Pass
+    ``execute_error`` to make EVERY execute raise — the per-org failure arms.
+    """
+    rows = list(reset_rows or [])
+    conn = MagicMock()
+
+    async def _execute(stmt: object, params: object = None) -> _ResetResult:
+        if execute_error is not None:
+            raise execute_error
+        if stmt is wh._HANDBACK_RESET_SQL:
+            return _ResetResult(rows.pop(0) if rows else None)
+        return _ResetResult(None)
+
+    conn.execute = AsyncMock(side_effect=_execute)
+    begin_cm = MagicMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    conn.begin.return_value = begin_cm
+    connect_cm = MagicMock()
+    connect_cm.__aenter__ = AsyncMock(return_value=conn)
+    connect_cm.__aexit__ = AsyncMock(return_value=False)
+    engine = MagicMock()
+    engine.connect.return_value = connect_cm
+    return engine
+
+
+def _observed_registry(run_id: uuid.UUID, org_id: uuid.UUID, token: str = "tok") -> InFlightRunRegistry:
+    """A registry holding one entry whose task observed the shutdown cancel."""
+    reg = InFlightRunRegistry()
+    reg.register(run_id=run_id, org_id=org_id, claim_token=token)
+    reg.mark_cancellation_observed(run_id, token)
+    return reg
+
+
+def _load_returning(row: object, graph: object) -> object:
+    """A ``_load_handback_row`` replacement returning ``(row, graph)`` or None."""
+
+    async def _load(conn: object, *, run_id: uuid.UUID, org_id: uuid.UUID) -> object:
+        return None if row is None else (row, graph)
+
+    return _load
+
+
+async def test_handback_empty_registry_returns_zero_counts() -> None:
+    engine = _handback_engine()
+    result = await handback_inflight_runs(engine, registry=InFlightRunRegistry())
+    engine.connect.assert_not_called()
+    assert result == {"handed_back": 0, "terminalised": 0, "skipped": 0}
+
+
+async def test_handback_releases_observed_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id, org_id = uuid.uuid4(), uuid.uuid4()
+    reg = _observed_registry(run_id, org_id)
+    engine = _handback_engine(reset_rows=[(str(run_id),)])
+    monkeypatch.setattr(wh, "_load_handback_row", _load_returning(_row(), {"nodes": [{"id": "n1"}]}))
+    monkeypatch.setattr(row_lock, "set_mutation_row_lock_timeout", AsyncMock())
+    result = await handback_inflight_runs(engine, registry=reg)
+    assert result == {"handed_back": 1, "terminalised": 0, "skipped": 0}
+    # The registry is drained once the shutdown handback completes.
+    assert len(reg) == 0
+
+
+async def test_handback_skips_fenced_out_reset(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id, org_id = uuid.uuid4(), uuid.uuid4()
+    reg = _observed_registry(run_id, org_id)
+    engine = _handback_engine(reset_rows=[None])
+    monkeypatch.setattr(wh, "_load_handback_row", _load_returning(_row(), {"nodes": [{"id": "n1"}]}))
+    monkeypatch.setattr(row_lock, "set_mutation_row_lock_timeout", AsyncMock())
+    result = await handback_inflight_runs(engine, registry=reg)
+    assert result == {"handed_back": 0, "terminalised": 0, "skipped": 1}
+
+
+async def test_handback_skips_run_not_visible(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id, org_id = uuid.uuid4(), uuid.uuid4()
+    reg = _observed_registry(run_id, org_id)
+    engine = _handback_engine()
+    monkeypatch.setattr(wh, "_load_handback_row", _load_returning(None, None))
+    monkeypatch.setattr(row_lock, "set_mutation_row_lock_timeout", AsyncMock())
+    result = await handback_inflight_runs(engine, registry=reg)
+    assert result == {"handed_back": 0, "terminalised": 0, "skipped": 1}
+
+
+async def test_handback_terminalises_refused_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id, org_id = uuid.uuid4(), uuid.uuid4()
+    reg = _observed_registry(run_id, org_id)
+    engine = _handback_engine()
+    monkeypatch.setattr(
+        wh, "_load_handback_row", _load_returning(_row(), {"nodes": [{"id": "n1", "idempotent": False}]})
+    )
+    monkeypatch.setattr(row_lock, "set_mutation_row_lock_timeout", AsyncMock())
+    fail = AsyncMock(return_value=True)
+    monkeypatch.setattr(pipeline_execution, "fail_run_terminal", fail)
+    result = await handback_inflight_runs(engine, registry=reg)
+    assert result == {"handed_back": 0, "terminalised": 1, "skipped": 0}
+    fail.assert_awaited_once()
+
+
+async def test_handback_terminal_write_fenced_out_counts_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id, org_id = uuid.uuid4(), uuid.uuid4()
+    reg = _observed_registry(run_id, org_id)
+    engine = _handback_engine()
+    monkeypatch.setattr(
+        wh, "_load_handback_row", _load_returning(_row(), {"nodes": [{"id": "n1", "idempotent": False}]})
+    )
+    monkeypatch.setattr(row_lock, "set_mutation_row_lock_timeout", AsyncMock())
+    monkeypatch.setattr(pipeline_execution, "fail_run_terminal", AsyncMock(return_value=False))
+    result = await handback_inflight_runs(engine, registry=reg)
+    assert result == {"handed_back": 0, "terminalised": 0, "skipped": 1}
+
+
+async def test_handback_terminal_write_error_counts_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id, org_id = uuid.uuid4(), uuid.uuid4()
+    reg = _observed_registry(run_id, org_id)
+    engine = _handback_engine()
+    monkeypatch.setattr(
+        wh, "_load_handback_row", _load_returning(_row(), {"nodes": [{"id": "n1", "idempotent": False}]})
+    )
+    monkeypatch.setattr(row_lock, "set_mutation_row_lock_timeout", AsyncMock())
+    monkeypatch.setattr(pipeline_execution, "fail_run_terminal", AsyncMock(side_effect=RuntimeError("db down")))
+    result = await handback_inflight_runs(engine, registry=reg)
+    assert result == {"handed_back": 0, "terminalised": 0, "skipped": 1}
+
+
+async def test_handback_terminal_cancelled_error_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id, org_id = uuid.uuid4(), uuid.uuid4()
+    reg = _observed_registry(run_id, org_id)
+    engine = _handback_engine()
+    monkeypatch.setattr(
+        wh, "_load_handback_row", _load_returning(_row(), {"nodes": [{"id": "n1", "idempotent": False}]})
+    )
+    monkeypatch.setattr(row_lock, "set_mutation_row_lock_timeout", AsyncMock())
+    monkeypatch.setattr(pipeline_execution, "fail_run_terminal", AsyncMock(side_effect=asyncio.CancelledError))
+    with pytest.raises(asyncio.CancelledError):
+        await handback_inflight_runs(engine, registry=reg)
+
+
+async def test_handback_org_row_lock_timeout_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id, org_id = uuid.uuid4(), uuid.uuid4()
+    reg = _observed_registry(run_id, org_id)
+    engine = _handback_engine(execute_error=RuntimeError("55P03 lock_not_available"))
+    monkeypatch.setattr(row_lock, "set_mutation_row_lock_timeout", AsyncMock())
+    monkeypatch.setattr(wh, "is_row_lock_timeout", lambda _exc: True)
+    result = await handback_inflight_runs(engine, registry=reg)
+    assert result == {"handed_back": 0, "terminalised": 0, "skipped": 1}
+
+
+async def test_handback_org_generic_failure_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id, org_id = uuid.uuid4(), uuid.uuid4()
+    reg = _observed_registry(run_id, org_id)
+    engine = _handback_engine(execute_error=RuntimeError("boom"))
+    monkeypatch.setattr(row_lock, "set_mutation_row_lock_timeout", AsyncMock())
+    monkeypatch.setattr(wh, "is_row_lock_timeout", lambda _exc: False)
+    result = await handback_inflight_runs(engine, registry=reg)
+    assert result == {"handed_back": 0, "terminalised": 0, "skipped": 1}
+
+
+async def test_handback_org_cancelled_error_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id, org_id = uuid.uuid4(), uuid.uuid4()
+    reg = _observed_registry(run_id, org_id)
+    engine = _handback_engine(execute_error=asyncio.CancelledError)
+    monkeypatch.setattr(row_lock, "set_mutation_row_lock_timeout", AsyncMock())
+    with pytest.raises(asyncio.CancelledError):
+        await handback_inflight_runs(engine, registry=reg)
+
+
+# ---------------------------------------------------------------------------
+# ``_load_handback_row`` (the requeue-gate read)
+# ---------------------------------------------------------------------------
+
+
+def _row_load_result(mapping: object) -> MagicMock:
+    result = MagicMock()
+    mappings = MagicMock()
+    mappings.one_or_none.return_value = mapping
+    result.mappings.return_value = mappings
+    return result
+
+
+async def test_load_handback_row_returns_none_when_absent() -> None:
+    conn = MagicMock()
+    conn.execute = AsyncMock(return_value=_row_load_result(None))
+    loaded = await wh._load_handback_row(conn, run_id=uuid.uuid4(), org_id=uuid.uuid4())
+    assert loaded is None
+
+
+async def test_load_handback_row_builds_row_and_graph() -> None:
+    mapping = {
+        "status": "running",
+        "dispatch_phase": "first_node_dispatched",
+        "claim_count": 2,
+        "node_attempt_count": 1,
+        "node_token_usage": 5,
+        "started_at": None,
+        "dispatched_at": None,
+        "sandbox_dispatch_state": None,
+        "retry_policy": {},
+        "graph_json": {"nodes": []},
+        "outputs_absent": 0,
+        "checkpoints_absent": 1,
+    }
+    conn = MagicMock()
+    conn.execute = AsyncMock(return_value=_row_load_result(mapping))
+    row, graph = await wh._load_handback_row(conn, run_id=uuid.uuid4(), org_id=uuid.uuid4())
+    assert row.status == "running"
+    assert row.outputs_absent is False
+    assert row.checkpoints_absent is True
+    assert graph == {"nodes": []}
+
+
+# ---------------------------------------------------------------------------
+# ``_node_started_policy_allows`` budget / empty-``on`` arms
+# ---------------------------------------------------------------------------
+
+
+def test_node_started_policy_treats_empty_on_list_as_no_veto() -> None:
+    """An explicit empty ``on`` is the GUI's inert no-op save — not a veto."""
+    from modulo.core.worker_handoff import _node_started_policy_allows
+
+    ok, reason = _node_started_policy_allows(_row(retry_policy={"on": []}))
+    assert ok is True
+    assert reason == ""
+
+
+def test_node_started_policy_allows_failure_covered_within_budget() -> None:
+    """A ``failure``-covering policy with budget left permits the re-run."""
+    from modulo.core.worker_handoff import _node_started_policy_allows
+
+    ok, reason = _node_started_policy_allows(_row(retry_policy={"on": ["failure"], "max_retries": 3}))
+    assert ok is True
+    assert reason == ""

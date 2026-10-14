@@ -723,6 +723,30 @@ class TestExecuteResumeWrappers:
         complete.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_execute_run_job_kwargs_stamp_cancelled_error_propagates(self) -> None:
+        """A shutdown cancellation during the claim-token stamp re-raises (FAR-1627).
+
+        SAQ cancels the job task mid-run; when ``job.update`` is what observes
+        the ``CancelledError`` it must propagate (never be downgraded by the
+        broad ``except Exception``) so ``track_inflight_run`` keeps the entry
+        for the shutdown handback.
+        """
+        job = MagicMock()
+        job.update = AsyncMock(side_effect=asyncio.CancelledError)
+        with (
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch("modulo.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value="tok-claim"),
+            patch("modulo.core.pipeline_execution.load_and_setup", new_callable=AsyncMock) as load,
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await sw.execute_run(
+                {"job": job},
+                run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f",
+                org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70",
+            )
+        load.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_execute_run_setup_failure_fails_run_terminal(self) -> None:
         """A run claimed but whose load_and_setup raises (e.g. a DB
         OperationalError during checkpointer setup) must be terminal-failed —
