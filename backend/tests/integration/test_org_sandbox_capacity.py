@@ -192,7 +192,15 @@ async def _seed_run(
     # migration_0300 this way). A lightweight table() carrying only the
     # columns present keeps the seeder legal at any revision and identical at
     # head, where every column exists.
-    existing_columns = {col["name"] for col in inspect(db_engine.sync_engine).get_columns("runs")}
+    #
+    # Reflection must go through ``conn.run_sync``: the engine is an asyncpg
+    # AsyncEngine, whose ``sync_engine`` cannot be inspected directly from the
+    # running event loop (doing so raises MissingGreenlet).
+    async with db_engine.connect() as conn:
+        reflected_columns = await conn.run_sync(
+            lambda sync_conn: [col["name"] for col in inspect(sync_conn).get_columns("runs")]
+        )
+    existing_columns = set(reflected_columns)
     columns = [name for name in values if name in existing_columns]
     runs_table = table("runs", *(column(name) for name in columns))
     async with factory() as session, session.begin():
