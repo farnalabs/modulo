@@ -112,6 +112,64 @@ class TestSeedOrgGuardrailRowsForPipeline:
         assert "re-apply" in exc_info.value.detail
         mock_create.assert_not_called()
 
+    async def test_pin_that_deserialises_to_none_is_a_noop(self) -> None:
+        """An empty (but dict-typed) pin is no applied config — fast no-op.
+
+        ``GuardrailPin.from_json`` returns ``None`` for a falsy mapping, so the
+        ``pin is None`` arm of the seed's guard must return 0 without touching
+        the pipeline rows.
+        """
+        session = AsyncMock()
+        with (
+            patch(
+                "modulo.db.crud.guardrail_config.get_guardrail_pin",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+            patch(
+                "modulo.core.guardrails.materialise.create_or_update_eval",
+                new_callable=AsyncMock,
+            ) as mock_create,
+        ):
+            created = await seed_org_guardrail_rows_for_pipeline(
+                session,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                account_id=_ACCOUNT_ID,
+            )
+        assert created == 0
+        mock_create.assert_not_called()
+        session.flush.assert_not_awaited()
+
+    async def test_applied_pin_without_snapshot_is_a_noop(self) -> None:
+        """A pin with no ``serialized_snapshot`` carries nothing to materialise.
+
+        This is the ``not pin.serialized_snapshot`` arm of the same guard: the
+        pin exists (so it is not the earlier no-pin fast path) but no applied
+        config snapshot was recorded, so the seed must return 0.
+        """
+        session = AsyncMock()
+        with (
+            patch(
+                "modulo.db.crud.guardrail_config.get_guardrail_pin",
+                new_callable=AsyncMock,
+                return_value=_pin(None),
+            ),
+            patch(
+                "modulo.core.guardrails.materialise.create_or_update_eval",
+                new_callable=AsyncMock,
+            ) as mock_create,
+        ):
+            created = await seed_org_guardrail_rows_for_pipeline(
+                session,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                account_id=_ACCOUNT_ID,
+            )
+        assert created == 0
+        mock_create.assert_not_called()
+        session.flush.assert_not_awaited()
+
     async def test_empty_applied_set_is_a_noop(self) -> None:
         session = AsyncMock()
         with (
