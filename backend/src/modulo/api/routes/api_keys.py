@@ -24,6 +24,7 @@ from modulo.auth.api_key import (
     USER_KEY_MAX_TTL_DAYS,
     ApiKeyGrantsUnavailableError,
     ApiKeyScopeError,
+    ApiKeyTtlError,
     api_key_grants_enabled,
     create_api_key,
     list_api_keys,
@@ -443,7 +444,10 @@ async def _mint_api_key(
     """Mint the key, mapping DB errors to the route's HTTP error contract."""
     try:
         return await _create_key_tx(session, principal, name, role, team_id, expires_at, requested_scope, grants)
-    except ApiKeyScopeError as exc:
+    except (ApiKeyScopeError, ApiKeyTtlError) as exc:
+        # Scope-shape and service-key-TTL refusals are both client errors on
+        # the payload (FAR-1478: a >365d expiry on a service-owned key) —
+        # same 422 contract, never a silent clamp.
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),

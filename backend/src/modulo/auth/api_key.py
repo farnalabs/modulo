@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.permissions import parse_grants, serialize_grants
 from modulo.core.feature_flags import get_registry
+from modulo.db.models.account import KIND_SERVICE, Account
 from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import TERMINAL_STATUSES, Run
@@ -57,6 +58,18 @@ class ApiKeyScopeError(ValueError):
     """Raised when a mint or update payload carries an invalid key scope."""
 
 
+class ApiKeyTtlError(ValueError):
+    """Raised when a mint payload's expiry exceeds a key class's TTL ceiling.
+
+    FAR-1478 / ADR 058's tiered TTL: a key OWNED by a service principal may
+    live at most ``SERVICE_KEY_MAX_TTL_DAYS`` (the service half of the
+    resolution; the 90-day user-scoped half is FAR-1477's). Raised at the
+    mint choke point so every surface (REST, MCP, on-behalf mint) refuses the
+    same way. Callers map it to a 422 — never to a silent clamp, which would
+    mint a key the caller did not ask for.
+    """
+
+
 _PREFIX_LEN = 8
 _SECRET_LEN = 32  # url-safe base64 chars
 _MK_PREFIX = "mk_"
@@ -70,6 +83,11 @@ KEY_SCOPES: frozenset[str] = frozenset({"org", "user"})
 FLAG_API_KEY_GRANTS = "api_key_grants"
 # User-scoped keys: 90-day default AND maximum lifetime (grants flag ON only).
 USER_KEY_MAX_TTL_DAYS = 90
+# Service-owned keys: 365-day maximum lifetime (ADR 058 tiered TTL — the
+# service half of the 365d-service / 90d-user-scoped resolution of ADR 030's
+# deferred Phase-2 TTL decision). Shorter TTLs (e.g. the per-run sandbox
+# keys' 300s-24h window) are always fine; only a LONGER request is refused.
+SERVICE_KEY_MAX_TTL_DAYS = 365
 
 
 async def api_key_grants_enabled(org_id: uuid.UUID, *, strict: bool = False) -> bool:
@@ -174,6 +192,18 @@ async def create_api_key(
     """
     if scope not in KEY_SCOPES:
         raise ApiKeyScopeError(f"Invalid API key scope '{scope}': must be one of {sorted(KEY_SCOPES)}")
+    # FAR-1478 / ADR 058 tiered TTL: a key owned by a SERVICE principal may
+    # live at most SERVICE_KEY_MAX_TTL_DAYS. Checked at this choke point so
+    # REST, MCP, on-behalf mints and any future surface all refuse the same
+    # way; the default below already lands every key (human- or service-owned)
+    # at 365 days, so only an EXPLICIT longer expiry is refused. A missing
+    # owner row cannot be a service principal, so it simply skips the cap
+    # (the FK on account_id makes a missing row impossible outside tests).
+    owner = await session.get(Account, account_id)
+    if owner is not None and getattr(owner, "kind", None) == KIND_SERVICE and expires_at is not None:
+        service_ceiling = datetime.now(UTC) + timedelta(days=SERVICE_KEY_MAX_TTL_DAYS)
+        if expires_at > service_ceiling:
+            raise ApiKeyTtlError(f"Keys owned by a service account expire within {SERVICE_KEY_MAX_TTL_DAYS} days")
     if expires_at is None:
         expires_at = datetime.now(UTC) + timedelta(days=365)
     full_key, prefix, hashed = generate_api_key()

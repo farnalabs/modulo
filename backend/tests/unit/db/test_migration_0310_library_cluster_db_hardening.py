@@ -4,7 +4,7 @@ Structural contract (no Postgres needed):
 
 * **Revision chain** - 0310 revises ``0309_hitl_claims_decision_sweep``; the
   migrations directory has exactly one head
-  (``0310_library_cluster_db_hardening``, pinned by all sibling chain tests),
+  (``0311_service_accounts_lifecycle``, pinned by all sibling chain tests),
   the revision id matches the filename, and neither ``branch_labels`` nor
   ``depends_on`` is set (the pre-commit check-migration-heads hook and every
   ``test_single_head_*`` pin depend on that shape).
@@ -40,7 +40,7 @@ from modulo.db.models.library_primitive import LibraryPrimitive
 
 _MIGRATION_REVISION = "0310_library_cluster_db_hardening"
 _MIGRATION_DOWN_REVISION = "0309_hitl_claims_decision_sweep"
-_HEAD_MIGRATION = "0310_library_cluster_db_hardening"
+_HEAD_MIGRATION = "0311_service_accounts_lifecycle"
 
 _INSTALL_UNIQUE_INDEX = "uq_collection_install_org_collection"
 _COMPOSITE_UNIQUE_INDEX = "uq_composite_templates_org_name"
@@ -120,7 +120,7 @@ def _joined(rec: _Recorder) -> str:
 
 
 class TestChain:
-    def test_single_head_is_0310_library_cluster_db_hardening(self) -> None:
+    def test_single_head_is_0311_service_accounts_lifecycle(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 

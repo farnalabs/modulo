@@ -2335,6 +2335,115 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/service-accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Service Accounts Endpoint
+         * @description List the org's service principals (admins only — same floor as /admin/users).
+         */
+        get: operations["list_service_accounts_endpoint_api_v1_service_accounts_get"];
+        put?: never;
+        /**
+         * Create Service Account Endpoint
+         * @description Create a service principal with its own name and an org role ≤ operator.
+         */
+        post: operations["create_service_account_endpoint_api_v1_service_accounts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/service-accounts/{service_account_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Service Account Endpoint
+         * @description Read one service principal.
+         */
+        get: operations["get_service_account_endpoint_api_v1_service_accounts__service_account_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Service Account Endpoint
+         * @description Rename a service principal and/or assign a new org role (≤ operator).
+         */
+        patch: operations["update_service_account_endpoint_api_v1_service_accounts__service_account_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/service-accounts/{service_account_id}/decommission": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Decommission Service Account Endpoint
+         * @description Explicitly retire a service principal: tombstone, revoke keys, drop teams.
+         *
+         *     One-way by design (ADR 058: decommissioned EXPLICITLY, never by owner
+         *     death): the timestamp is durable, the membership tombstone makes every
+         *     live-role read return None (so any surviving credential dies immediately),
+         *     and every live ``mk_`` key owned by the principal is bulk-revoked in the
+         *     same transaction. The human user surface refuses service targets, so the
+         *     membership tombstone can never be cleared behind this endpoint's back.
+         */
+        post: operations["decommission_service_account_endpoint_api_v1_service_accounts__service_account_id__decommission_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/service-accounts/{service_account_id}/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Service Account Key Endpoint
+         * @description Mint an ``mk_`` key OWNED by the service principal.
+         *
+         *     Two callers, one owner stamp:
+         *
+         *     * a human admin (JWT) bootstraps or rotates a key FOR the service account;
+         *     * the service principal itself (its own ``mk_`` credential — service rows
+         *       have no browser session, so this is the "mints its own keys" path),
+         *       which may mint only for ITSELF: a key never mints keys for someone
+         *       else's principal.
+         *
+         *     Either way ``org_api_keys.account_id`` is the service account, the role
+         *     never exceeds the target's LIVE org role (≤ operator by construction), a
+         *     grant-set (optional) flows through the live registry exclusion flag, and
+         *     the 365-day service TTL is enforced at the ``create_api_key`` choke point
+         *     for every surface.
+         */
+        post: operations["create_service_account_key_endpoint_api_v1_service_accounts__service_account_id__keys_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teams/my": {
         parameters: {
             query?: never;
@@ -18803,6 +18912,111 @@ export interface components {
             /** Value */
             value: string;
         };
+        /** ServiceAccountCreate */
+        ServiceAccountCreate: {
+            /** Name */
+            name: string;
+            /**
+             * Role
+             * @default operator
+             */
+            role: string;
+        };
+        /** ServiceAccountDecommissionResponse */
+        ServiceAccountDecommissionResponse: {
+            /** Id */
+            id: string;
+            /** Decommissioned At */
+            decommissioned_at: string;
+            /** Revoked Keys */
+            revoked_keys: number;
+            /** Team Memberships Removed */
+            team_memberships_removed: number;
+        };
+        /** ServiceAccountKeyCreate */
+        ServiceAccountKeyCreate: {
+            /** Name */
+            name: string;
+            /**
+             * Role
+             * @default operator
+             */
+            role: string;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Grants */
+            grants?: string[] | null;
+            /** Scope */
+            scope?: string | null;
+        };
+        /** ServiceAccountKeyResponse */
+        ServiceAccountKeyResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Role */
+            role: string;
+            /** Key Value */
+            key_value: string;
+            /** Lookup Prefix */
+            lookup_prefix: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Owner Account Id
+             * Format: uuid
+             */
+            owner_account_id: string;
+            /**
+             * Scope
+             * @default org
+             */
+            scope: string;
+            /** Grants */
+            grants?: string[] | null;
+        };
+        /** ServiceAccountListResponse */
+        ServiceAccountListResponse: {
+            /** Items */
+            items: components["schemas"]["ServiceAccountResponse"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+        };
+        /** ServiceAccountResponse */
+        ServiceAccountResponse: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Kind */
+            kind: string;
+            /** Role */
+            role: string;
+            /** Active */
+            active: boolean;
+            /** Decommissioned At */
+            decommissioned_at?: string | null;
+            /** Created At */
+            created_at?: string | null;
+        };
+        /** ServiceAccountUpdate */
+        ServiceAccountUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Role */
+            role?: string | null;
+        };
         /** SessionKeyResponse */
         SessionKeyResponse: {
             /** Key */
@@ -25743,6 +25957,215 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    list_service_accounts_endpoint_api_v1_service_accounts_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+                search?: string | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccountListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    create_service_account_endpoint_api_v1_service_accounts_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceAccountCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccountResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_service_account_endpoint_api_v1_service_accounts__service_account_id__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                service_account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccountResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    update_service_account_endpoint_api_v1_service_accounts__service_account_id__patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                service_account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceAccountUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccountResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    decommission_service_account_endpoint_api_v1_service_accounts__service_account_id__decommission_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                service_account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccountDecommissionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    create_service_account_key_endpoint_api_v1_service_accounts__service_account_id__keys_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                service_account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceAccountKeyCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccountKeyResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

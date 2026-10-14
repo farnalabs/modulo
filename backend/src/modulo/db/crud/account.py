@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.models.account import Account
+from modulo.db.models.account import KIND_SERVICE, Account
 
 _CODE_ACCOUNT_PREFERENCES = "db.crud.account.preferences"
 
@@ -69,6 +69,41 @@ async def create_account(
     )
     session.add(account)
     await session.flush()
+    return account
+
+
+async def create_service_account(
+    session: AsyncSession,
+    *,
+    display_name: str,
+) -> Account:
+    """Create a SERVICE principal (FAR-1478 / ADR 056-058 provisioning).
+
+    The row carries NO human-shaped identity: ``email`` / ``password_hash`` /
+    ``sso_subject`` are NULL (``ck_accounts_service_identity`` makes that
+    structural) and ``auth_provider`` is forced to NULL too — there is no auth
+    provider for a principal that never logs in. The provider needs the
+    explicit Core UPDATE because an ORM attribute set to ``None`` is the
+    "unset" sentinel: on INSERT the column would be omitted and the
+    ``'local'`` server default would win. ``kind='service'`` is what every
+    human-path exclusion (login, invite, SSO/SCIM, ``/me``, the admin user
+    surface) keys off, so it is set here rather than left to the server
+    default. Begin-AGNOSTIC: flushes into the caller's transaction, never
+    opens one.
+    """
+    account = Account(
+        kind=KIND_SERVICE,
+        email=None,
+        display_name=display_name,
+        password_hash=None,
+        sso_subject=None,
+    )
+    session.add(account)
+    await session.flush()
+    # Core-level None IS an explicit NULL (unlike the ORM attribute sentinel):
+    # the only way to beat the 'local' server default on this column.
+    await session.execute(update(Account).where(Account.id == account.id).values(auth_provider=None))
+    account.auth_provider = None
     return account
 
 

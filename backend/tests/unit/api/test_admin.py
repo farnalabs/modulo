@@ -15,6 +15,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.team import TeamUpdateOutcome
+from modulo.db.models.account import KIND_SERVICE
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -352,6 +353,80 @@ class TestUserDeactivateAuthorization:
         assert resp.status_code == 200
         body = resp.json()
         assert body["is_active"] is True
+
+
+class TestServiceAccountTargetRejectedOnUserAdminSurface:
+    """FAR-1478: the human user-admin surface never mutates a service row.
+
+    Service principals are provisioned, renamed, role-assigned and
+    decommissioned exclusively through ``/api/v1/service-accounts``; every
+    user-admin mutation path (update / deactivate / reactivate /
+    reset-password) refuses a service target with 422 so a decommission can
+    never be undone — or a password grafted on — through the human surface.
+    """
+
+    URL = "/api/v1/admin/users"
+
+    @staticmethod
+    def _service_target() -> MagicMock:
+        account = MagicMock()
+        account.id = _OTHER_USER_ID
+        account.kind = KIND_SERVICE
+        account.email = None
+        account.display_name = "ci-bot"
+        account.is_break_glass = False
+        account.active = True
+        account.decommissioned_at = None
+        return account
+
+    def test_update_user_rejects_service_target(self, admin_rls_client: TestClient) -> None:
+        membership = MagicMock()
+        membership.role = "operator"
+        with (
+            patch(
+                "modulo.api.routes.admin.get_account_by_id",
+                AsyncMock(return_value=self._service_target()),
+            ),
+            patch(
+                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                AsyncMock(return_value=membership),
+            ),
+            patch("modulo.api.routes.admin.assert_not_last_admin", AsyncMock()),
+        ):
+            resp = admin_rls_client.put(f"{self.URL}/{_OTHER_USER_ID}", json={"org_role": "admin"})
+
+        assert resp.status_code == 422
+        assert "service-accounts" in resp.json()["detail"]
+
+    def test_deactivate_rejects_service_target(self, admin_rls_client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.admin.get_account_by_id",
+            AsyncMock(return_value=self._service_target()),
+        ):
+            resp = admin_rls_client.post(f"{self.URL}/{_OTHER_USER_ID}/deactivate")
+
+        assert resp.status_code == 422
+        assert "service-accounts" in resp.json()["detail"]
+
+    def test_reactivate_rejects_service_target(self, admin_rls_client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.admin.get_account_by_id",
+            AsyncMock(return_value=self._service_target()),
+        ):
+            resp = admin_rls_client.post(f"{self.URL}/{_OTHER_USER_ID}/reactivate")
+
+        assert resp.status_code == 422
+        assert "service-accounts" in resp.json()["detail"]
+
+    def test_reset_password_rejects_service_target(self, admin_rls_client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.admin.get_account_by_id",
+            AsyncMock(return_value=self._service_target()),
+        ):
+            resp = admin_rls_client.post(f"{self.URL}/{_OTHER_USER_ID}/reset-password")
+
+        assert resp.status_code == 422
+        assert "service-accounts" in resp.json()["detail"]
 
 
 class TestUpdateUserDeactivationRevocation:

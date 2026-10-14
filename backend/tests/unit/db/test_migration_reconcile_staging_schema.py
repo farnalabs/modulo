@@ -142,8 +142,8 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0306_trigger_secret_encryption chains off 0305_guardrail_escalate_action, and
 # 0307_runs_guardrail_override_resume_pending chains off 0306_trigger_secret_encryption, and
 # 0308_runs_dispatch_phase_history chains off 0307_runs_guardrail_override_resume_pending, and
-# 0310_library_cluster_db_hardening chains off 0308_runs_dispatch_phase_history as the chain head.
-_CHAIN_HEAD_MIGRATION = "0310_library_cluster_db_hardening"
+# 0311_service_accounts_lifecycle chains off 0308_runs_dispatch_phase_history as the chain head.
+_CHAIN_HEAD_MIGRATION = "0311_service_accounts_lifecycle"
 
 
 def _source(name: str) -> str:

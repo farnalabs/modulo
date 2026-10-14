@@ -620,6 +620,29 @@ account and are denied under org-wide/run-scoped keys. Key lifecycle events
 are audited (`api_key_created` / `api_key_revoked`) on both the REST and MCP
 surfaces with `auth_type` / `key_scope` / masked-prefix payload stamps.
 
+**Service accounts (FAR-1478, ADR 056 / 058).** A service principal is a
+first-class `accounts` row (`kind='service'`, carrying no email, password or
+SSO identity — structurally unreachable by every login/invite/SSO/SCIM path,
+FAR-1385 slice 1). Org admins provision, read, list, rename and decommission
+them at `/api/v1/service-accounts`; an `admin` org-role grant on a service
+principal is rejected with 422 at the surface and structurally refused by a
+DB trigger (`trg_org_memberships_service_role_ceiling`, migration 0311) — the
+role ceiling is `operator`, never admin. Service accounts hold team
+memberships through the normal team surface (team roles never include admin).
+Keys minted for a service principal are OWNED by it (`org_api_keys.account_id`
+is the service account, never the minting human): a human admin bootstraps one
+via `POST /api/v1/service-accounts/{id}/keys`, and the service principal
+mints its own with its own `mk_` credential (MCP `create_api_key`, or the same
+endpoint acting as the principal itself — a key may only mint keys for its own
+principal). Service-owned keys are capped at **365 days** (ADR 058's tiered
+TTL — the service half of the 365d-service / 90d-user-scoped resolution),
+enforced at the `create_api_key` choke point so every surface refuses the
+same way. Decommission is explicit and one-way: it stamps
+`accounts.decommissioned_at` (CHECK-restricted to service rows), tombstones
+the org membership, flips `active` off and bulk-revokes every live key — a
+service account survives human offboarding and is retired only by that
+deliberate act; the human user-admin surface refuses service targets outright.
+
 **Grant-sets on API keys (FAR-1477, ADR 058; flag `api_key_grants`, default OFF).**
 `org_api_keys.grants` is a nullable, space-joined list of `PERMISSIONS` keys,
 tri-state: `NULL` = legacy role-bundle behaviour (unchanged), empty = explicit

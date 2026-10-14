@@ -120,6 +120,7 @@ from modulo.api.routes.runs import router as runs_router
 from modulo.api.routes.schema_folders import router as schema_folders_router
 from modulo.api.routes.schemas import router as schemas_router
 from modulo.api.routes.scim import router as scim_router
+from modulo.api.routes.service_accounts import router as service_accounts_router
 from modulo.api.routes.slack import router as slack_router
 from modulo.api.routes.sso import router as sso_router
 from modulo.api.routes.stripe_webhook import router as stripe_webhook_router
@@ -1234,6 +1235,7 @@ app.include_router(dashboard_router)
 app.include_router(deployment_router)
 app.include_router(costs_router)
 app.include_router(cost_components_router)
+app.include_router(service_accounts_router)
 app.include_router(teams_router)
 app.include_router(pipelines_router)
 app.include_router(pipeline_folders_router)
