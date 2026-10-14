@@ -6,10 +6,7 @@ time, so it is surfaced as a hard error (RETRY_POLICY_MALFORMED). ``None`` /
 """
 
 from modulo.core.graph_validator import GraphValidator, ValidationResult
-
-
-def _codes(result: ValidationResult) -> set[str]:
-    return {i.code for i in result.issues}
+from tests.unit.graph_validator._helpers import codes_of as _codes
 
 
 def test_retry_policy_none_is_default() -> None:
