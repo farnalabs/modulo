@@ -178,6 +178,32 @@ describe('CostComponentsView', () => {
     expect(nameInput.disabled).toBe(true)
   })
 
+  it('saveComponent PUTs the edited component with its id in the path', async () => {
+    const wrapper = await mountView()
+    const vm = wrapper.vm as unknown as {
+      openEdit: (c: { id: string; name: string; display_name: string; kind: string }) => void
+      saveComponent: () => Promise<void>
+      editing: boolean
+    }
+
+    vm.openEdit({ id: 'comp-1', name: 'llm_tokens', display_name: 'LLM Tokens', kind: 'calculated' })
+    await flushPromises()
+    expect(vm.editing).toBe(true)
+
+    await vm.saveComponent()
+    await flushPromises()
+
+    expect(mockPost).not.toHaveBeenCalled()
+    expect(mockPut).toHaveBeenCalledOnce()
+    const [url, { params, body }] = mockPut.mock.calls[0] as [
+      string,
+      { params: { path: { component_id: string } }; body: Record<string, unknown> },
+    ]
+    expect(url).toContain('/api/v1/admin/costs/components/{component_id}')
+    expect(params.path.component_id).toBe('comp-1')
+    expect(body).toMatchObject({ name: 'llm_tokens', display_name: 'LLM Tokens' })
+  })
+
   /* ── CRUD: save error ──────────────────────────────────────────────── */
 
   it('shows formError when POST returns an error', async () => {
@@ -436,5 +462,20 @@ describe('CostComponentsView', () => {
   it('shows rate fallback in parentheses', async () => {
     const wrapper = await mountView()
     expect(wrapper.text()).toContain('e2b_rate')
+  })
+
+  it('row actions render stable testids and the edit action opens the edit dialog', async () => {
+    const wrapper = await mountView()
+
+    const editButtons = wrapper.findAll('[data-testid="cost-components-edit"]')
+    expect(editButtons.length).toBeGreaterThan(0)
+    expect(wrapper.find('[data-testid="cost-components-delete"]').exists()).toBe(true)
+
+    await editButtons[0].trigger('click')
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { editing: boolean; editingId: string | null }
+    expect(vm.editing).toBe(true)
+    expect(vm.editingId).toBe('comp-1')
   })
 })
