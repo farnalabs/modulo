@@ -42,6 +42,7 @@ from modulo.api.middleware.rate_limiter import AuthRateLimitMiddleware, RateLimi
 from modulo.api.middleware.request_timeout import RequestTimeoutMiddleware
 from modulo.api.middleware.security_headers import SecurityHeadersMiddleware
 from modulo.api.middleware.sensitive_mask import router as sensitive_router
+from modulo.api.openapi import apply_error_response_schemas
 from modulo.api.routes.admin import router as admin_router
 from modulo.api.routes.admin_assistant import router as admin_assistant_router
 from modulo.api.routes.admin_capacity import router as admin_capacity_router
@@ -495,7 +496,7 @@ async def _assert_no_owner_rows(settings: Settings) -> None:
     # Message text only — never executed as SQL. The prescription mirrors the
     # migration's owner->admin UPDATE for operators who hit this FATAL.
     raise RuntimeError(
-        "FATAL: org_memberships still contain the dropped 'owner' role "  # noqa: S608 — error message text, not SQL
+        "FATAL: org_memberships still contain the dropped 'owner' role "  # noqa: S608 — error message text; not SQL
         f"({len(owners)} rows, account_ids={account_ids}). Prescribed fix: "
         "UPDATE org_memberships SET role='admin' WHERE role='owner'"  # nosec
     )
@@ -1198,9 +1199,15 @@ _HEALTHZ_READY_TIMEOUT_SECONDS = 15
 app.add_middleware(
     RequestTimeoutMiddleware,
     timeout_seconds=_DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    # Order matters: RequestTimeoutMiddleware._timeout_for returns the FIRST
+    # matching prefix, so the MOST SPECIFIC prefix must come first. With
+    # "/healthz" ahead of "/healthz/ready", the broader 5s deadline shadowed
+    # the readiness endpoint's intended 15s and /healthz/ready intermittently
+    # 504'd under load (the readiness probe runs 15 sub-checks), which the
+    # /healthz/ready tests surfaced as a KeyError on the 504 ProblemDetail.
     overrides={
-        "/healthz": _HEALTHZ_TIMEOUT_SECONDS,
         "/healthz/ready": _HEALTHZ_READY_TIMEOUT_SECONDS,
+        "/healthz": _HEALTHZ_TIMEOUT_SECONDS,
     },
 )
 
@@ -1317,6 +1324,24 @@ app.add_exception_handler(StarletteHTTPException, http_exception_handler)  # typ
 app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(StorageExhaustedError, storage_exhausted_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(Exception, unhandled_exception_handler)
+
+
+_raw_openapi = app.openapi
+
+
+def _openapi_schema() -> dict[str, Any]:
+    """Generated OpenAPI document, with error response bodies corrected.
+
+    FastAPI declares a ``422`` body shaped like its own ``HTTPValidationError``;
+    the handlers registered above actually render RFC 9457 Problem Details.
+    Wrapping the generator keeps that correction inside ``app.openapi()`` so
+    ``/openapi.json``, ``/docs`` and the schema-freshness generator all see the
+    same truthful document. See ``modulo.api.openapi``.
+    """
+    return apply_error_response_schemas(_raw_openapi())
+
+
+app.openapi = _openapi_schema  # type: ignore[method-assign]
 
 
 # ---------------------------------------------------------------------------

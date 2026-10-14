@@ -1,10 +1,12 @@
 """CodeClimateConnector — async Code Climate API v1 connector."""
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
@@ -24,6 +26,9 @@ class CodeClimateConnector(ConnectorBase):
     def __init__(self, token: str) -> None:
         self._token = token
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.CODECLIMATE
@@ -36,6 +41,7 @@ class CodeClimateConnector(ConnectorBase):
                 "Authorization": f"Token token={self._token}",
             },
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     async def health_check(self) -> HealthResult:
@@ -46,11 +52,13 @@ class CodeClimateConnector(ConnectorBase):
                     return HealthResult(ok=True, detail="Code Climate API token validated")
                 if resp.status_code == 401:
                     return HealthResult(ok=False, detail="Invalid Code Climate auth token")
-                return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
+                return HealthResult(
+                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as c:

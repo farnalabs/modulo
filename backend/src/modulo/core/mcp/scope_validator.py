@@ -78,6 +78,8 @@ _SCOPE_SECRET_MANAGE = "secret.manage"  # nosec B105 — permission scope name, 
 _SCOPE_CONNECTOR_LIST = "connector.list"  # nosec B105 — permission scope name, not a credential
 _SCOPE_PARAMETER_SCHEMA_LIST = "parameter_schema.list"  # nosec B105 — permission scope name, not a credential
 _SCOPE_HITL_LIST = "hitl.list"  # nosec B105 — permission scope name, not a credential
+_SCOPE_PIPELINE_UPDATE = "pipeline.update"  # nosec B105 — permission scope name, not a credential
+_SCOPE_EVAL_LIST = "eval.list"  # nosec B105 — permission scope name, not a credential
 
 _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "trigger_pipeline": "run.trigger",
@@ -98,19 +100,24 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "bind_connector_to_node": "pipeline.bind_connector",
     # FAR-1182: pipeline monthly spend circuit breaker threshold - same
     # permission key as the REST PATCH /pipelines/{id} that also sets it.
-    "set_pipeline_circuit_breaker": "pipeline.update",
+    "set_pipeline_circuit_breaker": _SCOPE_PIPELINE_UPDATE,
     # FAR-1161: accountability owners - same permission key as the REST
     # PATCH /pipelines/{id} that also sets them (eligibility runs in the
     # shared CRUD layer, identical to the REST path).
-    "set_pipeline_owners": "pipeline.update",
+    "set_pipeline_owners": _SCOPE_PIPELINE_UPDATE,
+    # FAR-1175 (ADR 043 S1): manual autonomy demote/promote - same permission
+    # key as the REST POST /pipelines/{id}/autonomy/{demote,promote}; the
+    # admin/owner gate is enforced in-handler on both surfaces.
+    "demote_pipeline_autonomy": _SCOPE_PIPELINE_UPDATE,
+    "promote_pipeline_autonomy": _SCOPE_PIPELINE_UPDATE,
     # FAR-1599: environment-profile binding - same permission key as the REST
     # PATCH /pipelines/{id} that also sets it (the shared FAR-1558 predicate
     # validates the binding on both surfaces).
-    "update_pipeline": "pipeline.update",
+    "update_pipeline": _SCOPE_PIPELINE_UPDATE,
     "create_model_backend": "model_backend.create",
     "list_runs": "run.list",
     "get_run_evals": "run.evals",
-    "list_eval_definitions": "eval.list",
+    "list_eval_definitions": _SCOPE_EVAL_LIST,
     "create_eval_definition": "eval.definition.create",
     "update_eval_definition": "eval.definition.update",
     "delete_eval_definition": "eval.definition.delete",
@@ -167,6 +174,28 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "update_parameter_set": "parameter_schema.set.update",
     "delete_parameter_set": "parameter_schema.set.delete",
     "restore_parameter_set": "parameter_schema.set.update",
+    # FAR-696: governance-entity read/list tools. Each maps to the SAME
+    # permission key as the corresponding REST route (team.list /
+    # user.list / audit.manage / admin.notification.manage /
+    # lifecycle_map.list / plugin.list / sso.manage / eval.list /
+    # schema.list / pipeline.list). ``list_feature_flags`` is pinned at
+    # ``resource.read_only`` via READ_ONLY_TOOLS below because the REST
+    # route's real gate is the strict ``require_system_permission`` check,
+    # which the tool enforces in-body from the is_system_admin context —
+    # mapping it to the ``system.config.manage`` placeholder role would let
+    # an org admin through the role leg.
+    "list_teams": "team.list",
+    "list_users": "user.list",
+    "get_audit_log": "audit.manage",
+    "list_notification_deliveries": "admin.notification.manage",
+    "list_lifecycle_maps": "lifecycle_map.list",
+    "get_lifecycle_map": "lifecycle_map.list",
+    "list_plugins": "plugin.list",
+    "list_sso_providers": "sso.manage",
+    "list_eval_suites": _SCOPE_EVAL_LIST,
+    "get_eval_suite": _SCOPE_EVAL_LIST,
+    "get_schema_versions": "schema.list",
+    "get_pipeline_diff": "pipeline.list",
 }
 
 TOOL_SCOPE_REQUIREMENTS: types.MappingProxyType[str, str] = types.MappingProxyType(_TOOL_SCOPE_REQUIREMENTS)
@@ -185,6 +214,12 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset(
         "get_available_features",
         "list_schemas",
         "validate_payload",
+        # FAR-696: the REST route's real gate is the strict
+        # ``require_system_permission`` check (no org-role fall-through),
+        # which the tool enforces in-body from the is_system_admin context.
+        # Pinning here keeps the role leg from inventing an org-admin
+        # fall-through the REST surface does not have.
+        "list_feature_flags",
     }
 )
 
@@ -474,7 +509,6 @@ def check_tool_scope(
             key_scope=key_scope,
             auth_type=auth_type,
             allowed_set=allowed_set,
-            kill_switch=authz_enforce_enabled(),
             grants=grants,
         )
         _log.warning("Scope check failed: %s", message)
@@ -491,7 +525,6 @@ def _denial_message(
     key_scope: str | None,
     auth_type: str | None,
     allowed_set: set[str] | None,
-    kill_switch: bool,
     grants: frozenset[str] | None = None,
 ) -> str:
     """Re-derive the specific denial message for a resolver denial.

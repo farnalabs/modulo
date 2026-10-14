@@ -15,6 +15,8 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.core.plugin_registry import PluginHealth, PluginManifest, get_plugin_registry
 from modulo.util import sanitise_log_value as _sanitise_log_value
 
+_CODE_PLUGIN_LIST = "plugin.list"
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/plugins", tags=["plugins"])
@@ -50,7 +52,7 @@ def _to_response(manifest: PluginManifest, health: PluginHealth) -> PluginRespon
 
 @router.get("", dependencies=[require_feature("plugin_management")])
 async def list_plugins_endpoint(
-    _principal: TenantPrincipal = require_permission("plugin.list"),
+    _principal: TenantPrincipal = require_permission(_CODE_PLUGIN_LIST),
 ) -> list[PluginResponse]:
     try:
         registry = get_plugin_registry()
@@ -70,7 +72,7 @@ async def list_plugins_endpoint(
 @router.get("/{plugin_id}", dependencies=[require_feature("plugin_management")])
 async def plugin_detail_endpoint(
     plugin_id: str,
-    _principal: TenantPrincipal = require_permission("plugin.list"),
+    _principal: TenantPrincipal = require_permission(_CODE_PLUGIN_LIST),
 ) -> PluginResponse:
     """Return the full manifest for a single installed plugin plus its health status."""
     try:
@@ -92,7 +94,7 @@ async def plugin_detail_endpoint(
 @router.get("/{plugin_id}/health", dependencies=[require_feature("plugin_management")])
 async def plugin_health_endpoint(
     plugin_id: str,
-    _principal: TenantPrincipal = require_permission("plugin.list"),
+    _principal: TenantPrincipal = require_permission(_CODE_PLUGIN_LIST),
 ) -> PluginHealth:
     try:
         registry = get_plugin_registry()

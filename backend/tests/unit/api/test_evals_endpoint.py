@@ -103,6 +103,30 @@ def admin_client() -> Generator[TestClient, None, None]:
 
 
 @pytest.fixture
+def operator_client() -> Generator[TestClient, None, None]:
+    """FAR-735: operators may create/update eval definitions."""
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="operator",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="operator",
+    )
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_db_session] = override_session
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
 def runner_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
@@ -243,7 +267,40 @@ class TestCreateEvalDefinition:
         assert data["pass_threshold"] is None
         assert data["suite_id"] is None
 
-    def test_create_admin_required(self, runner_client: TestClient) -> None:
+    def test_create_operator_succeeds(self, operator_client: TestClient) -> None:
+        """FAR-735: operators may create eval definitions (admin no longer required)."""
+        mock_pipeline = MagicMock()
+        mock_pipeline.id = _PIPELINE_ID
+        mock_session = _make_mock_session()
+        mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
+            _make_result(scalar_value=None),  # set_rls_org
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+            _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
+        ]
+        mock_session.add = MagicMock()
+        mock_session.flush = AsyncMock()
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        resp = operator_client.post(
+            self.URL,
+            json={
+                "pipeline_id": str(_PIPELINE_ID),
+                "name": "Op Eval",
+                "eval_type": "regex",
+                "config_json": {"pattern": r"\d+"},
+            },
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["name"] == "Op Eval"
+        assert data["eval_type"] == "regex"
+
+    def test_create_runner_denied(self, runner_client: TestClient) -> None:
         resp = runner_client.post(
             self.URL,
             json={
@@ -642,7 +699,35 @@ class TestUpdateEvalDefinition:
         assert resp.status_code == 400
         assert "PolicyGate binding violation" in resp.json()["detail"]
 
-    def test_update_admin_required(self, runner_client: TestClient) -> None:
+    def test_update_operator_succeeds(self, operator_client: TestClient) -> None:
+        """FAR-735: operators may update eval definitions."""
+        mock_session = _make_mock_session()
+        eval_def = _make_eval_def(name="Original", pass_threshold=None, suite_id=None)
+        mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
+            _make_result(scalar_value=None),  # set_rls_org
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+            _make_result(scalar_one_value=eval_def),  # Eval lookup (chunk 3b: reads from evals)
+            _make_result(scalar_one_value=None),  # PolicyGate lookup for current failure_behaviour
+            _make_result(scalar_one_value=eval_def),  # create_or_update_eval: existing Eval lookup
+            _make_result(scalar_one_value=None),  # create_or_update_eval: PolicyGate lookup
+            _make_result(scalar_one_value=None),  # create_or_update_eval: flush
+            _make_result(scalar_one_value=None),  # PolicyGate reload for response mapping
+        ]
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        resp = operator_client.put(
+            f"{self.URL}/{_EVAL_DEF_ID}",
+            json={"name": "Op Update"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "Op Update"
+
+    def test_update_runner_denied(self, runner_client: TestClient) -> None:
         resp = runner_client.put(f"{self.URL}/{_EVAL_DEF_ID}", json={"name": "Should Fail"})
         assert resp.status_code == 403
 
@@ -692,7 +777,12 @@ class TestDeleteEvalDefinition:
         resp = admin_client.delete(f"{self.URL}/{uuid.uuid4()}")
         assert resp.status_code == 404
 
-    def test_delete_admin_required(self, runner_client: TestClient) -> None:
+    def test_delete_operator_denied(self, operator_client: TestClient) -> None:
+        """FAR-735: DELETE is stricter than its registry floor — admins only."""
+        resp = operator_client.delete(f"{self.URL}/{_EVAL_DEF_ID}")
+        assert resp.status_code == 403
+
+    def test_delete_runner_denied(self, runner_client: TestClient) -> None:
         resp = runner_client.delete(f"{self.URL}/{_EVAL_DEF_ID}")
         assert resp.status_code == 403
 
@@ -939,3 +1029,100 @@ class TestInsertEvalDefinitionBindingViolation:
 
         assert excinfo.value.status_code == 400
         assert "PolicyGate binding violation" in excinfo.value.detail
+
+
+# --------------------------------------------------------------------------- #
+# FAR-1729: source-table pins — the evals routes read ``evals``              #
+# --------------------------------------------------------------------------- #
+class TestFar1729EvalSourcePins:
+    """These routes must look definitions up in ``evals``, not the frozen table.
+
+    ``eval_definitions`` was frozen by the 0254 cutover (no production write
+    path post-cutover): coverage would silently report every post-cutover
+    node uncovered, ``/evals/{id}/timeseries`` would 404 post-cutover evals,
+    and ``/evals/compare`` would label their results ``eval_name: "unknown"``.
+    Each pin fails if the source is reverted.
+    """
+
+    @staticmethod
+    def _install_capture(session: AsyncMock, *, eval_scalar: object = None, eval_rows: list | None = None) -> list[str]:
+        """Route ``session.execute`` on the compiled statement, capturing SQL text."""
+        captured: list[str] = []
+
+        def _execute(stmt, params=None):
+            s = str(stmt)
+            captured.append(s)
+            result = MagicMock()
+            result.scalars = MagicMock(return_value=result)
+            result.all = MagicMock(return_value=[])
+            result.scalar_one_or_none = MagicMock(return_value=None)
+            if "set_config" in s:
+                return result
+            if "FROM pipelines" in s:
+                node_id = uuid.uuid4()
+                pipeline = MagicMock()
+                pipeline.id = _PIPELINE_ID
+                pipeline.graph_nodes_json = [{"id": str(node_id)}]
+                result.scalar_one_or_none = MagicMock(return_value=pipeline)
+                return result
+            if "FROM evals" in s:
+                result.scalar_one_or_none = MagicMock(return_value=eval_scalar)
+                result.all = MagicMock(return_value=eval_rows or [])
+                return result
+            return result
+
+        session.execute = AsyncMock(side_effect=_execute)
+        return captured
+
+    @staticmethod
+    def _principal() -> MagicMock:
+        principal = MagicMock()
+        principal.organisation_id = _ORG_ID
+        principal.account_id = _USER_ID
+        principal.org_role = "admin"
+        return principal
+
+    async def test_eval_coverage_reads_evals_table(self) -> None:
+        session = _make_mock_session()
+        captured = self._install_capture(session)
+        principal = self._principal()
+
+        response = await evals_routes.eval_coverage(pipeline_id=_PIPELINE_ID, session=session, principal=principal)
+
+        assert response["summary"]["total_nodes"] == 1
+        stale = [s for s in captured if "eval_definitions" in s]
+        assert not stale, f"eval_coverage must not read the frozen table: {stale}"
+        assert any("FROM evals" in s for s in captured), f"no evals read captured: {captured}"
+
+    async def test_eval_timeseries_exists_lookup_reads_evals_table(self) -> None:
+        """The exists/name lookup (not the FAR-1725-owned raw aggregates)."""
+        session = _make_mock_session()
+        eval_row = MagicMock()
+        eval_row.name = "post-cutover-eval"
+        captured = self._install_capture(session, eval_scalar=eval_row)
+        principal = self._principal()
+
+        response = await evals_routes.eval_timeseries(
+            eval_id=_EVAL_DEF_ID, days=7, session=session, principal=principal
+        )
+
+        assert response["eval_name"] == "post-cutover-eval"
+        # The definition lookup is the ORM select against ``evals`` (the raw
+        # aggregate queries — FAR-1725-owned — join ``evals`` as ``ed`` and
+        # never emit a ``FROM evals`` clause).
+        lookups = [s for s in captured if "FROM evals" in s]
+        assert lookups, f"no definition lookup captured: {captured}"
+        stale = [s for s in lookups if "eval_definitions" in s]
+        assert not stale, f"timeseries lookup must not read the frozen table: {stale}"
+
+    async def test_fetch_eval_definitions_reads_evals_table(self) -> None:
+        session = _make_mock_session()
+        captured = self._install_capture(session, eval_rows=[])
+        principal = self._principal()
+
+        defs = await evals_routes._fetch_eval_definitions({_EVAL_DEF_ID}, session, principal)
+
+        assert defs == {}
+        stale = [s for s in captured if "eval_definitions" in s]
+        assert not stale, f"_fetch_eval_definitions must not read the frozen table: {stale}"
+        assert any("FROM evals" in s for s in captured), f"no evals read captured: {captured}"

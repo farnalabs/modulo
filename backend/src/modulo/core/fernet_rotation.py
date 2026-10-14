@@ -8,11 +8,15 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from modulo.auth.secret_storage import _is_complete_fernet_token, is_encrypted_secret
+from modulo.core.secret_patterns import TRIGGER_CONFIG_SECRET_KEYS
 
 _log = logging.getLogger(__name__)
 
@@ -107,6 +111,152 @@ async def _rotate_notification_endpoints(session: AsyncSession, new_fernet: Fern
             text("UPDATE notification_endpoints SET secret_ciphertext = :ct WHERE id = :id"),
             {"ct": new_ct, "id": row.id},
         )
+        count += 1
+    return count
+
+
+def _reencrypt_trigger_secret_or_classify(
+    stored: str,
+    *,
+    row_id: Any,
+    key: str,
+    new_fernet: Fernet,
+    old_fernet: Fernet | None,
+    new_key: str,
+    old_key: str,
+) -> str | None:
+    """Classify ONE stored trigger secret and return its re-encrypted token.
+
+    Returns the re-encrypted token when *stored* is ciphertext readable under
+    the new key (or under the rotation window's old key), or ``None`` when it
+    is legacy plaintext — the data migration's job, so rotation SKIPS it. A
+    value the probe cannot decrypt that is nonetheless a structurally complete
+    Fernet token is broken ciphertext: it fails LOUD (:class:`InvalidToken`)
+    rather than being silently left behind.
+    """
+    if is_encrypted_secret(stored, new_key, old_key):
+        return re_encrypt_str(stored, new_fernet, old_fernet)
+    if _is_complete_fernet_token(stored):
+        raise InvalidToken(
+            f"trigger {row_id} config key {key}: stored value is a structurally complete "
+            "Fernet token that neither the new nor the old key can decrypt"
+        )
+    return None
+
+
+def _rotated_trigger_secrets(
+    config: dict[str, Any],
+    *,
+    row_id: Any,
+    new_fernet: Fernet,
+    old_fernet: Fernet | None,
+    new_key: str,
+    old_key: str,
+) -> dict[str, str]:
+    """Return ``{config_key: re-encrypted token}`` for every secret that rotates.
+
+    Iterates the CANONICAL shared key set
+    (:data:`modulo.core.secret_patterns.TRIGGER_CONFIG_SECRET_KEYS`) — never a
+    module-local list — so no secret key can drift out of rotation's reach.
+    Non-secret, non-string, empty and legacy-plaintext values are omitted;
+    broken ciphertext propagates :class:`InvalidToken` via
+    :func:`_reencrypt_trigger_secret_or_classify`.
+    """
+    rotated: dict[str, str] = {}
+    for key in TRIGGER_CONFIG_SECRET_KEYS:
+        stored = config.get(key)
+        if not isinstance(stored, str) or not stored:
+            continue
+        # Decryptability probe + fail-loud arm: a value the probe cannot
+        # decrypt is plaintext UNLESS it is a structurally complete Fernet
+        # token — in that case no configured key reads it and the broken
+        # ciphertext must surface (InvalidToken), never be skipped silently.
+        # A gAAAA-prefixed PLAINTEXT (incomplete token shape) is skipped,
+        # never fed to the decryptor.
+        new_ct = _reencrypt_trigger_secret_or_classify(
+            stored,
+            row_id=row_id,
+            key=key,
+            new_fernet=new_fernet,
+            old_fernet=old_fernet,
+            new_key=new_key,
+            old_key=old_key,
+        )
+        if new_ct is not None:
+            rotated[key] = new_ct
+    return rotated
+
+
+async def _rotate_triggers(
+    session: AsyncSession,
+    new_fernet: Fernet,
+    old_fernet: Fernet | None,
+    *,
+    new_key: str,
+    old_key: str = "",
+) -> int:
+    """Re-encrypt HMAC/signing secrets inside triggers.config_json (FAR-1732).
+
+    Classification is the :func:`modulo.auth.secret_storage.is_encrypted_secret`
+    DECRYPTABILITY probe (FAR-1735), never the ``gAAAA`` prefix heuristic:
+
+    * a value that decrypts under the new key — or under the rotation
+      window's old key — rotates;
+    * a value that decrypts under NEITHER key but is a structurally complete
+      Fernet token
+      (:func:`modulo.auth.secret_storage._is_complete_fernet_token`) is a
+      broken ciphertext: it fails LOUD (:class:`InvalidToken` propagates) —
+      rotation surfaces an unreadable ciphertext row instead of silently
+      leaving it behind;
+    * any other value — including a plaintext secret that merely begins with
+      ``gAAAA`` but is not a complete token — is LEGACY PLAINTEXT (the data
+      migration's job) and is SKIPPED, so a ``gAAAA``-prefixed plaintext row
+      can never be fed to the decryptor and abort the whole rotation run.
+
+    The candidate keys are the CANONICAL shared set
+    (:data:`modulo.core.secret_patterns.TRIGGER_CONFIG_SECRET_KEYS`, the same
+    object the write path persists through). The SELECT is deliberately NOT
+    narrowed by a key list in SQL: a second, module-local key list is exactly
+    how a future secret key escapes — it would sit in the rotation loop while
+    the WHERE clause never selected the rows carrying it as their only secret.
+    Every row's ``config_json`` is checked in Python against the ONE shared
+    set instead; ``triggers`` is a small config table and rotation is a rare
+    admin operation, so the scan costs nothing next to the drift it removes.
+
+    FAR-1735 lost-update fix: the write is NARROWED to the secret keys via
+    ``jsonb_set`` (one per rotated key) instead of rewriting the whole
+    ``config_json`` document — a concurrent trigger edit between this
+    function's SELECT and its UPDATE can no longer have its NON-secret keys
+    clobbered by rotation.
+    """
+    rows = (await session.execute(text("SELECT id, config_json FROM triggers"))).all()
+    count = 0
+    for row in rows:
+        rotated = _rotated_trigger_secrets(
+            row.config_json,
+            row_id=row.id,
+            new_fernet=new_fernet,
+            old_fernet=old_fernet,
+            new_key=new_key,
+            old_key=old_key,
+        )
+        if not rotated:
+            continue
+        for key, new_ct in rotated.items():
+            # CAST(:ct AS text), NOT :ct::text — SQLAlchemy's bind-param
+            # regex skips a ":name" immediately followed by "::" (it reads
+            # the pair as a cast), leaving ":ct" literal in the SQL and
+            # failing on real Postgres with "syntax error at or near ':'"
+            # (caught by the integration test; the unit-tier SQL-text
+            # assertion cannot see it).
+            await session.execute(
+                text(
+                    "UPDATE triggers SET config_json = "
+                    "jsonb_set(config_json, ARRAY[:key]::text[], to_jsonb(CAST(:ct AS text))) "
+                    "WHERE id = :id"
+                ),
+                {"key": key, "ct": new_ct, "id": row.id},
+            )
         count += 1
     return count
 
@@ -253,7 +403,7 @@ async def rotate_all_encrypted_data(
 ) -> RotationResult:
     """Re-encrypt all Fernet-encrypted data across all stores.
 
-    Iterates all 8 data stores and re-encrypts each row with *new_key*,
+    Iterates all 9 data stores and re-encrypts each row with *new_key*,
     falling back to *old_key* for decryption of existing data.
 
     Args:
@@ -275,12 +425,17 @@ async def rotate_all_encrypted_data(
     old_fernet = Fernet(old_key.encode()) if old_key else None
 
     # Ordered: secrets first (most critical), then connectors/backends,
-    # then notifications, then observability, then checkpoints.
+    # then notifications, then triggers, then observability, then checkpoints.
+    # ``_rotate_triggers`` also needs the raw key STRINGS (its plaintext-vs-
+    # ciphertext classification is the is_encrypted_secret decryptability
+    # probe, which takes keys) — bound here so every other rotator keeps the
+    # uniform ``(session, new_fernet, old_fernet)`` signature.
     rotators: list[tuple[str, Any]] = [
         ("secrets", _rotate_secrets_table),
         ("connector_instances", _rotate_connector_instances),
         ("model_backends", _rotate_model_backends),
         ("notification_endpoints", _rotate_notification_endpoints),
+        ("triggers", partial(_rotate_triggers, new_key=new_key, old_key=old_key)),
         ("observability_config", _rotate_otel_config),
         ("checkpoints", _rotate_checkpoints),
         ("checkpoint_blobs", _rotate_checkpoint_blobs),

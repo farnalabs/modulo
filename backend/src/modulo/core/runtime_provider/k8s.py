@@ -545,8 +545,6 @@ class KubernetesRuntimeProvider(RuntimeProvider):
     async def _wait_until_running(self, pod_name: str, wait_bound_s: float) -> None:
         """Poll the pod until its phase is ``Running`` (bounded)."""
         deadline = time.monotonic() + wait_bound_s
-        phase = "unknown"
-        note = ""
         while True:
             pod = await self._read_pod(pod_name)
             if pod is None:

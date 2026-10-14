@@ -526,7 +526,7 @@ def _rollback_session(*, snapshot: MagicMock, connector_rows: list[MagicMock]) -
     return session
 
 
-def _org_only_connector_row(connector_id: uuid.UUID) -> MagicMock:
+def _org_visibility_connector_row(connector_id: uuid.UUID) -> MagicMock:
     row = MagicMock()
     row.id = connector_id
     row.name = "shared-ci"
@@ -535,12 +535,43 @@ def _org_only_connector_row(connector_id: uuid.UUID) -> MagicMock:
     return row
 
 
-def test_rollback_to_a_snapshot_pinning_an_org_only_connector_is_409() -> None:
-    """FAILS without the fix: no post_lock_gate -> the rollback is not stopped
-    by the connector-team gate (some other status, never this named 409)."""
+def test_rollback_to_a_snapshot_pinning_an_org_visibility_connector_is_not_409() -> None:
+    """FAR-1618: an org-wide connector is shared, so the team gate lets it through.
+
+    Reverses the FAR-1515 reverse direction: the pipeline's team pinning an
+    ``visibility=org`` connector is NOT a ``connector_team_mismatch`` (org
+    resources stay shared across the organisation), so the rollback gate must
+    not stop it. Before FAR-1618 this returned the named 409 with an
+    "is org-only" detail.
+    """
     session = _rollback_session(
         snapshot=_snapshot_bound_to(_BOUND_CONNECTOR_ID),
-        connector_rows=[_org_only_connector_row(_BOUND_CONNECTOR_ID)],
+        connector_rows=[_org_visibility_connector_row(_BOUND_CONNECTOR_ID)],
+    )
+    with _client_for(session, role="admin") as http:
+        resp = http.post(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{_SNAPSHOT_ID}/rollback")
+
+    assert "connector_team_mismatch" not in resp.text, resp.text
+    assert resp.status_code != 409, resp.text
+
+
+def test_rollback_to_a_snapshot_pinning_another_teams_connector_is_409() -> None:
+    """The team-PRIVATE direction still refuses — and proves the gate is wired.
+
+    FAILS without the fix: no post_lock_gate -> the rollback is not stopped
+    by the connector-team gate (some other status, never this named 409).
+    This is the wiring proof the org-visibility case used to carry; since
+    FAR-1618 only a team-private connector held outside the pipeline's team
+    can produce the mismatch.
+    """
+    other_team_row = MagicMock()
+    other_team_row.id = _BOUND_CONNECTOR_ID
+    other_team_row.name = "other-team-secrets"
+    other_team_row.visibility = "team"
+    other_team_row.owner_team_id = uuid.uuid4()  # deliberately NOT _TEAM_ID
+    session = _rollback_session(
+        snapshot=_snapshot_bound_to(_BOUND_CONNECTOR_ID),
+        connector_rows=[other_team_row],
     )
     with _client_for(session, role="admin") as http:
         resp = http.post(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{_SNAPSHOT_ID}/rollback")
@@ -548,8 +579,8 @@ def test_rollback_to_a_snapshot_pinning_an_org_only_connector_is_409() -> None:
     assert resp.status_code == 409, resp.text
     detail = str(resp.json()["detail"])
     assert detail.startswith("connector_team_mismatch"), detail
-    assert "shared-ci" in detail
-    assert "is org-only" in detail
+    assert "other-team-secrets" in detail
+    assert "is team-private" in detail
 
 
 def test_rollback_to_a_snapshot_pinning_the_pipeline_own_team_connector_is_not_409() -> None:

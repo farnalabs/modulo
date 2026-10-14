@@ -1,7 +1,7 @@
 ---
 id: feat-core-runtime-provider-core
 prd: 6
-adr: [ADR 044 (agent-dispatch-model), ADR 040 (runtime-provider-errors)]
+adr: [ADR 044 (agent-dispatch-model), ADR 040 (runtime-provider-contract-and-tier-conformance)]
 delivery-tasks: []
 code:
   - backend/src/modulo/core/runtime_provider/
@@ -40,7 +40,6 @@ bdd:
   - backend/tests/bdd/features/environments/environment_profiles.feature
   - backend/tests/bdd/features/runtime_providers/provider_matrix.feature
   - backend/tests/bdd/features/runtime_providers/file_io.feature
-  - backend/tests/bdd/features/workflows/binding.feature
 depends-on: []
 status: covered
 ---
@@ -49,8 +48,9 @@ status: covered
 
 Provider abstraction that executes `sandbox_agent` nodes and manages workspaces
 (ADR 044 – Agent Dispatch Model). Runtime providers (`local`, `runner_docker` with
-`docker`/`local_docker` aliases, `e2b`) expose the same capability surface, gated
-per-environment via environment profiles and validated at graph-validation time.
+`docker`/`local_docker` aliases, `e2b`, `kubernetes` with a `k8s` alias) expose the
+same capability surface, gated per-environment via environment profiles and
+validated at graph-validation time.
 `ShellConnector` (the legacy command connector) is deprecated since ADR 044 and maps
 onto the same runtime-provider surface; its product-map entry carries the ADR 044
 deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 029)
@@ -61,7 +61,7 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
 - [x] Runtime provider base contract (`base.py`): lifecycle, health, execution, teardown
 - [x] Provider registry/hub resolves the configured provider deterministically
       (explicit provider_type/hint match; `ProviderNotConfiguredError` otherwise)
-- [x] Built-in providers: `local`, `runner_docker` (aliases `docker`, `local_docker`), `e2b`
+- [x] Built-in providers: `local`, `runner_docker` (aliases `docker`, `local_docker`), `e2b`, `kubernetes` (alias `k8s`, registered when the `kubernetes-asyncio` SDK and its env signal are present)
 - [x] Environment profiles CRUD (`/api/v1/environment-profiles`): list, create, get,
       update, delete, restore, and `POST /{id}/test` (SSE sandbox connectivity check) –
       input-validated, org-scoped, gated on the `environment_profiles` feature
@@ -69,10 +69,12 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       (`test_environment_capabilities`)
 - [x] `sandbox_agent` node dispatch, crash-resume, and output-handling contracts
       (run model fields: node retry/resume markers)
-- [x] ShellConnector is deprecated (ADR 044, 2026-07-16) with a runtime
-      `DeprecationWarning` and doc notice; existing ShellConnector pipelines continue
-      running, and the node type is marked deprecated in the UI – new pipelines should
-      use `sandbox_agent`
+- [x] `ShellConnector` (a deprecated *connector type*, not a node type) is
+      deprecated since ADR 044 (2026-07-16) with a runtime `DeprecationWarning`
+      and a documented notice; existing ShellConnector pipelines continue running
+      – new pipelines should use `sandbox_agent`. (No UI deprecation marker ships
+      today: the pipeline editor's node vocabulary is
+      `agent`/`manual`/`router`/`hitl`/`dispatch`, with no `shell` node.)
 - [x] Platform-provider matrix is BDD-exercised against the REAL runtime-provider
       seams network-free and DB-free (`provider_matrix.feature`):
       `build_hub` registers `local` unconditionally and gates `e2b` /
@@ -108,9 +110,10 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       with E2B's legacy `_fetch_sandbox_log_tail` content parity pinned
 - [x] `apply_isolation` + the frozen `IsolationPolicy` carrier (FAR-1050 R3): the
       single owner of the three in-sandbox controls – git-credential scoping,
-      the selected-mode egress allowlist, and the read-only seal – with
-      flag-gated parity to the legacy `sandbox_policy.apply_sandbox_policy`
-      (enforcement-critical-raise vs egress-best-effort split) and a typed
+      the selected-mode egress allowlist, and the read-only seal – replacing the
+      legacy `sandbox_policy.apply_sandbox_policy` (parity on the
+      enforcement-critical-raise vs egress-best-effort split; FAR-1050 R6 retired
+      the flip flag, leaving a single unconditional path) and a typed
       `ProviderCapabilityUnsupportedError` refusal on non-overriding providers;
       the carrier also carries `single_pr_per_run` (FAR-1273), the single
       carrier for the one-PR-per-run guard trigger
@@ -130,8 +133,8 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       `gh api` PR creation, a `gh` copy outside the PATH, shell aliases/functions,
       and a `gh` installed into the PATH AFTER the install are NOT intercepted.
       **Tier coverage (FAR-1315) – honest boundary:** `e2b` installs the guard
-      through `apply_isolation` → `apply_sandbox_policy` and is the ONE tier
-      where the platform guard is actually in force today. `runner_docker`
+      through `apply_isolation` → `apply_sandbox_policy`, and is the tier where
+      the install path is in force on the shipped platform. `runner_docker`
       (the Bundled Runner) runs the SAME install at dispatch through the
       provider `exec_command` primitive
       (`sandbox_policy.install_gh_pr_guard_via_exec`) – but the shipped
@@ -146,8 +149,11 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       failure, failed claim pre-plant) is surfaced by a LOUD
       `runner_dispatch.gh_pr_guard_unavailable` warning naming the tier and
       status, never silently; `local` / `local_docker` are
-      dispatch-unbound and never execute sandbox nodes, so no dispatchable tier
-      is left uncovered-but-unmentioned. A missing `gh` or a failed install
+      dispatch-unbound and never execute sandbox nodes. `kubernetes` (alias
+      `k8s`, FAR-1051) is a further hub-registered dispatchable tier and runs
+      the same `install_gh_pr_guard_via_exec` machinery under its
+      `apply_isolation`, so its guard status is subject to the same
+      image-dependent best-effort caveat as `runner_docker`. A missing `gh` or a failed install
       degrades to the prompt-level guard (both are logged). The install is
       BEST-EFFORT – a failure is logged and the
       run degrades to the prompt-level guard, never wedges the dispatch (unlike
@@ -369,6 +375,18 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
   integration is configured.
 
 ## QA History
+
+- 2026-10-10: **qa-iterate product-map pass** — corrected drifted claims. Added
+  the `kubernetes`/`k8s` provider to the summary, the built-in-providers
+  behaviour and the tier-coverage boundary (it runs the same
+  `install_gh_pr_guard_via_exec` machinery under `apply_isolation`). Removed the
+  false "node type marked deprecated in the UI" claim — there is no `shell` node
+  type (the editor vocabulary is `agent`/`manual`/`router`/`hitl`/`dispatch`).
+  Fixed the ADR 040 slug
+  (`runtime-provider-contract-and-tier-conformance`), restated the `apply_isolation`
+  bullet as the single unconditional path (FAR-1050 R6 retired the flip flag), and
+  dropped the mismatched `workflows/binding.feature` BDD citation (import-binding
+  wizard, not runtime providers). Status: covered.
 
 - 2026-09-25: **product-map walk** – walked the FAR-1050 runtime-provider
   primitive series into this entry: the ADR 040 `RuntimeProviderError` family

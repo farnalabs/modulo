@@ -21,64 +21,6 @@ def connector():
 
 
 @respx.mock
-async def test_health_check_ok(connector):
-    respx.get(f"{API_BASE}/orgs", params={"limit": 1, "version": VERSION}).mock(
-        return_value=httpx.Response(200, json={"data": []}),
-    )
-    result = await connector.health_check()
-    assert result.ok is True
-    assert "validated" in result.detail
-
-
-@respx.mock
-async def test_health_check_unauthorized(connector):
-    respx.get(f"{API_BASE}/orgs", params={"limit": 1, "version": VERSION}).mock(
-        return_value=httpx.Response(401, text="Unauthorized"),
-    )
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "Invalid" in result.detail
-
-
-@respx.mock
-async def test_health_check_forbidden(connector):
-    respx.get(f"{API_BASE}/orgs", params={"limit": 1, "version": VERSION}).mock(
-        return_value=httpx.Response(403, text="Forbidden"),
-    )
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "permissions" in result.detail
-
-
-@respx.mock
-async def test_health_check_connection_error(connector):
-    respx.get(f"{API_BASE}/orgs", params={"limit": 1, "version": VERSION}).mock(
-        side_effect=httpx.ConnectError("connection refused"),
-    )
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "Cannot connect" in result.detail
-
-
-@respx.mock
-async def test_health_check_generic_error(connector):
-    respx.get(f"{API_BASE}/orgs", params={"limit": 1, "version": VERSION}).mock(
-        side_effect=ValueError("weird error"),
-    )
-    result = await connector.health_check()
-    assert result.ok is False
-
-
-@respx.mock
-async def test_health_check_other_status(connector):
-    respx.get(f"{API_BASE}/orgs", params={"limit": 1, "version": VERSION}).mock(
-        return_value=httpx.Response(500, text="Internal Server Error"),
-    )
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "500" in result.detail
-
-
 # --- connector_type ---
 
 

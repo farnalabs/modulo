@@ -33,6 +33,7 @@ common substring it appears in.
 from __future__ import annotations
 
 import asyncio
+import base64
 import functools
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
@@ -90,6 +91,21 @@ def redact_text(text: Any, secrets: Sequence[str]) -> str:
         if secret and secret in result:
             result = result.replace(secret, _MASK)
     return result
+
+
+def basic_auth_wire_secrets(username: str, password: str) -> tuple[str, str, str]:
+    """The basic-auth wire forms a connector sends with ``<username>``/``<password>``.
+
+    Returns ``(raw_pair, base64_blob, "Basic <b64>")`` — the same trio
+    ``RestConnector._collect_basic_secrets`` collects (the rest-connector
+    precedent). The raw token/password does NOT appear inside the base64 blob
+    or the ``Basic <b64>`` header value, so a reflected ``Authorization``
+    header survives value-based redaction of the raw credential alone; all
+    three forms must be handed to the redactor (FAR-1651).
+    """
+    raw = f"{username}:{password}"
+    b64 = base64.b64encode(raw.encode()).decode()
+    return raw, b64, f"Basic {b64}"
 
 
 def _scrub_headers(headers: httpx.Headers, secrets: Sequence[str]) -> list[tuple[str, str]]:

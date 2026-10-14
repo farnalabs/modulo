@@ -1,10 +1,12 @@
 """ShortcutConnector — async Shortcut REST API v3 connector."""
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -53,6 +55,9 @@ class ShortcutConnector(ConnectorBase):
     def __init__(self, token: str) -> None:
         self._token = token
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.SHORTCUT
@@ -63,6 +68,7 @@ class ShortcutConnector(ConnectorBase):
             base_url=_SHORTCUT_API,
             headers={"Shortcut-Token": self._token, "Content-Type": "application/json"},
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     async def health_check(self) -> HealthResult:
@@ -77,12 +83,12 @@ class ShortcutConnector(ConnectorBase):
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(f"HTTP {exc.response.status_code}: {exc.response.text}")[:200],
             )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
     async def _get_by_resource(
         self,

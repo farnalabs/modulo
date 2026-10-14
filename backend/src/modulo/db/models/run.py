@@ -131,6 +131,31 @@ CANCELLED_BY_SYSTEM: Final[str] = "system"
 EXECUTION_ORIGIN_DISPATCHED: Final[str] = "dispatched"
 EXECUTION_ORIGIN_VALUES: frozenset[str] = frozenset({EXECUTION_ORIGIN_DISPATCHED})
 
+# ---------------------------------------------------------------------------
+# FAR-153 / §15.1 (agent-failure UX v6) — WHY a run is an attempt of another.
+# The CLOSED vocabulary behind ``runs.run_group_kind``:
+#
+#   * RUN_GROUP_KIND_RETRY — a retry attempt: a CHILD row whose graph runs
+#     CLEAN on a fresh ``langgraph_thread_id`` (the default ``create_run``
+#     thread; no override).
+#   * RUN_GROUP_KIND_RESUME — a resume attempt: a CHILD row that inherits
+#     its parent's ``langgraph_thread_id`` via ``create_run(thread_id=...)``
+#     so it continues the parent's checkpoint.
+#   * ``NULL`` — a root run, or a signal / correction / work-item child
+#     (those keep their existing rollup behaviour; the new grouping logic
+#     filters ``run_group_kind IN ('retry','resume')``).
+#
+# Like ``EXECUTION_ORIGIN_VALUES`` above, no DB CHECK backs this yet (§15.12
+# schema diff lists no constraint): a CHECK validated against the populated
+# ``runs`` table costs a full-table scan for no safety the write site does
+# not already provide — ``crud.run.create_run`` refuses any value outside
+# this set at the persist boundary. Adding a value means adding it here AND
+# widening any future constraint in the same change.
+# ---------------------------------------------------------------------------
+RUN_GROUP_KIND_RETRY: Final[str] = "retry"
+RUN_GROUP_KIND_RESUME: Final[str] = "resume"
+RUN_GROUP_KIND_VALUES: frozenset[str] = frozenset({RUN_GROUP_KIND_RETRY, RUN_GROUP_KIND_RESUME})
+
 
 # The canonical status literal (FAR-604 qa F15): every write site that names the
 # parked status binds/compares against this constant so a rename or a typo can
@@ -307,6 +332,40 @@ class Run(OrgScoped):
                 "AND workspace_inputs_drift_detected IS NULL"
             ),
         ),
+        # FAR-153 / §15.1 — the two partial unique indexes that REPLACE the
+        # former global UNIQUE(langgraph_thread_id) (dropped by migration
+        # 0302_runs_run_grouping):
+        #
+        # 1. Exactly ONE resume child per parent: a second resume of the same
+        #    stalled parent is rejected at the DB (409 at the API), while a
+        #    resume child that itself stalls can be resumed again because its
+        #    parent is a DIFFERENT row — so resume-of-resume chains work.
+        Index(
+            "uq_runs_resume_parent",
+            "parent_run_id",
+            unique=True,
+            postgresql_where=text("run_group_kind = 'resume'"),
+            sqlite_where=text("run_group_kind = 'resume'"),
+        ),
+        # 2. Global thread uniqueness for every NON-resume row (roots,
+        #    retries, signal/correction/work-item children, legacy rows):
+        #    only a resume child may share its parent's thread, and only to
+        #    continue that parent's checkpoint — the "only their parent's"
+        #    half is enforced by ``crud.run.create_run``, which reads the
+        #    parent and rejects a resume whose thread_id is not the
+        #    parent's langgraph_thread_id (the indexes below exclude resume
+        #    rows, so they cannot make that check themselves).
+        #    ``IS NOT`` on SQLite has the
+        #    same null-safe semantics as ``IS DISTINCT FROM`` on Postgres
+        #    (NULL kind IS NOT 'resume' -> true), so both dialects index
+        #    exactly the rows the spec names.
+        Index(
+            "uq_runs_thread_non_resume",
+            "langgraph_thread_id",
+            unique=True,
+            postgresql_where=text("run_group_kind IS DISTINCT FROM 'resume'"),
+            sqlite_where=text("run_group_kind IS NOT 'resume'"),
+        ),
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
@@ -338,6 +397,19 @@ class Run(OrgScoped):
     parent_run_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("runs.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
     )
+    # FAR-153 / §15.1 — run-group identity. ``run_group_id`` is the ROOT run
+    # id of the retry/resume group this attempt belongs to (indexed: group
+    # queries read WHERE run_group_id = :root). NULL for roots, for signal /
+    # correction / work-item children (their rollup behaviour is unchanged),
+    # and for legacy rows until the FAR-147 backfill classifies them — never
+    # backfilled here (additive column, no table rewrite; 0288 precedent).
+    # No FK: the root row may itself be purged by retention while a younger
+    # attempt survives, and a dangling group id is the intended read
+    # (grouping is by value, not by join). ``run_group_kind`` names WHY this
+    # row joined the group — one of RUN_GROUP_KIND_VALUES or NULL — and is
+    # what the two partial unique indexes in ``__table_args__`` key on.
+    run_group_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True, index=True)
+    run_group_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
     run_number: Mapped[int] = mapped_column(Integer, nullable=False)
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True
@@ -419,7 +491,12 @@ class Run(OrgScoped):
     node_token_usage: Mapped[dict[str, Any] | None] = mapped_column(JSON().with_variant(JSONB(), "postgresql"))
     error_detail: Mapped[str | None] = mapped_column(Text)
     error_code: Mapped[str | None] = mapped_column(String(255))
-    langgraph_thread_id: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
+    # FAR-153 / §15.1: the GLOBAL unique constraint this column used to carry
+    # (migration 0110's ``runs_langgraph_thread_id_key``) is replaced by the
+    # two partial unique indexes in ``__table_args__`` — a resume child
+    # INTENTIONALLY shares its parent's thread to continue the checkpoint,
+    # while every other row keeps global thread uniqueness.
+    langgraph_thread_id: Mapped[str] = mapped_column(String(512), nullable=False)
     input_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     rate_limit_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     claimed_by: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
@@ -440,6 +517,29 @@ class Run(OrgScoped):
     # Enqueue-failure audit timestamp (migration 0074) — set when a SAQ
     # dispatch enqueue fails so dispatcher_reconcile can fail the run.
     enqueue_failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # FAR-1728 (migration 0307): the guardrail-override resume self-heal's
+    # DEDICATED discriminator — a BOOLEAN column, never a sentinel string in
+    # the observation column ``error_detail`` (which is exposed on REST/MCP
+    # responses; a healthy overridden run must not carry a control-flow marker
+    # on the wire). SINGLE WRITER: only ``recovery.guardrail_override``'s flip
+    # sets it, and only for a node-started (``first_node_dispatched``)
+    # eval-blocked run — in the same atomic optimistic UPDATE that flips the
+    # status. SINGLE CLEARER: the resume claim
+    # (``pipeline_execution._RESUME_CLAIM_UPDATE_SQL`` / ``..._WITH_TOKEN``)
+    # clears it in the same statement that stamps
+    # ``dispatch_phase='claimed'``, so a successful claim takes the row out of
+    # the self-heal class and clears the flag in one write. The zero-node
+    # override flip (``pending`` — nothing to resume, re-dispatched
+    # ``execute_run``) never sets it. INTERNAL ONLY: not API-projected.
+    # NOT NULL DEFAULT false (server_default in the migration): pre-existing
+    # rows read false, no backfill. Inert on a terminal row left behind by the
+    # age gate (the flag is only consulted together with the
+    # ``running`` + ``first_node_dispatched`` + stale-heartbeat shape) — the
+    # claim-clear covers the healthy path; a wedged row's lingering flag is
+    # never read and never surfaces.
+    guardrail_override_resume_pending: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
     # Sandbox dispatch lifecycle state (migration 0074) — the persistent handle
     # dispatch.py reads to resume/retry a sandbox_agent node after a crash.
     # D8 (FAR-594) JSON vocabulary (written by ``runner_capacity`` /
@@ -474,6 +574,39 @@ class Run(OrgScoped):
     # never lack a phase even if no node ever ran.
     dispatch_phase: Mapped[str | None] = mapped_column(Text)
     dispatch_phase_entered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # FAR-1714: the full durable phase timeline the two columns above can only
+    # hold the LAST edge of. Append-only JSONB array of
+    # ``{"phase": ..., "entered_at": <ISO-8601 timestamptz>}`` — one entry per
+    # durable phase write (``_PHASE_UPDATE_SQL``), PLUS one ``"claimed"``
+    # entry appended by each of the four claim statements (execute/resume,
+    # plain/token), so:
+    #   * every attempt's claim time is recoverable (the scalar floor is
+    #     overwritten by the later phases),
+    #   * the ``claimed`` entries are the ATTEMPT BOUNDARIES — split the
+    #     array on them to decompose claim→first-node per attempt;
+    #   * entries are CUMULATIVE across re-claims, never reset — the wedged
+    #     prior attempt is exactly what incident forensics need.
+    # Entries are non-decreasing in ``entered_at`` (the monotonic guard on
+    # ``_PHASE_UPDATE_SQL`` pairs every append with ``entered_at=now()``).
+    # INTERNAL ONLY: not API-projected (like ``dispatch_phase`` above).
+    # NULL for rows that predate migration 0308.
+    dispatch_phase_history: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"),
+        nullable=True,
+    )
+    # FAR-1714 / FAR-1511: how many durable phase writes this run ABANDONED
+    # at the 2 s bound (``PHASE_WRITE_TIMEOUT_SECONDS`` — timeout or DB
+    # error, ``DispatchPhaseWriter._drain``'s arms). The durable saturation
+    # signal: prod showed 10-13 drops/min, previously visible only in
+    # ephemeral worker logs. NOT reset by a re-claim (neither
+    # ``_CLAIM_UPDATE_SQL`` nor the fenced pending-reset names it — the drops
+    # are an observation about the DATABASE, cumulative for the run's whole
+    # life, additive-only so no attempt can stomp another's count). NOT
+    # claim-token fenced for the same reason. NOT API-projected; aggregate
+    # with ``SUM(dispatch_phase_write_drops)`` over runs for the org-level
+    # saturation view. NOT NULL DEFAULT 0: rows that predate migration 0308
+    # never recorded a drop.
+    dispatch_phase_write_drops: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     # FAR-583 B1: the legacy blob columns (outputs_json / node_telemetry_json /
     # raw_output_markers) are NO LONGER mapped on the ORM — the per-node store
     # `run_node_outputs` is the single blob surface (crud.run_node_outputs).

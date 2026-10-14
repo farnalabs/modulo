@@ -1,10 +1,12 @@
 """CircleCI CI runner — triggers and observes pipeline runs via the CircleCI API v2."""
 
+from collections.abc import Sequence
 from typing import Any, cast
 
 import httpx
 
 from modulo.connectors._ci_test_double import CITestDoubleMixin
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
@@ -48,6 +50,9 @@ class CircleCIConnector(CIRunnerBase):
     def __init__(self, token: str) -> None:
         self._token = token
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     def _headers(self) -> dict[str, str]:
         return {
             "Circle-Token": self._token,
@@ -55,7 +60,9 @@ class CircleCIConnector(CIRunnerBase):
         }
 
     def _client(self) -> httpx.AsyncClient:
-        return pinned_async_client_sync(_CIRCLECI_API, base_url=_CIRCLECI_API, headers=self._headers(), timeout=30)
+        return pinned_async_client_sync(
+            _CIRCLECI_API, base_url=_CIRCLECI_API, headers=self._headers(), timeout=30, verify=egress_ssl_context(self)
+        )
 
     def _parse_run(self, raw: dict[str, Any]) -> CIRun:
         raw_id = raw.get("id")
@@ -92,11 +99,13 @@ class CircleCIConnector(CIRunnerBase):
                 return HealthResult(ok=True)
             if r.status_code in (401, 403):
                 return HealthResult(ok=False, detail="Authentication failed: invalid or expired token")
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+            return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"CircleCI API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(f"CircleCI API HTTP {exc.response.status_code}: {exc.response.text}")[
+                    :200
+                ],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="CircleCI API timeout")

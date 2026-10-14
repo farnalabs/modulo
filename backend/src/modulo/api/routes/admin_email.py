@@ -33,6 +33,7 @@ from modulo.settings import Settings, get_settings
 
 _CODE_ADMIN_EMAIL_ADMIN_UPDATE = "admin_email.admin_update_email_settings"
 _CODE_ADMIN_EMAIL_ADMIN_TEST = "admin_email.admin_test_email_settings"
+_CODE_ADMIN_EMAIL_ADMIN_GET_EMAIL_SETTINGS = "admin_email.admin_get_email_settings"
 
 
 logger = logging.getLogger(__name__)
@@ -85,14 +86,14 @@ async def admin_get_email_settings(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
             cfg = org.settings_json or {}
     except ProgrammingError:
-        logger.exception("admin_email.admin_get_email_settings")
+        logger.exception(_CODE_ADMIN_EMAIL_ADMIN_GET_EMAIL_SETTINGS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_email.admin_get_email_settings")
-        logger.exception("admin_email.admin_get_email_settings")
+        raise_session_contract_error(exc, _CODE_ADMIN_EMAIL_ADMIN_GET_EMAIL_SETTINGS)
+        logger.exception(_CODE_ADMIN_EMAIL_ADMIN_GET_EMAIL_SETTINGS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=(
@@ -148,7 +149,7 @@ async def admin_update_email_settings(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_email.admin_update_email_settings")
+        raise_session_contract_error(exc, _CODE_ADMIN_EMAIL_ADMIN_UPDATE)
         logger.exception(_CODE_ADMIN_EMAIL_ADMIN_UPDATE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -193,7 +194,7 @@ async def admin_update_email_settings(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_email.admin_update_email_settings")
+        raise_session_contract_error(exc, _CODE_ADMIN_EMAIL_ADMIN_UPDATE)
         logger.exception(_CODE_ADMIN_EMAIL_ADMIN_UPDATE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

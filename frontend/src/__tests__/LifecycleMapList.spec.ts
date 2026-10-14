@@ -318,6 +318,52 @@ describe('LifecycleMapList error state', () => {
   })
 })
 
+describe('LifecycleMapList create error', () => {
+  it('shows the create error via ErrorAlert (no retry) when the create call fails', async () => {
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return Promise.resolve({
+          ok: false,
+          status: 500,
+          statusText: 'Internal Server Error',
+          json: async () => ({ detail: 'Create failed: boom' }),
+        } as unknown as Response)
+      }
+      // Empty list so the empty-state "Create Map" button renders (the
+      // header button lives inside the stubbed PageHeader slot).
+      return Promise.resolve(okJson({ items: [] }))
+    }))
+    const ButtonStub = {
+      template: '<button :disabled="disabled" @click="$emit(\'click\', $event)"><slot /></button>',
+      props: ['disabled'],
+    }
+    const wrapper = mount(LifecycleMapList, {
+      global: {
+        plugins: [i18n],
+        stubs: {
+          PageHeader: true,
+          FilterBar: true,
+          // EmptyState unstubbed: the empty-state "Create Map" button lives
+          // in its slot and opens the create dialog.
+          Button: ButtonStub,
+        },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-testid="lifecycle-map-list-empty-new"]').trigger('click')
+    await wrapper.find('[data-testid="lifecycle-map-list-create-name"]').setValue('Broken Map')
+    await wrapper.find('[data-testid="lifecycle-map-list-create-submit"]').trigger('click')
+    await flushPromises()
+
+    const errorAlert = wrapper.findComponent({ name: 'ErrorAlert' })
+    expect(errorAlert.exists()).toBe(true)
+    expect(errorAlert.text()).toContain('Create failed: boom')
+    // Create-action errors carry no refetch loader — no Retry control.
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+  })
+})
+
 describe('LifecycleMapList search filtering', () => {
   it('filters maps by name when search changes', async () => {
     const maps = [
@@ -696,7 +742,8 @@ describe('LifecycleMapList create dialog', () => {
         stubs: {
           PageHeader: true,
           FilterBar: true,
-          ErrorAlert: true,
+          // ErrorAlert unstubbed so the converted create-error box renders
+          // its message text.
           Button: ButtonStub,
         },
       },

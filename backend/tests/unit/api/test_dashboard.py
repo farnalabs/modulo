@@ -1,25 +1,37 @@
 """Unit tests for /api/v1/dashboard/summary and /api/v1/dashboard/trends."""
 
+import json
 import uuid
 from collections.abc import AsyncGenerator, Callable, Generator
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.api.routes.dashboard import (
     _compute_period_metrics,
+    _dashboard_cache_key,
     _facts_status_counts,
     _facts_window,
+    _get_cached_dashboard,
     _load_config_warnings,
+    _load_daily_trend,
+    _load_trend_run_and_spend,
+    _set_cached_dashboard,
 )
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.db.models.base import Base
+from modulo.db.models.daily_run_count import OrgDailyRunCount
+from modulo.db.models.eval import Eval
+from modulo.db.models.eval_result import EvalResult
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -77,12 +89,25 @@ class _MockResult:
         return self._scalar_one
 
     def one(self) -> "_MockRow":
-        """Return the first row, or a default row if none exist."""
+        """Return the first row, or a default row if none exist.
+
+        The default row carries every column ``_facts_window`` reads so the
+        period path can compute against this mock — otherwise a flag-gate
+        regression (FAR-92) crashes with an AttributeError 500 instead of
+        surfacing a ``period`` block for a flag-off test to reject.
+        """
         if hasattr(self._rows, "__iter__"):
             rows_list = list(self._rows)
             if rows_list:
                 return rows_list[0]
-        return _MockRow(total=100, passed=75)
+        return _MockRow(
+            total=100,
+            passed=75,
+            complete=75,
+            active_pipelines=3,
+            tokens=1000,
+            avg_duration_ms=120.0,
+        )
 
     def scalars(self) -> "_MockResult":
         return self
@@ -392,6 +417,33 @@ def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture
+def flag_off_client() -> Generator[TestClient, None, None]:
+    """Authenticated client whose plan reports ``analytics_page`` disabled (FAR-92)."""
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = False
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
 class TestDashboardSummary:
     """GET /api/v1/dashboard/summary"""
 
@@ -660,6 +712,51 @@ class TestDashboardSummaryPeriod:
         assert response.status_code == 200
         assert "period" not in response.json()
 
+    def test_days_ignored_when_analytics_flag_off(self, flag_off_client: TestClient) -> None:
+        # FAR-92: with `analytics_page` disabled the endpoint keeps the legacy
+        # all-time shape — `days` is ignored and no `period` block is returned.
+        response = flag_off_client.get("/api/v1/dashboard/summary?days=30")
+        assert response.status_code == 200
+        assert "period" not in response.json()
+
+    def test_flag_off_skips_period_and_uses_flag_scoped_cache_key(
+        self, flag_off_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FAR-92 flag-off, end to end: no ``period`` block AND a flag-scoped key.
+
+        Runs the REAL cache helpers against a fake Redis so the key the route
+        actually looks up / writes is captured at the wire — one request proves
+        both halves of the gate: with ``analytics_page`` disabled ``days`` is
+        ignored (legacy all-time shape, no ``period``) and the summary cache is
+        keyed with the flag segment (``dashboard:summary:{org_id}:{days}:{flag}``,
+        flag ``0``), so a flag-off entry can never be served to a flag-on caller.
+
+        Discriminating: dropping the route's ``days = None`` gate reintroduces
+        the ``period`` block and flips the key to the ``:{days}:{flag}`` form
+        (``...:30:0``); not threading the flag into the cache call writes the
+        ``:1`` key. Either regression fails this test.
+        """
+        fake = _FakeRedis()
+        monkeypatch.setattr(
+            "modulo.api.routes.dashboard.Redis",
+            MagicMock(from_url=MagicMock(return_value=fake)),
+        )
+        # The module autouse fixture stubs the cache helpers for request tests;
+        # restore the real ones so this test exercises the production key path.
+        monkeypatch.setattr("modulo.api.routes.dashboard._get_cached_dashboard", _get_cached_dashboard)
+        monkeypatch.setattr("modulo.api.routes.dashboard._set_cached_dashboard", _set_cached_dashboard)
+
+        response = flag_off_client.get("/api/v1/dashboard/summary?days=30")
+
+        assert response.status_code == 200
+        assert "period" not in response.json()
+        # The gate nulls ``days`` before the cache calls, so the flag-off key
+        # carries the flag segment only — no ``:{days}`` middle segment.
+        assert len(fake.set_calls) == 1
+        key, ttl, _payload = fake.set_calls[0]
+        assert key == f"dashboard:summary:{_ORG_ID}:0"
+        assert ttl == 60
+
     def test_delta_pct_null_when_previous_zero(self, period_client: Callable[..., TestClient]) -> None:
         client = period_client(
             current_facts={"total": 12, "active_pipelines": 2, "tokens": 1200, "avg_duration_ms": 150.0, "complete": 9},
@@ -723,6 +820,60 @@ class TestDashboardSummaryPeriod:
         assert metrics["spend"]["current"] == 15.5
         assert metrics["spend"]["previous"] == 10.0
         assert metrics["spend"]["delta_pct"] == 55.0
+
+
+class _FakeRedis:
+    """Minimal async Redis double capturing the key/value of get/setex calls."""
+
+    def __init__(self, get_value: str | None = None) -> None:
+        self._get_value = get_value
+        self.set_calls: list[tuple[str, int, str]] = []
+        self.closed = False
+
+    async def get(self, _key: str) -> str | None:
+        return self._get_value
+
+    async def setex(self, key: str, ttl: int, value: str) -> None:
+        self.set_calls.append((key, ttl, value))
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class TestDashboardCacheKeyScoping:
+    """FAR-92 — the summary cache key is scoped by the ``analytics_page`` flag.
+
+    These call the cache helpers directly (rather than through the endpoint):
+    the module-level autouse fixture stubs ``_get_cached_dashboard`` /
+    ``_set_cached_dashboard`` for request tests, so the flag-scoped key
+    construction would otherwise never execute.
+    """
+
+    def test_key_is_flag_scoped_with_and_without_days(self) -> None:
+        assert _dashboard_cache_key("org", 7, True) == "dashboard:summary:org:7:1"
+        assert _dashboard_cache_key("org", 7, False) == "dashboard:summary:org:7:0"
+        assert _dashboard_cache_key("org", None, True) == "dashboard:summary:org:1"
+        assert _dashboard_cache_key("org", None, False) == "dashboard:summary:org:0"
+
+    async def test_get_cached_dashboard_reads_flag_scoped_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake = _FakeRedis(get_value=json.dumps({"total_runs": 3}))
+        monkeypatch.setattr(
+            "modulo.api.routes.dashboard.Redis",
+            MagicMock(from_url=MagicMock(return_value=fake)),
+        )
+        result = await _get_cached_dashboard("org", 7, False)
+        assert result == {"total_runs": 3}
+        assert fake.closed is True
+
+    async def test_set_cached_dashboard_writes_flag_scoped_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake = _FakeRedis()
+        monkeypatch.setattr(
+            "modulo.api.routes.dashboard.Redis",
+            MagicMock(from_url=MagicMock(return_value=fake)),
+        )
+        await _set_cached_dashboard("org", {"total_runs": 3}, 7, False)
+        assert fake.set_calls == [("dashboard:summary:org:7:0", 60, json.dumps({"total_runs": 3}, default=str))]
+        assert fake.closed is True
 
 
 class TestDashboardTrends:
@@ -1027,3 +1178,106 @@ class TestDashboardSummaryEdgeCases:
             app.dependency_overrides.clear()
 
         assert response.status_code == 403
+
+
+class TestTrendQueriesOrgLevelScope:
+    """Both dashboard trend queries must sum org-level ledger rows only.
+
+    ``check_and_record_spend`` writes BOTH the org-level row (``team_id IS
+    NULL``) and a team-scoped row for a team-owned run — the org-level row
+    already includes that run. A daily query without the ``team_id IS NULL``
+    filter sums both rows and double-counts, so the trend disagrees with the
+    dashboard's own org-level ledger window (``_ledger_spend_window``).
+
+    The defect lives in the SQL SUM, so a mocked session cannot demonstrate
+    it — these tests run against a real in-memory SQLite DB, the same
+    approach as
+    ``tests/unit/reports/test_quality_report.py::TestDailyTrendOrgLevelScope``.
+    """
+
+    _ORG_RUN_COUNT: ClassVar[int] = 10
+    _ORG_SPEND: ClassVar[Decimal] = Decimal("5.00")
+    _TEAM_RUN_COUNT: ClassVar[int] = 4
+    _TEAM_SPEND: ClassVar[Decimal] = Decimal("2.00")
+
+    @pytest.fixture
+    async def ledger_maker(self) -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
+        engine = create_async_engine("sqlite+aiosqlite://", echo=False)
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda sync_conn: Base.metadata.create_all(
+                    sync_conn,
+                    tables=[
+                        OrgDailyRunCount.__table__,
+                        EvalResult.__table__,
+                        Eval.__table__,
+                    ],
+                )
+            )
+        try:
+            yield async_sessionmaker(engine, expire_on_commit=False)
+        finally:
+            await engine.dispose()
+
+    async def _seed_org_and_team_rows(
+        self, maker: async_sessionmaker[AsyncSession], org_id: uuid.UUID, run_date: date
+    ) -> None:
+        """Seed the row pair ``check_and_record_spend`` leaves for one date.
+
+        The org-level row already contains the team-owned run's count/spend;
+        the team row is a second copy of the same runs under the team key.
+        """
+        async with maker() as session, session.begin():
+            session.add(
+                OrgDailyRunCount(
+                    organisation_id=org_id,
+                    team_id=None,
+                    run_date=run_date,
+                    run_count=self._ORG_RUN_COUNT,
+                    total_spend_usd=self._ORG_SPEND,
+                )
+            )
+            session.add(
+                OrgDailyRunCount(
+                    organisation_id=org_id,
+                    team_id=uuid.uuid4(),
+                    run_date=run_date,
+                    run_count=self._TEAM_RUN_COUNT,
+                    total_spend_usd=self._TEAM_SPEND,
+                )
+            )
+
+    async def test_load_daily_trend_is_org_level_scoped(self, ledger_maker: async_sessionmaker[AsyncSession]) -> None:
+        org_id = uuid.uuid4()
+        today = datetime.now(UTC).date()
+        await self._seed_org_and_team_rows(ledger_maker, org_id, today)
+
+        async with ledger_maker() as session:
+            trend = await _load_daily_trend(session, org_id)
+
+        dates = [point["date"] for point in trend]
+        assert today.isoformat() in dates
+        entry = next(point for point in trend if point["date"] == today.isoformat())
+        # Org-level values only — NOT the org+team sum (14 runs / $7.00).
+        assert entry["run_count"] == self._ORG_RUN_COUNT
+        assert entry["token_spend_usd"] == 5.0
+
+    async def test_load_trend_run_and_spend_is_org_level_scoped(
+        self, ledger_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        org_id = uuid.uuid4()
+        today = datetime.now(UTC).date()
+        await self._seed_org_and_team_rows(ledger_maker, org_id, today)
+
+        async with ledger_maker() as session:
+            run_counts, token_spend = await _load_trend_run_and_spend(session, org_id, today - timedelta(days=6))
+
+        count_dates = [row["date"] for row in run_counts]
+        assert today.isoformat() in count_dates
+        counts = next(row for row in run_counts if row["date"] == today.isoformat())
+        spend_dates = [row["date"] for row in token_spend]
+        assert today.isoformat() in spend_dates
+        spend = next(row for row in token_spend if row["date"] == today.isoformat())
+        # Org-level values only — NOT the org+team sum (14 runs / $7.00).
+        assert counts["run_count"] == self._ORG_RUN_COUNT
+        assert spend["total_spend_usd"] == 5.0

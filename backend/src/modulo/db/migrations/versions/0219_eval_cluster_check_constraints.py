@@ -51,16 +51,17 @@ depends_on: str | None = None
 
 # (constraint_name, table, check_expression)
 # Only constraints NOT already enforced by 0157_add_numeric_check_constraints.
+_VERSION_GTE_1 = "version >= 1"
 _CONSTRAINTS: list[tuple[str, str, str]] = [
-    ("ck_eval_definitions_version_gte_1", "eval_definitions", "version >= 1"),
+    ("ck_eval_definitions_version_gte_1", "eval_definitions", _VERSION_GTE_1),
     (
         "ck_eval_suites_baseline_window_gte_1",
         "eval_suites",
         "baseline_window IS NULL OR baseline_window >= 1",
     ),
     ("ck_eval_suites_cooldown_gte_0", "eval_suites", "cooldown IS NULL OR cooldown >= 0"),
-    ("ck_eval_suites_version_gte_1", "eval_suites", "version >= 1"),
-    ("ck_eval_datasets_version_gte_1", "eval_datasets", "version >= 1"),
+    ("ck_eval_suites_version_gte_1", "eval_suites", _VERSION_GTE_1),
+    ("ck_eval_datasets_version_gte_1", "eval_datasets", _VERSION_GTE_1),
     ("ck_suite_runs_version_gte_0", "suite_runs", "version >= 0"),
     ("ck_suite_runs_dataset_version_gte_1", "suite_runs", "dataset_version >= 1"),
     (

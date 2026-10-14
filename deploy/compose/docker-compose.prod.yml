@@ -132,6 +132,20 @@ services:
       # default SAQ_WORKER_CONCURRENCY=5 (concurrency*3+5), so nothing is
       # starved; the floor still raises it automatically if concurrency is
       # raised. On a tier with a larger max_connections, override it here.
+      #
+      # Pool topology to hold in mind when re-deriving max_connections
+      # (FAR-1644): there are THREE DB pools in this deployment, not two.
+      # (1) the runs worker's SAQ pool - this setting; (2) the system worker's
+      # SAQ pool - the same setting, so 20 each at the default; (3) the system
+      # worker's THIRD pool, cron_helpers._get_system_engine (pool_size 20 +
+      # max_overflow 10, up to 30 connections) which the modulo_system role
+      # URL above feeds to dispatcher_reconcile and its sibling system crons.
+      # Pool (3) is a CEILING, not a reservation: its real concurrent demand is
+      # ~1, because the reconcile org loop is sequential - one org pass at a
+      # time inside a single tick - so it holds one connection per in-flight
+      # pass, not thirty. Size max_connections against the two SAQ reservations
+      # plus headroom for pool (3)'s ceiling; do not sum all three ceilings,
+      # and do not assume pool (3) is free either.
       SAQ_WORKER_DB_POOL_SIZE: ${SAQ_WORKER_DB_POOL_SIZE:-20}
       # SMTP for the app's own HITL alert email - Settings.smtp_host /
       # smtp_port / smtp_username / smtp_password / email_from /

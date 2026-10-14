@@ -18,6 +18,15 @@ name: "Native: release smoke + canary (bundle-v*)"
 #    data intact + doctor green). Failures land on ONE per-day tracking
 #    issue (deduped by issue key across re-runs); a green canary
 #    auto-closes that issue.
+#    FAR-1736: while NO bundle-v* release has ever been published,
+#    releases/latest 404s and the scheduled canary had nothing to verify
+#    (8/8 nightly failures). The canary gate step now skips that case
+#    with a ::notice:: (job succeeds -> no tracking issue opened).
+#    Everything else stays FAIL-LOUD: an explicit canary_version, an
+#    existing-but-broken artifact, or an unresolvable release feed must
+#    still fail. Durable fix is option 1 - publish a bundle-v* release
+#    as part of the release process; this keeps the nightly signal
+#    honest in the meantime.
 #
 # Rollback tooling: workflow_dispatch with rollback_version; the manual
 # playbook (triggers + actions) lives in docs/upgrade-process.md.
@@ -69,7 +78,7 @@ jobs:
       TAG: ${{ github.ref_name }}
     steps:
       - name: Checkout (scripts/install.sh must exist for the from-file install)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Fetch the artifact to smoke + enforce the integrity gates
         env:
@@ -83,7 +92,10 @@ jobs:
             if [ -n "${REQUESTED}" ]; then
               tag="${REQUESTED}"
             else
-              tag="$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')"
+              if ! tag="$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name' 2>/tmp/latest-err)"; then
+                echo "::error::cannot canary ${{ github.repository }}: releases/latest failed ($(tr -d '\n' </tmp/latest-err)). No bundle-v* release is published to verify - publish one, or dispatch with canary_version."
+                exit 1
+              fi
             fi
             if ! gh api "repos/${{ github.repository }}/releases/tags/${tag}" > /dev/null; then
               echo "::error::canary release ${tag} does not exist"; exit 1
@@ -337,13 +349,72 @@ jobs:
       matrix:
         attempt: [1, 2, 3]
       fail-fast: false
+    # Expose the resolved canary tag to canary-housekeeping (needs.canary):
+    # GITHUB_ENV written inside this job is job-scoped and never reaches a
+    # needs-dependent job, so `${{ env.TAG }}` there is always empty. Every
+    # matrix leg resolves the same tag, so the merged output is stable; a leg
+    # that skips (gate: no bundle-v* release published, FAR-1736) or fails
+    # BEFORE resolving simply contributes no value, leaving the `:-unknown`
+    # fallback intact.
+    outputs:
+      tag: ${{ steps.fetch.outputs.tag }}
     env:
       CANARY: "1"
     steps:
       - name: Checkout (scripts/install.sh must exist for the from-file install)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # FAR-1736 skip-with-clear-reason. Scheduled-only (an explicit
+      # canary_version is a human asking for a specific artifact - never
+      # skipped). While no bundle-v* release is published there is genuinely
+      # nothing to verify, so the gate emits a ::notice:: and marks the leg
+      # skipped; every step below is conditioned on this output, so the job
+      # succeeds WITHOUT running install/verify and canary-housekeeping sees
+      # success - no per-day tracking issue is opened. Everything else stays
+      # fail-loud: an existing-but-broken release, or an API failure while
+      # determining existence (skip stays false), proceeds to the fetch step
+      # which fails exactly as before.
+      - name: Canary gate (skip only when no bundle-v* release is published)
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED: ${{ inputs.canary_version }}
+        run: |
+          set -euo pipefail
+          if [ -n "${REQUESTED}" ]; then
+            echo "explicit canary_version=${REQUESTED} requested - never skip; a missing or bad release must fail in the fetch step below"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Ask the release feed directly: does ANY published bundle-v*
+          # release exist? An API failure is NOT "no release" - proceed with
+          # skip=false so the fetch step reports it loudly (fail-closed).
+          #
+          # Emit one tag per line via a scalar stream, never a per-page
+          # `join("\n")`: under --paginate gh applies --jq once per page, so a
+          # `join` only joins within a page and tags from adjacent pages could
+          # run together past the 100-release page size.
+          set +e
+          releases="$(gh api "repos/${{ github.repository }}/releases?per_page=100" --paginate \
+            --jq '.[] | select(.tag_name | startswith("bundle-v")) | select(.draft == false) | .tag_name' 2>/tmp/gate-err)"
+          rc=$?
+          set -e
+          if [ "${rc}" -ne 0 ]; then
+            echo "::warning::cannot list releases for ${{ github.repository }} ($(tr -d '\n' </tmp/gate-err)) - cannot prove a bundle-v* release is absent, so NOT skipping; the fetch step will report the failure loudly"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "${releases}" ]; then
+            echo "::notice::no published bundle-v* release exists for ${{ github.repository }} - the nightly canary has nothing to verify, so it is skipping successfully (no failure, no tracking issue). Durable fix: publish a bundle-v* release as part of the release process; until then this nightly signal is honestly 'not applicable' rather than red."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "published bundle-v* release(s) found: $(printf '%s' "${releases}" | tr '\n' ' ')"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
 
       - name: Fetch the artifact to smoke + enforce the integrity gates
+        id: fetch
+        if: steps.gate.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTED: ${{ inputs.canary_version }}
@@ -355,7 +426,10 @@ jobs:
             if [ -n "${REQUESTED}" ]; then
               tag="${REQUESTED}"
             else
-              tag="$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')"
+              if ! tag="$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name' 2>/tmp/latest-err)"; then
+                echo "::error::cannot canary ${{ github.repository }}: releases/latest failed ($(tr -d '\n' </tmp/latest-err)). No bundle-v* release is published to verify - publish one, or dispatch with canary_version."
+                exit 1
+              fi
             fi
             if ! gh api "repos/${{ github.repository }}/releases/tags/${tag}" > /dev/null; then
               echo "::error::canary release ${tag} does not exist"; exit 1
@@ -363,6 +437,10 @@ jobs:
             version="${tag#bundle-v}"
             echo "TAG=${tag}" >> "$GITHUB_ENV"
             echo "TARBALL=canary.tar.gz" >> "$GITHUB_ENV"
+            # Also surface the resolved tag as a job output so
+            # canary-housekeeping can name it in the tracking issue body
+            # (GITHUB_ENV above does not cross the job boundary).
+            echo "tag=${tag}" >> "$GITHUB_OUTPUT"
             # Resolve N-1 (the previous bundle-v release) so the N-1 upgrade leg
             # below is not permanently dead code. Best-effort: a resolution
             # failure must WARN, never abort the smoke.
@@ -426,6 +504,7 @@ jobs:
           fi
 
       - name: Install from the artifact (verified, installer enforces signature + sha256)
+        if: steps.gate.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -438,6 +517,7 @@ jobs:
           modulo --version
 
       - name: Boot the stack (detached) and resolve the API base
+        if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           export PATH="${HOME}/.local/bin:${PATH}"
@@ -456,6 +536,7 @@ jobs:
           modulo status
 
       - name: Seed the admin user
+        if: steps.gate.outputs.skip != 'true'
         env:
           ADMIN_PASSWORD: ${{ secrets.SMOKE_ADMIN_PASSWORD }}
         run: |
@@ -467,6 +548,7 @@ jobs:
           modulo users add admin@modulo.run --admin --password "${ADMIN_PASSWORD}"
 
       - name: Endpoint smoke (health, SPA, authenticated API, MCP initialize, WS handshake)
+        if: steps.gate.outputs.skip != 'true'
         env:
           ADMIN_PASSWORD: ${{ secrets.SMOKE_ADMIN_PASSWORD }}
         run: |
@@ -483,6 +565,7 @@ jobs:
             || { echo "::error::/ws did not complete the WebSocket upgrade"; exit 1; }
 
       - name: Doctor green
+        if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           export PATH="${HOME}/.local/bin:${PATH}"
@@ -490,6 +573,7 @@ jobs:
           echo "doctor OK (exit 0, green)"
 
       - name: Zero-egress proof (doctor under unshare -n)
+        if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           export PATH="${HOME}/.local/bin:${PATH}"
@@ -497,6 +581,7 @@ jobs:
           echo "::notice::doctor exited 0 with zero network interfaces - zero-egress proof complete"
 
       - name: Backup -> wipe -> restore -> doctor green
+        if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           export PATH="${HOME}/.local/bin:${PATH}"
@@ -509,6 +594,7 @@ jobs:
           echo "backup/wipe/restore round-trip OK"
 
       - name: Force-kill the process tree; orphans reaped; recovery health within 60s
+        if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           export PATH="${HOME}/.local/bin:${PATH}"
@@ -533,6 +619,7 @@ jobs:
           echo "recovery health 200 within 60s OK"
 
       - name: Ctrl-C clean exit proof
+        if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           export PATH="${HOME}/.local/bin:${PATH}"
@@ -550,6 +637,7 @@ jobs:
           fi
 
       - name: Upgrade refusal without a dump; upgrade success with a dump
+        if: steps.gate.outputs.skip != 'true'
         env:
           ADMIN_PASSWORD: ${{ secrets.SMOKE_ADMIN_PASSWORD }}
         run: |
@@ -581,7 +669,7 @@ jobs:
           echo "upgrade success OK"
 
       - name: N-1 upgrade leg (canary leg only)
-        if: ${{ env.CANARY == '1' && env.N_MINUS_1 != '' }}
+        if: ${{ steps.gate.outputs.skip != 'true' && env.CANARY == '1' && env.N_MINUS_1 != '' }}
         env:
           ADMIN_PASSWORD: ${{ secrets.SMOKE_ADMIN_PASSWORD }}
         run: |
@@ -627,7 +715,8 @@ jobs:
         if: needs.canary.result == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
-          CANARY_TAG: ${{ env.TAG }}
+          GH_REPO: ${{ github.repository }}
+          CANARY_TAG: ${{ needs.canary.outputs.tag }}
         run: |
           set -euo pipefail
           issue_key="[canary] $(date -u +%F)"
@@ -646,6 +735,7 @@ jobs:
         if: needs.canary.result == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           issue_key="[canary] $(date -u +%F)"

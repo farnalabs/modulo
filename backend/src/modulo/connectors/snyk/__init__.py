@@ -1,10 +1,12 @@
 """SnykConnector — async Snyk REST API connector for vulnerability scanning."""
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors._safe_page import safe_records as _safe_records
@@ -55,6 +57,9 @@ class SnykConnector(ConnectorBase):
         self._token = token
         self._version = "2024-10-15"
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.SNYK
@@ -68,6 +73,7 @@ class SnykConnector(ConnectorBase):
                 "Content-Type": "application/vnd.api+json",
             },
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     async def health_check(self) -> HealthResult:
@@ -80,13 +86,15 @@ class SnykConnector(ConnectorBase):
                     return HealthResult(ok=False, detail="Invalid Snyk auth token")
                 if resp.status_code == 403:
                     return HealthResult(ok=False, detail="Snyk token lacks required permissions")
-                return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
+                return HealthResult(
+                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
+                )
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="Cannot connect to Snyk API")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as c:

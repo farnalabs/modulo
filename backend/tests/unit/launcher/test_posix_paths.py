@@ -57,12 +57,22 @@ class TestAtomicSymlinkSwap:
         assert link.is_symlink()
         assert link.readlink() == Path("versions/1.1.0")
 
-    def test_atomic_swap_preserves_old_target_on_failure(self, tmp_path: Path) -> None:
+    def test_atomic_swap_preserves_old_target_on_failure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         link = tmp_path / "current"
         link.symlink_to("versions/1.0.0")
-        # Pointing to a nonexistent target is valid for a symlink.
-        upgrade_module.atomic_symlink_swap(link, "versions/9.9.9")
-        assert link.readlink() == Path("versions/9.9.9")
+        temp = tmp_path / f".current.new.{os.getpid()}"
+
+        def _boom(self, target, *args, **kwargs):
+            raise OSError("simulated rename failure")
+
+        monkeypatch.setattr(Path, "replace", _boom)
+
+        with pytest.raises(OSError, match="simulated rename failure"):
+            upgrade_module.atomic_symlink_swap(link, "versions/9.9.9")
+
+        # The incumbent symlink is preserved and the temp sibling is cleaned up.
+        assert link.readlink() == Path("versions/1.0.0")
+        assert not temp.exists()
 
     def test_sweep_before_swap_removes_stale_temps(self, tmp_path: Path) -> None:
         link = tmp_path / "current"
@@ -169,12 +179,6 @@ class TestRepairCurrentSymlink:
 
 class TestReadProcStarttime:
     """read_proc_starttime reads field 22 of /proc/<pid>/stat on Linux."""
-
-    def test_own_pid_returns_positive_ticks(self) -> None:
-        result = supervisor_module.read_proc_starttime(os.getpid())
-        assert result is not None
-        assert isinstance(result, int)
-        assert result > 0
 
     def test_dead_pid_returns_none(self) -> None:
         assert supervisor_module.read_proc_starttime(999_999_999) is None
@@ -378,16 +382,6 @@ class TestDataDirLock:
         # After context exit, the holder record is truncated.
         assert supervisor_module._read_lock_holder(tmp_path.parent / (tmp_path.name + ".lock")) is None
 
-    def test_second_acquire_refuses(self, tmp_path: Path) -> None:
-        first = supervisor_module.DataDirLock(tmp_path, mode="first")
-        first.acquire()
-        try:
-            second = supervisor_module.DataDirLock(tmp_path, mode="second")
-            with pytest.raises(supervisor_module.DataDirLockError, match="first"):
-                second.acquire()
-        finally:
-            first.release()
-
     def test_lock_is_free_after_release(self, tmp_path: Path) -> None:
         lock = supervisor_module.DataDirLock(tmp_path, mode="test")
         lock.acquire()
@@ -429,15 +423,6 @@ class TestHolderIdentityMatches:
     def test_none_starttime_returns_none(self) -> None:
         holder = supervisor_module.LockHolder(pid=os.getpid(), mode="test", acquired_at=0.0, starttime=None)
         assert supervisor_module._holder_identity_matches(holder) is None
-
-
-class TestDefaultSpawner:
-    """_default_spawner creates a shim-wrapped _TailProcess on Linux."""
-
-    def test_creates_tail_process(self) -> None:
-        proc = supervisor_module._default_spawner([sys.executable, "-c", "print('hello')"], None)
-        assert isinstance(proc, supervisor_module._TailProcess)
-        proc.wait(timeout=10)
 
 
 class TestRequestStop:

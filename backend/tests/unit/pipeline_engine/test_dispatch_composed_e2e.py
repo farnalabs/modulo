@@ -228,6 +228,7 @@ async def test_composed_dispatch_graph_fires_awaits_and_hands_off_downstream() -
     assert output["execution_identity"] == "customer_substrate"
     assert output["witnessed_via"] == _DISPATCH_INSTANCE_ID
     assert output["declared_external_cost"] is None
+    assert output["provenance"] == "reported"
 
     # --- downstream hand-off: the consumer read the dispatch output -----------
     assert artifacts["consume-result"]["status"] == "completed"

@@ -1067,6 +1067,7 @@ import functools
 import operator
 import os
 import re
+from collections.abc import Iterable
 from fractions import Fraction
 from pathlib import Path
 
@@ -1147,20 +1148,29 @@ def _resolve_scope_paths() -> frozenset[Path] | None:
     return frozenset(resolved)
 
 
-def _iter_test_modules():
-    scope = _resolve_scope_paths()
-    if scope is not None:
-        # Scoped mode: yield only files that are in the scope set.
-        for path in sorted(TESTS.rglob("*.py")):
-            if any(part in EXCLUDED_PACKAGES for part in path.parts):
-                continue
-            if path.resolve() in scope:
-                yield path
-        return
+def _iter_all_test_modules():
+    """Yield every test module in the tree, ignoring ``MODULO_TEST_STYLE_SCOPE``.
+
+    Lenses that reason about the whole tree must use this even when the scan is
+    scoped: a fixture requested by a test in an *unchanged* file is not dead, so
+    the dead-fixture lens must resolve requesters across the whole tree while
+    still only reporting definitions in the scoped files.
+    """
     for path in sorted(TESTS.rglob("*.py")):
         if any(part in EXCLUDED_PACKAGES for part in path.parts):
             continue
         yield path
+
+
+def _iter_test_modules():
+    scope = _resolve_scope_paths()
+    if scope is not None:
+        # Scoped mode: yield only files that are in the scope set.
+        for path in _iter_all_test_modules():
+            if path.resolve() in scope:
+                yield path
+        return
+    yield from _iter_all_test_modules()
 
 
 @functools.cache
@@ -1713,42 +1723,53 @@ def test_no_stray_print_in_test_code():
     )
 
 
-def test_no_dead_fixtures():
-    """pytest only instantiates fixtures on demand, so a fixture that no test
-    (or other fixture) ever requests is unreachable setup code. It inflates
-    the suite, adds per-run collection overhead, and misleads readers into
-    believing a capability is covered — its body may already be broken without
-    anyone noticing. A fixture counts as used when its name appears as a test
-    parameter, an attribute, inside ``@pytest.mark.usefixtures(...)`` /
-    ``request.getfixturevalue(...)`` strings, or via the conformance-fixture
-    registry; ``autouse=True`` fixtures are legitimately unreferenced."""
-    used_names: dict[str, int] = {}
-    for path in _iter_test_modules():
-        tree = _parse(path)
-        if tree is None:
-            continue
+def _fixture_used_names(sources: Iterable[tuple[ast.AST, str]]) -> dict[str, int]:
+    """Count every identifier that could request a fixture across *sources*.
+
+    *sources* pairs each parsed tree with its raw text so both AST references
+    (``ast.Name`` / ``ast.Attribute`` / ``ast.arg``) and string-literal
+    requests (``@pytest.mark.usefixtures("x")`` /
+    ``request.getfixturevalue("x")``) are counted. The caller must feed this
+    the WHOLE test tree — not just the scoped files — or a fixture requested by
+    an unchanged test is misread as dead.
+    """
+    used: dict[str, int] = {}
+    for tree, text in sources:
         for node in _all_nodes(tree):
             if isinstance(node, ast.Name):
-                used_names[node.id] = used_names.get(node.id, 0) + 1
+                used[node.id] = used.get(node.id, 0) + 1
             elif isinstance(node, ast.Attribute):
-                used_names[node.attr] = used_names.get(node.attr, 0) + 1
+                used[node.attr] = used.get(node.attr, 0) + 1
             elif isinstance(node, ast.arg):
-                used_names[node.arg] = used_names.get(node.arg, 0) + 1
-        for token in re.findall(r'["\']([A-Za-z_][A-Za-z0-9_]*)["\']', path.read_text(encoding="utf-8")):
-            used_names[token] = used_names.get(token, 0) + 1
+                used[node.arg] = used.get(node.arg, 0) + 1
+        for token in re.findall(r'["\']([A-Za-z_][A-Za-z0-9_]*)["\']', text):
+            used[token] = used.get(token, 0) + 1
+    return used
 
-    def _decorator_autouse(dec: ast.AST) -> bool:
-        if not isinstance(dec, ast.Call):
-            return False
-        return any(
-            kw.arg == "autouse" and isinstance(kw.value, ast.Constant) and kw.value.value is True for kw in dec.keywords
-        )
 
+def _decorator_autouse(dec: ast.AST) -> bool:
+    """True when a fixture decorator carries ``autouse=True``."""
+    if not isinstance(dec, ast.Call):
+        return False
+    return any(
+        kw.arg == "autouse" and isinstance(kw.value, ast.Constant) and kw.value.value is True for kw in dec.keywords
+    )
+
+
+def _dead_fixture_violations(
+    definition_sources: Iterable[tuple[str, ast.AST]],
+    used_names: dict[str, int],
+) -> list[str]:
+    """Return violation strings for fixtures in *definition_sources* that
+    *used_names* never references.
+
+    *definition_sources* is the SCOPED set (label, tree) of changed modules;
+    *used_names* is built from the WHOLE test tree so a fixture requested by an
+    unchanged test is not reported dead. ``autouse=True`` fixtures are
+    legitimately unreferenced and skipped.
+    """
     violations: list[str] = []
-    for path in _iter_test_modules():
-        tree = _parse(path)
-        if tree is None:
-            continue
+    for label, tree in definition_sources:
         for node in _all_nodes(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -1758,14 +1779,69 @@ def test_no_dead_fixtures():
                 continue
             if used_names.get(node.name):
                 continue
-            violations.append(
-                f"  {path.relative_to(TESTS)}:{node.lineno}  @pytest.fixture {node.name}()"
-                " — never requested by any test"
-            )
+            violations.append(f"  {label}:{node.lineno}  @pytest.fixture {node.name}() — never requested by any test")
+    return violations
+
+
+def test_no_dead_fixtures():
+    """pytest only instantiates fixtures on demand, so a fixture that no test
+    (or other fixture) ever requests is unreachable setup code. It inflates
+    the suite, adds per-run collection overhead, and misleads readers into
+    believing a capability is covered — its body may already be broken without
+    anyone noticing. A fixture counts as used when its name appears as a test
+    parameter, an attribute, inside ``@pytest.mark.usefixtures(...)`` /
+    ``request.getfixturevalue(...)`` strings, or via the conformance-fixture
+    registry; ``autouse=True`` fixtures are legitimately unreferenced.
+
+    Fixture *requesters* are resolved across the WHOLE test tree even in
+    ``--changed-files`` mode: a changed ``conftest.py`` may define a fixture
+    that only unchanged test modules request, and scanning the changed files
+    alone would flag every such live fixture as dead (a false failure on every
+    conftest edit).
+    """
+    used_names = _fixture_used_names(
+        (tree, path.read_text(encoding="utf-8"))
+        for path in _iter_all_test_modules()
+        if (tree := _parse(path)) is not None
+    )
+
+    definitions = [
+        (str(path.relative_to(TESTS)), tree) for path in _iter_test_modules() if (tree := _parse(path)) is not None
+    ]
+    violations = _dead_fixture_violations(definitions, used_names)
     assert not violations, (
         f"Found {len(violations)} fixture(s) that no test requests.\n"
         "pytest never instantiates an unrequested fixture, so its body is dead code.\n"
         "Remove it, or wire it up (request it / autouse=True) so it does real work.\n" + "\n".join(violations)
+    )
+
+
+def test_dead_fixture_lens_resolves_requesters_across_the_whole_tree():
+    """Control for the dead-fixture lens: a fixture defined in a CHANGED module
+    is live when an UNCHANGED module requests it, while a fixture no module
+    requests is still flagged.
+
+    Regression: the ``--changed-files`` wrapper scopes iteration to the changed
+    files, and the lens built its used-name set from that same scoped iteration
+    — so any edit to ``backend/tests/bdd/conftest.py`` flagged its live
+    ``unauth_client`` fixture as dead.
+    """
+    definition = ast.parse(
+        "@pytest.fixture\ndef cross_file_client():\n    return 1\n\n"
+        "@pytest.fixture\ndef truly_dead_fixture():\n    return 2\n"
+    )
+    requester_elsewhere = ast.parse("def test_uses_it(cross_file_client):\n    assert cross_file_client == 1\n")
+
+    # The whole-tree used-name set is fed from BOTH the changed definition
+    # module and the unchanged requester module.
+    used_names = _fixture_used_names([(definition, ""), (requester_elsewhere, "")])
+    violations = _dead_fixture_violations([("bdd/conftest.py", definition)], used_names)
+
+    assert not any("cross_file_client" in v for v in violations), (
+        f"a fixture requested by an unchanged module must not be flagged:\n{violations}"
+    )
+    assert any("truly_dead_fixture" in v for v in violations), (
+        f"a fixture no module requests must still be flagged:\n{violations}"
     )
 
 

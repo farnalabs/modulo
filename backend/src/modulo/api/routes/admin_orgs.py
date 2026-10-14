@@ -23,6 +23,7 @@ from modulo.api.dependencies import (
     require_target_org_role,
     resolve_audit_principal,
 )
+from modulo.api.routes.admin_license import invalidate_license_status_cache
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
 from modulo.core.audit_coverage import audited
@@ -50,6 +51,13 @@ _CODE_ADMIN_ORGS_ADMIN_SET = "admin_orgs.admin_set_org_license"
 _CODE_ADMIN_ORGS_ADMIN_REMOVE = "admin_orgs.admin_remove_org_license"
 _CODE_ADMIN_ORGS_SET_ORG_TRIGGERS_PAUSED = "admin_orgs.admin_set_org_triggers_paused"
 _CODE_ADMIN_ORGS_SET_ORG_GUARDRAILS_KILL_SWITCH = "admin_orgs.admin_set_org_guardrails_kill_switch"
+_CODE_ADMIN_ORGS_ADMIN_CREATE_ORG = "admin_orgs.admin_create_org"
+_CODE_ADMIN_ORGS_ADMIN_LIST_ORGS = "admin_orgs.admin_list_orgs"
+_CODE_ADMIN_ORGS_ADMIN_CREATE_ORG_USER = "admin_orgs.admin_create_org_user"
+_CODE_ADMIN_ORGS_ADMIN_DELETE_ORG = "admin_orgs.admin_delete_org"
+_CODE_ADMIN_ORGS_ADMIN_GET_ORG_LICENSE = "admin_orgs.admin_get_org_license"
+_CODE_ADMIN_ORGS_ADMIN_SET_ORG_AUTHZ_ENFORCE = "admin_orgs.admin_set_org_authz_enforce"
+_CODE_ADMIN_ORGS_ADMIN_GET_ORG_GUARDRAILS_KILL_SWITCH = "admin_orgs.admin_get_org_guardrails_kill_switch"
 
 
 _ALLOWED_ORG_ROLES = ("admin", "operator", "runner", "viewer")
@@ -232,10 +240,10 @@ async def admin_create_org(
 
             return _create_org_response(org)
     except ProgrammingError as exc:
-        _raise_programming_error("admin_orgs.admin_create_org", MSG_FEATURE_NOT_AVAILABLE, exc)
+        _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_CREATE_ORG, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_orgs.admin_create_org")
-        _raise_db_unavailable("admin_orgs.admin_create_org", "Database error while creating organisation.", exc)
+        raise_session_contract_error(exc, _CODE_ADMIN_ORGS_ADMIN_CREATE_ORG)
+        _raise_db_unavailable(_CODE_ADMIN_ORGS_ADMIN_CREATE_ORG, "Database error while creating organisation.", exc)
     except HTTPException:
         raise
     except Exception as exc:
@@ -269,10 +277,10 @@ async def admin_list_orgs(
         async with session.begin():
             orgs = await list_organisations(session)
     except ProgrammingError as exc:
-        _raise_programming_error("admin_orgs.admin_list_orgs", MSG_FEATURE_NOT_AVAILABLE, exc)
+        _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_LIST_ORGS, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_orgs.admin_list_orgs")
-        _raise_db_unavailable("admin_orgs.admin_list_orgs", "Database error while listing organisations.", exc)
+        raise_session_contract_error(exc, _CODE_ADMIN_ORGS_ADMIN_LIST_ORGS)
+        _raise_db_unavailable(_CODE_ADMIN_ORGS_ADMIN_LIST_ORGS, "Database error while listing organisations.", exc)
     except HTTPException:
         raise
     except Exception as exc:
@@ -420,10 +428,10 @@ async def admin_create_org_user(
 
             return _create_org_user_response(account, membership)
     except ProgrammingError as exc:
-        _raise_programming_error("admin_orgs.admin_create_org_user", MSG_FEATURE_NOT_AVAILABLE, exc)
+        _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_CREATE_ORG_USER, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_orgs.admin_create_org_user")
-        _raise_db_unavailable("admin_orgs.admin_create_org_user", "Database error while creating org user.", exc)
+        raise_session_contract_error(exc, _CODE_ADMIN_ORGS_ADMIN_CREATE_ORG_USER)
+        _raise_db_unavailable(_CODE_ADMIN_ORGS_ADMIN_CREATE_ORG_USER, "Database error while creating org user.", exc)
     except HTTPException:
         raise
     except Exception as exc:
@@ -478,10 +486,10 @@ async def admin_delete_org(
             if not deleted:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
     except ProgrammingError as exc:
-        _raise_programming_error("admin_orgs.admin_delete_org", MSG_FEATURE_NOT_AVAILABLE, exc)
+        _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_DELETE_ORG, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_orgs.admin_delete_org")
-        _raise_db_unavailable("admin_orgs.admin_delete_org", "Database error while deleting organisation.", exc)
+        raise_session_contract_error(exc, _CODE_ADMIN_ORGS_ADMIN_DELETE_ORG)
+        _raise_db_unavailable(_CODE_ADMIN_ORGS_ADMIN_DELETE_ORG, "Database error while deleting organisation.", exc)
     except HTTPException:
         raise
     except Exception as exc:
@@ -541,10 +549,10 @@ async def admin_get_org_license(
     try:
         org = await get_organisation(session, org_id)
     except ProgrammingError as exc:
-        _raise_programming_error("admin_orgs.admin_get_org_license", MSG_FEATURE_NOT_AVAILABLE, exc)
+        _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_GET_ORG_LICENSE, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_orgs.admin_get_org_license")
-        _raise_db_unavailable("admin_orgs.admin_get_org_license", "Database error while fetching org license.", exc)
+        raise_session_contract_error(exc, _CODE_ADMIN_ORGS_ADMIN_GET_ORG_LICENSE)
+        _raise_db_unavailable(_CODE_ADMIN_ORGS_ADMIN_GET_ORG_LICENSE, "Database error while fetching org license.", exc)
     except HTTPException:
         raise
     except Exception as exc:
@@ -598,6 +606,7 @@ async def admin_set_org_license(
     req: SetOrgLicenseRequest,
     _: Annotated[AuthenticatedPrincipal, require_target_org_role("org.license.manage", "admin")],
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> OrgLicenseResponse:
     try:
         # Single locked transaction: read the org FOR UPDATE, verify, then
@@ -611,7 +620,7 @@ async def admin_set_org_license(
             except ProgrammingError as exc:
                 _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_SET, MSG_FEATURE_NOT_AVAILABLE, exc)
             except SQLAlchemyError as exc:
-                raise_session_contract_error(exc, "admin_orgs.admin_set_org_license")
+                raise_session_contract_error(exc, _CODE_ADMIN_ORGS_ADMIN_SET)
                 _raise_db_unavailable(
                     _CODE_ADMIN_ORGS_ADMIN_SET, "Database error while fetching org for set-license.", exc
                 )
@@ -633,12 +642,17 @@ async def admin_set_org_license(
     except ProgrammingError as exc:
         _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_SET, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_orgs.admin_set_org_license")
+        raise_session_contract_error(exc, _CODE_ADMIN_ORGS_ADMIN_SET)
         _raise_db_unavailable(_CODE_ADMIN_ORGS_ADMIN_SET, "Database error while updating org license.", exc)
     except HTTPException:
         raise
     except Exception as exc:
         _raise_internal_error("Unexpected error in admin_set_org_license (update)", exc)
+
+    # The org's cached effective status is now stale — bust it (FAR-1719).
+    # Best-effort: the DB mutation above already committed, so a Redis
+    # failure must not turn the request into a 500.
+    await invalidate_license_status_cache(settings, org_id=str(org_id))
 
     return _license_response_from_data(d)
 
@@ -661,6 +675,7 @@ async def admin_remove_org_license(
     org_id: uuid.UUID,
     _: Annotated[AuthenticatedPrincipal, require_target_org_role("org.license.manage", "admin")],
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> OrgLicenseResponse:
     try:
         # Same locked read-modify-write transaction as admin_set_org_license —
@@ -672,7 +687,7 @@ async def admin_remove_org_license(
             except ProgrammingError as exc:
                 _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_REMOVE, MSG_FEATURE_NOT_AVAILABLE, exc)
             except SQLAlchemyError as exc:
-                raise_session_contract_error(exc, "admin_orgs.admin_remove_org_license")
+                raise_session_contract_error(exc, _CODE_ADMIN_ORGS_ADMIN_REMOVE)
                 _raise_db_unavailable(
                     _CODE_ADMIN_ORGS_ADMIN_REMOVE, "Database error while fetching org for remove-license.", exc
                 )
@@ -689,12 +704,17 @@ async def admin_remove_org_license(
     except ProgrammingError as exc:
         _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_REMOVE, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_orgs.admin_remove_org_license")
+        raise_session_contract_error(exc, _CODE_ADMIN_ORGS_ADMIN_REMOVE)
         _raise_db_unavailable(_CODE_ADMIN_ORGS_ADMIN_REMOVE, "Database error while removing org license.", exc)
     except HTTPException:
         raise
     except Exception as exc:
         _raise_internal_error("Unexpected error in admin_remove_org_license (remove)", exc)
+
+    # The org's cached effective status is now stale — bust it (FAR-1719).
+    # Best-effort: the DB mutation above already committed, so a Redis
+    # failure must not turn the request into a 500.
+    await invalidate_license_status_cache(settings, org_id=str(org_id))
 
     return OrgLicenseResponse(has_license=False)
 
@@ -740,11 +760,11 @@ async def admin_set_org_authz_enforce(
             )
             affected = result.rowcount or 0
     except ProgrammingError as exc:
-        _raise_programming_error("admin_orgs.admin_set_org_authz_enforce", MSG_FEATURE_NOT_AVAILABLE, exc)
+        _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_SET_ORG_AUTHZ_ENFORCE, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_orgs.admin_set_org_authz_enforce")
+        raise_session_contract_error(exc, _CODE_ADMIN_ORGS_ADMIN_SET_ORG_AUTHZ_ENFORCE)
         _raise_db_unavailable(
-            "admin_orgs.admin_set_org_authz_enforce", "Database error while updating org authz-enforce.", exc
+            _CODE_ADMIN_ORGS_ADMIN_SET_ORG_AUTHZ_ENFORCE, "Database error while updating org authz-enforce.", exc
         )
     except Exception as exc:
         _raise_internal_error("Unexpected error in admin_set_org_authz_enforce", exc)
@@ -805,7 +825,7 @@ async def admin_set_org_triggers_paused(
                 current_user=current_user,
                 event_type="triggers_paused",
                 payload={"paused": req.paused},
-                log_prefix="admin_orgs.admin_set_org_triggers_paused",
+                log_prefix=_CODE_ADMIN_ORGS_SET_ORG_TRIGGERS_PAUSED,
             )
 
             return SetOrgTriggersPausedResponse(
@@ -815,7 +835,7 @@ async def admin_set_org_triggers_paused(
     except ProgrammingError as exc:
         _raise_programming_error(_CODE_ADMIN_ORGS_SET_ORG_TRIGGERS_PAUSED, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_orgs.admin_set_org_triggers_paused")
+        raise_session_contract_error(exc, _CODE_ADMIN_ORGS_SET_ORG_TRIGGERS_PAUSED)
         _raise_db_unavailable(
             _CODE_ADMIN_ORGS_SET_ORG_TRIGGERS_PAUSED,
             "Database error while updating org trigger pause state.",
@@ -869,11 +889,11 @@ async def admin_get_org_guardrails_kill_switch(
                 enabled_at=_timestamp_response(org.guardrails_kill_switch_at),
             )
     except ProgrammingError as exc:
-        _raise_programming_error("admin_orgs.admin_get_org_guardrails_kill_switch", MSG_FEATURE_NOT_AVAILABLE, exc)
+        _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_GET_ORG_GUARDRAILS_KILL_SWITCH, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_orgs.admin_get_org_guardrails_kill_switch")
+        raise_session_contract_error(exc, _CODE_ADMIN_ORGS_ADMIN_GET_ORG_GUARDRAILS_KILL_SWITCH)
         _raise_db_unavailable(
-            "admin_orgs.admin_get_org_guardrails_kill_switch",
+            _CODE_ADMIN_ORGS_ADMIN_GET_ORG_GUARDRAILS_KILL_SWITCH,
             "Database error while reading org guardrails kill-switch state.",
             exc,
         )
@@ -931,7 +951,7 @@ async def admin_set_org_guardrails_kill_switch(
                 current_user=current_user,
                 event_type="guardrails_kill_switch",
                 payload={"enabled": req.enabled},
-                log_prefix="admin_orgs.admin_set_org_guardrails_kill_switch",
+                log_prefix=_CODE_ADMIN_ORGS_SET_ORG_GUARDRAILS_KILL_SWITCH,
             )
 
             if req.enabled:
@@ -951,7 +971,7 @@ async def admin_set_org_guardrails_kill_switch(
     except ProgrammingError as exc:
         _raise_programming_error(_CODE_ADMIN_ORGS_SET_ORG_GUARDRAILS_KILL_SWITCH, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_orgs.admin_set_org_guardrails_kill_switch")
+        raise_session_contract_error(exc, _CODE_ADMIN_ORGS_SET_ORG_GUARDRAILS_KILL_SWITCH)
         _raise_db_unavailable(
             _CODE_ADMIN_ORGS_SET_ORG_GUARDRAILS_KILL_SWITCH,
             "Database error while updating org guardrails kill-switch state.",

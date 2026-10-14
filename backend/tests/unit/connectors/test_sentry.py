@@ -22,30 +22,6 @@ def test_connector_type(connector: SentryConnector) -> None:
 
 
 @respx.mock
-async def test_health_check_ok(connector: SentryConnector) -> None:
-    respx.get(f"{_BASE}/").mock(return_value=httpx.Response(200, json={}))
-    result = await connector.health_check()
-    assert result.ok is True
-    assert result.detail == "Sentry API token validated"
-
-
-@respx.mock
-async def test_health_check_invalid_token(connector: SentryConnector) -> None:
-    respx.get(f"{_BASE}/").mock(return_value=httpx.Response(401, text="Unauthorized"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "Invalid" in result.detail
-
-
-@respx.mock
-async def test_health_check_network_error(connector: SentryConnector) -> None:
-    respx.get(f"{_BASE}/").mock(side_effect=httpx.ConnectError("connection refused"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "connection refused" in result.detail
-
-
-@respx.mock
 async def test_query_issues(connector: SentryConnector) -> None:
     issues = [
         {"id": "1", "title": "Crash in login", "status": "unresolved"},

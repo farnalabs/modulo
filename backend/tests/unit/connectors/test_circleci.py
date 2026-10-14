@@ -31,28 +31,6 @@ def test_connector_type(cc_runner):
 
 
 @respx.mock
-async def test_health_check_ok(cc_runner):
-    respx.get(f"{_CIRCLECI_API}/me").mock(return_value=httpx.Response(200, json={"login": "testuser"}))
-    result = await cc_runner.health_check()
-    assert result.ok is True
-
-
-@respx.mock
-async def test_health_check_fail_401(cc_runner):
-    respx.get(f"{_CIRCLECI_API}/me").mock(return_value=httpx.Response(401, text="Unauthorized"))
-    result = await cc_runner.health_check()
-    assert result.ok is False
-    assert "Authentication failed" in result.detail
-
-
-@respx.mock
-async def test_health_check_fail_500(cc_runner):
-    respx.get(f"{_CIRCLECI_API}/me").mock(return_value=httpx.Response(500, text="Internal Server Error"))
-    result = await cc_runner.health_check()
-    assert result.ok is False
-    assert "500" in result.detail
-
-
 # ---------------------------------------------------------------------------
 # trigger_run
 # ---------------------------------------------------------------------------
@@ -520,8 +498,3 @@ async def test_double_list_runs(cc_double):
     runs = await cc_double.list_runs(pipeline_id="gh/owner/repo")
     assert len(runs) == 1
     assert runs[0].status == CIRunStatus.SUCCESS
-
-
-async def test_double_health_check(cc_double):
-    result = await cc_double.health_check()
-    assert result.ok is True

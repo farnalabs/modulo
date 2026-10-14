@@ -23,6 +23,7 @@ from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
+from modulo.core.product_analytics.consent import is_org_consenting
 from modulo.core.product_analytics.metrics_constants import (
     API_ERROR_DAILY_CAP,
     MAX_BATCH_SIZE,
@@ -124,13 +125,14 @@ async def _api_error_count_today(
 
 
 def _consent_active(settings_json: dict[str, Any] | None) -> bool:
-    """Return True when the org has opted in to product analytics."""
-    if not isinstance(settings_json, dict):
-        return False
-    pa = settings_json.get("product_analytics")
-    if not isinstance(pa, dict):
-        return False
-    return pa.get("level") == "all"
+    """Return True when the org has opted in to product analytics.
+
+    Thin delegate to :func:`modulo.core.product_analytics.consent.is_org_consenting`,
+    the single canonical reader of the stored consent level. The egress decision
+    made here therefore cannot drift from the posture reported by the
+    transparency endpoint, which reads through the same shared predicate.
+    """
+    return is_org_consenting(settings_json)
 
 
 async def _stage_single_event(

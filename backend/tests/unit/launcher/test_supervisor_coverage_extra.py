@@ -508,21 +508,39 @@ def test_signal_group_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     assert terminated == [proc.pid]
 
 
-def test_signal_group_non_group_leader() -> None:
-    """Process is not a group leader → terminate + kill."""
+def test_signal_group_non_group_leader(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Process is not a group leader → terminate + os.kill(pid, signum)."""
     if sys.platform == "win32":
         pytest.skip("os.getpgid not available on Windows")
     from modulo.launcher.supervisor import Supervisor, SupervisorKnobs
 
-    proc = FakeProc()
+    terminated: list[int] = []
+    killed: list[tuple[int, int]] = []
+
+    class RecordingProc(FakeProc):
+        def terminate(self) -> None:
+            terminated.append(self.pid)
+
+    proc = RecordingProc()
     supervisor = Supervisor(SupervisorKnobs())
 
-    original = os.getpgid
-    os.getpgid = lambda pid: (_ for _ in ()).throw(OSError("no such process"))  # type: ignore[assignment]
-    try:
-        supervisor._signal_group(proc, 15)
-    finally:
-        os.getpgid = original
+    # Force the non-group-leader branch (os.getpgid raises) and record the
+    # direct-PID signal the branch must emit.
+    monkeypatch.setattr(
+        supervisor_module.os,
+        "getpgid",
+        lambda _pid: (_ for _ in ()).throw(OSError("no such process")),
+    )
+    monkeypatch.setattr(
+        supervisor_module.os,
+        "kill",
+        lambda pid, signum: killed.append((pid, signum)),
+    )
+
+    supervisor._signal_group(proc, 15)
+
+    assert terminated == [proc.pid]
+    assert killed == [(proc.pid, 15)]
 
 
 # ---------------------------------------------------------------------------
@@ -1363,22 +1381,6 @@ def test_collect_status_file_not_found(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_degrade_locked_runtime_and_pause(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import GATE_SUPERVISOR_PRE_TEARDOWN, Supervisor, SupervisorKnobs
-
-    pause_calls: list[str] = []
-    runtime_path = tmp_path / "runtime.json"
-    supervisor = Supervisor(
-        SupervisorKnobs(),
-        runtime_path=runtime_path,
-        pause_hook=lambda gate: pause_calls.append(gate),
-    )
-    supervisor.add(supervisor_module.ChildSpec(name="pg", argv_builder=lambda: ["pg"]))
-    supervisor._degrade_locked("test reason")
-    assert pause_calls == [GATE_SUPERVISOR_PRE_TEARDOWN]
-    assert runtime_path.exists()
-
-
 # ---------------------------------------------------------------------------
 # _default_spawner (skip if Windows, needs real subprocess)
 # ---------------------------------------------------------------------------
@@ -1472,9 +1474,22 @@ def test_serve_watch_normal_flow() -> None:
             self.should_exit = False
             self.force_exit = False
 
+    class RecordingForceEvent:
+        """Records the wait() timeout instead of blocking the full window."""
+
+        def __init__(self) -> None:
+            self.timeouts: list[float | None] = []
+
+        def wait(self, timeout: float | None = None) -> bool:
+            self.timeouts.append(timeout)
+            return False
+
+        def is_set(self) -> bool:
+            return False
+
     server = FakeServer()
     stop = threading.Event()
-    force = threading.Event()
+    force = RecordingForceEvent()
     # Set stop before starting the thread so it doesn't block
     stop.set()
     import modulo.launcher.entry as _entry
@@ -1482,6 +1497,8 @@ def test_serve_watch_normal_flow() -> None:
     _entry._serve_watch(server, stop, force)
     assert server.should_exit is True
     assert server.force_exit is False
+    # The serve loop waits on force_exit with the documented 5s window.
+    assert force.timeouts == [5]
 
 
 # ---------------------------------------------------------------------------

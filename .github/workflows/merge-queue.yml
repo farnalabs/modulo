@@ -63,7 +63,7 @@ jobs:
       frozen: ${{ steps.check.outputs.frozen }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check for release-freeze tag
         id: check
         env:
@@ -167,7 +167,14 @@ jobs:
     name: Merge queue -> main
     needs: [freeze-gate, event-gate]
     if: needs.freeze-gate.outputs.frozen == 'false' && needs.event-gate.outputs.should_run == 'true'
-    timeout-minutes: 30
+    # 30 was the observed failure ceiling: the last successful pass took 29.1 min
+    # (backend 19.9 + frontend 7.2 sequential) and every later pass hit the 30-min
+    # job cancel before the merge step. 45 gives ~15 min of headroom for the
+    # concurrent validation (~20 min) plus collection/merge/post steps, while
+    # staying bounded: this job holds the merge-queue concurrency lock
+    # (cancel-in-progress: false), so an unbounded hold would stall every
+    # later queue pass.
+    timeout-minutes: 45
     permissions:
       contents: write
       pull-requests: write
@@ -222,7 +229,7 @@ jobs:
             fi
           done
           echo "Stuck-run sweep complete."
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: main
@@ -234,9 +241,9 @@ jobs:
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.4
+          version: 11.28.5
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
           cache: pnpm
@@ -311,6 +318,26 @@ jobs:
             TITLE=$(echo "$pr" | jq -r '.title')
 
             echo -n "  PR #$NUM ($TITLE) -- "
+
+            # Same-repo author gate (FAR-264): a fork / external-author PR must
+            # NEVER be auto-merged by this queue. The decision is delegated to
+            # the versioned, unit-tested helper
+            # (.github/scripts/same-repo-author-guard.py) so merge and review
+            # cannot diverge. Any failure to resolve the PR's head repository or
+            # author association fails CLOSED (skipped), never merged; an
+            # external PR needs a human/approved path instead.
+            AUTHOR_FILE=$(mktemp)
+            if gh api "repos/${{ github.repository }}/pulls/$NUM" > "$AUTHOR_FILE" 2>/dev/null; then
+              AUTHOR_OUT=$(python3 .github/scripts/same-repo-author-guard.py "$AUTHOR_FILE" "${{ github.repository }}" 2>/dev/null) || true
+            else
+              AUTHOR_OUT=""
+            fi
+            rm -f "$AUTHOR_FILE"
+            AUTHOR_VERDICT="${AUTHOR_OUT%%|*}"
+            if [ "$AUTHOR_VERDICT" != "ok" ]; then
+              echo "skipping - same-repo author gate: ${AUTHOR_OUT#*|}"
+              continue
+            fi
 
             # Check for approval reviews
             APPROVERS=$(gh pr view "$NUM" --json reviews --jq '.reviews[]? | select(.state == "APPROVED") | .author.login' 2>/dev/null | sort -u)
@@ -412,6 +439,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          # Bound per-pass batch size so one pass's collection/merge/validation
+          # cost cannot grow without bound as the backlog grows (a growing batch
+          # is what tipped the ~29-min sequential baseline past the 30-min job
+          # cap). Oldest-first order is preserved (prs.json is createdAt-sorted);
+          # PRs beyond the cap simply wait for the next pass (~15 min cadence via
+          # the Housekeeper dispatch / cron / self-chain). Per-PR merge semantics
+          # are unchanged: every PR in the batch still runs the full combined
+          # backend+frontend validation and the freeze/TOCTOU guards before
+          # `gh pr merge`.
+          BATCH_LIMIT=12
+          TOTAL_APPROVED=$(jq 'length' /tmp/prs.json 2>/dev/null || echo 0)
+          if [ "$TOTAL_APPROVED" -gt "$BATCH_LIMIT" ]; then
+            echo "Approved PRs ready: $TOTAL_APPROVED - merging the oldest $BATCH_LIMIT this pass; $((TOTAL_APPROVED - BATCH_LIMIT)) wait for the next cycle."
+            jq ".[0:$BATCH_LIMIT]" /tmp/prs.json > /tmp/prs_batch.json
+          else
+            cp /tmp/prs.json /tmp/prs_batch.json
+          fi
+
           merged_prs=""
           conflict_prs=""
           noop_prs=""
@@ -462,7 +507,7 @@ jobs:
               echo "MERGE CONFLICT in PR #$NUM -- skipping."
               conflict_prs="$conflict_prs $NUM"
             fi
-          done < <(jq -c '.[]' /tmp/prs.json)
+          done < <(jq -c '.[]' /tmp/prs_batch.json)
 
           merged_prs=$(echo "$merged_prs" | xargs)
           conflict_prs=$(echo "$conflict_prs" | xargs)
@@ -779,12 +824,42 @@ jobs:
           fi
           echo "Migration heads OK ($HEAD_COUNT head)"
 
-      - name: Backend lint + tests (parallel)
+      # Backend lint+tests and the full frontend pipeline run CONCURRENTLY in
+      # this one step (previously two sequential steps: backend ~20 min then
+      # frontend ~7 min = ~27 min of validation). The frontend runs as a
+      # background subshell while the backend lint tools run in the background
+      # and pytest in the foreground, exactly as before; every gate is
+      # preserved and still blocks the merge — this is a wall-clock change
+      # only. Total validation wall-clock is now ~max(backend, frontend) ~ 20
+      # min instead of their sum.
+      #
+      # Failure accounting is now precise: each side's failure appends its own
+      # line to /tmp/failure_description.txt (the Branch Fixer notification
+      # consumes it), replacing both the old backend-step appends and the
+      # separate 'Capture frontend failures' step — which, being `if:
+      # failure()`, used to append "Frontend checks failed" even when the
+      # BACKEND step was the one that failed and frontend never ran.
+      - name: Backend lint + tests and frontend checks (concurrent)
         if: steps.merge.outputs.merged_count != '0'
-        working-directory: backend
         shell: bash
         run: |
-          # Run lint tools in background, tests in foreground
+          # --- Frontend checks: background subshell (was a separate sequential step) ---
+          # `set -e` is inherited by the subshell (GH Actions default shell is
+          # `bash -eo pipefail`), so the first failing pnpm command aborts the
+          # subshell with that exit status, matching the old step's behaviour.
+          (
+            set -euo pipefail
+            cd frontend
+            pnpm install --frozen-lockfile --ignore-scripts
+            pnpm run lint --quiet
+            pnpm run type-check
+            pnpm run test:unit
+            pnpm run build
+          ) &
+          FRONTEND_PID=$!
+
+          # --- Backend lint tools: background (unchanged from the old step) ---
+          cd backend
           uv run --no-build --no-sync ruff check . &
           RUFF_PID=$!
           uv run --no-build --no-sync mypy src/modulo/ &
@@ -794,8 +869,15 @@ jobs:
           uv run --no-build --no-sync ruff format --check . &
           RUFF_FORMAT_PID=$!
 
+          # --- Backend tests: foreground (unchanged command) ---
+          # `set +e` around the pytest invocation so its exit code is CAPTURED
+          # rather than aborting the step under -e before the failure
+          # description is written (the old script's `TEST_EXIT=$?` line was
+          # unreachable on a pytest failure for that reason).
+          set +e
           uv run --no-build --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal
           TEST_EXIT=$?
+          set -e
 
           # Collect lint results
           LINT_FAIL=0
@@ -804,32 +886,27 @@ jobs:
           wait $BANDIT_PID || LINT_FAIL=1
           wait $RUFF_FORMAT_PID || LINT_FAIL=1
 
-          # Report failures
+          # Collect frontend result
+          FRONTEND_EXIT=0
+          wait $FRONTEND_PID || FRONTEND_EXIT=1
+
+          # Report failures (each gate appends its own description line)
+          FAIL=0
           if [ $LINT_FAIL -ne 0 ]; then
             echo "Backend lint failed" >> /tmp/failure_description.txt
+            FAIL=1
           fi
           if [ $TEST_EXIT -ne 0 ]; then
             echo "Backend unit tests failed" >> /tmp/failure_description.txt
+            FAIL=1
           fi
-          if [ $LINT_FAIL -ne 0 ] || [ $TEST_EXIT -ne 0 ]; then
+          if [ $FRONTEND_EXIT -ne 0 ]; then
+            echo "Frontend checks failed" >> /tmp/failure_description.txt
+            FAIL=1
+          fi
+          if [ $FAIL -ne 0 ]; then
             exit 1
           fi
-
-      - name: Frontend checks
-        if: steps.merge.outputs.merged_count != '0'
-        working-directory: frontend
-        run: |
-          pnpm install --frozen-lockfile --ignore-scripts
-          pnpm run lint --quiet
-          pnpm run type-check
-          pnpm run test:unit
-          pnpm run build
-
-      - name: Capture frontend failures
-        if: failure() && steps.merge.outputs.merged_count != '0'
-        shell: bash
-        run: |
-          echo "Frontend checks failed" >> /tmp/failure_description.txt
 
       # Skips the merge (job stays GREEN) instead of failing: a failure here
       # would trip this job's failure() plumbing - false "frontend failed"
@@ -908,6 +985,24 @@ jobs:
             REVIEW_DECISION=$(gh pr view "$NUM" --json reviewDecision --jq '.reviewDecision' 2>/dev/null || echo "unknown")
             if [ "$REVIEW_DECISION" != "APPROVED" ]; then
               echo "  PR #$NUM reviewDecision is '$REVIEW_DECISION' -- skipping merge (stays open for next queue cycle)"
+              continue
+            fi
+
+            # Same-repo author gate re-verify (FAR-264, defense in depth): the
+            # collect step already gated this, but the PR's head repository /
+            # author state can change between collection and merge, so re-check
+            # immediately before merging - fail closed, like the reviewDecision
+            # re-verify above. An external verdict skips WITHOUT joining FAILED
+            # (the PR was never meant to auto-merge; a human path owns it).
+            AUTHOR_FILE=$(mktemp)
+            if gh api "repos/${{ github.repository }}/pulls/$NUM" > "$AUTHOR_FILE" 2>/dev/null; then
+              AUTHOR_OUT=$(python3 .github/scripts/same-repo-author-guard.py "$AUTHOR_FILE" "${{ github.repository }}" 2>/dev/null) || true
+            else
+              AUTHOR_OUT=""
+            fi
+            rm -f "$AUTHOR_FILE"
+            if [ "${AUTHOR_OUT%%|*}" != "ok" ]; then
+              echo "  PR #$NUM same-repo author gate: ${AUTHOR_OUT#*|} -- skipping merge (fail closed)"
               continue
             fi
 

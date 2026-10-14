@@ -206,6 +206,91 @@ class TestValidatorMatrix:
         result = validate_guardrail_request(eval_type="regex", config_json={"action": "explode"})
         assert result is None
 
+    def test_destroy_redaction_without_pepper_rejected(self) -> None:
+        # FAR-209 Track B: a destroy rule with no deployment pepper fails closed
+        # at authoring, mirroring ``_validate_config_item`` (config-as-code).
+        with (
+            patch(
+                "modulo.core.guardrails.redaction_mode.resolve_guardrail_destroy_pepper",
+                return_value="",
+            ),
+            pytest.raises(HTTPException) as excinfo,
+        ):
+            validate_guardrail_request(
+                eval_type="guardrail",
+                config_json={
+                    "action": "redact",
+                    "type": "regex",
+                    "redaction": [{"path": "body", "mode": "destroy"}],
+                },
+            )
+        assert excinfo.value.status_code == 422
+
+    def test_valid_detection_envelope_with_destroy_rejected(self) -> None:
+        # A VALID nested detection envelope falls through the envelope check;
+        # the new destroy check still rejects (unset pepper). This also keeps
+        # the envelope fall-through arc (which now lands on the new block) hit.
+        with (
+            patch(
+                "modulo.core.guardrails.redaction_mode.resolve_guardrail_destroy_pepper",
+                return_value="",
+            ),
+            pytest.raises(HTTPException) as excinfo,
+        ):
+            validate_guardrail_request(
+                eval_type="guardrail",
+                config_json={
+                    "action": "redact",
+                    "detection": {"type": "regex"},
+                    "redaction": [{"path": "body", "mode": "destroy"}],
+                },
+            )
+        assert excinfo.value.status_code == 422
+
+    def test_destroy_redaction_with_pepper_passes(self) -> None:
+        # The SAME config is accepted once the pepper is configured.
+        with patch(
+            "modulo.core.guardrails.redaction_mode.resolve_guardrail_destroy_pepper",
+            return_value="pepper",
+        ):
+            result = validate_guardrail_request(
+                eval_type="guardrail",
+                config_json={
+                    "action": "redact",
+                    "type": "regex",
+                    "redaction": [{"path": "body", "mode": "destroy"}],
+                },
+            )
+        assert result is None
+
+    def test_non_destroy_redaction_passes_without_pepper(self) -> None:
+        # A masks-only rule needs no pepper.
+        result = validate_guardrail_request(
+            eval_type="guardrail",
+            config_json={
+                "action": "redact",
+                "type": "regex",
+                "redaction": [{"path": "body", "mode": "transform"}],
+            },
+        )
+        assert result is None
+
+    def test_non_list_redaction_is_not_inspected(self) -> None:
+        # A malformed (non-list) redaction shape is left to shape-level checks.
+        result = validate_guardrail_request(
+            eval_type="guardrail",
+            config_json={"action": "redact", "type": "regex", "redaction": "destroy"},
+        )
+        assert result is None
+
+    def test_non_dict_redaction_rule_is_ignored(self) -> None:
+        # A non-dict rule cannot express a destroy mode — no false rejection.
+        result = validate_guardrail_request(
+            eval_type="guardrail",
+            config_json={"action": "redact", "type": "regex", "redaction": ["destroy"]},
+        )
+        assert result is None
+
 
 class TestSuiteScopedCreate:
     """Criterion 9   suite-scoped non-guardrail writes persist Eval WITHOUT a gate."""
@@ -440,7 +525,6 @@ class TestGuardrailConfigSoftDeletes:
         account_id = uuid.uuid4()
 
         await _apply_guardrail_deletes(
-            MagicMock(),
             {
                 "no-longer-proposed": org_level,
                 "also-absent": node_bound,

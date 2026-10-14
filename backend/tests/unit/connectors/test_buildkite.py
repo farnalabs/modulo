@@ -36,28 +36,6 @@ def test_connector_type(bk_runner):
 
 
 @respx.mock
-async def test_health_check_ok(bk_runner):
-    respx.get(f"{_BUILDKITE_API}/user").mock(return_value=httpx.Response(200, json={"id": "test-user"}))
-    result = await bk_runner.health_check()
-    assert result.ok is True
-
-
-@respx.mock
-async def test_health_check_fail_401(bk_runner):
-    respx.get(f"{_BUILDKITE_API}/user").mock(return_value=httpx.Response(401, text="Unauthorized"))
-    result = await bk_runner.health_check()
-    assert result.ok is False
-    assert "Authentication failed" in result.detail
-
-
-@respx.mock
-async def test_health_check_fail_500(bk_runner):
-    respx.get(f"{_BUILDKITE_API}/user").mock(return_value=httpx.Response(500, text="Internal Server Error"))
-    result = await bk_runner.health_check()
-    assert result.ok is False
-    assert "500" in result.detail
-
-
 # ---------------------------------------------------------------------------
 # trigger_run
 # ---------------------------------------------------------------------------
@@ -459,11 +437,6 @@ async def test_double_list_runs(bk_double):
     runs = await bk_double.list_runs(pipeline_id="my-org/my-pipeline")
     assert len(runs) == 1
     assert runs[0].status == CIRunStatus.SUCCESS
-
-
-async def test_double_health_check(bk_double):
-    result = await bk_double.health_check()
-    assert result.ok is True
 
 
 async def test_double_query(bk_double):

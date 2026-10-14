@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Literal
 
+from fastapi import HTTPException, status
 from sqlalchemy import ColumnElement, Connection, delete, func, select, text, update
 from sqlalchemy.exc import InvalidRequestError, ProgrammingError
 from sqlalchemy.ext.asyncio import (
@@ -25,6 +26,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import NullPool
 
 from modulo.core.audit_logger import append_audit_event
+from modulo.db.crud._gate_advisory_lock import with_gate_advisory_lock
 from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.crud.hitl_review_guard import (
     HitlReviewWeakeningDenied,
@@ -38,9 +40,11 @@ from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.crud.pipeline_owner import ACCOUNTABILITY_OWNER_FIELDS, validate_accountability_owner
 from modulo.db.crud.run import count_active_runs_for_pipeline, get_dialect_name
 from modulo.db.crud.team_scope import team_scope_clause
+from modulo.db.models.eval import Eval
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from modulo.db.models.policy_gate import PolicyGate
 from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.soft_delete import include_soft_deleted
@@ -482,6 +486,148 @@ async def list_pipelines(
     return PageResult(items=items, total=total, page=page, page_size=page_size)
 
 
+def _validate_circuit_breaker_change(
+    pipeline: Pipeline,
+    updates: dict[str, Any],
+) -> tuple[dict[str, Any], Decimal | None, bool]:
+    """Validate/quantize a ``circuit_breaker_threshold`` update (FAR-1182).
+
+    Returns ``(updates, previous_threshold, threshold_changing)``. When the key
+    is absent the update dict is returned unchanged and the flag is ``False``;
+    otherwise the threshold is normalized (raising ``ValueError`` on an invalid
+    value BEFORE any row mutation) and the row's current value is captured as
+    ``previous_threshold`` for the post-apply audit. ``None`` disables the
+    breaker.
+    """
+    if "circuit_breaker_threshold" not in updates:
+        return updates, None, False
+    return (
+        {
+            **updates,
+            "circuit_breaker_threshold": normalize_circuit_breaker_threshold(updates["circuit_breaker_threshold"]),
+        },
+        pipeline.circuit_breaker_threshold,
+        True,
+    )
+
+
+def _owner_candidate(
+    pipeline: Pipeline,
+    field: str,
+    owner_updates: dict[str, uuid.UUID | None],
+) -> uuid.UUID | None:
+    """Resolve the owner value to validate for ``field``.
+
+    A payload-carried owner is an unconditional pass-through; a stored owner is
+    re-checked only because the scope changed. Real rows are ``UUID | None`` by
+    column type; partial test stand-ins (``SimpleNamespace``) may expose
+    non-column attribute children — treat those as "unassigned" rather than
+    feed a non-UUID into the query.
+    """
+    if field in owner_updates:
+        return owner_updates[field]
+    stored = getattr(pipeline, field, None)
+    return stored if isinstance(stored, uuid.UUID | None) else None
+
+
+async def _reassign_pipeline_owners(
+    session: AsyncSession,
+    pipeline: Pipeline,
+    updates: dict[str, Any],
+    *,
+    org_id: uuid.UUID | None = None,
+) -> tuple[dict[str, uuid.UUID | None], dict[str, uuid.UUID | None]]:
+    """FAR-1161 pre-apply owner validation. Returns ``(owner_updates, previous_owners)``.
+
+    Fail-closed owner eligibility is checked against the EFFECTIVE
+    (post-update) visibility/owner-team — a PATCH may change all three in one
+    payload, and the invariant must hold on the resulting pipeline, not the
+    stale one.
+
+    Scope-change re-validation: when the update contains ``visibility`` or
+    ``owner_team_id`` — the same presence test the route's team-transition gate
+    uses — the STORED owners are re-validated too, not just the ones the
+    payload carries. A team move or visibility flip can strand an already-stored
+    owner outside the new scope even when the owner keys are omitted; that
+    combination fails CLOSED with the same 422 the owner-assignment path raises
+    (naming the offending field), never a silent auto-clear. All validation
+    runs BEFORE ``apply_updates`` so an out-of-scope owner never mutates the row
+    (the 422 rolls the transaction back regardless; this keeps the in-memory
+    object clean for any later code in the same transaction).
+    """
+    owner_updates = {f: updates[f] for f in ACCOUNTABILITY_OWNER_FIELDS if f in updates}
+    scope_changed = "visibility" in updates or "owner_team_id" in updates
+    fields_to_validate = set(owner_updates)
+    if scope_changed:
+        fields_to_validate.update(ACCOUNTABILITY_OWNER_FIELDS)
+    previous_owners: dict[str, uuid.UUID | None] = {f: getattr(pipeline, f) for f in owner_updates}
+    # Guard the whole block: an update that touches neither owners nor scope
+    # must not read scope attributes off partial stand-in rows at all.
+    if not fields_to_validate:
+        return owner_updates, previous_owners
+    # getattr defaults: real rows always carry both columns; partial test
+    # stand-ins (SimpleNamespace) may not, and a scope-less default only
+    # reaches the team gate when a real owner is being validated. Non-str
+    # scope (absent stand-in attribute, explicit null) behaves as org scope in
+    # the gate below — the same as `visibility != "team"`.
+    raw_visibility = updates.get("visibility", getattr(pipeline, "visibility", None))
+    effective_visibility = raw_visibility if isinstance(raw_visibility, str) else "org"
+    # .get is correct here: an explicit owner_team_id=None (clear) is in
+    # the dict, so .get returns None rather than the pipeline default.
+    effective_owner_team = updates.get("owner_team_id", getattr(pipeline, "owner_team_id", None))
+    for field in sorted(fields_to_validate):
+        await validate_accountability_owner(
+            session,
+            owner_account_id=_owner_candidate(pipeline, field, owner_updates),
+            field=field,
+            org_id=org_id if org_id is not None else pipeline.organisation_id,
+            visibility=effective_visibility,
+            owner_team_id=effective_owner_team,
+        )
+    return owner_updates, previous_owners
+
+
+async def _enforce_team_ownership_move(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+    *,
+    old_team_id: uuid.UUID | None,
+    new_team_id: uuid.UUID | None,
+    org_id: uuid.UUID | None,
+    account_id: uuid.UUID | None,
+    request_id: str | None,
+) -> None:
+    """PRD §9.3 team-transfer guard: block while the pipeline has non-terminal runs.
+
+    Fires only when audit context is supplied (the REST route path) AND
+    ``owner_team_id`` actually changed. The transfer is blocked
+    (``PipelineHasActiveRunsError``) while any non-terminal run exists, and a
+    ``resource_team_ownership_changed`` audit event is recorded otherwise.
+    Callers that pass no audit context (internal tooling, MCP) are unaffected.
+    """
+    if org_id is None or account_id is None or new_team_id == old_team_id:
+        return
+    active_runs = await count_active_runs_for_pipeline(session, pipeline_id, include_pending=True)
+    if active_runs:
+        raise PipelineHasActiveRunsError(active_runs)
+    await append_audit_event(
+        session,
+        org_id=org_id,
+        event_type="resource_team_ownership_changed",
+        actor_user_id=account_id,
+        resource_type="pipeline",
+        resource_id=pipeline_id,
+        payload_json={
+            "resource_type": "pipeline",
+            "resource_id": str(pipeline_id),
+            "old_team_id": str(old_team_id) if old_team_id is not None else None,
+            "new_team_id": str(new_team_id) if new_team_id is not None else None,
+            "changed_by": str(account_id),
+        },
+        request_id=request_id,
+    )
+
+
 async def update_pipeline(
     session: AsyncSession,
     pipeline_id: uuid.UUID,
@@ -509,67 +655,8 @@ async def update_pipeline(
         return None
     if updates.get("max_concurrent_runs") is not None:
         validate_max_concurrent_runs(updates["max_concurrent_runs"])
-    threshold_changing = "circuit_breaker_threshold" in updates
-    previous_threshold: Decimal | None = None
-    if threshold_changing:
-        previous_threshold = pipeline.circuit_breaker_threshold
-        updates = {
-            **updates,
-            "circuit_breaker_threshold": normalize_circuit_breaker_threshold(updates["circuit_breaker_threshold"]),
-        }
-    # FAR-1161: fail-closed owner eligibility against the EFFECTIVE (post-update)
-    # visibility/owner-team — a PATCH may change all three in one payload, and
-    # the invariant must hold on the resulting pipeline, not the stale one.
-    #
-    # Scope-change re-validation (review finding): when the update contains
-    # ``visibility`` or ``owner_team_id`` — the same presence test the route's
-    # team-transition gate uses — the STORED owners are re-validated too, not
-    # just the ones the payload carries. A team move or visibility flip can
-    # strand an already-stored owner outside the new scope even when the owner
-    # keys are omitted; that combination fails CLOSED with the same 422 the
-    # owner-assignment path raises (naming the offending field), never a
-    # silent auto-clear. All validation runs BEFORE apply_updates so an
-    # out-of-scope owner never mutates the row (the 422 rolls the transaction
-    # back regardless; this keeps the in-memory object clean for any later
-    # code in the same transaction).
-    owner_updates = {f: updates[f] for f in ACCOUNTABILITY_OWNER_FIELDS if f in updates}
-    scope_changed = "visibility" in updates or "owner_team_id" in updates
-    fields_to_validate = set(owner_updates)
-    if scope_changed:
-        fields_to_validate.update(ACCOUNTABILITY_OWNER_FIELDS)
-    # Guard the whole block: an update that touches neither owners nor scope
-    # must not read scope attributes off partial stand-in rows at all.
-    if fields_to_validate:
-        # getattr defaults: real rows always carry both columns; partial
-        # test stand-ins (SimpleNamespace) may not, and a scope-less default
-        # only reaches the team gate when a real owner is being validated.
-        # Non-str scope (absent stand-in attribute, explicit null) behaves as
-        # org scope in the gate below — the same as `visibility != "team"`.
-        _raw_visibility = updates.get("visibility", getattr(pipeline, "visibility", None))
-        effective_visibility = _raw_visibility if isinstance(_raw_visibility, str) else "org"
-        # .get is correct here: an explicit owner_team_id=None (clear) is in
-        # the dict, so .get returns None rather than the pipeline default.
-        effective_owner_team = updates.get("owner_team_id", getattr(pipeline, "owner_team_id", None))
-        for _field in sorted(fields_to_validate):
-            if _field in owner_updates:
-                # Payload-carried owner: same unconditional pass-through as before.
-                _candidate = owner_updates[_field]
-            else:
-                # Stored owner re-checked because the scope changed. Real rows
-                # are UUID | None by column type; partial test stand-ins
-                # expose non-column attribute children — treat those as
-                # "unassigned" rather than feed a non-UUID into the query.
-                _stored = getattr(pipeline, _field, None)
-                _candidate = _stored if isinstance(_stored, uuid.UUID | None) else None
-            await validate_accountability_owner(
-                session,
-                owner_account_id=_candidate,
-                field=_field,
-                org_id=org_id if org_id is not None else pipeline.organisation_id,
-                visibility=effective_visibility,
-                owner_team_id=effective_owner_team,
-            )
-    previous_owners: dict[str, uuid.UUID | None] = {f: getattr(pipeline, f) for f in owner_updates}
+    updates, previous_threshold, threshold_changing = _validate_circuit_breaker_change(pipeline, updates)
+    owner_updates, previous_owners = await _reassign_pipeline_owners(session, pipeline, updates, org_id=org_id)
     old_team_id = pipeline.owner_team_id
     apply_updates(pipeline, updates)
     if threshold_changing:
@@ -594,27 +681,15 @@ async def update_pipeline(
             new=owner_updates[_field],
             request_id=request_id,
         )
-    new_team_id = pipeline.owner_team_id
-    if org_id is not None and account_id is not None and new_team_id != old_team_id:
-        active_runs = await count_active_runs_for_pipeline(session, pipeline_id, include_pending=True)
-        if active_runs:
-            raise PipelineHasActiveRunsError(active_runs)
-        await append_audit_event(
-            session,
-            org_id=org_id,
-            event_type="resource_team_ownership_changed",
-            actor_user_id=account_id,
-            resource_type="pipeline",
-            resource_id=pipeline_id,
-            payload_json={
-                "resource_type": "pipeline",
-                "resource_id": str(pipeline_id),
-                "old_team_id": str(old_team_id) if old_team_id is not None else None,
-                "new_team_id": str(new_team_id) if new_team_id is not None else None,
-                "changed_by": str(account_id),
-            },
-            request_id=request_id,
-        )
+    await _enforce_team_ownership_move(
+        session,
+        pipeline_id,
+        old_team_id=old_team_id,
+        new_team_id=pipeline.owner_team_id,
+        org_id=org_id,
+        account_id=account_id,
+        request_id=request_id,
+    )
     await session.flush()
     return pipeline
 
@@ -911,6 +986,18 @@ async def _clone_pipeline_config(
         _sanitise_log_value(pipeline_id),
         _sanitise_log_value(name),
     )
+    # FAR-1666: a clone cannot carry the source's declared policy gates. Evals
+    # are not cloned and a gate row is eval-keyed with a hard cross-pipeline
+    # binding check, so a copied declaration could never converge (reconcile
+    # would 422). Strip the blocks through the shared helper and disclose what
+    # was dropped — never a silent drop.
+    cloned_nodes, dropped_policy_gates = strip_declared_policy_gates(snapshot.graph_nodes_json)
+    if dropped_policy_gates:
+        _log.warning(
+            "policy_gate declaration(s) dropped on clone of pipeline %s (evals/gates are not cloned): %s",
+            _sanitise_log_value(pipeline_id),
+            "; ".join(dropped_policy_gates),
+        )
     cloned = Pipeline(
         organisation_id=org_id,
         name=name,
@@ -927,7 +1014,7 @@ async def _clone_pipeline_config(
         # snapshot predating the guard may contain schema-less manual nodes, so
         # this duplicate path tolerates them (FAR-874) rather than running
         # enforce_manual_node_output_schemas; new graphs are guarded on write.
-        graph_nodes_json=copy.deepcopy(snapshot.graph_nodes_json),
+        graph_nodes_json=copy.deepcopy(cloned_nodes),
         default_autonomy_level=snapshot.default_autonomy_level,
         max_autonomy_level=snapshot.max_autonomy_level,
         stale_run_timeout_minutes=snapshot.stale_run_timeout_minutes,
@@ -986,6 +1073,30 @@ async def _clone_edges(
     return len(edges)
 
 
+def _warn_policy_gate_pins_dropped(
+    source_pins: list[dict[str, Any]] | None,
+    *,
+    pipeline_id: uuid.UUID,
+    snapshot_version: int,
+) -> None:
+    """Disclose a clone's dropped policy-gate pin pair, loudly (FAR-1698).
+
+    A clone cannot carry the source's policy-gate pins: the clone has no gate
+    rows (evals and gates are never cloned), so the pins would reference the
+    source's gates and declare a pinned universe that suppresses the clone's
+    own gates. Never a silent drop — mirrors the FAR-1666 declared-gate strip
+    warning. No-op when the source carried no pins.
+    """
+    if not source_pins:
+        return
+    _log.warning(
+        "policy_gate pin(s) dropped on clone of pipeline %s (evals/gates are not cloned): %d pin(s) on snapshot v%s",
+        _sanitise_log_value(pipeline_id),
+        len(source_pins),
+        snapshot_version,
+    )
+
+
 async def _clone_snapshots(
     session: AsyncSession,
     snapshots: list[dict[str, Any]],
@@ -997,32 +1108,73 @@ async def _clone_snapshots(
     """Copy the source's snapshots (and their schema pins) onto the clone.
 
     Returns the number of snapshots copied. The JSON blobs are deep-copied so
-    the cloned snapshots are fully independent of the source.
+    the cloned snapshots are fully independent of the source. A declared
+    ``policy_gate`` block in a snapshot's graph is stripped with a recorded
+    warning (FAR-1666), and the policy-gate pin pair is STRIPPED (NULL) — a
+    clone has no gate rows to pin (FAR-1698). See the inline comments below.
     """
     _log.info("Copying snapshots for pipeline %s -> %s", source_id, cloned_id)
     snap_count = 0
     for snap in snapshots:
+        # FAR-1666: a cloned snapshot must not carry a declared ``policy_gate``
+        # block either. Evals (and their gate rows) are not cloned, and a gate
+        # row is eval-keyed with a hard cross-pipeline binding check — rolling
+        # the clone back to this snapshot would replay the block through
+        # ``reconcile_graph_policy_gates`` and 422 on the foreign binding.
+        # Strip through the SAME shared helper the clone-config path uses, and
+        # disclose what was dropped — never a silent drop.
+        graph_json = copy.deepcopy(snap["graph_json"])
+        dropped_policy_gates: list[str] = []
+        if isinstance(graph_json, dict):
+            cloned_nodes, dropped_policy_gates = strip_declared_policy_gates(graph_json.get("nodes", []))
+            graph_json["nodes"] = cloned_nodes
+        if dropped_policy_gates:
+            _log.warning(
+                "policy_gate declaration(s) dropped on clone of snapshot %s of pipeline %s "
+                "(evals/gates are not cloned): %s",
+                _sanitise_log_value(str(snap["snapshot_version"])),
+                _sanitise_log_value(str(source_id)),
+                "; ".join(dropped_policy_gates),
+            )
+        # FAR-1698 — policy-gate pins are the exception to the FAR-967 F10
+        # carry rule. A clone has NO gate rows (evals and gates are never
+        # cloned; declared gate blocks are stripped per FAR-1666), and
+        # ``_build_policy_gate_pins`` stores only the SOURCE's
+        # ``policy_gate_id`` / ``eval_id`` / ``action`` / ``node_id``. Carrying
+        # them would pin foreign gates AND — worse — declare a "pinned
+        # universe" in ``_build_eval_defs_by_node``, under which the clone's
+        # OWN gates are unpinned and every clone gate block is silently
+        # downgraded to warn. Strip the pair to NULL so the clone falls back to
+        # its own live gates; disclose the drop, never silently.
+        _warn_policy_gate_pins_dropped(
+            snap.get("policy_gate_pins_json"),
+            pipeline_id=source_id,
+            snapshot_version=snap["snapshot_version"],
+        )
         cloned_snap = PipelineSnapshot(
             organisation_id=org_id,
             pipeline_id=cloned_id,
             snapshot_version=snap["snapshot_version"],
             account_id=snap["account_id"],
             environment_profile_id=snap["environment_profile_id"],
-            graph_json=copy.deepcopy(snap["graph_json"]),
+            graph_json=graph_json,
             connector_bindings_json=copy.deepcopy(snap["connector_bindings_json"]),
             schema_pins_json=copy.deepcopy(snap["schema_pins_json"]),
             prompt_pins_json=copy.deepcopy(snap["prompt_pins_json"]),
             model_backend_pins_json=copy.deepcopy(snap["model_backend_pins_json"]),
             composite_bindings_json=copy.deepcopy(snap["composite_bindings_json"]),
             parameter_bindings_json=copy.deepcopy(snap["parameter_bindings_json"]),
-            # Pin pairs the clone must carry verbatim (FAR-967 F10): a
-            # cloned snapshot with NULL pin columns would silently run the
-            # clone's runs UNPINNED (falling back to live gates/guardrails),
-            # dropping the snapshot-integrity guarantee the source had.
+            # Guardrail pins are carried through clone verbatim (FAR-967 F10):
+            # a cloned snapshot with NULL guardrail pin columns would silently
+            # run the clone's runs UNPINNED (falling back to live guardrails),
+            # dropping the snapshot-integrity guarantee the source had. They
+            # are self-contained serialised definitions — rebuilt from the pin
+            # alone by ``to_engine_definition_from_pin`` — so the clone needs
+            # nothing from the source to evaluate them.
             guardrail_pins_json=copy.deepcopy(snap.get("guardrail_pins_json")),
             guardrail_pins_fingerprint=snap.get("guardrail_pins_fingerprint"),
-            policy_gate_pins_json=copy.deepcopy(snap.get("policy_gate_pins_json")),
-            policy_gate_pins_fingerprint=snap.get("policy_gate_pins_fingerprint"),
+            policy_gate_pins_json=None,
+            policy_gate_pins_fingerprint=None,
             tag=snap["tag"],
             notes=snap["notes"],
             default_autonomy_level=snap["default_autonomy_level"],
@@ -1076,6 +1228,15 @@ def _snapshot_pin_to_dict(p: SnapshotSchemaPin) -> dict[str, Any]:
 def _snapshot_to_dict(snap: PipelineSnapshot, pins: list[dict[str, Any]]) -> dict[str, Any]:
     """Flatten a ``PipelineSnapshot`` row into plain data, deep-copying its JSON
     blobs so the clone never shares references with the source."""
+    # FAR-1698: strip the policy-gate pin pair at the read flatten too, not only
+    # at the clone writer — the intermediate dict must never carry the source's
+    # gates. Disclose the drop here (this is where the source value is still
+    # visible); ``_clone_snapshots`` re-strips defensively.
+    _warn_policy_gate_pins_dropped(
+        snap.policy_gate_pins_json,
+        pipeline_id=snap.pipeline_id,
+        snapshot_version=snap.snapshot_version,
+    )
     return {
         "snapshot_version": snap.snapshot_version,
         "account_id": snap.account_id,
@@ -1087,11 +1248,15 @@ def _snapshot_to_dict(snap: PipelineSnapshot, pins: list[dict[str, Any]]) -> dic
         "model_backend_pins_json": copy.deepcopy(snap.model_backend_pins_json),
         "composite_bindings_json": copy.deepcopy(snap.composite_bindings_json),
         "parameter_bindings_json": copy.deepcopy(snap.parameter_bindings_json),
-        # Pin pairs carried through clone (FAR-967 F10) — see _clone_snapshots.
+        # Guardrail pins are carried through clone verbatim (FAR-967 F10) — see
+        # _clone_snapshots — they are self-contained serialised definitions.
+        # FAR-1698: policy-gate pins are NULLed here AND in _clone_snapshots —
+        # a clone has no gate rows, so the source's pins could only pin foreign
+        # gates and suppress the clone's own.
         "guardrail_pins_json": copy.deepcopy(snap.guardrail_pins_json),
         "guardrail_pins_fingerprint": snap.guardrail_pins_fingerprint,
-        "policy_gate_pins_json": copy.deepcopy(snap.policy_gate_pins_json),
-        "policy_gate_pins_fingerprint": snap.policy_gate_pins_fingerprint,
+        "policy_gate_pins_json": None,
+        "policy_gate_pins_fingerprint": None,
         "tag": snap.tag,
         "notes": snap.notes,
         "default_autonomy_level": snap.default_autonomy_level,
@@ -1404,6 +1569,442 @@ def graph_update_audit_payload(
     }
 
 
+# ---------------------------------------------------------------------------
+# FAR-1109: translate node-attached ``policy_gate`` blocks into PolicyGate rows
+# ---------------------------------------------------------------------------
+#
+# The runtime engine resolves gating ONLY from ``policy_gates`` rows joined to
+# evals (``PipelineExecutor._load_eval_defs_for_pipeline``). A ``policy_gate``
+# block carried in ``graph_nodes_json`` therefore governs nothing on its own:
+# the graph write must translate each declared block into the corresponding row
+# lifecycle (create / update / soft-delete).
+#
+# The translation lives HERE, in the shared graph-REPLACE transaction, rather
+# than in any one caller. Every surface that REPLACES an existing graph — the
+# REST graph endpoints, the MCP ``update_pipeline_graph`` tool, the PATCH
+# ``graph_json`` path, node conversions, snapshot rollback, onboarding and the
+# demo seed's edge convergence — funnels through ``replace_pipeline_graph``, so
+# a gate declared through MCP is translated exactly like one declared through
+# REST, and a removal soft-deletes its row on both surfaces.
+#
+# A few writers persist ``graph_nodes_json`` DIRECTLY on a pipeline they are
+# CREATING rather than replacing (the demo seed's initial row) and so do NOT run
+# this translation. That surface calls ``reject_declared_policy_gates`` instead:
+# a graph that declares a ``policy_gate`` block fails loudly rather than being
+# stored with no governing row (silent, plan-hash-invisible non-enforcement).
+#
+# FAR-1666: the writers that can legitimately carry a declaration they cannot
+# materialise — workflow import, library/template install and clone — do NOT
+# reject; a bundle/template/clone may contain a gate the destination cannot
+# reference (evals/gates are not copied), so they STRIP the declared blocks
+# through ``strip_declared_policy_gates`` and record what was dropped. Snapshot
+# rollback, which is a graph write, translates through
+# ``reconcile_graph_policy_gates`` directly.
+#
+# The per-eval advisory lock is SHARED with the FAR-1106 authoring routes:
+# both the declarative translation here and the in-product
+# ``/evals/{eval_id}/policy-gate`` writers reach
+# ``modulo.db.crud._gate_advisory_lock.with_gate_advisory_lock`` — the SAME
+# ``policy_gate:<eval_id>`` key through ``hashtext``. The helper lives in a
+# neutral ``db``-side module (FAR-1688) because the
+# ``db-does-not-import-core`` import-linter contract forbids
+# ``modulo.db`` -> ``modulo.api``, so neither layer may own the other's copy;
+# a duplicate on either side would let an edit silently desynchronise the key.
+
+_POLICY_GATE_ACTIONS = ("warn", "block")
+
+
+def _iter_declared_policy_gates(nodes: list[dict[str, Any]]) -> list[tuple[str, str, str]]:
+    """Yield ``(eval_id, node_id, action)`` for every node carrying a gate block.
+
+    A malformed / absent block simply declares no gate on that node and is
+    skipped here (the graph model has already validated any block that reached
+    the write path).
+    """
+    declared: list[tuple[str, str, str]] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        gate = node.get("policy_gate")
+        node_id = node.get("id")
+        if not isinstance(gate, dict) or node_id is None:
+            continue
+        eval_id = gate.get("eval_id")
+        if eval_id is None:
+            continue
+        declared.append((str(eval_id), str(node_id), str(gate.get("action"))))
+    return declared
+
+
+def _declared_policy_gates(nodes: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+    """Map ``eval_id`` -> ``{"node_id", "action"}`` for a graph's declared gates."""
+    return {
+        eval_id: {"node_id": node_id, "action": action}
+        for eval_id, node_id, action in _iter_declared_policy_gates(nodes)
+    }
+
+
+def _reject_duplicate_policy_gates(nodes: list[dict[str, Any]]) -> None:
+    """Reject two nodes declaring a gate on the same eval (FAR-1109).
+
+    ``policy_gates`` carries ``UNIQUE(eval_id) WHERE deleted_at IS NULL`` — one
+    LIVE gate per eval — so two declarations can never converge. Fail loudly
+    instead of silently keeping the last, which would leave permanent drift.
+    """
+    seen: dict[str, str] = {}
+    for eval_id, node_id, _action in _iter_declared_policy_gates(nodes):
+        if eval_id in seen:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"policy_gate eval_id {eval_id} is declared on more than one node "
+                    f"({seen[eval_id]} and {node_id}); an eval may carry at most one live gate"
+                ),
+            )
+        seen[eval_id] = node_id
+
+
+def reject_declared_policy_gates(nodes: list[dict[str, Any]], *, surface: str) -> None:
+    """Fail closed when a direct graph writer is handed a declared policy gate.
+
+    ``replace_pipeline_graph`` is the ONLY graph-write surface that translates a
+    node ``policy_gate`` block into its ``PolicyGate`` row. A writer that
+    persists ``graph_nodes_json`` DIRECTLY and does not run that translation (the
+    demo-seed row creation) would store a declared block with no governing row —
+    silent non-enforcement the run-time plan hash cannot see (both plan sides
+    hash the block equally, so the graph reads unchanged). That surface calls
+    this guard instead: a declared block fails loudly rather than being
+    persisted unenforced.
+
+    FAR-1666: writers that can legitimately carry a declaration they cannot
+    materialise (workflow import, library/template install, clone) do NOT use
+    this guard — they strip declared blocks through
+    ``strip_declared_policy_gates`` and record what was dropped.
+
+    ``surface`` names the caller for the error message.
+    """
+    declared = _declared_policy_gates(nodes)
+    if not declared:
+        return
+    eval_ids = ", ".join(sorted(declared))
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=(
+            f"{surface} cannot persist a declared policy_gate block (eval_id(s): {eval_ids}); "
+            "only the pipeline graph write (REST graph PATCH / MCP update_pipeline_graph) "
+            "translates a declared gate into a PolicyGate row. Author the gate through that "
+            "path instead of storing it directly in graph_nodes_json."
+        ),
+    )
+
+
+async def _load_gate_eval_for_node(
+    session: AsyncSession,
+    *,
+    eval_id: uuid.UUID,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    node_id: str,
+) -> Eval:
+    """Load the eval a declared gate binds to, validating the binding.
+
+    The gate is the eval's gate (the DB binds one gate per eval, one eval per
+    node), so the declared ``eval_id`` must resolve to a live, node-scoped eval
+    of THIS pipeline whose ``node_id`` is the node carrying the block. A
+    violation is a 422 — a missing eval, a cross-pipeline reference or a
+    non-node-scoped eval can never converge and must fail loudly, never persist
+    a gate that governs a different node/pipeline than the config declares.
+    """
+    row = (
+        await session.execute(
+            select(Eval).where(
+                Eval.id == eval_id,
+                Eval.organisation_id == org_id,
+                Eval.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"policy_gate references eval {eval_id} which does not exist in this organisation",
+        )
+    if str(row.pipeline_id) != str(pipeline_id):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"policy_gate references eval {eval_id} which belongs to a different pipeline",
+        )
+    if row.node_id is None or str(row.node_id) != str(node_id):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"policy_gate on node {node_id} references eval {eval_id} which is not bound to that node",
+        )
+    return row
+
+
+async def _audit_gate_translation(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID | None,
+    event_type: str,
+    gate: PolicyGate,
+    payload_json: dict[str, Any],
+) -> None:
+    """Best-effort gate audit event (parity with the authoring routes).
+
+    A failed audit never blocks the graph write — the same fail-open contract
+    the ``/evals/{eval_id}/policy-gate`` routes use.
+    """
+    try:
+        await append_audit_event(
+            session,
+            org_id=org_id,
+            event_type=event_type,
+            actor_user_id=account_id,
+            resource_type="policy_gate",
+            resource_id=gate.id,
+            payload_json=payload_json,
+        )
+    except Exception:
+        _log.exception(
+            "policy_gate.graph_translation_audit_failed",
+            extra={"org_id": str(org_id), "eval_id": str(gate.eval_id)},
+        )
+
+
+async def _ensure_declared_gate(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID | None,
+    eval_row: Eval,
+    action: str,
+) -> None:
+    """Create the gate row for a declared block, or update it in place.
+
+    Runs under the per-eval advisory lock. A live row with the same action is a
+    no-op (so a repeated ``modulo apply`` is idempotent — no id/version churn);
+    a live row with a different action is updated IN PLACE (version bump +
+    ``pre_version_raw`` snapshot, mirroring the authoring route); no live row is
+    created ENABLED with ``enabled_at`` stamped at creation — the same
+    fresh-create semantics as the authoring ``_create_or_replace_gate``, so the
+    ``ck_policy_gates_enabled_timestamps`` symmetric CHECK holds by
+    construction.
+    """
+    if action not in _POLICY_GATE_ACTIONS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"policy_gate action {action!r} must be one of {list(_POLICY_GATE_ACTIONS)}",
+        )
+    eval_id = eval_row.id
+
+    async def _do() -> None:
+        live = (
+            await session.execute(
+                select(PolicyGate).where(
+                    PolicyGate.eval_id == eval_id,
+                    PolicyGate.organisation_id == org_id,
+                    PolicyGate.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if live is None:
+            gate = PolicyGate(
+                organisation_id=org_id,
+                eval_id=eval_id,
+                node_id=eval_row.node_id,
+                action=action,
+                version=1,
+                enabled=True,
+                enabled_at=datetime.now(UTC),
+            )
+            session.add(gate)
+            await session.flush()
+            await _audit_gate_translation(
+                session,
+                org_id=org_id,
+                account_id=account_id,
+                event_type="policy_gate.created",
+                gate=gate,
+                payload_json={
+                    "eval_id": str(eval_id),
+                    "action": gate.action,
+                    "version": gate.version,
+                    "enabled": gate.enabled,
+                },
+            )
+            return
+        if live.action == action:
+            return
+        previous_action = live.action
+        live.pre_version_raw = {"action": previous_action}
+        live.version = (live.version or 1) + 1
+        live.action = action
+        await _audit_gate_translation(
+            session,
+            org_id=org_id,
+            account_id=account_id,
+            event_type="policy_gate.updated",
+            gate=live,
+            payload_json={
+                "eval_id": str(eval_id),
+                "action": live.action,
+                "version": live.version,
+                "pre_version_raw": {"action": previous_action},
+                "enabled": live.enabled,
+            },
+        )
+
+    await with_gate_advisory_lock(eval_id, session, _do)
+
+
+async def _soft_delete_declared_gate(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID | None,
+    eval_id: uuid.UUID,
+) -> None:
+    """Soft-delete the live gate a removed graph block leaves behind.
+
+    Never a hard delete (``PolicyGateDecision`` rows may restrict against the
+    gate). Runs under the per-eval advisory lock so it cannot race a concurrent
+    authoring create.
+    """
+
+    async def _do() -> None:
+        live = (
+            await session.execute(
+                select(PolicyGate).where(
+                    PolicyGate.eval_id == eval_id,
+                    PolicyGate.organisation_id == org_id,
+                    PolicyGate.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if live is None:
+            return
+        action = live.action
+        live.deleted_at = func.now()
+        live.deleted_by = account_id
+        await _audit_gate_translation(
+            session,
+            org_id=org_id,
+            account_id=account_id,
+            event_type="policy_gate.deleted",
+            gate=live,
+            payload_json={"eval_id": str(eval_id), "action": action},
+        )
+
+    await with_gate_advisory_lock(eval_id, session, _do)
+
+
+async def reconcile_graph_policy_gates(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID | None,
+    pipeline_id: uuid.UUID,
+    previous_nodes: list[dict[str, Any]],
+    new_nodes: list[dict[str, Any]],
+) -> None:
+    """Translate declared node ``policy_gate`` blocks into PolicyGate rows.
+
+    The declarative source of truth for a pipeline's gates is its graph's
+    ``policy_gate`` blocks: a block with no live row is created, a changed
+    block updates its row in place, and a block that disappeared from the graph
+    soft-deletes its row. Comparison is per eval across the PREVIOUS and NEW
+    graphs, so only evals the graph actually names are managed — a gate authored
+    through the evals API for an eval the graph never declared is left
+    untouched.
+
+    Runs in the caller's transaction (the graph write and its gate rows commit
+    or roll back together) and under FAR-1106's per-eval advisory lock, so the
+    declarative and in-product surfaces serialise.
+    """
+    _reject_duplicate_policy_gates(new_nodes)
+    previous = _declared_policy_gates(previous_nodes)
+    desired = _declared_policy_gates(new_nodes)
+    affected = sorted(set(desired) | set(previous))
+    if not affected:
+        return
+    try:
+        for eval_key in affected:
+            try:
+                eval_uuid = uuid.UUID(eval_key)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=f"policy_gate eval_id {eval_key!r} is not a valid UUID",
+                ) from None
+            want = desired.get(eval_key)
+            if want is not None:
+                eval_row = await _load_gate_eval_for_node(
+                    session,
+                    eval_id=eval_uuid,
+                    org_id=org_id,
+                    pipeline_id=pipeline_id,
+                    node_id=want["node_id"],
+                )
+                await _ensure_declared_gate(
+                    session,
+                    org_id=org_id,
+                    account_id=account_id,
+                    eval_row=eval_row,
+                    action=want["action"],
+                )
+            elif previous.get(eval_key) is not None:
+                await _soft_delete_declared_gate(
+                    session,
+                    org_id=org_id,
+                    account_id=account_id,
+                    eval_id=eval_uuid,
+                )
+    finally:
+        # ``with_gate_advisory_lock`` sets ``SET LOCAL statement_timeout = '5s'``
+        # for the CURRENT transaction, so it would otherwise bound every
+        # remaining statement in the caller's transaction (the graph_updated
+        # audit write, and post-write work on the route paths). Reset it to the
+        # session default once the gate ops are done.
+        await session.execute(text("RESET statement_timeout"))
+
+
+def strip_declared_policy_gates(
+    nodes: list[dict[str, Any]] | None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Remove every node-attached ``policy_gate`` block from a graph (FAR-1666).
+
+    Clone, workflow-import and template-install writers cannot carry the
+    source's ``PolicyGate`` rows: evals are not copied, and a gate row is
+    eval-keyed with a hard cross-pipeline binding check, so a copied
+    declaration would either fail reconciliation (422) or persist as an INERT
+    block that governs nothing (``PipelineExecutor`` resolves gating from
+    ``policy_gates`` rows only). Those writers therefore STRIP the declaration
+    through this ONE helper — so every strip site behaves identically — and
+    disclose exactly what was removed rather than leave silent drift.
+
+    Returns ``(stripped_nodes, dropped)`` where ``dropped`` holds one
+    ``"node <id> (eval <id>)"`` label per removed block, in graph order. The
+    caller's ``nodes`` are never mutated: a gate-bearing node is shallow-copied
+    without its ``policy_gate`` key; every other node passes through untouched.
+    """
+    stripped: list[dict[str, Any]] = []
+    dropped: list[str] = []
+    for node in nodes or []:
+        if not isinstance(node, dict) or "policy_gate" not in node:
+            stripped.append(node)
+            continue
+        cleaned = dict(node)
+        gate = cleaned.pop("policy_gate", None)
+        stripped.append(cleaned)
+        eval_id = gate.get("eval_id") if isinstance(gate, dict) else None
+        node_label = _sanitise_log_value(str(node.get("id")))
+        eval_label = _sanitise_log_value(str(eval_id))
+        dropped.append(f"node {node_label} (eval {eval_label})")
+    return stripped, dropped
+
+
 async def replace_pipeline_graph(
     session: AsyncSession,
     *,
@@ -1565,6 +2166,26 @@ async def replace_pipeline_graph(
     session.add_all(persisted_edges)
     await session.flush()
 
+    # FAR-1109: translate the new graph's declared ``policy_gate`` blocks into
+    # the PolicyGate row lifecycle IN THE SAME TRANSACTION. Every surface that
+    # REPLACES a graph (REST, MCP, node conversion, onboarding, demo-seed edge
+    # convergence) funnels through here, so a declarative gate can never be
+    # stored in ``graph_nodes_json`` without a governing row and a removal can
+    # never leave a live row behind. FAR-1666: snapshot rollback is a graph
+    # write too — it calls ``reconcile_graph_policy_gates`` directly — while the
+    # writers that persist a CREATED pipeline's graph directly (workflow import,
+    # library/template install, clone) strip declared blocks rather than
+    # translating them; the demo-seed row creation still rejects via
+    # ``reject_declared_policy_gates``.
+    await reconcile_graph_policy_gates(
+        session,
+        org_id=org_id,
+        account_id=account_id,
+        pipeline_id=pipeline_id,
+        previous_nodes=previous_nodes,
+        new_nodes=nodes,
+    )
+
     # FAR-1471: every successful graph replacement is attributable. Written
     # AFTER the graph rows flush but in the SAME transaction (mirroring the
     # other append_audit_event call sites in this file), so the event and the
@@ -1588,3 +2209,30 @@ async def replace_pipeline_graph(
         ),
     )
     return list(pipeline.graph_nodes_json), persisted_edges
+
+
+async def set_earned_autonomy_level(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    level: str | None,
+) -> Pipeline | None:
+    """Set (or clear) a pipeline's runtime ``earned_autonomy_level`` (FAR-1175).
+
+    Called by the manual promote/demote API + MCP surfaces. ``level`` must be a
+    canonical :class:`~modulo.core.run_context.autonomy.AutonomyLevel` value (or
+    ``None`` to clear) — the caller validates/clamps against the pipeline's
+    ``max_autonomy_level``; this function only writes. Returns the refreshed
+    pipeline, or ``None`` when it does not exist in the org.
+
+    ``earned_autonomy_updated_at`` is stamped to the write instant so the
+    pipeline-detail surface can show when the earned level last moved.
+    """
+    pipeline = await get_pipeline(session, pipeline_id, organisation_id=org_id)
+    if pipeline is None:
+        return None
+    pipeline.earned_autonomy_level = level
+    pipeline.earned_autonomy_updated_at = datetime.now(UTC)
+    await session.flush()
+    return pipeline

@@ -1,7 +1,21 @@
 <template>
   <div class="page-wide">
-    <LoadingSpinner v-if="loading" />
-    <ErrorAlert v-else-if="error" :message="error" />
+    <div v-if="loading" class="space-y-6" data-testid="variant-compare-loading-skeleton">
+      <div class="space-y-2">
+        <SkeletonBlock height-class="h-7 w-64" />
+        <SkeletonBlock class="mt-2" height-class="h-4 w-3/4" />
+      </div>
+      <SkeletonBlock class="mt-6" height-class="h-10 w-96" />
+      <div class="overflow-hidden rounded-lg border bg-card">
+        <div v-for="n in 5" :key="`variant-compare-skeleton-row-${n}`" class="flex items-center gap-4 border-b px-4 py-3 last:border-b-0">
+          <SkeletonBlock height-class="h-4 w-32" />
+          <SkeletonBlock height-class="h-4 w-24" />
+          <SkeletonBlock height-class="h-4 w-24" />
+          <SkeletonBlock height-class="h-4 w-24" />
+        </div>
+      </div>
+    </div>
+    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadGroups" />
     <template v-else>
       <PageHeader :title="$t('views.variantCompare.title')" :subtitle="$t('views.variantCompare.subtitle')" />
 
@@ -14,7 +28,7 @@
       <template v-else>
       <div class="flex flex-wrap items-center gap-4">
         <Select
-  aria-label="Compare group"
+  :aria-label="$t('views.variantCompare.compareGroupLabel')"
   v-model="selectedGroupId"
   :placeholder="$t('views.variantCompare.selectGroup')"
   data-testid="variant-compare-group-select"
@@ -43,8 +57,8 @@
         </Button>
 
         <span v-if="selectedGroup" class="text-xs text-muted-foreground">
-          {{ $t('views.variantCompare.runs', { count: selectedGroup.run_count }) }} ·
-          {{ selectedGroup.selection_strategy }}
+          {{ $t('views.variantCompare.runs', { count: selectedGroup.run_count ?? 0 }) }} ·
+          {{ selectedGroup.selection_strategy || '—' }}
         </span>
       </div>
 
@@ -149,11 +163,11 @@
                       <span v-else class="text-muted-foreground">—</span>
                       <span class="text-muted-foreground">{{ $t('views.variantCompare.pass') }}</span>
                     </div>
-                    <div v-if="s.totalCost !== null" class="text-muted-foreground">
-                      {{ $t('views.variantCompare.cost', { cost: formatMoney(Number(s.totalCost), currencyCode, 6) }) }}
+                    <div class="text-muted-foreground">
+                      {{ $t('views.variantCompare.cost', { cost: s.totalCost !== null ? formatMoney(Number(s.totalCost), currencyCode, 6) : '—' }) }}
                     </div>
-                    <div v-if="s.tokenTotal !== null" class="text-muted-foreground">
-                      {{ $t('views.variantCompare.tokens', { count: s.tokenTotal.toLocaleString() }) }}
+                    <div class="text-muted-foreground">
+                      {{ $t('views.variantCompare.tokens', { count: s.tokenTotal !== null ? s.tokenTotal.toLocaleString() : '—' }) }}
                     </div>
                     <div class="flex gap-2 text-muted-foreground">
                       <span class="text-muted-foreground/60">{{ $t('views.variantCompare.noHitl') }}</span>
@@ -172,9 +186,9 @@
               <span class="text-muted-foreground">{{ $t('views.variantCompare.node') }}:</span>
               <Select
   v-model="diffNode"
-  placeholder="Select node"
+  :placeholder="$t('views.variantCompare.selectNode')"
   data-testid="variant-compare-diff-node"
-  aria-label="Diff node"
+  :aria-label="$t('views.variantCompare.diffNodeLabel')"
   :options="nodeNames.map(n => ({ value: n, label: n }))"
   option-label="label"
   option-value="value"
@@ -188,9 +202,9 @@
               <span class="text-muted-foreground">{{ $t('views.variantCompare.variantA') }}:</span>
               <Select
   v-model="diffVarA"
-  placeholder="Select variant"
+  :placeholder="$t('views.variantCompare.selectVariant')"
   data-testid="variant-compare-diff-variant-a"
-  aria-label="Variant A"
+  :aria-label="$t('views.variantCompare.variantA')"
   :options="diffVariantsAvailable.map(v => ({ value: v, label: v }))"
   option-label="label"
   option-value="value"
@@ -204,9 +218,9 @@
               <span class="text-muted-foreground">{{ $t('views.variantCompare.variantB') }}:</span>
               <Select
   v-model="diffVarB"
-  placeholder="Select variant"
+  :placeholder="$t('views.variantCompare.selectVariant')"
   data-testid="variant-compare-diff-variant-b"
-  aria-label="Variant B"
+  :aria-label="$t('views.variantCompare.variantB')"
   :options="diffVariantsAvailable.map(v => ({ value: v, label: v }))"
   option-label="label"
   option-value="value"
@@ -248,7 +262,7 @@
         v-else
         class="rounded-lg border bg-card p-8 text-center text-muted-foreground"
       >
-        Select a variant group from the dropdown above to compare model outputs.
+        {{ $t('views.variantCompare.selectGroupFirst') }}
       </div>
       </template>
     </template>
@@ -262,7 +276,7 @@ import { useRoute } from 'vue-router'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import type { components } from '../lib/api/client'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -307,7 +321,7 @@ interface RunEntry {
   evalResults: RunEvalItem[]
 }
 
-const { loading, error, data: groupsResp } = useDataFetch(
+const { loading, error, data: groupsResp, load: loadGroups } = useDataFetch(
   () => api.GET('/api/v1/variant-groups'),
   { initialValue: [] as VariantGroup[] },
 )

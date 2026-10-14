@@ -77,8 +77,9 @@ POSTGRES_HOST = "127.0.0.1"
 APP_DB_NAME = "modulo"
 
 # Strict grammar for any SQL identifier the launcher interpolates into DDL
-# (CREATE DATABASE cannot take a bound parameter).
-_SQL_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# (CREATE DATABASE cannot take a bound parameter). re.ASCII pins \w to
+# [A-Za-z0-9_] so the accepted set stays byte-identical to the old class.
+_SQL_IDENTIFIER_RE = re.compile(r"[A-Za-z_]\w*", re.ASCII)
 
 
 def _validate_sql_identifier(name: str, what: str) -> str:
@@ -838,7 +839,7 @@ def _ensure_app_database(launcher_state: Any, secrets: Any) -> None:
         # constructed (no sslmode), so this yields the explicit plaintext
         # ``ssl=False`` the loopback cluster needs; routing it through the
         # shared translator keeps the fail-closed invariant in one place.
-        from modulo.db.bootstrap import split_postgres_sslmode
+        from modulo.db.url_utils import split_postgres_sslmode
 
         root_url, root_ssl = split_postgres_sslmode(root_url)
         conn = await asyncpg.connect(root_url, ssl=root_ssl)

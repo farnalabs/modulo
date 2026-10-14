@@ -19,12 +19,26 @@ from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_system_db_session
 from modulo.api.main import app
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.trigger_engine import (
+    DuplicateWebhookError,
+    PipelineRateLimitError,
+    TriggerConfigInvalidError,
+    TriggerInactiveError,
+    TriggerNotFoundError,
+)
+from modulo.core.trigger_engine.slack_app_mention import (
+    SlackAppMentionParseError,
+    SlackEventTypeError,
+    SlackSignatureError,
+    SlackTimestampExpiredError,
+)
 from modulo.settings import Settings, get_settings
 from tests.unit.api.conftest import _ProvisionedSystemSettings, make_system_session_mock
 from tests.unit.api.mock_session import configure_mock_session
@@ -133,6 +147,10 @@ def _make_trigger_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # FAR-1629: AsyncSession.in_transaction() is sync - a bare AsyncMock
+    # auto-creates it as an async child, leaving an un-awaited coroutine when
+    # _ensure_active_transaction (db/rls.py) calls it.
+    session.in_transaction = MagicMock(return_value=True)
     # FAR-1287: create_snapshot_from_live_graph allocates the snapshot version
     # inside a ``session.begin_nested()`` SAVEPOINT. A bare AsyncMock's
     # begin_nested() returns a plain coroutine, which is not an async context
@@ -264,7 +282,7 @@ def test_app_mention_delivery_returns_202(client: TestClient) -> None:
             return_value=("enqueued", "job-id"),
         ),
         patch("modulo.api.routes.slack.set_rls_org"),
-        patch("modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+        patch("modulo.api.routes.slack.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
     ):
         snap_mock = MagicMock()
         snap_mock.id = uuid.uuid4()
@@ -302,7 +320,7 @@ def test_app_mention_ack_carries_dispatched_execution_origin(client: TestClient)
             return_value=("enqueued", "job-id"),
         ),
         patch("modulo.api.routes.slack.set_rls_org"),
-        patch("modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+        patch("modulo.api.routes.slack.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
     ):
         snap_mock = MagicMock()
         snap_mock.id = uuid.uuid4()
@@ -432,7 +450,7 @@ def test_app_mention_duplicate_event_returns_400(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
         patch("modulo.api.routes.slack.set_rls_org"),
-        patch("modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+        patch("modulo.api.routes.slack.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
     ):
         snap_mock = MagicMock()
         snap_mock.id = uuid.uuid4()
@@ -567,6 +585,37 @@ def test_app_mention_archived_pipeline_returns_409(client: TestClient) -> None:
     assert "archived" in resp.json()["detail"]
 
 
+def test_app_mention_snapshot_lock_busy_returns_503(client: TestClient) -> None:
+    """FAR-527 parity: a busy per-pipeline snapshot advisory lock on the Slack
+    app-mention path must surface an honest, retryable 503 — never a generic
+    500 (matches the webhook + MCP trigger paths)."""
+    from modulo.core.exceptions import SnapshotLockNotAvailableError
+
+    body = _event_body()
+    ts = str(int(time.time()))
+    with (
+        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.slack.set_rls_org"),
+        patch(
+            "modulo.api.routes.slack.create_snapshot_from_live_graph",
+            new_callable=AsyncMock,
+            side_effect=SnapshotLockNotAvailableError("busy"),
+        ),
+    ):
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/slack",
+            content=body,
+            headers={**_headers(ts, body), "Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 503
+    detail = resp.json()["detail"]
+    assert "snapshot lock unavailable" in detail
+    assert "retry" in detail.lower()
+    # The engine is never reached once the snapshot cannot be created.
+    m.assert_not_called()
+
+
 def test_app_mention_invalid_config_json_returns_400(client: TestClient) -> None:
     """A non-dict config_json on the trigger must 400 at the route, not
     AttributeError -> 500 on external ingress."""
@@ -590,3 +639,345 @@ def test_app_mention_invalid_config_json_returns_400(client: TestClient) -> None
 
     assert resp.status_code == 400
     assert resp.json()["detail"] == "Trigger configuration is invalid"
+
+
+def test_paused_org_missing_row_skips_event_write(client: TestClient) -> None:
+    """Orphan-org guard on the paused path (S3776 split, changed-lines
+    coverage): when the org row was HARD-deleted the paused TriggerEvent
+    INSERT is skipped (organisations FK) — still an honest 202 paused ack."""
+    body = _event_body()
+    ts = str(int(time.time()))
+    with (
+        patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
+        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.slack._dispatch_slack_run", new_callable=AsyncMock) as dispatch,
+        patch("modulo.api.routes.slack.set_rls_org"),
+        patch("modulo.api.routes.slack._org_row_exists", new_callable=AsyncMock, return_value=False),
+    ):
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/slack",
+            content=body,
+            headers={**_headers(ts, body), "Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 202
+    assert resp.json() == {"status": "paused"}
+    m.assert_not_called()
+    dispatch.assert_not_called()
+
+
+async def test_ack_slack_busy_delivery_unresolvable_org_refuses_429() -> None:
+    """Defensive arm (S3776 split, changed-lines coverage): a busy ack with
+    no resolved org must refuse with 429 + Retry-After, never a false 2xx."""
+    from modulo.api.routes.slack import _ack_slack_busy_delivery
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _ack_slack_busy_delivery(trigger_id=_TRIGGER_ID, org_id=None, raw_body=b"{}")
+
+    assert exc_info.value.status_code == 429
+    headers = exc_info.value.headers
+    assert headers is not None
+    assert headers["Retry-After"] == "5"
+
+
+def _dispatch_trigger_mock() -> MagicMock:
+    trigger = MagicMock()
+    trigger.id = _TRIGGER_ID
+    trigger.pipeline_id = uuid.uuid4()
+    trigger.active = True
+    trigger.config_json = {"signing_secret": _SECRET}
+    return trigger
+
+
+@pytest.mark.parametrize(
+    ("side_effect", "expected_status"),
+    [
+        (TriggerNotFoundError(trigger_id=_TRIGGER_ID), 404),
+        (TriggerInactiveError(_TRIGGER_ID), 404),
+        (TriggerConfigInvalidError(trigger_id=_TRIGGER_ID), 400),
+        (SlackTimestampExpiredError("stale"), 400),
+        (SlackSignatureError("bad"), 401),
+        (SlackEventTypeError("unsupported envelope"), 400),
+        (SlackAppMentionParseError("malformed"), 400),
+        (DuplicateWebhookError("hash"), 400),
+        (PipelineRateLimitError(uuid.uuid4(), None, 1, 60), 429),
+    ],
+    ids=[
+        "trigger_not_found",
+        "trigger_inactive",
+        "trigger_config_invalid",
+        "slack_timestamp_expired",
+        "slack_signature",
+        "slack_event_type",
+        "slack_app_mention_parse",
+        "duplicate_webhook",
+        "pipeline_rate_limit",
+    ],
+)
+async def test_run_slack_pipeline_maps_dispatch_family_errors(side_effect: Exception, expected_status: int) -> None:
+    """S3776 split invariant: ``_run_slack_pipeline`` maps the typed errors
+    the engine can raise mid-dispatch to the SAME statuses the original
+    single route ladder produced — the error→status mapping is unchanged by
+    the split (each arm a verbatim subsequence of the original ladder)."""
+    from modulo.api.routes.slack import _run_slack_pipeline
+
+    session = _make_trigger_session()
+    with (
+        patch("modulo.api.routes.slack.ensure_triggers_resumable", new_callable=AsyncMock),
+        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock, side_effect=side_effect),
+        patch("modulo.api.routes.slack.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+    ):
+        snap_mock = MagicMock()
+        snap_mock.id = uuid.uuid4()
+        snap.return_value = snap_mock
+        with pytest.raises(HTTPException) as exc_info:
+            await _run_slack_pipeline(
+                session=session,
+                trigger=_dispatch_trigger_mock(),
+                trigger_id=_TRIGGER_ID,
+                org_id=_ORG_ID,
+                raw_body=b"{}",
+                raw_payload={},
+                slack_signature="v0=bad",
+                slack_timestamp="1",
+            )
+
+    assert exc_info.value.status_code == expected_status
+
+
+async def test_verify_slack_delivery_maps_inactive_trigger_to_404() -> None:
+    """S3776 split invariant: ``_verify_slack_delivery`` maps the bootstrap
+    ladder's ``TriggerInactiveError`` -> 404, exactly as the original inline
+    ladder did (the bootstrap helper and the engine's mid-dispatch re-read can
+    both raise it, so both ladders keep the arm)."""
+    from modulo.api.routes.slack import _verify_slack_delivery
+
+    with (
+        patch(
+            "modulo.api.routes.slack.load_trigger_and_org_global",
+            new_callable=AsyncMock,
+            side_effect=TriggerInactiveError(_TRIGGER_ID),
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _verify_slack_delivery(
+            session=AsyncMock(),
+            system_session=AsyncMock(),
+            request=MagicMock(),
+            trigger_id=_TRIGGER_ID,
+            principal=None,
+            raw_body=b"{}",
+            slack_signature="v0=bad",
+            slack_timestamp="1",
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Trigger not found"
+
+
+async def test_verify_slack_delivery_missing_signing_secret_returns_401() -> None:
+    """S3776 split changed-lines coverage: a well-formed config with NO signing
+    secret (``{}``, not the invalid non-dict shape) must fail closed with 401
+    before any snapshot/dedup work — never reach the engine unauthenticated."""
+    from modulo.api.routes.slack import _verify_slack_delivery
+
+    trigger = MagicMock()
+    trigger.config_json = {}
+    with (
+        patch(
+            "modulo.api.routes.slack.load_trigger_and_org_global",
+            new_callable=AsyncMock,
+            return_value=(trigger, _ORG_ID),
+        ),
+        patch("modulo.api.routes.slack.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.slack.set_rls_execution_context", new_callable=AsyncMock),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _verify_slack_delivery(
+            session=AsyncMock(),
+            system_session=AsyncMock(),
+            request=MagicMock(),
+            trigger_id=_TRIGGER_ID,
+            principal=None,
+            raw_body=b"{}",
+            slack_signature="v0=bad",
+            slack_timestamp="1",
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Slack signature verification failed"
+
+
+async def test_create_slack_snapshot_none_returns_500_and_skips_pause_check() -> None:
+    """S3776 split changed-lines coverage: an INACTIVE trigger skips the org
+    pause pre-check, and a ``None`` snapshot fails closed with 500 rather than
+    dispatching against a missing snapshot."""
+    from modulo.api.routes.slack import _create_slack_snapshot
+
+    trigger = MagicMock()
+    trigger.active = False
+    trigger.pipeline_id = uuid.uuid4()
+    with (
+        patch("modulo.api.routes.slack.ensure_triggers_resumable", new_callable=AsyncMock) as ensure,
+        patch(
+            "modulo.api.routes.slack.create_snapshot_from_live_graph",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _create_slack_snapshot(session=AsyncMock(), trigger=trigger, trigger_id=_TRIGGER_ID, org_id=_ORG_ID)
+
+    ensure.assert_not_called()
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Failed to create pipeline snapshot for slack trigger"
+
+
+# ---------------------------------------------------------------------------
+# _verify_slack_delivery — encrypted signing_secret at rest (FAR-1732)
+# ---------------------------------------------------------------------------
+
+
+def _fernet_token(secret: str, key: str | None = None) -> str:
+    import base64
+
+    from cryptography.fernet import Fernet
+
+    key = key or base64.urlsafe_b64encode(b"s" * 32).decode()
+    return Fernet(key.encode()).encrypt(secret.encode()).decode()
+
+
+def _fake_settings_with_key(fernet_key: str) -> MagicMock:
+    settings = MagicMock()
+    settings.fernet_key = fernet_key
+    return settings
+
+
+async def test_verify_slack_delivery_encrypted_signing_secret_verifies() -> None:
+    """FAR-1732/1735: a Fernet-token signing_secret decrypts via the shared
+    bounded resolver with the REAL decode helper (no decode mock — the
+    patch target is ``modulo.api.routes.slack.get_settings``, the name the
+    route actually binds, so the fail-closed/decrypt plumbing is genuinely
+    exercised) and the signature check runs against the DECRYPTED secret —
+    never against the raw ciphertext blob."""
+    import base64
+
+    from modulo.api.routes.slack import _verify_slack_delivery
+
+    valid_key = base64.urlsafe_b64encode(b"s" * 32).decode()
+    token = _fernet_token(_SECRET, valid_key)
+    trigger = MagicMock()
+    trigger.pipeline_id = uuid.uuid4()
+    trigger.config_json = {"signing_secret": token}
+    raw_body = _event_body()
+    ts = str(int(time.time()))
+
+    with (
+        patch(
+            "modulo.api.routes.slack.load_trigger_and_org_global",
+            new_callable=AsyncMock,
+            return_value=(trigger, _ORG_ID),
+        ),
+        patch("modulo.api.routes.slack.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.slack.set_rls_execution_context", new_callable=AsyncMock),
+        patch("modulo.api.routes.slack.get_settings", return_value=_fake_settings_with_key(valid_key)),
+    ):
+        result_trigger, org_id = await _verify_slack_delivery(
+            session=AsyncMock(),
+            system_session=AsyncMock(),
+            request=MagicMock(),
+            trigger_id=_TRIGGER_ID,
+            principal=None,
+            raw_body=raw_body,
+            slack_signature=_slack_sig(raw_body, _SECRET, ts),
+            slack_timestamp=ts,
+        )
+
+    assert result_trigger is trigger
+    assert org_id == _ORG_ID
+
+
+async def test_verify_slack_delivery_undecryptable_token_fails_closed() -> None:
+    """FAR-1732/1735: a stored value shaped like a Fernet token that CANNOT be
+    decrypted under the configured key must fail closed (401) — never fall
+    back to comparing Slack's signature against ciphertext-as-secret. The
+    REAL decode helper raises ``DecryptionError`` here (no decode mock)."""
+    import base64
+
+    from modulo.api.routes.slack import _verify_slack_delivery
+
+    other_key = base64.urlsafe_b64encode(b"x" * 32).decode()
+    configured_key = base64.urlsafe_b64encode(b"s" * 32).decode()
+    token = _fernet_token(_SECRET, other_key)
+    trigger = MagicMock()
+    trigger.config_json = {"signing_secret": token}
+    with (
+        patch(
+            "modulo.api.routes.slack.load_trigger_and_org_global",
+            new_callable=AsyncMock,
+            return_value=(trigger, _ORG_ID),
+        ),
+        patch("modulo.api.routes.slack.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.slack.set_rls_execution_context", new_callable=AsyncMock),
+        patch("modulo.api.routes.slack.get_settings", return_value=_fake_settings_with_key(configured_key)),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _verify_slack_delivery(
+            session=AsyncMock(),
+            system_session=AsyncMock(),
+            request=MagicMock(),
+            trigger_id=_TRIGGER_ID,
+            principal=None,
+            raw_body=b"{}",
+            slack_signature="v0=whatever",
+            slack_timestamp="1",
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Slack signature verification failed"
+
+
+async def test_verify_slack_delivery_legacy_plaintext_accepted_with_dated_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-1735 bounded shim: a NON-token stored secret is legacy pre-0306
+    plaintext — accepted so pre-migration deployments keep delivering, but
+    ONLY with a loud dated warning (``trigger_secret.legacy_plaintext``), so
+    a future plaintext write is surfaced in the logs, never silently
+    accepted. The REAL decode helper is used (no decode mock): a plaintext
+    value is returned unchanged by the resolver, it does NOT raise."""
+    import logging as _logging
+
+    from modulo.api.routes.slack import _verify_slack_delivery
+
+    trigger = MagicMock()
+    trigger.pipeline_id = uuid.uuid4()
+    trigger.config_json = {"signing_secret": _SECRET}
+    raw_body = _event_body()
+    ts = str(int(time.time()))
+
+    with (
+        patch(
+            "modulo.api.routes.slack.load_trigger_and_org_global",
+            new_callable=AsyncMock,
+            return_value=(trigger, _ORG_ID),
+        ),
+        patch("modulo.api.routes.slack.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.slack.set_rls_execution_context", new_callable=AsyncMock),
+        caplog.at_level(_logging.WARNING, logger="modulo.core.trigger_secrets"),
+    ):
+        result_trigger, org_id = await _verify_slack_delivery(
+            session=AsyncMock(),
+            system_session=AsyncMock(),
+            request=MagicMock(),
+            trigger_id=_TRIGGER_ID,
+            principal=None,
+            raw_body=raw_body,
+            slack_signature=_slack_sig(raw_body, _SECRET, ts),
+            slack_timestamp=ts,
+        )
+
+    assert result_trigger is trigger
+    assert org_id == _ORG_ID
+    assert "trigger_secret.legacy_plaintext" in caplog.text
+    assert "signing_secret" in caplog.text

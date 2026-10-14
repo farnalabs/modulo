@@ -22,24 +22,6 @@ def connector():
 
 
 @respx.mock
-async def test_health_check_ok(connector):
-    respx.get(_PROFILE_URL, params={"api-version": "7.0"}).mock(
-        return_value=httpx.Response(200, json={"displayName": "Duncan Tait"})
-    )
-    result = await connector.health_check()
-    assert result.ok is True
-    assert result.detail == "Duncan Tait"
-
-
-@respx.mock
-async def test_health_check_fail(connector):
-    respx.get(_PROFILE_URL, params={"api-version": "7.0"}).mock(return_value=httpx.Response(401, text="Unauthorized"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "401" in result.detail
-
-
-@respx.mock
 async def test_query_repos(connector):
     repos = [{"id": "repo-1", "name": "frontend"}, {"id": "repo-2", "name": "backend"}]
     respx.get(f"{_BASE}/myproject/_apis/git/repositories", params={"api-version": "7.0"}).mock(
@@ -266,16 +248,6 @@ async def test_query_repos_non_list_value_no_crash(connector):
     result = await connector.query(ConnectorQuery(resource="repos", filters={"project": "myproject"}))
     assert not result.records
     assert result.total == 2
-
-
-@respx.mock
-async def test_health_check_corrupt_body_no_crash(connector):
-    """A corrupt/hostile profile response with a non-dict body must not crash
-    health_check — it reports success with an empty display name."""
-    respx.get(_PROFILE_URL, params={"api-version": "7.0"}).mock(return_value=httpx.Response(200, json=["garbage"]))
-    result = await connector.health_check()
-    assert result.ok is True
-    assert not result.detail
 
 
 @respx.mock

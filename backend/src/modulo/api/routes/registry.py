@@ -50,6 +50,8 @@ from modulo.registry.crypto import (
 )
 from modulo.util import sanitise_log_value as _sanitise_log_value
 
+_CODE_REGISTRY_VERIFY_REGISTRY_PRIMITIVE_V2 = "registry.verify_registry_primitive_v2"
+
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/registry", tags=["registry"])
@@ -539,7 +541,7 @@ async def pull_registry_primitive_v2(
 
 
 @router.get("/verify/{slug:path}")
-@handle_db_errors("registry.verify_registry_primitive_v2")
+@handle_db_errors(_CODE_REGISTRY_VERIFY_REGISTRY_PRIMITIVE_V2)
 async def verify_registry_primitive_v2(
     slug: str,
     public_key_hex: str | None = None,
@@ -609,14 +611,14 @@ async def verify_registry_primitive_v2(
                     trust_tier = db_pub.trust_tier
                     publisher_name = db_pub.name
         except ProgrammingError:
-            _log.exception("registry.verify_registry_primitive_v2")
+            _log.exception(_CODE_REGISTRY_VERIFY_REGISTRY_PRIMITIVE_V2)
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Feature is not available. Run database migrations to enable it.",
             ) from None
         except SQLAlchemyError as exc:
-            raise_session_contract_error(exc, "registry.verify_registry_primitive_v2")
-            _log.exception("registry.verify_registry_primitive_v2")
+            raise_session_contract_error(exc, _CODE_REGISTRY_VERIFY_REGISTRY_PRIMITIVE_V2)
+            _log.exception(_CODE_REGISTRY_VERIFY_REGISTRY_PRIMITIVE_V2)
             _log.warning(
                 "DB error in verify_registry_primitive_v2: public_key_hex path, slug=%s, fp=%s",
                 _sanitise_log_value(slug),

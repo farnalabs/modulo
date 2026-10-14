@@ -1,5 +1,6 @@
 """Unit tests for the create_trigger / list_triggers MCP tools."""
 
+import base64
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -12,6 +13,9 @@ from modulo.api.mcp_server import create_trigger, list_triggers
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PLACEHOLDER_ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
+# FAR-1732: valid Fernet key for at-rest encryption assertions (the MCP
+# conftest default is not a valid Fernet key).
+_VALID_FERNET_KEY = base64.urlsafe_b64encode(b"s" * 32).decode()
 
 
 def _make_mock_trigger(
@@ -45,10 +49,44 @@ def _make_list_result(items: list[MagicMock], *, total: int, next_cursor: str | 
 
 
 def _make_session_context(session: AsyncMock) -> AsyncMock:
+    # FAR-1639: the RLS preamble calls ``session.in_transaction()`` and the
+    # write paths call ``session.add()`` with SYNC call sites; on a bare
+    # AsyncMock those return un-awaited coroutines and always-truthy values,
+    # so the active-transaction guard (rls._ensure_active_transaction) passes
+    # vacuously and dangling coroutines leak on GC. Type both here, keeping
+    # any deliberately customised member (e.g. _make_add_session's add
+    # side effect is already a MagicMock and is not overwritten).
+    session.in_transaction = MagicMock(return_value=True)
+    if not isinstance(session.add, MagicMock):
+        session.add = MagicMock()
     cm = AsyncMock()
     cm.__aenter__ = AsyncMock(return_value=session)
     cm.__aexit__ = AsyncMock(return_value=False)
     return cm
+
+
+def _make_sync_result() -> MagicMock:
+    """Shape the sync ``Result``-object contract for awaited session reads.
+
+    The tools in this file exercise three production readers that all
+    ``await session.execute(...)`` and then touch the returned ``Result`` with
+    SYNC methods:
+
+    - ``get_trigger_streak_status`` (FAR-251): ``scalar_one()`` for the count
+      walker and ``all()`` for the last-N outcome reader;
+    - ``pipeline_owner_team_id`` (team-scope gate): ``scalar_one_or_none()``.
+
+    The awaited call on a bare ``AsyncMock`` returns another AsyncMock, so
+    those sync reads came back as un-awaited coroutines; the streak reader's
+    best-effort wrapper swallowed the resulting ``TypeError`` and the
+    coroutines surfaced as ``PytestUnraisableExceptionWarning`` (never
+    awaited).
+    """
+    result = MagicMock()
+    result.scalar_one.return_value = 0
+    result.scalar_one_or_none.return_value = None
+    result.all.return_value = []
+    return result
 
 
 def _make_add_session(trigger_id: uuid.UUID | None = None) -> AsyncMock:
@@ -62,6 +100,12 @@ def _make_add_session(trigger_id: uuid.UUID | None = None) -> AsyncMock:
     session = AsyncMock()
     generated_id = trigger_id or uuid.uuid4()
     session.add = MagicMock(side_effect=lambda obj: setattr(obj, "id", generated_id))
+    # FAR-1639: the create tool computes streak_status for covered trigger
+    # types (ongoing/cron) via the FAR-251 helper, whose reads await
+    # session.execute then call sync scalar_one()/all() on the Result — shape
+    # that sync contract (see _make_sync_result) instead of leaving the
+    # awaited return value as a leaky AsyncMock child.
+    session.execute = AsyncMock(return_value=_make_sync_result())
     return session
 
 
@@ -307,7 +351,6 @@ def _cross_team_mismatch(connector_id: uuid.UUID) -> Any:
         connector_name="other-teams-connector",
         connector_owner_team_id=_TEAM_B,
         pipeline_owner_team_id=_TEAM_A,
-        connector_visibility="team",
     )
 
 
@@ -502,6 +545,11 @@ class TestListTriggersSuccess(_AuthContext):
         t2 = _make_mock_trigger()
         mock_db_list.return_value = _make_list_result([t1, t2], total=2, next_cursor=None, has_more=False)
         mock_sesh = AsyncMock()
+        # FAR-1639: the FAR-251 streak serializer runs behind a NON-EMPTY list
+        # result — its reads await session.execute then call sync scalar_one()/
+        # all() on the Result (see _make_sync_result); bare AsyncMock then
+        # leaves un-awaited coroutines for the best-effort reader to swallow.
+        mock_sesh.execute = AsyncMock(return_value=_make_sync_result())
         mock_session.return_value = _make_session_context(mock_sesh)
 
         result = await list_triggers()
@@ -535,6 +583,12 @@ class TestListTriggersSuccess(_AuthContext):
     ) -> None:
         mock_db_list.return_value = _make_list_result([], total=0, next_cursor=None, has_more=False)
         mock_sesh = AsyncMock()
+        # FAR-1639: the pipeline_id filter routes the team-scope owner read
+        # (crud/team_scope.pipeline_owner_team_id) through this session —
+        # its awaited execute is followed by a sync scalar_one_or_none() on
+        # the Result (see _make_sync_result); bare AsyncMock leaks that sync
+        # call's coroutine even though the list itself is mocked empty.
+        mock_sesh.execute = AsyncMock(return_value=_make_sync_result())
         mock_session.return_value = _make_session_context(mock_sesh)
 
         pid = uuid.uuid4()
@@ -657,3 +711,84 @@ class TestListTriggersStreakStatus(_AuthContext):
         assert result["data"][0]["active"] is False
         assert result["data"][1]["streak_status"] == streak_base
         assert get_status.await_count == 2
+
+
+# ---------------------------------------------------------------------------
+# create_trigger — secret encryption at rest (FAR-1732)
+# ---------------------------------------------------------------------------
+
+
+class TestCreateTriggerEncryptsWebhookSecrets(_AuthContext):
+    """FAR-1732: secrets submitted on creation must never land in
+    ``triggers.config_json`` as plaintext — the MCP path applies the same
+    shared helper the REST create route uses.
+    """
+
+    def setup_method(self) -> None:
+        super().setup_method()
+        from modulo.api.mcp_server import _ctx_role
+
+        _ctx_role.set("operator")
+
+    def _fernet(self):
+        from cryptography.fernet import Fernet
+
+        return Fernet(_VALID_FERNET_KEY.encode())
+
+    def _settings_patch(self):
+        fake_settings = MagicMock()
+        fake_settings.fernet_key = _VALID_FERNET_KEY
+        return patch("modulo.api.mcp_server.get_settings", return_value=fake_settings)
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_webhook_secrets_stored_as_fernet_tokens(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        fern = self._fernet()
+        mock_sesh = _make_add_session()
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        with self._settings_patch():
+            result = await create_trigger(
+                pipeline_id=str(uuid.uuid4()),
+                config_json={
+                    "input_template": {"foo": "bar"},
+                    "hmac_secret": "hmac-value",
+                    "signing_secret": "slacksig",
+                },
+            )
+
+        assert result.get("error") is None
+        assert mock_sesh.add.call_count == 1
+        stored = mock_sesh.add.call_args[0][0].config_json
+        assert stored["hmac_secret"].startswith("gAAAA"), f"never plaintext: {stored['hmac_secret']!r}"
+        assert stored["signing_secret"].startswith("gAAAA"), f"never plaintext: {stored['signing_secret']!r}"
+        assert fern.decrypt(stored["hmac_secret"].encode()) == b"hmac-value"
+        assert fern.decrypt(stored["signing_secret"].encode()) == b"slacksig"
+        assert stored["input_template"] == {"foo": "bar"}
+        # The create payload contract contains no config echo — secrets must
+        # not even surface in the response blob.
+        assert "config_json" not in result
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_config_without_webhook_secrets_is_stored_unchanged(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_sesh = _make_add_session()
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        with self._settings_patch():
+            result = await create_trigger(
+                pipeline_id=str(uuid.uuid4()),
+                config_json={"input_template": {"foo": "bar"}},
+            )
+
+        assert result.get("error") is None
+        stored = mock_sesh.add.call_args[0][0].config_json
+        assert stored == {"input_template": {"foo": "bar"}}

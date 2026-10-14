@@ -19,6 +19,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base, TimestampMixin
 
+# Partial-index liveness predicate (un-consumed, un-revoked) — mirrors the
+# shared _live_conditions scope in db/crud/invitations.py and 0291's
+# _LIVE_WHERE (S1192: referenced by both partial indexes below).
+_LIVE_WHERE = "consumed_at IS NULL AND revoked_at IS NULL"
+
 
 class Invitation(Base, TimestampMixin):
     __tablename__ = "invitations"
@@ -33,16 +38,16 @@ class Invitation(Base, TimestampMixin):
             "ix_invitations_org_email_live",
             "organisation_id",
             "email",
-            postgresql_where=text("consumed_at IS NULL AND revoked_at IS NULL"),
-            sqlite_where=text("consumed_at IS NULL AND revoked_at IS NULL"),
+            postgresql_where=text(_LIVE_WHERE),
+            sqlite_where=text(_LIVE_WHERE),
         ),
         # Live-invite expiry scan: every liveness check filters
         # expires_at > now() and a stale-invite purge sweeps on it.
         Index(
             "ix_invitations_expires_at_live",
             "expires_at",
-            postgresql_where=text("consumed_at IS NULL AND revoked_at IS NULL"),
-            sqlite_where=text("consumed_at IS NULL AND revoked_at IS NULL"),
+            postgresql_where=text(_LIVE_WHERE),
+            sqlite_where=text(_LIVE_WHERE),
         ),
         # Role vocabulary is otherwise enforced only at the API boundary
         # (admin.invite-user); crud.create_invitation does not validate.

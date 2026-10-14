@@ -950,9 +950,11 @@ class TestStaleRunRecoverySweep:
         assert result["never_dispatched_swept"] == 0
         assert result["worker_lost_swept"] == 0
         assert result["capacity_timeout_swept"] == 0
+        assert result["saq_zero_progress_swept"] == 0
         assert result["stranded_capacity_redispatched"] == 0
-        # Per-org: org enumeration + set_config + the four UPDATE branches.
-        assert len(statements) == 6
+        # Per-org: org enumeration + set_config + the four UPDATE branches +
+        # the FAR-1715 zero-progress branch (its own set_config + UPDATE).
+        assert len(statements) == 8
         joined = " ".join(statements)
         assert "never_dispatched" in joined
         assert "RETURNING id, organisation_id" in joined
@@ -965,6 +967,22 @@ class TestStaleRunRecoverySweep:
         assert ":fail_ttl" in joined
         assert ":ttl" in joined
         assert ":wl_window" in joined
+        # FAR-1623: the never-dispatched branch must not match a run the
+        # heartbeat-stale reset already claimed (claim_count >= 1) nor a run
+        # carrying the reset's heartbeat_stale marker. Pin the guards to the
+        # NEVER-DISPATCHED statement specifically — the capacity-timeout
+        # branch also contains "claim_count = 0", so asserting against the
+        # join would pass even if this guard were dropped.
+        never_stmts = [s for s in statements if "error_code = 'never_dispatched'" in s]
+        assert len(never_stmts) == 1
+        never_stmt = never_stmts[0]
+        assert "claim_count = 0" in never_stmt
+        assert "error_code IS DISTINCT FROM 'heartbeat_stale'" in never_stmt
+        # The guards must not have landed on the capacity-timeout branch
+        # instead: that branch must NOT carry the heartbeat_stale exclusion.
+        capacity_stmts = [s for s in statements if "error_code = 'capacity_timeout'" in s]
+        assert len(capacity_stmts) == 1
+        assert "error_code IS DISTINCT FROM 'heartbeat_stale'" not in capacity_stmts[0]
 
     async def test_explicit_windows_override_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         params_seen: list[dict[str, object]] = []
@@ -1643,11 +1661,16 @@ class TestSaqWorkerSettings:
         # + the FAR-604 sweeps (slot reconciliation, HITL park-on-expiry)
         # + memory_monitor_cron (FAR-776) — advisory guest-memory telemetry cron.
         # + health_readiness_alert (FAR-1446) — readiness-degradation alert cron.
+        # + decision_record_reconcile (FAR-1108 chunk 8b) — hourly read-only
+        #   decision-record corruption-detection sweep.
+        # + run_kill_switch_drill (FAR-1707) — daily kill-switch self-test that
+        #   records one system-audit fact per run.
         cron_names = {c.function.__name__ for c in settings["cron_jobs"]}
         assert cron_names == {
             "analytics_facts_maintenance",
             "fire_due_triggers",
             "dispatcher_reconcile",
+            "decision_record_reconcile",
             "claim_expiry",
             "connector_health_checks",
             "hitl_overdue",
@@ -1669,6 +1692,7 @@ class TestSaqWorkerSettings:
             "runner_marker_sweep",
             "runner_health_probe",
             "health_readiness_alert",
+            "run_kill_switch_drill",
         }
         assert settings["after_process"] is not None
 
@@ -2483,7 +2507,6 @@ class TestNodeDeadlineWatchdog:
                     node_completed_event=completed,
                     run_done_event=done,
                     node_deadlines=deadlines,
-                    default_timeout=1200,
                 )
             )
             # Node starts, then completes well within its 1200s deadline.
@@ -2518,7 +2541,6 @@ class TestNodeDeadlineWatchdog:
                     node_completed_event=completed,
                     run_done_event=done,
                     node_deadlines=deadlines,
-                    default_timeout=0.05,
                 )
             )
             # Node starts but never completes -> deadline exceeded.
@@ -2560,7 +2582,6 @@ class TestNodeDeadlineWatchdog:
                     node_completed_event=completed,
                     run_done_event=done,
                     node_deadlines=deadlines,
-                    default_timeout=1200,
                 )
             )
             # A starts and stalls (short deadline).
@@ -2604,7 +2625,6 @@ class TestNodeDeadlineWatchdog:
                 node_completed_event=completed,
                 run_done_event=done,
                 node_deadlines=deadlines,
-                default_timeout=1200,
             )
         fail.assert_not_awaited()
 
@@ -2631,7 +2651,6 @@ class TestNodeDeadlineWatchdog:
                 node_completed_event=completed,
                 run_done_event=done,
                 node_deadlines=deadlines,
-                default_timeout=1200,
             )
         fail.assert_not_awaited()
         assert not exec_task.cancelled()

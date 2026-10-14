@@ -409,6 +409,148 @@ def _mark_failed(result: dict[str, Any], *, status_code: int | None = None, erro
     result.update({"status": "failed", "status_code": status_code, "error": error})
 
 
+def _signed_body_and_headers(
+    body: dict[str, Any] | list[Any],
+    headers: dict[str, str] | None,
+    signing_secret: str | None,
+) -> tuple[bytes | None, dict[str, str]]:
+    """Serialize *body* once and attach the HMAC signature header when signed.
+
+    Returns the raw body bytes (``None`` when unsigned — the caller then sends
+    ``json=body`` instead of ``content=body_bytes``) and the caller's headers
+    merged with the signature plus a JSON content type. The signature is
+    computed over the exact bytes that go on the wire so the recipient can
+    verify byte-for-byte authenticity.
+    """
+    if not signing_secret:
+        return None, headers or {}
+    body_bytes = _serialize_json_body(body)
+    merged_headers = {**(headers or {}), _SIGNATURE_HEADER: _sign_payload(signing_secret, body_bytes)}
+    merged_headers.setdefault("Content-Type", "application/json")
+    return body_bytes, merged_headers
+
+
+def _backoff_seconds(attempt: int) -> float:
+    """Capped exponential backoff for *attempt* (0-based)."""
+    return min(_REPORT_BACKOFF_BASE**attempt, _REPORT_MAX_BACKOFF)
+
+
+def _mark_retry_exhausted(result: dict[str, Any], last_resp_or_exc: httpx.Response | Exception | None) -> None:
+    """Record the outcome of a URL whose retry budget ran out without a break.
+
+    Prefers the last exception's message, then the last response's status and
+    (truncated) body text, and finally the ``max_retries_exceeded`` sentinel
+    when no attempt ever produced a response or an exception.
+    """
+    if isinstance(last_resp_or_exc, Exception):
+        _mark_failed(result, error=str(last_resp_or_exc))
+    elif last_resp_or_exc is not None:
+        err_text = getattr(last_resp_or_exc, "text", None) or "max_retries_exceeded"
+        _mark_failed(result, status_code=last_resp_or_exc.status_code, error=err_text[:200])
+    else:
+        _mark_failed(result, error="max_retries_exceeded")
+
+
+def _handle_delivery_response(
+    resp: httpx.Response,
+    result: dict[str, Any],
+    url: str,
+    attempt: int,
+) -> bool:
+    """Classify *resp* for the retry loop, returning True when the loop must stop.
+
+    A success or a non-transient response (neither 429 nor 5xx) is terminal: the
+    outcome is recorded on ``result`` and the caller breaks out of the loop. A
+    429 or 5xx is transient — the warning is logged and the caller retries.
+    """
+    if resp.is_success:
+        result.update({"status": "delivered", "status_code": resp.status_code, "error": None})
+        return True
+    if resp.status_code == 429:
+        _log.warning(
+            "Delivery to %s rate-limited (429), retrying after %.0fs (attempt %d/%d)",
+            url,
+            _parse_retry_after(resp),
+            attempt + 1,
+            _REPORT_MAX_RETRIES,
+        )
+        return False
+    if resp.status_code >= 500:
+        _log.warning(
+            "Delivery to %s returned %d, retrying (attempt %d/%d)",
+            url,
+            resp.status_code,
+            attempt + 1,
+            _REPORT_MAX_RETRIES,
+        )
+        return False
+    _mark_failed(result, status_code=resp.status_code, error=resp.text[:200])
+    return True
+
+
+def _retry_delay(resp: httpx.Response, attempt: int) -> float:
+    """Delay before the next attempt: the 429 ``Retry-After``, else capped backoff."""
+    if resp.status_code == 429:
+        return _parse_retry_after(resp)
+    return _backoff_seconds(attempt)
+
+
+async def _deliver_one_url(
+    client: httpx.AsyncClient,
+    url: str,
+    body: dict[str, Any] | list[Any],
+    *,
+    body_bytes: bytes | None = None,
+    headers: dict[str, str],
+) -> dict[str, Any]:
+    """POST to one URL with the retry/backoff loop, returning its result entry.
+
+    Retries transient failures (5xx, connection errors, 429) up to
+    ``_REPORT_MAX_RETRIES`` times; a non-transient 4xx breaks out immediately.
+    ``body_bytes`` carries the pre-serialized, pre-signed payload when a
+    signing secret is in use; otherwise ``json=body`` is sent. ``headers``
+    already carries any signature header computed by the caller.
+    """
+    result: dict[str, Any] = {
+        "url": _redact_url_credentials(url),
+        "status": "failed",
+        "status_code": None,
+        "error": None,
+    }
+    last_resp_or_exc: httpx.Response | Exception | None = None
+    for attempt in range(_REPORT_MAX_RETRIES):
+        try:
+            if body_bytes is not None:
+                resp = await client.post(url, content=body_bytes, headers=headers)
+            else:
+                resp = await client.post(url, json=body, headers=headers)
+            last_resp_or_exc = resp
+            if _handle_delivery_response(resp, result, url, attempt):
+                break
+        except (httpx.RequestError, TypeError) as exc:
+            _log.warning(
+                "Delivery to %s failed: %s (attempt %d/%d)",
+                url,
+                exc,
+                attempt + 1,
+                _REPORT_MAX_RETRIES,
+                exc_info=True,
+            )
+            last_resp_or_exc = exc
+            # A request error sleeps only while further attempts remain — the
+            # final failure is reported immediately, with no trailing delay.
+            if attempt < _REPORT_MAX_RETRIES - 1:
+                await asyncio.sleep(_backoff_seconds(attempt))
+            continue
+        # Transient response (429 / 5xx): sleep before the next attempt. The
+        # 429 honours Retry-After; both paths still sleep on the FINAL attempt
+        # so the observed request cadence is unchanged (the loop then ends).
+        await asyncio.sleep(_retry_delay(resp, attempt))
+    else:
+        _mark_retry_exhausted(result, last_resp_or_exc)
+    return result
+
+
 async def _deliver_to_urls(
     urls: list[str],
     body: dict[str, Any] | list[Any],
@@ -427,90 +569,32 @@ async def _deliver_to_urls(
     header so the recipient can verify authenticity. ``request_timeout``
     overrides the per-request timeout (default ``_REPORT_HTTP_TIMEOUT``).
     """
-    if signing_secret:
-        body_bytes = _serialize_json_body(body)
-        merged_headers = {**(headers or {}), _SIGNATURE_HEADER: _sign_payload(signing_secret, body_bytes)}
-        merged_headers.setdefault("Content-Type", "application/json")
-    else:
-        body_bytes = None
-        merged_headers = headers or {}
+    body_bytes, merged_headers = _signed_body_and_headers(body, headers, signing_secret)
     effective_timeout = _coerce_timeout(request_timeout) if request_timeout is not None else None
     request_timeout_seconds = effective_timeout if effective_timeout is not None else _REPORT_HTTP_TIMEOUT
 
     results: list[dict[str, Any]] = []
     async with httpx.AsyncClient(timeout=request_timeout_seconds) as client:
         for url in urls:
-            display_url = _redact_url_credentials(url)
-            result: dict[str, Any] = {"url": display_url, "status": "failed", "status_code": None, "error": None}
             invalid_reason = _webhook_url_error(url)
             if invalid_reason is not None:
                 # Permanent config error — skip the retry/backoff loop entirely;
                 # a malformed URL cannot become deliverable on a later attempt.
+                display_url = _redact_url_credentials(url)
                 _log.warning(
                     "Delivery to %s skipped: invalid webhook URL (%s)",
                     display_url,
                     invalid_reason,
                 )
-                _mark_failed(result, error=f"invalid_webhook_url: {invalid_reason}")
+                result: dict[str, Any] = {
+                    "url": display_url,
+                    "status": "failed",
+                    "status_code": None,
+                    "error": f"invalid_webhook_url: {invalid_reason}",
+                }
                 results.append(result)
                 continue
-            last_resp_or_exc: httpx.Response | Exception | None = None
-            for attempt in range(_REPORT_MAX_RETRIES):
-                try:
-                    if body_bytes is not None:
-                        resp = await client.post(url, content=body_bytes, headers=merged_headers)
-                    else:
-                        resp = await client.post(url, json=body, headers=merged_headers)
-                    last_resp_or_exc = resp
-                    if resp.is_success:
-                        result.update({"status": "delivered", "status_code": resp.status_code, "error": None})
-                        break
-                    if resp.status_code == 429:
-                        retry_after = _parse_retry_after(resp)
-                        _log.warning(
-                            "Delivery to %s rate-limited (429), retrying after %.0fs (attempt %d/%d)",
-                            url,
-                            retry_after,
-                            attempt + 1,
-                            _REPORT_MAX_RETRIES,
-                        )
-                        await asyncio.sleep(retry_after)
-                        continue
-                    if resp.status_code >= 500:
-                        _log.warning(
-                            "Delivery to %s returned %d, retrying (attempt %d/%d)",
-                            url,
-                            resp.status_code,
-                            attempt + 1,
-                            _REPORT_MAX_RETRIES,
-                        )
-                        delay = min(_REPORT_BACKOFF_BASE**attempt, _REPORT_MAX_BACKOFF)
-                        await asyncio.sleep(delay)
-                        continue
-                    _mark_failed(result, status_code=resp.status_code, error=resp.text[:200])
-                    break
-                except (httpx.RequestError, TypeError) as exc:
-                    _log.warning(
-                        "Delivery to %s failed: %s (attempt %d/%d)",
-                        url,
-                        exc,
-                        attempt + 1,
-                        _REPORT_MAX_RETRIES,
-                        exc_info=True,
-                    )
-                    last_resp_or_exc = exc
-                    if attempt < _REPORT_MAX_RETRIES - 1:
-                        delay = min(_REPORT_BACKOFF_BASE**attempt, _REPORT_MAX_BACKOFF)
-                        await asyncio.sleep(delay)
-            else:
-                if isinstance(last_resp_or_exc, Exception):
-                    _mark_failed(result, error=str(last_resp_or_exc))
-                elif last_resp_or_exc is not None:
-                    err_text = getattr(last_resp_or_exc, "text", None) or "max_retries_exceeded"
-                    _mark_failed(result, status_code=last_resp_or_exc.status_code, error=err_text[:200])
-                else:
-                    _mark_failed(result, error="max_retries_exceeded")
-            results.append(result)
+            results.append(await _deliver_one_url(client, url, body, body_bytes=body_bytes, headers=merged_headers))
     return results
 
 

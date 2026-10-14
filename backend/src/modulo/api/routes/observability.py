@@ -27,6 +27,8 @@ from modulo.settings import Settings, get_settings
 _CODE_OBSERVABILITY_VIEW = "observability.view"
 _CODE_OBSERVABILITY_MANAGE = "observability.manage"
 
+_CODE_OBSERVABILITY_UPDATE_OBSERVABILITY_SETTINGS = "observability.update_observability_settings"
+
 
 _log = logging.getLogger(__name__)
 
@@ -149,10 +151,9 @@ async def get_observability_settings(
     principal: TenantPrincipal = require_permission(_CODE_OBSERVABILITY_VIEW),
 ) -> OtelSettingsResponse:
     try:
-        async with asyncio.timeout(_DB_TIMEOUT):
-            async with session.begin():
-                await set_rls_org(session, principal.organisation_id)
-                merged = await _fetch_and_cache(session, principal.organisation_id)
+        async with asyncio.timeout(_DB_TIMEOUT), session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            merged = await _fetch_and_cache(session, principal.organisation_id)
         return _config_to_response(merged)
     except ProgrammingError as exc:
         _log.exception("observability.get_observability_settings")
@@ -211,21 +212,20 @@ async def update_observability_settings(
             updates["langsmith_api_key_ciphertext"] = fernet.encrypt(req.langsmith_api_key.encode()).decode()
 
     try:
-        async with asyncio.timeout(_DB_TIMEOUT):
-            async with session.begin():
-                await set_rls_org(session, principal.organisation_id)
-                merged = await update_otel_config(session, principal.organisation_id, updates)
+        async with asyncio.timeout(_DB_TIMEOUT), session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            merged = await update_otel_config(session, principal.organisation_id, updates)
         _invalidate_cache(str(principal.organisation_id))
         return _config_to_response(merged)
     except ProgrammingError as exc:
-        _log.exception("observability.update_observability_settings")
+        _log.exception(_CODE_OBSERVABILITY_UPDATE_OBSERVABILITY_SETTINGS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "observability.update_observability_settings")
-        _log.exception("observability.update_observability_settings")
+        raise_session_contract_error(exc, _CODE_OBSERVABILITY_UPDATE_OBSERVABILITY_SETTINGS)
+        _log.exception(_CODE_OBSERVABILITY_UPDATE_OBSERVABILITY_SETTINGS)
         _log.warning(
             "observability.put.db_error",
             extra={"org_id": str(principal.organisation_id)},
@@ -337,10 +337,9 @@ async def get_export_preview(
     principal: TenantPrincipal = require_permission(_CODE_OBSERVABILITY_VIEW),
 ) -> ExportPreviewResponse:
     try:
-        async with asyncio.timeout(_DB_TIMEOUT):
-            async with session.begin():
-                await set_rls_org(session, principal.organisation_id)
-                merged = await _fetch_and_cache(session, principal.organisation_id)
+        async with asyncio.timeout(_DB_TIMEOUT), session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            merged = await _fetch_and_cache(session, principal.organisation_id)
     except ProgrammingError as exc:
         _log.exception("observability.get_export_preview")
         raise HTTPException(

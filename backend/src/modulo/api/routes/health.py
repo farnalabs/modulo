@@ -171,6 +171,16 @@ _RUNNER_MARKER_SWEEP_STALE_SECONDS = 15 * 60
 _RUNNER_HEALTH_PROBE_STATS_KEY = "saq:cron:stats:runner_health_probe"
 _RUNNER_HEALTH_PROBE_STALE_SECONDS = 3 * 60
 
+# decision_record_reconcile (FAR-1108 chunk 8b): the read-only
+# decision-record corruption-detection sweep runs hourly on the system worker
+# and persists its outcome (``scanned`` + anomaly counts) to this Redis key.
+# Same advisory contract as its siblings, with the stale window tuned to the
+# hourly cadence (3h — two missed ticks before it alerts): a dead sweep means
+# the corruption-detection surface has silently stopped, so a missing or stale
+# key warns without gating readiness.
+_DECISION_RECORD_RECONCILE_STATS_KEY = "saq:cron:stats:decision_record_reconcile"
+_DECISION_RECORD_RECONCILE_STALE_SECONDS = 3 * 60 * 60
+
 # System-cron liveness watchdog (plan F8): fire_due_triggers runs every 60s
 # (SAQ system cron, cron="* * * * *"); a machine whose heartbeat is older than
 # 2x the cadence has a silently dead cron scheduler and fails readiness so Fly
@@ -833,9 +843,14 @@ async def _live_worker_hostnames(queue_name: str) -> set[str]:
                 await r.aclose()
 
 
+def _uptime_seconds() -> float:
+    """Seconds since this process started — the deploy/boot reference clock."""
+    return (datetime.now(UTC) - _START_TIME).total_seconds()
+
+
 def _in_fleet_boot_grace() -> bool:
     """True within the fleet gates' post-boot grace window (ADR 043 Decision 3)."""
-    return (datetime.now(UTC) - _START_TIME).total_seconds() < _FLEET_BOOT_GRACE_SECONDS
+    return _uptime_seconds() < _FLEET_BOOT_GRACE_SECONDS
 
 
 async def _check_fleet_saq_workers() -> CheckResult:
@@ -1019,14 +1034,32 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
     Surfaces the reconcile outcome counters (D1): scanned/repaired/skipped/
     redis_errors/deduped plus the claimed-but-never-dispatched recovery
     counter (FAR-714) and the terminalizer and enqueue-failed recovery
-    counters. Every counter defaults to 0 so a pre-D worker's payload renders
-    without error.
+    counters. FAR-1649 adds the node-started counters: ``node_started_deferred``
+    (row-level belt hits) and ``node_started_terminalized`` (node-started rows
+    that reached the terminaliser) - both regression alarms that must never be
+    read as ``claimed_but_never_dispatched``. Every counter defaults to 0 so a
+    pre-D worker's payload renders without error.
+
+    FAR-1621: the per-org counters are included so an alert email can tell the
+    cases apart at a glance - ``org_timeouts`` (TWO classes since FAR-1621,
+    per M4/FAR-1644: the FAR-1525 per-org asyncio cut at the slice deadline
+    AND an in-pass ``TimeoutError`` raised before the slice ran out),
+    ``orgs_deferred`` (orgs never started because only the reserved tick
+    tail remained), ``org_lock_timeouts`` (FAR-1601 SQLSTATE 55P03 skip),
+    ``org_pool_timeouts`` (system-engine pool checkout), ``org_connect_timeouts``
+    (asyncpg's TCP connect bound during session acquisition) and
+    ``org_statement_timeouts`` (FAR-1621 SQLSTATE 57014 statement bound) -
+    five bounded-failure counters plus ``orgs_deferred``. Before them the
+    detail ended at ``rows_deferred``, so the exact class of bounded failure
+    was invisible to the alert.
     """
     return (
         f"scanned={stats.get('scanned', 0)}, repaired={stats.get('repaired', 0)}, "
         f"skipped={stats.get('skipped', 0)}, redis_errors={stats.get('redis_errors', 0)}, "
         f"deduped={stats.get('deduped', 0)}, nodeless_failed={stats.get('nodeless_failed', 0)}, "
         f"claimed_but_never_dispatched={stats.get('claimed_but_never_dispatched', 0)}, "
+        f"node_started_terminalized={stats.get('node_started_terminalized', 0)}, "
+        f"node_started_deferred={stats.get('node_started_deferred', 0)}, "
         f"claim_cap_terminalized={stats.get('claim_cap_terminalized', 0)}, "
         f"age_terminalized={stats.get('age_terminalized', 0)}, "
         f"dispatch_failed_terminalized={stats.get('dispatch_failed_terminalized', 0)}, "
@@ -1036,8 +1069,46 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
         f"capacity_deferred={stats.get('capacity_deferred', 0)}, "
         f"terminalize_capped={stats.get('terminalize_capped', 0)}, "
         f"facts_deferred={stats.get('facts_deferred', 0)}, "
-        f"rows_deferred={stats.get('rows_deferred', 0)}"
+        f"rows_deferred={stats.get('rows_deferred', 0)}, "
+        f"org_timeouts={stats.get('org_timeouts', 0)}, "
+        f"orgs_deferred={stats.get('orgs_deferred', 0)}, "
+        f"org_lock_timeouts={stats.get('org_lock_timeouts', 0)}, "
+        f"org_pool_timeouts={stats.get('org_pool_timeouts', 0)}, "
+        f"org_connect_timeouts={stats.get('org_connect_timeouts', 0)}, "
+        f"org_statement_timeouts={stats.get('org_statement_timeouts', 0)}"
     )
+
+
+def _sweep_missing_key_result(stale_seconds: int, not_applicable: str | None) -> CheckResult:
+    """Result for a MISSING sweep stats key — the shared reader's absent-key arm.
+
+    FAR-1201: when *not_applicable* is provided (the deployment has no Docker
+    endpoint, so the sweep skips every tick), the reading is "not applicable
+    on this deployment".
+
+    FAR-1672 warm-up grace: a missing key is "never run" only once THIS
+    process has been up longer than the sweep's own stale window. Inside that
+    window the absence is indistinguishable from the sweep simply not having
+    had its first tick yet (cadences range from 60s to hourly, so a fresh
+    deploy has a legitimately key-less window — the 2026-10-11
+    decision_record_reconcile page). The grace is the PER-SWEEP stale window
+    rather than a fixed constant: it is already ~3x each sweep's cadence, so
+    beyond it the sweep has had multiple missed cadences in which to write at
+    least once and a still-missing key keeps reporting degraded — the genuine
+    dead-sweep signal is unchanged. (Note: _check_dispatcher_reconcile
+    deliberately does NOT share this reader — its missing-key tier is the
+    readiness-GATING "unavailable" designed in FAR-199, not this advisory
+    degraded.)
+    """
+    if not_applicable is not None:
+        return CheckResult(status="ok", detail=f"not applicable on this deployment: {not_applicable}")
+    uptime = _uptime_seconds()
+    if uptime < stale_seconds:
+        return CheckResult(
+            status="ok",
+            detail=(f"sweep has not run yet (within {stale_seconds}s post-boot warm-up grace, uptime={uptime:.0f}s)"),
+        )
+    return CheckResult(status="degraded", detail="sweep has never run")
 
 
 async def _check_sweep_stats_advisory(
@@ -1054,6 +1125,17 @@ async def _check_sweep_stats_advisory(
     ``runner_health_probe`` reported ok for hours while its stats carried
     ``error: probe_failed, orgs_probed: 0``), and "ok" otherwise. Fail-open
     on Redis read errors (never gates readiness).
+
+    FAR-1672 warm-up grace: a missing key is "never run" only once the
+    process has been up longer than *stale_seconds*. Inside that window the
+    absence is indistinguishable from the sweep simply not having had its
+    first tick yet (the cadences range from 60s to hourly, so a fresh
+    deploy has a legitimately key-less window), so it reports ok with an
+    explicit warm-up detail. Outside the window the sweep has had multiple
+    missed cadences in which to write at least once, so a still-missing key
+    keeps reporting degraded — the genuine dead-sweep signal is unchanged.
+    Behaviour-neutral for any sweep that has ticked at least once: a present
+    key never reaches this branch.
 
     FAR-1201: when *not_applicable* is provided (the deployment has no
     Docker endpoint, so the sweep skips every tick — see
@@ -1086,9 +1168,10 @@ async def _check_sweep_stats_advisory(
                 await r.aclose()
 
     if raw is None:
-        if not_applicable is not None:
-            return CheckResult(status="ok", detail=f"not applicable on this deployment: {not_applicable}")
-        return CheckResult(status="degraded", detail="sweep has never run")
+        # FAR-1672 warm-up grace + FAR-1201 not-applicable: the absent-key arm
+        # is extracted so this reader stays within its cognitive-complexity
+        # budget — see ``_sweep_missing_key_result`` for the decision.
+        return _sweep_missing_key_result(stale_seconds, not_applicable)
     try:
         data = json.loads(raw)
         last_run_at = data.get("last_run_at")
@@ -1244,6 +1327,25 @@ async def _check_runner_health_probe() -> CheckResult:
         _RUNNER_HEALTH_PROBE_STATS_KEY,
         _RUNNER_HEALTH_PROBE_STALE_SECONDS,
         "orgs_probed",
+    )
+
+
+async def _check_decision_record_reconcile() -> CheckResult:
+    """ADVISORY — last decision_record_reconcile outcome (never gates readiness).
+
+    The FAR-1108 chunk-8b read-only decision-record reconciliation sweep
+    (``saq_worker.decision_record_reconcile``) runs hourly in the SYSTEM WORKER
+    process and persists its outcome (``scanned`` + anomaly counts +
+    ``last_run_at``) to ``saq:cron:stats:decision_record_reconcile``. A dead
+    sweep means the decision-record corruption-detection surface has silently
+    stopped; the sweep itself never mutates a record, so this is alert-only —
+    a missing or >3h-stale key reports "degraded" while the app stays healthy.
+    Fail-open on Redis read errors.
+    """
+    return await _check_sweep_stats_advisory(
+        _DECISION_RECORD_RECONCILE_STATS_KEY,
+        _DECISION_RECORD_RECONCILE_STALE_SECONDS,
+        "scanned",
     )
 
 
@@ -1410,6 +1512,7 @@ async def evaluate_readiness() -> ReadinessResponse:
             rwr_check,
             rms_check,
             rhp_check,
+            drr_check,
         ) = await asyncio.gather(
             _check_database(),
             _check_redis(),
@@ -1425,6 +1528,7 @@ async def evaluate_readiness() -> ReadinessResponse:
             _check_runner_workspace_reconcile(),
             _check_runner_marker_sweep(),
             _check_runner_health_probe(),
+            _check_decision_record_reconcile(),
         )
     finally:
         lag_stop.set()
@@ -1511,6 +1615,11 @@ async def evaluate_readiness() -> ReadinessResponse:
         # probe cache (strips age to "status unknown") and silences the
         # transition alerts, so it stays alert-only.
         "runner_health_probe": rhp_check,
+        # ADVISORY only — excluded from the aggregate (never gates readiness).
+        # FAR-1108 chunk 8b: a dead decision-record reconciliation sweep means
+        # the decision-record corruption-detection surface has silently
+        # stopped; the sweep mutates nothing, so it stays alert-only.
+        "decision_record_reconcile": drr_check,
     }
 
     # Aggregate over the NON-advisory checks only.

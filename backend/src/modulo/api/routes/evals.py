@@ -1,11 +1,12 @@
 """Eval management endpoints.
 
 URLs:
-    POST   /api/v1/evals              — create an eval definition (admin only)
+    POST   /api/v1/evals              — create an eval definition (operator or admin)
     GET    /api/v1/runs/{run_id}/evals — list eval results for a run
     POST   /api/v1/evals/compare      — side-by-side comparison of two runs
     GET    /api/v1/evals/coverage     — eval coverage map for a pipeline
-    POST   /api/v1/evals/from-run     — create eval definition from run data
+    POST   /api/v1/evals/from-run     — create eval definition from run data (operator or admin)
+    PUT    /api/v1/evals/{eval_id}    — update an eval definition (operator or admin)
     PUT    /api/v1/evals/suites/{suite_id}/alerting — configure regression alerting (admin only)
     POST   /api/v1/eval-datasets      — create an eval dataset (admin only)
     GET    /api/v1/eval-datasets      — list eval datasets
@@ -26,7 +27,6 @@ URLs:
 
 import logging
 import uuid
-from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -56,6 +56,7 @@ from modulo.api.team_scope import (
 )
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.team_rbac import org_role_level
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.eval_engine.author_warnings import check_author_warnings
@@ -83,11 +84,11 @@ from modulo.core.eval_engine.suite_run import (
     summarise_eval_timeseries,
 )
 from modulo.core.node_output_split import node_return
+from modulo.db.crud._gate_advisory_lock import with_gate_advisory_lock
 from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.crud.run_node_outputs import read_run_blobs
 from modulo.db.models.eval import Eval
 from modulo.db.models.eval_dataset import EvalDataset
-from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.eval_suite import EvalSuite
 from modulo.db.models.pipeline import Pipeline
@@ -122,6 +123,11 @@ _MSG_EVAL_SUITE_NOT_FOUND = "Eval suite not found"
 _MSG_POLICY_GATE_NOT_FOUND = "Policy gate not found for this eval"
 _MSG_POLICY_GATE_CONFLICT = "A policy gate for this eval was created concurrently. Please retry."
 _MSG_POLICY_GATE_LOCK_TIMEOUT = "Gate save is temporarily unavailable due to high contention. Please retry."
+_CODE_EVAL_DEFINITION_UPDATE = "eval.definition.update"
+_CODE_EVAL_DEFINITION_DELETE = "eval.definition.delete"
+_CODE_EVAL_DEFINITION_CREATE = "eval.definition.create"
+_VISIBILITY_PATTERN = "^(org|team)$"
+
 _MSG_POLICY_GATE_CASCADE_CONFLICT = (
     "Cannot delete this eval: it has policy gate decision records. "
     "Remove the associated pipeline run(s) or wait for decision retention "
@@ -173,10 +179,8 @@ class EvalDefinitionResponse(BaseModel):
 
 def _eval_def_to_dict(
     eval_row: Eval,
-    *,
-    policy_gate: PolicyGate | None = None,
 ) -> dict[str, Any]:
-    """Convert an ``Eval`` row (and optional ``PolicyGate``) to the response dict.
+    """Convert an ``Eval`` row to the response dict.
 
     Returns the public fields only; ``failure_behaviour`` is excluded from the
     response shape (it is an internal column, not exposed to callers).
@@ -194,6 +198,24 @@ def _eval_def_to_dict(
         "version": getattr(eval_row, "version", 1),
         "pre_version_raw": getattr(eval_row, "pre_version_raw", None),
     }
+
+
+def _assert_eval_definition_write_role(principal: TenantPrincipal, action: str) -> None:
+    """Operator-or-admin may create/update eval definitions (FAR-735).
+
+    The ``require_permission`` dependency already enforces the ADR 047 registry
+    floor (``eval.definition.create`` / ``eval.definition.update`` resolve to
+    ``operator``), so callers reaching this guard with a JWT org role below
+    ``operator`` are exactly the viewer/runner cases the registry could not
+    stop at the dependency layer (e.g. a runner with a broader legacy bundle).
+    Fail-closed on an unknown/missing role: below-floor callers receive 403.
+    Delete is NOT covered here — it stays admin-only, mirroring the MCP tool.
+    """
+    if principal.org_role is None or org_role_level(principal.org_role) < org_role_level("operator"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Only operators or admins can {action} eval definitions",
+        )
 
 
 def _validate_guardrail_request(
@@ -304,44 +326,16 @@ class PolicyGateResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Policy Gate helpers — advisory lock and create-or-replace
+# Policy Gate helpers — shared advisory lock and create-or-replace
 # ---------------------------------------------------------------------------
 
-_GATE_LOCK_TIMEOUT_SQL = "SET LOCAL statement_timeout = '5s'"
-_GATE_ADVISORY_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext(:key))"
-_GATE_LOCK_KEY_PREFIX = "policy_gate:"
-
-
-async def _with_gate_advisory_lock[T](
-    eval_id: uuid.UUID,
-    session: AsyncSession,
-    fn: Callable[..., Awaitable[T]],
-) -> T:
-    """Execute *fn* while holding a transaction-scoped advisory lock keyed on *eval_id*.
-
-    The lock is released when the transaction commits or rolls back.
-
-    PostgreSQL advisory locks are transaction-scoped when called inside a
-    transaction.  The lock key is derived from *eval_id* via ``hashtext()``
-    — the established pattern for string-keyed advisory locks in this
-    codebase (see ``gate_coalescing.py:107``).
-
-    ``SET LOCAL statement_timeout`` limits how long the session blocks on
-    ``pg_advisory_xact_lock``.  5 seconds is long enough for normal
-    acquisition (the lock is held only for the check-delete-insert sequence)
-    and short enough to surface contention to the caller quickly.
-    On timeout, PostgreSQL raises ``statement_timeout`` (SQLSTATE 57014)
-    which surfaces as a 503 Service Unavailable.
-
-    Generic over the wrapped callable's return type (FAR-967 F6): the
-    toggle handler wraps its load-and-mutate under the SAME lock, so the
-    helper must be able to return whatever the callback produces — not only
-    a ``PolicyGate``.
-    """
-    lock_key = f"{_GATE_LOCK_KEY_PREFIX}{eval_id}"
-    await session.execute(text(_GATE_LOCK_TIMEOUT_SQL))
-    await session.execute(text(_GATE_ADVISORY_LOCK_SQL), {"key": lock_key})
-    return await fn()
+# The per-eval advisory lock is SHARED with the declarative graph writer
+# (``modulo.db.crud.pipeline``): both serialise through
+# ``modulo.db.crud._gate_advisory_lock.with_gate_advisory_lock`` — the SAME
+# ``policy_gate:<eval_id>`` key through ``hashtext`` (FAR-1688). The helper
+# lives in a neutral ``db``-side module because the ``db-does-not-import-core``
+# import-linter contract forbids ``modulo.db`` -> ``modulo.api``, so this layer
+# cannot own the helper the DB layer also needs.
 
 
 async def _create_or_replace_gate(
@@ -411,7 +405,7 @@ async def _create_or_replace_gate(
         await session.flush()
         return new_gate
 
-    return await _with_gate_advisory_lock(eval_id, session, _do_insert)
+    return await with_gate_advisory_lock(eval_id, session, _do_insert)
 
 
 async def _load_eval_or_404(
@@ -537,7 +531,7 @@ async def create_policy_gate(
     eval_id: uuid.UUID,
     req: PolicyGateCreateRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.update"),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_UPDATE),
 ) -> PolicyGateResponse:
     """Create a PolicyGate for an eval (admin only).
 
@@ -702,7 +696,7 @@ async def update_policy_gate(
     eval_id: uuid.UUID,
     req: PolicyGateUpdateRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.update"),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_UPDATE),
 ) -> PolicyGateResponse:
     """Update a PolicyGate's action (admin only).
 
@@ -854,7 +848,7 @@ async def update_policy_gate(
 async def delete_policy_gate(
     eval_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.delete"),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_DELETE),
 ) -> None:
     """Soft-delete a PolicyGate (admin only).
 
@@ -978,7 +972,7 @@ async def toggle_policy_gate(
     eval_id: uuid.UUID,
     req: PolicyGateToggleRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.update"),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_UPDATE),
 ) -> PolicyGateResponse:
     """Enable or disable a PolicyGate (admin only).
 
@@ -1034,7 +1028,7 @@ async def toggle_policy_gate(
                     gate.enabled_at = None
                 return gate, pre_enabled
 
-            gate, pre_enabled = await _with_gate_advisory_lock(eval_id, session, _do_toggle)
+            gate, pre_enabled = await with_gate_advisory_lock(eval_id, session, _do_toggle)
 
             # Audit log (best-effort — a failed audit never blocks the toggle)
             try:
@@ -1207,17 +1201,14 @@ async def get_policy_gate(
 async def create_eval_definition(
     req: CreateEvalRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.create"),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_CREATE),
 ) -> dict[str, Any]:
     """Create a new eval definition.
 
-    Admin only. The eval definition is scoped to the caller's organisation.
+    Operator or admin only (FAR-735). The eval definition is scoped to the
+    caller's organisation.
     """
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can create eval definitions",
-        )
+    _assert_eval_definition_write_role(principal, "create")
 
     _validate_guardrail_request(
         eval_type=req.eval_type,
@@ -1341,25 +1332,6 @@ async def list_eval_definitions(
                 .limit(page_size)
             )
             rows = (await session.execute(q)).scalars().all()
-
-            # Batch-load PolicyGates for the page (one query, not N+1).
-            gate_map: dict[uuid.UUID, PolicyGate] = {}
-            if rows:
-                eval_ids = [r.id for r in rows]
-                gates = (
-                    (
-                        await session.execute(
-                            select(PolicyGate).where(
-                                PolicyGate.eval_id.in_(eval_ids),
-                                PolicyGate.organisation_id == principal.organisation_id,
-                                PolicyGate.deleted_at.is_(None),
-                            )
-                        )
-                    )
-                    .scalars()
-                    .all()
-                )
-                gate_map = {g.eval_id: g for g in gates}
     except HTTPException:
         raise
     except IntegrityError:
@@ -1390,7 +1362,7 @@ async def list_eval_definitions(
         ) from None
 
     return EvalDefinitionListResponse(
-        items=[EvalDefinitionResponse(**_eval_def_to_dict(d, policy_gate=gate_map.get(d.id))) for d in rows],
+        items=[EvalDefinitionResponse(**_eval_def_to_dict(d)) for d in rows],
         total=total,
         page=page,
         page_size=page_size,
@@ -1439,14 +1411,17 @@ async def eval_coverage(
             nodes_raw = pipeline.graph_nodes_json or []
             node_ids = [str(n.get("id")) for n in nodes_raw if n.get("id")]
 
+            # FAR-1729: read live ``evals`` rows (the storage source since the
+            # 0254 cutover) — the frozen ``eval_definitions`` snapshot stops at
+            # the cutover, so post-cutover definitions would be invisible here.
             eval_defs_rows = (
                 (
                     await session.execute(
-                        select(EvalDefinition).where(
-                            EvalDefinition.pipeline_id == pipeline_id,
-                            EvalDefinition.organisation_id == principal.organisation_id,
-                            EvalDefinition.node_id.in_([uuid.UUID(nid) for nid in node_ids if nid]),
-                            EvalDefinition.deleted_at.is_(None),
+                        select(Eval).where(
+                            Eval.pipeline_id == pipeline_id,
+                            Eval.organisation_id == principal.organisation_id,
+                            Eval.node_id.in_([uuid.UUID(nid) for nid in node_ids if nid]),
+                            Eval.deleted_at.is_(None),
                         )
                     )
                 )
@@ -1644,12 +1619,15 @@ async def eval_timeseries(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
+            # FAR-1729: the exists/name lookup must read ``evals`` — checking
+            # the frozen ``eval_definitions`` snapshot 404s every post-cutover
+            # eval even though its results exist.
             eval_def = (
                 await session.execute(
                     include_soft_deleted(
-                        select(EvalDefinition).where(
-                            EvalDefinition.id == eval_id,
-                            EvalDefinition.organisation_id == principal.organisation_id,
+                        select(Eval).where(
+                            Eval.id == eval_id,
+                            Eval.organisation_id == principal.organisation_id,
                         )
                     )
                 )
@@ -1831,7 +1809,7 @@ async def update_suite_alerting(
     suite_id: uuid.UUID,
     req: EvalSuiteAlertingRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.update"),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_UPDATE),
     _: TenantPrincipal = require_team_membership_or_admin(resolve_eval_suite_team_scope),
 ) -> EvalSuiteAlertingResponse:
     """Configure regression alerting for an eval suite (FAR-379).
@@ -1918,13 +1896,13 @@ async def update_suite_alerting(
 class CreateEvalDatasetRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     owner_team_id: uuid.UUID | None = None
-    visibility: str = Field(default="org", pattern=r"^(org|team)$")
+    visibility: str = Field(default="org", pattern=_VISIBILITY_PATTERN)
 
 
 class UpdateEvalDatasetRequest(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     owner_team_id: uuid.UUID | None = None
-    visibility: str | None = Field(None, pattern=r"^(org|team)$")
+    visibility: str | None = Field(None, pattern=_VISIBILITY_PATTERN)
 
 
 class EvalDatasetResponse(BaseModel):
@@ -1976,7 +1954,7 @@ _MSG_EVAL_DATASET_NOT_FOUND = "Eval dataset not found"
 async def create_eval_dataset(
     req: CreateEvalDatasetRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.create"),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_CREATE),
 ) -> EvalDatasetResponse:
     if principal.org_role != "admin":
         raise HTTPException(
@@ -2106,7 +2084,7 @@ async def update_eval_dataset(
     dataset_id: uuid.UUID,
     req: UpdateEvalDatasetRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.update"),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_UPDATE),
     _: TenantPrincipal = require_team_membership_or_admin(resolve_eval_dataset_team_scope),
 ) -> EvalDatasetResponse:
     if principal.org_role != "admin":
@@ -2166,7 +2144,7 @@ async def update_eval_dataset(
 async def delete_eval_dataset(
     dataset_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.delete"),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_DELETE),
     _: TenantPrincipal = require_team_membership_or_admin(resolve_eval_dataset_team_scope),
 ) -> None:
     if principal.org_role != "admin":
@@ -2210,14 +2188,14 @@ class CreateEvalSuiteRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
     owner_team_id: uuid.UUID | None = None
-    visibility: str = Field(default="org", pattern=r"^(org|team)$")
+    visibility: str = Field(default="org", pattern=_VISIBILITY_PATTERN)
 
 
 class UpdateEvalSuiteRequest(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = None
     owner_team_id: uuid.UUID | None = None
-    visibility: str | None = Field(None, pattern=r"^(org|team)$")
+    visibility: str | None = Field(None, pattern=_VISIBILITY_PATTERN)
 
 
 class EvalSuiteResponse(BaseModel):
@@ -2273,7 +2251,7 @@ _MSG_EVAL_SUITE_NOT_FOUND_DETAIL = "Eval suite not found"
 async def create_eval_suite(
     req: CreateEvalSuiteRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.create"),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_CREATE),
 ) -> EvalSuiteResponse:
     if principal.org_role != "admin":
         raise HTTPException(
@@ -2399,7 +2377,7 @@ async def update_eval_suite(
     suite_id: uuid.UUID,
     req: UpdateEvalSuiteRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.update"),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_UPDATE),
     _: TenantPrincipal = require_team_membership_or_admin(resolve_eval_suite_team_scope),
 ) -> EvalSuiteResponse:
     if principal.org_role != "admin":
@@ -2458,7 +2436,7 @@ async def update_eval_suite(
 async def delete_eval_suite(
     suite_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.delete"),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_DELETE),
     _: TenantPrincipal = require_team_membership_or_admin(resolve_eval_suite_team_scope),
 ) -> None:
     if principal.org_role != "admin":
@@ -2507,8 +2485,7 @@ async def get_eval_definition(
     """Get a single eval definition by ID.
 
     Reads from the ``evals`` table (chunk 3b cutover).  Includes
-    soft-deleted rows for historical lookups.  The associated
-    ``PolicyGate`` (if any) is loaded for the response mapping.
+    soft-deleted rows for historical lookups.
     """
     try:
         async with session.begin():
@@ -2523,19 +2500,6 @@ async def get_eval_definition(
                 )
             )
             eval_row = result.scalar_one_or_none()
-
-            # Load the associated PolicyGate (if any) for the response mapping.
-            policy_gate: PolicyGate | None = None
-            if eval_row is not None:
-                gate_result = await session.execute(
-                    include_soft_deleted(
-                        select(PolicyGate).where(
-                            PolicyGate.eval_id == eval_row.id,
-                            PolicyGate.organisation_id == principal.organisation_id,
-                        )
-                    )
-                )
-                policy_gate = gate_result.scalar_one_or_none()
     except HTTPException:
         raise
     except IntegrityError:
@@ -2566,7 +2530,7 @@ async def get_eval_definition(
         ) from None
     if eval_row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_DEFINITION_NOT_FOUND)
-    return _eval_def_to_dict(eval_row, policy_gate=policy_gate)
+    return _eval_def_to_dict(eval_row)
 
 
 @router.put(
@@ -2581,16 +2545,15 @@ async def update_eval_definition(
     eval_id: uuid.UUID,
     req: UpdateEvalRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.update"),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_UPDATE),
 ) -> dict[str, Any]:
-    """Update an eval definition. Admin only.
+    """Update an eval definition. Operator or admin only (FAR-735).
 
     Reads from the ``evals`` table (chunk 3b cutover).  The update is
     persisted via ``create_or_update_eval`` which handles version stamping
     and PolicyGate management internally.
     """
-    if principal.org_role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can update eval definitions")
+    _assert_eval_definition_write_role(principal, "update")
 
     try:
         async with session.begin():
@@ -2653,17 +2616,6 @@ async def update_eval_definition(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"PolicyGate binding violation: {exc}",
                 ) from exc
-
-            # Reload the PolicyGate for the response mapping (it may have
-            # been created/updated by the helper).
-            gate_result = await session.execute(
-                select(PolicyGate).where(
-                    PolicyGate.eval_id == eval_row.id,
-                    PolicyGate.organisation_id == principal.organisation_id,
-                    PolicyGate.deleted_at.is_(None),
-                )
-            )
-            policy_gate = gate_result.scalar_one_or_none()
     except HTTPException:
         raise
     except IntegrityError:
@@ -2693,7 +2645,7 @@ async def update_eval_definition(
             detail="An unexpected error occurred while updating the eval definition.",
         ) from None
 
-    return _eval_def_to_dict(eval_row, policy_gate=policy_gate)
+    return _eval_def_to_dict(eval_row)
 
 
 @router.delete(
@@ -2714,7 +2666,7 @@ async def delete_eval_definition(
     eval_id: uuid.UUID,
     purge: bool = Query(False, description="Hard-remove a soft-deleted guardrail eval definition (step 2)"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.delete"),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_DELETE),
 ) -> None:
     """Delete an eval definition. Admin only.
 
@@ -3124,13 +3076,16 @@ async def _fetch_eval_definitions(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            # FAR-1729: names come from the live ``evals`` table — reading the
+            # frozen snapshot silently labels every post-cutover result
+            # ``eval_name: "unknown"`` in the compare payload.
             defs_rows = (
                 (
                     await session.execute(
                         include_soft_deleted(
-                            select(EvalDefinition).where(
-                                EvalDefinition.id.in_(eval_ids),
-                                EvalDefinition.organisation_id == principal.organisation_id,
+                            select(Eval).where(
+                                Eval.id.in_(eval_ids),
+                                Eval.organisation_id == principal.organisation_id,
                             )
                         )
                     )
@@ -3408,14 +3363,10 @@ async def _insert_eval_definition(
 async def create_eval_from_run(
     req: CreateEvalFromRunRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.create"),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_CREATE),
 ) -> dict[str, Any]:
-    """Create an eval definition pre-populated from run output."""
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can create eval definitions",
-        )
+    """Create an eval definition pre-populated from run output. Operator or admin (FAR-735)."""
+    _assert_eval_definition_write_role(principal, "create")
     run, sample_output = await _eval_from_run_source(session, principal, req)
     config_json = _build_eval_config_json(req.eval_type, sample_output)
     eval_dict = await _insert_eval_definition(session, principal, req, run, config_json)

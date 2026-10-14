@@ -23,9 +23,15 @@ status: covered
 
 # Secrets Backend
 
-The pluggable at-rest secret store for credential material (connector
-credentials, model-backend API keys, notification endpoints and OTel export
-keys). The ``SecretsBackend`` ABC exposes async ``get_secret`` / ``set_secret``
+The pluggable at-rest secret store for external credential material. The
+current production writers through it are model-backend API keys
+(`api/routes/model_backends.py`) and the organisation secret vault
+(`api/mcp_server.py`); the connector hub *prefers* this backend on read and
+falls back to the connector row's own ciphertext column. Notification-endpoint
+and OTel export keys are written direct-Fernet into their own columns and are
+re-wrapped by ``fernet_rotation.py`` — they are not routed through the
+pluggable store. The ``SecretsBackend`` ABC exposes async ``get_secret`` /
+``set_secret``
 / ``delete_secret``; the factory selects ``fernet`` (default, Fernet-encrypted
 rows in the ``secrets`` table), ``vault`` (HashiCorp Vault) or ``aws`` (Secrets
 Manager), with a license gate for external backends. ``fernet_rotation.py``
@@ -79,6 +85,13 @@ rather than in the manifest registry.
   factory, and the unlicensed fallback end to end instead.
 
 ## QA History
+
+- 2026-10-10: **qa-iterate product-map pass** — corrected the summary scope: the
+  pluggable backend's production writers are model-backend keys
+  (`api/routes/model_backends.py`) and the org secret vault
+  (`api/mcp_server.py`), with the connector hub preferring it on read and falling
+  back to the connector row's ciphertext; notification-endpoint and OTel keys are
+  written direct-Fernet and only re-wrapped by `fernet_rotation`. Status: covered.
 
 - 2026-09-19: **product-map review pass** — closed the "No
   BDD feature files" gap. Registered ``backend/tests/bdd/features/infra/

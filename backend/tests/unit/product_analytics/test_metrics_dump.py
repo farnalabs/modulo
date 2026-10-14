@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,12 +12,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core.product_analytics.consent import apply_consent_action, default_consent_state
+from modulo.core.product_analytics.constants import (
+    DUMP_COUNT_KEY,
+    DUMP_WATERMARK_KEY,
+    coerce_dump_count,
+)
 from modulo.core.product_analytics.metrics_dump import (
     _BACKFILL_MAX_DAYS,
     _DUMP_EXECUTION_WINDOW_MINUTES,
     _DUMP_WINDOW_MINUTES,
     _OFFSET_KEY,
-    _WATERMARK_KEY,
     SCHEMA_VERSION,
     _build_instance_metadata,
     _build_payload,
@@ -36,6 +41,24 @@ from modulo.core.product_analytics.vendor_client import (
     VendorClient,
     sign_outbound_batch,
 )
+
+
+@pytest.fixture(autouse=True)
+def _stub_purge_staging(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub ``_purge_staging`` for every metrics_dump test in this module.
+
+    FAR-1717 made ``metrics_dump`` purge ``metrics_staging`` on EVERY tick,
+    before the jitter gate. The ``_FakeSessionFactory`` sessions in this module
+    cannot execute SQL (their ``execute`` returns a bare MagicMock), so the real
+    purge would blow up on the watermark read instead of testing the gate under
+    examination. The purge's real behaviour — including that it fires on a
+    jitter-skip tick — is covered against a real in-memory DB by
+    ``tests/unit/product_analytics/test_metrics_staging_consumer.py``.
+    """
+    from modulo.core.product_analytics import metrics_dump as md_module
+
+    monkeypatch.setattr(md_module, "_purge_staging", AsyncMock(return_value=0))
+
 
 # --- HMAC signing ---
 
@@ -90,7 +113,7 @@ class TestSchemaVersion:
         assert SCHEMA_VERSION > 0
 
     def test_watermark_key_is_string(self) -> None:
-        assert isinstance(_WATERMARK_KEY, str)
+        assert isinstance(DUMP_WATERMARK_KEY, str)
 
     def test_backfill_cap_is_14_days(self) -> None:
         assert _BACKFILL_MAX_DAYS == 14
@@ -126,7 +149,7 @@ class TestGetConsentingOrgs:
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock(return_value=mock_result)
 
-        result = await _get_consenting_orgs(mock_session)
+        result = await _get_consenting_orgs(mock_session, enforcement_active=False)
         assert len(result) == 1
         assert result[0]["id"] == org_id_1
         assert result[0]["level_changed_at"] == date(2026, 8, 15)
@@ -138,7 +161,7 @@ class TestGetConsentingOrgs:
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock(return_value=mock_result)
 
-        result = await _get_consenting_orgs(mock_session)
+        result = await _get_consenting_orgs(mock_session, enforcement_active=False)
         assert result == []
 
     @pytest.mark.asyncio
@@ -154,7 +177,7 @@ class TestGetConsentingOrgs:
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock(return_value=mock_result)
 
-        result = await _get_consenting_orgs(mock_session)
+        result = await _get_consenting_orgs(mock_session, enforcement_active=False)
         assert result[0]["level_changed_at"] == date(2026, 7, 1)
 
     @pytest.mark.asyncio
@@ -180,7 +203,7 @@ class TestGetConsentingOrgs:
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock(return_value=mock_result)
 
-        result = await _get_consenting_orgs(mock_session)
+        result = await _get_consenting_orgs(mock_session, enforcement_active=False)
         assert result[0]["level_changed_at"] == date(2026, 8, 15)
 
     @pytest.mark.asyncio
@@ -196,7 +219,7 @@ class TestGetConsentingOrgs:
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock(return_value=mock_result)
 
-        result = await _get_consenting_orgs(mock_session)
+        result = await _get_consenting_orgs(mock_session, enforcement_active=False)
         assert len(result) == 1
         assert result[0]["level_changed_at"] is None
 
@@ -213,8 +236,80 @@ class TestGetConsentingOrgs:
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock(return_value=mock_result)
 
-        result = await _get_consenting_orgs(mock_session)
+        result = await _get_consenting_orgs(mock_session, enforcement_active=False)
         assert result == []
+
+
+class TestGetConsentingOrgsLicenseEnforcement:
+    """Partner carve-out (design §6): a degraded org is excluded from the dump.
+
+    ``should_degrade_to_community`` implies a non-``all`` level, so the consent
+    predicate alone would already exclude these rows — the enforcement filter is
+    defence-in-depth for that overlap (and for any future level that counts as
+    consenting while still degrading). These tests pin the filter by forcing the
+    degrade verdict on an otherwise-consenting row.
+    """
+
+    @pytest.mark.asyncio
+    async def test_degraded_consenting_org_is_excluded(self) -> None:
+        rows = [
+            MagicMock(
+                id="eeee-5555",
+                settings_json={"product_analytics": {"level": "all"}},
+            ),
+        ]
+        mock_result = MagicMock()
+        mock_result.__iter__ = MagicMock(return_value=iter(rows))
+        mock_session = AsyncMock()
+        mock_session.execute = AsyncMock(return_value=mock_result)
+
+        with patch(
+            "modulo.core.product_analytics.metrics_dump.should_degrade_to_community",
+            return_value=True,
+        ):
+            result = await _get_consenting_orgs(mock_session, enforcement_active=True)
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_non_degraded_consenting_org_is_kept(self) -> None:
+        rows = [
+            MagicMock(
+                id="ffff-6666",
+                settings_json={"product_analytics": {"level": "all"}},
+            ),
+        ]
+        mock_result = MagicMock()
+        mock_result.__iter__ = MagicMock(return_value=iter(rows))
+        mock_session = AsyncMock()
+        mock_session.execute = AsyncMock(return_value=mock_result)
+
+        with patch(
+            "modulo.core.product_analytics.metrics_dump.should_degrade_to_community",
+            return_value=False,
+        ):
+            result = await _get_consenting_orgs(mock_session, enforcement_active=True)
+        assert len(result) == 1
+        assert result[0]["id"] == "ffff-6666"
+
+    @pytest.mark.asyncio
+    async def test_enforcement_off_skips_degrade_check(self) -> None:
+        rows = [
+            MagicMock(
+                id="gggg-7777",
+                settings_json={"product_analytics": {"level": "all"}},
+            ),
+        ]
+        mock_result = MagicMock()
+        mock_result.__iter__ = MagicMock(return_value=iter(rows))
+        mock_session = AsyncMock()
+        mock_session.execute = AsyncMock(return_value=mock_result)
+
+        with patch(
+            "modulo.core.product_analytics.metrics_dump.should_degrade_to_community",
+            side_effect=AssertionError("must not consult the degrade helper when enforcement is off"),
+        ):
+            result = await _get_consenting_orgs(mock_session, enforcement_active=False)
+        assert len(result) == 1
 
 
 # --- ISO date/datetime parsing ---
@@ -478,6 +573,11 @@ class TestMetricsDumpSkipConditions:
                 return_value=[],
             ),
             patch(
+                "modulo.core.product_analytics.metrics_dump.is_enforcement_active",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
                 "modulo.settings.get_settings",
                 return_value=MagicMock(),
             ),
@@ -509,6 +609,11 @@ class TestMetricsDumpSkipConditions:
                 "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
                 new_callable=AsyncMock,
                 return_value=orgs,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.is_enforcement_active",
+                new_callable=AsyncMock,
+                return_value=False,
             ),
             patch(
                 "modulo.core.product_analytics.metrics_dump.read_system_config",
@@ -575,6 +680,11 @@ class TestSystemSessionFactory:
                 new_callable=AsyncMock,
                 return_value=[],
             ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.is_enforcement_active",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
             patch("modulo.settings.get_settings", return_value=MagicMock()),
         ):
             result = await metrics_dump({})
@@ -615,6 +725,11 @@ class TestSystemSessionFactory:
                 new_callable=AsyncMock,
                 return_value=[],
             ) as get_orgs,
+            patch(
+                "modulo.core.product_analytics.metrics_dump.is_enforcement_active",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
             patch("modulo.settings.get_settings", return_value=MagicMock()),
         ):
             result = await metrics_dump({})
@@ -864,7 +979,7 @@ class TestResolveStartDate:
         mock_result.__iter__ = MagicMock(return_value=iter([row]))
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock(return_value=mock_result)
-        orgs = await _get_consenting_orgs(mock_session)
+        orgs = await _get_consenting_orgs(mock_session, enforcement_active=False)
         assert orgs[0]["level_changed_at"] == date(2026, 8, 1)
 
         factory = _FakeSessionFactory()
@@ -1017,6 +1132,96 @@ class TestDumpDateRange:
                 "secret",
             )
         assert result == [date(2026, 8, 10), date(2026, 8, 11), date(2026, 8, 12)]
+
+    @pytest.mark.asyncio
+    async def test_raising_close_logged_and_swallowed(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A ``close()`` that raises never escapes ``_dump_date_range``.
+
+        The teardown sits in ``finally`` AFTER the body, so without its own
+        guard a raising ``close()`` would discard the returned date list on
+        both the success path and the failed-POST ``break`` path.
+        """
+        factory = _FakeSessionFactory()
+        orgs = [{"id": "org-1", "level_changed_at": None}]
+        with (
+            patch(
+                "modulo.core.product_analytics.metrics_dump._build_payload",
+                new_callable=AsyncMock,
+                return_value={"schema_version": 1},
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.VendorClient",
+            ) as mock_client_cls,
+        ):
+            mock_client = AsyncMock()
+            mock_client.post_batch = AsyncMock(return_value=(True, 200, None))
+            mock_client.close = AsyncMock(side_effect=RuntimeError("teardown failed"))
+            mock_client_cls.return_value = mock_client
+
+            with caplog.at_level(logging.ERROR, logger="modulo.core.product_analytics.metrics_dump"):
+                result = await _dump_date_range(
+                    factory,
+                    orgs,
+                    date(2026, 8, 10),
+                    date(2026, 8, 10),
+                    "https://vendor.example.com",
+                    "secret",
+                )
+
+            assert result == [date(2026, 8, 10)]
+            mock_client.close.assert_awaited_once()
+            assert "product_analytics.dump_client_close_failed" in caplog.messages
+
+            # Failure path (failed POST -> early break): the date list still returns.
+            caplog.clear()
+            mock_client.post_batch = AsyncMock(return_value=(False, 500, "vendor error"))
+
+            with caplog.at_level(logging.ERROR, logger="modulo.core.product_analytics.metrics_dump"):
+                failed = await _dump_date_range(
+                    factory,
+                    orgs,
+                    date(2026, 8, 10),
+                    date(2026, 8, 11),
+                    "https://vendor.example.com",
+                    "secret",
+                )
+
+            assert not failed
+            assert "product_analytics.dump_client_close_failed" in caplog.messages
+
+    @pytest.mark.asyncio
+    async def test_raising_close_does_not_displace_body_exception(self) -> None:
+        """Body exception + failing teardown: the BODY's error wins.
+
+        Without the teardown guard the ``finally``'s exception replaces the
+        propagating ``RuntimeError`` from ``_build_payload``, masking the real
+        failure with the teardown's own message.
+        """
+        factory = _FakeSessionFactory()
+        orgs = [{"id": "org-1", "level_changed_at": None}]
+        with (
+            patch(
+                "modulo.core.product_analytics.metrics_dump._build_payload",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("payload boom"),
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.VendorClient",
+            ) as mock_client_cls,
+        ):
+            mock_client = AsyncMock()
+            mock_client.close = AsyncMock(side_effect=RuntimeError("teardown failed"))
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(RuntimeError, match="payload boom"):
+                await _dump_date_range(
+                    factory,
+                    orgs,
+                    date(2026, 8, 10),
+                    date(2026, 8, 10),
+                    "https://vendor.example.com",
+                    "secret",
+                )
 
 
 # --- _build_payload ---
@@ -1174,6 +1379,11 @@ class TestMetricsDumpSuccess:
                 return_value=orgs,
             ),
             patch(
+                "modulo.core.product_analytics.metrics_dump.is_enforcement_active",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
                 "modulo.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 return_value=None,
@@ -1190,7 +1400,7 @@ class TestMetricsDumpSuccess:
             patch(
                 "modulo.core.product_analytics.metrics_dump.write_system_config",
                 new_callable=AsyncMock,
-            ),
+            ) as write_cfg,
             patch(
                 "modulo.core.saq_worker._make_system_session_factory",
                 return_value=factory,
@@ -1206,6 +1416,10 @@ class TestMetricsDumpSuccess:
             result = await metrics_dump({})
         assert result["dumped_dates"] == ["2026-08-10"]
         assert result["org_count"] == 1
+        written = {call.args[1]: call.args[2] for call in write_cfg.await_args_list}
+        # A successful dump advances the watermark AND records a real count.
+        assert written[DUMP_WATERMARK_KEY] == "2026-08-10"
+        assert written[DUMP_COUNT_KEY] == 1
 
     @pytest.mark.asyncio
     async def test_jitter_skip(self) -> None:
@@ -1249,6 +1463,11 @@ class TestMetricsDumpSuccess:
                 return_value=[{"id": "org-1", "level_changed_at": None}],
             ),
             patch(
+                "modulo.core.product_analytics.metrics_dump.is_enforcement_active",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
                 "modulo.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 return_value=today.isoformat(),
@@ -1286,6 +1505,11 @@ class TestMetricsDumpSuccess:
                 return_value=orgs,
             ),
             patch(
+                "modulo.core.product_analytics.metrics_dump.is_enforcement_active",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
                 "modulo.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 return_value=None,
@@ -1314,6 +1538,207 @@ class TestMetricsDumpSuccess:
             result = await metrics_dump({})
         assert not result["dumped_dates"]
         write_cfg.assert_not_awaited()
+
+
+# --- Dump counter ---
+
+
+class TestDumpCount:
+    """A successful (non-skipped) dump records a real ``DUMP_COUNT_KEY`` total.
+
+    The counter is the source the transparency endpoint reads for
+    ``dump_count_total``; without this the page can only ever render ``0``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_increments_from_absent(self) -> None:
+        factory = _FakeSessionFactory()
+        orgs = [{"id": "org-1", "level_changed_at": None}]
+        with (
+            patch(
+                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._check_instance_switch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                new_callable=AsyncMock,
+                return_value=orgs,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.is_enforcement_active",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._dump_date_range",
+                new_callable=AsyncMock,
+                return_value=[date(2026, 8, 10)],
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.acquire_kv_lock",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.write_system_config",
+                new_callable=AsyncMock,
+            ) as write_cfg,
+            patch(
+                "modulo.core.saq_worker._make_system_session_factory",
+                return_value=factory,
+            ),
+            patch(
+                "modulo.settings.get_settings",
+                return_value=MagicMock(
+                    product_analytics_endpoint_url="https://vendor.example.com",
+                    product_analytics_instance_secret="secret",
+                ),
+            ),
+        ):
+            await metrics_dump({})
+        written = {call.args[1]: call.args[2] for call in write_cfg.await_args_list}
+        assert written[DUMP_COUNT_KEY] == 1
+
+    @pytest.mark.asyncio
+    async def test_increments_from_existing_value(self) -> None:
+        factory = _FakeSessionFactory()
+        orgs = [{"id": "org-1", "level_changed_at": None}]
+
+        async def _read(session: object, key: str) -> str | None:
+            if key == DUMP_COUNT_KEY:
+                return "41"
+            return None
+
+        with (
+            patch(
+                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._check_instance_switch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                new_callable=AsyncMock,
+                return_value=orgs,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.is_enforcement_active",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                new_callable=AsyncMock,
+                side_effect=_read,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._dump_date_range",
+                new_callable=AsyncMock,
+                return_value=[date(2026, 8, 10)],
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.acquire_kv_lock",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.write_system_config",
+                new_callable=AsyncMock,
+            ) as write_cfg,
+            patch(
+                "modulo.core.saq_worker._make_system_session_factory",
+                return_value=factory,
+            ),
+            patch(
+                "modulo.settings.get_settings",
+                return_value=MagicMock(
+                    product_analytics_endpoint_url="https://vendor.example.com",
+                    product_analytics_instance_secret="secret",
+                ),
+            ),
+        ):
+            await metrics_dump({})
+        written = {call.args[1]: call.args[2] for call in write_cfg.await_args_list}
+        assert written[DUMP_COUNT_KEY] == 42
+
+    @pytest.mark.asyncio
+    async def test_skip_does_not_increment(self) -> None:
+        factory = _FakeSessionFactory()
+        with (
+            patch(
+                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._check_instance_switch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.is_enforcement_active",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.write_system_config",
+                new_callable=AsyncMock,
+            ) as write_cfg,
+            patch(
+                "modulo.core.saq_worker._make_system_session_factory",
+                return_value=factory,
+            ),
+            patch("modulo.settings.get_settings", return_value=MagicMock()),
+        ):
+            result = await metrics_dump({})
+        assert result["skipped"] == "no_consenting_orgs"
+        write_cfg.assert_not_awaited()
+
+
+class TestCoerceDumpCount:
+    @pytest.mark.parametrize(
+        ("stored", "expected"),
+        [
+            (None, 0),
+            (0, 0),
+            ("0", 0),
+            (7, 7),
+            ("42", 42),
+            ("not-a-number", 0),
+            (-3, 0),
+            (True, 1),
+        ],
+        ids=[
+            "none",
+            "zero-int",
+            "zero-string",
+            "positive-int",
+            "positive-string",
+            "malformed",
+            "negative",
+            "bool",
+        ],
+    )
+    def test_coercion(self, stored: object, expected: int) -> None:
+        assert coerce_dump_count(stored) == expected
 
 
 # --- _get_or_create_system_config ---
@@ -1363,8 +1788,26 @@ class TestGetConsentingOrgsExtended:
         mock_result.__iter__ = MagicMock(return_value=iter(rows))
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock(return_value=mock_result)
-        result = await _get_consenting_orgs(mock_session)
+        result = await _get_consenting_orgs(mock_session, enforcement_active=False)
         assert result == []
+
+    @pytest.mark.asyncio
+    async def test_skips_non_dict_settings_without_raising(self) -> None:
+        """A malformed (non-dict) ``settings_json`` is skipped, not a dump crash."""
+        rows = [
+            MagicMock(id="org-bad", settings_json=["not", "a", "dict"]),
+            MagicMock(
+                id="org-good",
+                settings_json={"product_analytics": {"level": "all"}},
+            ),
+        ]
+        mock_result = MagicMock()
+        mock_result.__iter__ = MagicMock(return_value=iter(rows))
+        mock_session = AsyncMock()
+        mock_session.execute = AsyncMock(return_value=mock_result)
+        result = await _get_consenting_orgs(mock_session, enforcement_active=False)
+        assert len(result) == 1
+        assert result[0]["id"] == "org-good"
 
     @pytest.mark.asyncio
     async def test_no_product_analytics_key(self) -> None:
@@ -1375,7 +1818,7 @@ class TestGetConsentingOrgsExtended:
         mock_result.__iter__ = MagicMock(return_value=iter(rows))
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock(return_value=mock_result)
-        result = await _get_consenting_orgs(mock_session)
+        result = await _get_consenting_orgs(mock_session, enforcement_active=False)
         assert result == []
 
     @pytest.mark.asyncio
@@ -1390,7 +1833,7 @@ class TestGetConsentingOrgsExtended:
         mock_result.__iter__ = MagicMock(return_value=iter(rows))
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock(return_value=mock_result)
-        result = await _get_consenting_orgs(mock_session)
+        result = await _get_consenting_orgs(mock_session, enforcement_active=False)
         assert len(result) == 1
         assert result[0]["level_changed_at"] == date(2026, 1, 1)
 

@@ -1,5 +1,6 @@
 """Unit tests for /api/v1/templates and /api/v1/pipelines/from-template endpoints."""
 
+import logging
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
@@ -400,6 +401,65 @@ def test_create_from_template_with_schemaless_manual_node_returns_422(client: Te
 
     assert resp.status_code == 422
     assert "requires an output schema" in resp.json()["detail"]
+
+
+def test_create_from_template_with_declared_policy_gate_strips_and_warns(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """FAR-1666: a template declaring a policy_gate block installs with the block stripped.
+
+    The from-template path persists ``graph_nodes_json`` directly and cannot
+    translate a declared gate into a PolicyGate row (evals and gates are not
+    cloned), so the block is stripped through the shared helper and a warning is
+    recorded rather than persisting an INERT declaration.
+    """
+    template_id = uuid.uuid4()
+    template_prim = _make_template_primitive(
+        id=template_id,
+        content_json={
+            "agents": [
+                {
+                    "name": "Agent A",
+                    "description": "First",
+                    "prompt_template": "Do A",
+                    "connector_type_refs": [],
+                    "required_environment_capabilities": [],
+                }
+            ],
+            "graph_nodes": [
+                {
+                    "id": "n1",
+                    "node_type": "agent",
+                    "agent_index": 0,
+                    "label": "A",
+                    "position": {"x": 0, "y": 0},
+                    "policy_gate": {"eval_id": str(uuid.uuid4()), "action": "block"},
+                }
+            ],
+            "edges": [],
+            "connector_type_refs": [],
+            "schema_refs": [],
+            "category": "code-review",
+        },
+    )
+
+    mock_pipeline = MagicMock()
+    mock_pipeline.id = uuid.uuid4()
+    mock_pipeline.name = "Test (from template)"
+
+    with (
+        patch("modulo.api.routes.templates.get_template", new_callable=AsyncMock) as mock_get,
+        patch("modulo.api.routes.templates.create_pipeline", new_callable=AsyncMock) as mock_create,
+        caplog.at_level(logging.WARNING, logger="modulo.api.routes.templates"),
+    ):
+        mock_get.return_value = template_prim
+        mock_create.return_value = mock_pipeline
+
+        resp = client.post(f"/api/v1/pipelines/from-template/{template_id}")
+
+    assert resp.status_code == 201
+    assert all("policy_gate" not in node for node in mock_pipeline.graph_nodes_json)
+    assert "policy_gate declaration(s) stripped when creating a pipeline from template" in caplog.text
 
 
 def test_create_from_template_below_operator_denied(client: TestClient) -> None:

@@ -23,6 +23,18 @@ routes:
         deprecated: false
         exact: true
 
+    /governance:
+        name: governance-stack
+        breadcrumb: Governance Stack
+        parent: /
+        product_map: [feat-governance-stack]
+        sidebar_group: build
+        sidebar_order: 0
+        type: page
+        <<: *community
+        deprecated: false
+        exact: true
+
     /analytics:
         name: analytics
         breadcrumb: Analytics
@@ -973,6 +985,15 @@ elements:
       - testid: collection-create-connector
         type: button
         dynamic_testid: false
+      - testid: collection-update-available
+        type: element
+        dynamic_testid: false
+      - testid: collection-upgrade
+        type: button
+        dynamic_testid: false
+      - testid: collection-upgrade-error
+        type: element
+        dynamic_testid: false
     /accept-invite:
       - testid: accept-invite-missing-token
         type: element
@@ -1508,6 +1529,9 @@ elements:
       - testid: error-alert-dismiss
         type: button
         dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -1548,7 +1572,7 @@ elements:
       - testid: hk-error
         type: element
         dynamic_testid: false
-      - testid: hk-retry
+      - testid: error-alert-retry
         type: button
         dynamic_testid: false
       - testid: hk-empty
@@ -1914,6 +1938,9 @@ elements:
       - testid: error-alert-dismiss
         type: button
         dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
       - testid: org-hitl-review-window-load-error
         type: element
         dynamic_testid: false
@@ -1978,6 +2005,39 @@ elements:
       - testid: paramschema-set-save
         type: button
         dynamic_testid: false
+      - testid: paramschema-save
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-cancel
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-add-param
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-delete-confirm
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-delete-cancel
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-add-option
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-set-desc
+        type: input
+        dynamic_testid: false
+      - testid: paramschema-set-cancel
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-delete-set-confirm
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-delete-set-cancel
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-validate
+        type: button
+        dynamic_testid: false
     /admin/plugins:
       - testid: admin-plugins-refresh
         type: button
@@ -2014,6 +2074,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: enforcement-enabled
+        type: element
+        dynamic_testid: false
+      - testid: egress-allowed
         type: element
         dynamic_testid: false
       - testid: product-analytics-consent-prompt
@@ -2152,9 +2215,6 @@ elements:
         type: button
         dynamic_testid: false
       - testid: assistant-skill-delete
-        type: button
-        dynamic_testid: false
-      - testid: assistant-primer-regenerate
         type: button
         dynamic_testid: false
     /admin/run-retention:
@@ -2695,6 +2755,9 @@ elements:
       - testid: eval-editor-cancel-delete
         type: button
         dynamic_testid: false
+      - testid: eval-editor-loading-skeleton
+        type: element
+        dynamic_testid: false
       - testid: policy-gate-heading
         type: element
         dynamic_testid: false
@@ -2723,6 +2786,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: policy-gate-confirm-delete
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-cancel-delete
         type: button
         dynamic_testid: false
       - testid: policy-gate-error
@@ -2780,6 +2846,27 @@ elements:
       - testid: proposal-dismiss
         type: button
         dynamic_testid: false
+      - testid: publish-proposal-dialog
+        type: element
+        dynamic_testid: false
+      - testid: publish-name
+        type: input
+        dynamic_testid: false
+      - testid: publish-eval-type
+        type: select
+        dynamic_testid: false
+      - testid: publish-config
+        type: textarea
+        dynamic_testid: false
+      - testid: publish-dialog-error
+        type: element
+        dynamic_testid: false
+      - testid: publish-cancel
+        type: button
+        dynamic_testid: false
+      - testid: publish-confirm
+        type: button
+        dynamic_testid: false
     /feedback/inbox:
       - testid: feedback-inbox-title
         type: element
@@ -2799,7 +2886,7 @@ elements:
       - testid: feedback-inbox-toggle-expand
         type: button
         dynamic_testid: false
-      - testid: feedback-inbox-retry
+      - testid: error-alert-retry
         type: button
         dynamic_testid: false
       - testid: feedback-inbox-trigger-correction
@@ -3076,13 +3163,31 @@ elements:
       - testid: oauth-consent-login
         type: button
         dynamic_testid: false
+      - testid: oauth-consent-context-error
+        type: element
+        dynamic_testid: false
+      - testid: oauth-consent-success
+        type: element
+        dynamic_testid: false
+      - testid: oauth-consent-declined
+        type: element
+        dynamic_testid: false
+      - testid: oauth-consent-loading
+        type: element
+        dynamic_testid: false
       - testid: oauth-consent-client-name
         type: element
         dynamic_testid: false
-      - testid: oauth-consent-scope
+      - testid: oauth-consent-team-line
+        type: element
+        dynamic_testid: false
+      - testid: oauth-consent-no-scopes-hint
         type: element
         dynamic_testid: false
       - testid: oauth-consent-approve
+        type: button
+        dynamic_testid: false
+      - testid: oauth-consent-decline
         type: button
         dynamic_testid: false
     /onboarding:
@@ -3195,7 +3300,7 @@ elements:
       - testid: pipeline-list-breadcrumb-root
         type: button
         dynamic_testid: false
-      - testid: pipeline-list-move-error-close
+      - testid: error-alert-dismiss
         type: button
         dynamic_testid: false
       - testid: pipeline-list-move-folder-option
@@ -3307,6 +3412,48 @@ elements:
         dynamic_testid: false
       - testid: pipeline-editor-max-autonomy
         type: select
+        dynamic_testid: false
+      - testid: pipeline-editor-autonomy-panel-toggle
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-autonomy-panel-dialog
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-autonomy-panel-close
+        type: button
+        dynamic_testid: false
+      - testid: progressive-autonomy-panel
+        type: element
+        dynamic_testid: false
+      - testid: progressive-autonomy-default
+        type: element
+        dynamic_testid: false
+      - testid: progressive-autonomy-ceiling
+        type: element
+        dynamic_testid: false
+      - testid: progressive-autonomy-earned
+        type: element
+        dynamic_testid: false
+      - testid: progressive-autonomy-earned-at
+        type: element
+        dynamic_testid: false
+      - testid: progressive-autonomy-target
+        type: select
+        dynamic_testid: false
+      - testid: progressive-autonomy-reason
+        type: input
+        dynamic_testid: false
+      - testid: progressive-autonomy-demote
+        type: button
+        dynamic_testid: false
+      - testid: progressive-autonomy-promote
+        type: button
+        dynamic_testid: false
+      - testid: progressive-autonomy-status
+        type: element
+        dynamic_testid: false
+      - testid: progressive-autonomy-error
+        type: element
         dynamic_testid: false
       - testid: pipeline-editor-environment-profile
         type: select
@@ -4020,6 +4167,9 @@ elements:
       - testid: error-alert-dismiss
         type: button
         dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
       - testid: json-viewer
         type: element
         dynamic_testid: false
@@ -4037,6 +4187,12 @@ elements:
         dynamic_testid: false
       - testid: json-viewer-string-expand
         type: button
+        dynamic_testid: false
+      - testid: run-detail-deadline-triage
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-deadline-triage-entry
+        type: element
         dynamic_testid: false
     /runs/diff:
       - testid: diff-loading
@@ -4085,7 +4241,10 @@ elements:
       - testid: schema-list-move-error
         type: element
         dynamic_testid: false
-      - testid: schema-list-dismiss-move-error
+      - testid: error-alert-dismiss
+        type: button
+        dynamic_testid: false
+      - testid: error-alert-retry
         type: button
         dynamic_testid: false
       - testid: schema-list-mobile-folder-select
@@ -4388,6 +4547,9 @@ elements:
       - testid: error-alert-dismiss
         type: button
         dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -4563,6 +4725,9 @@ elements:
       - testid: error-alert-dismiss
         type: button
         dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
       - testid: hitl-review-fetch-error
         type: element
         dynamic_testid: false
@@ -4700,14 +4865,23 @@ elements:
       - testid: settings-mcp-oauth-redirect-invalid
         type: element
         dynamic_testid: false
-      - testid: settings-mcp-oauth-scope-trigger-run
-        type: checkbox
+      - testid: settings-mcp-oauth-scope-filter
+        type: input
         dynamic_testid: false
-      - testid: settings-mcp-oauth-scope-hitl-review
-        type: checkbox
+      - testid: settings-mcp-oauth-scope-list
+        type: element
         dynamic_testid: false
-      - testid: settings-mcp-oauth-scope-library-browse
-        type: checkbox
+      - testid: settings-mcp-oauth-scope-no-match
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-scopes-loading
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-scopes-load-error
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-scopes-retry
+        type: button
         dynamic_testid: false
       - testid: settings-mcp-oauth-scopes-error
         type: element
@@ -5246,6 +5420,9 @@ elements:
         type: button
         dynamic_testid: false
     /variants/compare:
+      - testid: variant-compare-loading-skeleton
+        type: element
+        dynamic_testid: false
       - testid: variant-compare-group-select
         type: select
         dynamic_testid: false
@@ -5429,7 +5606,8 @@ features:
         behaviours:
             # Config format & loading (backend/src/modulo/cli/apply/)
             - "[x] `modulo apply -f <file>` loads single- or multi-document YAML (api_version modulo.dev/v1 major-gated; minor suffixes merge leniently) declaring entities.schemas / entities.model_backends / entities.pipelines / entities.triggers; duplicate names per kind (triggers keyed as pipeline/name) and trigger forward-references to a pipeline declared only in a LATER document are load-time errors"
-            - "[x] Secrets are refs-only: backend api_key and trigger config_json secret-shaped entries (sensitive LEAF keys or server-maskable values) must be ${env:VAR} or secretref://<key> references — inline secret literals are forbidden at validation; ${env:} refs are resolved client-side (missing/empty var blocks that entity), secretref:// is blocked pending server-side resolution, and hmac_secret/signing_secret are Fernet-encrypted server-side on write"
+            - "[x] Secrets are refs-only: backend api_key / credential_ref and trigger config_json secret-shaped entries (sensitive LEAF keys or server-maskable values) must be ${env:VAR} or secretref://<key> references — inline secret literals are forbidden at validation; ${env:} refs are resolved client-side (missing/empty var blocks that entity), secretref:// is resolved SERVER-SIDE against the org vault at write time (FAR-1640, core/secrets_backend/references.py) and a missing/foreign key fails the entity with a typed credential_reference_error (422) naming the key, and hmac_secret/signing_secret are Fernet-encrypted server-side on write"
+            - "[x] A model backend credential may instead be declared as credential_ref: <key> (FAR-1216) — the declarative short form naming a bare org-vault key; exactly one of api_key / credential_ref is required, the CLI normalises credential_ref to the server's secretref://<key> token (one wire form, one server resolver, so there is no parallel mechanism), and the key is validated at PLAN time against the org vault so a missing key blocks the entity (in the plan's blocked list, with a reason naming the key) before any write — the value never crosses the client boundary. Plan-time validation reads the vault keys through the server's MCP list_secrets tool, which requires the apply key to hold the secret.manage scope; an operator key that cannot list secrets blocks the entity rather than silently passing, and the validator fails CLOSED if the listing surface is unreachable. credential_ref applies to model backends only in this increment — connectors and SSO credentials are out of scope (cli/apply/models.py credential_reference/_exactly_one_credential, cli/apply/executor.py _block_missing_credential_refs, test_apply_credential_ref.py)"
             # Plan / apply engine
             - "[x] Planning is name-based upsert scoped to the org (the HTTP transport is the operator's MODULO_URL + MODULO_API_KEY bearer org key): per-entity decisions created / updated / unchanged / blocked, hashed over CANONICAL managed-field views (api_key excluded; trigger config_json compared on the desired key set with masked secrets stripped symmetrically and daily_spend_limit quantized to the column's 4dp scale) — runtime state (next_fire_at, streak_epoch, ...) never produces drift"
             - "[x] Entities apply in dependency order schemas -> model_backends -> pipelines -> triggers with per-entity containment (one failure moves that entity to failed, the rest still apply); graphs are cached by canonical hash (a graph write snapshots the pipeline, so an unchanged graph must not churn snapshots); provider mismatches on backends and same-version-different-content schema versions are blocked (never silently diverged); missing/ambiguous agent or duplicated live-name references are blocked, apply never auto-creates agents"
@@ -5472,6 +5650,9 @@ features:
             - "[x] /batch-detail and /export additionally require the audit_viewer feature (no view without the flag); every audit endpoint needs audit.manage"
             - "[x] GET /scan is the server-side scan export companion to /export (same filters, audit_viewer + audit.manage gates, org-scoped RLS): it streams the WHOLE matching event set in ONE response (NDJSON by default, or a Content-Disposition CSV attachment with the scan columns) with no offset/limit pagination — the server keyset-paginates over the stable (created_at ASC, id ASC) order in fixed page-size batches so memory stays bounded for any org size, and an invalid user_id is 422 while pre-stream DB errors surface as a proper status (backend/src/modulo/core/audit_logger/__init__.py stream_export_chain, backend/src/modulo/api/routes/audit.py scan_chain_endpoint, test_audit_scan_route.py, TestScanChain in test_audit.py)"
 
+            # Offline-verifiable evidence (FAR-1697)
+            - "[x] An audit export can be emitted as offline-verifiable evidence: GET /api/v1/admin/audit/evidence-pack (audit_viewer + audit.manage) returns a self-contained pack - the audit events as audit-events.ndjson, a canonical manifest (organisation id, exporter identity, created_at, run ids, per-file SHA-256 + size, and the re-derived chain summary valid/event_count/head_hash/first_gap_index/first_tampered_id/truncated), an Ed25519 signature over the canonical manifest, and the PEM verification key as an artefact - while GET /api/v1/admin/audit/verification-key publishes the org's public key + key_id fingerprint; a party holding ONLY the artefact + the pre-published key verifies authorship, re-derives every file digest and re-derives the embedded audit chain with no Modulo service and no login (the `modulo evidence verify` CLI), and any tampered file, mutated event, falsified chain claim or swapped key fails as valid=false (backend/src/modulo/core/evidence_pack/, backend/src/modulo/api/routes/audit.py evidence_pack_endpoint + verification_key_endpoint, backend/src/modulo/cli/evidence.py, test_evidence_pack.py)"
+
             # Pipeline graph mutation audit (FAR-1471)
             - "[x] Every pipeline graph mutation is ALWAYS audited: each successful replace_pipeline_graph write and each rollback_to_snapshot appends one pipeline.graph_updated event in the SAME transaction as the write (a graph write can never commit without its event), carrying a concise before/after summary — node/edge counts plus the added/removed/agent_commands-changed node IDS ONLY, never node payloads, env_vars, context_files or parameter values, so no masked secret enters the chain; MCP graph writes attribute the event to the caller's account id as changed_by (a session without one records null, never a bogus id), replacing the prior HITL-only audit that left plain writes such as an agent_commands edit unattributable (backend/src/modulo/db/crud/pipeline.py graph_update_audit_payload + GRAPH_UPDATED_EVENT, backend/src/modulo/db/crud/pipeline_snapshot_versioning.py, backend/src/modulo/api/mcp_server.py, test_pipeline_graph_updated_audit.py)"
 
@@ -5488,6 +5669,7 @@ features:
             - "[x] The team-tier audit log view verifies chain integrity, exports CSV and JSONL (client-side pagination over /export into audit-log-<date>.csv / .jsonl), and filters by actor user / date range / target entity type with previous/next pagination and filter reset"
         deferrals:
             - Verification is bounded to VERIFY_MAX_EVENTS=10,000 most-recent events — there is no incremental from-chain-head verify for very long chains
+            - "Evidence-pack signing is instance-scoped with no key rotation or revocation: the published verification key is derived from the single configured MODULO_EVIDENCE_SIGNING_KEY, and per-org keys are not implemented (FAR-1697 out of scope)"
     feat-connectors:
         description: External tool connectors
         status: covered
@@ -5511,7 +5693,7 @@ features:
             - "[x] Credentials are stored encrypted as a multi-field JSON dict (auth_mode bearer / api_key / basic) and round-trip through the secrets backend; the credential never reaches LangGraph state, logs, or error detail, and error detail redacts secret values"
             - "[x] api_key auth runs in BOTH header mode (default X-API-Key, or a custom header_name) and query mode (default api_key, or a custom query_param_name)"
             - "[x] api_key-in-query credentials are applied right before the wire, after the injection guard, so the secret is never screened; a rendered/context query param that collides with the credential param name is a hard error, never a silent override"
-            - "[x] health_check issues the configured request with the credentials applied and reports the endpoint OK only for a sub-400 status"
+            - "[x] health_check issues the configured request with the credentials applied and reports the endpoint OK only for a 2xx status — redirects are never followed, so a 3xx is raised as the typed RESTStatusError before the sub-400 check and is reported unhealthy"
 
             # Security — SSRF / egress / injection
             - "[x] An allowed_hosts allowlist plus core SSRF validation (validate_outbound_url_async wired at the composition root) prevent private / loopback / metadata / off-allowlist targets; a non-http/https scheme is rejected"
@@ -5555,13 +5737,13 @@ features:
             # Operation-scope semantics (FAR-1564)
             - "[x] A connector's operation scope is UNRESTRICTED unless a non-empty allowlist restrains it (FAR-1564): the SINGLE shared unrestricted_allowed_operations predicate (used by ConnectorACL, the graph validator's connector-binding check and the guardrail conformance reader so one stored value can never certify a full capability set on one path and be read restrictively on another) reads exactly two values as unrestricted — None (the column's other unset representation) AND the empty list [] that every REST/MCP/UI-created connector stores — so default-created connectors are not locked out of every operation; a NON-EMPTY list is an allowlist (any operation it does not list is denied; there is no explicit deny-all state — removing the connector is the lock), and any MALFORMED non-list value (dict/str/int read back out of the JSON column) FAILS CLOSED to the empty allowlist so every operation is denied — malformed input restricts, it never grants (backend/src/modulo/connectors/base.py ConnectorACL + unrestricted_allowed_operations, backend/src/modulo/core/graph_validator/__init__.py, backend/src/modulo/core/guardrails/conformance.py; backend/src/modulo/core/connector_hub/health_sweep.py references the ACL-denial semantics in comments only and does not read the predicate; backend/src/modulo/api/routes/connectors.py, backend/tests/unit/connectors/test_acl.py, backend/tests/unit/api/test_connectors_endpoint.py, backend/tests/unit/core/test_guardrail_conformance_midrun.py)"
             # One canonical capability vocabulary shared by ACL + conformance (FAR-1582 / FAR-1594)
-            - "[x] Connector capability spellings are reduced through ONE canonical vocabulary shared by enforcement and certification (FAR-1582 / FAR-1594): qualified_capability / canonical_capability / canonical_capability_set live in the stdlib-only connectors/base.py leaf so ConnectorACL (enforcement) and core.guardrails.conformance (certification) import the SAME code and can never give opposite answers for one stored value — before FAR-1594 conformance certified a stored ['github.read'] as read while the ACL denied the read. A stored ALLOWLIST entry is a declaration of GRANT, so its redundant type qualifier is reduced to the bare Capability (github.read / github:write -> read); a conformance CLAIM is a binding REQUEST, so it keeps its qualifier (github.read binds to the github surface specifically). ConnectorACL builds its restricted set through canonical_capability_set and canonicalises the requested operation through canonical_capability, so check('read') grants a stored ['github.read'] exactly as the conformance reader certifies read; entries that are not capabilities in any accepted spelling (sandbox.egress, egress:github.com) are never rewritten and malformed list entries are dropped with a log (they grant nothing), while a non-list value yields the empty set matching the fail-closed FAR-1564 treatment (backend/src/modulo/connectors/base.py qualified_capability + canonical_capability + canonical_capability_set, backend/src/modulo/core/guardrails/conformance.py _canonical_claim/_reported/_capabilities_for_connector, backend/tests/unit/connectors/test_acl.py, backend/tests/unit/core/test_guardrail_conformance_midrun.py)"
+            - "[x] Connector capability spellings are reduced through ONE canonical vocabulary shared by enforcement and certification (FAR-1582 / FAR-1594): qualified_capability / canonical_capability / canonical_capability_set live in the stdlib-only connectors/base.py leaf so ConnectorACL (enforcement) and core.guardrails.conformance (certification) import the SAME code and can never give opposite answers for one stored value — before FAR-1594 conformance certified a stored ['github.read'] as read while the ACL denied the read. A stored ALLOWLIST entry is a declaration of GRANT, so a type qualifier is reduced to the bare Capability if it names the surface's OWN connector type (github.read -> read, github:write / github.write -> write), but the qualifier is only TRUSTED for that type (FAR-1616): a mis-typed qualifier (github.write on a filesystem connector), or one whose surface type cannot be verified, is REJECTED fail-closed and logged (it grants nothing) — never dropped to the bare capability and granted on the wrong surface; a conformance CLAIM is a binding REQUEST, so it keeps its qualifier (github.read binds to the github surface specifically). ConnectorACL builds its restricted set through canonical_capability_set (the connector hub passes the instance's own connector_type_id) and canonicalises the requested operation through canonical_capability, so check('read') grants a stored same-type ['github.read'] in the hub exactly as the conformance reader certifies read; entries that are not capabilities in any accepted spelling (sandbox.egress, egress:github.com) are never rewritten (a non-string list entry is dropped silently; a string entry that is not a capability is dropped with a log — both grant nothing), while a non-list value yields the empty set matching the fail-closed FAR-1564 treatment (backend/src/modulo/connectors/base.py qualified_capability + canonical_capability + canonical_capability_set, backend/src/modulo/core/guardrails/conformance.py _canonical_claim/_reported/_capabilities_for_connector, backend/tests/unit/connectors/test_acl.py, backend/tests/unit/core/test_guardrail_conformance_midrun.py)"
             # Cross-team connector binding enforcement at graph save (FAR-1515, PRD §9.3)
-            - "[x] A connector binding that crosses a team boundary is refused at graph save with 409 connector_team_mismatch (FAR-1515): a team-private connector (visibility=team) is only usable by a pipeline owned by the SAME team, and — the reverse direction — a TEAM pipeline may not pin an org-only connector (visibility=org), because a run whose owner_team_id is set is team-scoped and ConnectorACL.check fails closed on team-scoped access to an org-only connector (FAR-516), so the save must refuse a graph whose every run would die at the connector gate (org pipelines keep org-wide connectors and never mismatch). The candidate rows are read team-blind but org-scoped through db.crud.team_scope.team_blind_org_scope — the rls_team_isolation policy would otherwise hide another team's team-private row from the caller session, making the very binding under judgement look absent — so an absent id is DEFINITIVE and fails CLOSED as the same named connector_team_mismatch (ConnectorBindingMissingError), never a silent skip. The shared predicate + wire-code constants live in core/team_visibility.py and are enforced at every write path that can create the binding: the REST graph save / node-conversion chokepoint (_enforce_connector_team_bindings), the MCP graph-update tool, the workflow import confirm, the library collection install, and a connector visibility/owner re-scope (_reject_re_scope_that_breaks_a_bound_pipeline), each raising the shared 409 detail (backend/src/modulo/core/team_visibility.py, backend/src/modulo/db/crud/team_scope.py, backend/src/modulo/api/routes/pipelines.py, backend/src/modulo/api/mcp_server.py, backend/src/modulo/api/routes/library.py, backend/src/modulo/api/routes/connectors.py, backend/tests/unit/api/test_pipeline_team_visibility.py, backend/tests/integration/test_pipeline_team_gate_parity.py)"
+            - "[x] A connector binding that crosses a team boundary is refused at graph save with 409 connector_team_mismatch (FAR-1515, model restated by FAR-1618): teams are a VISIBILITY GROUPING, not a credential trust boundary, so the rule has one shape — a team-private connector (visibility=team) is only usable by a pipeline owned by the SAME team (a different team's pipeline, or an org pipeline with no owner team, is refused), and an org-visibility connector (visibility=org) is SHARED ACROSS THE ORGANISATION: it binds to ANY pipeline including one owned by a team, and never produces a mismatch (FAR-1618 removed the reverse direction FAR-1515 had added — a TEAM pipeline pinning an org connector, mirrored at run time by the FAR-516 ConnectorACL.check run-gate — so neither save nor run rejects it). The candidate rows are read team-blind but org-scoped through db.crud.team_scope.team_blind_org_scope — the rls_team_isolation policy would otherwise hide another team's team-private row from the caller session, making the very binding under judgement look absent — so an absent id is DEFINITIVE and fails CLOSED as the same named connector_team_mismatch (ConnectorBindingMissingError), never a silent skip. The shared predicate + wire-code constants live in core/team_visibility.py and are enforced at every write path that can create the binding: the REST graph save / node-conversion chokepoint (_enforce_connector_team_bindings), the MCP graph-update tool and the MCP bind_connector_to_node tool, the workflow import confirm, the library collection install, and a connector visibility/owner re-scope (_reject_re_scope_that_breaks_a_bound_pipeline), each surfacing the shared named connector_team_mismatch code + detail builder (HTTP 409 on the REST/library surfaces, the shared error envelope on the MCP tools; bind_connector_to_node evaluates the predicate directly, so it refuses a caller-RLS-hidden row as connector_not_found, while the team-blind read behind the graph-save / import / MCP-graph-update paths fails closed as ConnectorBindingMissingError) (backend/src/modulo/core/team_visibility.py, backend/src/modulo/db/crud/team_scope.py, backend/src/modulo/api/routes/pipelines.py, backend/src/modulo/api/mcp_server.py, backend/src/modulo/api/routes/library.py, backend/src/modulo/api/routes/connectors.py, backend/tests/unit/api/test_pipeline_team_visibility.py, backend/tests/integration/test_pipeline_team_gate_parity.py)"
         deferrals:
             - Per-tenant weighted concurrency semaphore / bounded-concurrency fan-out fork — fan-out emits sequentially in v1 (no concurrent fork); throughput relies on pipeline-level concurrency limits and the connector's single connection-pooled client
             - "Per-ITEM fan-out outcome trace SPANS — operation-level OTel trace spans (from _TracedConnector: connector.<type>.query/write/health_check emitting connector.type/operation/resource/limit/result_total/error_type + duration) and per-destination outcome/latency METRICS are emitted in v1; only per-item trace spans are deferred"
-            - DISTINCT classification layer (request-to-response ingestion classification runs as one opaque hop; a separate deduplicate/classify layer is deferred to FAR-404)
+            - DISTINCT classification layer (request-to-response ingestion classification runs as one opaque hop; a separate deduplicate/classify layer is not modelled)
 
     feat-costs:
         description: Cost tracking, spend limits, cost controls, and cost components
@@ -5622,9 +5804,23 @@ features:
         behaviours:
             - "[x] The dashboard renders token spend, eval rate, and run activity widgets"
             - "[x] Dashboard metrics are scoped to the caller's organisation with per-team breakdown"
+            - "[x] The rolling-window timespan toggle (24h/3d/7d/30d/90d + All time, default 3d, persisted in localStorage — FAR-92/FAR-115) scopes the stat cards to the selected window with per-metric trend arrows comparing it to the immediately-preceding equal-length window, value+arrow from the same source (run_daily_facts for counts/status/tokens/success/duration, the org-level org_daily_run_counts ledger row team_id IS NULL for spend, eval_results for pass rate); delta_pct is null with no prior baseline; when the analytics_page flag is off the toggle is hidden and GET /dashboard/summary keeps the legacy all-time shape (days ignored, no period block) with the summary cache keyed dashboard:summary:{org_id}:{days}:{flag} (backend/src/modulo/api/routes/dashboard.py, frontend/src/views/DashboardView.vue)"
             - "[x] Saved Views ship end to end as the admin CRUD surface: `/admin/views` renders AdminViewsView.vue with create/edit/delete over GET/POST/PATCH/DELETE /api/v1/views (gated by the `view_modes` feature flag), covering custom filters (JSON), column layouts, view type, and sort configuration — locked by views.feature BDD + test_view_endpoint.py"
         deferrals:
             - "Saved Views are a private_preview surface (FAR-546): the /admin/views route is hidden from the sidebar nav and the `saved_views` plan toggle is default-off per org; the ViewToggle 'apply to list' frontend component ships but is not yet wired into the runs/pipelines list pages, so a saved view is created/edited from /admin/views rather than applied in-context"
+    feat-governance-stack:
+        description: Read-only governance-hierarchy taxonomy readout (/governance)
+        status: covered
+        behaviours:
+            - "[x] The /governance route renders Modulo's seven-level governance hierarchy (Models, Tools, MCP, Agents, Commands, Autonomy, Telemetry) as a single read-only inventory, each level composing an existing list API client-side (no new backend endpoint, no migration, no schema change)"
+            - "[x] Each level loads independently and shows a live count plus a configured/empty state, or its own restricted (402 feature-gated / 403 permission) state, or a retry-able per-level error state; one level's failure or restriction never blanks another level or the page"
+            - "[x] Levels deep-link to their existing management surfaces: /admin/model-backends, /admin/connectors, /settings/mcp, /library, /pipelines, /settings/observability, /admin/errors, /admin/notification-delivery"
+            - "[x] Level 6 (Autonomy) summarises the pipeline list as total pipelines plus the distribution across the three rungs from earned_autonomy_level, falling back to default_autonomy_level when earned is null"
+            - "[x] Plan-gated levels reuse the same FeatureGate as their management page (model_backend_management, plugin_management, mcp_server, observability); every user-facing string is i18n-backed and per-level status regions use role=status/aria-live (assertive for errors); covered by the GovernanceStackView Vitest spec"
+        deferrals:
+            - "Upstream MCP-server inventory and a pinned tool-definition allowlist are not yet governed (Beta, G3); the MCP card states the boundary and draws no fabricated data"
+            - "An org-wide inventory of agents Modulo did not dispatch is not yet governed (Beta, G3); the Agents card states the boundary"
+            - "The interactive earned-autonomy panel and promote/demote controls are FAR-1696(b) / ADR-043-S5; this surface is a readout only"
     feat-environments:
         description: Environment profiles
         status: covered
@@ -5648,7 +5844,7 @@ features:
         status: covered
         behaviours:
             - "[x] The eval editor creates, configures, and deletes evaluation definitions per pipeline node"
-            - "[x] The proposal queue surfaces eval proposals for review and allows publishing to pipelines"
+            - "[x] The proposal queue surfaces eval proposals for review and supports publish / dismiss (the API publish endpoint creates a live eval definition; the /evals/proposals view's publish currently marks the proposal resolved)"
             - "[x] Eval results are queryable per run (GET /api/v1/runs/{run_id}/evals) and comparable side-by-side between two runs (POST /api/v1/evals/compare, backend/tests/unit/api/test_evals_compare.py); variant comparison surfaces eval scores per node, prompt diffs and eval coverage gaps under feat-variants (docs/product-map/improve/evals.md, docs/product-map/improve/variants.md)"
             - "[x] Eval policy-gate binding (POST/PUT /api/v1/evals/{eval_id}/policy-gate) runs the FAR-957 advisory author-warning checks for the eval's evidence_key and the PolicyGateResponse carries non-blocking warnings (no_producer / temporal_ordering / recent_undefined) — warning on the safe direction so a racy or indeterminate evidence key is surfaced without ever preventing binding (backend/src/modulo/core/eval_engine/author_warnings.py, backend/tests/unit/core/evidence/test_author_warnings.py, docs/product-map/core/evidence-store.md)"
             # FAR-967 chunk 10: pin integrity + operator enable/disable control
@@ -5663,7 +5859,7 @@ features:
             - "[x] Feedback items can be reviewed, dismissed, and corrected with correction runs spawned"
             - "[x] Feedback-to-eval gap detection and proposal generation ship end to end: POST /api/v1/feedback/{record_id}/detect-gap runs eval-gap detection over a feedback record producing an eval proposal, GET /api/v1/feedback/proposals lists the queue, and POST /api/v1/feedback/proposals/{record_id}/publish promotes a proposal into a live eval definition — a non-eval-gap record is refused (docs/product-map/improve/feedback.md, backend/tests/unit/api/test_feedback_endpoint.py)"
         deferrals:
-            - "Eval-gap detection is model-assisted — it depends on a configured model backend; there is no deterministic fallback classifier for gap detection"
+            - "Correction runs depend on a configured model backend; eval-gap detection itself is deterministic — it replays the pipeline's existing eval suite and needs no model backend"
     feat-guardrails:
         description: Guardrail policies
         status: covered
@@ -5690,6 +5886,13 @@ features:
             - "[x] The review page paginates server-side (page/page_size params on every fetch, minimal inline pager with Previous / 'Page X of Y' / Next shown only when total > page_size, disabled states at the bounds, aria-labelled buttons and a role=status page indicator); search/pipeline/date filters remain CLIENT-side over the loaded page (documented limitation: search matches within the current page only)"
             # FAR-1163: autonomy escalation ceiling (ADR 043 slice S0)
             - "[x] HITL autonomy resolution clamps a context-setter's autonomy_recommendation to the pipeline's max_autonomy_level ceiling (pinned into the run snapshot as the reserved `_pipeline_max_autonomy` run_context key): a recommendation may lower autonomy freely, may raise only up to the ceiling — with no explicit ceiling the effective ceiling is the pipeline default, so a recommendation can only lower — and each clamp appends a run.autonomy_recommendation_clamped audit event (review_id, requested, effective, ceiling); human_only gates still always fire"
+            # FAR-1175: earned autonomy + manual promote/demote (ADR 043 slice S1)
+            - "[x] Behind the default-off autonomy_gating flag, each HITL gate resolves its base level from the pipeline's runtime earned autonomy level (pipelines.earned_autonomy_level, stored outside the snapshot, NULL until set): a demotion is read LIVE and bites an in-flight run at its next gate, while a promotion never loosens an in-flight run because the gate resolves min(pinned-at-run-start, live earned); the ceiling always clamps the earned base, and with the flag off resolution is byte-identical to S0"
+            - "[x] Manual autonomy changes ship on REST and MCP: POST /api/v1/pipelines/{id}/autonomy/demote and .../promote (and the MCP demote_pipeline_autonomy / promote_pipeline_autonomy tools) are admin/owner gated (org admin, or a member of the pipeline's owner team), promote is capped at max_autonomy_level, and each writes a pipeline.autonomy_demoted / pipeline.autonomy_promotion_decided audit event carrying actor, previous/new level and reason (backend/tests/unit/api/test_pipeline_autonomy_endpoints.py)"
+            # FAR-1696 (ADR 043 slice S5): the frontend visibility surface over that state
+            - "[x] The pipeline editor exposes the earned-autonomy state and the manual controls (FAR-1696, ADR 043 S5): ProgressiveAutonomyPanel.vue mounts next to the ceiling select on /pipelines/:id/editor behind the Autonomy toolbar toggle, rendering the pipeline's default level, ceiling (with an explicit 'inherits the default level' state when max_autonomy_level is null) and earned level plus its earned_autonomy_updated_at timestamp; a NULL earned level renders an explicit 'Not set - using the pipeline default' fallback rather than a blank, and the caption states the earned level applies at HITL gates when autonomy gating is enabled (ProgressiveAutonomyPanel.spec.ts)"
+            - "[x] Demote and promote from that panel POST the selected target level plus an optional reason to /api/v1/pipelines/{id}/autonomy/demote and .../promote, take the new earned level straight from the response and ask the editor to refetch the pipeline on 200; direction is enforced client-side against the same manual_approval < notify_on_complete < fully_autonomous rank (demote must strictly lower, promote must strictly raise and may never exceed the ceiling — an above-ceiling target is a disabled option and never enables promote), while the server's 403 (not admin/owner) surfaces a specific not-permitted message and its 422 direction/ceiling detail is shown verbatim in an assertive region — never a silent stale UI (ProgressiveAutonomyPanel.spec.ts; testids progressive-autonomy-* and pipeline-editor-autonomy-panel-*)"
+            - "[x] run_daily_facts gains an autonomy_level column populated at fact-write time from the run's latest run.autonomy_level_applied audit event, so the analytics surface can bucket by autonomy without re-joining the audit chain"
             # FAR-1257 + FAR-1269: the configurable review window
             - "[x] The HITL review window is configurable at three levels (FAR-1257): a per-pipeline override, an org default (GET/PUT /api/v1/admin/org/hitl-review-window - whole seconds, 60 to 604800, explicit null clears back to inheritance) and the instance default (HITL_REVIEW_CANCEL_GRACE_SECONDS); the resolved window is stamped ONCE at gate fire time as an absolute hitl_claims.terminalize_at, so stamped rows ignore the env knob while legacy rows keep it verbatim"
             - "[x] The org review window is editable on EVERY plan tier (FAR-1269): the org-hitl-review-window-* card on /admin/org renders OUTSIDE the team_rbac FeatureGate (the endpoint is not plan-gated) and the /admin/org route itself is community-tier with an explicit [admin] role (FAR-462 pattern), so a community admin reaches the control while every other section of the page stays behind the gate's disabled overlay"
@@ -5697,13 +5900,16 @@ features:
             - "[x] A HITL rejection with no reject destination ENDS the run with the terminal `rejected` status (not `failed`, not `cancelled`) and error_code `hitl.rejected`: the gate compiles to a conditional edge whose router returns LangGraph END on a stamped rejection (the FAR-541 gate-identity check), and the executor finalize downgrades the would-be `complete` to `rejected` only when BOTH the gate artifact and the committed hitl_claims rejected row agree (backend/tests/integration/test_hitl_resume_roundtrip.py, backend/tests/unit/pipeline_engine/test_hitl_reject_terminate.py)"
             - "[x] Three reject dispositions share one resolver (resolve_reject_disposition): `route` when a reject target/edge exists, `terminate` (the default) otherwise, and `proceed` only when the gate explicitly sets `on_reject: proceed` (validated at graph save, edge-level and node-level); an automated correction_target wins over terminate, and the reviewer briefing (HitlBriefing, HitlReviewCard banners) states the reject consequence in all three states"
             - "[x] A coalesced-supersede system rejection (a newer version of the work item replaced a still-waiting review) with no reject route ends `rejected` with error_code `hitl.superseded` (detected from the committed claim's system reason with no deciding account): silent (no failure alert), excluded from failure analytics and the human-reject count, never advances a lifecycle journey, and labelled 'Superseded by a newer version' on the run list and run detail - never 'Rejected by reviewer'"
+        deferrals:
+            - "The earned/ceiling/default history-with-reasons view (the audit half of ADR 043 slice S5) is not yet built - it needs a pipeline-scoped audit read that does not exist; the live-state and manual promote/demote half of S5 now ships as the progressive-autonomy panel on the pipeline editor (ProgressiveAutonomyPanel.vue), so only the per-change reason history is outstanding (REST and MCP surfaces stay live, and earned_autonomy_level / earned_autonomy_updated_at stay exposed on the pipeline response)."
+            - "Automatic demotion (S3) and promotion proposals as human_only HITL gates (S4) are not yet built; the earned level can only be moved manually today."
     feat-router:
         description: Router decision nodes and branching in the execution graph (FAR-402 P1 / F2-A)
         status: covered
         behaviours:
             - "[x] Router nodes compile to ordered JMESPath rules with a default fallback edge"
             - "[x] The graph validator enforces router node topology constraints at save time"
-            - "[x] Conditional routing supports the full JMESPath expression language (nested filters/projections like items[?status=='open'], contains, multi-level access) because router guards, conditional edges, loop counters, HITL review conditions and polling triggers all compile and evaluate through the single consolidated evaluator (compile_jmespath + evaluate_jmespath_condition in core/pipeline_engine/jmespath_eval.py); an invalid expression surfaces an actionable ValueError and a no-match run terminalizes router_no_match (pipeline_engine/jmespath_eval.py, router_nodes.feature)"
+            - "[x] Conditional routing supports the full JMESPath expression language (nested filters/projections like items[?status=='open'], contains, multi-level access) because router guards, conditional edges, loop counters and HITL review conditions all compile and evaluate through the single consolidated evaluator (compile_jmespath + evaluate_jmespath_condition in core/pipeline_engine/jmespath_eval.py); an invalid expression surfaces an actionable ValueError and a no-match run terminalizes router_no_match (pipeline_engine/jmespath_eval.py, router_nodes.feature)"
     feat-library:
         description: Reusable pipeline templates and the template library
         status: covered
@@ -5724,7 +5930,7 @@ features:
             - "[x] Draft collections can be created (POST /libraries/collections), updated (PATCH), and published (POST /publish); published collections cannot be edited"
             # Install / Uninstall (FAR-762)
             - "[x] Install resolves manifest pins to visible primitives, materialises entities via materialize_import, stamps collection_install_id on all created entities (schemas, agents, pipelines), and creates a CollectionInstall provenance record with status=installed"
-            - "[x] Uninstall deletes unmodified entities (collection_install_id matches) and detaches provenance from modified entities (collection_install_id already cleared); the CollectionInstall record and entity tracking rows are deleted"
+            - "[x] Uninstall deletes unmodified entities (collection_install_id matches) and detaches provenance from modified entities (collection_install_id already cleared); the CollectionInstall record is soft-deleted (deleted_at stamped) and its collection_install_entity rows are retained as audit history and hidden from the normal read paths; a reinstall of the same collection is permitted afterwards (the uniqueness is a partial unique index on (organisation_id, collection_id) WHERE deleted_at IS NULL)"
             - "[x] Re-install of the same version is idempotent: missing entities are re-added via materialize_import without duplicating existing ones"
             # Runnability (FAR-762)
             - "[x] compute_runnable is a pure read-time check: returns True when all connector_checklist entries are configured+bound and the org has at least one active model backend; returns False otherwise"
@@ -5767,13 +5973,14 @@ features:
         description: Model Context Protocol tool configuration
         status: covered
         behaviours:
-            - "[x] MCP HITL review (2026-09-24): the real `review_hitl` tool drives the claim-token parse guard, the `_check_agent_tool_scope` role-hierarchy scope gate (a `runner` is denied `hitl:review` -> `insufficient_scope`), the HITLManager approve/reject decision dispatch, and the `list_pending_hitl` pending-gate surface — five `mcp/review_hitl.feature` scenarios execute in CI against the real handler functions with auth re-validation + DB/HITLManager seams patched (the legacy `/mcp/tools/call` HTTP surface is gone; the FastMCP invoke/dispatch layer is not exercised)"
+            - "[x] MCP HITL review (2026-09-24): the real `review_hitl` tool drives the claim-token parse guard, the `_check_agent_tool_scope` role-hierarchy scope gate (a `runner` is denied the decision action's registry key, e.g. `hitl.approve` for `approve` -> `insufficient_scope`), the HITLManager approve/reject decision dispatch, and the `list_pending_hitl` pending-gate surface — five `mcp/review_hitl.feature` scenarios execute in CI against the real handler functions with auth re-validation + DB/HITLManager seams patched (the legacy `/mcp/tools/call` HTTP surface is gone; the FastMCP invoke/dispatch layer is not exercised)"
             - "[x] MCP human-only gates (2026-09-24): the real `_check_human_only_gate` policy hook denies an API-key client every decision action (claim/approve/deliver_manual) on a human_only gate — the shared `human_only_denial` verdict (`human_only_gate` error carrying the MSG_HUMAN_ONLY_DENY browser-authentication detail) plus the FAR-634 `hitl.human_only_denied` denial audit; `list_pending_hitl` surfaces each pending gate's `human_only` flag (claim-stamped config preferred, snapshot-config fallback, fail-safe default True) so an agent can SEE which gates require a browser human; and decision audit attribution distinguishes client_type `browser` (REST browser principal) from client_type `mcp` (the `review_hitl` dispatch) — the three `mcp/human_only.feature` scenarios execute in CI against these real handler + policy seams"
             - "[x] MCP library browse (2026-09-25): the `search_library` tool is the read-only library-browse surface, on the read-only allowlist (`resource.read_only` viewer floor) in the centralized scope gate and gated at the handler by the real `_check_agent_tool_scope` chokepoint — an authenticated caller at or above viewer browses, and a node-level `capability_scope.allowed_tools` that excludes the tool is denied `insufficient_scope` before any DB read; the four `mcp/library_browse.feature` scenarios execute in CI against the real handler + scope-gate seams (auth re-validation + list/session seams patched), closing the last legacy `/mcp/tools/call` `@awaiting-implementation` draft"
-            - "[x] MCP OAuth client registration UI (2026-09-28): Settings > MCP lists the org's registered OAuth clients (name, client id, scopes, redirect URIs, created) and wires register + revoke to POST/DELETE /api/v1/mcp/oauth/clients - the register form validates a required name, at least one redirect URI tokenised on ANY whitespace (so two URIs pasted on one line separate correctly and match the backend's space-joined storage round-trip) where every entry must be an absolute http:// or https:// URI (localhost / 127.0.0.1 stay valid for local development) with duplicates de-duplicated and invalid entries named in an inline error, plus at least one of the three valid scopes (trigger:run, hitl:review, library:browse); the confirm button is never validity-disabled, so a submit always reaches the guard and surfaces every touched-field error; success opens a one-time-reveal dialog showing client_id and client_secret with copy buttons and a 10s auto-mask, both values are wiped from component state when the dialog closes (the footer Done handler and the Dialog hide event), and a rejected clipboard write (insecure plain-HTTP context, no navigator.clipboard) renders a visible copy-failed message telling the user to select the value and copy manually instead of console-only; the section is gated to org role admin/operator with a restricted state driven by the list call's 403, a fetch rejection or a non-array list body renders the inline section error rather than the 'no clients registered yet' empty state, and the API keys card degrades the same way - a 403 from GET /api/v1/api-keys (the identical admin|operator gate) renders a restricted API-keys card instead of failing the whole page, while non-403 API key failures stay fatal (SettingsMcpView.spec.ts)"
+            - "[x] MCP OAuth client registration UI (2026-09-28): Settings > MCP lists the org's registered OAuth clients (name, client id, scopes, redirect URIs, created) and wires register + revoke to POST/DELETE /api/v1/mcp/oauth/clients - the register form validates a required name, at least one redirect URI tokenised on ANY whitespace (so two URIs pasted on one line separate correctly and match the backend's space-joined storage round-trip) where every entry must be an absolute http:// or https:// URI (localhost / 127.0.0.1 stay valid for local development) with duplicates de-duplicated and invalid entries named in an inline error, plus at least one grantable scope drawn from the backend-served delegable registry vocabulary (GET /api/v1/mcp/oauth/scopes - the delegable PERMISSIONS keys + role floors filtered to the caller's role, rendered grouped by namespace and searchable, canonical keys sent with the three legacy spellings accepted only as input aliases); the confirm button is never validity-disabled, so a submit always reaches the guard and surfaces every touched-field error; success opens a one-time-reveal dialog showing client_id and client_secret with copy buttons and a 10s auto-mask, both values are wiped from component state when the dialog closes (the footer Done handler and the Dialog hide event), and a rejected clipboard write (insecure plain-HTTP context, no navigator.clipboard) renders a visible copy-failed message telling the user to select the value and copy manually instead of console-only; the section is gated to org role admin/operator with a restricted state driven by the list call's 403, a fetch rejection or a non-array list body renders the inline section error rather than the 'no clients registered yet' empty state, and the API keys card degrades the same way - a 403 from GET /api/v1/api-keys (the identical admin|operator gate) renders a restricted API-keys card instead of failing the whole page, while non-403 API key failures stay fatal (SettingsMcpView.spec.ts)"
             - "[x] The MCP API-keys card distinguishes a REVOKED key from an EXPIRED one by the observed facts instead of the derived is_active flag (FAR-1296/FAR-1299): the key serializer emits revoked_at (ISO-8601 when set, else null — the revocation FACT, not an inference from is_active) alongside lookup_prefix/role/scope/last_used_at/expires_at, revocation is a DELETE /api/v1/api-keys/{key_id} (the earlier PUT was silently dropped — FAR-1291), and the /settings/mcp table renders a per-key status badge (settings-mcp-key-status) computed as revoked (revoked_at set, checked first) / expired (revoked_at null and the expiry elapsed) / active (revoked_at null, expiry not elapsed), with the revoke button shown only for active keys (api/routes/api_keys.py + auth/api_key._serialize_key; SettingsMcpView.vue, SettingsMcpView.spec.ts, test_api_keys_endpoint.py)"
             - "[x] API key grant-sets can be set at creation from REST and MCP (FAR-1477): POST /api/v1/api-keys and the MCP create_api_key tool both accept an optional grants list (omitted = legacy role bundle, [] = explicit deny-all, otherwise exactly those permissions) behind the per-org api_key_grants flag (OFF => 422, never a silent widen) and both run the same mint cap (unknown key 422, non-delegable 403, above the caller's live capability 403); the Settings > MCP create-key dialog shows a grant picker only when GET /api/v1/api-keys/grantable-permissions reports the flag ON, lists only backend-supplied delegable permissions (grouped by prefix, filtered to the caller's role level), defaults to off (role bundle), omits grants rather than sending [] and blocks Create while restriction is on with nothing ticked (ApiKeyGrantsSelector.vue, SettingsMcpView.vue, ApiKeyGrantsSelector.spec.ts, test_api_key_grants.py, test_api_key_mgmt_tools.py)"
             - "[x] MCP tool errors carry specific, branchable codes (FAR-1502): `_tool_error(msg, *, code)` demands a keyword-only code with no default so a call site can never fall back to a generic code, and the shared `_tool_exception_error` classifier maps an escaped exception type to the code the consuming agent can branch on — `insufficient_scope` (MCPAuthorizationError), `validation_failed` for a 4xx StarletteHTTPException / `server_error` for a 5xx, `session_contract_error` for a session-contract violation (InvalidRequestError / MissingGreenlet) via the shared db_error_handling classifier, `conflict` for IntegrityError, `migration_required` for ProgrammingError, `database_unavailable` for any other SQLAlchemyError, and `server_error` as the ONLY reserved catch-all; the run WebSocket control-frame surface aligns to the same vocabulary (db_unavailable -> database_unavailable, internal_error -> server_error, and its SQLAlchemyError arm shares the session-contract payload), enforced structurally by test_mcp_error_codes.py (backend/src/modulo/api/mcp_server.py, backend/src/modulo/api/db_error_handling.py, backend/src/modulo/api/routes/run_ws.py; test_mcp_tool_exception_error.py, test_run_ws.py)"
+            - "[x] Browser OAuth consent screen (FAR-1476, 2026-10-10): /oauth/authorize renders the real grant set from the anonymous GET /api/v1/mcp/oauth/consent/context?state=... (client name + canonical scopes + team boundary; no redirect_uri/secrets; unknown/expired/consumed state = undifferentiated 404; the mcp_server kill switch is enforced against the pending row's org without an authenticated dependency chain), each scope has a per-scope deny checkbox (all granted by default, each labelled with its raw canonical scope key — the registration picker's single labelling scheme, since the grantable vocabulary is the whole delegable PERMISSIONS registry) and a team-limited line; Approve sends {state, granted_scopes} and the approve POST fails closed on any key outside the stored set (canonicalised subset only, live-role re-check, 403 on denial), omitted granted_scopes keeps the all-stored behaviour; Decline renders a clear declined state (the context endpoint deliberately withholds redirect_uri, so no error redirect); migration 0301 gives oauth_consent_states the NULL-context RLS arm oauth_clients already had so the pre-auth read is visible to modulo_app (OAuthConsentView.vue, OAuthConsentView.spec.ts, test_mcp_oauth_bdd.py, 0301_oauth_consent_state_preauth_rls.py)"
     feat-model-backends:
         description: Model backend management and setup
         status: covered
@@ -5786,7 +5993,7 @@ features:
             - "[x] REST surface: GET/PUT/DELETE /api/v1/agents/{agent_id}/bindings bind create/update behind the model_backend.binding.manage permission with audit events (values never logged); library export carries name-based binding specs and import rebinds them by backend name"
             - "[x] Editor UI: the pipeline editor's sandbox-agent inspector shows repeatable binding rows with inline help and a Local-tier warning; i18n keys under views.PipelineEditorView.runner_bindings_*"
             # Cross-team model-backend pin enforcement at graph save (FAR-1515, PRD §9.3)
-            - "[x] A pipeline graph save that pins a model backend with visibility=team from a pipeline owned by a DIFFERENT team is refused 409 model_backend_team_mismatch (FAR-1515): the model-backend mirror of the connector team-scope rule, enforced at the shared graph-reference resolver (_enforce_model_backend_team_bindings) so a team-private backend is only usable by its own team's pipeline. It is deliberately NOT extended to reject an org-only backend on a team pipeline, unlike the connector rule, because ModelBackendHub has no invocation-time visibility gate (a run resolves a pin with hub.get(backend_id) and never consults visibility), so a save-time rejection there would refuse a graph the run would happily execute — closing that gap needs the invocation-side gate first (backend/src/modulo/core/team_visibility.py, backend/src/modulo/api/routes/pipelines.py _enforce_model_backend_team_bindings, backend/tests/unit/core/test_team_visibility.py, backend/tests/unit/api/test_pipeline_team_visibility.py)"
+            - "[x] A pipeline graph save that pins a model backend with visibility=team from a pipeline owned by a DIFFERENT team is refused 409 model_backend_team_mismatch (FAR-1515): the model-backend mirror of the connector team-scope rule, enforced at the shared graph-reference resolver (_enforce_model_backend_team_bindings) so a team-private backend is only usable by its own team's pipeline. Since FAR-1618 it says exactly the same thing as the connector rule (an org-visibility row never mismatches; a team-private row mismatches every pipeline outside its owner team, including an org pipeline): ModelBackendHub has no invocation-time visibility gate — a run resolves a pin with hub.get(backend_id) and never consults visibility — and after FAR-1618 neither does the connector hub, so neither rule has an invocation-time counterpart to mirror (backend/src/modulo/core/team_visibility.py, backend/src/modulo/api/routes/pipelines.py _enforce_model_backend_team_bindings, backend/tests/unit/core/test_team_visibility.py, backend/tests/unit/api/test_pipeline_team_visibility.py)"
     feat-notifications:
         description: Notifications, email delivery, and notification logs
         status: covered
@@ -5889,11 +6096,14 @@ features:
         description: Product usage and adoption analytics for system administrators
         status: partial
         behaviours:
-            - "[ ] The product analytics page does not yet show usage and adoption metrics for system administrators - it renders only the transparency endpoint's delivery/consent/enforcement fields (frontend/src/views/AdminProductAnalyticsView.vue), which themselves render defaults (see the next gap)"
+            - "[ ] The product analytics page does not yet show in-product usage and adoption metrics for system administrators - it renders only the transparency endpoint's delivery/consent/enforcement fields (frontend/src/views/AdminProductAnalyticsView.vue), which now reflect real state"
             - "[x] Consent and enforcement toggles are configurable per instance"
             - "[x] Metrics scheduling ships: a jittered daily metrics-dump SAQ system cron (core/product_analytics/metrics_dump.py) gates the per-instance dump window on the stored jitter offset and intersects it with the consented validity window, then delivers the batch to the vendor ingest endpoint with a stable persisted watermark"
             - "[x] The transparency endpoint (GET /api/v1/product-analytics/transparency) derives the instance's data-residency posture: egress_allowed is true ONLY when the instance-level switch AND an explicit 'all' consent are both on (core/product_analytics/consent.py), so telemetry egress is fail-closed by default (personas/marcus-ciso.feature)"
-            - "[ ] The transparency surface's collected-metrics fields (last_successful_dump_at, dump_count_total, consent_level, enforcement_enabled) have no feature-code writer - the metrics dump and consent routes never persist them (the generic system-admin config API can still upsert any key), so the /admin/product-analytics page always renders its defaults"
+            - "[x] The transparency endpoint reports the instance's real product-analytics state - instance_enabled/enforcement_enabled delegate to the shared consent helpers (is_instance_analytics_enabled / is_license_enforcement_enabled), last_successful_dump_at and dump_count_total read the keys the metrics dump writes (constants.DUMP_WATERMARK_KEY / DUMP_COUNT_KEY, the latter incremented once per successful non-skipped dump), and consent_level reads the caller's org settings_json - so /admin/product-analytics no longer renders static defaults"
+            - "[x] The transparency endpoint's consent_level/egress_allowed are scoped per organisation (the caller's own org, the preferred source) with an instance-level fallback when the caller org cannot be resolved - all if any active org has opted in, else off (FAR-1635)"
+            - "[x] Staged frontend events are consumed and purged end to end (FAR-1717) - the daily metrics_dump aggregates metrics_staging rows into the payload's event_counts section (_aggregate_staged_events) and every cron tick purges consumed rows (watermark past their date) plus rows older than the 30-day retention bound via _purge_staging, served by the plain index ix_metrics_staging_recorded_at (migration 0304); turning the org level off (admin PUT or prompt decline) purges its staged rows immediately"
+            - "[x] The frontend event-capture composable is initialised in the app root (FAR-1718) - App.vue calls initProductAnalytics wired to productAnalyticsStore.isOptedIn as the live consent function, and curated track() call sites ship for pipeline create/run start, schema create, connector add, model-backend add, trigger create, eval create and HITL claim/approve/reject; no page_view event exists - per-route data is not captured client or server side"
             - "[ ] License/plan eligibility gating is not wired in production - every function in core/product_analytics/license_enforcement.py (check_product_analytics_requirement, is_enforcement_active, should_degrade_to_community) and consent.partner_license_requires_analytics / is_partner_carve_out_active has no production call site (unit tests only), so no route or the dump applies the partner product_analytics_required carve-out"
             - "[ ] An in-product analytics export/administration surface (self-serve downloadable org metrics, configurable reporting schedule, or an in-app analytics warehouse) is not shipped — telemetry export is vendor-bound"
         deferrals:
@@ -5934,7 +6144,9 @@ features:
             - "[x] GET /api/v1/runs/{run_id}/nodes/{node_id}/artifacts (runs.get_run_artifact permission, org-scoped via RLS) lists all artifact pointers across all attempts for a (run, node) pair, returning attempt_key, stream, size_bytes, sha256, and compression — newest first; 404 when the node has no rows"
             - "[x] The run detail page fetches the artifact listing when a node's logs panel opens and renders per-stream download links (stdout / stderr) pointing at the existing GET /api/v1/runs/{run_id}/nodes/{node_id}/attempts/{attempt_key}/artifacts/{stream} endpoint; multi-attempt nodes show the attempt number alongside each stream; loading, empty, and error states are handled with aria-live regions"
             # Run-outcome delivery signal (FAR-189 / FAR-228 / FAR-1336)
-            - "[x] A terminal run carries a run-outcome classification record (value delivered / no_delivery / excluded / unclassified plus a stored reason and delivered_pr_urls), written atomically with terminalization and fail-closed: a classifier/persist failure writes an unclassified marker (SAVEPOINT-fenced, bounded) so the record is never NULL, and the periodic reconciliation sweep (reconcile_missing_classifications, wired into dispatcher_reconcile) backfills raw-SQL terminalizers within a minute; run detail serializes the record (defensive-coerced, never a 500) and the derived gate_fired flag (backend/src/modulo/core/pipeline_engine/classify.py, backend/src/modulo/db/crud/run.py, test_run_classification.py, test_runs_endpoint.py)"
+            - "[x] A terminal run carries a run-outcome classification record (value delivered / no_delivery / excluded / benign / unclassified plus a stored reason and delivered_pr_urls), written atomically with terminalization and fail-closed: a classifier/persist failure writes an unclassified marker (SAVEPOINT-fenced, bounded) so the record is never NULL, and the periodic reconciliation sweep (reconcile_missing_classifications, wired into dispatcher_reconcile) backfills raw-SQL terminalizers within a minute; run detail serializes the record (defensive-coerced, never a 500) and the derived gate_fired flag (backend/src/modulo/core/pipeline_engine/classify.py, backend/src/modulo/db/crud/run.py, test_run_classification.py, test_runs_endpoint.py)"
+            # Business-expected run outcomes (FAR-707)
+            - "[x] A pipeline can declare BUSINESS-EXPECTED terminal failures via the per-pipeline benign_signatures config (pipelines.benign_signatures JSON, migration 0296): a JSON list of signatures shaped {\"error_code\": \"<exact runs.error_code, required>\", \"error_detail_contains\": \"<case-insensitive substring, optional>\"}, set through PATCH /api/v1/pipelines/{id} with STRICT wire validation — a non-list value, a missing/non-string error_code, a non-string detail, or any key outside the accepted pair is a 422 (a typo'd key must never silently widen a signature to match any detail), and null clears. At terminalization a countable failure (failed / eval_failed / stalled / compensation_failed) whose (error_code, error_detail) matches a signature classifies benign (reason benign_outcome) INSTEAD of no_delivery — checked only in that branch, so excluded / delivered / non-terminal verdicts are never re-routed by a signature — and run-stats and analytics failure readers drop benign runs from failure-rate numerators AND denominators and from error-code failure clusters while volume/cost/token totals still include them; a pipeline with no signatures (null / []) classifies byte-identically to before, the stored config is read leniently at match time (malformed entries dropped + logged, never blocking terminalization), run_daily_facts.benign carries the marker so the analytics read never joins runs (ADR 020; NULL reads as not benign, fail-open), and the reconciliation sweep re-records the fact when it lands a benign verdict because raw-SQL terminalizers wrote it before the classification existed (backend/src/modulo/core/pipeline_engine/classify.py, backend/src/modulo/api/routes/pipelines.py, backend/src/modulo/core/analytics/, backend/src/modulo/db/migrations/versions/0296_benign_run_outcomes.py, test_run_classification.py, test_pipelines_endpoint.py, test_analytics_builder.py, test_runs_stats.py)"
             - "[x] The delivery signal is agent-reported and honestly labelled (FAR-1336, renamed by FAR-1388): delivered_pr_urls are harvested from the run's own output (node structured return / telemetry value / FAR-188 raw-output markers) with a per-URL pr_url_provenance (declared vs matched, declared wins) and a delivery_confidence of agent_reported on every record today (verified reserved); rows stored before the FAR-1388 rename carry the deprecated self_reported alias, are never backfilled, and readers tolerate either spelling — additive metadata that never changes the verdict, forward-only over legacy six-key rows (readers treat an absent key as legacy/unknown)"
             # Node-deadline watchdog firing record (FAR-1463)
             - "[x] The node-deadline watchdog records each firing distinctly from terminal failures (FAR-1463): pipeline_execution._fail_overdue_node durably increments runs.node_deadline_watchdog_fired_count on its own connection BEFORE the shared retry consult, so BOTH the re-dispatch (which nulls error_code via the fenced pending-reset) and the terminal fail count; the marker survives the re-dispatch (neither the atomic claim nor the pending-reset names the column), a run that never dispatched a node reads 0, and error_code separates a genuine terminal failure from a firing — internal/analytics-only (never on RunResponse or the MCP run payloads), migration 0280 adds the NOT NULL DEFAULT 0 column and it is copied onto run_daily_facts at finalize so the analytics read never joins runs (ADR 020) (backend/src/modulo/core/pipeline_execution.py, backend/src/modulo/db/models/run.py, test_watchdog_firing_record_writer.py, test_pipeline_execution_watchdog_retry.py)"
@@ -6067,7 +6279,7 @@ features:
             - "[x] Role-based access control enforces permissions across endpoints"
             - "[x] User invitations work with email-based enrollment"
             - "[x] Team-level resource scoping and cross-team data isolation ship end to end: a team cannot see or enumerate another team's team-scoped pipelines (404 / omitted counts, no 'N hidden' enumeration leak), cross-team connector binding is refused as connector_team_mismatch, team-scoped pipeline visibility + view-as-team admin flows are enforced, and RBAC roles (admin/operator/runner/viewer) gate team surfaces (backend/src/modulo/core/team_visibility.py, backend/src/modulo/auth/team_rbac.py; cross_team_isolation.feature / team_pipeline_visibility.feature / view_as_team.feature, test_team_visibility.py)"
-            - "[x] DB team RLS covers every team-scoped table (FAR-1514): lifecycle_maps, eval_datasets and eval_suites joined the five 0124 tables — the migration drops their org-ONLY rls_org_isolation policy and creates the shared rls_team_isolation policy carrying the full visibility matrix (organisation_id = current org AND (visibility='org' OR visibility IS NULL OR owner_team_id IS NULL OR owner_team_id IN my team_memberships OR org_role='admin' OR app.execution_context='true')) — Postgres ORs permissive policies, so an org-only policy sitting beside a team policy made the team policy dead weight (the cross-team leak 0124 fixed); the org check stays an AND gate so the execution-context escape hatch only widens the team-visibility clause WITHIN the org, never across orgs; background machinery (executor, cron, SAQ suite-run dispatch, housekeeping, seed) sets app.execution_context='true' (set_rls_execution_context) so team-private rows stay readable to background work while user-facing sessions never set it, preserving isolation; the four core-table resolvers (connectors / model_backends / environment_profiles / library_primitives) remain INTENTIONALLY unwired from route dependencies because their DB RLS alone 404s a non-member before any handler code runs (wiring them would add a redundant second transaction + membership query per request); data safety is policy-DDL only, existence-guarded for idempotent upgrade, Postgres-only (migration 0287_team_rls_lifecycle_evals, docs/product-map/teams/teams.md, backend/tests/integration/test_rls_isolation.py, backend/tests/unit/db/test_migration_team_visibility_rls.py, backend/tests/architecture/test_team_scope_wiring.py)"
+            - "[x] DB team RLS covers every team-scoped table (FAR-1514): lifecycle_maps, eval_datasets and eval_suites joined the five 0124 tables — the migration drops their org-ONLY rls_org_isolation policy and creates the shared rls_team_isolation policy carrying the full visibility matrix (organisation_id = current org AND (visibility='org' OR visibility IS NULL OR owner_team_id IS NULL OR owner_team_id IN my team_memberships OR org_role='admin' OR app.execution_context='true')) — Postgres ORs permissive policies, so an org-only policy sitting beside a team policy made the team policy dead weight (the cross-team leak 0124 fixed); the org check stays an AND gate so the execution-context escape hatch only widens the team-visibility clause WITHIN the org, never across orgs; background machinery (executor, cron, SAQ suite-run dispatch, housekeeping, seed) sets app.execution_context='true' (set_rls_execution_context) so team-private rows stay readable to background work, and the FAR-1515 team-scope seams team_blind_org_scope / pipeline_team_scope_team_blind widen on the request path for the duration of a scoped gate check then restore the caller's context, so user-facing list/read paths stay team-filtered; the four core-table resolvers (connectors / model_backends / environment_profiles / library_primitives) remain INTENTIONALLY unwired from route dependencies because their DB RLS alone 404s a non-member before any handler code runs (wiring them would add a redundant second transaction + membership query per request); data safety is policy-DDL only, existence-guarded for idempotent upgrade, Postgres-only (migration 0287_team_rls_lifecycle_evals, docs/product-map/teams/teams.md, backend/tests/integration/test_rls_isolation.py, backend/tests/unit/db/test_migration_team_visibility_rls.py, backend/tests/architecture/test_team_scope_wiring.py)"
         deferrals:
             - "Org-level membership/role grants and the team entity lifecycle are tracked under feat-teams-org-entity"
     feat-triggers:

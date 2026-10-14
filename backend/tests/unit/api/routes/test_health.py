@@ -17,10 +17,13 @@ from unittest.mock import patch
 
 import pytest
 
+import modulo.api.routes.health as health_mod
 from modulo.api.routes.health import (
+    _check_decision_record_reconcile,
     _check_dispatcher_reconcile,
     _check_migrations,
     _check_runner_health_probe,
+    _check_runner_marker_sweep,
     _check_runner_workspace_reconcile,
     _check_slot_reconciliation,
     _check_stale_run_recovery,
@@ -34,11 +37,28 @@ def _reset_repo_heads_cache() -> Generator[None, None, None]:
     """FAR-1439: ``_check_migrations`` memoizes the parsed alembic heads in a
     process-wide cache; reset it around every test so one test's canned heads
     can never leak into another test's assertions."""
-    from modulo.api.routes import health as health_mod
-
     health_mod._REPO_HEADS_CACHE = None
     yield
     health_mod._REPO_HEADS_CACHE = None
+
+
+@pytest.fixture(autouse=True)
+def _skip_sweep_warmup_grace() -> Generator[None, None, None]:
+    """FAR-1672: push ``_START_TIME`` past the sweeps' warm-up grace by default.
+
+    The advisory sweep readers treat a MISSING stats key as ok while the
+    process is younger than the sweep's stale window (the post-boot warm-up
+    grace). Tests exercising the genuine never-run signal must start OUTSIDE
+    that window, so the module default pushes ``_START_TIME`` an hour into
+    the past — enough for every 5-min/60s-cadence sweep. Tests that DO want
+    the warm-up grace re-patch ``_START_TIME`` locally (inner patch wins
+    while active), as does the hourly decision_record_reconcile
+    outside-grace test, which needs > 3h.
+    """
+    start_time_patch = patch.object(health_mod, "_START_TIME", datetime.now(UTC) - timedelta(hours=1))
+    start_time_patch.start()
+    yield
+    start_time_patch.stop()
 
 
 def _make_settings(redis_url: str = "redis://localhost:6379/0") -> Settings:
@@ -259,6 +279,92 @@ class TestCheckDispatcherReconcile:
         assert "age_terminalized=4" in result.detail
         assert result.detail is not None
         assert "claimed_but_never_dispatched=5" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_fresh_run_detail_surfaces_node_started_counters(self) -> None:
+        """FAR-1649: the readiness detail must surface the node-started counters
+        so an operator reading the /healthz detail sees the regression alarms
+        without querying the raw blob. Before this they were written to the
+        stats blob but omitted from the detail line."""
+        fake = _FakeStatsRedis(
+            blob=_fresh_payload(
+                node_started_terminalized=2,
+                node_started_deferred=3,
+            ).encode()
+        )
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "node_started_terminalized=2" in result.detail
+        assert "node_started_deferred=3" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_fresh_run_detail_defaults_node_started_counters_to_zero(self) -> None:
+        """A payload without the FAR-1649 node-started keys still renders them
+        as 0 rather than raising (pre-FAR-1649 worker)."""
+        fake = _FakeStatsRedis(blob=_fresh_payload().encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "node_started_terminalized=0" in result.detail
+        assert "node_started_deferred=0" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_fresh_run_detail_surfaces_per_org_bounded_failure_counters(self) -> None:
+        """FAR-1621: the readiness detail must surface ALL the per-org
+        bounded-failure counters (plus ``orgs_deferred``) so an alert email can
+        tell the FAR-1525 cut, the FAR-1601 skip, the pool-checkout cut, the
+        connect-bound skip, the FAR-1621 statement-bound skip and a deferral
+        apart — before this they were absent from the detail entirely, making
+        the cases indistinguishable."""
+        fake = _FakeStatsRedis(
+            blob=_fresh_payload(
+                org_timeouts=1,
+                orgs_deferred=2,
+                org_lock_timeouts=3,
+                org_pool_timeouts=4,
+                org_connect_timeouts=5,
+                org_statement_timeouts=6,
+            ).encode()
+        )
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "org_timeouts=1" in result.detail
+        assert "orgs_deferred=2" in result.detail
+        assert "org_lock_timeouts=3" in result.detail
+        assert "org_pool_timeouts=4" in result.detail
+        assert "org_connect_timeouts=5" in result.detail
+        assert "org_statement_timeouts=6" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_fresh_run_detail_defaults_the_per_org_counters_to_zero(self) -> None:
+        """A pre-FAR-1621 payload (no org-failure keys at all) still renders —
+        every counter defaults to 0 rather than raising."""
+        fake = _FakeStatsRedis(blob=_fresh_payload().encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "org_timeouts=0" in result.detail
+        assert "org_pool_timeouts=0" in result.detail
+        assert "org_connect_timeouts=0" in result.detail
+        assert "org_statement_timeouts=0" in result.detail
 
     @pytest.mark.asyncio
     async def test_fresh_timeout_status_degraded(self) -> None:
@@ -830,3 +936,87 @@ class TestRunnerWorkspaceReconcileNotApplicable:
         assert result.status == "degraded"
         assert result.detail is not None
         assert "engine unreachable" in result.detail
+
+
+class TestSweepStatsWarmupGrace:
+    """FAR-1672: a MISSING stats key is ok inside the process's post-boot
+    warm-up grace (the sweep simply has not had its first tick yet — the
+    cadences range from 60s to hourly, so a fresh deploy has a legitimately
+    key-less window), and still degraded outside it (a genuinely dead sweep
+    must keep alerting). Covers the class via the shared reader across two
+    different cadences — the 5-min stale_run_recovery and the HOURLY
+    decision_record_reconcile that produced the 2026-10-11 false page — not
+    just the one instance."""
+
+    async def _read_missing_key(self, check: Any, *, started: datetime) -> Any:
+        """Run a sweep check with NO stats key and a given process start time."""
+        with (
+            patch.object(health_mod, "_START_TIME", started),
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=_FakeStatsRedis(blob=None)),
+        ):
+            return await check()
+
+    @pytest.mark.asyncio
+    async def test_missing_key_inside_grace_reports_ok_hourly_sweep(self) -> None:
+        """decision_record_reconcile (hourly, 3h stale window): a fresh
+        process with no key yet is the warm-up case, not a dead sweep."""
+        result = await self._read_missing_key(_check_decision_record_reconcile, started=datetime.now(UTC))
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "warm-up grace" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_missing_key_inside_grace_reports_ok_5min_sweep(self) -> None:
+        """stale_run_recovery (5-min cadence, 15-min stale window): same
+        warm-up treatment through the same shared reader."""
+        result = await self._read_missing_key(_check_stale_run_recovery, started=datetime.now(UTC))
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "warm-up grace" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_missing_key_outside_grace_still_degraded_hourly_sweep(self) -> None:
+        """decision_record_reconcile outside its 3h window: a key that never
+        appeared has had multiple missed cadences — the genuine dead-sweep
+        signal is unchanged."""
+        result = await self._read_missing_key(
+            _check_decision_record_reconcile, started=datetime.now(UTC) - timedelta(hours=4)
+        )
+        assert result.status == "degraded"
+        assert result.detail is not None
+        assert "has never run" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_missing_key_outside_grace_still_degraded_5min_sweep(self) -> None:
+        """stale_run_recovery outside its 15-min window: still degraded."""
+        result = await self._read_missing_key(_check_stale_run_recovery, started=datetime.now(UTC) - timedelta(hours=1))
+        assert result.status == "degraded"
+        assert result.detail is not None
+        assert "has never run" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_fresh_key_inside_grace_still_reads_stats_not_grace(self) -> None:
+        """Behaviour-neutral once the sweep has ticked: a present fresh key
+        takes the NORMAL stats path even inside the grace window — the grace
+        only covers key absence, it never masks a content reading."""
+        fake = _FakeStatsRedis(blob=_rhp_payload().encode())
+        with (
+            patch.object(health_mod, "_START_TIME", datetime.now(UTC)),
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_runner_health_probe()
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "orgs_probed=1" in result.detail
+        assert "warm-up grace" not in result.detail
+
+    @pytest.mark.asyncio
+    async def test_marker_sweep_missing_key_inside_grace_reports_ok(self) -> None:
+        """runner_marker_sweep (5-min cadence) — a third sweep of the class,
+        confirming the grace is not wired per-instance."""
+        result = await self._read_missing_key(_check_runner_marker_sweep, started=datetime.now(UTC))
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "warm-up grace" in result.detail

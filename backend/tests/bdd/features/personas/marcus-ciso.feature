@@ -60,7 +60,7 @@ Feature: Marcus — CISO at a Regulated Organisation
     Then no organisation can access another org's pipelines, runs, or credentials
     And RLS is enforced at the database level
 
-  @goal-marcus-offboarding
+  @goal-marcus-offboarding @real_verify_identity
   Scenario: Marcus confirms offboarding immediately revokes access
     Given user "engineer-bob" has an active JWT session
     When Bob is removed from the organisation

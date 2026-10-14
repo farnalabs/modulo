@@ -43,6 +43,7 @@ from modulo.core.analytics.metrics import (
 )
 from modulo.core.cost_controller.breakdown.constants import COST_COLUMN_CAP
 from modulo.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
+from modulo.db.crud.daily_run_count import org_level_predicate
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -265,6 +266,16 @@ async def backfill_facts(session: Any, day: date) -> int:
         ),
         else_=None,
     )
+    # FAR-707: the business-expected-outcome marker, mirrored from the run's
+    # terminal classification. The LIVE writer stamps it at finalize; this is
+    # the repair path, and without it a backfilled fact would sit at the
+    # column's NULL default forever (NULL still reads as "not benign", so the
+    # failure rate would keep counting a benign run). NULL (not False) when the
+    # classification has not landed, matching the live writer's contract.
+    benign_expr = sa.case(
+        (Run.run_classification["value"].as_string() == "benign", True),
+        else_=sa.null(),
+    )
     # ``graph_json`` is ``json`` on SQLite/MariaDB and promoted to ``jsonb`` on
     # Postgres by migration 0147 — but the promotion is non-blocking and the ORM
     # model keeps the generic ``JSON`` type, so the column type is not guaranteed
@@ -334,6 +345,7 @@ async def backfill_facts(session: Any, day: date) -> int:
             Run.total_tokens,
             duration_ms_expr.label("duration_ms"),
             Run.error_code.label("error_code"),
+            benign_expr.label("benign"),
             Run.claim_count.label("claim_count"),
             queue_wait_ms_expr.label("queue_wait_ms"),
             final_idle_ms_expr.label("final_idle_ms"),
@@ -375,6 +387,12 @@ async def backfill_facts(session: Any, day: date) -> int:
             Run.execution_origin.label("execution_origin"),
         )
         .select_from(Run)
+        # FAR-1653: this INSERT...FROM SELECT is NOT scoped by the global
+        # soft-delete filter (the do_orm_execute listener acts on SELECTs
+        # only), so soft-deleted team/pipeline names already resolve here —
+        # no include_soft_deleted opt-out is needed or effective on the
+        # INSERT. Locked by TestSoftDeletedTeamNamePreservation in
+        # tests/integration/test_run_daily_facts.py.
         .outerjoin(Team, Team.id == Run.owner_team_id)
         .outerjoin(Pipeline, Pipeline.id == Run.pipeline_id)
         .outerjoin(PipelineSnapshot, PipelineSnapshot.id == Run.snapshot_id)
@@ -405,6 +423,7 @@ async def backfill_facts(session: Any, day: date) -> int:
                 RunDailyFact.total_tokens,
                 RunDailyFact.duration_ms,
                 RunDailyFact.error_code,
+                RunDailyFact.benign,
                 RunDailyFact.claim_count,
                 RunDailyFact.queue_wait_ms,
                 RunDailyFact.final_idle_ms,
@@ -570,7 +589,7 @@ async def reconcile_facts(session: Any, *, today: date | None = None) -> dict[st
                 OrgDailyRunCount.run_date,
                 OrgDailyRunCount.total_spend_usd,
             ).where(
-                OrgDailyRunCount.team_id.is_(None),
+                org_level_predicate(),
                 OrgDailyRunCount.run_date >= start,
                 OrgDailyRunCount.run_date < today,
             )

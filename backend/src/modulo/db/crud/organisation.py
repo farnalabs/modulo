@@ -33,6 +33,11 @@ async def get_organisation(
         # Lock it for the remainder of the transaction so a concurrent writer
         # cannot interleave between the read and the write (TOCTOU). No-op on
         # dialects without SELECT ... FOR UPDATE (SQLite).
+        #
+        # FAR-1624 org-lock audit: intentionally plain `FOR UPDATE`, NOT `FOR NO
+        # KEY UPDATE` — callers take the org lock FIRST (no pre-held FK `KEY
+        # SHARE` on the org), so they cannot hit the KEY-SHARE->FOR-UPDATE
+        # upgrade cycle.
         stmt = stmt.with_for_update()
     result = await session.execute(stmt)
     return result.scalar_one_or_none()

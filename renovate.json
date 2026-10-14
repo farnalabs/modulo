@@ -110,6 +110,17 @@
         "major"
       ],
       "enabled": false
+    },
+    {
+      "description": "Hold Python below 3.15. python:3.15-slim breaks the prod image build: zstandard 0.25.0 ships no cp315 wheel, so 'uv sync --frozen' falls back to an sdist build that needs gcc, which the images' --no-build policy forbids (see revert #1721). The same cap must apply to backend/pyproject.toml's requires-python (pep621) - the Dockerfile base image must sit inside its range per tests/architecture/test_fly_toml_python_version.py - so match both the docker base image and the python-version datasource. Remove this once the native dependencies publish cp315 wheels.",
+      "matchDatasources": [
+        "docker",
+        "python-version"
+      ],
+      "matchPackageNames": [
+        "python"
+      ],
+      "allowedVersions": "<3.15"
     }
   ]
 }

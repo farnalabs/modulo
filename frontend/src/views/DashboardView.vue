@@ -3,14 +3,14 @@
     <DashboardNotificationsPanel class="-mt-3 mb-4" />
     <PageHeader :title="$t('views.DashboardView.dashboard')" :subtitle="$t('views.DashboardView.overview_of_your_organisations_pipelines_and_runs')" data-testid="dashboard-title">
       <template #right>
-        <div class="flex flex-wrap justify-start sm:justify-end gap-1">
+        <div v-if="trendToggleVisible" class="flex flex-wrap justify-start sm:justify-end gap-1">
           <button type="button"
             v-for="w in trendWindows"
             :key="w.value ?? 'all'"
             :data-testid="'trend-toggle-' + (w.value ?? 'all')"
             :aria-pressed="selectedWindow === w.value"
             :class="[
-              'px-3 py-1 text-xs font-medium rounded transition-colors',
+              'px-3 py-1 text-xs font-medium rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               selectedWindow === w.value ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80',
             ]"
             @click="selectWindow(w.value)"
@@ -38,24 +38,24 @@
       <!-- Row 1: Summary stat cards -->
       <div :class="['grid gap-4 sm:grid-cols-2 lg:grid-cols-4 transition-opacity duration-200', periodRefreshing ? 'opacity-60' : 'opacity-100']">
         <StatCard :label="$t('views.DashboardView.pipelines')" :value="cardValue(summary.period?.metrics?.active_pipelines?.current, summary.active_pipelines)" color="primary" to="/pipelines" :delta="periodMetrics?.active_pipelines ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined" :neutral-trend="true">
-          <template #icon><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></template>
+          <template #icon><GitBranch class="h-4 w-4" aria-hidden="true" /></template>
         </StatCard>
         <StatCard :label="$t('views.DashboardView.total_runs')" :value="cardValue(summary.period?.metrics?.total_runs?.current, summary.total_runs)" color="primary" to="/runs" :delta="periodMetrics?.total_runs ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined">
-          <template #icon><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></template>
+          <template #icon><BarChart2 class="h-4 w-4" aria-hidden="true" /></template>
         </StatCard>
         <StatCard :label="$t('views.DashboardView.running')" :value="cardValue(summary.period?.metrics?.run_counts_by_status?.running?.current, summary.run_counts_by_status?.running ?? 0)" color="success" :to="`/runs?status=${RUN_STATUS.RUNNING}`" :delta="periodMetrics?.run_counts_by_status?.running ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined">
-          <template #icon><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></template>
+          <template #icon><Activity class="h-4 w-4" aria-hidden="true" /></template>
         </StatCard>
         <StatCard :label="$t('views.DashboardView.awaiting_human')" :value="cardValue(summary.period?.metrics?.run_counts_by_status?.awaiting_human?.current, summary.run_counts_by_status?.awaiting_human ?? 0)" color="warning" :to="`/runs?status=${RUN_STATUS.AWAITING_HUMAN}`" :delta="periodMetrics?.run_counts_by_status?.awaiting_human ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined" :inverted="true">
-          <template #icon><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></template>
+          <template #icon><Clock class="h-4 w-4" aria-hidden="true" /></template>
         </StatCard>
       </div>
       <div class="grid gap-4 sm:grid-cols-2">
         <StatCard :label="$t('views.DashboardView.failed')" :value="cardValue(summary.period?.metrics?.run_counts_by_status?.failed?.current, summary.run_counts_by_status?.failed ?? 0)" color="destructive" :to="`/runs?status=${RUN_STATUS.FAILED}`" :delta="periodMetrics?.run_counts_by_status?.failed ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined" :inverted="true">
-          <template #icon><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></template>
+          <template #icon><XCircle class="h-4 w-4" aria-hidden="true" /></template>
         </StatCard>
         <StatCard :label="$t('views.DashboardView.idle')" :value="cardValue(summary.period?.metrics?.run_counts_by_status?.idle?.current, summary.run_counts_by_status?.idle ?? 0)" color="muted" to="/pipelines" :delta="periodMetrics?.run_counts_by_status?.idle ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined" :inverted="true">
-          <template #icon><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></template>
+          <template #icon><PauseCircle class="h-4 w-4" aria-hidden="true" /></template>
         </StatCard>
       </div>
       <!-- Eval pass rate + Token spend -->
@@ -116,7 +116,7 @@
                 tabindex="0"
                 :aria-expanded="expandedTeam === team.id"
                 :data-testid="'dashboard-team-row-' + team.id"
-                class="border-b last:border-0 hover:bg-muted/50"
+                class="border-b last:border-0 hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                 @click="toggleTeam(team.id)"
                 @keydown.enter="toggleTeam(team.id)"
                 @keydown.space.prevent="toggleTeam(team.id)">
@@ -222,7 +222,7 @@ import { useDashboardStore } from '../stores/dashboard'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Sparkline from '../components/shared/Sparkline.vue'
 import StatCard from '../components/StatCard.vue'
-import { ChevronUp, ChevronDown } from '@lucide/vue'
+import { ChevronUp, ChevronDown, GitBranch, BarChart2, Activity, Clock, XCircle, PauseCircle } from '@lucide/vue'
 import { RUN_STATUS } from '../constants/filters'
 import { formatMoney } from '../lib/money'
 import { runStatusBadgeClass, runStatusLabel, formatRunDate, isDispatchedRun } from '../utils/runUtils'
@@ -300,6 +300,11 @@ const spendSparklineData = computed(() => {
 const summaryTrendLabels = computed(() => summary.value?.trend?.map(d => d.date) ?? [])
 
 // --- Rolling-window toggle (FAR-92 / FAR-115) ---
+// Gated on the analytics_page flag (FAR-92): hidden when off — the dashboard
+// keeps the legacy all-time shape and the backend ignores `days` (scoping its
+// summary cache by the flag state).
+const trendToggleVisible = computed(() => planStore.featureEnabled('analytics_page'))
+
 const trendWindows: Array<{ labelKey: string; value: number | null }> = [
   { labelKey: 'views.DashboardView.trend_24h', value: 1 },
   { labelKey: 'views.DashboardView.trend_3d', value: 3 },

@@ -335,9 +335,6 @@ def _build_state_summaries(
         run_statuses = [r.status for r in batch_runs]
 
         batch_name = st.name or ""
-        pipeline_id = st.pipeline_id
-        if batch_runs and pipeline_id is None:
-            pipeline_id = batch_runs[0].pipeline_id
 
         batch_status, run_count = _summarise_batch_runs(run_statuses, runs=batch_runs)
         summaries.append(

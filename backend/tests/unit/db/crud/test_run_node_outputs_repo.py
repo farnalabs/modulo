@@ -37,8 +37,11 @@ from modulo.db.crud.run_node_outputs import (
     OutputsSentinelViolation,
     RunBlobs,
     _jsonb_canonical_key,
+    _sanitise_jsonb,
     dialect_insert,
     parse_marker_node_id,
+    persist_artifact_pointers,
+    persist_schema_enforcement_record,
     read_node_output_blob_bytes,
     read_run_blobs,
     read_run_markers_fenced,
@@ -188,6 +191,23 @@ def _meta_rows_query(run_id: uuid.UUID) -> Any:
 
 def _attempt_key_rows_query(run_id: uuid.UUID, attempt_key: str) -> Any:
     return select(RunNodeOutput).where(RunNodeOutput.run_id == run_id, RunNodeOutput.attempt_key == attempt_key)
+
+
+async def _read_row(session: AsyncSession, run: Run, *, node_id: str, attempt_key: str) -> RunNodeOutput:
+    """Fetch one row by its natural key (inside an explicit transaction so a
+    bare read's autobegin does not block the next write's ``begin()``)."""
+    async with session.begin():
+        row = (
+            await session.execute(
+                select(RunNodeOutput).where(
+                    RunNodeOutput.run_id == run.id,
+                    RunNodeOutput.node_id == node_id,
+                    RunNodeOutput.attempt_key == attempt_key,
+                )
+            )
+        ).scalar_one_or_none()
+    assert row is not None
+    return row
 
 
 class TestTwinParser:
@@ -701,6 +721,180 @@ class TestInheritedSentinelFiltering:
         await _write_markers(session, run, {"weird-legacy-key": {"raw": "keep"}})
         blobs = await _read_blobs(session, run, raw=True)
         assert blobs.markers == {"weird-legacy-key": {"raw": "keep"}}
+
+
+class TestJsonbSanitisation:
+    """FAR-1602: a node output carrying U+0000 (or a lone UTF-16 surrogate)
+    would abort the Postgres jsonb INSERT (SQLSTATE 22P05) and lose the node's
+    output. The primary-write choke point (:func:`replace_run_node_outputs`)
+    replaces every illegal code point — in nested string values AND keys —
+    with the visible U+FFFD marker so the run completes."""
+
+    def test_nul_in_nested_strings_is_replaced(self) -> None:
+        sanitised = _sanitise_jsonb({"out": {"text": "a\x00b", "more": ["x\x00", "y"]}})[0]
+        assert "\x00" not in json.dumps(sanitised)
+        assert sanitised["out"]["text"] == "a\ufffdb"
+        assert sanitised["out"]["more"] == ["x\ufffd", "y"]
+
+    def test_nul_in_keys_is_replaced(self) -> None:
+        sanitised = _sanitise_jsonb({"k\x00ey": {"inner\x00": 1}})[0]
+        assert set(sanitised) == {"k\ufffdey"}
+        assert set(sanitised["k\ufffdey"]) == {"inner\ufffd"}
+
+    def test_lone_surrogate_is_replaced(self) -> None:
+        assert _sanitise_jsonb("pre\ud800post")[0] == "pre\ufffdpost"
+
+    def test_clean_value_is_reported_unchanged(self) -> None:
+        value = {"a": [1, 2.5, True, None], "b": {"c": "ok"}}
+        sanitised, changed = _sanitise_jsonb(value)
+        assert sanitised == value
+        assert changed is False
+
+    def test_non_string_scalars_are_preserved(self) -> None:
+        assert _sanitise_jsonb(7)[0] == 7
+        assert _sanitise_jsonb(None)[0] is None
+        assert _sanitise_jsonb(True)[0] is True
+
+    async def test_replace_sanitises_nul_nested_and_in_keys(self, session: AsyncSession) -> None:
+        run = await _seed_run(session)
+        outputs = {"n\x001": {"answer": "a\x00b", "deep": {"list": ["x\x00y"]}}}
+        await _replace(session, run, outputs=outputs, telemetry=None)
+
+        blobs = await _read_blobs(session, run, raw=True)
+        assert blobs.outputs is not None
+        assert set(blobs.outputs) == {"n\ufffd1"}
+        node = blobs.outputs["n\ufffd1"]
+        assert node["answer"] == "a\ufffdb"
+        assert node["deep"]["list"] == ["x\ufffdy"]
+
+    async def test_replace_after_sanitisation_keeps_key_consistency(self, session: AsyncSession) -> None:
+        """The blanking key set and the upsert node_ids are both derived from
+        the sanitised map, so a REPLACE re-writing the same (NUL-keyed) node
+        updates the row instead of blanking it as a phantom absent key."""
+        run = await _seed_run(session)
+        await _replace(session, run, outputs={"n\x001": {"v": 1}}, telemetry=None)
+        await _replace(session, run, outputs={"n\x001": {"v": 2}}, telemetry=None)
+
+        blobs = await _read_blobs(session, run, raw=True)
+        assert blobs.outputs == {"n\ufffd1": {"v": 2}}
+
+    async def test_upsert_rows_sanitises_every_jsonb_side(self, session: AsyncSession) -> None:
+        """FAR-1654: ``upsert_rows`` is the shared chokepoint for the four blob
+        sides — a NUL in a marker / artifact payload passed here directly is
+        sanitised even though the writer bypassed ``replace_run_node_outputs``."""
+        run = await _seed_run(session)
+        attempt_key = f"run:{run.id}:node:n1:1"
+        async with session.begin():
+            await set_rls_org(session, run.organisation_id)
+            await upsert_rows(
+                session,
+                run_id=run.id,
+                organisation_id=run.organisation_id,
+                rows=[
+                    NodeOutputWrite(
+                        node_id="n1",
+                        attempt_key=attempt_key,
+                        markers={"k\x00": {"v": "a\x00b"}},
+                        artifacts=[{"rel\x00path": "x\x00"}],
+                    )
+                ],
+                ignore_conflicts=False,
+            )
+        row = await _read_row(session, run, node_id="n1", attempt_key=attempt_key)
+        assert row.raw_output_markers == {"k\ufffd": {"v": "a\ufffdb"}}
+        assert row.artifacts_json == [{"rel\ufffdpath": "x\ufffd"}]
+        assert "\x00" not in json.dumps(row.raw_output_markers)
+        assert "\x00" not in json.dumps(row.artifacts_json)
+
+    async def test_write_markers_sanitises_nul_nested_and_in_keys(self, session: AsyncSession) -> None:
+        """FAR-1654: ``write_run_markers`` reaches the table through
+        ``upsert_rows`` — the stored marker payload has its NULs (nested values
+        AND keys) replaced with the visible U+FFFD marker."""
+        run = await _seed_run(session)
+        attempt_key = f"run:{run.id}:node:n1:1"
+        markers = {attempt_key: {"answer": "a\x00b", "deep": {"k\x00": ["x\x00y"]}}}
+        await _write_markers(session, run, markers)
+        blobs = await _read_blobs(session, run, raw=True)
+        assert blobs.markers is not None
+        stored = blobs.markers[attempt_key]
+        assert stored == {"answer": "a\ufffdb", "deep": {"k\ufffd": ["x\ufffdy"]}}
+        assert "\x00" not in json.dumps(stored)
+
+    async def test_persist_artifact_pointers_sanitises_nul_nested_and_in_keys(self, session: AsyncSession) -> None:
+        """FAR-1654: the targeted ``artifacts_json`` upsert bypasses
+        ``upsert_rows`` — its payload is sanitised directly."""
+        run = await _seed_run(session)
+        attempt_key = f"run:{run.id}:node:n1:0"
+        pointers = [{"stream": "stdout", "rel_path": "a\x00b", "meta": {"k\x00": ["x\x00y"]}}]
+        async with session.begin():
+            await set_rls_org(session, run.organisation_id)
+            await persist_artifact_pointers(
+                session,
+                run_id=run.id,
+                organisation_id=run.organisation_id,
+                node_id="n1",
+                attempt_key=attempt_key,
+                pointers=pointers,
+            )
+        row = await _read_row(session, run, node_id="n1", attempt_key=attempt_key)
+        assert row.artifacts_json == [{"stream": "stdout", "rel_path": "a\ufffdb", "meta": {"k\ufffd": ["x\ufffdy"]}}]
+        assert "\x00" not in json.dumps(row.artifacts_json)
+
+    async def test_persist_schema_enforcement_record_sanitises_nul_nested_and_in_keys(
+        self, session: AsyncSession
+    ) -> None:
+        """FAR-1654: the targeted ``schema_enforcement_json`` upsert bypasses
+        ``upsert_rows`` — its payload is sanitised directly."""
+        run = await _seed_run(session)
+        attempt_key = f"run:{run.id}:node:n1:0"
+        record = {"outcome": "a\x00b", "detail": {"k\x00": ["x\x00y"]}}
+        async with session.begin():
+            await set_rls_org(session, run.organisation_id)
+            await persist_schema_enforcement_record(
+                session,
+                run_id=run.id,
+                organisation_id=run.organisation_id,
+                node_id="n1",
+                attempt_key=attempt_key,
+                enforcement_record=record,
+            )
+        row = await _read_row(session, run, node_id="n1", attempt_key=attempt_key)
+        assert row.schema_enforcement_json == {"outcome": "a\ufffdb", "detail": {"k\ufffd": ["x\ufffdy"]}}
+        assert "\x00" not in json.dumps(row.schema_enforcement_json)
+
+
+class TestUpsertRowsIgnoreConflicts:
+    """``upsert_rows(ignore_conflicts=True)`` emits ON CONFLICT DO NOTHING —
+    the ``_upsert_group_stmt`` no-overwrite arm: a conflicting row keeps its
+    original blob payload instead of being overwritten from ``excluded``."""
+
+    async def test_ignore_conflicts_true_inserts_then_leaves_row_untouched(self, session: AsyncSession) -> None:
+        run = await _seed_run(session)
+        attempt_key = f"run:{run.id}:node:n1:1"
+
+        async with session.begin():
+            await set_rls_org(session, run.organisation_id)
+            await upsert_rows(
+                session,
+                run_id=run.id,
+                organisation_id=run.organisation_id,
+                rows=[NodeOutputWrite(node_id="n1", attempt_key=attempt_key, outputs={"v": 1})],
+                ignore_conflicts=True,
+            )
+        row = await _read_row(session, run, node_id="n1", attempt_key=attempt_key)
+        assert row.outputs_json == {"v": 1}
+
+        async with session.begin():
+            await set_rls_org(session, run.organisation_id)
+            await upsert_rows(
+                session,
+                run_id=run.id,
+                organisation_id=run.organisation_id,
+                rows=[NodeOutputWrite(node_id="n1", attempt_key=attempt_key, outputs={"v": 2})],
+                ignore_conflicts=True,
+            )
+        row = await _read_row(session, run, node_id="n1", attempt_key=attempt_key)
+        assert row.outputs_json == {"v": 1}
 
 
 class TestBytesAccounting:

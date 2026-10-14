@@ -25,4 +25,4 @@ Feature: Pipeline Node Types
   Scenario: HITL review node interrupts for approval
     Given a pipeline with a HITL review node "pre-deploy"
     When the run reaches the "pre-deploy" gate
-    Then the run status becomes "waiting_for_approval"
+    Then the run status becomes "awaiting_human"

@@ -15,6 +15,7 @@ code:
   - frontend/src/components/settings/McpOauthClientsCard.vue
 unit-tests:
   - backend/tests/unit/mcp/test_scope_validator.py
+  - backend/tests/unit/mcp/test_hitl_delegation_boundary.py
   - backend/tests/unit/mcp/test_tenant_context.py
   - backend/tests/unit/mcp/test_api_key_mgmt_tools.py
   - backend/tests/unit/mcp/test_get_run_output.py
@@ -107,9 +108,20 @@ applications. Built on the auth + model-backend core.
       space-joined storage round-trips losslessly, every entry an absolute
       `http://`/`https://` URI – localhost and 127.0.0.1 stay valid for local
       development, duplicates de-duplicated, invalid entries named in an
-      inline error) and at least one of the three valid scopes `trigger:run` /
-      `hitl:review` / `library:browse` (the backend's `VALID_SCOPES`; an
-      unknown scope is a 400 `InvalidScopeError`). Success opens a one-time
+      inline error) and at least one grantable scope (the backend's widened
+      vocabulary: every delegable key of the `PERMISSIONS` registry — the
+      accepted scope IS the permission key, ~158 today — with the three
+      pre-FAR-1476 spellings `trigger:run` / `hitl:review` / `library:browse`
+      still accepted as INPUT aliases through `auth.oauth.SCOPE_ALIASES` and
+      canonicalised to `run.trigger` / `hitl.review` / `resource.read_only`
+      before anything is stored; the registered list is the client's CEILING,
+      so an unknown or non-delegable scope is a 400 `InvalidScopeError`).
+      The picker itself is backend-driven: it fetches
+      `GET /api/v1/mcp/oauth/scopes` (the delegable keys + their role floors,
+      filtered to the caller's own role so a scope above the caller's floor is
+      never offered as a dead control), renders them grouped by namespace and
+      filterable through a search box, and hardcodes no vocabulary — a newly
+      added registry key is reachable without a frontend change. Success opens a one-time
       dialog showing the client id and client secret: only the create
       response ever carries the raw secret (the row stores
       `client_secret_hash`, so it cannot be retrieved again), the value
@@ -144,8 +156,9 @@ applications. Built on the auth + model-backend core.
       approve / reject / deliver_manual) drives the REAL parse guard, scope gate
       and decision dispatch – `approve`/`reject` require a claim token
       (`claim_token_required` otherwise), the `_check_agent_tool_scope`
-      role-hierarchy chokepoint denies a `runner` `hitl:review` actions with the
-      pinned `insufficient_scope` error shape, and a successful decision reports
+      role-hierarchy chokepoint denies a `runner` the `hitl.approve` /
+      `hitl.claim` decision actions with the pinned `insufficient_scope` error
+      shape, and a successful decision reports
       `{"status": "approved"|"rejected", "review_id": ...}` through the real
       HITLManager; `list_pending_hitl` returns the org's undecided gates with the
       shared description resolver. Five `mcp/review_hitl.feature` scenarios
@@ -241,8 +254,11 @@ applications. Built on the auth + model-backend core.
       (`/.well-known/oauth-protected-resource` plus its `/mcp` path-suffix
       variant, which MCP clients ask for too: resource `/mcp/`,
       `authorization_servers`, header bearer methods) – with `scopes_supported`
-      derived from the single source of truth `auth.oauth.VALID_SCOPES`
-      (`trigger:run` / `hitl:review` / `library:browse`) in both documents.
+      derived from the single source of truth `auth.oauth.VALID_SCOPES`, which
+      since FAR-1476 is the whole delegable `PERMISSIONS` registry (~158
+      canonical keys, e.g. `run.trigger` / `hitl.review` / `pipeline.create`)
+      with the three legacy spellings deliberately absent (they are accepted
+      input aliases via `SCOPE_ALIASES`, never advertised) in both documents.
       They are pre-auth and org-less by design: a harness must read them before
       it holds any credential, so they cannot consult the per-org `mcp_server`
       kill switch, which stays enforced where it always was – at `/mcp`
@@ -261,6 +277,72 @@ applications. Built on the auth + model-backend core.
       (`backend/src/modulo/api/routes/oauth_metadata.py`,
       `backend/src/modulo/api/mcp_server.py`, `backend/src/modulo/api/main.py`;
       `backend/tests/unit/api/test_oauth_metadata.py`)
+- [x] Browser OAuth consent screen (2026-10-10, FAR-1476): the SPA consent
+      route `/oauth/authorize` is a real grant-review page, not a placeholder.
+      An anonymous pre-auth context endpoint
+      (`GET /api/v1/mcp/oauth/consent/context?state=...`,
+      `api/routes/mcp_oauth.py` — deliberately NO `require_feature` /
+      `get_current_user`, whose plan resolution would 401 a not-yet-signed-in
+      browser; the org is resolved from the pending `oauth_consent_states` row
+      and the `mcp_server` kill switch is enforced against it, the
+      `_oauth_authorize` pattern) returns the client's display name, the
+      canonical grant set stored by the authorize leg, and the client's team
+      boundary (`team: {id, name}` when `team_id` is set, so a team-bounded
+      client can say so) — and NOTHING else (no redirect_uri, no secrets, no
+      org internals; unknown/expired/consumed states are one undifferentiated
+      404). Migration 0300 widened the table's RLS policy with the
+      NULL-context arm (the same contract `oauth_clients` already has) so the
+      pre-auth read is visible to the runtime `modulo_app` role. The view
+      renders each scope's raw canonical key verbatim — the same single
+      labelling scheme the registration picker uses, since the grantable
+      vocabulary is the whole delegable `PERMISSIONS` registry and there is no
+      fixed per-scope description set any more (one scheme, not two),
+      a per-scope deny checkbox (all granted by default), and a
+      "limited to team X" line; Approve sends
+      `{state, granted_scopes: <still-granted keys>}` and the approve POST
+      (now accepting optional `granted_scopes`) fails CLOSED: the keys are
+      canonicalised, must be a non-empty subset of the stored set (anything
+      outside → 400, never widens), and the live-role check re-runs against
+      the granted subset (403 on denial, no code minted) — omitted
+      `granted_scopes` keeps the pre-slice all-stored-scopes behaviour. The
+      client-name bug (showing the logged-in user's username) is gone: the
+      name comes from the context endpoint, display-only — the code is still
+      minted from the stored state row only. Decline renders a clear "you
+      declined" state rather than an OAuth error redirect, because the
+      context endpoint deliberately does not expose `redirect_uri` (a
+      query-supplied redirect would be an open redirect); the pending state
+      simply expires (~15 min)
+      (`frontend/src/views/OAuthConsentView.vue`,
+      `frontend/src/__tests__/OAuthConsentView.spec.ts`,
+      `backend/tests/unit/api/test_mcp_oauth_bdd.py`,
+      migration `0301_oauth_consent_state_preauth_rls`)
+- [x] Widened OAuth scope vocabulary + delegated HITL decisions (2026-10-10,
+      FAR-1476): the grantable scope set is the delegable `PERMISSIONS`
+      registry — every key `auth.permissions.is_delegable` accepts (~158
+      today), re-read LIVE on every enforcement leg so tightening an exclusion
+      revokes already-minted grants — not a fixed three-scope list, and the
+      three pre-FAR-1476 spellings survive only as input aliases
+      (`SCOPE_ALIASES`: `trigger:run` → `run.trigger`, `hitl:review` →
+      `hitl.review`, `library:browse` → `resource.read_only`). The five
+      `hitl.*` decision keys were removed from `NON_DELEGABLE_PERMISSIONS` on
+      the 2026-10-09 decision record: a human-linked credential (a human's
+      OAuth connection) may hold them, and the boundary is the gate's runtime
+      `human_only` policy — the MCP surface (`_check_human_only_gate`) denies
+      a `human_only` gate outright regardless of credential class and REST
+      (`routes/hitl._enforce_human_only_gate`) denies a non-browser
+      credential — so a token holding `hitl.*` CAN decide an explicitly
+      opted-out gate and is denied on a `human_only` one with the RUNTIME
+      `human_only_gate` error rather than `insufficient_scope`. The
+      registration picker is backend-driven: `GET /api/v1/mcp/oauth/scopes`
+      serves the delegable keys + role floors filtered to the caller's role,
+      and the card renders them grouped by namespace and searchable with no
+      hardcoded vocabulary (`backend/src/modulo/auth/permissions.py`,
+      `backend/src/modulo/api/routes/mcp_oauth.py`,
+      `frontend/src/components/settings/McpOauthClientsCard.vue`;
+      `backend/tests/unit/mcp/test_hitl_delegation_boundary.py`,
+      `backend/tests/unit/api/test_mcp_oauth.py`,
+      `backend/tests/unit/auth/test_oauth.py`,
+      `frontend/src/__tests__/SettingsMcpView.spec.ts`)
 
 ## Known Gaps
 
@@ -271,6 +353,28 @@ applications. Built on the auth + model-backend core.
   published as a distinct surface here.
 
 ## QA History
+- 2026-10-10: **Spec-accuracy pass** – FAR-1476 slice 3 landed the real browser
+  consent screen (anonymous consent-context endpoint, per-scope deny on
+  approve, the rebuilt `/oauth/authorize` view). The tracker's OAuth bullet
+  previously described only client CRUD + the approve POST (and the approve
+  endpoint's own docstring claimed there was deliberately NO consent page);
+  added the consent-screen behaviour line above with its code/test citations
+  and the `frontend/src/manifest.yaml` `feat-mcp` behaviour + the
+  `/oauth/authorize` element-registry refresh. Known Gaps reviewed and
+  unchanged.
+- 2026-10-10: **Spec-accuracy pass (FAR-1476 slice)** – the registry widened
+  the OAuth scope vocabulary from the fixed three-scope set to every delegable
+  `PERMISSIONS` key, the `hitl.*` decision keys became delegable (2026-10-09
+  decision record; the gate's runtime `human_only` policy is the boundary),
+  and the registration picker became backend-driven (`GET
+  /api/v1/mcp/oauth/scopes`, grouped + searchable). Updated the two behaviour
+  bullets that still described three valid scopes (`trigger:run` /
+  `hitl:review` / `library:browse`) and the discovery bullet that advertised
+  that set as `scopes_supported`, fixed the HITL scope-gate wording to the
+  canonical `hitl.approve` / `hitl.claim` action keys, added the widened-
+  vocabulary behaviour line, and cited the new pinning suites
+  (`test_hitl_delegation_boundary.py`, `test_mcp_oauth.py` scope-endpoint
+  cases, `SettingsMcpView.spec.ts` picker cases).
 - 2026-10-07: **Spec-accuracy pass** – FAR-1476 shipped the OAuth discovery
   surface (RFC 8414 authorization-server + RFC 9728 protected-resource
   documents, the `WWW-Authenticate` challenge on unauthenticated MCP `401`s, the

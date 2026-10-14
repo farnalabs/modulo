@@ -108,6 +108,8 @@ from modulo.core.spend_ceiling import (
     cents_from_usd,
     evaluate_spend_ceilings,
 )
+from modulo.db.crud.daily_run_count import org_level_predicate
+from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.run import update_run_status
 from modulo.db.crud.run_node_outputs import DualWriteError, read_run_blobs
 from modulo.db.lifecycle_refs import (
@@ -126,6 +128,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.models.run_daily_facts import JourneyFact
 from modulo.db.rls import set_rls_org
+from modulo.db.sqlstates import is_lock_abort
 from modulo.settings import get_settings, work_item_refs_cap
 
 _log = logging.getLogger(__name__)
@@ -215,6 +218,75 @@ class _LedgerEscapeContext(NamedTuple):
     finalize_fields: dict[str, Any]
     session_factory: Callable[[], Any] | None
     claim_token: str | None
+
+
+class FinalizeMetricSink:
+    """Buffer of terminal-path telemetry, flushed by the retrying owner (FAR-1642).
+
+    The executor's whole-transaction lock retry (``_run_finalize_cost_transaction``)
+    re-runs ``finalize_cost`` from the top on a 40P01/55P03 abort. The
+    rolled-back attempt commits nothing, so its non-transactional metric
+    emissions must not fire: emitting inline would count a single run once per
+    attempt, inflating ``modulo_cost_ledger_limit_refused_total`` /
+    ``modulo_cost_ledger_duplicate_terminal_total`` /
+    ``modulo_cost_ledger_finalize_deferred_total``.
+
+    When a sink is supplied, the retry-affected emissions are BUFFERED instead
+    of emitted immediately; the executor flushes them only AFTER the attempt's
+    transaction commits, so a retried finalisation emits exactly one sample per
+    logical finalisation — the same "one sample per operation, never one per
+    attempt" contract the REST connector's retry loop documents
+    (``connectors.rest.rest_metrics.record_request_duration``). A caller with no
+    retry loop (the cancel path, ``finalize_cancelled_run``) passes ``None`` and
+    emits inline, byte-identically to before.
+    """
+
+    __slots__ = ("_pending",)
+
+    def __init__(self) -> None:
+        self._pending: list[Callable[[], None]] = []
+
+    def limit_refused(self, team: str) -> None:
+        """Queue a ``limit_refused`` emission for the committing attempt."""
+        self._pending.append(lambda: record_limit_refused(team))
+
+    def duplicate_terminal(self) -> None:
+        """Queue a ``duplicate_terminal`` emission for the committing attempt."""
+        self._pending.append(record_duplicate_terminal)
+
+    def finalize_deferred(self, reason: str, team: str) -> None:
+        """Queue a ``finalize_deferred`` emission for the committing attempt."""
+        self._pending.append(lambda: record_finalize_deferred(reason=reason, team=team))
+
+    def flush(self) -> None:
+        """Emit every buffered metric ONCE (called only after a commit)."""
+        pending, self._pending = self._pending, []
+        for emit in pending:
+            emit()
+
+
+def _emit_limit_refused(team: str, sink: FinalizeMetricSink | None) -> None:
+    """Emit (or defer) a ``limit_refused`` metric — see :class:`FinalizeMetricSink`."""
+    if sink is None:
+        record_limit_refused(team)
+    else:
+        sink.limit_refused(team)
+
+
+def _emit_duplicate_terminal(sink: FinalizeMetricSink | None) -> None:
+    """Emit (or defer) a ``duplicate_terminal`` metric — see :class:`FinalizeMetricSink`."""
+    if sink is None:
+        record_duplicate_terminal()
+    else:
+        sink.duplicate_terminal()
+
+
+def _emit_finalize_deferred(reason: str, team: str, sink: FinalizeMetricSink | None) -> None:
+    """Emit (or defer) a ``finalize_deferred`` metric — see :class:`FinalizeMetricSink`."""
+    if sink is None:
+        record_finalize_deferred(reason=reason, team=team)
+    else:
+        sink.finalize_deferred(reason, team)
 
 
 # Union JSON size guardrail — log-only, not a cap (§4.2).
@@ -1276,6 +1348,83 @@ def _is_abort_error(exc: Exception) -> bool:
     }
 
 
+class _LedgerWriteRetryError(Exception):
+    """A contained ledger-write failure worth retrying inside the savepoint loop.
+
+    Raised only for failures that did NOT abort the whole transaction. A whole-tx
+    abort (deadlock / serialization failure / bounded lock timeout) is re-raised
+    untranslated so the caller can run the reduced escape instead.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _read_accrued_base(accrued_org: Organisation | None) -> int:
+    """The locked org's lifetime consumed total, read ONCE before the retry loop.
+
+    Reading it once (rather than per attempt) is deliberate: a savepoint rollback
+    EXPIRES the Organisation, so a per-attempt attribute read would trigger a lazy
+    refresh outside a greenlet and raise ``MissingGreenlet``.
+    """
+    if accrued_org is None:
+        return 0
+    return accrued_org.org_cumulative_spend_cents or 0
+
+
+async def _attempt_ledger_write(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    cost_usd: Decimal,
+    team_id: uuid.UUID | None,
+    run_id: uuid.UUID,
+    run_date: date,
+    accrued_org: Organisation | None,
+    accrued_base: int,
+    accrued_cents: int,
+) -> tuple[bool, str | None]:
+    """One savepoint-guarded ledger write (a single retry-loop attempt).
+
+    The org accrual is applied INSIDE this savepoint — the SAME atomic unit as
+    the ledger row — so a contained failure rolls the accrual back WITH the
+    ledger. Re-raises a whole-tx abort and ``CancelledError`` untouched; wraps any
+    other contained failure as ``_LedgerWriteRetryError`` for the caller's bounded
+    retry loop.
+    """
+    savepoint = await session.begin_nested()
+    try:
+        ok, reason = await check_and_record_spend(
+            session,
+            org_id=org_id,
+            cost_usd=cost_usd,
+            team_id=team_id,
+            run_id=run_id,
+            run_date=run_date,
+        )
+        if accrued_org is not None and accrued_cents:
+            # Absolute assignment from the pre-loop base — NEVER re-read the
+            # (possibly savepoint-expired) attribute inside the loop.
+            accrued_org.org_cumulative_spend_cents = accrued_base + accrued_cents
+            await session.flush()
+    except asyncio.CancelledError:
+        await savepoint.rollback()
+        raise
+    except Exception as exc:
+        await savepoint.rollback()
+        # Re-raise a whole-tx abort: retrying a savepoint inside an aborted
+        # transaction is pointless. ``_is_abort_error`` is the DBAPI-class
+        # classification; ``is_lock_abort`` adds the SQLSTATE-based 40P01 /
+        # 55P03 detection so a lock abort is never mistaken for a retryable
+        # contained failure when class-name detection misses it.
+        if _is_abort_error(exc) or is_lock_abort(exc):
+            raise
+        raise _LedgerWriteRetryError(type(exc).__name__) from exc
+    await savepoint.commit()
+    return ok, reason
+
+
 async def _record_ledger_with_retry(
     session: AsyncSession,
     *,
@@ -1285,6 +1434,8 @@ async def _record_ledger_with_retry(
     run_id: uuid.UUID,
     run_date: date,
     attempts: int = 3,
+    accrued_org: Organisation | None = None,
+    accrued_cents: int = 0,
 ) -> tuple[bool, str | None]:
     """Record the terminal spend with BOUNDED RETRY (``begin_nested`` savepoints).
 
@@ -1293,34 +1444,50 @@ async def _record_ledger_with_retry(
     "daily_limit_exceeded")`` is a clean return (a PERMANENT refusal, NOT a
     failure — the refused amount was already persisted by
     ``check_and_record_spend``).
+
+    ``accrued_org`` / ``accrued_cents`` (money-correctness): the org's lifetime
+    consumed total is incremented INSIDE this savepoint — the SAME atomic unit
+    as the ledger write — instead of in the outer transaction. A contained
+    ledger-write failure (or any retry) therefore rolls the accrual back WITH
+    the ledger, so a later re-finalisation of the same run cannot double-count.
+    The accrual is written after ``check_and_record_spend`` returns (a clean
+    daily-limit refusal still commits it, preserving prior behaviour — only a
+    genuine write FAILURE drops it).
+
+    The org's BASE cumulative is read ONCE here, BEFORE the retry loop, and the
+    absolute value ``base + accrued_cents`` is assigned on every attempt. This
+    is deliberate: when the accrual's own ``flush()`` fails, the savepoint
+    rollback EXPIRES the Organisation (SQLAlchemy drops its loaded state), so a
+    per-attempt attribute READ on the next attempt would trigger a lazy refresh
+    outside a greenlet and raise ``MissingGreenlet`` — a NON-abort error that
+    would exhaust the retries and lose the ledger to the reduced escape. The row
+    is held ``FOR ... UPDATE`` by the ceiling gate for the whole transaction, so
+    the pre-loop base cannot be changed concurrently and the absolute
+    assignment is idempotent under savepoint rollback.
     """
+    # Read the locked org's base ONCE, before any savepoint can expire it.
+    accrued_base = _read_accrued_base(accrued_org)
     last_reason: str | None = None
     for attempt in range(attempts):
-        savepoint = await session.begin_nested()
         try:
-            ok, reason = await check_and_record_spend(
+            return await _attempt_ledger_write(
                 session,
                 org_id=org_id,
                 cost_usd=cost_usd,
                 team_id=team_id,
                 run_id=run_id,
                 run_date=run_date,
+                accrued_org=accrued_org,
+                accrued_base=accrued_base,
+                accrued_cents=accrued_cents,
             )
-        except asyncio.CancelledError:
-            await savepoint.rollback()
-            raise
-        except Exception as exc:
-            await savepoint.rollback()
-            if _is_abort_error(exc):
-                raise
-            last_reason = type(exc).__name__
+        except _LedgerWriteRetryError as exc:
+            last_reason = exc.reason
             _log.warning(
                 "cost_ledger.write_retry",
-                extra={"run_id": str(run_id), "attempt": attempt + 1, "exc_type": type(exc).__name__},
+                extra={"run_id": str(run_id), "attempt": attempt + 1, "exc_type": exc.reason},
             )
             continue
-        await savepoint.commit()
-        return ok, reason
     _log.error(
         "cost_ledger.write_failed",
         extra={"run_id": str(run_id), "reason": last_reason or "write_failure"},
@@ -1345,6 +1512,13 @@ async def _reduced_escape(
     try:
         async with ctx.session_factory() as fresh, fresh.begin():
             await set_rls_org(fresh, ctx.org_id)
+            # FAR-1313 / FAR-1592: bound this FRESH transaction's row-lock waits
+            # too. The reduced escape runs while the (aborted/rolled-back) outer
+            # transaction may still hold the ``runs`` FOR UPDATE, so the
+            # ``update_run_status`` below would otherwise queue unbounded on that
+            # lock — the exact wall-clock hang the finalisation lock bound exists
+            # to prevent. Fail open on non-Postgres (a no-op on the unit mocks).
+            await set_mutation_row_lock_timeout(fresh)
             # FAR-583: the reduced escape is also a dual-write chokepoint (the
             # finalize_fields may carry outputs/telemetry) — same catch/
             # orchestrate contract; a DualWriteError aborts the escape and is
@@ -1404,36 +1578,62 @@ async def _apply_spend_ceiling_gate(
     org_id: uuid.UUID,
     total: Decimal,
     run_id: uuid.UUID,
-) -> bool:
+    metric_sink: FinalizeMetricSink | None = None,
+) -> tuple[bool, Organisation | None, int]:
     """FAR-391: hard spend-ceiling gate (per-run + per-org).
 
     Runs BEFORE the daily-ledger write so a ceiling breach refuses the ledger
     (the run is never billed beyond its ceiling) AND terminalizes the run as
     ``cost_ceiling_exceeded`` — a run that exceeds its per-run ceiling is
     halted (never resumed to spawn further billable steps), and an org at its
-    lifetime budget stops spawning new runs. On the success path the org's
-    consumed total is incremented by this run's cost.
+    lifetime budget stops spawning new runs.
+
+    Returns ``(skip_ledger, accrual_org, accrual_cents)`` — ``skip_ledger`` is
+    True when the ledger write must be SKIPPED (the run was refused at its
+    ceiling); ``accrual_org`` is the LOCKED Organisation row whose lifetime
+    consumed total must be incremented by this run's cost, or ``None`` when no
+    accrual is due (the org row vanished, or the run was refused); and
+    ``accrual_cents`` is the SAME rounded-down cents value this gate compared
+    against the ceiling, so the value decided on IS the value accrued (the
+    ledger block must not recompute it independently).
+
+    The accrual is deliberately NOT performed here (money-correctness): it is
+    applied INSIDE the ledger write's savepoint by
+    ``_record_ledger_with_retry`` — the SAME atomic unit as the ledger row —
+    so a contained ledger-write failure rolls the accrual back with the ledger
+    and a later re-finalisation cannot double-count the org's consumed total
+    (the ``ledger_written`` duplicate guard does not cover the accrual).
 
     FAR-1025: opt out of the global soft-delete filter — a pending-deletion
     org (deleted_at stamped at initiate, before confirm) is still
-    operationally live.  Skipping the ceiling check and accrual here means
-    runs bill past the org's ceiling and lifetime spend under-counts.
+    operationally live.  Skipping the ceiling check here means runs bill past
+    the org's ceiling and the lifetime spend under-counts (the accrual rides
+    the ledger savepoint, which this gate gates).
 
-    Returns True when the ledger write must be SKIPPED (the run was refused
-    at its ceiling); returns False to proceed with the ledger write.
+    FAR-1624: the org row is locked with ``FOR NO KEY UPDATE`` (SQLAlchemy
+    ``with_for_update(key_share=True)``), NOT ``FOR UPDATE``.  The
+    finalisation transaction has already inserted/updated rows that
+    FK-reference the organisation (taking ``FOR KEY SHARE`` on the org tuple),
+    so requesting the stronger ``FOR UPDATE`` here deadlocked up to 8
+    concurrent finalisations (SQLSTATE 40P01): each held ``FOR KEY SHARE`` and
+    each waited for the others' ``FOR UPDATE`` upgrade.  ``FOR NO KEY UPDATE``
+    is compatible with ``FOR KEY SHARE`` and still conflicts with itself, so
+    concurrent spend accrual remains serialised — while the gate only ever
+    writes the non-key column ``org_cumulative_spend_cents``.
     """
     from modulo.db.soft_delete import include_soft_deleted
 
     org_row = (
         await session.execute(
-            include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
+            include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update(key_share=True))
         )
     ).scalar_one_or_none()
     if org_row is None:
-        return False
+        return False, None, 0
     # Use the same ROUND_HALF_UP cents conversion as the API boundary so the
     # gate value and the persisted org cumulative never diverge on sub-cent
-    # run costs (the accrual below also uses ``cents_from_usd``).
+    # run costs (the accrual in ``_record_ledger_with_retry`` uses the same
+    # ``cents_from_usd``).
     total_cents = cents_from_usd(total) or 0
     decision = evaluate_spend_ceilings(
         run_cost_so_far_cents=total_cents,
@@ -1443,19 +1643,19 @@ async def _apply_spend_ceiling_gate(
         spend_ceiling_cents=org_row.spend_ceiling_cents,
     )
     if decision.allowed:
-        # Success: accrue this run's cost into the org's lifetime consumed total.
-        org_row.org_cumulative_spend_cents = (org_row.org_cumulative_spend_cents or 0) + total_cents
-        await session.flush()
-        return False
+        # Billable: hand the LOCKED org row AND the decision cents back so the
+        # ledger savepoint accrues exactly the value this gate decided on,
+        # atomically with the ledger row.
+        return False, org_row, total_cents
     # Preserve an explicit terminal CANCEL (B6 / user-requested halt) so
     # the ceiling refuse does NOT overwrite it and feed the wrong status
     # to journey advancement. The ledger is still refused (the run is not
     # billed beyond its ceiling) — only the status is left untouched.
     if locked.status == "cancelled":
         locked.ledger_refused_at = datetime.now(UTC)
-        record_limit_refused("spend_ceiling")
+        _emit_limit_refused("spend_ceiling", metric_sink)
         await session.flush()
-        return True
+        return True, None, 0
     locked.ledger_refused_at = datetime.now(UTC)
     locked.status = "cost_ceiling_exceeded"
     locked.error_code = decision.reason
@@ -1469,10 +1669,10 @@ async def _apply_spend_ceiling_gate(
             "total_cents": total_cents,
         },
     )
-    record_limit_refused("spend_ceiling")
+    _emit_limit_refused("spend_ceiling", metric_sink)
     await _ceiling_auto_pause_if_org_crossing(session, org_row=org_row, decision=decision, run_id=run_id)
     await session.flush()
-    return True
+    return True, None, 0
 
 
 async def _ledger_block(
@@ -1487,6 +1687,7 @@ async def _ledger_block(
     finalize_fields: dict[str, Any],
     session_factory: Callable[[], Any] | None,
     claim_token: str | None = None,
+    metric_sink: FinalizeMetricSink | None = None,
 ) -> None:
     """Terminal-only ledger block — guarded, retried, then the reduced escape.
 
@@ -1496,17 +1697,24 @@ async def _ledger_block(
     sets ``ledger_refused_at`` + ``limit_refused{team}`` (the refused amount is
     already persisted by ``check_and_record_spend``); a write failure runs the
     reduced escape with ``finalize_deferred{reason="write_failure", team}``.
+
+    *metric_sink* (FAR-1642): when the caller owns a whole-transaction lock
+    retry, the retry-sensitive counters are buffered on the sink and flushed
+    only after the committing attempt — so a re-run cannot double-count them.
     """
     locked = (await session.execute(select(Run).where(Run.id == run_id).with_for_update())).scalar_one()
     if locked.ledger_written or locked.ledger_refused_at is not None:
         _log.warning("cost_ledger.duplicate_terminal", extra={"run_id": str(run_id)})
-        record_duplicate_terminal()
+        _emit_duplicate_terminal(metric_sink)
         await _record_duplicate_terminal_event(session, run_id)
         return
 
     # --- FAR-391: hard spend-ceiling gate (per-run + per-org), see
     # ``_apply_spend_ceiling_gate`` — it runs BEFORE the daily-ledger write.
-    if await _apply_spend_ceiling_gate(session, locked, org_id=org_id, total=total, run_id=run_id):
+    skip_ledger, accrual_org, accrual_cents = await _apply_spend_ceiling_gate(
+        session, locked, org_id=org_id, total=total, run_id=run_id, metric_sink=metric_sink
+    )
+    if skip_ledger:
         return
 
     try:
@@ -1518,10 +1726,25 @@ async def _ledger_block(
             run_id=run_id,
             run_date=run_date,
             attempts=3,
+            # Accrual rides the ledger savepoint (same atomic unit) so a
+            # contained write failure cannot commit it without the ledger.
+            accrued_org=accrual_org,
+            # The cents the ceiling gate already compared — never recomputed
+            # here, so the value decided on IS the value accrued.
+            accrued_cents=accrual_cents,
         )
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        if is_lock_abort(exc):
+            # A GENUINE lock abort (deadlock 40P01 / bounded lock_timeout
+            # 55P03) has aborted the WHOLE outer transaction. Re-raise it so the
+            # ownership layer's bounded retry (``_run_finalize_cost_transaction``)
+            # re-runs the finalisation — reduced-escaping here would terminalize
+            # without a ledger on the HIGHEST-contention path, when a retry could
+            # legitimately still write it. The reduced escape stays for NON-lock
+            # ledger write failures (the ledger is not going to succeed on retry).
+            raise
         _log.warning(
             "cost_ledger.whole_tx_abort",
             extra={"run_id": str(run_id), "exc_type": type(exc).__name__},
@@ -1529,7 +1752,9 @@ async def _ledger_block(
         ok, reason = False, "whole_tx_abort"
 
     if _is_limit_refused(ok, reason):
-        await _handle_limit_refused(session, locked, run_id, owner_team_id, org_id, reason, total)
+        await _handle_limit_refused(
+            session, locked, run_id, owner_team_id, org_id, reason, total, metric_sink=metric_sink
+        )
         return
 
     if not ok:
@@ -1545,6 +1770,7 @@ async def _ledger_block(
             ),
             owner_team_id,
             reason,
+            metric_sink=metric_sink,
         )
         return
 
@@ -1561,10 +1787,12 @@ async def _handle_limit_refused(
     org_id: uuid.UUID,
     reason: str | None,
     total: Decimal,
+    *,
+    metric_sink: FinalizeMetricSink | None = None,
 ) -> None:
     """LIMIT-REFUSED — expected healthy enforcement, NOT a ledger failure."""
     locked.ledger_refused_at = datetime.now(UTC)
-    record_limit_refused(str(owner_team_id or "none"))
+    _emit_limit_refused(str(owner_team_id or "none"), metric_sink)
     _log.info("cost_ledger.limit_reached", extra={"run_id": str(run_id)})
     await session.flush()
     # FAR-1183 — the org's cost-controls "Auto-stop on budget exceeded" toggle:
@@ -1586,7 +1814,7 @@ async def _handle_limit_refused(
             await session.execute(
                 select(OrgDailyRunCount.total_spend_usd).where(
                     OrgDailyRunCount.organisation_id == org_id,
-                    OrgDailyRunCount.team_id.is_(None),
+                    org_level_predicate(),
                     OrgDailyRunCount.run_date == locked.created_at.date(),
                 )
             )
@@ -1615,13 +1843,54 @@ async def _handle_ledger_write_failure(
     ctx: _LedgerEscapeContext,
     owner_team_id: uuid.UUID | None,
     reason: str | None,
+    metric_sink: FinalizeMetricSink | None = None,
 ) -> None:
-    """REDUCED terminalize-without-ledger escape, write_failure ONLY."""
+    """REDUCED terminalize-without-ledger escape, write_failure ONLY.
+
+    ``finalize_deferred`` is routed through *metric_sink* (FAR-1642): when the
+    caller owns a whole-transaction lock retry, the counter is buffered on the
+    attempt's sink and flushed only after that attempt's transaction commits —
+    so a rolled-back attempt emits nothing and a retried finalisation emits
+    exactly one sample.
+
+    ACCEPTED TRADE — the buffer can DROP a real event. ``_reduced_escape``
+    commits the reduced terminal write in a FRESH, INDEPENDENT transaction, so
+    that write is durable the moment it returns regardless of this attempt's
+    outer transaction. If the outer transaction then aborts (a 40P01/55P03 lock)
+    before its own commit, the executor discards this attempt's sink and re-runs
+    the finalisation — the already-committed reduced escape's
+    ``finalize_deferred`` sample is lost, so
+    ``modulo_cost_ledger_finalize_deferred_total`` under-counts by one for that
+    finalisation.
+
+    This is deliberate and acceptable:
+
+    1. Money is unaffected. The reduced escape is the accounting authority and
+       it committed; the metric is a diagnostic, not a money fact.
+    2. The event is still LOUD. The ``cost_ledger.finalize_deferred`` ERROR log
+       above fires inline on every occurrence, independent of the sink, so the
+       condition is always visible in logs.
+    3. The alternative is worse. Emitting inline (or flushing this attempt's
+       sink from inside the reduced escape) reintroduces an OVER-count: the outer
+       retry re-attempts the ledger and can escape again, emitting one sample per
+       attempt — exactly the inflation FAR-1642's sink exists to prevent.
+       Under-counting a diagnostic counter under the rare double-fault (a ledger
+       write failure AND an outer lock abort) beats systematically over-counting
+       under a common transient lock.
+
+    There is no clean fix that emits iff the escape committed AND at most once
+    across the outer retry without a second mechanism: making the escape itself
+    idempotent would require a persisted per-run marker, and the only existing
+    one (``ledger_refused_at``) is the money guard that must stay unset so a
+    later attempt can still write the ledger. The trade is pinned by
+    ``test_handle_ledger_write_failure_defers_with_sink_and_emits_inline_without``
+    and the wire by the ``test_ledger_block_threads_sink_*`` tests.
+    """
     _log.error(
         "cost_ledger.finalize_deferred",
         extra={"reason": reason or "unknown", "run_id": str(ctx.run_id)},
     )
-    record_finalize_deferred(reason="write_failure", team=str(owner_team_id or "none"))
+    _emit_finalize_deferred("write_failure", str(owner_team_id or "none"), metric_sink)
     await _reduced_escape(session, ctx)
 
 
@@ -2141,27 +2410,31 @@ async def _fallback_finalize(
     status: str,
     error_code: str | None,
     error_detail: str | None,
-    merged_usage: dict[str, Any],
-    merged_outputs: dict[str, Any],
-    merged_telemetry: dict[str, Any],
+    merged: _MergedSets,
     is_terminal: bool,
     session_factory: Callable[[], Any] | None,
     claim_token: str | None,
+    metric_sink: FinalizeMetricSink | None = None,
 ) -> None:
-    """The LEGACY FALLBACK write (§1.5) — runs when the component build failed."""
+    """The LEGACY FALLBACK write (§1.5) — runs when the component build failed.
+
+    *merged* bundles the three segment-wins sets (``usage`` / ``outputs`` /
+    ``telemetry``) — see :class:`_MergedSets` — keeping this helper's argument
+    count below the S107 threshold.
+    """
     _log.exception("cost_component_finalize_failed", extra={"run_id": str(run_id)})
     record_fallback_legacy()
     # FAR-104 — the budget check is FAIL-OPEN (never raises), so it is safe
     # inside the never-fail fallback envelope: an agent-budget breach still
     # terminalizes ``budget_exceeded`` even when the component build failed.
     status, error_code, error_detail = await _apply_agent_budget_override(
-        session, run, merged_usage, is_terminal, status, error_code, error_detail
+        session, run, merged.usage, is_terminal, status, error_code, error_detail
     )
     fallback_total = await _fallback_write(
         session,
         run_id,
         status,
-        _MergedSets(merged_usage, merged_outputs, merged_telemetry),
+        merged,
         error_code,
         error_detail,
         is_terminal=is_terminal,
@@ -2191,10 +2464,17 @@ async def _fallback_finalize(
                     },
                     session_factory=session_factory,
                     claim_token=claim_token,
+                    metric_sink=metric_sink,
                 )
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
+                if is_lock_abort(exc):
+                    # Do NOT swallow a whole-transaction lock abort (40P01 /
+                    # 55P03) here — it has aborted the outer transaction, so the
+                    # ownership layer's bounded retry must own it rather than the
+                    # fallback logging it and leaving the run un-ledgered.
+                    raise
                 _log.exception(
                     "cost_ledger.fallback_block_failed",
                     extra={"run_id": str(run_id)},
@@ -2207,31 +2487,34 @@ async def _terminal_ledger_block(
     run: Run,
     run_id: uuid.UUID,
     org_id: uuid.UUID,
-    status: str,
+    write: _TerminalWrite,
     total: Decimal,
     built: _BuiltCost,
     merged_outputs: dict[str, Any],
     merged_telemetry: dict[str, Any],
-    error_code: str | None,
-    error_detail: str | None,
     is_terminal: bool,
     session_factory: Callable[[], Any] | None,
-    claim_token: str | None,
+    metric_sink: FinalizeMetricSink | None = None,
 ) -> None:
-    """The ledger block — terminal only, guarded, converged (§4.2/§4.6)."""
+    """The ledger block — terminal only, guarded, converged (§4.2/§4.6).
+
+    *write* bundles the terminal scalars (``status`` / ``error_code`` /
+    ``error_detail`` / ``claim_token``) — see :class:`_TerminalWrite` — keeping
+    this helper's argument count below the S107 threshold.
+    """
     run_date = _ledger_run_date(is_terminal, total, run)
     if run_date is not None:
         await _ledger_block(
             session,
             run_id=run_id,
             org_id=org_id,
-            status=status,
+            status=write.status,
             total=total,
             owner_team_id=run.owner_team_id,
             run_date=run_date,
             finalize_fields={
-                "error_code": error_code,
-                "error_detail": error_detail,
+                "error_code": write.error_code,
+                "error_detail": write.error_detail,
                 "total_cost_usd": total,
                 "cost_breakdown": built.breakdown,
                 "node_token_usage": built.enriched,
@@ -2240,7 +2523,8 @@ async def _terminal_ledger_block(
                 "total_tokens": built.total_tokens,
             },
             session_factory=session_factory,
-            claim_token=claim_token,
+            claim_token=write.claim_token,
+            metric_sink=metric_sink,
         )
 
 
@@ -2258,6 +2542,7 @@ async def finalize_cost(
     is_terminal: bool = True,
     session_factory: Callable[[], Any] | None = None,
     claim_token: str | None = None,
+    metric_sink: FinalizeMetricSink | None = None,
 ) -> None:
     """The SINGLE finalization block (§4.2) — component read + build + run write + ledger.
 
@@ -2276,7 +2561,27 @@ async def finalize_cost(
     successor. CANCEL-WINS (B6): finalizing an ``awaiting_human``/``complete``
     run whose row carries ``cancellation_requested`` writes ``cancelled``
     instead (the same statement is guard-atomic for the concurrent case).
+
+    FAR-1313 / FAR-1592 lock bound: ``set_mutation_row_lock_timeout`` is issued
+    FIRST, before ANY row lock this finalisation takes — it bounds (SET LOCAL)
+    the org ``FOR ... UPDATE`` in ``_apply_spend_ceiling_gate`` and the Run
+    ``FOR UPDATE`` in ``_ledger_block`` for the REST of the caller's transaction,
+    so a contended finalisation surfaces as a bounded 55P03
+    (``is_row_lock_timeout``) rather than queuing on wall-clock past the
+    gateway's session window. The executor's ownership layer retries that
+    bounded failure (40P01/55P03) and otherwise terminalises truthfully.
+
+    *metric_sink* (FAR-1642): the executor's retry owner passes a
+    :class:`FinalizeMetricSink` so the retry-sensitive counters
+    (``limit_refused`` / ``duplicate_terminal``) are buffered and emitted once,
+    only after the committing attempt. ``None`` (the cancel path and every
+    caller without a retry loop) emits inline.
     """
+    # Bound every row-lock wait the finalisation takes — set at the ENTRY POINT,
+    # before any lock (never squeezed next to an individual lock). Postgres-only;
+    # a no-op on the SQLite unit fixtures.
+    await set_mutation_row_lock_timeout(session)
+
     run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
     if run is None:
         _log.warning("cost_finalize.run_not_found", extra={"run_id": str(run_id)})
@@ -2374,12 +2679,11 @@ async def finalize_cost(
             status,
             error_code,
             error_detail,
-            merged_usage,
-            merged_outputs,
-            merged_telemetry,
+            _MergedSets(merged_usage, merged_outputs, merged_telemetry),
             is_terminal,
             session_factory,
             claim_token,
+            metric_sink,
         )
         return
 
@@ -2389,16 +2693,14 @@ async def finalize_cost(
         run=run,
         run_id=run_id,
         org_id=org_id,
-        status=status,
+        write=_TerminalWrite(status, error_code, error_detail, claim_token),
         total=built.total,
         built=built,
         merged_outputs=merged_outputs,
         merged_telemetry=merged_telemetry,
-        error_code=error_code,
-        error_detail=error_detail,
         is_terminal=is_terminal,
         session_factory=session_factory,
-        claim_token=claim_token,
+        metric_sink=metric_sink,
     )
 
     # --- Analytics facts — every terminal path, SAME transaction (ADR 020) ---

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import uuid
 from types import SimpleNamespace
 from typing import Any, Self
@@ -1162,42 +1163,83 @@ class TestClaimRunAsyncCancelled:
 
 
 # -----------------------------------------------------------------------
-# node_deadline_watchdog — settings path (line 1064)
+# node_deadline_watchdog — default-timeout contract (settings + signature)
 # -----------------------------------------------------------------------
 
 
 class TestNodeDeadlineWatchdogSettings:
     @pytest.mark.asyncio
     async def test_uses_settings_default_timeout_when_none(self) -> None:
-        """When default_timeout is None, the watchdog reads from settings."""
-        exec_task = asyncio.create_task(asyncio.sleep(999))
-        started = asyncio.Event()
-        completed = asyncio.Event()
-        done = asyncio.Event()
-        deadlines: dict[str, tuple[float, int]] = {}
+        """A node with no explicit timeout gets ``settings.saq_node_default_timeout_seconds``.
 
+        ``default_timeout`` was removed from ``node_deadline_watchdog``: the
+        parameter was never read inside the watchdog, so its ``None`` →
+        settings fallback was dead code. The live default-timeout contract
+        lives in ``run_executor_with_watchdog`` — ``_on_node_started`` computes
+        each node's deadline as ``node_timeouts.get(nid, default_timeout)``
+        with ``default_timeout`` read from settings. This drives that path with
+        an EMPTY ``_node_timeouts`` dict: the stalled node must be
+        terminal-failed with ``node_deadline_exceeded`` at the SETTINGS-derived
+        deadline, and the failure detail must report that exact value (0.05s).
+        If the settings default were not consulted the callback would raise and
+        the run would fail with the executor error code instead.
+        """
+        executor = MagicMock()
+        executor._node_timeouts = {}  # no per-node timeout -> settings default
+
+        async def _hang() -> None:
+            # Mimic the streamed events: the node starts, then never completes.
+            executor.on_first_progress()  # type: ignore[attr-defined]
+            executor.on_node_started("n1")  # type: ignore[attr-defined]
+            await asyncio.sleep(999)  # half-alive stall until the watchdog fires
+
+        engine = MagicMock()
         with (
-            patch.object(pe, "get_settings", return_value=MagicMock(saq_node_default_timeout_seconds=999)),
-            patch.object(pe, "fail_run_terminal", new_callable=AsyncMock) as fail,
+            patch.object(
+                pe,
+                "get_settings",
+                return_value=MagicMock(saq_setup_grace_seconds=60, saq_node_default_timeout_seconds=0.05),
+            ),
+            patch.object(pe, "heartbeat_loop", new_callable=AsyncMock),
+            patch.object(pe, "fail_run_terminal", new_callable=AsyncMock, return_value=True) as fail,
+            patch.object(pe, "_read_run_status", new_callable=AsyncMock, return_value="failed"),
         ):
-            # Set run done immediately so the watchdog stands down.
-            done.set()
-            await pe.node_deadline_watchdog(  # type: ignore[arg-type]
+            result = await pe.run_executor_with_watchdog(  # type: ignore[arg-type]
+                engine,
+                run_id=str(uuid.uuid4()),
+                org_id=str(uuid.uuid4()),
+                executor=executor,
+                job=None,
+                execute_fn=_hang,
+            )
+        assert result == {"status": "failed"}
+        fail.assert_awaited_once()
+        assert fail.await_args.kwargs["error_code"] == "node_deadline_exceeded"
+        # The deadline used IS the settings default (not a dict entry — the
+        # dict was empty — and not a hardcoded fallback).
+        assert "(0.05s)" in fail.await_args.kwargs["error_detail"]
+
+    def test_default_timeout_parameter_is_removed(self) -> None:
+        """The vestigial ``default_timeout`` parameter is gone from the watchdog.
+
+        It was never read inside ``node_deadline_watchdog`` (the settings
+        default is resolved by ``run_executor_with_watchdog``), so passing it
+        must be rejected rather than silently ignored.
+        """
+        assert "default_timeout" not in inspect.signature(pe.node_deadline_watchdog).parameters
+        with pytest.raises(TypeError):
+            pe.node_deadline_watchdog(
                 MagicMock(),
                 "run-1",
                 "org-1",
-                exec_task=exec_task,
+                exec_task=MagicMock(),
                 stall_requested=asyncio.Event(),
-                node_started_event=started,
-                node_completed_event=completed,
-                run_done_event=done,
-                node_deadlines=deadlines,
+                node_started_event=asyncio.Event(),
+                node_completed_event=asyncio.Event(),
+                run_done_event=asyncio.Event(),
+                node_deadlines={},
                 default_timeout=None,
             )
-        fail.assert_not_awaited()
-        exec_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await exec_task
 
 
 # -----------------------------------------------------------------------

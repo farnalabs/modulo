@@ -61,6 +61,8 @@ from modulo.settings import Settings, get_settings
 
 _CODE_PERMISSION_DENIED = "permission.denied"
 
+_CODE_DEPENDENCIES_CHECK = "dependencies._check"
+
 
 def _enforce_key_grant(principal: TenantPrincipal, permission: str) -> None:
     """Raise a 403 when the principal's API-key grant-set does not permit ``permission``.
@@ -397,7 +399,7 @@ def require_target_org_role(
                     enforce = await resolve_authz_enforce(session, org_id)
                 token = set_authz_enforce(enforce)
             except SQLAlchemyError as exc:
-                raise_session_contract_error(exc, "dependencies._check")
+                raise_session_contract_error(exc, _CODE_DEPENDENCIES_CHECK)
                 logger.exception("permission.live_role_read_failed")
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -594,7 +596,7 @@ def _team_membership_or_admin_dep(
                     team_key_id=key_team_id,
                 )
         except SQLAlchemyError as exc:
-            raise_session_contract_error(exc, "dependencies._check")
+            raise_session_contract_error(exc, _CODE_DEPENDENCIES_CHECK)
             logger.exception("permission.team_scope_read_failed")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1108,7 +1110,7 @@ def deny_break_glass_mint_dependency(
             async with session.begin():
                 account = await session.get(Account, principal.account_id)
         except SQLAlchemyError as exc:
-            raise_session_contract_error(exc, "dependencies._check")
+            raise_session_contract_error(exc, _CODE_DEPENDENCIES_CHECK)
             logger.exception("permission.break_glass_mint_read_failed")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

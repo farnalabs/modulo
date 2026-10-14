@@ -10,20 +10,32 @@ Thin connector model: this is a contextual integration, not a deep client.
                               method, implemented via _post_comment).
 
 No auto-create (create_ticket) and no compensate expansion - per the thin
-connector contract. Mirrors JiraConnector conventions (Bearer auth, httpx
-client, typed errors, no credentials in logs) but stays deliberately narrow.
+connector contract. Mirrors JiraConnector conventions (httpx client, typed
+errors, no credentials in logs) but stays deliberately narrow.
 
-Linear's API is GraphQL at https://api.linear.app/graphql authenticated with a
-Bearer API key (the connector credential ``token``).
+Linear's API is GraphQL at https://api.linear.app/graphql. Authentication
+depends on the credential kind (FAR-1683):
+
+* a **personal API key** is sent RAW — ``Authorization: <key>``. This mirrors
+  our own working client (``harness/mcp/linear/server.py``), which sends the
+  key with no scheme prefix.
+* an **OAuth access token** is sent as ``Authorization: Bearer <token>``.
+
+Linear personal API keys begin with ``lin_api_``; OAuth access tokens carry the
+``lin_oauth_`` prefix. The scheme is therefore chosen from the token shape, with
+RAW as the default (personal keys are by far the common case and are what our
+working client issues).
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._retry_headers import RETRYABLE_STATUSES
 from modulo.connectors.base import (
     ConnectorPayload,
@@ -38,6 +50,24 @@ from modulo.connectors.ticket_tracker.base import Ticket, TicketTrackerBase
 from modulo.core.ssrf import pinned_async_client_sync
 
 _LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
+
+# Linear OAuth access tokens carry a recognisable prefix; personal API keys
+# (``lin_api_``) do not and must be sent RAW. See module docstring (FAR-1683).
+_OAUTH_TOKEN_PREFIX = "lin_oauth_"
+
+
+def _authorization_header(token: str) -> str:
+    """Return the ``Authorization`` value for *token* in Linear's required scheme.
+
+    A Linear personal API key is sent RAW; only an OAuth access token uses the
+    ``Bearer`` scheme. Linear rejects a personal key sent with ``Bearer`` with an
+    HTTP 400 ("...trying to use an API key as a Bearer token...").
+    """
+    token = token.strip()
+    if token.startswith(_OAUTH_TOKEN_PREFIX):
+        return f"Bearer {token}"
+    return token
+
 
 # Retryable transport / upstream conditions for the thin GraphQL client.
 # FAR-410: the shared constant is the INTERSECTION {429, 502, 503, 504}; Linear
@@ -72,13 +102,16 @@ class LinearConnector(TicketTrackerBase):
         self._token = token
         self._redactor = CredentialRedactor([token])
 
+    def _credential_values(self) -> Sequence[str]:
+        return self._redactor.secrets
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.LINEAR
 
     def _headers(self) -> dict[str, str]:
         return {
-            "Authorization": f"Bearer {self._token}",
+            "Authorization": _authorization_header(self._token),
             "Content-Type": "application/json",
         }
 
@@ -89,9 +122,7 @@ class LinearConnector(TicketTrackerBase):
         # ``trust_env=False`` stops a proxy from re-resolving the destination
         # and defeating the pin.
         return pinned_async_client_sync(
-            _LINEAR_GRAPHQL_URL,
-            headers=self._headers(),
-            timeout=30,
+            _LINEAR_GRAPHQL_URL, headers=self._headers(), timeout=30, verify=egress_ssl_context(self)
         )
 
     @redacting
@@ -135,8 +166,8 @@ class LinearConnector(TicketTrackerBase):
             if exc.response.status_code in _RETRYABLE_STATUS and attempt < _MAX_RETRIES:
                 await asyncio.sleep(_retry_delay(attempt))
                 raise _RetrySignalError(exc) from exc
-            detail = exc.response.text[:200]
-            raise ValueError(self._redactor.redact(f"Linear API HTTP {exc.response.status_code}: {detail}")) from exc
+            detail = self._redacted_detail(f"Linear API HTTP {exc.response.status_code}: {exc.response.text}")[:200]
+            raise ValueError(detail) from exc
         body: dict[str, Any] = r.json()
         return body
 
@@ -358,6 +389,8 @@ class LinearConnector(TicketTrackerBase):
             "body": comment.get("body"),
         }
 
+    @redacting
+    # Defence-in-depth: health_check catches internally today; guards against a future escape.
     async def health_check(self) -> HealthResult:
         """Verify the API key by querying the authenticated viewer."""
         try:
@@ -365,11 +398,11 @@ class LinearConnector(TicketTrackerBase):
             viewer = data.get("viewer") or {}
             return HealthResult(ok=True, detail=viewer.get("name") or "ok")
         except ValueError as exc:
-            return health_check_failure(self._redactor.redact_exc(exc))
+            return health_check_failure(self._redactor.redact_exc(exc), self._redacted_detail)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(self._redactor.redact_exc(exc))
+            return health_check_failure(self._redactor.redact_exc(exc), self._redacted_detail)
 
     async def get_ticket(self, ticket_id: str) -> Ticket:
         """Resolve an issue into the shared :class:`Ticket` shape (T1 surface)."""

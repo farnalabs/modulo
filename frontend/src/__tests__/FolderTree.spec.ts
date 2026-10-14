@@ -228,6 +228,17 @@ describe('FolderTree create flow', () => {
     await saveBtn!.trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('name taken')
+    // FAR-1669: the create error renders via the shared ErrorAlert carrying the
+    // message — a bespoke destructive <div> (the pre-conversion markup) would
+    // fail findComponent, so this proves the conversion.
+    const alert = wrapper.findComponent({ name: 'ErrorAlert' })
+    expect(alert.exists()).toBe(true)
+    expect(String(alert.props('message'))).toContain('name taken')
+    // Operation errors are not retryable in place — retry = click Save again.
+    expect(alert.props('retryable')).toBe(false)
+    // Dense sidebar dialog: the shared alert renders in its compact density.
+    expect(alert.props('compact')).toBe(true)
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="dialog-stub"]').exists()).toBe(true)
   })
 
@@ -278,6 +289,10 @@ describe('FolderTree rename flow', () => {
     await saveBtn!.trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('rename conflict')
+    const renameAlert = wrapper.findComponent({ name: 'ErrorAlert' })
+    expect(renameAlert.exists()).toBe(true)
+    expect(String(renameAlert.props('message'))).toContain('rename conflict')
+    expect(renameAlert.props('compact')).toBe(true)
     expect(wrapper.find('[data-testid="dialog-stub"]').exists()).toBe(true)
   })
 
@@ -328,6 +343,10 @@ describe('FolderTree delete flow', () => {
     await confirmBtn!.trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('folder not empty')
+    const deleteAlert = wrapper.findComponent({ name: 'ErrorAlert' })
+    expect(deleteAlert.exists()).toBe(true)
+    expect(String(deleteAlert.props('message'))).toContain('folder not empty')
+    expect(deleteAlert.props('compact')).toBe(true)
     expect(wrapper.find('[data-testid="dialog-stub"]').exists()).toBe(true)
   })
 })

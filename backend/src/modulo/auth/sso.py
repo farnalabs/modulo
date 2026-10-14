@@ -19,6 +19,7 @@ from modulo.auth.oidc_verify import OidcVerifyError, verify_id_token
 from modulo.auth.saml_handler import ModuloSamlAuth, SamlAuthError
 from modulo.auth.secret_storage import decode_stored_secret
 from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
+from modulo.core.license import verify_license_key
 from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.core.ssrf import (
     derive_oidc_allowed_hosts,
@@ -249,7 +250,7 @@ async def jit_provision_user(
         existing_membership = await get_membership_by_account_and_org(session, existing.id, org_id)
     if existing_membership is not None and existing_membership.deactivated_at is None:
         # Already a member (e.g. SCIM/admin-provisioned): never change their role.
-        account = await _upsert_sso_identity(session, settings, email, display_name, auth_provider, sso_subject)
+        account = await _upsert_sso_identity(session, email, display_name, auth_provider, sso_subject)
         return account, org_id, existing_membership.role
 
     invitation = await get_live_for_email(session, org_id=org_id, email=email)
@@ -258,7 +259,7 @@ async def jit_provision_user(
     if unlocked and mode == "unrestricted":
         # Mode 3 is DANGEROUS and gated behind the operator-level flag; OFF
         # fails CLOSED here (falling back to member/invitation-only access).
-        unlocked = await resolve_sso_unrestricted_provisioning(session, org_id=org_id)
+        unlocked = await resolve_sso_unrestricted_provisioning(org_id=org_id)
         if not unlocked:
             _log.info(
                 "sso.jit_unrestricted_flag_off",
@@ -383,7 +384,6 @@ def _sso_default_role(provider: SsoProvider, settings: Settings) -> str:
 
 async def _upsert_sso_identity(
     session: AsyncSession,
-    settings: Settings,
     email: str,
     display_name: str,
     auth_provider: str,
@@ -440,7 +440,7 @@ async def _provision_membership(
     invitation in exactly that case, so an existing live member never burns
     one.
     """
-    account = await _upsert_sso_identity(session, settings, email, display_name, auth_provider, sso_subject)
+    account = await _upsert_sso_identity(session, email, display_name, auth_provider, sso_subject)
     existing = await get_membership_by_account_and_org(session, account.id, org_id)
     if existing is not None and existing.deactivated_at is None:
         return account, existing.role, False
@@ -1016,6 +1016,100 @@ async def _read_system_saml_provider_by_slug(
     return None
 
 
+async def _resolve_saml_provider(
+    system_session: AsyncSession | None,
+    app_session: AsyncSession | None,
+    provider_id: str | None,
+) -> SsoProvider | None:
+    """Look up the DB SAML provider row: system (global) read, then app single-org.
+
+    When ``provider_id`` is given, resolves a SPECIFIC provider by its globally
+    unique slug (FAR-1001). When ``None``, resolves the first enabled SAML
+    provider globally (legacy single-tenant convenience).
+
+    The pre-auth SAML routes have no user/org claim. IdP config is
+    instance-global, so the primary read goes through the ``modulo_system`` role
+    (BYPASSRLS) which sees every org. When the system read returns nothing, fall
+    back to the app session scoped to the first org (single-org self-hosted
+    behaviour). Returns ``None`` when no DB row applies, so the caller can use
+    the env-var fallback path.
+    """
+    if provider_id is not None:
+        db_saml = await _read_system_saml_provider_by_slug(system_session, provider_id)
+        if db_saml is None and app_session is not None:
+            await _set_default_rls_org(app_session)
+            provider_by_slug = await get_provider_by_provider_id(app_session, provider_id)
+            if provider_by_slug is not None and provider_by_slug.provider_type == "saml" and provider_by_slug.enabled:
+                db_saml = provider_by_slug
+        return db_saml
+    db_saml = await _read_system_saml_provider(system_session)
+    if db_saml is None and app_session is not None:
+        await _set_default_rls_org(app_session)
+        db_saml = await get_enabled_saml_provider(app_session)
+    return db_saml
+
+
+async def _saml_config_from_db(
+    provider_id: str | None,
+    db_saml: SsoProvider,
+    settings: Settings,
+) -> tuple[str, str, str | None, str | None, SsoProvider]:
+    """Build the resolved SAML config tuple from a DB provider row.
+
+    Admin-configured ``metadata_url`` is SSRF-validated and fetched with
+    explicit error handling; the connect is pinned to the validated address
+    rather than re-resolved at request time (FAR-517). ``entity_id`` falls
+    back to the per-provider SP URL (FAR-1001) or the legacy env setting for
+    the singleton flow.
+    """
+    idp_metadata = db_saml.metadata_xml or None
+    if not idp_metadata and db_saml.metadata_url:
+        try:
+            await validate_outbound_url_async(db_saml.metadata_url)
+        except ValueError as exc:
+            raise ValueError(f"Rejected SAML metadata_url for provider: {exc}") from None
+        try:
+            async with await pinned_async_client(db_saml.metadata_url) as client:
+                resp = await client.get(db_saml.metadata_url, timeout=httpx.Timeout(15.0, connect=5.0))
+                resp.raise_for_status()
+                idp_metadata = resp.text
+        except httpx.HTTPError as exc:
+            raise ValueError("Failed to fetch SAML IdP metadata from provider metadata_url") from exc
+    if not idp_metadata:
+        raise ValueError("SAML provider is missing IdP metadata (set metadata_xml or metadata_url)")
+    # Per-provider entity_id default (FAR-1001): when the DB provider
+    # has no entity_id set, default to {public_url}/saml/{provider_id}
+    # for per-provider routes, or the legacy env setting for singleton.
+    if provider_id is not None:
+        default_entity = f"{get_public_url(settings).rstrip('/')}/api/v1/auth/saml/{provider_id}"
+    else:
+        default_entity = settings.modulo_saml_entity_id or "modulo"
+    entity_id = db_saml.entity_id or default_entity
+    sp_key = settings.modulo_saml_sp_private_key or None
+    sp_cert = settings.modulo_saml_sp_x509_cert or None
+    return idp_metadata, entity_id, sp_key, sp_cert, db_saml
+
+
+async def _saml_config_from_env(settings: Settings) -> tuple[str, str, str | None, str | None, None]:
+    """Fetch env-var SAML IdP metadata and build the resolved config tuple.
+
+    Licence gating (``modulo_saml_enabled`` / ``modulo_license_key``) is
+    applied fail-closed by the orchestrator ``_resolve_saml_config`` BEFORE
+    this helper runs; it is intentionally not repeated here.
+    """
+    try:
+        idp_metadata = await _saml_fetch_idp_metadata(settings)
+    except (httpx.HTTPError, ValueError) as exc:
+        raise ValueError(f"Failed to fetch IdP metadata: {exc}") from None
+    return (
+        idp_metadata,
+        settings.modulo_saml_entity_id,
+        settings.modulo_saml_sp_private_key or None,
+        settings.modulo_saml_sp_x509_cert or None,
+        None,
+    )
+
+
 async def _resolve_saml_config(
     system_session: AsyncSession | None,
     app_session: AsyncSession | None,
@@ -1029,81 +1123,31 @@ async def _resolve_saml_config(
     unique slug (FAR-1001). When ``None``, resolves the first enabled SAML
     provider globally (legacy single-tenant convenience).
 
-    The pre-auth SAML routes have no user/org claim. IdP config is
-    instance-global, so the primary read goes through the ``modulo_system`` role
-    (BYPASSRLS) which sees every org. When the system read returns nothing, fall
-    back to the app session scoped to the first org (single-org self-hosted
-    behaviour) before the env-var fallback.
-
     Returns ``(idp_metadata_xml, entity_id, sp_private_key, sp_x509_cert,
     db_provider)``. ``entity_id`` is ``db_saml.entity_id or
     settings.modulo_saml_entity_id`` (used by the SP handler). ``db_provider`` is
     the row when config came from the DB (used for JIT org placement); ``None``
     for the env path.
-
-    Admin-configured ``metadata_url`` (DB path) is SSRF-validated and fetched
-    with explicit error handling; the env path is fetched with the same pinned
-    client (FAR-517) so the connect is pinned to the validated address rather
-    than re-resolved at request time.
     """
-    if provider_id is not None:
-        # Per-provider resolution (FAR-1001): resolve by globally unique slug.
-        db_saml = await _read_system_saml_provider_by_slug(system_session, provider_id)
-        if db_saml is None and app_session is not None:
-            await _set_default_rls_org(app_session)
-            provider_by_slug = await get_provider_by_provider_id(app_session, provider_id)
-            if provider_by_slug is not None and provider_by_slug.provider_type == "saml" and provider_by_slug.enabled:
-                db_saml = provider_by_slug
-    else:
-        db_saml = await _read_system_saml_provider(system_session)
-        if db_saml is None and app_session is not None:
-            await _set_default_rls_org(app_session)
-            db_saml = await get_enabled_saml_provider(app_session)
+    db_saml = await _resolve_saml_provider(system_session, app_session, provider_id)
     if db_saml is not None:
-        idp_metadata = db_saml.metadata_xml or None
-        if not idp_metadata and db_saml.metadata_url:
-            try:
-                await validate_outbound_url_async(db_saml.metadata_url)
-            except ValueError as exc:
-                raise ValueError(f"Rejected SAML metadata_url for provider: {exc}") from None
-            try:
-                async with await pinned_async_client(db_saml.metadata_url) as client:
-                    resp = await client.get(db_saml.metadata_url, timeout=httpx.Timeout(15.0, connect=5.0))
-                    resp.raise_for_status()
-                    idp_metadata = resp.text
-            except httpx.HTTPError as exc:
-                raise ValueError("Failed to fetch SAML IdP metadata from provider metadata_url") from exc
-        if not idp_metadata:
-            raise ValueError("SAML provider is missing IdP metadata (set metadata_xml or metadata_url)")
-        # Per-provider entity_id default (FAR-1001): when the DB provider
-        # has no entity_id set, default to {public_url}/saml/{provider_id}
-        # for per-provider routes, or the legacy env setting for singleton.
-        if provider_id is not None:
-            default_entity = f"{get_public_url(settings).rstrip('/')}/api/v1/auth/saml/{provider_id}"
-        else:
-            default_entity = settings.modulo_saml_entity_id or "modulo"
-        entity_id = db_saml.entity_id or default_entity
-        sp_key = settings.modulo_saml_sp_private_key or None
-        sp_cert = settings.modulo_saml_sp_x509_cert or None
-        return idp_metadata, entity_id, sp_key, sp_cert, db_saml
+        return await _saml_config_from_db(provider_id, db_saml, settings)
 
+    # Env-var fallback. Licence gating stays fail-closed here (verbatim):
+    # a config that should be refused must still be refused.
     if not settings.modulo_saml_enabled:
         raise ValueError("SAML is not enabled")
-    if not settings.modulo_license_key:
+    # FAR-1733: the env-var key must VERIFY (Ed25519 signature + expiry), not
+    # merely exist. An unverifiable key fails closed with the SAME message as
+    # an absent one, so the pre-auth 400 surface never discloses whether a key
+    # is configured; the server-side warning is the operator diagnostic.
+    env_key = getattr(settings, "modulo_license_key", "") or ""
+    if verify_license_key(env_key) is None:
+        if env_key:
+            _log.warning("saml.env_license_key_unverified")
         raise ValueError("SAML requires a license key (Team feature)")
 
-    try:
-        idp_metadata = await _saml_fetch_idp_metadata(settings)
-    except (httpx.HTTPError, ValueError) as exc:
-        raise ValueError(f"Failed to fetch IdP metadata: {exc}") from None
-
-    return (
-        idp_metadata,
-        settings.modulo_saml_entity_id,
-        settings.modulo_saml_sp_private_key or None,
-        settings.modulo_saml_sp_x509_cert or None,
-        None,
-    )
+    return await _saml_config_from_env(settings)
 
 
 async def saml_get_auth_url(

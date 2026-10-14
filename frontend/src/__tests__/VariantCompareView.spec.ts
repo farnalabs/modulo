@@ -474,4 +474,83 @@ describe('VariantCompareView', () => {
     await nextTick()
     expect(wrapper.find('[data-testid="variant-group-builder"]').exists()).toBe(true)
   })
+
+  it('offers Retry on a failed variant-groups load and re-fetches on click (FAR-1655)', async () => {
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation((url: string) => {
+      if (url === '/api/v1/variant-groups') {
+        return Promise.reject(new Error('groups backend down'))
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const wrapper = mount(VariantCompareView, {
+      global: {
+        stubs: { FeatureGate: { template: '<div><slot /></div>' } },
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('groups backend down')
+    })
+
+    const retry = wrapper.find('[data-testid="error-alert-retry"]')
+    expect(retry.exists()).toBe(true)
+
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation((url: string) => {
+      if (url === '/api/v1/variant-groups') {
+        return Promise.resolve({ data: [groupWithVariants], error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    await retry.trigger('click')
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+    })
+    expect(wrapper.find('[data-testid="variant-compare-group-select"]').exists()).toBe(true)
+  })
+
+  it('renders the selected-group summary with the run-count and strategy fallbacks', async () => {
+    // A selected group whose run_count and selection_strategy are absent exercises
+    // BOTH defensive fallbacks in the summary span: `run_count ?? 0` and
+    // `selection_strategy || '—'` (the changed-lines coverage gate requires the
+    // nullish/empty arms, not just the populated ones).
+    const sparseGroup = {
+      ...groupWithVariants,
+      id: 'g-sparse',
+      name: 'Sparse Group',
+      run_count: null,
+      selection_strategy: null,
+    }
+
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation((url: string) => {
+      if (url === '/api/v1/variant-groups') {
+        return Promise.resolve({ data: [sparseGroup], error: undefined })
+      }
+      if (url === '/api/v1/variant-groups/{group_id}') {
+        return Promise.resolve({ data: sparseGroup, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const tWithParams = (key: string, params?: Record<string, unknown>) =>
+      params && Object.keys(params).length > 0 ? `${key}:${JSON.stringify(params)}` : key
+
+    const wrapper = mount(VariantCompareView, {
+      global: {
+        stubs: { FeatureGate: { template: '<div><slot /></div>' } },
+        mocks: { $t: tWithParams },
+      },
+    })
+
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('views.variantCompare.runs')
+    })
+
+    const text = wrapper.text()
+    // run_count null falls back to 0 (the `??` arm)
+    expect(text).toContain('"count":0')
+    // selection_strategy null falls back to an em dash (the `||` arm)
+    expect(text).toContain('—')
+  })
 })

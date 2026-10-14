@@ -18,7 +18,7 @@ from decimal import Decimal
 from operator import attrgetter
 from typing import Any, TypeGuard
 
-from sqlalchemy import Date, bindparam, case, cast, delete, func, or_, select, text, update
+from sqlalchemy import Date, and_, bindparam, case, cast, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer, selectinload
@@ -64,6 +64,8 @@ from modulo.db.models.run import (
     EXECUTION_ORIGIN_DISPATCHED,
     HITL_PARKED_STATUS,
     PIPELINE_CAPACITY_STATUSES,
+    RUN_GROUP_KIND_RESUME,
+    RUN_GROUP_KIND_VALUES,
     TERMINAL_STATUSES,
     Run,
 )
@@ -258,6 +260,51 @@ def _is_failure_bucket_status(status: str) -> bool:
 def _is_failure_reason_status(status: str) -> bool:
     """Whether ``status`` can carry a failure reason in run stats."""
     return status in _FAILURE_REASON_STATUSES
+
+
+#: FAR-707 — the ``benign`` run-classification value (a BUSINESS-EXPECTED
+#: terminal outcome: an explicit per-pipeline benign signature matched the
+#: run's error_code/error_detail). Held as a LITERAL rather than an import of
+#: ``core.pipeline_engine.classify.RunClassificationValue`` because this module
+#: is the db layer and the classifier import must stay off the CRUD hot path —
+#: the same lockstep convention ``_write_unclassified_classification`` uses for
+#: the ``unclassified`` marker. The anti-drift test in test_run_classification.py
+#: pins the two spellings together.
+_RUN_CLASSIFICATION_BENIGN = "benign"
+
+
+def _is_benign_run(run: Run) -> bool:
+    """FAR-707 — whether the run's terminal classification marks it business-expected.
+
+    Benign runs are NOT failures: they are dropped from the stats failure
+    buckets, the failure-reason cluster breakdown, and the success-rate
+    denominator. Defensive on the JSON column (a legacy/partial row may hold
+    anything): a non-dict record or a missing ``value`` is NOT benign, so the
+    historical counting keeps applying until a real record exists.
+    """
+    record = getattr(run, "run_classification", None)
+    if not isinstance(record, dict):
+        return False
+    return record.get("value") == _RUN_CLASSIFICATION_BENIGN
+
+
+def _benign_case_sum() -> Any:
+    """SQL ``SUM(...)`` of the per-day benign count for the Postgres stats path.
+
+    ``run_classification`` is JSON/JSONB on the supported backends, so the
+    ``["value"].as_string()`` accessor renders the dialect-correct extraction
+    (``->>`` on Postgres) — the same ORM form ``core.rollback_thresholds``
+    already uses against this column.
+    """
+    return func.sum(case((Run.run_classification["value"].as_string() == _RUN_CLASSIFICATION_BENIGN, 1), else_=0))
+
+
+#: SQL predicate excluding benign rows from a failure aggregate (Postgres stats
+#: path). ``IS DISTINCT FROM`` (not ``!=``) so a NULL classification — a
+#: terminal run whose record has not landed yet — is treated as NOT benign and
+#: keeps counting, matching the ORM-side ``_is_benign_run`` default. A bare
+#: ``!=`` would evaluate NULL and silently DROP those rows from the aggregate.
+_NOT_BENIGN_PREDICATE = Run.run_classification["value"].as_string().is_distinct_from(_RUN_CLASSIFICATION_BENIGN)
 
 
 def _is_valid_int_limit_value(value: Any) -> TypeGuard[int]:
@@ -1242,12 +1289,18 @@ def _select_guardrail_definitions(
     A snapshot with a NON-EMPTY pinned set evaluates exactly that set, even when
     EVERY pin fails to rebuild. Only a snapshot with NO pins (pre-migration /
     read failure) falls back to the live rows.
-    """
-    if _has_pinned_guardrail_set(snap_pins, saved_fingerprint):
-        return pinned_defs
-    from modulo.core.guardrails import to_engine_definition
 
-    return [to_engine_definition(row) for row in guardrail_rows]
+    FAR-209 Track B (D5): output-point guardrails are EXCLUDED from the input
+    pass — they intercept at the executor's node-output seam instead. Unknown
+    ``interception_point`` values are KEPT here (they still run this pass and
+    its strict validation fails closed on them).
+    """
+    from modulo.core.guardrails import to_engine_definition
+    from modulo.core.guardrails.output_intercept import exclude_output_interception_definitions
+
+    if _has_pinned_guardrail_set(snap_pins, saved_fingerprint):
+        return exclude_output_interception_definitions(pinned_defs)
+    return exclude_output_interception_definitions([to_engine_definition(row) for row in guardrail_rows])
 
 
 def _downgrade_guardrails_to_observe(guardrail_defs: list[Any]) -> list[Any]:
@@ -1810,22 +1863,30 @@ async def _persist_guardrail_eval_results(
     detail is count-only / pattern-descriptive — never raw payload (item 7
     no-raw-persist). Observe-mode guardrails stamp observed=True so the
     guardrail_summary observed bucket is counted exactly once.
+
+    Also appends one generic Evidence fact per decision (FAR-1293 — the
+    evidence store's first production producer), routed through
+    ``append_evidence`` so the key-namespace ownership check runs before any
+    row is added.
     """
-    from modulo.db.models.eval_definition import EvalDefinition as _EvalDefinitionModel
+    from modulo.db.models.eval import Eval as _EvalModel
     from modulo.db.models.eval_result import EvalResult as EvalResultModel
 
     # FAR-382: stamp the definition version snapshot so a later rubric bump
     # never makes this guardrail outcome look like a regression. The engine
     # DTO carries no version, so resolve it from the (org-scoped) definition
     # rows in one batched query rather than N+1.
+    # FAR-1729: the version lives on ``evals`` (the storage source since the
+    # 0254 cutover) — the frozen ``eval_definitions`` snapshot has no row for
+    # a post-cutover guardrail, so every such result was stamped NULL.
     guardrail_eval_ids = {gr.eval_id for gr in guardrail_results}
     version_by_eval_id: dict[uuid.UUID, int] = {}
     if guardrail_eval_ids:
         def_rows = (
             await session.execute(
-                select(_EvalDefinitionModel.id, _EvalDefinitionModel.version).where(
-                    _EvalDefinitionModel.id.in_(guardrail_eval_ids),
-                    _EvalDefinitionModel.organisation_id == org_id,
+                select(_EvalModel.id, _EvalModel.version).where(
+                    _EvalModel.id.in_(guardrail_eval_ids),
+                    _EvalModel.organisation_id == org_id,
                 )
             )
         ).all()
@@ -1844,6 +1905,34 @@ async def _persist_guardrail_eval_results(
                 detail=(gr.detail or "")[:2000],
                 observed=guardrail_observed_by_eval.get(gr.eval_id, False),
             )
+        )
+
+    # FAR-1293 — the append-only evidence store's FIRST production write: one
+    # fact per guardrail/eval decision. Key ``eval_guardrail_<eval_id>`` sits
+    # inside the ``eval`` producer's owned ``eval_`` namespace, and the write
+    # routes through ``append_evidence`` -> ``assert_write_authorisation``, so
+    # an unowned namespace is refused (EvidenceWriteAuthorisationError
+    # propagates out of create_run and aborts the run's transaction — the
+    # refusal fails CLOSED, never a silently-dropped or unauthorised fact).
+    # Subject is the run, so ``fetch("run", str(run_id), org)`` returns every
+    # guardrail decision recorded for that run. Deferred import (like every
+    # other core import in this module); the narrow
+    # ``db.crud.run -> core.eval_engine.evidence_layer`` edge carries its own
+    # ``db-does-not-import-core`` exemption entry — same cross-boundary
+    # category as the existing FAR-208 ``db.crud.run -> core.eval_engine``
+    # guardrail seam this write hangs off.
+    from modulo.core.eval_engine.evidence_layer import append_evidence
+
+    for gr in guardrail_results:
+        append_evidence(
+            session,
+            organisation_id=org_id,
+            key=f"eval_guardrail_{gr.eval_id}",
+            subject_type="run",
+            subject_id=str(run_id),
+            value=gr.passed,
+            producer_type="eval",
+            producer_id=gr.eval_id,
         )
 
 
@@ -1914,6 +2003,98 @@ def graph_contains_dispatch(graph_json: Any) -> bool:
     return any(isinstance(node, dict) and connector_binding_operation(node) == "dispatch" for node in nodes)
 
 
+async def _validate_resume_thread_override(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    parent_run_id: uuid.UUID,
+    thread_id: str | None,
+) -> None:
+    """Validate a resume child's thread override against its parent (FAR-153 / §15.1).
+
+    §15.1 — the thread override must be the PARENT's thread, not just any
+    non-empty string. Both partial unique indexes EXCLUDE resume rows (that is
+    the whole point of dropping the global thread unique), so without this read
+    a wrong-thread resume — even a thread owned by a run in ANOTHER org — would
+    pass validation and every DB fence silently, landing a child on someone
+    else's checkpoint (or a foreign-org thread). One org-scoped read of the
+    parent, before any write; the parent must exist in THIS org (a resume never
+    crosses orgs).
+    """
+    if not thread_id:
+        # A resume that does not carry its parent's thread gets a fresh one and
+        # continues NOTHING — the silent failure mode the override kwarg exists
+        # to prevent.
+        raise ValueError(
+            "run_group_kind='resume' requires thread_id=<parent's thread> — "
+            "a resume child must continue its parent's checkpoint (§15.1)"
+        )
+    parent = (
+        await session.execute(
+            select(Run.id, Run.langgraph_thread_id).where(
+                Run.id == parent_run_id,
+                Run.organisation_id == org_id,
+            )
+        )
+    ).one_or_none()
+    if parent is None:
+        raise ValueError(
+            "run_group_kind='resume' parent_run_id not found in this org — "
+            "the resume child's parent must be a run of the same organisation (§15.1)"
+        )
+    if thread_id != parent.langgraph_thread_id:
+        raise ValueError(
+            "run_group_kind='resume' thread_id must equal the parent run's "
+            f"langgraph_thread_id — got {thread_id!r}, parent is on "
+            f"{parent.langgraph_thread_id!r} (§15.1)"
+        )
+
+
+async def _validate_run_grouping_kwargs(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    parent_run_id: uuid.UUID | None,
+    run_group_id: uuid.UUID | None,
+    run_group_kind: str | None,
+    thread_id: str | None,
+) -> None:
+    """Validate ``create_run``'s grouping kwargs at the persist boundary (FAR-153 / §15.1).
+
+    The ``run_idempotency_key`` fail-loud pattern: these are caller-contract
+    violations, so a typo or a missing field must raise here rather than
+    silently write a row the group queries and the two partial unique indexes
+    cannot govern. The resume thread check needs ONE read (the parent row) —
+    still before any write. Extracted from ``create_run`` to keep that
+    function's cognitive complexity within the Sonar S3776 threshold.
+    """
+    if run_group_kind is not None:
+        if run_group_kind not in RUN_GROUP_KIND_VALUES:
+            raise ValueError(
+                f"invalid run_group_kind: {run_group_kind!r} (expected one of {sorted(RUN_GROUP_KIND_VALUES)!r})"
+            )
+        if parent_run_id is None:
+            # Both kinds are CHILD rows per §15.1. Without a parent the
+            # exactly-one-resume partial unique (parent_run_id WHERE
+            # kind='resume') never indexes the row — NULL parents are distinct
+            # in a unique index — so a parentless resume would silently bypass
+            # the double-resume fence.
+            raise ValueError("run_group_kind requires parent_run_id — retry/resume rows are child rows (§15.1)")
+        if run_group_id is None:
+            raise ValueError(
+                f"run_group_kind={run_group_kind!r} requires run_group_id (the group's root run id, §15.1)"
+            )
+        if run_group_kind == RUN_GROUP_KIND_RESUME:
+            await _validate_resume_thread_override(
+                session,
+                org_id=org_id,
+                parent_run_id=parent_run_id,
+                thread_id=thread_id,
+            )
+    if thread_id is not None and not thread_id:
+        raise ValueError("thread_id override must be a non-empty string")
+
+
 async def create_run(
     session: AsyncSession,
     *,
@@ -1935,7 +2116,39 @@ async def create_run(
     variant_config_snapshot: dict[str, Any] | None = None,
     feedback_correction: dict[str, Any] | None = None,
     coalesce_key: str | None = None,
+    # FAR-153 / §15.1 — run grouping (retry/resume attempts) + the
+    # resume-as-child thread override:
+    #
+    # * ``run_group_id``   — the ROOT run id of the group this row belongs
+    #   to (stored; NULL for roots / signal / correction / work-item
+    #   children / un-backfilled legacy rows). Required whenever
+    #   ``run_group_kind`` is set: a grouped attempt without its group id is
+    #   invisible to every group query.
+    # * ``run_group_kind`` — 'retry' | 'resume' | NULL, the closed
+    #   vocabulary in ``models.run.RUN_GROUP_KIND_VALUES``.
+    # * ``thread_id``      — langgraph thread OVERRIDE. The resume path
+    #   passes the parent's thread string so the child CONTINUES the
+    #   parent's checkpoint; every other path leaves it unset and gets the
+    #   default fresh ``f"{org}:{run_id}"`` thread (retry runs the graph
+    #   CLEAN on its own thread).
+    run_group_id: uuid.UUID | None = None,
+    run_group_kind: str | None = None,
+    thread_id: str | None = None,
 ) -> Run:
+    # FAR-153 / §15.1 — validate the grouping kwargs at the persist boundary
+    # BEFORE any DB write (the ``run_idempotency_key`` fail-loud pattern).
+    # Extracted into ``_validate_run_grouping_kwargs`` to keep this function's
+    # cognitive complexity within the Sonar S3776 threshold; semantics are
+    # unchanged.
+    await _validate_run_grouping_kwargs(
+        session,
+        org_id=org_id,
+        parent_run_id=parent_run_id,
+        run_group_id=run_group_id,
+        run_group_kind=run_group_kind,
+        thread_id=thread_id,
+    )
+
     # Soft-deleted-org guard — a run must never be created in an org whose
     # deletion flow has set status='deleted' (or in a hard-deleted org).
     await _ensure_org_not_deleted(session, org_id)
@@ -2019,7 +2232,11 @@ async def create_run(
 
     stored_payload = _inject_engine_payload_keys(stored_payload, feedback_correction, coalesce_key)
 
-    thread_id = f"{org_id}:{run_id}"
+    # FAR-153 / §15.1 — thread resolution: the resume path passes its
+    # parent's thread via the ``thread_id`` override so the child CONTINUES
+    # the parent's checkpoint; every other caller leaves the kwarg unset and
+    # gets the default fresh thread (a retry therefore runs its graph CLEAN).
+    resolved_thread_id = thread_id if thread_id is not None else f"{org_id}:{run_id}"
     # Per-org atomic counter (FAR-168) — never MAX(run_number)+1 on Postgres,
     # which races under concurrent trigger dispatches.
     run_number = await _allocate_run_number(session, org_id)
@@ -2109,8 +2326,10 @@ async def create_run(
         account_id=account_id,
         trigger_id=trigger_id,
         owner_team_id=owner_team_id,
-        langgraph_thread_id=thread_id,
+        langgraph_thread_id=resolved_thread_id,
         parent_run_id=parent_run_id,
+        run_group_id=run_group_id,
+        run_group_kind=run_group_kind,
         run_number=run_number,
         rate_limit_key=rate_limit_key,
         idempotency_key=idempotency_key,
@@ -2193,8 +2412,14 @@ async def coalesce_pending_run(
     pending run instead of ratcheting the queue. Returns the updated run, or
     ``None`` when no coalesce target exists (the caller inserts a fresh run).
 
-    Only ``status='pending'`` rows are folded — a run that already started
-    (or a terminal row) is never mutated. ``FOR UPDATE SKIP LOCKED`` on
+    Only never-claimed, never-started ``status='pending'`` rows are folded —
+    a run that already started (or a terminal row) is never mutated.
+    ``claim_count = 0`` AND ``started_at IS NULL`` enforce "unstarted" (FAR-1623):
+    a claimed run reset to ``pending`` for re-dispatch (FAR-779/812 heartbeat
+    recovery) carries ``claim_count >= 1`` and must survive until the
+    dispatcher re-claims it, so it is never a coalesce target — folding it
+    would overwrite the input payload of a run the retry path is about to
+    dispatch. ``FOR UPDATE SKIP LOCKED`` on
     PostgreSQL: a run currently being dispatched is skipped and a fresh run
     is inserted (safe fallback, no blocked delivery). Non-PostgreSQL backends
     match the key in Python over a bounded candidate scan. The candidate
@@ -2228,6 +2453,13 @@ async def coalesce_pending_run(
             .where(
                 Run.pipeline_id == pipeline_id,
                 Run.status == "pending",
+                # FAR-1623: only a NEVER-claimed, NEVER-started pending run is
+                # a coalesce target. A claimed-then-reset run (claim_count >= 1,
+                # FAR-779 heartbeat recovery) is pending again but the
+                # dispatcher is about to re-claim it — folding it would
+                # overwrite its input payload mid-retry.
+                Run.claim_count == 0,
+                Run.started_at.is_(None),
                 Run.cancellation_requested.is_(False),
                 Run.organisation_id == org_id,
                 func.jsonb_extract_path_text(Run.input_payload, _COALESCE_KEY_FIELD) == coalesce_key,
@@ -2245,6 +2477,10 @@ async def coalesce_pending_run(
                     .where(
                         Run.pipeline_id == pipeline_id,
                         Run.status == "pending",
+                        # FAR-1623: never-claimed, never-started only — see the
+                        # Postgres branch above for the rationale.
+                        Run.claim_count == 0,
+                        Run.started_at.is_(None),
                         Run.cancellation_requested.is_(False),
                         Run.organisation_id == org_id,
                     )
@@ -2259,7 +2495,10 @@ async def coalesce_pending_run(
             (
                 r
                 for r in candidates
-                if getattr(r, "organisation_id", None) == org_id and read_coalesce_key(r.input_payload) == coalesce_key
+                if getattr(r, "organisation_id", None) == org_id
+                and getattr(r, "claim_count", 0) == 0
+                and getattr(r, "started_at", None) is None
+                and read_coalesce_key(r.input_payload) == coalesce_key
             ),
             None,
         )
@@ -4262,7 +4501,8 @@ def _runs_by_day(runs: list[Run]) -> dict[str, dict[str, int]]:
         by_day[day]["count"] += 1
         if r.status == "complete":
             by_day[day]["success"] += 1
-        elif _is_failure_bucket_status(r.status):
+        # FAR-707: a business-expected outcome is never a failure bucket entry.
+        elif _is_failure_bucket_status(r.status) and not _is_benign_run(r):
             by_day[day]["failed"] += 1
     return by_day
 
@@ -4280,10 +4520,15 @@ def _duration_by_day(completed_runs: list[Run]) -> dict[str, list[int]]:
 
 
 def _failure_reason_counts(runs: list[Run]) -> dict[str, int]:
-    """Counts of failure-reason statuses by their ``error_code``."""
+    """Counts of failure-reason statuses by their ``error_code``.
+
+    FAR-707: benign (business-expected) runs are dropped — an expected
+    ``agent.failed`` rebase conflict must not inflate its own error-code
+    cluster, which is exactly the pollution the benign class exists to stop.
+    """
     failure_reasons: dict[str, int] = defaultdict(int)
     for r in runs:
-        if _is_failure_reason_status(r.status) and r.error_code:
+        if _is_failure_reason_status(r.status) and r.error_code and not _is_benign_run(r):
             failure_reasons[r.error_code] += 1
     return failure_reasons
 
@@ -4312,7 +4557,13 @@ async def _get_run_stats_python(
     durations_ms = _completed_durations_ms(completed_runs)
 
     success_count = sum(1 for r in runs if r.status == "complete")
-    success_rate = round(success_count / total, 4)
+    # FAR-707: business-expected outcomes leave the failure rate entirely —
+    # they leave the DENOMINATOR too, so an expected rebase conflict can never
+    # dilute the rate. ``total_runs`` stays the raw volume (it is a count of
+    # runs, not a rate); only the rate is recomputed over the non-benign set.
+    benign_count = sum(1 for r in runs if _is_benign_run(r))
+    rate_denominator = total - benign_count
+    success_rate = round(success_count / rate_denominator, 4) if rate_denominator > 0 else 0.0
     avg_duration = int(sum(durations_ms) / len(durations_ms)) if durations_ms else 0
 
     by_day = _runs_by_day(runs)
@@ -4356,6 +4607,9 @@ async def _get_run_stats_postgres(
     # Per-day count/success/failed buckets plus per-day average duration. A day
     # with runs but no completed durations has a NULL avg and is omitted, which
     # matches the generic path (days only appear once they have a duration).
+    # FAR-707: ``benign_count`` is the per-day business-expected total (so the
+    # rate's denominator can be recomputed) and the ``failed`` bucket skips
+    # those rows.
     day_rows = list(
         (
             await session.execute(
@@ -4363,7 +4617,10 @@ async def _get_run_stats_postgres(
                     day,
                     func.count().label("run_count"),
                     func.sum(case((Run.status == "complete", 1), else_=0)).label("success"),
-                    func.sum(case((Run.status.in_(_FAILURE_BUCKET_STATUSES), 1), else_=0)).label("failed"),
+                    func.sum(
+                        case((and_(Run.status.in_(_FAILURE_BUCKET_STATUSES), _NOT_BENIGN_PREDICATE), 1), else_=0)
+                    ).label("failed"),
+                    _benign_case_sum().label("benign_count"),
                     func.avg(duration_ms).label("avg_duration"),
                 )
                 .select_from(Run)
@@ -4403,7 +4660,9 @@ async def _get_run_stats_postgres(
     p99 = overall.p99
     avg_duration = overall.avg_duration
 
-    # Failure reason breakdown for failed / eval_failed runs carrying an error code.
+    # Failure reason breakdown for failed / eval_failed runs carrying an error
+    # code. FAR-707: benign (business-expected) rows are excluded so an
+    # expected failure never inflates its own error-code cluster.
     failure_rows = list(
         (
             await session.execute(
@@ -4415,6 +4674,7 @@ async def _get_run_stats_postgres(
                     Run.status.in_(_FAILURE_REASON_STATUSES),
                     Run.error_code.is_not(None),
                     Run.error_code != "",
+                    _NOT_BENIGN_PREDICATE,
                 )
                 .group_by(Run.error_code)
             )
@@ -4422,7 +4682,11 @@ async def _get_run_stats_postgres(
     )
 
     success_count = sum(int(row.success) for row in day_rows)
-    success_rate = round(success_count / total, 4)
+    benign_total = sum(int(row.benign_count or 0) for row in day_rows)
+    # FAR-707: the rate's denominator drops business-expected outcomes (see the
+    # generic path's comment); ``total_runs`` stays the raw volume.
+    rate_denominator = total - benign_total
+    success_rate = round(success_count / rate_denominator, 4) if rate_denominator > 0 else 0.0
 
     return {
         "total_runs": total,

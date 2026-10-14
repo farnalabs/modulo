@@ -11,6 +11,14 @@ module. It provides:
   (``replace_run_node_outputs`` / ``write_run_markers``) — upsert + delete-
   absent, delete-absent ordered AFTER upserts, metadata flags re-derived from
   full run state;
+* JSONB-sanitisation on EVERY write path to the table (FAR-1602/FAR-1654):
+  ``_sanitise_jsonb_for_store`` replaces Postgres/JSONB-illegal code points
+  (U+0000 NUL, lone UTF-16 surrogates) with the visible U+FFFD marker and logs
+  the replacement. It is applied at the shared ``upsert_rows`` choke point (the
+  outputs/telemetry/markers/artifacts blob sides) and directly by the two
+  targeted direct-upsert writers (``persist_artifact_pointers`` /
+  ``persist_schema_enforcement_record``), so no writer can bind an
+  INSERT-aborting payload (SQLSTATE 22P05);
 * reassembly readers returning the LEGACY dict shapes (``outputs_dict`` /
   ``telemetry_dict`` / ``markers_dict``) with PYTHON jsonb-canonical key
   ordering (sorted by ``(len(key.encode()), key.encode())``) so
@@ -214,6 +222,95 @@ def _jsonb_canonical_key(key: str) -> tuple[int, bytes]:
     return (len(encoded), encoded)
 
 
+# Postgres rejects U+0000 (NUL) in a TEXT bind and inside a ``jsonb`` literal
+# (``jsonb`` raises SQLSTATE 22P05, "unsupported Unicode escape sequence").
+# A Python ``str`` can also carry lone UTF-16 surrogates, whose ``\uXXXX``
+# escapes are equally illegal in a jsonb literal. Either reaching the
+# ``run_node_outputs`` INSERT aborts the write and loses the node's output
+# (FAR-1602), so the payload is sanitised at the primary-write choke point.
+# The replacement is a VISIBLE marker — U+FFFD REPLACEMENT CHARACTER, the
+# canonical character a lossy decode produces — so the sanitisation is
+# observable in the stored value rather than a silent drop.
+_JSONB_ILLEGAL_CHARS = re.compile("[\x00\ud800-\udfff]")
+_JSONB_ILLEGAL_REPLACEMENT = "\ufffd"
+
+
+def _sanitise_jsonb(value: Any) -> tuple[Any, bool]:
+    """Return ``(value, changed)`` with every Postgres/JSONB-illegal code point
+    replaced by the visible U+FFFD marker.
+
+    Postgres rejects U+0000 (NUL) in a TEXT bind and inside a ``jsonb`` literal
+    (``jsonb`` raises SQLSTATE 22P05, "unsupported Unicode escape sequence"),
+    and it also rejects the ``\\uXXXX`` escapes of lone UTF-16 surrogates that a
+    Python ``str`` can carry. Either reaching the ``run_node_outputs`` INSERT
+    aborts the write and loses the node's output (FAR-1602), so every payload
+    bound for the table is sanitised here first.
+
+    Replacement is recursive across dict KEYS and string values;
+    ``list``/``tuple`` inputs return a ``list`` (JSON has no tuple); every other
+    scalar is returned unchanged. ``changed`` reports whether anything was
+    replaced so the caller can log the sanitisation (it is otherwise visible as
+    the U+FFFD marker in the stored value).
+    """
+    if isinstance(value, str):
+        cleaned = _JSONB_ILLEGAL_CHARS.sub(_JSONB_ILLEGAL_REPLACEMENT, value)
+        return cleaned, cleaned != value
+    if isinstance(value, dict):
+        changed = False
+        sanitised: dict[Any, Any] = {}
+        for key, item in value.items():
+            new_key, key_changed = _sanitise_jsonb(key)
+            new_item, item_changed = _sanitise_jsonb(item)
+            sanitised[new_key] = new_item
+            changed = changed or key_changed or item_changed
+        return sanitised, changed
+    if isinstance(value, (list, tuple)):
+        changed = False
+        sanitised_items: list[Any] = []
+        for item in value:
+            new_item, item_changed = _sanitise_jsonb(item)
+            sanitised_items.append(new_item)
+            changed = changed or item_changed
+        return sanitised_items, changed
+    return value, False
+
+
+def _sanitise_side(side: dict[str, Any] | None) -> tuple[dict[str, Any] | None, bool]:
+    """Sanitise one outputs/telemetry side (a node-id-keyed dict) — returns
+    ``(sanitised_side, changed)``; a ``None`` side stays ``None``."""
+    if side is None:
+        return None, False
+    cleaned, changed = _sanitise_jsonb(side)
+    return cleaned, changed
+
+
+def _sanitise_jsonb_for_store(value: Any, *, run_id: uuid.UUID, label: str) -> Any:
+    """Sanitise one JSONB payload bound for ``run_node_outputs`` and log the change.
+
+    The single shared entry point EVERY JSONB writer to the table passes
+    through — :func:`upsert_rows` (the four blob sides: outputs, telemetry,
+    markers, artifacts) and the two targeted direct-upsert writers
+    (:func:`persist_artifact_pointers`, :func:`persist_schema_enforcement_record`)
+    — so no writer can bypass the sanitiser and let U+0000 / a lone UTF-16
+    surrogate abort the Postgres jsonb INSERT (SQLSTATE 22P05, FAR-1602/FAR-1654).
+
+    Replacement is recursive across dict KEYS and string values (delegated to
+    :func:`_sanitise_jsonb`) and is the visible U+FFFD marker, so the sanitisation
+    is observable in the stored value rather than a silent drop; ``changed``
+    (reported by :func:`_sanitise_jsonb`) drives the warning log so the lossy
+    write is never silent.
+    """
+    cleaned, changed = _sanitise_jsonb(value)
+    if changed:
+        _log.warning(
+            "run_node_outputs: replaced Postgres/JSONB-illegal code points "
+            "(NUL / lone surrogate) in the %s payload for run %s",
+            label,
+            run_id,
+        )
+    return cleaned
+
+
 def _reassemble_markers(items: list[tuple[str, Any]]) -> dict[str, Any]:
     """The flat markers dict from (attempt_key, value) items in jsonb-canonical
     key order — the ONE reassembly site used by both the ``__final__``-row
@@ -358,6 +455,82 @@ def _assert_read_org(
         )
 
 
+# The four JSONB blob columns in side-signature tuple order
+# (has_outputs, has_telemetry, has_markers, has_artifacts) — maps a row
+# group's signature onto the uniform column set executemany requires.
+_SIDE_COLUMNS: tuple[str, str, str, str] = (
+    "outputs_json",
+    "node_telemetry_json",
+    "raw_output_markers",
+    "artifacts_json",
+)
+
+
+def _group_by_payload_signature(
+    rows: Sequence[NodeOutputWrite],
+) -> dict[tuple[bool, bool, bool, bool], list[NodeOutputWrite]]:
+    """Group rows by which sides they write — the side-signature 4-tuple.
+
+    executemany requires homogeneous params, so every statement carries a
+    single uniform column set: one group per distinct signature.
+    """
+    groups: dict[tuple[bool, bool, bool, bool], list[NodeOutputWrite]] = {}
+    for row in rows:
+        signature = (
+            row.outputs is not _SIDE_ABSENT,
+            row.telemetry is not _SIDE_ABSENT,
+            row.markers is not _SIDE_ABSENT,
+            row.artifacts is not _SIDE_ABSENT,
+        )
+        groups.setdefault(signature, []).append(row)
+    return groups
+
+
+def _row_update_payload(row: NodeOutputWrite, *, run_id: uuid.UUID) -> dict[str, Any]:
+    """The executemany param dict for one row: identity keys plus every
+    present side, each sanitised through the shared JSONB store sanitiser
+    (FAR-1654)."""
+    item: dict[str, Any] = {"node_id": row.node_id, "attempt_key": row.attempt_key}
+    if row.outputs is not _SIDE_ABSENT:
+        item["outputs_json"] = _sanitise_jsonb_for_store(row.outputs, run_id=run_id, label="outputs")
+    if row.telemetry is not _SIDE_ABSENT:
+        item["node_telemetry_json"] = _sanitise_jsonb_for_store(row.telemetry, run_id=run_id, label="telemetry")
+    if row.markers is not _SIDE_ABSENT:
+        item["raw_output_markers"] = _sanitise_jsonb_for_store(row.markers, run_id=run_id, label="markers")
+    if row.artifacts is not _SIDE_ABSENT:
+        item["artifacts_json"] = _sanitise_jsonb_for_store(row.artifacts, run_id=run_id, label="artifacts")
+    return item
+
+
+def _upsert_group_stmt(
+    insert_factory: Any,
+    *,
+    signature: tuple[bool, bool, bool, bool],
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+    ignore_conflicts: bool,
+) -> Any:
+    """The dialect-guarded ON CONFLICT statement for one side-signature group.
+
+    Present sides are named in the INSERT column list (executemany binds
+    them per row) and — unless *ignore_conflicts* — overwritten from
+    ``excluded`` on conflict with ``updated_at`` stamped explicitly
+    (TimestampMixin.onupdate never fires for Core upserts).
+    """
+    values: dict[str, Any] = {"run_id": run_id, "organisation_id": organisation_id}
+    for present, column in zip(signature, _SIDE_COLUMNS, strict=True):
+        if present:
+            values[column] = None
+    stmt = insert_factory(RunNodeOutput).values(**values)
+    if ignore_conflicts:
+        return stmt.on_conflict_do_nothing(index_elements=["run_id", "node_id", "attempt_key"])
+    set_: dict[str, Any] = {"updated_at": func.current_timestamp()}
+    for present, column in zip(signature, _SIDE_COLUMNS, strict=True):
+        if present:
+            set_[column] = getattr(stmt.excluded, column)
+    return stmt.on_conflict_do_update(index_elements=["run_id", "node_id", "attempt_key"], set_=set_)
+
+
 async def upsert_rows(
     session: AsyncSession,
     *,
@@ -373,56 +546,30 @@ async def upsert_rows(
     conflict the present sides are overwritten from ``excluded`` and
     ``updated_at`` is stamped explicitly (TimestampMixin.onupdate never fires
     for Core upserts).
+
+    FAR-1654: every JSONB side is sanitised through
+    :func:`_sanitise_jsonb_for_store` HERE, at the shared upsert choke point,
+    so no caller of this function can bind a NUL / lone-surrogate payload that
+    would abort the Postgres jsonb INSERT. (``node_id`` / ``attempt_key`` are
+    TEXT, not JSONB, and are deliberately left untouched: sanitising a marker
+    attempt key here would desynchronise it from the caller's unsanitised
+    delete-absent key set. A payload already sanitised by
+    :func:`replace_run_node_outputs` — for its key-derived work — passes through
+    unchanged: sanitisation is idempotent and its second pass reports
+    ``changed=False``, so no duplicate warning is logged.)
     """
     if not rows:
         return
     insert_factory = dialect_insert(resolve_dialect(session))
-    groups: dict[tuple[bool, bool, bool, bool], list[NodeOutputWrite]] = {}
-    for row in rows:
-        flags = (
-            row.outputs is not _SIDE_ABSENT,
-            row.telemetry is not _SIDE_ABSENT,
-            row.markers is not _SIDE_ABSENT,
-            row.artifacts is not _SIDE_ABSENT,
+    for signature, group in _group_by_payload_signature(rows).items():
+        stmt = _upsert_group_stmt(
+            insert_factory,
+            signature=signature,
+            run_id=run_id,
+            organisation_id=organisation_id,
+            ignore_conflicts=ignore_conflicts,
         )
-        groups.setdefault(flags, []).append(row)
-
-    for (has_out, has_tel, has_markers, has_artifacts), group in groups.items():
-        values: dict[str, Any] = {"run_id": run_id, "organisation_id": organisation_id}
-        if has_out:
-            values["outputs_json"] = None
-        if has_tel:
-            values["node_telemetry_json"] = None
-        if has_markers:
-            values["raw_output_markers"] = None
-        if has_artifacts:
-            values["artifacts_json"] = None
-        stmt = insert_factory(RunNodeOutput).values(**values)
-        params: list[dict[str, Any]] = []
-        for row in group:
-            item: dict[str, Any] = {"node_id": row.node_id, "attempt_key": row.attempt_key}
-            if has_out:
-                item["outputs_json"] = row.outputs
-            if has_tel:
-                item["node_telemetry_json"] = row.telemetry
-            if has_markers:
-                item["raw_output_markers"] = row.markers
-            if has_artifacts:
-                item["artifacts_json"] = row.artifacts
-            params.append(item)
-        if ignore_conflicts:
-            stmt = stmt.on_conflict_do_nothing(index_elements=["run_id", "node_id", "attempt_key"])
-        else:
-            set_: dict[str, Any] = {"updated_at": func.current_timestamp()}
-            if has_out:
-                set_["outputs_json"] = stmt.excluded.outputs_json
-            if has_tel:
-                set_["node_telemetry_json"] = stmt.excluded.node_telemetry_json
-            if has_markers:
-                set_["raw_output_markers"] = stmt.excluded.raw_output_markers
-            if has_artifacts:
-                set_["artifacts_json"] = stmt.excluded.artifacts_json
-            stmt = stmt.on_conflict_do_update(index_elements=["run_id", "node_id", "attempt_key"], set_=set_)
+        params = [_row_update_payload(row, run_id=run_id) for row in group]
         await session.execute(stmt, params)
 
 
@@ -510,7 +657,35 @@ async def replace_run_node_outputs(
     proves it was inherited).
 
     Returns ``{"outputs_dual_write_sentinel_filtered": <int>}``.
+
+    FAR-1602: the incoming outputs/telemetry dicts (and the inherited captures
+    they are filtered against) are sanitised by :func:`_sanitise_jsonb` BEFORE
+    any key-derived work, so a payload carrying U+0000 / a lone surrogate
+    stores intact instead of aborting the Postgres jsonb INSERT (22P05).
     """
+    # FAR-1602: the SINGLE write choke point for the outputs/telemetry blobs —
+    # sanitise every payload here (recursively, keys included) so a node output
+    # carrying U+0000 or a lone surrogate can never abort the Postgres jsonb
+    # INSERT (SQLSTATE 22P05). This runs BEFORE the inherited-sentinel filter
+    # and the blanking-key computation, so upsert node_ids and the delete-absent
+    # key set stay consistent. Both the ORM and fenced ``update_run_status``
+    # paths reach the store through ``write_run_outputs_from_run`` and so share
+    # this one sanitiser (no duplicated logic).
+    outputs, outputs_sanitised = _sanitise_side(outputs)
+    telemetry, telemetry_sanitised = _sanitise_side(telemetry)
+    if outputs_sanitised or telemetry_sanitised:
+        _log.warning(
+            "run_node_outputs: replaced Postgres/JSONB-illegal code points "
+            "(NUL / lone surrogate) in the outputs/telemetry payload for run %s",
+            run_id,
+        )
+    # ``_sanitise_side(None)`` is a no-op returning ``(None, False)``, so the
+    # inherited captures are sanitised unconditionally (guarding each on
+    # ``is not None`` added two branches for no behavioural difference and
+    # pushed this function's cognitive complexity over the Sonar limit).
+    inherited_outputs = _sanitise_side(inherited_outputs)[0]
+    inherited_telemetry = _sanitise_side(inherited_telemetry)[0]
+
     filtered = _split_inherited_sentinel_keys(outputs, inherited_outputs, kind="outputs node id")
     filtered |= _split_inherited_sentinel_keys(telemetry, inherited_telemetry, kind="telemetry node id")
     await assert_write_org(session, organisation_id)
@@ -1017,6 +1192,11 @@ async def persist_artifact_pointers(
 
     When *pointers* is empty the column is set to NULL (signal that the node
     ran but produced no meaningful artifact data).
+
+    FAR-1654: this targeted upsert does NOT pass through :func:`upsert_rows`,
+    so the pointer payload is sanitised here via
+    :func:`_sanitise_jsonb_for_store` — a NUL / lone surrogate in a pointer
+    string (or key) can never abort the Postgres jsonb INSERT.
     """
     insert_factory = dialect_insert(resolve_dialect(session))
     values = {
@@ -1024,7 +1204,7 @@ async def persist_artifact_pointers(
         "organisation_id": organisation_id,
         "node_id": node_id,
         "attempt_key": attempt_key,
-        "artifacts_json": pointers or None,
+        "artifacts_json": _sanitise_jsonb_for_store(pointers or None, run_id=run_id, label="artifacts"),
     }
     stmt = insert_factory(RunNodeOutput).values(**values)
     set_: dict[str, Any] = {
@@ -1057,6 +1237,11 @@ async def persist_schema_enforcement_record(
     The ``attempt_key`` MUST NOT be ``__final__`` — the CHECK constraint
     ``attempt_key <> '__final__' OR schema_enforcement_json IS NULL`` rejects
     a ``__final__`` write.
+
+    FAR-1654: this targeted upsert does NOT pass through :func:`upsert_rows`,
+    so the enforcement payload is sanitised here via
+    :func:`_sanitise_jsonb_for_store` — a NUL / lone surrogate in the record
+    (values or keys) can never abort the Postgres jsonb INSERT.
     """
     insert_factory = dialect_insert(resolve_dialect(session))
     values = {
@@ -1064,7 +1249,9 @@ async def persist_schema_enforcement_record(
         "organisation_id": organisation_id,
         "node_id": node_id,
         "attempt_key": attempt_key,
-        "schema_enforcement_json": enforcement_record,
+        "schema_enforcement_json": _sanitise_jsonb_for_store(
+            enforcement_record, run_id=run_id, label="schema enforcement"
+        ),
     }
     stmt = insert_factory(RunNodeOutput).values(**values)
     set_: dict[str, Any] = {

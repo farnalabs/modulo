@@ -29,7 +29,6 @@ from test_test_suite_quality import (  # noqa: E402
     _duplicate_test_body_baseline_candidates,
     _iter_test_modules,
     _read_duplicate_test_body_baseline,
-    _read_self_asserting_bdd_baseline,
     _resolve_scope_paths,
     _self_asserting_bdd_baseline_candidates,
 )
@@ -197,6 +196,45 @@ class TestIterTestModulesScope:
         # If no excluded package dirs exist, test passes vacuously
 
 
+class TestDeadFixtureLensUnderScope:
+    """End-to-end control for the dead-fixture lens in scoped ``--changed-files``
+    mode.
+
+    The helper-level regression test in the scanner module
+    (``test_dead_fixture_lens_resolves_requesters_across_the_whole_tree``) pins
+    the ``_fixture_used_names`` / ``_dead_fixture_violations`` contract, but it
+    never drives ``test_no_dead_fixtures`` itself — so a regression in the
+    wiring between those helpers and the lens (e.g. feeding the used-name set
+    the scoped files only, the original bug) would slip past it. This class
+    exercises the real lens end-to-end under ``MODULO_TEST_STYLE_SCOPE``.
+
+    Regression: scoping the scan to a changed ``bdd/conftest.py`` flagged its
+    live ``unauth_client`` fixture as dead, because the lens built its "used"
+    set from the changed files alone while the requesters live in unchanged
+    modules.
+    """
+
+    def test_scoped_to_a_conftest_does_not_flag_cross_file_fixture(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Scoped to ``bdd/conftest.py``, the real lens must pass: its live
+        ``unauth_client`` is requested only by unchanged modules, so resolving
+        requesters from the scoped files alone (the pre-fix wiring) would flag
+        it and make this raise."""
+        target = TESTS / "bdd" / "conftest.py"
+        monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", str(target))
+        _resolve_scope_paths.cache_clear()
+
+        scoped_paths = [p.resolve() for p in _iter_test_modules()]
+        assert scoped_paths == [target.resolve()], "the scope must narrow the scan to the changed conftest alone"
+        assert "def unauth_client(" in target.read_text(encoding="utf-8"), (
+            "regression fixture: bdd/conftest.py must define the cross-file fixture this test relies on"
+        )
+
+        # The real assertion: the end-to-end lens must pass. On the pre-fix
+        # wiring (used names built from the scoped iteration) this raises,
+        # naming unauth_client as a fixture no test requests.
+        _scanner.test_no_dead_fixtures()
+
+
 class TestBuildScopeEnv:
     """Unit tests for the wrapper's scope-building logic (backend/-prefix strip).
 
@@ -239,19 +277,27 @@ class TestBaselineStalenessUnderScope:
     Regression: the ``--changed-files`` wrapper sets ``MODULO_TEST_STYLE_SCOPE``
     to the changed test files, and every baseline entry lives in a BDD step
     module — so a scoped run whose changed set excluded those steps read the
-    whole 75-entry baseline as "no longer violating" and failed with phantom
-    stale entries unrelated to the change under review (observed while gating
-    an unrelated branch; unscoped the same test passed).
+    whole baseline as "no longer violating" and failed with phantom stale
+    entries unrelated to the change under review (observed while gating an
+    unrelated branch; unscoped the same test passed).
+
+    These tests pin their own baseline fixture through the scanner's reader
+    (``_scanner._read_self_asserting_bdd_baseline``) rather than relying on
+    real entries: the FAR-1578 sweep has emptied the production baseline, so
+    planting an out-of-scope bdd/ entry keeps the filter regression
+    deterministically exercised instead of passing vacuously.
     """
 
     def test_scoped_run_ignores_baseline_entries_it_never_scanned(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Scope = one non-BDD file: no baseline entry is in scope, so both
         the candidate set and the real stale check must come up empty rather
-        than reporting the 75 un-scanned entries."""
+        than reporting the un-scanned entries as phantom-stale."""
         target = TESTS / "architecture" / "test_test_suite_quality.py"
-        assert _read_baseline(), "regression fixture: the BDD baseline must be non-empty"
+        planted = "bdd/steps/planted_steps.py:test_planted_out_of_scope"
+        monkeypatch.setattr(_scanner, "_read_self_asserting_bdd_baseline", lambda: {planted})
+        assert _read_baseline() == {planted}
         assert not any(key.startswith("architecture/") for key in _read_baseline()), (
-            "regression fixture: the baseline lists only bdd/ modules, so this scope excludes them all"
+            "regression fixture: the planted baseline lists only bdd/ modules, so this scope excludes them all"
         )
         monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", str(target))
         _resolve_scope_paths.cache_clear()
@@ -277,11 +323,18 @@ class TestBaselineStalenessUnderScope:
 
     def test_unscoped_run_still_judges_every_baseline_entry(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Without a scope the candidate set must be the WHOLE baseline — the
-        filter may never blind the tree-wide ratchet."""
+        filter may never blind the tree-wide ratchet. The fixture is planted
+        through the scanner's reader so the test does not depend on the
+        production baseline being non-empty."""
+        planted = {
+            "bdd/steps/planted_steps.py:test_planted_one",
+            "bdd/steps/planted_steps.py:test_planted_two",
+        }
+        monkeypatch.setattr(_scanner, "_read_self_asserting_bdd_baseline", lambda: set(planted))
         monkeypatch.delenv("MODULO_TEST_STYLE_SCOPE", raising=False)
         _resolve_scope_paths.cache_clear()
         assert _candidates() == _read_baseline()
-        assert _read_baseline()
+        assert _read_baseline() == planted
 
 
 class TestDuplicateBaselineStalenessUnderScope:
@@ -346,7 +399,7 @@ class TestDuplicateBaselineStalenessUnderScope:
 
 
 def _read_baseline() -> set[str]:
-    return _read_self_asserting_bdd_baseline()
+    return _scanner._read_self_asserting_bdd_baseline()
 
 
 def _candidates() -> set[str]:

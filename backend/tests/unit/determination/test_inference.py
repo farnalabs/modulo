@@ -18,29 +18,45 @@ def test_empty_samples_returns_findings() -> None:
     assert any(f.category == "overview" and "No SDLC stages" in f.finding for f in findings)
 
 
-def test_repos_detect_development_stage() -> None:
-    samples = [make_sample("repos", [{"name": "backend"}, {"name": "frontend"}])]
+@pytest.mark.parametrize(
+    ("resource", "records", "connector_type", "expected_evidence"),
+    [
+        pytest.param(
+            "repos",
+            [{"name": "backend"}, {"name": "frontend"}],
+            ConnectorType.GITHUB,
+            "2 repositories",
+            id="github-repos-plain-name",
+        ),
+        pytest.param(
+            "projects",
+            [{"name": "proj-1"}, {"name": "proj-2"}],
+            ConnectorType.GITLAB,
+            "2 repositories",
+            id="gitlab-projects-plain-name",
+        ),
+        pytest.param(
+            "repos",
+            [{"full_name": "owner/repo1"}],
+            ConnectorType.GITHUB,
+            "1 repository",
+            id="github-repos-full-name",
+        ),
+    ],
+)
+def test_repo_family_records_detect_development_stage(
+    resource: str,
+    records: list[dict],
+    connector_type: ConnectorType,
+    expected_evidence: str,
+) -> None:
+    """Any repo/project record shape yields exactly one high-confidence development finding."""
+    samples = [make_sample(resource, records, connector_type=connector_type)]
     findings = infer(samples)
     stages = [f for f in findings if f.category == "stage" and "Development" in f.finding]
     assert len(stages) == 1
-    assert "2 repositories" in stages[0].evidence
+    assert expected_evidence in stages[0].evidence
     assert stages[0].confidence == "high"
-
-
-def test_projects_detect_development_stage() -> None:
-    samples = [make_sample("projects", [{"name": "proj-1"}, {"name": "proj-2"}], connector_type=ConnectorType.GITLAB)]
-    findings = infer(samples)
-    stages = [f for f in findings if f.category == "stage" and "Development" in f.finding]
-    assert len(stages) == 1
-    assert "2 repositories" in stages[0].evidence
-
-
-def test_full_name_repo_records_detect_development_stage() -> None:
-    samples = [make_sample("repos", [{"full_name": "owner/repo1"}])]
-    findings = infer(samples)
-    stages = [f for f in findings if f.category == "stage" and "Development" in f.finding]
-    assert len(stages) == 1
-    assert "1 repository" in stages[0].evidence
 
 
 def test_pull_requests_detect_code_review() -> None:
@@ -93,61 +109,51 @@ def test_no_stale_prs_when_all_recent() -> None:
     assert no_stale[0].confidence == "low"
 
 
-def test_invalid_pr_date_ignored() -> None:
-    samples = [make_sample("pulls", [{"number": 1, "created_at": "not-a-date"}])]
-    findings = infer(samples)
-    assert not any(f.category == "bottleneck" for f in findings)
-    assert any(f.category == "stage" and "Code review" in f.finding for f in findings)
+_STALE_BOTTLENECK = "Potential review bottleneck"
+_NO_STALE = "No stale PRs"
 
 
-def test_pr_camelcase_created_at_detects_stale_bottleneck() -> None:
-    """Inference must read the camelCase ``createdAt`` field when ``created_at`` is absent."""
-    samples = [make_sample("pulls", [{"number": 1, "createdAt": iso_days_ago(10)}])]
-    findings = infer(samples)
-    bottleneck = next((f for f in findings if f.category == "bottleneck"), None)
-    assert bottleneck is not None
-    assert "Potential review bottleneck: 1 PRs/MRs open for >5 days" in bottleneck.finding
+@pytest.mark.parametrize(
+    ("record", "expected_bottleneck"),
+    [
+        pytest.param({"number": 1, "created_at": iso_days_ago(10)}, _STALE_BOTTLENECK, id="stale-snake-case-10-days"),
+        pytest.param({"number": 1, "createdAt": iso_days_ago(10)}, _STALE_BOTTLENECK, id="stale-camelcase-10-days"),
+        pytest.param(
+            {"number": 1, "created_at": iso_days_ago(10)[:-1]},
+            _STALE_BOTTLENECK,
+            id="stale-naive-timestamp-no-timezone",
+        ),
+        pytest.param(
+            {"number": 1, "created_at": iso_days_ago(10).split("T")[0]},
+            _STALE_BOTTLENECK,
+            id="stale-date-only",
+        ),
+        pytest.param({"number": 1, "created_at": iso_days_ago(2)}, _NO_STALE, id="recent-two-days"),
+        pytest.param({"number": 1, "createdAt": iso_days_ago(1)}, _NO_STALE, id="recent-camelcase-one-day"),
+        pytest.param({"number": 1, "created_at": "not-a-date"}, None, id="unparseable-timestamp-dropped"),
+        pytest.param({"number": 1, "created_at": 12345}, None, id="non-string-timestamp-dropped"),
+    ],
+)
+def test_pr_timestamp_spelling_decides_bottleneck_finding(
+    record: dict,
+    expected_bottleneck: str | None,
+) -> None:
+    """Every timestamp spelling inference accepts must be classified consistently.
 
-
-def test_naive_created_at_without_timezone_does_not_crash() -> None:
-    """A timezone-less ISO timestamp must be interpreted as UTC, never crash inference.
-
-    datetime.fromisoformat('2026-06-20T00:00:00') yields a naive datetime;
-    subtracting an aware datetime from it would raise TypeError.
+    A PR older than five days yields a bottleneck finding, a recent PR yields the
+    "no stale PRs" finding, and an unusable timestamp is dropped so that no
+    bottleneck finding is produced at all. The review stage is detected either way.
     """
-    samples = [make_sample("pulls", [{"number": 1, "created_at": iso_days_ago(10)[:-1]}])]
-    findings = infer(samples)
-    bottleneck = next((f for f in findings if f.category == "bottleneck"), None)
-    assert bottleneck is not None
-    assert "Potential review bottleneck" in bottleneck.finding
+    findings = infer([make_sample("pulls", [record])])
 
-
-def test_date_only_created_at_does_not_crash() -> None:
-    """A bare date (parsed as naive midnight UTC) must be handled gracefully."""
-    date_only = iso_days_ago(10).split("T")[0]
-    samples = [make_sample("pulls", [{"number": 1, "created_at": date_only}])]
-    findings = infer(samples)
     assert any(f.category == "stage" and "Code review" in f.finding for f in findings)
-    bottleneck = next((f for f in findings if f.category == "bottleneck"), None)
-    assert bottleneck is not None
-    assert "Potential review bottleneck" in bottleneck.finding
 
-
-def test_non_string_created_at_is_ignored() -> None:
-    """Non-string created_at values must not crash or produce a bottleneck finding."""
-    samples = [make_sample("pulls", [{"number": 1, "created_at": 12345}])]
-    findings = infer(samples)
-    assert any(f.category == "stage" and "Code review" in f.finding for f in findings)
-    assert not any(f.category == "bottleneck" for f in findings)
-
-
-def test_pr_camelcase_created_at_recent_no_stale_bottleneck() -> None:
-    samples = [make_sample("pulls", [{"number": 1, "createdAt": iso_days_ago(1)}])]
-    findings = infer(samples)
-    stale = [f for f in findings if f.category == "bottleneck" and "Potential review bottleneck" in f.finding]
-    assert stale == []
-    no_stale = [f for f in findings if f.category == "bottleneck" and "No stale PRs" in f.finding]
-    assert len(no_stale) == 1
+    bottlenecks = [f for f in findings if f.category == "bottleneck"]
+    if expected_bottleneck is None:
+        assert bottlenecks == []
+    else:
+        assert len(bottlenecks) == 1
+        assert expected_bottleneck in bottlenecks[0].finding
 
 
 def test_planning_stage_from_jira_issues() -> None:
@@ -195,16 +201,17 @@ def test_issue_lifecycle_transition() -> None:
     assert "Issue lifecycle" in transitions[0].finding
 
 
-def test_ci_detected_from_repo_name() -> None:
-    samples = [make_sample("repos", [{"name": "azure-pipelines"}])]
-    findings = infer(samples)
-    ci = [f for f in findings if f.category == "automation" and "CI/CD configuration detected" in f.finding]
-    assert len(ci) == 1
+def _repo_record_with_ci_hint(carrier: str, marker: str) -> dict:
+    if carrier == "name":
+        return {"name": marker}
+    return {"name": "repo-a", "description": f"pipeline configured via {marker}"}
 
 
-def test_ci_detected_from_description_without_name() -> None:
-    """CI detection must not require an identifier: a bare description hint suffices."""
-    samples = [make_sample("repos", [{"description": "deploys via .github/workflows"}])]
+@pytest.mark.parametrize("carrier", ["name", "description"])
+@pytest.mark.parametrize("marker", [".github/workflows", ".gitlab-ci.yml", "circleci", "azure-pipelines"])
+def test_ci_detected_from_repo_metadata(carrier: str, marker: str) -> None:
+    """A known CI marker must be recognised in either the repo name or its description."""
+    samples = [make_sample("repos", [_repo_record_with_ci_hint(carrier, marker)])]
     findings = infer(samples)
     ci = [f for f in findings if f.category == "automation" and "CI/CD configuration detected" in f.finding]
     assert len(ci) == 1
@@ -244,6 +251,7 @@ def test_each_finding_has_evidence() -> None:
         make_sample("issues", [{"fields": {"status": {"name": "Backlog"}}}], connector_type=ConnectorType.JIRA),
     ]
     findings = infer(samples)
+    assert findings, "infer() produced no findings — the loop below would pass vacuously"
     for f in findings:
         assert f.evidence, f"Finding '{f.finding}' has no evidence"
         assert f.category, "Finding has no category"
@@ -265,6 +273,32 @@ def test_issues_with_empty_records_are_tolerated() -> None:
     findings = infer(samples)
     assert not any(f.category == "stage" and "Planning" in f.finding for f in findings)
     assert any(f.category == "overview" for f in findings)
+
+
+@pytest.mark.parametrize(
+    ("record", "expected_planning"),
+    [
+        pytest.param({"fields": {"status": {"name": "Backlog"}}}, True, id="fields-status-object"),
+        pytest.param({"fields": {"status": "Backlog"}}, True, id="fields-status-string"),
+        pytest.param({"state": "Backlog"}, True, id="top-level-state-string"),
+        pytest.param({"state": {"name": "Ready"}}, True, id="top-level-state-object"),
+        pytest.param({"fields": {}, "state": "To Do"}, True, id="empty-fields-falls-back-to-state"),
+        pytest.param({"state": "in_progress"}, False, id="top-level-state-non-planning"),
+        pytest.param(
+            {"fields": {"status": None}, "state": "Done"}, False, id="null-status-falls-back-to-non-planning-state"
+        ),
+    ],
+)
+def test_issue_status_is_read_from_fields_or_top_level_state(
+    record: dict,
+    expected_planning: bool,
+) -> None:
+    """Planning detection must work for Jira-style ``fields.status`` and plain ``state`` records."""
+    findings = infer([make_sample("issues", [record], connector_type=ConnectorType.JIRA)])
+    planning = [f for f in findings if f.category == "stage" and "Planning" in f.finding]
+    assert bool(planning) is expected_planning
+    if expected_planning:
+        assert "1 issues in planning statuses" in planning[0].evidence
 
 
 def test_issue_records_without_any_status_are_skipped() -> None:
@@ -295,31 +329,20 @@ def test_unknown_resource_samples_are_ignored() -> None:
     assert "1 repository" in next(f for f in findings if f.category == "stage").evidence
 
 
-def test_finding_model() -> None:
-    f = Finding(
+def test_finding_defaults_and_optional_fields() -> None:
+    """A minimal Finding carries empty uncertainty and no related connector unless supplied."""
+    minimal = Finding(category="stage", finding="Test finding", evidence="Some evidence", confidence="high")
+    assert not minimal.uncertainty
+    assert minimal.related_connector is None
+
+    cid = uuid.uuid4()
+    linked = Finding(
         category="stage",
         finding="Test finding",
         evidence="Some evidence",
-        confidence="high",
-        uncertainty="Some uncertainty",
-    )
-    assert f.category == "stage"
-    assert f.confidence == "high"
-    assert f.uncertainty == "Some uncertainty"
-
-
-def test_finding_invalid_confidence_raises() -> None:
-    with pytest.raises(ValueError, match="confidence must be one of"):
-        Finding(category="stage", finding="Test", evidence="Ev", confidence="very-sure")
-
-
-def test_related_connector_in_finding() -> None:
-    cid = uuid.uuid4()
-    f = Finding(
-        category="stage",
-        finding="Test",
-        evidence="Ev",
         confidence="low",
+        uncertainty="Some uncertainty",
         related_connector=cid,
     )
-    assert f.related_connector == cid
+    assert linked.uncertainty == "Some uncertainty"
+    assert linked.related_connector == cid

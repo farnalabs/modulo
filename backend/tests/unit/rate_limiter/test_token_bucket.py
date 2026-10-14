@@ -23,17 +23,15 @@ class FakeClock:
 
 
 class TestTokenBucket:
-    async def test_full_bucket_allows_burst(self) -> None:
-        bucket = TokenBucket(rate=1.0, burst=60)
-        for _ in range(60):
+    @pytest.mark.parametrize(
+        ("rate", "burst"),
+        [(1.0, 60), (0.5, 3)],
+        ids=["burst-60", "burst-3"],
+    )
+    async def test_burst_boundary_allows_exactly_burst(self, rate: float, burst: int) -> None:
+        bucket = TokenBucket(rate=rate, burst=burst)
+        for _ in range(burst):
             assert await bucket.consume() is True
-        assert await bucket.consume() is False
-
-    async def test_exact_burst_boundary(self) -> None:
-        bucket = TokenBucket(rate=0.5, burst=3)
-        assert await bucket.consume() is True
-        assert await bucket.consume() is True
-        assert await bucket.consume() is True
         assert await bucket.consume() is False
 
     async def test_refills_over_time(self) -> None:
@@ -47,11 +45,11 @@ class TestTokenBucket:
         assert await bucket.consume() is True
 
     async def test_never_exceeds_burst_ceiling(self) -> None:
+        """Refill past the burst ceiling must still cap at burst, not accumulate."""
         clock = FakeClock()
         bucket = TokenBucket(rate=100.0, burst=5, clock=clock)
         assert await bucket.consume() is True
-        clock.advance(0.05)
-        bucket.reset()
+        clock.advance(3600.0)  # refill far beyond burst: capped back to 5
         for _ in range(5):
             assert await bucket.consume() is True
         assert await bucket.consume() is False
@@ -81,10 +79,13 @@ class TestTokenBucket:
 
     async def test_reset_restores_full_capacity(self) -> None:
         bucket = TokenBucket(rate=1.0, burst=4)
-        assert await bucket.consume() is True
-        assert bucket._tokens < bucket.burst
+        for _ in range(4):
+            assert await bucket.consume() is True
+        assert await bucket.consume() is False
         bucket.reset()
-        assert bucket._tokens == bucket.burst
+        for _ in range(4):
+            assert await bucket.consume() is True
+        assert await bucket.consume() is False
 
 
 class TestTokenBucketRegistry:

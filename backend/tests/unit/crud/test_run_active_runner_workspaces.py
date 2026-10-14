@@ -26,21 +26,31 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.dialects import postgresql
 
-from modulo.db.crud.run import count_active_runner_dispatches_for_org
+from modulo.db.crud.run import (
+    RUNNER_HOST_RESOURCE_FILTER_SQL,
+    RUNNER_TOMBSTONE_EXCLUSION_SQL,
+    count_active_runner_dispatches_for_org,
+)
 from modulo.db.models.run import TERMINAL_STATUSES
+from tests.unit.crud.helpers import compile_sql
 
 _ORG = uuid.UUID("11111111-1111-1111-1111-111111111111")
+_ORG_SQL = f"organisation_id = '{_ORG}'"
 _OTHER_ORG = uuid.UUID("22222222-2222-2222-2222-222222222222")
 
 
 def _compile_with_literal_binds(stmt: Any) -> str:
     """Render the SELECT with literal values baked in (assertion-friendly)."""
-    return str(
-        stmt.compile(
-            dialect=postgresql.dialect(),
-            compile_kwargs={"literal_binds": True},
-        )
-    )
+    return compile_sql(stmt, postgresql.dialect())
+
+
+def _pg_like(fragment: str) -> str:
+    """Render a SQL fragment the way the Postgres dialect does INSIDE LIKE
+    literals: every ``%`` doubles to ``%%``. The production
+    ``RUNNER_*_SQL`` text() fragments are asserted in exactly this
+    dialect-rendered form — the raw Python constant would NOT match the
+    compiled SQL verbatim."""
+    return fragment.replace("%", "%%")
 
 
 async def _count_sql_and_value(
@@ -48,9 +58,14 @@ async def _count_sql_and_value(
     monkeypatch: pytest.MonkeyPatch,
     *,
     counted: int = 0,
+    exclude_run_id: uuid.UUID | None = None,
+    host_resource_only: bool = False,
+    org: uuid.UUID = _ORG,
 ) -> tuple[str, int]:
     """Run the count, capturing and rendering its SELECT, returning the raw
-    SELECT text plus the value the fake session reported."""
+    SELECT text plus the value the fake session reported. ``org`` selects the
+    caller's organisation — the default pins the shared _ORG shape; tests
+    varying it prove the predicate renders the CALLER's org, not a constant."""
     statements: list[Any] = []
 
     class _Settings:
@@ -67,18 +82,30 @@ async def _count_sql_and_value(
         return result
 
     session.execute = AsyncMock(side_effect=_execute)
-    value = await count_active_runner_dispatches_for_org(session, _ORG)
+    value = await count_active_runner_dispatches_for_org(
+        session, org, exclude_run_id=exclude_run_id, host_resource_only=host_resource_only
+    )
     assert len(statements) == 1
     return _compile_with_literal_binds(statements[0]), value
 
 
 class TestActiveWorkspaceCountPopulation:
+    async def test_count_is_bound_to_the_callers_org(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The org predicate renders THE CALLER's org — proven in BOTH
+        directions: each caller's own org renders into that caller's SQL and
+        the two callers' SQL differ. A predicate hardcoded to (or defaulting
+        to) one org would render identical SQL for two different callers,
+        silently counting one org's workspaces under the other's name."""
+        sql_a, _ = await _count_sql_and_value(flag_on=True, monkeypatch=monkeypatch, org=_ORG)
+        sql_b, _ = await _count_sql_and_value(flag_on=True, monkeypatch=monkeypatch, org=_OTHER_ORG)
+        assert f"organisation_id = '{_ORG}'" in sql_a
+        assert f"organisation_id = '{_OTHER_ORG}'" in sql_b
+
     async def test_running_run_with_live_marker_counts_and_returns_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
         sql, value = await _count_sql_and_value(flag_on=True, monkeypatch=monkeypatch, counted=5)
         # The count is org-scoped — a foreign marker never reaches the figure
         # (the explicit organisation_id predicate; RLS is the second fence).
-        assert str(_ORG) in sql
-        assert str(_OTHER_ORG) not in sql
+        assert _ORG_SQL in sql
         assert "sandbox_dispatch_state IS NOT NULL" in sql
         # D8 flag-on population: RUNNING runs only — a live marker can only
         # legally exist on a running run.
@@ -106,5 +133,26 @@ class TestActiveWorkspaceCountPopulation:
     async def test_hitl_tombstone_markers_excluded_flag_on(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # A HITL-boundary tombstone marker holds no slot — it must not feed
         # the active-workspace count (the same fragment the D8 reader uses).
+        # The production fragment is asserted in its dialect-rendered form
+        # (inside LIKE literals the Postgres dialect doubles every ``%``):
+        # a test passing on a partial string would also pass on an
+        # inverted/absent exclusion, so the exact NOT LIKE SQL the count
+        # applies is what is asserted.
         sql, _ = await _count_sql_and_value(flag_on=True, monkeypatch=monkeypatch)
-        assert "cleared_at_hitl" in sql
+        assert _pg_like(RUNNER_TOMBSTONE_EXCLUSION_SQL) in sql
+
+    async def test_exclude_run_id_is_applied(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A re-dispatch excluding its own run must apply ``runs.id != :param``
+        so a fence-carrying stale marker cannot self-block the count."""
+        exclude = uuid.uuid4()
+        sql, _ = await _count_sql_and_value(
+            flag_on=True, monkeypatch=monkeypatch, exclude_run_id=exclude, host_resource_only=False
+        )
+        assert f"runs.id != '{exclude}'" in sql
+
+    async def test_host_resource_only_applies_provider_filter(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``host_resource_only=True`` must scope the count to the host-resource
+        provider IN-list (Docker + Local + Kubernetes — FAR-1051) via the
+        production SQL fragment, in its dialect-rendered form."""
+        sql, _ = await _count_sql_and_value(flag_on=True, monkeypatch=monkeypatch, host_resource_only=True)
+        assert _pg_like(RUNNER_HOST_RESOURCE_FILTER_SQL) in sql

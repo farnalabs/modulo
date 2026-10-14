@@ -14,20 +14,27 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 
 from modulo.otel_bridge.export import _sanitise_url, setup_otel, shutdown_otel
-from tests.unit.otel_bridge.conftest import reset_global_provider
+from tests.unit.otel_bridge.conftest import reset_global_provider, span_processors
 
 
-def test_setup_otel_sets_global_provider() -> None:
-    setup_otel(service_name="test-service")
-    provider = trace.get_tracer_provider()
-    assert isinstance(provider, TracerProvider)
+def test_setup_otel_installs_a_provider_carrying_the_service_name() -> None:
+    """The global provider is replaced and stamped with the requested service name.
 
-
-def test_setup_otel_sets_service_name_resource() -> None:
+    Also covers "the default is telemetry off": with ``telemetry_enabled`` left at
+    its default the provider must be installed but register no exporters.
+    """
     setup_otel(service_name="my-modulo")
+
     provider = trace.get_tracer_provider()
     assert isinstance(provider, TracerProvider)
     assert provider.resource.attributes.get("service.name") == "my-modulo"
+    assert not span_processors(provider), "no exporter may be registered when telemetry is off"
+
+    # The provider must be usable: spans can be created against it.
+    tracer = trace.get_tracer("test")
+    with tracer.start_as_current_span("test-span") as span:
+        span.set_attribute("test", True)
+    assert span.name == "test-span"
 
 
 def test_setup_otel_uses_default_service_name() -> None:
@@ -35,18 +42,6 @@ def test_setup_otel_uses_default_service_name() -> None:
     provider = trace.get_tracer_provider()
     assert isinstance(provider, TracerProvider)
     assert provider.resource.attributes.get("service.name") == "modulo"
-
-
-def test_setup_otel_creates_tracer_with_service_name() -> None:
-    setup_otel(service_name="my-modulo")
-    provider = trace.get_tracer_provider()
-    assert isinstance(provider, TracerProvider)
-    # The requested service name must be reflected in the provider resource.
-    assert provider.resource.attributes.get("service.name") == "my-modulo"
-    # The tracer should be functional — creating a span should not raise.
-    tracer = trace.get_tracer("test")
-    with tracer.start_as_current_span("test-span") as span:
-        span.set_attribute("test", True)
 
 
 def test_setup_otel_can_be_called_repeatedly(caplog: pytest.LogCaptureFixture) -> None:
@@ -79,34 +74,30 @@ def test_setup_otel_disabled_registers_no_span_processors() -> None:
 
 
 def test_setup_otel_enabled_registers_stdout_processor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Telemetry on with no endpoint set: exactly the stdout SimpleSpanProcessor.
+
+    ``TestTelemetryEnabled.test_enabled_registers_stdout_exporter`` pins the
+    enabled/disabled toggle matrix; this pins *which* processor the exporter
+    lands in (Simple, not Batch).
+    """
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
     setup_otel(service_name="enabled", telemetry_enabled=True)
-    provider = trace.get_tracer_provider()
-    assert isinstance(provider, TracerProvider)
-    processors = provider._active_span_processor._span_processors
+    processors = span_processors(trace.get_tracer_provider())
     assert len(processors) == 1
     assert isinstance(processors[0], SimpleSpanProcessor)
 
 
-def test_setup_otel_no_otlp_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Should not configure OTLP when OTEL_EXPORTER_OTLP_ENDPOINT is not set."""
-    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
-    with patch("modulo.otel_bridge.export.OTLPSpanExporter") as mock_exporter:
-        setup_otel(service_name="no-otlp", telemetry_enabled=True)
-    mock_exporter.assert_not_called()
+def test_setup_otel_with_otlp_endpoint_registers_batch_processor_after_stdout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A set OTLP endpoint adds a Batch processor alongside the stdout one.
 
-
-def test_setup_otel_handles_bad_otlp_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Should not crash when OTLP endpoint is invalid; stdout still configured."""
+    The exporter constructor is patched so nothing is exported over the network —
+    only the processor wiring is under test here.
+    """
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://nonexistent.local:4318/v1/traces")
     with patch("modulo.otel_bridge.export.OTLPSpanExporter") as mock_exporter:
-        setup_otel(service_name="bad-otlp", telemetry_enabled=True)
+        setup_otel(service_name="with-otlp", telemetry_enabled=True)
     mock_exporter.assert_called_once()
-    provider = trace.get_tracer_provider()
-    assert isinstance(provider, TracerProvider)
-    # The OTLP path still registers its BatchSpanProcessor alongside the
-    # stdout processor — the exporter is constructed (lazily, no network).
-    processors = provider._active_span_processor._span_processors
+    processors = span_processors(trace.get_tracer_provider())
     assert len(processors) == 2
     assert isinstance(processors[0], SimpleSpanProcessor)
     assert isinstance(processors[1], BatchSpanProcessor)
@@ -119,8 +110,10 @@ def test_setup_otel_otlp_constructor_failure_is_swallowed(monkeypatch: pytest.Mo
         setup_otel(service_name="otlp-fails", telemetry_enabled=True)
     provider = trace.get_tracer_provider()
     assert isinstance(provider, TracerProvider)
-    # Stdout processor must still be registered.
-    assert len(provider._active_span_processor._span_processors) == 1
+    # Stdout processor must still be registered, and no half-built Batch processor.
+    processors = span_processors(provider)
+    assert len(processors) == 1
+    assert isinstance(processors[0], SimpleSpanProcessor)
 
 
 def test_shutdown_otel_multi_call_safe() -> None:
@@ -164,12 +157,13 @@ def test_shutdown_otel_provider_cancellation_propagates() -> None:
     reset_global_provider()
 
 
-def test_shutdown_otel_with_plain_proxy_provider() -> None:
-    """Providers without a shutdown() method are ignored gracefully."""
-    trace.set_tracer_provider(MagicMock(spec=[]))
+def test_shutdown_otel_with_provider_without_shutdown_method() -> None:
+    """A ProxyTracerProvider (no shutdown()) is ignored and left installed."""
+    proxy_provider = MagicMock(spec=[])
+    trace.set_tracer_provider(proxy_provider)
     shutdown_otel()  # should not raise
-    # The caller's provider must be left untouched.
-    assert trace.get_tracer_provider() is not None
+    # The caller's provider must be left untouched — not swapped or shut down.
+    assert trace.get_tracer_provider() is proxy_provider
 
 
 # ---------------------------------------------------------------------------
@@ -177,41 +171,62 @@ def test_shutdown_otel_with_plain_proxy_provider() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_sanitise_url_leaves_credential_free_url_unchanged() -> None:
-    url = "https://otel.example.com:4318/v1/traces"
-    assert _sanitise_url(url) == url
+@pytest.mark.parametrize(
+    ("url", "expected", "secrets"),
+    [
+        pytest.param(
+            "https://otel.example.com:4318/v1/traces",
+            "https://otel.example.com:4318/v1/traces",
+            (),
+            id="no-credentials-with-port",
+        ),
+        pytest.param(
+            "https://user:pass@otel.example.com:4318/v1/traces",
+            "https://otel.example.com:4318/v1/traces",
+            ("user", "pass"),
+            id="username-and-password-with-port",
+        ),
+        pytest.param(
+            "https://user@otel.example.com:4318/v1/traces",
+            "https://otel.example.com:4318/v1/traces",
+            ("user",),
+            id="username-only-with-port",
+        ),
+        pytest.param(
+            "https://user:pass@otel.example.com/v1/traces",
+            "https://otel.example.com/v1/traces",
+            ("user", "pass"),
+            id="username-and-password-no-port",
+        ),
+        pytest.param(
+            "https://:secret@otel.example.com/v1/traces",
+            "https://otel.example.com/v1/traces",
+            ("secret",),
+            id="password-only-no-port",
+        ),
+        pytest.param(
+            "https://user:pass@otel.example.com:8443/v1/traces",
+            "https://otel.example.com:8443/v1/traces",
+            ("user", "pass"),
+            id="non-default-port-preserved",
+        ),
+        pytest.param(
+            "https://@otel.example.com/v1/traces",
+            "https://@otel.example.com/v1/traces",
+            (),
+            id="empty-userinfo-kept",
+        ),
+    ],
+)
+def test_sanitise_url_strips_credentials_but_preserves_host_and_port(
+    url: str, expected: str, secrets: tuple[str, ...]
+) -> None:
+    """Credentials must be redacted before a URL reaches a log line.
 
-
-def test_sanitise_url_strips_username_and_password() -> None:
-    url = "https://user:pass@otel.example.com:4318/v1/traces"
+    The host and port must survive so an operator can still tell which collector
+    was configured. ``id`` names the case so a failure is readable in CI output.
+    """
     sanitised = _sanitise_url(url)
-    assert "user" not in sanitised
-    assert "pass" not in sanitised
-    assert sanitised == "https://otel.example.com:4318/v1/traces"
-
-
-def test_sanitise_url_strips_username_only() -> None:
-    url = "https://user@otel.example.com:4318/v1/traces"
-    assert _sanitise_url(url) == "https://otel.example.com:4318/v1/traces"
-
-
-def test_sanitise_url_handles_no_port() -> None:
-    url = "https://user:pass@otel.example.com/v1/traces"
-    assert _sanitise_url(url) == "https://otel.example.com/v1/traces"
-
-
-def test_sanitise_url_username_only_with_port() -> None:
-    url = "https://user@otel.example.com:8443/v1/traces"
-    assert _sanitise_url(url) == "https://otel.example.com:8443/v1/traces"
-
-
-def test_sanitise_url_password_only_without_username() -> None:
-    """A password with an empty username is still stripped."""
-    url = "https://:secret@otel.example.com/v1/traces"
-    assert _sanitise_url(url) == "https://otel.example.com/v1/traces"
-
-
-def test_sanitise_url_empty_credentials_kept() -> None:
-    """An empty userinfo (bare '@') carries no credentials to strip."""
-    url = "https://@otel.example.com/v1/traces"
-    assert _sanitise_url(url) == "https://@otel.example.com/v1/traces"
+    assert sanitised == expected
+    for secret in secrets:
+        assert secret not in sanitised, f"credential {secret!r} leaked into {sanitised!r}"

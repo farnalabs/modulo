@@ -3,13 +3,12 @@
     <div v-if="loading" class="text-center py-12 text-muted-foreground">
       {{ $t('views.LibraryView.loading') }}
     </div>
-    <div
+    <ErrorAlert
       v-else-if="error"
-      class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
+      :message="error"
+      :on-retry="load"
       role="alert"
-    >
-      {{ error }}
-    </div>
+    />
     <div v-else-if="collection" class="max-w-2xl mx-auto mt-6 space-y-4">
       <PageHeader :title="collection.name" />
       <div class="text-sm text-muted-foreground">
@@ -44,15 +43,31 @@
           }}
         </Button>
       </div>
-      <div
+      <!--
+        FAR-1669: install is a non-idempotent POST (creates a CollectionInstall),
+        so a Retry that re-fires after a lost response could double-install.
+        retryable=false — the Install button above is the retry path.
+      -->
+      <ErrorAlert
         v-if="installError"
-        class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
+        :message="installError"
+        :retryable="false"
         role="alert"
         aria-live="assertive"
         data-testid="collection-install-error"
-      >
-        {{ installError }}
-      </div>
+      />
+      <!--
+        FAR-759: upgrade is a non-idempotent POST — retryable=false; the
+        Upgrade button on the install row is the retry path.
+      -->
+      <ErrorAlert
+        v-if="upgradeError"
+        :message="upgradeError"
+        :retryable="false"
+        role="alert"
+        aria-live="assertive"
+        data-testid="collection-upgrade-error"
+      />
       <!--
         FAR-1231: this warning is only actionable if it is ANNOUNCED. An
         aria-live region is announced when it is ALREADY on the page and its
@@ -103,13 +118,16 @@
           }}
         </Button>
       </div>
-      <div
+      <!--
+        FAR-1669: publish mutates collection status — not idempotent, so no
+        auto-retry. retryable=false — the Publish button above is the retry path.
+      -->
+      <ErrorAlert
         v-if="publishError"
-        class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
+        :message="publishError"
+        :retryable="false"
         role="alert"
-      >
-        {{ publishError }}
-      </div>
+      />
 
       <!-- Installs section (FAR-764) -->
       <div v-if="installs.length > 0" class="border-t pt-4 space-y-4">
@@ -152,6 +170,31 @@
                   granting === install.install_id
                     ? $t('views.CollectionDetail.granting')
                     : $t('views.CollectionDetail.grant_agents')
+                }}
+              </Button>
+              <!-- FAR-759: update-available surfacing + operator-initiated upgrade -->
+              <span
+                v-if="install.update_available"
+                class="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
+                data-testid="collection-update-available"
+              >
+                {{
+                  $t('views.CollectionDetail.update_available', {
+                    version: install.available_version || '?',
+                  })
+                }}
+              </span>
+              <Button
+                v-if="install.update_available"
+                size="small"
+                :disabled="upgrading === install.install_id"
+                data-testid="collection-upgrade"
+                @click="upgrade(install.install_id)"
+              >
+                {{
+                  upgrading === install.install_id
+                    ? $t('views.CollectionDetail.upgrading')
+                    : $t('views.CollectionDetail.upgrade')
                 }}
               </Button>
             </div>
@@ -219,6 +262,7 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
 import PageHeader from '../components/shared/PageHeader.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 
@@ -248,6 +292,8 @@ interface CollectionInstall {
   connector_checklist: ConnectorChecklistEntry[] | null
   installed_entities: Record<string, unknown> | null
   runnable: boolean
+  update_available?: boolean
+  available_version?: string | null
   created_at: string
 }
 
@@ -273,6 +319,8 @@ const granting = ref<string | null>(null)
 const installing = ref(false)
 const installError = ref<string | null>(null)
 const installWarnings = ref<string[]>([])
+const upgrading = ref<string | null>(null)
+const upgradeError = ref<string | null>(null)
 
 function resolvedManifestWarnings(manifest: ResolvedManifest | null | undefined): string[] {
   const warnings = manifest?.warnings
@@ -415,6 +463,41 @@ async function grantAgents(installId: string) {
     error.value = formatApiError(e)
   } finally {
     granting.value = null
+  }
+}
+
+async function upgrade(installId: string) {
+  upgrading.value = installId
+  upgradeError.value = null
+  try {
+    const { error: err } = await api.POST(
+      '/api/v1/libraries/collections/{primitive_id}/installs/{install_id}/upgrade',
+      {
+        params: {
+          path: {
+            primitive_id: String(route.params.id),
+            install_id: installId,
+          },
+        },
+      },
+    )
+    if (err) {
+      upgradeError.value = formatApiError(err)
+      return
+    }
+    // The upgrade succeeded — refetch so the card renders the new version
+    // and the update-available badge clears. Same non-fatal treatment as
+    // the post-install refetch: a failed READ must not report a failed
+    // upgrade.
+    try {
+      await loadInstalls()
+    } catch {
+      // Non-fatal: the upgrade already succeeded server-side.
+    }
+  } catch (e) {
+    upgradeError.value = formatApiError(e)
+  } finally {
+    upgrading.value = null
   }
 }
 

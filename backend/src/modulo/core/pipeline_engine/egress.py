@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 
 # --- Vocabulary constants (declare once, validate at the boundary) --------
 
@@ -35,6 +36,74 @@ E2B provider's documented metadata carrier.  Every mapper that builds a
 ``WorkspaceSpec`` from an :class:`EgressResolution` stamps under THIS key so
 the two paths cannot diverge.
 """
+
+
+# --- Typed egress posture (FAR-1690) --------------------------------------
+
+
+class EgressPosture(StrEnum):
+    """How a dispatch's resolved egress posture is *established* (FAR-1690).
+
+    A TYPED provenance of the posture — deliberately never a boolean. The
+    OWASP Q3 "enforcement outside the prompt" control set requires the
+    posture to be typed so a permissive tier can never certify an
+    enforcement it does not perform.
+
+    Semantics (ADR 040 refusal-contract discipline, the FAR-1690 binding
+    guardrail):
+
+    - ``ENFORCED_BY_SUBSTRATE`` — the substrate is the enforcement point
+      *and the provider proves it on the ADR 040 refusal-contract path*
+      (``apply_isolation`` / provisioning raise on a failed enforcement
+      step). Only a tier that raises on failure — E2B in-sandbox steps,
+      Docker host network mode — may report this.
+    - ``DECLARED`` — Modulo authors the posture as a manifest that a
+      customer-owned substrate is expected to enforce, and Modulo does
+      **not** itself observe the enforcement (the Kubernetes NetworkPolicy
+      rendered from ``deploy/helm/modulo`` by the T3 chart). This is the
+      substrate-authoring posture of the FAR-1047 decision.
+    - ``METADATA_ONLY`` — the posture is recorded in metadata/telemetry but
+      no substrate enforces it.
+    - ``NONE`` — no egress posture is asserted (the unrestricted provider
+      default, or a refused dispatch where nothing is in effect).
+
+    **Every value is a Modulo-DECLARED fact, never an observation.** Modulo
+    never observes the substrate's traffic, so no posture is ever reported
+    as *observed*; ``ENFORCED_BY_SUBSTRATE`` is admitted only because the
+    refusal-contract path proves the substrate's own enforcement step, not
+    because Modulo watched the wire.
+    """
+
+    ENFORCED_BY_SUBSTRATE = "enforced_by_substrate"
+    DECLARED = "declared"
+    METADATA_ONLY = "metadata_only"
+    NONE = "none"
+
+
+# Posture for a *restrictive* resolved policy, per tier (FAR-1690). A tier
+# whose provider raises on a failed enforcement step reports
+# ENFORCED_BY_SUBSTRATE; a tier whose control is authored as a manifest for
+# the customer's substrate to enforce reports DECLARED. Tiers with no
+# restrictive capability never reach a restrictive resolution (they refuse),
+# so their entry is NONE (unreachable, kept for totality).
+_TIER_RESTRICTIVE_POSTURE: dict[str, EgressPosture] = {
+    "e2b": EgressPosture.ENFORCED_BY_SUBSTRATE,
+    "docker": EgressPosture.ENFORCED_BY_SUBSTRATE,
+    # T3 / Kubernetes: Modulo authors the NetworkPolicy manifest (declared);
+    # the customer's CNI enforces it and Modulo observes nothing. Today the
+    # resolver still REFUSES a restrictive Kubernetes policy (the FAR-1690
+    # K8s-authoring slice and its ADR amendment flip this to a declared
+    # resolution); the mapping is recorded so the posture vocabulary is
+    # complete and the upcoming flip is a one-line change here.
+    "t3": EgressPosture.DECLARED,
+    "kubernetes": EgressPosture.DECLARED,
+    "local": EgressPosture.NONE,
+}
+
+
+def _restrictive_posture_for_tier(tier: str) -> EgressPosture:
+    """Return the posture a tier establishes for a *restrictive* resolved policy."""
+    return _TIER_RESTRICTIVE_POSTURE.get(tier, EgressPosture.NONE)
 
 
 # --- WorkspaceSpec dialect mapping ----------------------------------------
@@ -180,11 +249,21 @@ class EgressResolution:
         given tier.  Carries a clear, actionable reason string naming the
         profile/node values and the alternatives.  A refusal is NEVER a
         silent downgrade and NEVER a silent grant.
+
+    ``posture``
+        The TYPED provenance of the resolved posture (:class:`EgressPosture`,
+        FAR-1690) — never a boolean. ``NONE`` when nothing is asserted (the
+        unrestricted provider default or a refused dispatch); otherwise
+        ``ENFORCED_BY_SUBSTRATE`` / ``DECLARED`` / ``METADATA_ONLY`` naming
+        *how* the posture is established. Defaults to ``NONE`` so an
+        externally-constructed resolution (no posture established) stays
+        honest without every call site supplying it.
     """
 
     policy: str | None
     allowlist: list[dict[str, str | int]] | None
     refusal: str | None
+    posture: EgressPosture = EgressPosture.NONE
 
 
 def resolve_egress(
@@ -220,6 +299,7 @@ def resolve_egress(
             policy=None,
             allowlist=None,
             refusal=(f"unrecognised node egress_policy {node_egress_policy!r}; valid values: {NODE_EGRESS_POLICIES}"),
+            posture=EgressPosture.NONE,
         )
     _profile_raw = (
         profile_network_policy.strip().lower() if isinstance(profile_network_policy, str) else profile_network_policy
@@ -233,6 +313,7 @@ def resolve_egress(
                 f" {profile_network_policy!r};"
                 f" valid values: {PROFILE_NETWORK_POLICIES}"
             ),
+            posture=EgressPosture.NONE,
         )
 
     canonical_node = _map_node_to_canonical(node_egress_policy)
@@ -264,6 +345,7 @@ def resolve_egress(
                     "none available on this route (node has no egress_allowlist "
                     "and profile has no allowlist field)"
                 ),
+                posture=EgressPosture.NONE,
             )
 
     # Tier capability check — covers both named policies and the provider
@@ -275,6 +357,7 @@ def resolve_egress(
             policy=effective,
             allowlist=effective_allowlist,
             refusal=f"unknown tier {tier!r}; cannot determine enforcement capability",
+            posture=EgressPosture.NONE,
         )
     if not tier_caps.get(effective if effective is not None else "default", False):
         _note = _TIER_REFUSAL_NOTES.get(tier)
@@ -286,10 +369,14 @@ def resolve_egress(
                 f"available enforcement on this tier: "
                 f"{[k for k, v in tier_caps.items() if v]}" + (f"; {_note}" if _note else "")
             ),
+            posture=EgressPosture.NONE,
         )
 
     return EgressResolution(
         policy=effective,
         allowlist=effective_allowlist,
         refusal=None,
+        # A restrictive resolved policy carries the tier's establishment
+        # posture; the unrestricted provider default asserts no posture.
+        posture=(EgressPosture.NONE if effective is None else _restrictive_posture_for_tier(tier)),
     )

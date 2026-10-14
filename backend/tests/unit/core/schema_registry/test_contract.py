@@ -454,6 +454,26 @@ class TestSanitisation:
         )
         assert any("enum_entry_exceeds" in w for w in result.warnings)
 
+    def test_enum_within_caps_is_preserved(self, tmp_path: Path) -> None:
+        """An enum within both caps is accepted and passes through unchanged."""
+        schema: dict[str, Any] = {
+            "type": "string",
+            "enum": ["draft", "published"],
+        }
+        result = write_schema_contract(
+            tmp_path,
+            node_id="n1",
+            input_schema=schema,
+            output_schema=None,
+            profile="verbatim",
+            provider_id=None,
+        )
+        # No cap violation: the sanitised copy is used, not rejected.
+        assert not any("enum_cardinality_exceeds" in w for w in result.warnings)
+        assert not any("enum_entry_exceeds" in w for w in result.warnings)
+        canonical = json.loads((tmp_path / "schemas" / "n1" / "input.canonical.json").read_text())
+        assert canonical["enum"] == ["draft", "published"]
+
     def test_structural_keywords_preserved(self, tmp_path: Path) -> None:
         write_schema_contract(
             tmp_path,

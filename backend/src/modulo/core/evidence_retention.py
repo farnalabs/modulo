@@ -59,7 +59,7 @@ class EvidenceRetentionPolicy:
     """Retention policy for evidence rows."""
 
     max_age_days: int = DEFAULT_MAX_AGE_DAYS
-    max_rows: int | None = None  # None = unlimited
+    max_rows: int | None = None  # None means unlimited
     batch_size: int = DEFAULT_BATCH_SIZE
     lock_timeout_seconds: float = DEFAULT_LOCK_TIMEOUT_SECONDS
 

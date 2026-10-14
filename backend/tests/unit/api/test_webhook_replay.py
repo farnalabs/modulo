@@ -76,6 +76,14 @@ def _make_mock_session(*, trigger_config: dict | None = None, stored_payload: bo
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # FAR-1629: AsyncSession.in_transaction() is sync - a bare AsyncMock
+    # auto-creates it as an async child, leaving an un-awaited coroutine when
+    # _ensure_active_transaction (db/rls.py) calls it.
+    session.in_transaction = MagicMock(return_value=True)
+    # FAR-1629: AsyncSession.add() is sync too - the engine-side-effect test
+    # calls _session.add(TriggerEvent(...)) directly; a bare AsyncMock would
+    # leave that coroutine un-awaited.
+    session.add = MagicMock()
 
     trigger_mock = MagicMock()
     trigger_mock.id = _TRIGGER_ID
@@ -403,6 +411,8 @@ def _make_org_aware_app_session(*, payload_org_id: uuid.UUID) -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # FAR-1629: in_transaction() is sync on AsyncSession - see _make_mock_session.
+    session.in_transaction = MagicMock(return_value=True)
 
     payload_mock = MagicMock()
     payload_mock.raw_body = _STORED_BODY
@@ -654,3 +664,232 @@ def test_replay_webhook_event_not_accepted_returns_400(client: TestClient) -> No
         and getattr(c.args[0], "validation_result", None) == "event_type_not_accepted"
         for c in session.add.call_args_list
     )
+
+
+async def test_replay_busy_path_without_org_returns_none() -> None:
+    """Defensive guard: without a resolved org the busy re-record has nothing to
+    write against, so ``_replay_busy_path`` returns None and the route refuses
+    loudly rather than sending a false 2xx queued ack."""
+    from modulo.api.routes.webhooks import _replay_busy_path
+
+    result = await _replay_busy_path(
+        trigger_id=_TRIGGER_ID,
+        trigger=None,
+        org_id=None,
+        event_id=uuid.uuid4(),
+    )
+
+    assert result is None
+
+
+def test_replay_webhook_trigger_busy_unresolvable_returns_429(client: TestClient) -> None:
+    """Defensive replay mirror of the receive path: when the busy re-record
+    yields no ack (org unresolvable), refuse with 429 (+ Retry-After) rather
+    than emit a false 2xx queued ack."""
+    from modulo.core.trigger_engine import TriggerBusyError
+
+    event_id = uuid.uuid4()
+    with (
+        patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+        patch(
+            "modulo.api.routes.webhooks._replay_busy_path",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+        patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+    ):
+        m.side_effect = TriggerBusyError(_TRIGGER_ID)
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
+            headers=_auth_headers("admin"),
+        )
+
+    assert resp.status_code == 429
+    assert "retry" in resp.json()["detail"].lower()
+    assert resp.headers.get("Retry-After") == "5"
+
+
+def test_replay_webhook_paused_org_missing_row_returns_202_without_event(client: TestClient) -> None:
+    """Orphan trigger whose org row was HARD-deleted: a paused replay returns
+    202 {"status": "paused"} but does NOT attempt the TriggerEvent INSERT (the
+    organisations FK would fail -> 503). Fail-closed, no crash — the mirror of
+    the receive_webhook orphan guard."""
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session.in_transaction = MagicMock(return_value=True)
+    session.add = MagicMock()
+
+    trigger_mock = MagicMock()
+    trigger_mock.id = _TRIGGER_ID
+    trigger_mock.pipeline_id = uuid.uuid4()
+    trigger_mock.config_json = {}
+    trigger_result = MagicMock()
+    trigger_result.scalar_one_or_none.return_value = trigger_mock
+    org_missing = MagicMock()
+    org_missing.scalar_one_or_none.return_value = None
+
+    async def _execute(*args: object, **kwargs: object) -> MagicMock:
+        sql = str(args[0]).lower()
+        if "organisations" in sql:
+            return org_missing
+        return trigger_result
+
+    session.execute = _execute
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    app.dependency_overrides[get_db_session] = override_session
+    try:
+        with (
+            patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
+            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+        ):
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{uuid.uuid4()}",
+                headers=_auth_headers("admin"),
+            )
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+
+    assert resp.status_code == 202
+    assert resp.json() == {"status": "paused"}
+    session.add.assert_not_called()
+    m.assert_not_called()
+
+
+def test_replay_webhook_paused_org_missing_event_returns_404(client: TestClient) -> None:
+    """Paused replay whose org row exists but whose SOURCE TriggerEvent is gone
+    must raise ReplayNotFoundError -> 404 (never a silent paused ack), and must
+    not write a paused event for a missing source."""
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session.in_transaction = MagicMock(return_value=True)
+    session.add = MagicMock()
+
+    trigger_mock = MagicMock()
+    trigger_mock.id = _TRIGGER_ID
+    trigger_mock.pipeline_id = uuid.uuid4()
+    trigger_mock.config_json = {}
+    trigger_result = MagicMock()
+    trigger_result.scalar_one_or_none.return_value = trigger_mock
+    org_exists = MagicMock()
+    org_exists.scalar_one_or_none.return_value = trigger_mock
+    event_missing = MagicMock()
+    event_missing.scalar_one_or_none.return_value = None
+
+    async def _execute(*args: object, **kwargs: object) -> MagicMock:
+        sql = str(args[0]).lower()
+        if "organisations" in sql:
+            return org_exists
+        if "trigger_events" in sql:
+            return event_missing
+        return trigger_result
+
+    session.execute = _execute
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    app.dependency_overrides[get_db_session] = override_session
+    try:
+        with (
+            patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
+            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+        ):
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{uuid.uuid4()}",
+                headers=_auth_headers("admin"),
+            )
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Trigger event not found"
+    m.assert_not_called()
+
+
+def test_replay_webhook_legacy_plaintext_secret_accepted_with_dated_warning(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """FAR-1735 bounded shim on the unauthenticated replay path: a NON-token
+    stored hmac_secret is legacy pre-0306 plaintext — accepted so a replay
+    signed against it still verifies (mirrors receive_webhook), but ONLY with
+    a loud dated ``trigger_secret.legacy_plaintext`` warning. No decode mock:
+    the REAL resolver accepts the non-token value and never raises."""
+    import logging as _logging
+
+    event_id = uuid.uuid4()
+    run_mock = _make_mock_run()
+    with (
+        patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.webhooks.dispatch_run"),
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+        patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+        caplog.at_level(_logging.WARNING, logger="modulo.core.trigger_secrets"),
+    ):
+        m.return_value = (run_mock, None, {})
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
+            headers=_hmac_headers(),
+        )
+
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["run_id"] == str(_RUN_ID)
+    assert "trigger_secret.legacy_plaintext" in caplog.text
+    assert "hmac_secret" in caplog.text
+
+
+def test_replay_webhook_undecryptable_token_secret_fails_closed(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """FAR-1735 fail-closed on the unauthenticated replay path: a token-shaped
+    hmac_secret that CANNOT be decrypted under the configured key is refused
+    (500) — the ciphertext is NEVER used as the HMAC key. The REAL decode
+    helper raises ``DecryptionError``; the settings patch targets
+    ``modulo.api.routes.webhooks.get_settings``, the name the route binds."""
+    import base64
+    import logging as _logging
+
+    from cryptography.fernet import Fernet
+
+    valid_key = base64.urlsafe_b64encode(b"s" * 32).decode()
+    other_key = base64.urlsafe_b64encode(b"x" * 32).decode()
+    stored_token = Fernet(other_key.encode()).encrypt(b"secret-that-cannot-decrypt").decode()
+    event_id = uuid.uuid4()
+
+    system_mock = make_system_session_mock(trigger_config={"hmac_secret": stored_token})
+
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield system_mock
+
+    app.dependency_overrides[get_system_db_session] = override_system_session
+    fake_settings = MagicMock()
+    fake_settings.fernet_key = valid_key
+    try:
+        with (
+            patch("modulo.api.routes.webhooks.get_settings", return_value=fake_settings),
+            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+            patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+            caplog.at_level(_logging.ERROR, logger="modulo.api.routes.webhooks"),
+        ):
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
+                headers=_hmac_headers(),
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+
+    assert resp.status_code == 500, resp.text
+    m.assert_not_called()
+    assert "webhooks.hmac_secret_undecryptable" in caplog.text

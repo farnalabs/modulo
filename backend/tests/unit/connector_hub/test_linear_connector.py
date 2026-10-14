@@ -105,14 +105,58 @@ def test_init_requires_token():
         LinearConnector(token=None)
 
 
-def test_init_requires_token_not_none():
-    with pytest.raises(ValueError, match="token"):
-        LinearConnector(token=None)
-
-
 def test_init_succeeds_with_token():
     c = LinearConnector(token=TOKEN)
     assert c.connector_type == ConnectorType.LINEAR
+
+
+# ---------------------------------------------------------------------------
+# Authentication scheme — a personal API key is RAW, only OAuth uses Bearer
+# (FAR-1683: Linear 400s a personal key sent as a Bearer token)
+# ---------------------------------------------------------------------------
+
+
+def test_personal_api_key_header_is_raw():
+    """A personal key is sent with NO scheme prefix (mirrors our working client)."""
+    c = LinearConnector(token="lin_api_personal_key")
+    assert c._headers()["Authorization"] == "lin_api_personal_key"
+
+
+def test_oauth_token_header_uses_bearer():
+    """An OAuth access token keeps the Bearer scheme."""
+    c = LinearConnector(token="lin_oauth_access_token")
+    assert c._headers()["Authorization"] == "Bearer lin_oauth_access_token"
+
+
+@respx.mock
+async def test_health_check_sends_personal_key_raw_on_the_wire(connector):
+    """Discriminating: the value sent to Linear for a personal key is the raw key."""
+    captured: dict[str, str] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured["auth"] = request.headers["Authorization"]
+        return _viewer_response()
+
+    respx.post(_URL).mock(side_effect=_capture)
+    result = await connector.health_check()
+    assert result.ok is True
+    assert captured["auth"] == TOKEN
+    assert not captured["auth"].startswith("Bearer")
+
+
+@respx.mock
+async def test_health_check_sends_oauth_token_as_bearer_on_the_wire():
+    """Discriminating: an OAuth-shaped token is sent as ``Bearer <token>``."""
+    captured: dict[str, str] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured["auth"] = request.headers["Authorization"]
+        return _viewer_response()
+
+    respx.post(_URL).mock(side_effect=_capture)
+    result = await LinearConnector(token="lin_oauth_access_token").health_check()
+    assert result.ok is True
+    assert captured["auth"] == "Bearer lin_oauth_access_token"
 
 
 # ---------------------------------------------------------------------------

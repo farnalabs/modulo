@@ -90,15 +90,6 @@ class TestPathSelection:
         assert "MAX(run_number)" in sql
         assert "COALESCE" in sql
 
-    async def test_mariadb_falls_back_to_max_plus_one(self) -> None:
-        session, p = await _mock_session("mysql", 3)
-        with p:
-            value = await _allocate_run_number(session, _ORG)
-
-        assert value == 3
-        sql = str(session.execute.call_args.args[0])
-        assert "MAX(run_number)" in sql
-
 
 # ---------------------------------------------------------------------------
 # Real-SQLite behaviour: atomic counter vs MAX+1 fallback

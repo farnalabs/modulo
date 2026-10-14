@@ -65,6 +65,7 @@ def _run(
     completed_at: datetime | None,
     started_at: datetime | None,
     error_code: str | None = None,
+    run_classification: dict | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         status=status,
@@ -72,6 +73,7 @@ def _run(
         completed_at=completed_at,
         started_at=started_at,
         error_code=error_code,
+        run_classification=run_classification,
     )
 
 
@@ -79,7 +81,7 @@ async def test_get_run_stats_postgres_uses_percentile_cont_sql() -> None:
     session = _make_session("postgresql")
     captured: list = []
     now = datetime.now(UTC)
-    day_row = MagicMock(day=now.date(), run_count=2, success=1, failed=1, avg_duration=100.0)
+    day_row = MagicMock(day=now.date(), run_count=2, success=1, failed=1, benign_count=0, avg_duration=100.0)
     overall_row = MagicMock(p50=100.0, p95=250.0, p99=500.0, avg_duration=150.0)
     session.execute = AsyncMock(
         side_effect=_postgres_execute(
@@ -119,7 +121,7 @@ async def test_get_run_stats_postgres_empty_percentile_group_returns_none() -> N
     session = _make_session("postgresql")
     captured: list = []
     now = datetime.now(UTC)
-    day_row = MagicMock(day=now.date(), run_count=1, success=0, failed=0, avg_duration=None)
+    day_row = MagicMock(day=now.date(), run_count=1, success=0, failed=0, benign_count=0, avg_duration=None)
     overall_row = MagicMock(p50=None, p95=None, p99=None, avg_duration=None)
     session.execute = AsyncMock(
         side_effect=_postgres_execute(
@@ -145,7 +147,7 @@ async def test_get_run_stats_postgres_single_row_returns_that_value() -> None:
     session = _make_session("postgresql")
     captured: list = []
     now = datetime.now(UTC)
-    day_row = MagicMock(day=now.date(), run_count=1, success=1, failed=0, avg_duration=42.0)
+    day_row = MagicMock(day=now.date(), run_count=1, success=1, failed=0, benign_count=0, avg_duration=42.0)
     overall_row = MagicMock(p50=42.0, p95=42.0, p99=42.0, avg_duration=42.0)
     session.execute = AsyncMock(
         side_effect=_postgres_execute(
@@ -385,3 +387,125 @@ async def test_get_dialect_name_handles_sync_bind() -> None:
     session.get_bind.return_value = bind
 
     assert await _get_dialect_name(session) == "sqlite"
+
+
+# ---------------------------------------------------------------------------
+# FAR-707 — benign (business-expected) outcomes leave every failure rate
+# ---------------------------------------------------------------------------
+
+
+def _benign_classification() -> dict:
+    return {"value": "benign", "reason": "benign_outcome"}
+
+
+def _no_delivery_classification() -> dict:
+    return {"value": "no_delivery", "reason": "source_error"}
+
+
+async def test_get_run_stats_generic_drops_benign_from_the_failure_rate() -> None:
+    """1 complete + 1 REAL failure + 1 benign rebase conflict.
+
+    Pre-FAR-707 the rate was 1/3; the benign run leaves the DENOMINATOR too,
+    so the rate is 1/2 and the benign run appears in neither the failed bucket
+    nor the ``agent.failed`` failure-reason cluster. ``total_runs`` stays the
+    raw volume (it counts runs, it is not a rate).
+    """
+    session = _make_session("sqlite")
+    now = datetime.now(UTC)
+    runs = [
+        _run(
+            status="complete",
+            created_at=now,
+            completed_at=now,
+            started_at=now - timedelta(minutes=1),
+        ),
+        _run(
+            status="failed",
+            created_at=now,
+            completed_at=now,
+            started_at=now - timedelta(minutes=1),
+            error_code="agent.failed",
+            run_classification=_benign_classification(),
+        ),
+        _run(
+            status="failed",
+            created_at=now,
+            completed_at=now,
+            started_at=now - timedelta(minutes=1),
+            error_code="node_cancelled",
+            run_classification=_no_delivery_classification(),
+        ),
+    ]
+    res = MagicMock()
+    res.scalars.return_value.all.return_value = runs
+    session.execute = AsyncMock(return_value=res)
+
+    result = await get_run_stats(session, "30d")
+
+    assert result["total_runs"] == 3
+    assert result["success_rate"] == 0.5
+    assert result["runs_by_day"] == [{"date": str(now.date()), "count": 3, "success": 1, "failed": 1}]
+    assert result["failure_by_reason"] == [{"reason": "node_cancelled", "count": 1}]
+
+
+async def test_get_run_stats_generic_keeps_an_unclassified_run_counting() -> None:
+    """A terminal run whose classification has not landed yet (NULL record) is
+    NOT benign — fail-open to the historical counting."""
+    session = _make_session("sqlite")
+    now = datetime.now(UTC)
+    runs = [
+        _run(
+            status="failed",
+            created_at=now,
+            completed_at=now,
+            started_at=now - timedelta(minutes=1),
+            error_code="agent.failed",
+            run_classification=None,
+        ),
+    ]
+    res = MagicMock()
+    res.scalars.return_value.all.return_value = runs
+    session.execute = AsyncMock(return_value=res)
+
+    result = await get_run_stats(session, "30d")
+
+    assert result["success_rate"] == 0.0
+    assert result["failure_by_reason"] == [{"reason": "agent.failed", "count": 1}]
+
+
+async def test_get_run_stats_postgres_excludes_benign_from_failure_aggregates() -> None:
+    """The Postgres day query AND the failure-reason query carry the benign
+    exclusion, and the rate's denominator drops the per-day benign total."""
+    session = _make_session("postgresql")
+    captured: list = []
+    now = datetime.now(UTC)
+    day_row = MagicMock(day=now.date(), run_count=3, success=1, failed=1, benign_count=1, avg_duration=100.0)
+    overall_row = MagicMock(p50=100.0, p95=250.0, p99=500.0, avg_duration=150.0)
+    session.execute = AsyncMock(
+        side_effect=_postgres_execute(
+            captured,
+            day_rows=[day_row],
+            overall_row=overall_row,
+            failure_rows=[("node_cancelled", 1)],
+        )
+    )
+
+    result = await get_run_stats(session, "30d")
+
+    day_sql = str(captured[0].compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    failure_sql = str(captured[2].compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    # ``as_string()`` renders a CAST around the ``->>`` extraction; pin the
+    # WHOLE predicate so a silent swap to a plain ``!=`` (which drops NULL
+    # classifications from the aggregate) fails the test.
+    benign_predicate = "CAST((runs.run_classification ->> 'value') AS VARCHAR) IS DISTINCT FROM 'benign'"
+    # The failed bucket skips benign rows...
+    assert benign_predicate in day_sql
+    # ...and the error-code cluster breakdown does too.
+    assert benign_predicate in failure_sql
+    # The per-day benign total is selected so the denominator is recomputable.
+    assert "AS benign_count" in day_sql
+
+    assert result["total_runs"] == 3
+    # 1 complete over (3 - 1 benign) = 0.5 — the benign run leaves the rate.
+    assert result["success_rate"] == 0.5
+    assert result["runs_by_day"] == [{"date": str(now.date()), "count": 3, "success": 1, "failed": 1}]

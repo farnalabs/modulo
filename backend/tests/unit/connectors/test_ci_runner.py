@@ -205,6 +205,12 @@ async def test_gh_trigger_run_never_hands_back_a_pre_dispatch_run(gh_runner, mon
     assert dispatched_at.replace(microsecond=0) <= cutoff <= datetime.now(UTC)
 
 
+async def test_gh_trigger_run_rejects_empty_pipeline_id(gh_runner):
+    """An empty pipeline_id fails loud before any dispatch is attempted."""
+    with pytest.raises(ValueError, match="pipeline_id is required"):
+        await gh_runner.trigger_run(pipeline_id="")
+
+
 # ---------------------------------------------------------------------------
 # GitHub Actions — get_run_status (respx)
 # ---------------------------------------------------------------------------
@@ -370,6 +376,12 @@ async def test_gh_list_runs_non_list_workflow_runs_no_crash(gh_runner):
     )
     runs = await gh_runner.list_runs(pipeline_id="owner/repo")
     assert runs == []
+
+
+async def test_gh_list_runs_rejects_empty_pipeline_id(gh_runner):
+    """An empty pipeline_id fails loud instead of listing an unscoped repo."""
+    with pytest.raises(ValueError, match="pipeline_id is required"):
+        await gh_runner.list_runs(pipeline_id="")
 
 
 def test_gh_parse_run_null_id_maps_to_empty_string(gh_runner):

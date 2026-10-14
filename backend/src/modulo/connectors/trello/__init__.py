@@ -1,10 +1,11 @@
 """TrelloConnector — async Trello REST API v1 connector."""
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, cast
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -50,6 +51,9 @@ class TrelloConnector(ConnectorBase):
         # the shared ``CredentialRedactor`` rather than a per-connector fork.
         self._redactor = CredentialRedactor([api_key, token], scrub_url=True, chain_cause=False)
 
+    def _credential_values(self) -> Sequence[str]:
+        return self._redactor.secrets
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.TRELLO
@@ -60,6 +64,7 @@ class TrelloConnector(ConnectorBase):
             base_url=_TRELLO_API,
             params={"key": self._api_key, "token": self._token},
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     async def _request(
@@ -85,18 +90,19 @@ class TrelloConnector(ConnectorBase):
                 resp.raise_for_status()
         return resp
 
+    @redacting
     async def health_check(self) -> HealthResult:
         """Verify connectivity by fetching the authenticated user's profile."""
         r = await self._request("GET", "/members/me", raise_on_status=False)
 
         if r.status_code != 200:
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {self._redactor.redact(r.text[:200])}")
+            return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
 
-        body: dict[str, Any] = r.json()
-        if "id" not in body:
+        profile: dict[str, Any] = r.json()
+        if "id" not in profile:
             return HealthResult(ok=False, detail="Unexpected response — no 'id' in member profile")
 
-        display_name = body.get("fullName") or body.get("username") or ""
+        display_name = profile.get("fullName") or profile.get("username") or ""
         return HealthResult(ok=True, detail=display_name)
 
     @redacting

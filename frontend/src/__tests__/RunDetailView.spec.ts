@@ -16,6 +16,7 @@ let mockHeartbeatAt: string | null = null
 let mockWorkItemRefs: unknown = null
 let mockChildRuns: unknown = null
 let mockCapacity: unknown = null
+let mockDeadlineTriage: unknown = null
 let mockPendingGates: Array<Record<string, unknown>> = []
 let mockWorkspaceLease: Record<string, unknown> | null = null
 let mockNodeLabels: Record<string, string> | null = null
@@ -83,6 +84,7 @@ vi.mock('../lib/api/client', () => {
               work_item_refs: mockWorkItemRefs,
               child_runs: mockChildRuns,
               capacity: mockCapacity,
+              deadline_triage: mockDeadlineTriage,
             },
             error: undefined
           })
@@ -170,6 +172,7 @@ vi.mock('vue-router', () => {
 })
 
 import RunDetailView from '../views/RunDetailView.vue'
+import { api } from '../lib/api/client'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -191,6 +194,7 @@ describe('RunDetailView', () => {
     mockWorkItemRefs = null
     mockChildRuns = null
     mockCapacity = null
+    mockDeadlineTriage = null
     mockPendingGates = []
     mockWorkspaceLease = null
     mockNodeLabels = null
@@ -233,6 +237,102 @@ describe('RunDetailView', () => {
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('Run Detail')
     wrapper.unmount()
+  })
+
+  it('renders deadline-kill triage evidence when the run detail carries it (FAR-704)', async () => {
+    mockRunStatus = 'failed'
+    mockErrorCode = 'node_deadline_exceeded'
+    // Three entries exercise every template branch arm: the full entry takes
+    // each v-if truthy arm; the node_id-only entry with delivery_done=true
+    // takes the falsy arms and the delivery-done badge; the final entry has
+    // neither attempt_key nor node_id, so the :key falls through the whole
+    // `??` chain to String(entryIndex).
+    mockDeadlineTriage = [
+      {
+        node_id: 'n1',
+        attempt_key: 'run:r1:node:n1:1',
+        no_output_reason: 'node-deadline watchdog',
+        sandbox_log_tail: 'agent.log: e2b endAt reached',
+        raw_output_tail: 'partial agent output',
+        stdout_length: 20,
+        stderr_length: 0,
+        delivery_done: false,
+      },
+      {
+        node_id: 'n2',
+        delivery_done: true,
+      },
+      {
+        delivery_done: false,
+      },
+    ]
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    const panel = wrapper.find('[data-testid="run-detail-deadline-triage"]')
+    expect(panel.exists()).toBe(true)
+    expect(panel.text()).toContain('n1')
+    expect(panel.text()).toContain('node-deadline watchdog')
+    expect(panel.text()).toContain('agent.log: e2b endAt reached')
+    const entries = wrapper.findAll('[data-testid="run-detail-deadline-triage-entry"]')
+    expect(entries).toHaveLength(3)
+    expect(panel.text()).toContain('delivery observed before kill')
+    wrapper.unmount()
+  })
+
+  it('does not render the triage panel when the run has no triage entries', async () => {
+    mockRunStatus = 'failed'
+    mockErrorCode = 'node_deadline_exceeded'
+    mockDeadlineTriage = null
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="run-detail-deadline-triage"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('offers Retry on the page-level load error and re-fetches on click (FAR-1655)', async () => {
+    // The run fetcher's inner GETs swallow rejections (`.catch(() => ({ data:
+    // null }))`), so a rejected promise never surfaces as `error` — a
+    // synchronous throw does (it escapes the per-GET catch into the fetcher's
+    // own try/catch). Fail the first load that way, then recover on Retry.
+    const getMock = vi.mocked(api.GET as unknown as (url: string) => unknown)
+    const originalGet = getMock.getMockImplementation()
+    let failRunFetch = true
+    getMock.mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}' && failRunFetch) {
+        throw new Error('run backend down')
+      }
+      return (originalGet as (u: string) => unknown)(url)
+    })
+
+    try {
+      router.push('/runs/test-run-id')
+      await router.isReady()
+      const wrapper = createWrapper()
+      await nextTick()
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('run backend down')
+      const retry = wrapper.find('[data-testid="error-alert-retry"]')
+      expect(retry.exists()).toBe(true)
+
+      failRunFetch = false
+      await retry.trigger('click')
+      await nextTick()
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('run backend down')
+      expect(wrapper.text()).toContain('Run Detail')
+      wrapper.unmount()
+    } finally {
+      getMock.mockImplementation(originalGet as (...args: unknown[]) => unknown)
+    }
   })
 
   it('renders the superseded status badge for a coalesced-supersede run', async () => {

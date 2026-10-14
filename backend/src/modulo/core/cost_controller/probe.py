@@ -45,6 +45,7 @@ from modulo.core.cost_controller.system_config import (
     read_system_config,
     write_system_config,
 )
+from modulo.db.crud.daily_run_count import org_level_predicate
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import Run
@@ -227,7 +228,7 @@ async def _org_row_watch(session: AsyncSession, org_id: uuid.UUID, runs: list[An
             OrgDailyRunCount.clamped,
         ).where(
             OrgDailyRunCount.organisation_id == org_id,
-            OrgDailyRunCount.team_id.is_(None),
+            org_level_predicate(),
             OrgDailyRunCount.run_date.in_(dates),
         )
     )

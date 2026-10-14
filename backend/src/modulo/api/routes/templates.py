@@ -16,7 +16,12 @@ from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
-from modulo.db.crud.pipeline import ManualNodeOutputSchemaError, create_pipeline, enforce_manual_node_output_schemas
+from modulo.db.crud.pipeline import (
+    ManualNodeOutputSchemaError,
+    create_pipeline,
+    enforce_manual_node_output_schemas,
+    strip_declared_policy_gates,
+)
 from modulo.db.crud.template import (
     _agent_count_from_content,
     _preview_data_from_content,
@@ -149,7 +154,19 @@ def _resolve_template_nodes(
 
     A node with a valid ``agent_index`` becomes an agent node bound to the
     freshly allocated agent id; anything else becomes a manual step.
+
+    FAR-1666: a template is not a pipeline, so it cannot carry declared policy
+    gates (evals/gates are not cloned on create-from-template). Strip any
+    ``policy_gate`` block from the source nodes through the shared helper so
+    the persisted graph can never hold an INERT declaration, and record what
+    was dropped.
     """
+    graph_nodes, dropped_policy_gates = strip_declared_policy_gates(graph_nodes)
+    if dropped_policy_gates:
+        logger.warning(
+            "policy_gate declaration(s) stripped when creating a pipeline from template: %s",
+            "; ".join(dropped_policy_gates),
+        )
     resolved_nodes: list[dict[str, Any]] = []
     for node in graph_nodes:
         agent_idx = node.get("agent_index", -1)
@@ -254,6 +271,11 @@ async def create_pipeline_from_template_endpoint(
         agent_configs: list[dict[str, Any]] = content.get("agents", [])
         graph_nodes: list[dict[str, Any]] = content.get("graph_nodes", [])
         edges: list[dict[str, Any]] = content.get("edges", [])
+        # FAR-1666: this writer persists ``graph_nodes_json`` directly and cannot
+        # carry the template's declared policy gates (evals/gates are not cloned),
+        # so ``_resolve_template_nodes`` strips any ``policy_gate`` block through
+        # the shared helper and records a warning rather than failing or storing
+        # an INERT declaration.
 
         agent_ids = _allocate_template_agent_ids(agent_configs)
         async with session.begin():

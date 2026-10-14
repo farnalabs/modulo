@@ -6,6 +6,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.product_analytics.constants import (
@@ -54,6 +55,27 @@ def get_product_analytics_block(org_settings_json: dict[str, Any] | None) -> dic
     result = default_consent_state()
     result.update(raw)
     return result
+
+
+def org_consent_level(settings_json: Any) -> str:
+    """Return an organisation's product-analytics consent level (``all`` / ``off``).
+
+    The single canonical reader for the stored consent level. Both consumers —
+    the transparency endpoint (what the page reports) and the metrics dump (what
+    actually egresses) — read it through here, so the reported posture cannot
+    drift from the egress decision. A missing/blank level, a missing block, or a
+    malformed (non-dict) ``settings_json`` degrades to ``off`` (fail-closed)
+    rather than raising.
+    """
+    if not isinstance(settings_json, dict):
+        return LEVEL_OFF
+    raw_level = get_product_analytics_block(settings_json).get("level")
+    return str(raw_level) if raw_level else LEVEL_OFF
+
+
+def is_org_consenting(settings_json: Any) -> bool:
+    """Return True when an organisation's settings enable the ``all`` level."""
+    return org_consent_level(settings_json) == LEVEL_ALL
 
 
 def merge_product_analytics_block(
@@ -221,16 +243,44 @@ def is_partner_carve_out_active(license_data: Any, org_level: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def kill_switch_disables_enforcement(value: Any) -> bool:
+    """Interpret a stored license-enforcement kill-switch value.
+
+    This is the ONE canonical semantics for the kill switch, shared by
+    ``consent.is_license_enforcement_enabled`` and
+    ``license_enforcement.is_enforcement_active``.
+
+    Only an *explicitly truthy* value turns the kill switch ON (which disables
+    enforcement): boolean ``True`` or one of the strings ``"1"``/``"true"``/
+    ``"yes"`` (case-insensitive).  Every other stored value — including the
+    strings ``"false"``, ``"0"`` and ``"no"``, and boolean ``False`` — leaves
+    enforcement ENABLED.  In particular a stored ``"false"`` means "the kill
+    switch is off", i.e. enforcement is on; it must never be read as a truthy
+    non-empty string and invert the switch.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes")
+    return bool(value)
+
+
 async def is_license_enforcement_enabled(session: AsyncSession) -> bool:
     """Return True if license enforcement is active (kill switch is OFF by default).
 
     The kill switch is absent → enforced (matching authz_enforce convention).
+    See :func:`kill_switch_disables_enforcement` for the canonical stored-value
+    semantics.
+
+    A read failure also resolves to ``True`` (enforced): this mirrors
+    :func:`modulo.core.product_analytics.license_enforcement.is_enforcement_active`
+    so the two helpers agree on every input class, not only stored values.
     """
-    config = await get_config(session, LICENSE_ENFORCEMENT_KILL_SWITCH_KEY)
+    try:
+        config = await get_config(session, LICENSE_ENFORCEMENT_KILL_SWITCH_KEY)
+    except SQLAlchemyError:
+        _log.warning("product_analytics.kill_switch_read_failed", exc_info=True)
+        return True  # read failure = fail safe = enforced
     if config is None:
         return True  # absent = enforced
-    if isinstance(config.value, bool):
-        return not config.value
-    if isinstance(config.value, str):
-        return config.value.lower() not in ("1", "true", "yes")
-    return not bool(config.value)
+    return not kill_switch_disables_enforcement(config.value)

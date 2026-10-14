@@ -195,6 +195,13 @@ _EXCLUDE_PATTERNS: list[str] = [
     "backend/tools/**",
     "scripts/**",
     "frontend/scripts/**",
+    # CI/ops helper modules under ``.github/scripts/**`` are the same class as
+    # the ``scripts/**`` and ``backend/scripts/**`` exclusions: the CI coverage
+    # scan runs ``pytest --cov=src/modulo`` (see scripts/coverage-thresholds.sh),
+    # so it never instruments them. Their unit tests run and pass (regression
+    # protection), but no line-coverage data for them reaches coverage.xml, so
+    # every changed line would otherwise register as "0% unmeasured".
+    ".github/scripts/**",
     "docs/api/examples/**",
     # Auto-generated code: ``frontend/src/lib/api/schema.ts`` is emitted by
     # openapi-typescript (scripts/run_generate_api_types.py) and carries no
@@ -1267,7 +1274,7 @@ def _compute_branch_coverage_from_raw(
             )
             if result.returncode == 0 and result.stdout:
                 added_lines[filepath] = _parse_added_line_numbers(result.stdout)
-        except Exception:  # noqa: S112 — best-effort per-file parse, skip on any error
+        except Exception:  # noqa: S112 — best-effort per-file parse; skip on any error
             continue
 
     raw_branch_data = (
@@ -1702,6 +1709,256 @@ def _production_coverage_from_text(output: str, changed_lines: int) -> tuple[flo
     return effective_pct, measured_lines, unmeasured_lines
 
 
+def _evaluate_report_outcome(rc: int, output: str, *, language: str, fail_under: int) -> tuple[bool, str]:
+    """Pass/fail outcome when diff-cover produced no parseable line percentage.
+
+    Three situations share the "no parseable coverage" state and are told
+    apart by the exit code and output: an rc of 0 with nothing parseable (a
+    diff-cover/report mismatch — fail loudly), the explicit below-threshold
+    marker, and any other error (surface its last non-empty line).
+    """
+    if rc == 0:
+        return False, f"diff-cover exited 0 but produced no parseable coverage result for {language}"
+    if _THRESHOLD_NOT_MET_RE.search(output):
+        return False, f"coverage below threshold {fail_under}%"
+    error_lines = [ln.strip() for ln in output.strip().splitlines() if ln.strip()]
+    reason = error_lines[-1] if error_lines else "diff-cover returned non-zero"
+    return False, reason
+
+
+def _line_gate_outcome(
+    measured_pct: float | None,
+    unmeasured_lines: int,
+    rc: int,
+    output: str,
+    *,
+    language: str,
+    fail_under: int,
+) -> tuple[bool, str]:
+    """Decide the line-gate pass/fail and build the human-readable reason.
+
+    A parseable *measured_pct* is scored against *fail_under* (unmeasured
+    lines are already inside the percentage, counted at 0%); without one the
+    outcome comes from diff-cover's exit code and output
+    (:func:`_evaluate_report_outcome`).
+    """
+    if measured_pct is None:
+        return _evaluate_report_outcome(rc, output, language=language, fail_under=fail_under)
+    passed = measured_pct >= fail_under
+    if not passed and unmeasured_lines > 0:
+        reason = f"coverage {measured_pct:.1f}% (with {unmeasured_lines} unmeasured lines at 0%) is below threshold {fail_under}%"
+    elif not passed:
+        reason = f"coverage {measured_pct:.1f}% is below threshold {fail_under}%"
+    elif unmeasured_lines > 0:
+        reason = (
+            f"coverage {measured_pct:.1f}% >= {fail_under}% (but {unmeasured_lines} unmeasured lines counted at 0%)"
+        )
+    else:
+        reason = ""
+    return passed, reason
+
+
+def _score_changed_lines(
+    changed_files: dict[str, int],
+    json_data: dict | None,
+    production_stats: tuple[int, int] | None,
+    report_path: Path,
+    language: str,
+    js_src_root: str,
+    output: str,
+    changed_lines: int,
+) -> tuple[float | None, int, int, int]:
+    """Score the changed production lines (production files only).
+
+    Returns ``(measured_pct, measured_lines, unmeasured_lines, scored_lines)``.
+    ``scored_lines`` is the denominator actually scored by the gate: for files
+    present in the report it is their coverable changed lines; for files absent
+    from the report it is every changed line (scored at 0%).  It is reported as
+    ``changed_lines`` in the GateResult so ``Measured + Unmeasured == Changed
+    Lines`` stays coherent in the summary.
+
+    The JSON ``src_stats`` path is preferred (per-file, production-only, capped
+    at each file's changed-line count).  The text-output fallback keeps the
+    measured-line count so unmeasured lines are still detected when the JSON
+    report is absent.  Reached only when ``changed_lines > 0`` (the zero case
+    returns in :func:`evaluate` before this runs), so the divisions below are
+    safe.
+    """
+    src_stats = json_data.get("src_stats") if isinstance(json_data, dict) else None
+    if production_stats is not None and isinstance(src_stats, dict):
+        covered_lines, measured_lines = production_stats
+        # Only production files ABSENT from the report are "unmeasured" and
+        # scored at 0% (brand-new untested file detection).  Non-executable
+        # lines inside a measured file are simply not part of the coverage
+        # denominator (see _unmeasured_file_lines).
+        present_files = _report_counts_files(changed_files, report_path, language, js_src_root)
+        unmeasured_lines = _unmeasured_file_lines(changed_files, json_data, present_files)
+        scored_lines = measured_lines + unmeasured_lines
+        measured_pct = (covered_lines / scored_lines) * 100.0 if scored_lines else None
+        return measured_pct, measured_lines, unmeasured_lines, scored_lines
+    # Fallback: parse the text output (with the measured-line count so
+    # unmeasured lines are still detected when the JSON report is absent).
+    text_stats = _production_coverage_from_text(output, changed_lines)
+    if text_stats is not None:
+        measured_pct, measured_lines, unmeasured_lines = text_stats
+        return measured_pct, measured_lines, unmeasured_lines, changed_lines
+    return None, 0, 0, changed_lines
+
+
+def _branch_gate_outcome(
+    branch_covered: int, branch_total: int, branch_fail_under: int
+) -> tuple[float | None, bool | None]:
+    """Branch-gate outcome: ``(branch_actual_pct, branch_passed)``.
+
+    No branch records on any changed line -> ``(None, None)``: there is no
+    branch to measure, so the branch gate passes vacuously.  The report parsers
+    retain only branch records, so a changed line that simply has no branch
+    (straight-line code) is indistinguishable from one whose branch record is
+    absent — neither carries a branch into the denominator.  Treating the
+    former as 0% spuriously failed every branch-free diff of more than
+    TINY_DIFF_THRESHOLD lines.  ``branch_unmeasured`` (computed separately in
+    :func:`evaluate`) is a diagnostic only; it never drives the pass/fail
+    decision.  Genuinely unexercised branches still surface as
+    ``branch_total > 0`` with 0% coverage, and a brand-new untested file still
+    fails the line gate.
+    """
+    if branch_total == 0:
+        return None, None  # vacuous
+    branch_actual_pct = (branch_covered / branch_total) * 100.0
+    return branch_actual_pct, branch_actual_pct >= branch_fail_under
+
+
+def _empty_diff_gate(language: str, fail_under: int, deleted_files: dict[str, int], deleted_lines: int) -> GateResult:
+    """Gate result when the diff adds no executable production lines (FAR-1317).
+
+    A deletion-only production change FAILs instead of skipping into a pass —
+    the gate cannot tell a justified deletion from a load-bearing one, so it
+    fails closed.  A diff with neither additions nor deletions (test-only,
+    docs-only, or comment-only) is a skip.
+    """
+    if deleted_lines > 0:
+        return GateResult(
+            language=language,
+            skipped=False,
+            skip_reason=(
+                f"deletion-only production change: {deleted_lines} executable line(s) in "
+                f"{len(deleted_files)} file(s) removed and none added — deletions earn no "
+                "coverage credit and cannot pass the gate (FAR-1317)"
+            ),
+            passed=False,
+            actual_pct=None,
+            threshold=fail_under,
+            changed_lines=0,
+            deleted_lines=deleted_lines,
+        )
+    return GateResult(
+        language=language,
+        skipped=True,
+        skip_reason="no changed production lines in this diff",
+        passed=True,
+        actual_pct=None,
+        threshold=fail_under,
+        changed_lines=0,
+    )
+
+
+def _missing_report_gate(
+    language: str,
+    report_path: Path | None,
+    fail_under: int,
+    allow_missing: bool,
+    changed_lines: int,
+    deleted_lines: int,
+) -> GateResult:
+    """Gate result when the coverage report is missing or unreadable.
+
+    CI default (``allow_missing`` False) fails closed — the upstream job that
+    produces the report failed or its artifact download broke.  Local
+    convenience (True) skips instead.
+    """
+    if allow_missing:
+        return GateResult(
+            language=language,
+            skipped=True,
+            skip_reason=f"no coverage report found at {report_path} (allow-missing)",
+            passed=True,
+            actual_pct=None,
+            threshold=fail_under,
+            changed_lines=changed_lines,
+            deleted_lines=deleted_lines,
+        )
+    return GateResult(
+        language=language,
+        skipped=False,
+        skip_reason=f"missing coverage report: {report_path}",
+        passed=False,
+        actual_pct=None,
+        threshold=fail_under,
+        changed_lines=changed_lines,
+        deleted_lines=deleted_lines,
+    )
+
+
+def _no_measurable_lines_gate(
+    changed_files: dict[str, int],
+    report_path: Path,
+    language: str,
+    js_src_root: str,
+    fail_under: int,
+    branch_fail_under: int,
+    changed_lines: int,
+    deleted_lines: int,
+) -> GateResult:
+    """Gate result when diff-cover reports no changed coverable lines (FAR-706).
+
+    Two situations share diff-cover's "no changed coverable lines" marker and
+    are told apart on the raw report's file list:
+
+    (a) the changed production files are absent from the report entirely
+        (brand-new, untested files) -> FAIL, scoring the absent files' lines
+        at 0%; and
+    (b) the changed production files ARE measured by the report, but none of
+        their changed lines are instrumentable (static ``.vue`` template
+        markup, import-only lines) -> there is no executable changed code to
+        cover, so SKIP rather than fail a file the report already measures.
+
+    Reached only when ``changed_lines > 0`` (the zero case returns earlier in
+    :func:`evaluate`).
+    """
+    present_files = _report_counts_files(changed_files, report_path, language, js_src_root)
+    unmeasured_files = {path: count for path, count in changed_files.items() if path not in present_files}
+    if not unmeasured_files:
+        return GateResult(
+            language=language,
+            skipped=True,
+            skip_reason=(
+                "no measurable coverage data for changed lines: every changed production file "
+                "is measured by the report and its changed lines are non-instrumentable "
+                "(static template markup / import-only lines)"
+            ),
+            passed=True,
+            actual_pct=None,
+            threshold=fail_under,
+            changed_lines=changed_lines,
+            deleted_lines=deleted_lines,
+        )
+    return GateResult(
+        language=language,
+        skipped=False,
+        skip_reason="no coverage data for changed lines (0% effective)",
+        passed=False,
+        actual_pct=0.0,
+        threshold=fail_under,
+        changed_lines=changed_lines,
+        measured_lines=0,
+        unmeasured_lines=sum(unmeasured_files.values()),
+        deleted_lines=deleted_lines,
+        branch_actual_pct=0.0,
+        branch_passed=False,
+        branch_threshold=branch_fail_under,
+    )
+
+
 def evaluate(
     language: str,
     report_path: Path | None,
@@ -1739,30 +1996,7 @@ def evaluate(
 
     # --- No added production lines: a deletion-only change FAILs (never SKIPs) ---
     if changed_lines == 0:
-        if deleted_lines > 0:
-            return GateResult(
-                language=language,
-                skipped=False,
-                skip_reason=(
-                    f"deletion-only production change: {deleted_lines} executable line(s) in "
-                    f"{len(deleted_files)} file(s) removed and none added — deletions earn no "
-                    "coverage credit and cannot pass the gate (FAR-1317)"
-                ),
-                passed=False,
-                actual_pct=None,
-                threshold=fail_under,
-                changed_lines=0,
-                deleted_lines=deleted_lines,
-            )
-        return GateResult(
-            language=language,
-            skipped=True,
-            skip_reason="no changed production lines in this diff",
-            passed=True,
-            actual_pct=None,
-            threshold=fail_under,
-            changed_lines=0,
-        )
+        return _empty_diff_gate(language, fail_under, deleted_files, deleted_lines)
 
     # --- Tiny-diff exemption ---
     # Withheld when the diff also removes executable production lines
@@ -1784,26 +2018,13 @@ def evaluate(
 
     # --- Missing report ---
     if report_path is None or not report_path.exists():
-        if allow_missing:
-            return GateResult(
-                language=language,
-                skipped=True,
-                skip_reason=f"no coverage report found at {report_path} (allow-missing)",
-                passed=True,
-                actual_pct=None,
-                threshold=fail_under,
-                changed_lines=changed_lines,
-                deleted_lines=deleted_lines,
-            )
-        return GateResult(
-            language=language,
-            skipped=False,
-            skip_reason=f"missing coverage report: {report_path}",
-            passed=False,
-            actual_pct=None,
-            threshold=fail_under,
-            changed_lines=changed_lines,
-            deleted_lines=deleted_lines,
+        return _missing_report_gate(
+            language,
+            report_path,
+            fail_under,
+            allow_missing,
+            changed_lines,
+            deleted_lines,
         )
 
     # --- Run diff-cover with JSON report to detect unmeasured lines ---
@@ -1811,105 +2032,44 @@ def evaluate(
     rc, output = _run_diff_cover(report_path.resolve(), compare_branch, fail_under)
 
     # --- diff-cover found no coverage data for the changed lines ---
-    # Two situations share diff-cover's "no changed coverable lines" marker and
-    # must be told apart on the raw report's file list (FAR-706):
-    #   (a) the changed production files are absent from the report entirely
-    #       (brand-new, untested files) -> FAIL, scoring the absent files' lines
-    #       at 0%; and
-    #   (b) the changed production files ARE measured by the report, but none of
-    #       their changed lines are instrumentable (static ``.vue`` template
-    #       markup, import-only lines) -> there is no executable changed code to
-    #       cover, so SKIP rather than fail a file the report already measures.
-    # Reaching here means changed_lines > 0 (zero changed production lines
-    # already skipped above).
+    # Two situations share the marker and are told apart on the raw report's
+    # file list — see _no_measurable_lines_gate (FAR-706).  Reaching here
+    # means changed_lines > 0 (zero changed production lines already skipped
+    # above).
     if _NO_CHANGED_LINES_RE.search(output):
-        present_files = _report_counts_files(changed_files, report_path, language, js_src_root)
-        unmeasured_files = {path: count for path, count in changed_files.items() if path not in present_files}
-        if not unmeasured_files:
-            return GateResult(
-                language=language,
-                skipped=True,
-                skip_reason=(
-                    "no measurable coverage data for changed lines: every changed production file "
-                    "is measured by the report and its changed lines are non-instrumentable "
-                    "(static template markup / import-only lines)"
-                ),
-                passed=True,
-                actual_pct=None,
-                threshold=fail_under,
-                changed_lines=changed_lines,
-                deleted_lines=deleted_lines,
-            )
-        return GateResult(
-            language=language,
-            skipped=False,
-            skip_reason="no coverage data for changed lines (0% effective)",
-            passed=False,
-            actual_pct=0.0,
-            threshold=fail_under,
-            changed_lines=changed_lines,
-            measured_lines=0,
-            unmeasured_lines=sum(unmeasured_files.values()),
-            deleted_lines=deleted_lines,
-            branch_actual_pct=0.0,
-            branch_passed=False,
-            branch_threshold=branch_fail_under,
+        return _no_measurable_lines_gate(
+            changed_files,
+            report_path,
+            language,
+            js_src_root,
+            fail_under,
+            branch_fail_under,
+            changed_lines,
+            deleted_lines,
         )
 
     # --- Extract measured coverage (production files only) ---
-    # changed_lines > 0 here: the zero case returned above, so the divisions
-    # below are safe.
-    measured_pct: float | None = None
-    measured_lines = 0
-    unmeasured_lines = 0
-    # Denominator actually scored by the gate.  For files present in the report
-    # this is their coverable changed lines; for files absent from the report it
-    # is every changed line (scored at 0%).  Reported as ``changed_lines`` in the
-    # summary so ``Measured + Unmeasured == Changed Lines`` stays coherent.
-    scored_lines = changed_lines
-
-    src_stats = json_data.get("src_stats") if isinstance(json_data, dict) else None
     production_stats = _production_coverage_from_json(changed_files, json_data)
-    if production_stats is not None and isinstance(src_stats, dict):
-        covered_lines, measured_lines = production_stats
-        # Only production files ABSENT from the report are "unmeasured" and
-        # scored at 0% (brand-new untested file detection).  Non-executable
-        # lines inside a measured file are simply not part of the coverage
-        # denominator (see _unmeasured_file_lines).
-        present_files = _report_counts_files(changed_files, report_path, language, js_src_root)
-        unmeasured_lines = _unmeasured_file_lines(changed_files, json_data, present_files)
-        scored_lines = measured_lines + unmeasured_lines
-        measured_pct = (covered_lines / scored_lines) * 100.0 if scored_lines else None
-    else:
-        # Fallback: parse the text output (with the measured-line count so
-        # unmeasured lines are still detected when the JSON report is absent).
-        text_stats = _production_coverage_from_text(output, changed_lines)
-        if text_stats is not None:
-            measured_pct, measured_lines, unmeasured_lines = text_stats
+    measured_pct, measured_lines, unmeasured_lines, scored_lines = _score_changed_lines(
+        changed_files,
+        json_data,
+        production_stats,
+        report_path,
+        language,
+        js_src_root,
+        output,
+        changed_lines,
+    )
 
     # --- Determine pass/fail ---
-    if measured_pct is not None:
-        passed = measured_pct >= fail_under
-        if not passed and unmeasured_lines > 0:
-            reason = f"coverage {measured_pct:.1f}% (with {unmeasured_lines} unmeasured lines at 0%) is below threshold {fail_under}%"
-        elif not passed:
-            reason = f"coverage {measured_pct:.1f}% is below threshold {fail_under}%"
-        elif unmeasured_lines > 0:
-            reason = (
-                f"coverage {measured_pct:.1f}% >= {fail_under}% (but {unmeasured_lines} unmeasured lines counted at 0%)"
-            )
-        else:
-            reason = ""
-    elif rc == 0:
-        passed = False
-        reason = f"diff-cover exited 0 but produced no parseable coverage result for {language}"
-    elif _THRESHOLD_NOT_MET_RE.search(output):
-        passed = False
-        reason = f"coverage below threshold {fail_under}%"
-    else:
-        passed = False
-        error_lines = [ln.strip() for ln in output.strip().splitlines() if ln.strip()]
-        reason = error_lines[-1] if error_lines else "diff-cover returned non-zero"
+    passed, reason = _line_gate_outcome(
+        measured_pct,
+        unmeasured_lines,
+        rc,
+        output,
+        language=language,
+        fail_under=fail_under,
+    )
 
     # --- Branch coverage on changed lines ---
     branch_covered, branch_total, branch_unmeasured = _compute_branch_coverage_from_raw(
@@ -1919,24 +2079,7 @@ def evaluate(
         language,
         js_src_root,
     )
-    branch_actual_pct: float | None = None
-    branch_passed_val: bool | None = None
-    if branch_total == 0:
-        # No branch records on any changed line: there is no branch to
-        # measure, so the branch gate passes vacuously.  The report parsers
-        # retain only branch records, so a changed line that simply has no
-        # branch (straight-line code) is indistinguishable from one whose
-        # branch record is absent — neither carries a branch into the
-        # denominator.  Treating the former as 0% spuriously failed every
-        # branch-free diff of more than TINY_DIFF_THRESHOLD lines.
-        # ``branch_unmeasured`` is retained as a diagnostic only; it never
-        # drives the pass/fail decision.  Genuinely unexercised branches
-        # still surface as ``branch_total > 0`` with 0% coverage, and a
-        # brand-new untested file still fails the line gate.
-        branch_passed_val = None  # vacuous
-    else:
-        branch_actual_pct = (branch_covered / branch_total) * 100.0
-        branch_passed_val = branch_actual_pct >= branch_fail_under
+    branch_actual_pct, branch_passed_val = _branch_gate_outcome(branch_covered, branch_total, branch_fail_under)
 
     return GateResult(
         language=language,
@@ -2009,7 +2152,37 @@ def _write_summary(results: list[GateResult]) -> None:
             print(f"::error::{msg}")
 
 
-def main() -> int:
+@dataclass(frozen=True)
+class Args:
+    """Parsed command-line arguments for the coverage gate."""
+
+    compare_branch: str
+    fail_under: int
+    branch_fail_under: int
+    python_report: Path | None
+    js_report: Path | None
+    js_src_root: str
+    allow_missing_reports: bool
+    allow_missing_js_report: bool
+
+
+@dataclass(frozen=True)
+class CoverageNumbers:
+    """Project-wide coverage for one language: line and branch percentages.
+
+    ``branch_pct`` is ``None`` when the report carries no branch records at
+    all (no branch data to measure), distinct from ``0.0`` (branch records
+    exist but none are covered).  ``language`` labels the metric for the
+    per-language BREACH messages.
+    """
+
+    language: str
+    line_pct: float
+    branch_pct: float | None
+
+
+def _parse_args(argv: list[str]) -> Args:
+    """Parse the command-line arguments (argparse only)."""
     parser = argparse.ArgumentParser(
         description="Changed-lines coverage gate using diff-cover.",
     )
@@ -2066,48 +2239,135 @@ def main() -> int:
             "deliberately produced no coverage because the PR touched no frontend path."
         ),
     )
-    args = parser.parse_args()
+    parsed = parser.parse_args(argv)
+    return Args(
+        compare_branch=parsed.compare_branch,
+        fail_under=parsed.fail_under,
+        branch_fail_under=parsed.branch_fail_under,
+        python_report=parsed.python_report,
+        js_report=parsed.js_report,
+        js_src_root=parsed.js_src_root,
+        allow_missing_reports=parsed.allow_missing_reports,
+        allow_missing_js_report=parsed.allow_missing_js_report,
+    )
 
-    # Resolve default report paths relative to the repo root
+
+def _resolve_reports(args: Args) -> tuple[Path | None, Path | None]:
+    """Resolve the Python Cobertura and JavaScript LCOV report paths.
+
+    An explicit ``--*-report`` value (sanitised) wins; otherwise the default
+    repo-relative report is used when it exists, else ``None`` (the gate then
+    fails closed for a missing report unless allow-missing is set).
+    """
     default_python = REPO_ROOT / "backend" / "coverage.xml"
     default_js = REPO_ROOT / "frontend" / "coverage" / "lcov.info"
 
     if args.python_report is not None:
-        python_report = Path(_sanitize_path(str(args.python_report), "python-report"))
+        python_report: Path | None = Path(_sanitize_path(str(args.python_report), "python-report"))
     elif default_python.exists():
         python_report = default_python
     else:
         python_report = None
 
     if args.js_report is not None:
-        js_report = Path(_sanitize_path(str(args.js_report), "js-report"))
+        js_report: Path | None = Path(_sanitize_path(str(args.js_report), "js-report"))
     elif default_js.exists():
         js_report = default_js
     else:
         js_report = None
 
-    # Normalise the LCOV report so diff-cover can match its paths (see
-    # _normalize_js_report).  The temp file, if any, is cleaned up below.
-    #
-    # Keep the ORIGINAL report path: the project-wide floor is computed after
-    # the finally block has unlinked the normalised temp copy, so it must read
-    # the raw report (which still exists) rather than ``js_report``.  In CI the
-    # vitest LCOV always uses relative ``SF:`` paths, so ``_normalize_js_report``
-    # always returns a temp file and ``js_report`` always points at the deleted
-    # copy — reading it would silently skip the JavaScript project-wide floor on
-    # every run.
-    raw_js_report = js_report
-    normalised_js_report: Path | None = None
+    return python_report, js_report
+
+
+def _load_python_coverage(report: str) -> CoverageNumbers | None:
+    """Load project-wide line and branch coverage from a Cobertura XML report.
+
+    Returns ``None`` when the report cannot be parsed, so the caller skips the
+    Python floor (matching the pre-refactor behaviour).
+    """
+    metrics = _compute_project_wide_metrics_cobertura(Path(report))
+    if metrics is None:
+        return None
+    line_pct, branch_pct = metrics
+    return CoverageNumbers(language="Python", line_pct=line_pct, branch_pct=branch_pct)
+
+
+def _load_js_coverage(report: str) -> CoverageNumbers | None:
+    """Load project-wide line and branch coverage from an LCOV report.
+
+    Returns ``None`` when the report cannot be read, so the caller skips the
+    JavaScript floor.  The project-wide metric reads the whole report and is
+    independent of any source root.
+    """
+    metrics = _compute_project_wide_metrics_lcov(Path(report))
+    if metrics is None:
+        return None
+    line_pct, branch_pct = metrics
+    return CoverageNumbers(language="JavaScript", line_pct=line_pct, branch_pct=branch_pct)
+
+
+def _enforce(got: CoverageNumbers) -> int:
+    """Evaluate one language's project-wide coverage against the floors.
+
+    Prints the language's metric line and any BREACH lines; returns 1 when a
+    floor is breached or branch data is absent, else 0.  The floors are
+    module-level ratchet constants, not CLI values.
+    """
+    branch_display = f"{got.branch_pct:.1f}%" if got.branch_pct is not None else "n/a (no branch data)"
+    print(f"  {got.language} project-wide: line {got.line_pct:.1f}%, branch {branch_display}")
+    failed = False
+    if got.line_pct < MIN_PROJECT_LINE_COVERAGE:
+        failed = True
+        print(
+            f"  BREACH: {got.language} line {got.line_pct:.1f}% < floor {MIN_PROJECT_LINE_COVERAGE}% — "
+            "fix coverage (floors are a ratchet and must not be lowered)"
+        )
+    if got.branch_pct is None:
+        failed = True
+        if got.language == "Python":
+            print(
+                "  BREACH: Python branch data missing from Cobertura report "
+                "(no branches-covered/branches-valid attributes, condition-coverage "
+                "attributes, or <condition> elements) — branch coverage cannot be enforced"
+            )
+        else:
+            print(
+                "  BREACH: JavaScript branch data missing from LCOV report "
+                "(no BRDA records) — branch coverage cannot be enforced"
+            )
+    elif got.branch_pct < MIN_PROJECT_BRANCH_COVERAGE:
+        failed = True
+        print(
+            f"  BREACH: {got.language} branch {got.branch_pct:.1f}% < floor {MIN_PROJECT_BRANCH_COVERAGE}% — "
+            "fix coverage (floors are a ratchet and must not be lowered)"
+        )
+    return 1 if failed else 0
+
+
+def _evaluate_changed_lines(
+    args: Args,
+    python_report: Path | None,
+    js_report: Path | None,
+) -> list[GateResult]:
+    """Evaluate the changed-lines gate (line + branch) for both languages.
+
+    Normalises the LCOV report so diff-cover can match its paths (see
+    :func:`_normalize_js_report`), owns the normalised temp copy, and deletes
+    it before returning.  ``js_report`` stays the RAW path on the caller's
+    side, so the project-wide floor (which runs after this returns and after
+    the temp copy is unlinked) reads the original report rather than the
+    deleted normalised copy — otherwise the JavaScript floor would silently
+    skip on every CI run.
+    """
     js_src_root = _sanitize_path(args.js_src_root, "js-src-root")
+    normalised_js_report: Path | None = None
     if js_report is not None and js_report.exists():
-        normalised = _normalize_js_report(js_report, js_src_root)
-        if normalised is not None:
-            normalised_js_report = normalised
-            js_report = normalised
+        normalised_js_report = _normalize_js_report(js_report, js_src_root)
+    effective_js_report = normalised_js_report if normalised_js_report is not None else js_report
 
     results: list[GateResult] = []
     try:
-        for language, report in (("Python", python_report), ("JavaScript", js_report)):
+        for language, report in (("Python", python_report), ("JavaScript", effective_js_report)):
             results.append(
                 evaluate(
                     language,
@@ -2124,87 +2384,58 @@ def main() -> int:
         if normalised_js_report is not None:
             with contextlib.suppress(OSError):
                 normalised_js_report.unlink()
+    return results
 
-    # --- Branch coverage summary ---
-    any_branch_failed = any(r.branch_passed is False for r in results)
 
-    # --- Project-wide floor check (the ratchet) ---
-    # Floors are a ratchet: raise as coverage improves, never lower.
-    # Lowering requires an explicit, justified commit message.
-    project_floor_failed = False
-    project_metrics: list[str] = []
-    if python_report is not None and python_report.exists():
-        py_metrics = _compute_project_wide_metrics_cobertura(python_report)
-        if py_metrics is not None:
-            pl, pb = py_metrics
-            branch_display = f"{pb:.1f}%" if pb is not None else "n/a (no branch data)"
-            project_metrics.append(f"  Python project-wide: line {pl:.1f}%, branch {branch_display}")
-            if pl < MIN_PROJECT_LINE_COVERAGE:
-                project_floor_failed = True
-                project_metrics.append(
-                    f"  BREACH: Python line {pl:.1f}% < floor {MIN_PROJECT_LINE_COVERAGE}% — "
-                    "fix coverage (floors are a ratchet and must not be lowered)"
-                )
-            # Branch data must be present.  A report with no branch data at all
-            # is indistinguishable from one whose branch data was dropped — fail
-            # closed with its own distinct reason, not a floor breach.
-            if pb is None:
-                project_floor_failed = True
-                project_metrics.append(
-                    "  BREACH: Python branch data missing from Cobertura report "
-                    "(no branches-covered/branches-valid attributes, condition-coverage "
-                    "attributes, or <condition> elements) — branch coverage cannot be enforced"
-                )
-            elif pb < MIN_PROJECT_BRANCH_COVERAGE:
-                project_floor_failed = True
-                project_metrics.append(
-                    f"  BREACH: Python branch {pb:.1f}% < floor {MIN_PROJECT_BRANCH_COVERAGE}% — "
-                    "fix coverage (floors are a ratchet and must not be lowered)"
-                )
-    if raw_js_report is not None and raw_js_report.exists():
-        js_metrics = _compute_project_wide_metrics_lcov(raw_js_report)
-        if js_metrics is not None:
-            jl, jb = js_metrics
-            branch_display = f"{jb:.1f}%" if jb is not None else "n/a (no branch data)"
-            project_metrics.append(f"  JavaScript project-wide: line {jl:.1f}%, branch {branch_display}")
-            if jl < MIN_PROJECT_LINE_COVERAGE:
-                project_floor_failed = True
-                project_metrics.append(
-                    f"  BREACH: JavaScript line {jl:.1f}% < floor {MIN_PROJECT_LINE_COVERAGE}% — "
-                    "fix coverage (floors are a ratchet and must not be lowered)"
-                )
-            if jb is None:
-                project_floor_failed = True
-                project_metrics.append(
-                    "  BREACH: JavaScript branch data missing from LCOV report "
-                    "(no BRDA records) — branch coverage cannot be enforced"
-                )
-            elif jb < MIN_PROJECT_BRANCH_COVERAGE:
-                project_floor_failed = True
-                project_metrics.append(
-                    f"  BREACH: JavaScript branch {jb:.1f}% < floor {MIN_PROJECT_BRANCH_COVERAGE}% — "
-                    "fix coverage (floors are a ratchet and must not be lowered)"
-                )
-
-    # --- Summary ---
+def _print_changed_lines_summary(results: list[GateResult]) -> None:
+    """Print the per-language changed-lines summary block."""
     print("\n=== Coverage Gate Summary ===")
-    for r in results:
-        print(f"  {r.summary()}")
+    for result in results:
+        print(f"  {result.summary()}")
     print()
 
-    if project_metrics:
-        print("=== Project-wide Coverage Floor (ratchet) ===")
-        for line in project_metrics:
-            print(line)
-        print(
-            f"  Floors: MIN_PROJECT_LINE_COVERAGE={MIN_PROJECT_LINE_COVERAGE}%, "
-            f"MIN_PROJECT_BRANCH_COVERAGE={MIN_PROJECT_BRANCH_COVERAGE}%"
-        )
-        print("  Raise floors as coverage improves; never lower without justification.")
-        print()
 
-    all_skipped = all(r.skipped for r in results)
-    any_line_failed = any(not r.skipped and not r.passed for r in results)
+def _check_project_floors(python_report: Path | None, js_report: Path | None) -> bool:
+    """Evaluate the project-wide coverage floors (the ratchet).
+
+    Loads each language's project-wide numbers, prints the floor section (via
+    :func:`_enforce`), and returns True when any floor is breached or a
+    language carries no branch data.  Floors are a ratchet: raise as coverage
+    improves, never lower; lowering requires an explicit justified commit.
+
+    Only languages whose report parses contribute a metric — a missing or
+    unparseable report is skipped (matching the pre-refactor behaviour), never
+    treated as a floor breach.
+    """
+    python_numbers: CoverageNumbers | None = None
+    if python_report is not None and python_report.exists():
+        python_numbers = _load_python_coverage(str(python_report))
+    js_numbers: CoverageNumbers | None = None
+    if js_report is not None and js_report.exists():
+        js_numbers = _load_js_coverage(str(js_report))
+
+    present = [numbers for numbers in (python_numbers, js_numbers) if numbers is not None]
+    if not present:
+        return False
+
+    print("=== Project-wide Coverage Floor (ratchet) ===")
+    failure = False
+    for numbers in present:
+        failure |= _enforce(numbers) == 1
+    print(
+        f"  Floors: MIN_PROJECT_LINE_COVERAGE={MIN_PROJECT_LINE_COVERAGE}%, "
+        f"MIN_PROJECT_BRANCH_COVERAGE={MIN_PROJECT_BRANCH_COVERAGE}%"
+    )
+    print("  Raise floors as coverage improves; never lower without justification.")
+    print()
+    return failure
+
+
+def _exit_code(results: list[GateResult], project_floor_failed: bool) -> int:
+    """Decide the process exit code and print the final verdict."""
+    all_skipped = all(result.skipped for result in results)
+    any_line_failed = any(not result.skipped and not result.passed for result in results)
+    any_branch_failed = any(result.branch_passed is False for result in results)
 
     if all_skipped and not project_floor_failed:
         print("No coverage data to check — gate passed (all languages skipped).")
@@ -2226,6 +2457,19 @@ def main() -> int:
     print("PASSED: all languages met the coverage thresholds.")
     _write_summary(results)
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Orchestrate the coverage gate: parse, resolve/load, enforce, exit."""
+    args = _parse_args(sys.argv[1:] if argv is None else argv)
+
+    python_report, js_report = _resolve_reports(args)
+    results = _evaluate_changed_lines(args, python_report, js_report)
+
+    _print_changed_lines_summary(results)
+    project_floor_failed = _check_project_floors(python_report, js_report)
+
+    return _exit_code(results, project_floor_failed)
 
 
 if __name__ == "__main__":

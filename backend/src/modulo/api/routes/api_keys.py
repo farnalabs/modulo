@@ -48,6 +48,9 @@ _MSG_API_KEYS_NOT_AVAILABLE = "API keys are not available. Run database migratio
 _CODE_API_KEYS_UPDATE_API = "api_keys.update_api_key_endpoint"
 _CODE_API_KEYS_REVOKE_API = "api_keys.revoke_api_key_endpoint"
 
+_MSG_ACTIVE_MEMBERSHIP_REQUIRED = "Active organisation membership required to manage API keys"
+_CODE_API_KEYS_LIST_API_KEYS_ENDPOINT = "api_keys.list_api_keys_endpoint"
+
 # FAR-620: the org-level feature flag gating user-scoped MCP key minting.
 _FLAG_USER_SCOPED_MCP_KEYS = "user_scoped_mcp_keys"
 # Per-(account, org) quota of ACTIVE user-scoped keys: revoked_at IS NULL AND
@@ -184,7 +187,7 @@ async def _enforce_mint_cap(session: AsyncSession, principal: TenantPrincipal, r
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Active organisation membership required to manage API keys",
+            detail=_MSG_ACTIVE_MEMBERSHIP_REQUIRED,
         )
     if org_role_level(requested_role) > org_role_level(live_role):
         logger.warning(
@@ -237,7 +240,7 @@ async def enforce_grants_mint_cap_for(
     if live_role is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Active organisation membership required to manage API keys",
+            detail=_MSG_ACTIVE_MEMBERSHIP_REQUIRED,
         )
     live_level = org_role_level(live_role)
     above = sorted(g for g in requested_grants if org_role_level(PERMISSIONS[g]) > live_level)
@@ -305,7 +308,7 @@ async def _enforce_user_key_quota(
     if account is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Active organisation membership required to manage API keys",
+            detail=_MSG_ACTIVE_MEMBERSHIP_REQUIRED,
         )
     active = (
         await session.execute(
@@ -563,7 +566,7 @@ async def create_api_key_endpoint(
 
 
 @router.get("")
-@handle_db_errors("api_keys.list_api_keys_endpoint")
+@handle_db_errors(_CODE_API_KEYS_LIST_API_KEYS_ENDPOINT)
 async def list_api_keys_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("api_key.update"),
@@ -580,14 +583,14 @@ async def list_api_keys_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             return await list_api_keys(session, principal.organisation_id)
     except ProgrammingError:
-        logger.exception("api_keys.list_api_keys_endpoint")
+        logger.exception(_CODE_API_KEYS_LIST_API_KEYS_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_API_KEYS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "api_keys.list_api_keys_endpoint")
-        logger.exception("api_keys.list_api_keys_endpoint")
+        raise_session_contract_error(exc, _CODE_API_KEYS_LIST_API_KEYS_ENDPOINT)
+        logger.exception(_CODE_API_KEYS_LIST_API_KEYS_ENDPOINT)
         logger.warning("list_api_keys SQLAlchemyError", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

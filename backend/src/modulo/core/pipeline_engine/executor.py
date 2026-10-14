@@ -55,7 +55,8 @@ from modulo.core.audit_logger.labels import (
     short_id,
 )
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
-from modulo.core.cost_controller.finalize import derive_node_type_map, finalize_cost
+from modulo.core.cost_controller.finalize import FinalizeMetricSink, derive_node_type_map, finalize_cost
+from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.core.eval_engine import (
     EvalBlockedError,
 )
@@ -85,6 +86,7 @@ from modulo.core.pipeline_engine.decorator import (
 )
 from modulo.core.pipeline_engine.error_codes import (
     _CODE_SANDBOX_AGENT_FAILED,
+    _CODE_SANDBOX_NO_OUTPUT_JSON,
     map_legacy_code,
     sanitize_error_text,
 )
@@ -105,6 +107,7 @@ from modulo.core.pipeline_engine.evidence import (
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile, struct_hash_with_eval_defs
 from modulo.core.pipeline_engine.hitl_context import HitlReviewContext, build_hitl_review_context
 from modulo.core.pipeline_engine.idempotency import read_before_write_suppression
+from modulo.core.pipeline_engine.llm_judge import resolve_llm_judge_callable
 from modulo.core.pipeline_engine.model_backend_errors import classify_provider_error
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 from modulo.core.pipeline_engine.node_runner import (
@@ -121,12 +124,18 @@ from modulo.core.pipeline_engine.output_filter import OutputRejectedError
 from modulo.core.pipeline_engine.port_resolver import compute_port_topology_hash
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
 from modulo.core.pipeline_engine.runtime_retry import COMPENSATION_FAILED_CODE, CompensationFailedError
-from modulo.core.run_context.autonomy import PIPELINE_MAX_AUTONOMY_KEY
+from modulo.core.run_context.autonomy import (
+    PIPELINE_EARNED_AT_START_KEY,
+    PIPELINE_MAX_AUTONOMY_KEY,
+    AutonomyLevel,
+    autonomy_level_rank,
+)
 from modulo.core.run_provenance import run_provenance_fields
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, evaluate_org_spend_ceiling
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
 from modulo.db.crud.hitl_review_config import resolve_hitl_review_config, resolve_review_window_for_gate
 from modulo.db.crud.pipeline import get_pipeline
+from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.run import (
     ERROR_CODE_ORG_CAPACITY_LIMITED,
     ERROR_CODE_PIPELINE_CAPACITY,
@@ -140,7 +149,7 @@ from modulo.db.crud.run import (
     get_sandbox_concurrency_limit,
     update_run_status,
 )
-from modulo.db.crud.run_node_outputs import read_run_blobs, read_run_markers
+from modulo.db.crud.run_node_outputs import DualWriteError, read_run_blobs, read_run_markers
 from modulo.db.models.eval import Eval
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.model_backend import ModelBackend
@@ -150,6 +159,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.policy_gate import PolicyGate
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
 from modulo.db.rls import set_rls_execution_context, set_rls_org
+from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, is_lock_abort, sqlstate_of
 from modulo.otel_bridge import LangGraphOtelBridge, trace_id_for_thread
 
 _WORKER_ID: str = f"{socket.gethostname()}:{os.getpid()}"
@@ -170,7 +180,59 @@ _TERMINAL_STATUSES = TERMINAL_STATUSES
 _SANDBOX_AGENT_CACHE: OrderedDict[str, bool] = OrderedDict()
 _SANDBOX_AGENT_CACHE_MAX = 512
 
+# --- Bounded whole-transaction finalisation retry (money-correctness) ---
+# A deadlock (40P01) or the bounded lock_timeout expiry (55P03) taken at the
+# org / Run finalisation locks aborts the WHOLE finalisation transaction, so it
+# is re-run from its ownership layer (``_run_finalize_cost_transaction``, which
+# owns ``session.begin()``). Idempotent-safe: the rolled-back OUTER transaction
+# commits none of its own writes — including the org accrual, which lives inside
+# the ledger savepoint — so re-running cannot double-count. (``finalize_cost``
+# also runs side transactions that COMMIT independently — ``_reduced_escape``'s
+# fresh transaction and the journey/facts writes — so the claim is scoped to the
+# outer transaction, not to "nothing whatsoever".) A small fixed number of
+# attempts rides out transient contention; a persisting failure propagates and
+# the executor is terminal-failed truthfully (``executor_failed``), never a raw
+# 500 and never a silent swallow.
+FINALIZE_LOCK_RETRY_ATTEMPTS = 3
+# Small linear backoff between attempts (0.1s, 0.2s) — long enough for the
+# contended lock holder to release, short enough to stay well inside the
+# finalisation's bounded envelope.
+_FINALIZE_LOCK_RETRY_DELAY_SECONDS = 0.1
+
+
+def _is_finalize_lock_retryable(exc: BaseException) -> bool:
+    """True for a whole-transaction finalisation lock failure worth re-running.
+
+    Covers a deadlock (40P01) and the bounded lock_timeout expiry (55P03) —
+    both abort the transaction, so the only recovery is re-running it from its
+    ownership layer. ``is_lock_abort`` recognises both SQLSTATEs across the raw
+    asyncpg ``LockNotAvailableError`` and SQLAlchemy ``OperationalError`` shapes.
+
+    EXCLUDES :class:`~modulo.db.crud.run_node_outputs.DualWriteError`: it is a
+    deliberate FAIL-CLOSED abort that ``finalize_cost`` raises only AFTER the
+    run has been terminalised ``dual_write_failed``. Its ``sqlstate`` reflects
+    the underlying failure (often 40P01), so a bare SQLSTATE test would retry
+    and overwrite that truthful status — the predicate must never do so.
+    """
+    if isinstance(exc, DualWriteError):
+        return False
+    return is_lock_abort(exc)
+
+
 _log = logging.getLogger(__name__)
+
+# FAR-209 Track B: the guardrail eval_type value the executor splits out of
+# the node-scoped eval defs (interception-owned, never eval-engine-owned —
+# the eval engine raises GuardrailMisroutedError on a guardrail-typed def).
+GUARDRAIL_EVAL_TYPE = "guardrail"
+
+# NOTE: the output-point predicate is NOT re-implemented here. The canonical
+# ``is_output_interception`` lives in ``modulo.core.guardrails.output_intercept``
+# and is lazily imported inside ``_handle_chain_end_event`` (a module-level
+# import cycles guardrails -> eval_engine -> executor). A local copy of a
+# security-seam predicate is exactly the duplication the FAR-209 review
+# flagged — never reintroduce one.
+
 
 # Pipeline retry_policy events (must stay in sync with the API schema in
 # api/routes/pipelines.py and the graph validator). A policy can retry on:
@@ -1285,6 +1347,35 @@ async def _reclassify_after_work_intact(session: AsyncSession, run_id: uuid.UUID
         _log.exception("work_intact.classify_refresh_failed", extra={"run_id": str(run_id)})
 
 
+async def _apply_work_intact_best_effort(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    work_intact: bool | None,
+    *,
+    claim_token: str | None,
+) -> None:
+    """Best-effort persist of ``work_intact`` inside the finalisation transaction.
+
+    ``None`` means "not computed" — nothing to persist. A non-cancelled write
+    failure is logged and swallowed so the finalisation still completes (the
+    reclassify step, which depends on a successful write, is then skipped);
+    ``CancelledError`` propagates so the ownership layer's retry owns it.
+    """
+    if work_intact is None:
+        return
+    try:
+        await _apply_work_intact(session, run_id, work_intact, claim_token=claim_token)
+        # FAR-189 round-2 FIX 3: finalize_cost's inline classify ran BEFORE this
+        # write (work_intact still NULL at classify time). Re-persist the
+        # classification with the real value — the sweep skips already-classified
+        # rows, so this is the only correction for executor-terminalized runs.
+        await _reclassify_after_work_intact(session, run_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("work_intact.write_failed", extra={"run_id": str(run_id)})
+
+
 async def org_sandbox_capacity_free(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -1659,7 +1750,7 @@ def _stream_terminal_reason(
         return _terminal_failure(
             broker,
             "failed",
-            "sandbox.no_output_json",
+            _CODE_SANDBOX_NO_OUTPUT_JSON,
             _sanitize_detail(state.session_lost_reason, limit=5000),
             usage,
         )
@@ -1821,6 +1912,22 @@ def _interrupt_subject_leaf_key(gate_payload: dict[str, Any]) -> str | None:
     return result if isinstance(result, str) else None
 
 
+def _clamp_to_ceiling(base_level: AutonomyLevel, ceiling: str | None) -> str:
+    """Clamp ``base_level`` to a raw ceiling string, by rank (FAR-1175).
+
+    Levels are not lexicographic, so the clamp compares ``autonomy_level_rank``.
+    An absent or unparseable ceiling imposes no constraint — the base wins.
+    """
+    if isinstance(ceiling, str) and ceiling:
+        try:
+            ceiling_level = AutonomyLevel(ceiling)
+        except ValueError:
+            ceiling_level = None
+        if ceiling_level is not None and autonomy_level_rank(ceiling_level) < autonomy_level_rank(base_level):
+            return ceiling_level.value
+    return base_level.value
+
+
 class PipelineExecutor:
     """Execute a single pipeline run (HITL-aware, supports parallel fan-out).
 
@@ -1960,9 +2067,51 @@ class PipelineExecutor:
         )
         org_run_limit: int | None = await self._read_org_run_concurrency_limit(org_id)
 
+        try:
+            return await self._claim_under_capacity(
+                run_id=run_id,
+                org_id=org_id,
+                pipeline_id=pipeline_id,
+                max_concurrent=max_concurrent,
+                org_sandbox_cap=org_sandbox_cap,
+                org_sandbox_host_only=org_sandbox_host_only,
+                org_sandbox_population=org_sandbox_population,
+                org_run_limit=org_run_limit,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            recovered = await self._recover_capacity_lock_timeout(exc, run_id=run_id, org_id=org_id)
+            if recovered is None:
+                raise
+            return recovered
+
+    async def _claim_under_capacity(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        max_concurrent: int,
+        org_sandbox_cap: int | None,
+        org_sandbox_host_only: bool,
+        org_sandbox_population: str,
+        org_run_limit: int | None,
+    ) -> Run:
+        """Claim the run or demote it to pending, in one bounded transaction.
+
+        FAR-1610: ``set_mutation_row_lock_timeout`` bounds the hot ``runs``
+        row-lock wait BEFORE this transaction's first lock (``get_run`` below
+        is a plain read; the first lock is the cancel/claim/demote write). This
+        claim-time write is a RECOVERY path — the run was already claimed
+        ``running`` by ``claim_run_async``, so a contended row must NOT
+        terminal-fail it. Issued in the caller's transaction; the shared
+        ``update_run_status`` stays unbounded (FAR-1601).
+        """
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
+            await set_mutation_row_lock_timeout(session)
             run = await get_run(session, run_id)
             if run is None:
                 raise RunNotFoundError(run_id)
@@ -2047,6 +2196,41 @@ class PipelineExecutor:
                 raise RunNotFoundError(run_id)
             return pending_run
 
+    async def _recover_capacity_lock_timeout(
+        self,
+        exc: Exception,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+    ) -> Run | None:
+        """Recover from a 55P03 on ``_claim_under_capacity``'s write, else ``None``.
+
+        FAR-1610: the bounded row-lock wait expired (55P03) on a claim-time
+        write. The transaction rolled back whole, so NO status change was
+        applied — the run is left exactly as it was (the SAQ claim already set
+        it ``running``). This is the same fail-open-admit posture the capacity
+        READ failures already take (see ``_check_capacity``'s docstring): WARN,
+        re-read the row, and let the caller proceed; a concurrent cancel-request
+        is still caught by the stream path's DB cancellation check. Never
+        silent.
+
+        Returns the re-read run on a 55P03; returns ``None`` for any other
+        exception so ``_check_capacity`` re-raises it unchanged.
+        """
+        if sqlstate_of(exc) != LOCK_NOT_AVAILABLE_SQLSTATE:
+            return None
+        _log.warning(
+            "pipeline.capacity_check_lock_timeout run=%s — bounded "
+            "mutation_row_lock_timeout_ms wait expired on the claim-time write; no "
+            "status change applied, proceeding with the run's current state",
+            run_id,
+            exc_info=True,
+        )
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            return await get_run(session, run_id)
+
     async def _check_spend_ceiling_gate(
         self,
         *,
@@ -2075,6 +2259,14 @@ class PipelineExecutor:
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 await set_rls_execution_context(session)
+                # FAR-1610: bound the hot ``runs`` row-lock wait BEFORE the
+                # transaction's first lock (the terminalizing
+                # ``update_run_status`` below). Issued in the caller's
+                # transaction; the shared ``update_run_status`` stays unbounded
+                # (FAR-1601). A 55P03 lands in this method's existing fail-open
+                # ``except Exception`` (WARNING + return None) — the ledger block
+                # remains the authoritative hard ceiling.
+                await set_mutation_row_lock_timeout(session)
                 # FAR-1025: opt out of the global soft-delete filter — a
                 # pending-deletion org (deleted_at stamped at initiate) is still
                 # operationally live.  Skipping here means the pre-dispatch
@@ -2756,8 +2948,131 @@ class PipelineExecutor:
             org_id=org_id,
             session_factory=self._session_factory,
             node_id=node_id,
+            # FAR-315: mirror the HITL-gate path (FAR-307) — resolve the LLM
+            # judge callable from eval_def.config["model_backend_id"] via the
+            # ModelBackendHub, so llm_judge evals score against a real judge
+            # instead of returning the fail-closed 0.0 "callable not provided".
+            resolve_llm_judge=resolve_llm_judge_callable,
             on_eval_result=_on_post_node_eval_result,
         )
+
+    async def _run_output_guardrails(
+        self,
+        *,
+        node_id: str,
+        envelope: dict[str, Any],
+        guardrail_defs: list[EvalDefDTO],
+        run_id: uuid.UUID,
+        org_id: uuid.UUID | None,
+    ) -> dict[str, Any]:
+        """FAR-209 Track B: intercept a completed node's output envelope.
+
+        Runs ONLY the output-point guardrails (filtered here — the input-point
+        ones are excluded upstream, before this seam). Orders per the design:
+        interception runs BEFORE `_run_post_node_evals` in
+        `_handle_chain_end_event`, the redacted envelope is OVERWRITTEN into
+        ``ctx.completed_node_outputs`` there, and downstream LangGraph state
+        propagation is intentionally NOT in scope (documented known gap).
+
+        A block outcome raises ``GuardrailBlockedError`` — the stream loop's
+        existing ``except EvalBlockedError`` handler terminalizes the run
+        (``eval_failed``) unchanged. A destroy-mode mechanism error (fail
+        closed) becomes the same terminal block. Detection-only (replay /
+        kill switch) never acts and returns the envelope untouched.
+        """
+        from modulo.core.guardrails import GuardrailBlockedError, GuardrailRedactionMechanismError
+        from modulo.core.guardrails.output_intercept import run_output_interception_async
+
+        if not org_id:
+            _log.warning("guardrails.output_no_org", extra={"node_id": node_id})
+            return envelope
+        try:
+            outcome = await run_output_interception_async(
+                guardrail_defs,
+                envelope,
+                session_factory=self._session_factory,
+                run_id=run_id,
+                org_id=org_id,
+            )
+        except GuardrailRedactionMechanismError as exc:
+            _log.exception("guardrails.output_destroy_mechanism_error")
+            raise GuardrailBlockedError(
+                node_id, f"guardrail output mechanism error (destroy redaction failed closed): {exc}"
+            ) from exc
+        except Exception as exc:
+            # Defect path guard: any unexpected pass failure with a guarding
+            # guardrail must not pass through unredacted — block. The shared
+            # pass already fail-closes internally for detection mechanism
+            # errors; this covers anything IT failed to convert.
+            guarding = any((d.config.get("action") in ("block", "redact")) for d in guardrail_defs)
+            if guarding:
+                _log.exception("guardrails.output_pass_failed_closed")
+                raise GuardrailBlockedError(node_id, "guardrail output mechanism error at node-output edge") from exc
+            _log.warning("guardrails.output_pass_failed_open", extra={"node_id": node_id})
+            return envelope
+        # Typed round-trip: the seam returns the pass's redacted envelope
+        # by reference (outcome is dynamically typed from the async helper).
+        redacted: dict[str, Any] = outcome.payload
+        if outcome.blocked:
+            raise GuardrailBlockedError(outcome.blocking_eval_name or node_id, outcome.block_message)
+        return redacted
+
+    async def _intercept_node_output_and_run_evals(
+        self,
+        *,
+        name: str,
+        output: dict[str, Any],
+        ctx: _StreamContext,
+    ) -> dict[str, Any]:
+        """FAR-209 Track B: split a completed node's eval defs at the output seam.
+
+        Guardrail-typed defs bound to *name* are interception-owned, not
+        eval-owned: the OUTPUT-point ones intercept THIS envelope (and the
+        redacted copy is written back into ``ctx.completed_node_outputs``);
+        the rest keep flowing through ``_run_post_node_evals``. A guardrail
+        def left in the eval-shaped list would raise ``GuardrailMisroutedError``
+        inside the eval engine and crash the run.
+
+        Returns the (possibly redacted) envelope. A block outcome raises
+        ``GuardrailBlockedError`` (an ``EvalBlockedError`` subclass) — the
+        stream loop's handler terminalizes the run unchanged.
+        """
+        from modulo.core.guardrails.output_intercept import is_output_interception
+
+        node_defs = (ctx.eval_definitions_by_node or {}).get(name) or []
+        # Only the OUTPUT-point guardrail defs intercept THIS envelope
+        # (strictly the "output" literal -- an unknown value stays with the
+        # eval-shape list below, where strict validation fails closed).
+        # Input-point ones are owned by their upstream seam, so they keep
+        # flowing in the eval-shaped path here.
+        guardrail_defs = [d for d in node_defs if str(d.eval_type) == GUARDRAIL_EVAL_TYPE and is_output_interception(d)]
+        if guardrail_defs:
+            redacted = await self._run_output_guardrails(
+                node_id=name,
+                envelope=output,
+                guardrail_defs=guardrail_defs,
+                run_id=ctx.run_id,
+                org_id=ctx.org_id,
+            )
+            output = redacted
+            if ctx.completed_node_outputs is not None:
+                ctx.completed_node_outputs[name] = redacted
+        # Non-output defs (other eval types AND input-point guardrails) keep
+        # flowing in the eval-shaped path — an output-point one is the only
+        # def owned by THIS seam.
+        eval_defs = [
+            d for d in node_defs if not (str(d.eval_type) == GUARDRAIL_EVAL_TYPE and is_output_interception(d))
+        ]
+        if eval_defs:
+            await self._run_post_node_evals(
+                name,
+                output,
+                {name: eval_defs},
+                ctx.run_id,
+                ctx.org_id,
+                node_type_map=ctx.node_type_map,
+            )
+        return output
 
     async def _init_model_backend_hub(self, org_id: uuid.UUID) -> ModelBackendHub | None:
         """Load active model backends for the org and initialise ModelBackendHub.
@@ -2941,7 +3256,6 @@ class PipelineExecutor:
         org_id: uuid.UUID,
         rows: list[Any],
         allowed_connectors: list[str] | None,
-        request_visibility: str | None,
     ) -> Any:
         """Build, enter and initialise the ConnectorHub for the active rows.
 
@@ -2970,7 +3284,6 @@ class PipelineExecutor:
                 secrets_backend=secrets_backend,
                 runtime_provider=runtime_hub,
                 org_id=str(org_id),
-                request_visibility=request_visibility,
             )
             await hub.__aenter__()
             await hub.initialise(rows, allowed_connectors=allowed_connectors)
@@ -3023,14 +3336,8 @@ class PipelineExecutor:
         org_id: uuid.UUID,
         *,
         graph_json: dict[str, Any] | None = None,
-        request_visibility: str | None = None,
     ) -> Any | None:
         """Load active ConnectorInstance rows for the org and initialise ConnectorHub.
-
-        *request_visibility* (FAR-516) is the run's scoping axis: ``"team"`` when
-        the run belongs to a team, ``"org"`` when it is org-scoped. It is threaded
-        into every ACL check so an org-only connector (``visibility == "org"``) is
-        fail-closed rejected for a team-scoped invocation at the connector gate.
 
         Sets the hub on the current ContextVar so make_connector_fn can access it.
         Returns the hub (or None if no connectors are configured).
@@ -3088,7 +3395,7 @@ class PipelineExecutor:
                 )
                 if isinstance(rows, list) and rows:
                     # Connectors confirmed configured: build the hub (fail-closed).
-                    hub = await self._build_connector_hub(session, org_id, rows, allowed_connectors, request_visibility)
+                    hub = await self._build_connector_hub(session, org_id, rows, allowed_connectors)
                 else:
                     # Confirmed-EMPTY result (no error): the ONE genuine "no
                     # connectors configured" case. ``connectors_configured`` False
@@ -3370,7 +3677,7 @@ class PipelineExecutor:
             return None
         if final_status == "failed" and error_code in (
             "agent.failed",
-            "sandbox.no_output_json",
+            _CODE_SANDBOX_NO_OUTPUT_JSON,
             _CODE_SANDBOX_AGENT_FAILED,
         ):
             return False
@@ -3555,6 +3862,70 @@ class PipelineExecutor:
             )
             return None, False
 
+    async def _read_live_earned_for_pin(self, pipeline_id: uuid.UUID, org_id: uuid.UUID) -> str | None:
+        """Read the pipeline's live ``earned_autonomy_level`` for the run-start pin.
+
+        Failure-isolated (FAR-1175): any read error degrades to ``None`` so a
+        transient DB failure can never seed a PIN of ``None`` — the caller then
+        falls back to the pinned default. Cancellation still propagates.
+        """
+        try:
+            from modulo.db.crud.pipeline import get_pipeline
+
+            async with self._session_factory() as session, session.begin():
+                from modulo.db.rls import set_rls_org
+
+                await set_rls_org(session, org_id)
+                pipeline = await get_pipeline(session, pipeline_id, organisation_id=org_id)
+                if pipeline is not None:
+                    earned = getattr(pipeline, "earned_autonomy_level", None)
+                    if isinstance(earned, str) and earned:
+                        return earned
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "pipeline.executor.earned_autonomy_read_failed",
+                extra={"run_pipeline_id": str(pipeline_id), "org_id": str(org_id)},
+                exc_info=True,
+            )
+        return None
+
+    async def _resolve_earned_at_start(
+        self,
+        pipeline_id: uuid.UUID,
+        org_id: uuid.UUID,
+        snapshot: Any,
+    ) -> str | None:
+        """Pin the earned autonomy level for a run at its first execution (FAR-1175).
+
+        Returns the level the run will use as its in-flight *earned* base,
+        clamped to the pipeline ceiling:
+
+        * the live ``earned_autonomy_level`` from the pipeline row when set,
+        * else the snapshot's ``default_autonomy_level``,
+        * clamped to ``max_autonomy_level`` (falling back to the default as the
+          ceiling, mirroring runtime resolution).
+
+        Failure-isolated: any read error degrades to the pinned default so a
+        transient DB failure can never seed a PIN of ``None`` (which would let a
+        later live promotion loosen the run). Returns ``None`` only when no
+        default is available either.
+        """
+        default_level = getattr(snapshot, "default_autonomy_level", None)
+        ceiling = getattr(snapshot, "max_autonomy_level", None)
+        earned_live = await self._read_live_earned_for_pin(pipeline_id, org_id)
+
+        base = earned_live or (default_level if isinstance(default_level, str) and default_level else None)
+        if base is None:
+            return None
+        # Clamp to the ceiling using the rank map (levels are not lexicographic).
+        try:
+            base_level = AutonomyLevel(base)
+        except ValueError:
+            return None
+        return _clamp_to_ceiling(base_level, ceiling)
+
     async def resume(
         self,
         *,
@@ -3575,6 +3946,13 @@ class PipelineExecutor:
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
+            # FAR-1610: bound the hot ``runs`` row-lock wait BEFORE this
+            # transaction's first lock (the ``update_run_status`` claim below).
+            # Issued in the caller's transaction; the shared
+            # ``update_run_status`` stays unbounded (FAR-1601). A 55P03
+            # propagates to the resume caller's error handling — a request
+            # (HITL approve) path fails visibly, never silently.
+            await set_mutation_row_lock_timeout(session)
             run = await get_run(session, run_id)
             if run is None:
                 raise RunNotFoundError(run_id)
@@ -4130,6 +4508,83 @@ class PipelineExecutor:
         except Exception:
             _log.exception("pipeline.run_completed_publish_failed", extra={"run_id": str(run_id)})
 
+    async def _run_finalize_cost_transaction(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        final_status: str,
+        error_code: str | None,
+        error_detail: str | None,
+        node_token_usage: dict[str, Any] | None,
+        completed_node_outputs: dict[str, Any],
+        node_type_map: dict[str, str],
+        work_intact: bool | None,
+    ) -> None:
+        """Own + run the finalisation transaction, re-running it on a lock failure.
+
+        The transaction is owned HERE (``session.begin()``), so re-owning it on a
+        whole-transaction lock failure (40P01 deadlock / 55P03 lock_timeout) is
+        feasible and is the only recovery — the transaction is aborted, so a
+        retry must re-run it from the top, not attempt savepoint surgery.
+        Idempotent-safe: a rolled-back transaction commits NOTHING (including
+        the org accrual, which lives inside the ledger savepoint), so a re-run
+        cannot double-count and the ``finalize_cost`` duplicate-terminal guard
+        is re-derived from the DB each attempt.
+
+        The bounded retry rides out transient contention; if it persists, the
+        exception propagates — ``run_executor_with_watchdog`` terminal-fails the
+        run as ``executor_failed`` (truthful, non-silent), never a raw 500.
+
+        FAR-1642 retry-idempotent metrics: each attempt buffers its
+        ``limit_refused`` / ``duplicate_terminal`` counters on a FRESH
+        :class:`FinalizeMetricSink` and the sink is flushed only AFTER this
+        attempt's transaction commits — so a rolled-back attempt emits nothing
+        and a retried finalisation emits exactly one sample per event, instead
+        of one per attempt. A discarded sink (attempt failed) is simply dropped.
+        """
+        for attempt in range(1, FINALIZE_LOCK_RETRY_ATTEMPTS + 1):
+            metric_sink = FinalizeMetricSink()
+            try:
+                async with self._session_factory() as session, session.begin():
+                    await set_rls_org(session, org_id)
+                    await set_rls_execution_context(session)
+                    await finalize_cost(
+                        session,
+                        run_id=run_id,
+                        org_id=org_id,
+                        status=final_status,
+                        segment_node_token_usage=node_token_usage,
+                        segment_completed_node_outputs=completed_node_outputs,
+                        node_type_map=node_type_map,
+                        error_code=error_code,
+                        error_detail=error_detail,
+                        is_terminal=final_status in _TERMINAL_STATUSES,
+                        session_factory=self._session_factory,
+                        claim_token=self._claim_token,
+                        metric_sink=metric_sink,
+                    )
+                    await _apply_work_intact_best_effort(session, run_id, work_intact, claim_token=self._claim_token)
+                # Committed — the buffered counters are now real (exactly once).
+                metric_sink.flush()
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if attempt < FINALIZE_LOCK_RETRY_ATTEMPTS and _is_finalize_lock_retryable(exc):
+                    _log.warning(
+                        "pipeline.finalize_lock_retry",
+                        extra={
+                            "run_id": str(run_id),
+                            "attempt": attempt,
+                            "max_attempts": FINALIZE_LOCK_RETRY_ATTEMPTS,
+                            "sqlstate": sqlstate_of(exc),
+                        },
+                    )
+                    await asyncio.sleep(_FINALIZE_LOCK_RETRY_DELAY_SECONDS * attempt)
+                    continue
+                raise
+
     async def _finalize_run_after_stream(
         self,
         *,
@@ -4206,36 +4661,17 @@ class PipelineExecutor:
         # FAR-152 §15.3 — work_intact computed at terminalization (same rule as
         # execute()).
         work_intact = self._compute_run_work_intact(final_status, error_code, completed_node_outputs, node_ids)
-        async with self._session_factory() as session, session.begin():
-            await set_rls_org(session, org_id)
-            await set_rls_execution_context(session)
-            await finalize_cost(
-                session,
-                run_id=run_id,
-                org_id=org_id,
-                status=final_status,
-                segment_node_token_usage=node_token_usage,
-                segment_completed_node_outputs=completed_node_outputs,
-                node_type_map=node_type_map,
-                error_code=error_code,
-                error_detail=error_detail,
-                is_terminal=final_status in _TERMINAL_STATUSES,
-                session_factory=self._session_factory,
-                claim_token=self._claim_token,
-            )
-            if work_intact is not None:
-                try:
-                    await _apply_work_intact(session, run_id, work_intact, claim_token=self._claim_token)
-                    # FAR-189 round-2 FIX 3: finalize_cost's inline classify ran
-                    # BEFORE this write (work_intact still NULL at classify
-                    # time). Re-persist the classification with the real value —
-                    # the sweep skips already-classified rows, so this is the
-                    # only correction for executor-terminalized runs.
-                    await _reclassify_after_work_intact(session, run_id)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.exception("work_intact.write_failed", extra={"run_id": str(run_id)})
+        await self._run_finalize_cost_transaction(
+            run_id=run_id,
+            org_id=org_id,
+            final_status=final_status,
+            error_code=error_code,
+            error_detail=error_detail,
+            node_token_usage=node_token_usage,
+            completed_node_outputs=completed_node_outputs,
+            node_type_map=node_type_map,
+            work_intact=work_intact,
+        )
 
         # FAR-291: run-termination compensation for a guardrail-blocked
         # MID-RUN terminalization. The terminal status write (finalize_cost
@@ -4270,38 +4706,39 @@ class PipelineExecutor:
             final_status=final_status,
             completed_node_outputs=completed_node_outputs,
         )
-        # FAR-296 Phase 3b: revoke the per-run runner-role API key (if any was
-        # minted for a script-mode sandbox). Failure-isolated — a revocation
-        # failure never crashes terminalization (the key's short-TTL expiry in
-        # validate_api_key is the backstop).
+        # FAR-1690 A3 (run_teardown.RunTeardownSeal): the sealed terminal step —
+        # revoke the run's per-run API key (FAR-296 Phase 3b), then destroy every
+        # workspace labelled modulo.run.id = run_id, then write one
+        # run.teardown_sealed fact. Revoke-first, fail-closed. Failure-isolated
+        # so a seal failure never crashes terminalization (the key's short-TTL
+        # expiry in validate_api_key is the credential backstop; the
+        # workspace-orphan reconciler reclaims a workspace the seal could not).
         try:
-            await self._revoke_run_api_key(run_id=run_id, org_id=org_id)
+            await self._seal_run_teardown(run_id=run_id, org_id=org_id)
         except asyncio.CancelledError:
             raise
         except Exception:
-            _log.exception("run_api_key.revoke_failed", extra={"run_id": str(run_id)})
+            _log.exception("run_teardown.seal_failed", extra={"run_id": str(run_id)})
         return final_run
 
-    async def _revoke_run_api_key(self, *, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
-        """Revoke the per-run runner-role API key minted for a script-mode sandbox.
+    async def _seal_run_teardown(self, *, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
+        """Run the sealed joint revoke+destroy step for a terminalized run (FAR-1690 A3).
 
-        Failure-isolated at the call site — a revocation failure never crashes
-        terminalization (the key's short-TTL expiry in validate_api_key is the
-        backstop).
+        Failure-isolated at the call site — a seal failure never crashes
+        terminalization. ``seal_run_teardown`` itself raises
+        ``RunTeardownSealError`` when the credential revoke could not be
+        confirmed (after writing the ``sealed=False`` fact); that surfaces here
+        as a loud log line, and the compensating sweep retries.
         """
         if self._session_factory is None:
             return
-        try:
-            from modulo.auth.api_key import revoke_run_api_key
+        from modulo.core.run_teardown import seal_run_teardown
 
-            async with self._session_factory() as session, session.begin():
-                await set_rls_org(session, org_id)
-                await set_rls_execution_context(session)
-                await revoke_run_api_key(session, run_id=run_id, org_id=org_id)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("run_api_key.revoke_failed", extra={"run_id": str(run_id)})
+        await seal_run_teardown(
+            run_id=run_id,
+            org_id=org_id,
+            session_factory=self._session_factory,
+        )
 
     async def execute(
         self,
@@ -4344,6 +4781,13 @@ class PipelineExecutor:
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
+            # FAR-1610: bound the hot ``runs`` row-lock wait BEFORE the
+            # transaction's first lock (``_check_policy_gate_pin``'s
+            # terminalizing ``update_run_status``). Issued in the caller's
+            # transaction; the shared ``update_run_status`` stays unbounded
+            # (FAR-1601). A 55P03 propagates to ``execute()``'s caller and
+            # terminal-fails the run visibly (executor_failed) — never silent.
+            await set_mutation_row_lock_timeout(session)
             pin_run = await self._check_policy_gate_pin(
                 session,
                 run_id=run_id,
@@ -4438,18 +4882,11 @@ class PipelineExecutor:
         # when the stream never started (compile/pre-stream failure) — a run with
         # no executed nodes is never work-intact.
         node_ids: set[str] = set()
-        # FAR-516: the run's scoping axis determines whether an org-only connector
-        # is permitted. A run that belongs to a team (owner_team_id set) is
-        # team-scoped: any org-visibility connector it invokes is fail-closed
-        # rejected at the connector gate. Org-scoped runs (no team) may use
-        # org-only connectors.
-        request_visibility = "team" if getattr(run, "owner_team_id", None) is not None else "org"
         model_backend_hub, connector_hub, broker, single_sandbox_node = await self._init_run_environment(
             org_id=org_id,
             run_id=run_id,
             pipeline_id=pipeline_id,
             graph_json=graph_json,
-            request_visibility=request_visibility,
         )
         # FAR-295: computed ONCE per run — a graph containing ANY node declared
         # non-idempotent (idempotent=false) suppresses every retry path below
@@ -4641,8 +5078,6 @@ class PipelineExecutor:
             error_code=error_code,
             error_detail=error_detail,
             completed_node_outputs=completed_node_outputs,
-            broker=broker,
-            gate_suppressed=gate_suppressed,
             model_backend_hub=model_backend_hub,
             connector_hub=connector_hub,
         )
@@ -4986,15 +5421,10 @@ class PipelineExecutor:
         run_id: uuid.UUID,
         pipeline_id: uuid.UUID,
         graph_json: dict[str, Any],
-        request_visibility: str | None = None,
     ) -> tuple[ModelBackendHub | None, Any | None, RunEventBroker, bool]:
         """Set up the run-scoped execution environment (broker + hubs + otel).
 
         Returns ``(model_backend_hub, connector_hub, broker, single_sandbox_node)``.
-
-        *request_visibility* (FAR-516) is the run's scoping axis — ``"team"`` or
-        ``"org"`` — threaded into the connector hub so an org-only connector is
-        fail-closed rejected for a team-scoped invocation.
         """
         broker = get_registry().get_or_create(run_id)
         set_cancellation_check(self._check_db_cancellation(org_id, run_id))
@@ -5016,9 +5446,7 @@ class PipelineExecutor:
         # fetch-everything behaviour survives ONLY for fully-unrestricted runs
         # (no node contributes any connector), where the union is empty → None.
         try:
-            connector_hub = await self._init_connector_hub(
-                org_id, graph_json=graph_json, request_visibility=request_visibility
-            )
+            connector_hub = await self._init_connector_hub(org_id, graph_json=graph_json)
         except (Exception, asyncio.CancelledError):
             # FAR-439: a configured-path connector-hub failure RAISES (fail closed).
             # Catch the run-abort paths (Exception + asyncio.CancelledError) but not
@@ -5106,6 +5534,9 @@ class PipelineExecutor:
         )
 
         initial_state = _seed_state(snapshot, input_payload, variant_config_snapshot)
+        earned_pin = await self._resolve_earned_at_start(scope.pipeline_id, scope.org_id, snapshot)
+        if earned_pin is not None:
+            initial_state["run_context"][PIPELINE_EARNED_AT_START_KEY] = earned_pin
         initial_state.update(
             {
                 "_run_id": scope.run_id,
@@ -5116,6 +5547,13 @@ class PipelineExecutor:
                 # guardrail binding) find it at gate/dispatch time. The state
                 # key was READ in those paths but never written before this.
                 "_pipeline_id": scope.pipeline_id,
+                # FAR-1175 S1: pin the EARNED autonomy level at run start so
+                # an in-flight run resolves min(pinned-at-start, live earned) —
+                # a demotion bites at the next gate, a promotion never loosens
+                # an in-flight run (ADR 043 §3). Read from the live pipeline row
+                # (falling back to the pinned default and clamped to the
+                # ceiling) on the FIRST execution; the value persists in the run
+                # checkpoint so a resume does not re-pin a promoted level.
                 "_claim_lease": self._claim_token,
                 # FAR-764: community-gated agent IDs seeded into state so
                 # node functions can enforce default-deny without DB access.
@@ -5383,6 +5821,17 @@ class PipelineExecutor:
         cannot resurrect a run the watchdog just failed, and a cancellation
         cannot be reversed.
 
+        The row keeps ``dispatcher='saq'``/``dispatched_at``/``dispatch_phase``,
+        so the resulting ``pending`` row's ONLY durable recovery is
+        ``dispatcher_reconcile``'s pending re-enqueue leg (FAR-1649 qa
+        iteration 3) — and that leg re-dispatches it as ``execute_run``,
+        i.e. re-executes the run. Safe ONLY because every call site of THIS
+        method is gated on ``_graph_is_idempotent`` (``_can_fenced_requeue``,
+        ``_retry_policy_applies``, watchdog_retry's ``not graph_idempotent``
+        stand-down): the reset is never performed on a graph whose re-run is
+        unsafe (FAR-295). A new call site MUST keep that gate or a
+        non-idempotent node-started run becomes re-dispatchable.
+
         Returns the UPDATE rowcount (1 = the fence held / reset confirmed,
         0 = fence lost) so callers can distinguish a confirmed reset from a
         lost race (FAR-525: the retry counter only fires on a CONFIRMED reset).
@@ -5487,7 +5936,7 @@ class PipelineExecutor:
                 # while its code resolves to ``node.cancelled`` — that marker
                 # keeps the generic code.
                 if isinstance(exc, SandboxNodeFailedError) and "likely hung" not in error_detail:
-                    error_code = "sandbox.no_output_json"
+                    error_code = _CODE_SANDBOX_NO_OUTPUT_JSON
                 # FAR-734: scan the retained stdout (embedded in the
                 # exception message) for terminal provider-error
                 # signatures.  When a signature matches, upgrade the
@@ -5723,8 +6172,6 @@ class PipelineExecutor:
         error_code: str | None,
         error_detail: str | None,
         completed_node_outputs: dict[str, Any],
-        broker: RunEventBroker,
-        gate_suppressed: bool,
     ) -> tuple[str, str | None, str | None]:
         """Post-stream tail: agent_signal firing, gated publish.
 
@@ -5750,9 +6197,9 @@ class PipelineExecutor:
                         pipeline_id=pipeline_id,
                         completed_node_outputs=completed_node_outputs,
                     )
-            # FAR-228 / FAR-1534: a gated run (``gate_suppressed``) completes
-            # without re-executing the node; its ``run_completed`` is published
-            # post-finalize like every other complete run.
+            # FAR-228 / FAR-1534: a gated run completes without re-executing
+            # the node; its ``run_completed`` is published post-finalize like
+            # every other complete run.
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -5769,8 +6216,6 @@ class PipelineExecutor:
         error_code: str | None,
         error_detail: str | None,
         completed_node_outputs: dict[str, Any],
-        broker: RunEventBroker,
-        gate_suppressed: bool,
         model_backend_hub: ModelBackendHub | None,
         connector_hub: Any | None,
     ) -> tuple[str, str | None, str | None]:
@@ -5792,8 +6237,6 @@ class PipelineExecutor:
                 error_code=error_code,
                 error_detail=error_detail,
                 completed_node_outputs=completed_node_outputs,
-                broker=broker,
-                gate_suppressed=gate_suppressed,
             )
             tail_ok = True
         finally:
@@ -6227,6 +6670,16 @@ class PipelineExecutor:
         )
         if output is None:
             return
+        # Markers are extracted from the RAW output BEFORE interception — a
+        # FAR-209 Track B redaction (transform/policy) must never blank the
+        # stall / agent-failure / session-lost evidence path (these publish to
+        # the event broker on the surviving detail; the raw payload itself is
+        # only ever framed here).
+        stall_reason, agent_failure, session_lost = _record_node_markers(
+            output,
+            ctx.broker,
+            name,
+        )
         # FAR-305: standalone post-node eval path — run any node-scoped evals
         # for this node against its inner output dict. This is independent of
         # HITL gates: a plain node (no gate) now gets its node-scoped evals
@@ -6236,20 +6689,13 @@ class PipelineExecutor:
         # If this node ALSO feeds a HITL gate with eval-before-interrupt,
         # the evals run twice (once here post-node, once in the gate) —
         # acceptable for now, the gate's eval is a separate node.
+        #
+        # FAR-209 Track B: guardrail-typed defs bound to a node are SPLIT out
+        # here — they are interception-owned, not eval-owned. Output-point
+        # ones intercept THIS envelope; anything else would raise
+        # GuardrailMisroutedError inside the eval engine and crash the run.
         if ctx.eval_definitions_by_node:
-            await self._run_post_node_evals(
-                name,
-                output,
-                ctx.eval_definitions_by_node,
-                ctx.run_id,
-                ctx.org_id,
-                node_type_map=ctx.node_type_map,
-            )
-        stall_reason, agent_failure, session_lost = _record_node_markers(
-            output,
-            ctx.broker,
-            name,
-        )
+            output = await self._intercept_node_output_and_run_evals(name=name, output=output, ctx=ctx)
         if stall_reason:
             state.stall_reason = stall_reason
         if agent_failure:
@@ -6283,9 +6729,14 @@ class PipelineExecutor:
             if not state.first_node_signalled:
                 state.first_node_signalled = True
                 # FAR-893: update phase tracker so the watchdog logs the transition.
+                # FAR-1649: bind the shared constant (dependency-free leaf
+                # ``dispatch_phases``) so the write site and every
+                # reconcile/age-gate predicate share ONE definition — a
+                # bare literal here could desynchronise from the
+                # ``:first_node_phase`` bind params silently.
                 _tracker = self._dispatch_phase_tracker
                 if _tracker is not None:
-                    _tracker.enter_phase("first_node_dispatched")
+                    _tracker.enter_phase(PHASE_FIRST_NODE_DISPATCHED)
                 if self.on_first_progress is not None:
                     self.on_first_progress()
             # FAR-369 absolute node-deadline watchdog: signal per-node

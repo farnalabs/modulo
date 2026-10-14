@@ -57,6 +57,7 @@ class _MockSession:
         self.executed: list[tuple[Any, Any]] = []
         self.added: list[object] = []
         self.begin_cm = _MockBegin()
+        self.rolled_back = False
         bind = MagicMock()
         bind.dialect.name = "postgresql"
         self._get_bind = MagicMock(return_value=bind)
@@ -72,6 +73,12 @@ class _MockSession:
 
     def begin_nested(self) -> _MockBegin:
         return _MockBegin()
+
+    async def rollback(self) -> None:
+        """``AsyncSession.rollback()`` — the read-failed swallow calls this
+        explicitly (FAR-1644/M3) before unwinding, so a clean ``begin()``
+        exit cannot commit a healthy transaction."""
+        self.rolled_back = True
 
     def in_transaction(self) -> bool:
         return True
@@ -1791,6 +1798,10 @@ async def test_reconcile_org_read_failure_returns(caplog):
         )
     assert got == 0
     assert any("read failed" in m for m in caplog.messages)
+    # FAR-1644/M3: the swallow also decides the transaction outcome — it rolls
+    # back explicitly, so a healthy connection can no longer COMMIT the
+    # terminalizer writes the summary has just disowned.
+    assert session.rolled_back
 
 
 async def test_reconcile_org_processes_rows():
@@ -2220,7 +2231,7 @@ async def test_reconcile_one_row_recheck_variants():
         patch.object(ch, "_reconcile_enqueue_failed", new_callable=AsyncMock, return_value=None),
         patch.object(ch, "_read_reconcile_job", new_callable=AsyncMock, side_effect=[(None, True), (None, False)]),
     ):
-        got = await ch._reconcile_one_row(session, q, _redis(), ORG, row, 20, 0, summary, [])
+        got = await ch._reconcile_one_row(session, q, _redis(), ORG, row, 20, 0, summary, [], stale_window=600)
     assert got == 0
     # Re-check finds a job -> skipped.
     summary2: dict[str, Any] = {
@@ -2236,7 +2247,7 @@ async def test_reconcile_one_row_recheck_variants():
         patch.object(ch, "_reconcile_enqueue_failed", new_callable=AsyncMock, return_value=None),
         patch.object(ch, "_read_reconcile_job", new_callable=AsyncMock, side_effect=[(None, True), ("job-1", True)]),
     ):
-        got = await ch._reconcile_one_row(session, q, _redis(), ORG, row, 20, 0, summary2, [])
+        got = await ch._reconcile_one_row(session, q, _redis(), ORG, row, 20, 0, summary2, [], stale_window=600)
     assert got == 0
     assert summary2["skipped"] == 1
 

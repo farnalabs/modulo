@@ -11,7 +11,11 @@
         </Button>
       </header>
 
-      <LoadingSpinner v-if="loading" />
+      <TableSkeleton
+        v-if="loading"
+        :columns="5"
+        :aria-label="$t('views.ParameterSchemasView.loading_schemas')"
+      />
       <ErrorAlert v-else-if="error" :message="error" :on-retry="loadSchemas" />
 
       <template v-else>
@@ -68,12 +72,13 @@
           </p>
           <p v-if="deleteRefError" class="mt-1 text-sm text-destructive/80">{{ deleteRefError }}</p>
           <div class="mt-3 flex items-center gap-2">
-            <Button :disabled="deleting" severity="danger" @click="doDelete">
+            <Button :disabled="deleting" severity="danger" data-testid="paramschema-delete-confirm" @click="doDelete">
               {{ deleting ? $t('views.ParameterSchemasView.deleting') : $t('views.ParameterSchemasView.delete') }}
             </Button>
             <button
               type="button"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+              data-testid="paramschema-delete-cancel"
               @click="deleteConfirmId = null"
             >
               {{ $t('views.ParameterSchemasView.cancel') }}
@@ -116,12 +121,13 @@
               <p v-if="!isNew" class="text-sm text-muted-foreground">v{{ editingSchema?.version ?? 1 }}</p>
             </div>
             <div class="flex items-center gap-2">
-              <Button :disabled="saving || !schemaForm.name.trim()" @click="saveSchema">
+              <Button :disabled="saving || !schemaForm.name.trim()" data-testid="paramschema-save" @click="saveSchema">
                 {{ saving ? $t('views.ParameterSchemasView.saving') : (isNew ? $t('views.ParameterSchemasView.create') : $t('views.ParameterSchemasView.save_as_new_version')) }}
               </Button>
               <button
                 type="button"
                 class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+                data-testid="paramschema-cancel"
                 @click="closeEditor"
               >
                 {{ $t('views.ParameterSchemasView.cancel') }}
@@ -129,9 +135,11 @@
             </div>
           </header>
 
-          <div v-if="saveError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
-            {{ saveError }}
-          </div>
+          <!--
+            Save-form failure: the user fixes the form and clicks Save again;
+            an automatic Retry could double-create, so none is offered.
+          -->
+          <ErrorAlert v-if="saveError" :message="saveError" :retryable="false" />
           <div v-if="saveSuccess" class="rounded-lg border border-success/50 bg-success/10 p-4 text-sm text-success">
             {{ saveSuccess }}
           </div>
@@ -163,7 +171,7 @@
           <div>
             <div class="flex items-center justify-between mb-3">
               <h3 class="text-sm font-semibold">{{ $t('views.ParameterSchemasView.parameters') }}</h3>
-              <Button severity="secondary" outlined size="small" @click="addParameter">
+              <Button severity="secondary" outlined size="small" data-testid="paramschema-add-param" @click="addParameter">
                 {{ $t('views.ParameterSchemasView.add_parameter') }}
               </Button>
             </div>
@@ -190,6 +198,7 @@
                         type="text"
                         class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm font-mono"
                         :placeholder="$t('views.ParameterSchemasView.param_name_placeholder')"
+                        :data-testid="`paramschema-param-name-${idx}`"
                       />
                       </div>
                       <div>
@@ -200,6 +209,7 @@
                         type="text"
                         class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
                         :placeholder="$t('views.ParameterSchemasView.param_label_placeholder')"
+                        :data-testid="`paramschema-param-label-${idx}`"
                       />
                       </div>
                     </div>
@@ -211,6 +221,7 @@
                         type="text"
                         class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
                         :placeholder="$t('views.ParameterSchemasView.param_desc_placeholder')"
+                        :data-testid="`paramschema-param-desc-${idx}`"
                       />
                     </div>
                     <div class="grid grid-cols-2 gap-3">
@@ -220,6 +231,7 @@
                         :id="'paramschema-param-type-' + idx"
                         v-model="param.type"
                         class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
+                        :data-testid="`paramschema-param-type-${idx}`"
                         @change="onParamTypeChange(param)"
                       >
                           <option value="string">string</option>
@@ -232,11 +244,21 @@
                       </div>
                       <div class="flex items-end gap-2 pb-1">
                         <label class="flex items-center gap-1.5 text-sm cursor-pointer">
-                          <input type="checkbox" v-model="param.required" class="h-4 w-4 rounded border-gray-300" />
-                          {{ $t('views.ParameterSchemasView.param_required') }}
+<input
+                          type="checkbox"
+                          v-model="param.required"
+                          class="h-4 w-4 rounded border-gray-300"
+                          :data-testid="`paramschema-param-required-${idx}`"
+                        />
+                        {{ $t('views.ParameterSchemasView.param_required') }}
                         </label>
                         <label v-if="param.type === 'string'" class="flex items-center gap-1.5 text-sm cursor-pointer">
-                          <input type="checkbox" v-model="param.multiline" class="h-4 w-4 rounded border-gray-300" />
+                          <input
+                            type="checkbox"
+                            v-model="param.multiline"
+                            class="h-4 w-4 rounded border-gray-300"
+                            :data-testid="`paramschema-param-multiline-${idx}`"
+                          />
                           {{ $t('views.ParameterSchemasView.param_multiline') }}
                         </label>
                       </div>
@@ -249,6 +271,7 @@
                         v-model.number="param.minimum"
                         type="number"
                         class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
+                        :data-testid="`paramschema-param-min-${idx}`"
                       />
                       </div>
                       <div>
@@ -258,6 +281,7 @@
                         v-model.number="param.maximum"
                         type="number"
                         class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
+                        :data-testid="`paramschema-param-max-${idx}`"
                       />
                       </div>
                     </div>
@@ -271,6 +295,7 @@
                             :aria-label="$t('views.ParameterSchemasView.param_options')"
                             class="flex-1 rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
                             :placeholder="$t('views.ParameterSchemasView.option_placeholder')"
+                            :data-testid="`paramschema-param-option-${idx}-${oi}`"
                           />
                           <button
                             type="button"
@@ -284,7 +309,8 @@
                         </div>
                         <button
                           type="button"
-                          class="text-xs text-indigo-500 hover:text-indigo-400"
+                          class="text-xs text-primary hover:underline"
+                          data-testid="paramschema-add-option"
                           @click="(param.options = param.options || []).push('')"
                         >
                           {{ $t('views.ParameterSchemasView.add_option') }}
@@ -299,6 +325,7 @@
                         v-model="param.default_value"
                         type="text"
                         class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
+                        :data-testid="`paramschema-param-default-${idx}`"
                       />
                       <input
                         :id="'paramschema-param-default-' + idx"
@@ -306,12 +333,14 @@
                         v-model.number="param.default_value"
                         type="number"
                         class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
+                        :data-testid="`paramschema-param-default-${idx}`"
                       />
                       <select
                         :id="'paramschema-param-default-' + idx"
                         v-else-if="param.type === 'boolean'"
                         v-model="param.default_value"
                         class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
+                        :data-testid="`paramschema-param-default-${idx}`"
                       >
                         <option :value="undefined"></option>
                         <option :value="true">true</option>
@@ -322,6 +351,7 @@
                         v-else-if="param.type === 'select' && param.options?.length"
                         v-model="param.default_value"
                         class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
+                        :data-testid="`paramschema-param-default-${idx}`"
                       >
                         <option :value="undefined"></option>
                         <option v-for="o in param.options" :key="o" :value="o">{{ o }}</option>
@@ -353,7 +383,24 @@
             </Button>
           </header>
 
-          <LoadingSpinner v-if="setsLoading" />
+          <output
+            v-if="setsLoading"
+            class="block space-y-2"
+            aria-busy="true"
+            :aria-label="$t('views.ParameterSchemasView.loading_sets')"
+          >
+            <div
+              v-for="n in 4"
+              :key="`paramschema-sets-skeleton-${n}`"
+              class="flex items-center justify-between rounded-lg border bg-card px-4 py-3"
+            >
+              <div class="space-y-2">
+                <SkeletonBlock height-class="h-4 w-40" />
+                <SkeletonBlock height-class="h-3 w-56" />
+              </div>
+              <SkeletonBlock height-class="h-6 w-24" />
+            </div>
+          </output>
           <ErrorAlert v-else-if="setsError" :message="setsError" :on-retry="loadSets" />
 
           <div v-else-if="sets.length === 0" class="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
@@ -365,10 +412,11 @@
               v-for="set in sets"
               :key="set.id"
               class="flex items-center justify-between rounded-lg border bg-card px-4 py-3"
+              :data-testid="`paramschema-set-${set.id}`"
             >
               <div>
                 <p class="text-sm font-medium">{{ set.name }}</p>
-                <p v-if="set.description" class="text-xs text-muted-foreground">{{ set.description }}</p>
+                <p class="text-xs text-muted-foreground">{{ set.description || '—' }}</p>
               </div>
               <div class="flex items-center gap-1">
                 <button
@@ -422,6 +470,7 @@
                 type="text"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                 :placeholder="$t('views.ParameterSchemasView.desc_placeholder')"
+                data-testid="paramschema-set-desc"
               />
               </div>
             </div>
@@ -445,15 +494,17 @@
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                 rows="3"
                 :placeholder="param.placeholder || ''"
+                :data-testid="`paramschema-set-value-${param.name}`"
               />
               <input
                 v-else-if="param.type === 'string'"
                 :id="'paramschema-set-value-' + param.name"
                 v-model="setForm.values[param.name]"
                 type="text"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  :placeholder="param.placeholder || ''"
-                />
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                :placeholder="param.placeholder || ''"
+                :data-testid="`paramschema-set-value-${param.name}`"
+              />
                 <input
                   v-else-if="param.type === 'number'"
                   :id="'paramschema-set-value-' + param.name"
@@ -462,12 +513,14 @@
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                   :min="param.minimum"
                   :max="param.maximum"
+                  :data-testid="`paramschema-set-value-${param.name}`"
                 />
                 <select
                   v-else-if="param.type === 'boolean'"
                   :id="'paramschema-set-value-' + param.name"
                   v-model="setForm.values[param.name]"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                  :data-testid="`paramschema-set-value-${param.name}`"
                 >
                   <option :value="undefined"></option>
                   <option :value="true">true</option>
@@ -478,6 +531,7 @@
                   :id="'paramschema-set-value-' + param.name"
                   v-model="setForm.values[param.name]"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                  :data-testid="`paramschema-set-value-${param.name}`"
                 >
                   <option :value="undefined"></option>
                   <option v-for="o in (param.options || [])" :key="o" :value="o">{{ o }}</option>
@@ -487,6 +541,7 @@
                     :id="'paramschema-set-value-' + param.name"
                     v-model="setForm.values[param.name]"
                     class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                    :data-testid="`paramschema-set-value-${param.name}`"
                   >
                     <option :value="undefined"></option>
                     <option v-for="mb in modelBackends" :key="mb.id" :value="mb.id">{{ mb.name || shortId(mb.id) }}</option>
@@ -497,6 +552,7 @@
                     :id="'paramschema-set-value-' + param.name"
                     v-model="setForm.values[param.name]"
                     class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                    :data-testid="`paramschema-set-value-${param.name}`"
                   >
                     <option :value="undefined"></option>
                     <option v-for="s in allSchemas" :key="s.id" :value="s.id">{{ s.name || shortId(s.id) }}</option>
@@ -512,6 +568,7 @@
               </Button>
               <button type="button"
                 class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+                data-testid="paramschema-set-cancel"
                 @click="cancelSetEdit"
               >
                 {{ $t('views.ParameterSchemasView.cancel') }}
@@ -525,11 +582,12 @@
             </p>
             <p v-if="deleteSetError" class="mt-1 text-sm text-destructive/80">{{ deleteSetError }}</p>
             <div class="mt-3 flex items-center gap-2">
-              <Button :disabled="deletingSet" severity="danger" @click="doDeleteSet">
+              <Button :disabled="deletingSet" severity="danger" data-testid="paramschema-delete-set-confirm" @click="doDeleteSet">
                 {{ deletingSet ? $t('views.ParameterSchemasView.deleting') : $t('views.ParameterSchemasView.delete') }}
               </Button>
               <button type="button"
                 class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+                data-testid="paramschema-delete-set-cancel"
                 @click="deleteSetConfirmId = null"
               >
                 {{ $t('views.ParameterSchemasView.cancel') }}
@@ -540,7 +598,22 @@
 
         <!-- References Tab -->
         <TabPanel value="references" class="space-y-4 pt-4">
-          <LoadingSpinner v-if="refsLoading" />
+          <output
+            v-if="refsLoading"
+            class="block space-y-4"
+            aria-busy="true"
+            :aria-label="$t('views.ParameterSchemasView.loading_references')"
+          >
+            <div class="space-y-2">
+              <SkeletonBlock height-class="h-4 w-56" />
+              <SkeletonBlock height-class="h-4 w-64" />
+              <SkeletonBlock height-class="h-4 w-48" />
+            </div>
+            <div class="space-y-2 pt-2">
+              <SkeletonBlock height-class="h-4 w-56" />
+              <SkeletonBlock height-class="h-4 w-64" />
+            </div>
+          </output>
           <ErrorAlert v-else-if="refsError" :message="refsError" :on-retry="loadReferences" />
 
           <template v-else>
@@ -553,7 +626,7 @@
               <div v-if="!references.agents?.length" class="text-sm text-muted-foreground">—</div>
               <ul v-else class="space-y-1">
                 <li v-for="agent in references.agents" :key="agent.id" class="text-sm">
-                  <router-link :to="`/admin/agents/${agent.id}`" class="text-indigo-500 hover:text-indigo-400">
+                  <router-link :to="`/admin/agents/${agent.id}`" class="text-primary hover:underline" :data-testid="`paramschema-ref-agent-${agent.id}`">
                     {{ agent.name || shortId(agent.id) }}
                   </router-link>
                 </li>
@@ -588,6 +661,7 @@
                 v-model="validateValues[param.name]"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                 rows="2"
+                :data-testid="`paramschema-validate-value-${param.name}`"
               />
               <input
                 v-else-if="param.type === 'string'"
@@ -595,6 +669,7 @@
                 v-model="validateValues[param.name]"
                 type="text"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                :data-testid="`paramschema-validate-value-${param.name}`"
               />
               <input
                 v-else-if="param.type === 'number'"
@@ -602,12 +677,14 @@
                 v-model.number="validateValues[param.name]"
                 type="number"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                :data-testid="`paramschema-validate-value-${param.name}`"
               />
               <select
                 v-else-if="param.type === 'boolean'"
                 :id="'paramschema-validate-value-' + param.name"
                 v-model="validateValues[param.name]"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                :data-testid="`paramschema-validate-value-${param.name}`"
               >
                 <option :value="undefined"></option>
                 <option :value="true">true</option>
@@ -618,6 +695,7 @@
                 :id="'paramschema-validate-value-' + param.name"
                 v-model="validateValues[param.name]"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                :data-testid="`paramschema-validate-value-${param.name}`"
               >
                 <option :value="undefined"></option>
                 <option v-for="o in (param.options || [])" :key="o" :value="o">{{ o }}</option>
@@ -626,7 +704,7 @@
           </div>
 
           <div class="flex items-center gap-2">
-            <Button :disabled="validating" @click="doValidate">
+            <Button :disabled="validating" data-testid="paramschema-validate" @click="doValidate">
               {{ validating ? $t('views.ParameterSchemasView.validating') : $t('views.ParameterSchemasView.validate') }}
             </Button>
           </div>
@@ -656,7 +734,8 @@ import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
+import TableSkeleton from '../components/shared/TableSkeleton.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import PageHeader from '../components/shared/PageHeader.vue'

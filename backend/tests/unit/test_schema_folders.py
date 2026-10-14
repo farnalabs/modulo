@@ -45,12 +45,6 @@ _SCHEMA_ID = uuid.uuid4()
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
 
 
-@pytest.fixture(autouse=True)
-def _prevent_db_auth_check(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Prevent ``_verify_identity`` from connecting to a real database."""
-    monkeypatch.setattr("modulo.auth.dependencies._verify_identity", AsyncMock(return_value=None))
-
-
 def _make_settings() -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",

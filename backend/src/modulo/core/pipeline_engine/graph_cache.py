@@ -1020,6 +1020,268 @@ def _add_normal_edges(
             graph.add_edge(source, target)
 
 
+# ---------------------------------------------------------------------------
+# build_graph_from_json assembly helpers (S3776 decomposition)
+#
+# The builder's orchestration splits into three phases with identical graph
+# mutation ordering to the original single function: (1) _assemble_nodes adds
+# every pipeline node's wrapped callable, (2) _assemble_edges compiles every
+# edge / gate / router, (3) the caller picks the entry point from the returned
+# target-id set.
+# ---------------------------------------------------------------------------
+
+
+def _classify_outgoing_edges(
+    src_edges: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split a source's forwarding edges into conditional / loop / normal lists."""
+    conditional = [e for e in src_edges if _get_edge_type(e) == "conditional"]
+    loop_edges = [e for e in src_edges if _get_edge_type(e) == "loop"]
+    normal = [e for e in src_edges if _get_edge_type(e) not in ("conditional", "loop")]
+    return conditional, loop_edges, normal
+
+
+def _inject_node_hitl_configs(
+    source: str,
+    normal: list[dict[str, Any]],
+    source_node_def: dict[str, Any],
+) -> None:
+    """Stamp a HITL node's ``hitl_config`` onto each of its normal outgoing edges.
+
+    HITL node (FAR-402 P1 / F2-D): compile-equivalent to the legacy edge-level
+    HITL gate. Inject the node's hitl_config onto every outgoing (normal) edge
+    so the existing synthetic-gate path picks it up unchanged. Mutates the edge
+    dicts in place, before :func:`_add_normal_edges` reads them back.
+    """
+    hitl_config = dict(source_node_def.get("hitl_config") or {})
+    for edge in normal:
+        review_id = _make_review_id(source, _get_edge_val(edge, "target", "target_node_id"))
+        edge["hitl_review_config"] = {**hitl_config, "review_id": review_id}
+
+
+def _register_router_rule_targets(nodes: list[dict[str, Any]], target_ids: set[str]) -> None:
+    """Register every Router-node rule/default target in *target_ids* (FAR-415).
+
+    Router nodes route via ``router_config`` (not outgoing edges), so their rule
+    targets are never seen by the edge-driven ``target_ids`` population. The
+    entry-point selection below must not pick a router's rule target as the
+    pipeline entry node (a router whose rule target sorts first in *nodes* would
+    otherwise become the entry, leaving the real entry + router dead).
+    """
+    router_nodes = [n for n in nodes if (n.get("node_type") or "agent") == "router"]
+    for router_node in router_nodes:
+        router_config = router_node.get("router_config") or {}
+        for rule in router_config.get("rules", []) or []:
+            target = rule.get("target") or rule.get("target_port")
+            if target is not None:
+                target_ids.add(str(target))
+
+
+def _group_retry_adjacency(
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[dict[str, Any]]]]:
+    """Build the per-node incoming/outgoing edge sets used by the retry wrapper.
+
+    Reject edges are excluded (a reject edge is a kick-back, not a new data
+    dependency). Returned as ``(incoming_by_node, outgoing_by_node)``, both
+    pre-seeded with every node id so each node resolves to a list.
+    """
+    incoming_by_node: dict[str, list[dict[str, Any]]] = {str(n["id"]): [] for n in nodes}
+    outgoing_by_node: dict[str, list[dict[str, Any]]] = {str(n["id"]): [] for n in nodes}
+    for edge_def in edges:
+        if _get_edge_type(edge_def) == "reject":
+            continue
+        src = _get_edge_val(edge_def, "source", "source_node_id")
+        tgt = _get_edge_val(edge_def, "target", "target_node_id")
+        outgoing_by_node.setdefault(str(src), []).append(edge_def)
+        incoming_by_node.setdefault(str(tgt), []).append(edge_def)
+    return incoming_by_node, outgoing_by_node
+
+
+def _assemble_nodes(
+    graph: StateGraph[Any],
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    *,
+    pipeline_node_timeout_seconds: int,
+    session_factory: Callable[..., Any] | None,
+    pipeline_retry_policy: dict[str, Any] | None,
+    node_idempotency_key: Callable[[str, dict[str, Any]], str | None] | None,
+    pipeline_stdout_retention_config: dict[str, Any] | None,
+) -> None:
+    """Build and add every pipeline node's wrapped callable to *graph*.
+
+    FAR-228: the idempotency gate is inert on multi-node graphs — computed once
+    here and threaded into the sandbox node builder so guard A (early skip) can
+    require it without re-deriving from the node's own def.
+
+    FAR-795: per-node DAG-ancestor id sets (over forwarding edges), frozen at
+    compile time and threaded into the agent node fns so the node-start
+    work_item_refs injection (node_runner ``make_node_fn``) can union the
+    ancestors' emissions with the create-time refs through the pure
+    ``collect_injected_refs`` collector. Derived purely from graph_json
+    topology — cache-consistent with the struct hash.
+
+    Every node's raw callable is built FIRST, then each is wrapped with the P5
+    retry/compensation wrapper. Wrapping after a full pass lets the wrapper
+    resolve OTHER nodes' raw fns (per-edge retry re-executes the SOURCE; a
+    compensation edge invokes the on_failure_target), which is impossible in a
+    single pass (the source/target fn may not exist yet).
+    """
+    single_sandbox_node = _count_sandbox_nodes(nodes)
+    dag_ancestors_by_node = _compute_dag_ancestor_ids([str(n["id"]) for n in nodes], edges)
+
+    raw_fns: dict[str, Any] = {}
+    for node_def in nodes:
+        node_timeout = node_def.get("timeout_seconds")
+        timeout = pipeline_node_timeout_seconds if node_timeout is None else node_timeout
+        raw_fns[str(node_def["id"])] = _build_raw_node_fn(
+            node_def,
+            timeout=timeout,
+            session_factory=session_factory,
+            single_sandbox_node=single_sandbox_node,
+            pipeline_stdout_retention_config=pipeline_stdout_retention_config,
+            dag_ancestor_ids=dag_ancestors_by_node.get(str(node_def["id"])),
+        )
+
+    # Node-id-to-def lookup for the retry wrapper (source fail-closed + retry config).
+    retry_nodes_by_id: dict[str, dict[str, Any]] = {str(n["id"]): n for n in nodes}
+    # Per-node incoming/outgoing edge sets for per-edge retry + compensation.
+    incoming_by_node, outgoing_by_node = _group_retry_adjacency(nodes, edges)
+
+    for node_def in nodes:
+        node_id = str(node_def["id"])
+        wrapped = make_retrying_node_fn(
+            raw_fns[node_id],
+            node_id=node_id,
+            node_def=node_def,
+            pipeline_retry_policy=pipeline_retry_policy,
+            outgoing_edges=outgoing_by_node.get(node_id, []),
+            incoming_edges=incoming_by_node.get(node_id, []),
+            raw_fn_resolver=raw_fns.get,
+            idempotency_key=node_idempotency_key,
+            node_defs=retry_nodes_by_id,
+        )
+        graph.add_node(node_id, wrapped)
+
+
+def _link_sources(
+    graph: StateGraph[Any],
+    source: str,
+    src_edges: list[dict[str, Any]],
+    *,
+    nodes_by_id: dict[str, dict[str, Any]],
+    target_ids: set[str],
+    gate_node_ids: set[str],
+    reject_targets_by_source: dict[str, str],
+    eval_definitions_by_node: dict[str, list[EvalDefDTO]] | None,
+    session_factory: Callable[..., Any] | None,
+    org_id: uuid.UUID | None,
+    node_type_map: dict[str, str],
+) -> None:
+    """Compile one source node's outgoing edges onto *graph*.
+
+    Dispatch precedence (unchanged from the original builder): Router node
+    config > HITL node config > loop edges > LLM routing mode > conditional
+    edges > normal edges.
+    """
+    source_node_def = nodes_by_id.get(source, {})
+    routing_mode: str | None = source_node_def.get("routing_mode")
+    source_node_type: str = source_node_def.get("node_type", "agent")
+
+    conditional, loop_edges, normal = _classify_outgoing_edges(src_edges)
+
+    if source_node_type == "router":
+        # Router node (FAR-402 P1 / F2-A): lowers to the existing
+        # conditional-edge compile path via the shared JMESPath evaluator.
+        # Compile-time default-rule enforcement guards mis-configured graphs.
+        router_config = dict(source_node_def.get("router_config") or {})
+        _validate_router_config(router_config, source)
+        graph.add_conditional_edges(source, make_router_node_fn(router_config, node_id=source))
+    elif source_node_type == "hitl":
+        # HITL node (FAR-402 P1 / F2-D): stamp the node-level hitl_config onto
+        # every outgoing normal edge, then compile them via the legacy
+        # synthetic-gate path unchanged.
+        _inject_node_hitl_configs(source, normal, source_node_def)
+        _add_normal_edges(
+            graph,
+            source,
+            normal,
+            target_ids=target_ids,
+            gate_node_ids=gate_node_ids,
+            reject_targets_by_source=reject_targets_by_source,
+            eval_definitions_by_node=eval_definitions_by_node,
+            session_factory=session_factory,
+            org_id=org_id,
+            node_type_map=node_type_map,
+        )
+    elif loop_edges:
+        _add_loop_edges(graph, source, loop_edges, normal, target_ids)
+    elif routing_mode == "llm":
+        _add_llm_routing(graph, source, source_node_def, conditional, normal, target_ids)
+    elif conditional:
+        _add_conditional_routing(graph, source, conditional, normal, target_ids)
+    else:
+        _add_normal_edges(
+            graph,
+            source,
+            normal,
+            target_ids=target_ids,
+            gate_node_ids=gate_node_ids,
+            reject_targets_by_source=reject_targets_by_source,
+            eval_definitions_by_node=eval_definitions_by_node,
+            session_factory=session_factory,
+            org_id=org_id,
+            node_type_map=node_type_map,
+        )
+
+
+def _assemble_edges(
+    graph: StateGraph[Any],
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    *,
+    node_type_map: dict[str, str],
+    eval_definitions_by_node: dict[str, list[EvalDefDTO]] | None,
+    session_factory: Callable[..., Any] | None,
+    org_id: uuid.UUID | None,
+) -> set[str]:
+    """Compile every edge of the graph (HITL gates, loop counters, routers).
+
+    Returns ``target_ids`` — every node id reachable as an edge, gate or router
+    target — which the caller uses for entry-point selection.
+    """
+    # Build reject-edge lookup for kick-back routing.
+    reject_targets_by_source = _build_reject_targets(edges)
+    # Group forwarding edges by source (skip reject).
+    source_edges = _group_forwarding_edges(edges)
+
+    target_ids: set[str] = set()
+    gate_node_ids: set[str] = set()
+
+    # Build a node-id-to-def lookup for quick access.
+    nodes_by_id: dict[str, dict[str, Any]] = {str(n["id"]): n for n in nodes}
+
+    _register_router_rule_targets(nodes, target_ids)
+
+    for source, src_edges in source_edges.items():
+        _link_sources(
+            graph,
+            source,
+            src_edges,
+            nodes_by_id=nodes_by_id,
+            target_ids=target_ids,
+            gate_node_ids=gate_node_ids,
+            reject_targets_by_source=reject_targets_by_source,
+            eval_definitions_by_node=eval_definitions_by_node,
+            session_factory=session_factory,
+            org_id=org_id,
+            node_type_map=node_type_map,
+        )
+    return target_ids
+
+
 def build_graph_from_json(
     graph_json: dict[str, Any],
     *,
@@ -1087,147 +1349,26 @@ def build_graph_from_json(
     # graph_json, so it is identical for every compiled snapshot.
     node_type_map = {str(n["id"]): (n.get("node_type") or DEFAULT_NODE_TYPE) for n in nodes if n.get("id")}
 
-    # FAR-228: the idempotency gate is inert on multi-node graphs. Computed ONCE
-    # here and threaded into the sandbox node builder so guard A (early skip)
-    # can require it without re-deriving from the node's own def.
-    single_sandbox_node = _count_sandbox_nodes(nodes)
+    _assemble_nodes(
+        graph,
+        nodes,
+        edges,
+        pipeline_node_timeout_seconds=pipeline_node_timeout_seconds,
+        session_factory=session_factory,
+        pipeline_retry_policy=pipeline_retry_policy,
+        node_idempotency_key=node_idempotency_key,
+        pipeline_stdout_retention_config=pipeline_stdout_retention_config,
+    )
 
-    # FAR-795: per-node DAG-ancestor id sets (over forwarding edges), frozen at
-    # compile time and threaded into the agent node fns so the node-start
-    # work_item_refs injection (node_runner ``make_node_fn``) can union the
-    # ancestors' emissions with the create-time refs through the pure
-    # ``collect_injected_refs`` collector. Derived purely from graph_json
-    # topology — cache-consistent with the struct hash.
-    dag_ancestors_by_node = _compute_dag_ancestor_ids([str(n["id"]) for n in nodes], edges)
-
-    # Build EVERY node's raw callable first, then wrap each with the P5
-    # retry/compensation wrapper. Wrapping after a full pass lets the wrapper
-    # resolve OTHER nodes' raw fns (per-edge retry re-executes the SOURCE; a
-    # compensation edge invokes the on_failure_target), which is impossible in a
-    # single pass (the source/target fn may not exist yet).
-    raw_fns: dict[str, Any] = {}
-    for node_def in nodes:
-        node_timeout = node_def.get("timeout_seconds")
-        timeout = pipeline_node_timeout_seconds if node_timeout is None else node_timeout
-        raw_fns[str(node_def["id"])] = _build_raw_node_fn(
-            node_def,
-            timeout=timeout,
-            session_factory=session_factory,
-            single_sandbox_node=single_sandbox_node,
-            pipeline_stdout_retention_config=pipeline_stdout_retention_config,
-            dag_ancestor_ids=dag_ancestors_by_node.get(str(node_def["id"])),
-        )
-
-    # Node-id-to-def lookup for the retry wrapper (source fail-closed + retry config).
-    retry_nodes_by_id: dict[str, dict[str, Any]] = {str(n["id"]): n for n in nodes}
-    # Per-node incoming/outgoing edge sets for per-edge retry + compensation.
-    incoming_by_node: dict[str, list[dict[str, Any]]] = {str(n["id"]): [] for n in nodes}
-    outgoing_by_node: dict[str, list[dict[str, Any]]] = {str(n["id"]): [] for n in nodes}
-    for edge_def in edges:
-        if _get_edge_type(edge_def) == "reject":
-            continue
-        src = _get_edge_val(edge_def, "source", "source_node_id")
-        tgt = _get_edge_val(edge_def, "target", "target_node_id")
-        outgoing_by_node.setdefault(str(src), []).append(edge_def)
-        incoming_by_node.setdefault(str(tgt), []).append(edge_def)
-
-    for node_def in nodes:
-        node_id = str(node_def["id"])
-        wrapped = make_retrying_node_fn(
-            raw_fns[node_id],
-            node_id=node_id,
-            node_def=node_def,
-            pipeline_retry_policy=pipeline_retry_policy,
-            outgoing_edges=outgoing_by_node.get(node_id, []),
-            incoming_edges=incoming_by_node.get(node_id, []),
-            raw_fn_resolver=raw_fns.get,
-            idempotency_key=node_idempotency_key,
-            node_defs=retry_nodes_by_id,
-        )
-        graph.add_node(node_id, wrapped)
-
-    # Build reject-edge lookup for kick-back routing.
-    reject_targets_by_source = _build_reject_targets(edges)
-
-    # Group forwarding edges by source (skip reject).
-    source_edges = _group_forwarding_edges(edges)
-
-    target_ids: set[str] = set()
-    gate_node_ids: set[str] = set()
-
-    # Build a node-id-to-def lookup for quick access.
-    nodes_by_id: dict[str, dict[str, Any]] = {str(n["id"]): n for n in nodes}
-
-    # Router nodes route via `router_config` (not outgoing edges), so their rule
-    # targets are never seen by the edge-driven `target_ids` population below.
-    # Register every router rule/default target here so the entry-point selection
-    # cannot pick a router's rule target as the pipeline entry node (FAR-415: a
-    # router whose rule target sorts first in `nodes` would otherwise become the
-    # entry, leaving the real entry + router dead).
-    for _n in nodes:
-        if (_n.get("node_type") or "agent") == "router":
-            _rc = _n.get("router_config") or {}
-            for _rule in _rc.get("rules", []) or []:
-                _tgt = _rule.get("target") or _rule.get("target_port")
-                if _tgt is not None:
-                    target_ids.add(str(_tgt))
-
-    for source, src_edges in source_edges.items():
-        source_node_def = nodes_by_id.get(source, {})
-        routing_mode: str | None = source_node_def.get("routing_mode")
-        source_node_type: str = source_node_def.get("node_type", "agent")
-
-        conditional = [e for e in src_edges if _get_edge_type(e) == "conditional"]
-        loop_edges = [e for e in src_edges if _get_edge_type(e) == "loop"]
-        normal = [e for e in src_edges if _get_edge_type(e) not in ("conditional", "loop")]
-
-        if source_node_type == "router":
-            # Router node (FAR-402 P1 / F2-A): lowers to the existing
-            # conditional-edge compile path via the shared JMESPath evaluator.
-            # Compile-time default-rule enforcement guards mis-configured graphs.
-            router_config = dict(source_node_def.get("router_config") or {})
-            _validate_router_config(router_config, source)
-            graph.add_conditional_edges(source, make_router_node_fn(router_config, node_id=source))
-        elif source_node_type == "hitl":
-            # HITL node (FAR-402 P1 / F2-D): compile-equivalent to the legacy
-            # edge-level HITL gate. Inject the node's hitl_config onto every
-            # outgoing (normal) edge so the existing synthetic-gate path picks
-            # it up unchanged.
-            hitl_config = dict(source_node_def.get("hitl_config") or {})
-            for edge in normal:
-                review_id = _make_review_id(source, _get_edge_val(edge, "target", "target_node_id"))
-                edge["hitl_review_config"] = {**hitl_config, "review_id": review_id}
-            _add_normal_edges(
-                graph,
-                source,
-                normal,
-                target_ids=target_ids,
-                gate_node_ids=gate_node_ids,
-                reject_targets_by_source=reject_targets_by_source,
-                eval_definitions_by_node=eval_definitions_by_node,
-                session_factory=session_factory,
-                org_id=org_id,
-                node_type_map=node_type_map,
-            )
-        elif loop_edges:
-            _add_loop_edges(graph, source, loop_edges, normal, target_ids)
-        elif routing_mode == "llm":
-            _add_llm_routing(graph, source, source_node_def, conditional, normal, target_ids)
-        elif conditional:
-            _add_conditional_routing(graph, source, conditional, normal, target_ids)
-        else:
-            _add_normal_edges(
-                graph,
-                source,
-                normal,
-                target_ids=target_ids,
-                gate_node_ids=gate_node_ids,
-                reject_targets_by_source=reject_targets_by_source,
-                eval_definitions_by_node=eval_definitions_by_node,
-                session_factory=session_factory,
-                org_id=org_id,
-                node_type_map=node_type_map,
-            )
+    target_ids = _assemble_edges(
+        graph,
+        nodes,
+        edges,
+        node_type_map=node_type_map,
+        eval_definitions_by_node=eval_definitions_by_node,
+        session_factory=session_factory,
+        org_id=org_id,
+    )
 
     entry_candidates = [str(n["id"]) for n in nodes if str(n["id"]) not in target_ids]
     if not entry_candidates:

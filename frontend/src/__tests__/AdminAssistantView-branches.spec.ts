@@ -4,7 +4,8 @@
  * Targets uncovered branches: provider tooltip variants, custom providers
  * empty state, skills with empty triggers/description, context source
  * token vs toolCall display, save error catch blocks, loadProviders error
- * paths, primer regeneration catch, config hydration null/undefined, and
+ * paths, the removed primer-regenerate control (FAR-1724 absence pins),
+ * config hydration null/undefined, and
  * all error-state display branches.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -473,17 +474,26 @@ describe('AdminAssistantView branches — save error response paths', () => {
   })
 })
 
-// ── primer regeneration error (catch block) ─────────────────────────────
-describe('AdminAssistantView branches — primer regeneration error', () => {
-  it('shows error message when primer regeneration throws', async () => {
-    const { api } = await import('../lib/api/client')
-    vi.mocked(api.POST).mockRejectedValue(new Error('network failure'))
+// ── dead primer-regenerate control removal (FAR-1724) ───────────────────
+// POST /api/v1/admin/assistant/primer/regenerate never existed on the
+// backend; the control was removed. These pin the absence and that no
+// POST to the dead route is ever issued.
+describe('AdminAssistantView branches — primer-regenerate control removed', () => {
+  it('does not render the primer-regenerate button', async () => {
     const wrapper = await mountAssistant()
 
-    await wrapper.find('[data-testid="assistant-primer-regenerate"]').trigger('click')
+    expect(wrapper.find('[data-testid="assistant-primer-regenerate"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Regenerate Primer')
+    wrapper.unmount()
+  })
+
+  it('never POSTs to the dead primer/regenerate route', async () => {
+    const { api } = await import('../lib/api/client')
+    const wrapper = await mountAssistant()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('network failure')
+    const posts = vi.mocked(api.POST).mock.calls.map((c) => c[0])
+    expect(posts).not.toContain('/api/v1/admin/assistant/primer/regenerate')
     wrapper.unmount()
   })
 })
@@ -634,21 +644,6 @@ describe('AdminAssistantView branches — saveSkillSourceMode API error', () => 
   })
 })
 
-// ── primer regeneration API error (non-throw) ───────────────────────────
-describe('AdminAssistantView branches — primer regeneration API error', () => {
-  it('shows error message from API error response', async () => {
-    const { api } = await import('../lib/api/client')
-    vi.mocked(api.POST).mockResolvedValue({ data: null, error: { detail: 'primer_budget' } } as any)
-    const wrapper = await mountAssistant()
-
-    await wrapper.find('[data-testid="assistant-primer-regenerate"]').trigger('click')
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('primer_budget')
-    wrapper.unmount()
-  })
-})
-
 // ── configSaving guard ──────────────────────────────────────────────────
 describe('AdminAssistantView branches — configSaving guard', () => {
   it('returns early from saveAccessList when configSaving is true', async () => {
@@ -668,30 +663,6 @@ describe('AdminAssistantView branches — configSaving guard', () => {
     // PUT should not have been called because configSaving was true
     const { api } = await import('../lib/api/client')
     expect(api.PUT).not.toHaveBeenCalled()
-    wrapper.unmount()
-  })
-})
-
-// ── primer timer cleanup ────────────────────────────────────────────────
-describe('AdminAssistantView branches — primer timer', () => {
-  it('clears primer message after timeout', async () => {
-    vi.useFakeTimers()
-    // Mock POST to return success BEFORE mounting
-    const { api } = await import('../lib/api/client')
-    vi.mocked(api.POST).mockResolvedValue({ data: undefined, error: undefined, response: {} as Response } as any)
-    const wrapper = await mountAssistant()
-
-    await wrapper.find('[data-testid="assistant-primer-regenerate"]').trigger('click')
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('Primer regenerated')
-
-    // Advance past the 4000ms timer
-    vi.advanceTimersByTime(4001)
-    await nextTick()
-
-    expect(wrapper.text()).not.toContain('Primer regenerated')
-    vi.useRealTimers()
     wrapper.unmount()
   })
 })

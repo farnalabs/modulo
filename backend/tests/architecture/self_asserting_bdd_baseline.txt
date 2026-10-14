@@ -14,12 +14,3 @@
 #     listed step is fixed but not removed from the baseline.
 #
 # Entry format: <path relative to backend/tests>:<step-function-name>
-bdd/steps/test_assistant.py:check_assistant_access
-bdd/steps/test_assistant.py:llm_emits_sequence
-bdd/steps/test_assistant.py:llm_emits_tool_call
-bdd/steps/test_connectors.py:get_connector_health
-bdd/steps/test_connectors.py:step_infer_schema
-bdd/steps/test_convert_to_agent_steps.py:pipeline_saves_successfully
-bdd/steps/test_personas.py:copy_workflow_to_workspace
-bdd/steps/test_revert_to_manual_steps.py:pipeline_saves_successfully
-bdd/steps/test_team_pipeline_visibility.py:create_team_pipeline

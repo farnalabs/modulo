@@ -25,17 +25,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core import cron_helpers as ch
+from tests.unit.cron_helpers._helpers import _Begin, _mock_result, _settings
 
 ORG = uuid.uuid4()
 TRIGGER_ID = uuid.uuid4()
 PIPELINE_ID = uuid.uuid4()
-
-
-def _mock_result(**kwargs: Any) -> MagicMock:
-    result = MagicMock()
-    for name, value in kwargs.items():
-        getattr(result, name).return_value = value
-    return result
 
 
 def _make_trigger(**overrides: Any) -> MagicMock:
@@ -59,14 +53,6 @@ def _make_trigger(**overrides: Any) -> MagicMock:
     for key, value in defaults.items():
         setattr(trigger, key, value)
     return trigger
-
-
-class _Begin:
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, *args: object) -> bool:
-        return False
 
 
 # Sentinel: resolve the snapshot from the trigger's pinned config_json. Passing
@@ -148,23 +134,6 @@ class _RoutedSession:
         if "total_cost_usd" in s or "coalesce" in s:
             return _mock_result(scalar_one=self._today_cost)
         return MagicMock()
-
-
-def _settings(**overrides: object) -> MagicMock:
-    base: dict[str, object] = {
-        "saq_runs_queue": "runs",
-        "redis_url": "redis://localhost:6379/0",
-        "saq_redis_pool_size": 5,
-        "fernet_key": "b" * 44,
-    }
-    base.update(overrides)
-    return MagicMock(**base)
-
-
-def _patch_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
-    monkeypatch.setenv("SECRET_KEY", "a" * 40)
-    monkeypatch.setenv("FERNET_KEY", "b" * 44)
 
 
 def _make_run() -> MagicMock:
@@ -275,8 +244,7 @@ class TestCountOngoingRuns:
 
 class TestOngoingTopup:
     @pytest.mark.asyncio
-    async def test_below_target_creates_exactly_target_minus_in_flight(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_below_target_creates_exactly_target_minus_in_flight(self) -> None:
         now = datetime.now(UTC)
         session = _RoutedSession(trigger=_make_trigger(max_concurrent_runs=3))
         outcome: dict[str, Any] = {}
@@ -294,8 +262,7 @@ class TestOngoingTopup:
         )
 
     @pytest.mark.asyncio
-    async def test_at_target_is_noop(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_at_target_is_noop(self) -> None:
         now = datetime.now(UTC)
         session = _RoutedSession(trigger=_make_trigger(max_concurrent_runs=3))
         outcome: dict[str, Any] = {}
@@ -311,8 +278,7 @@ class TestOngoingTopup:
         )
 
     @pytest.mark.asyncio
-    async def test_above_target_is_noop(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_above_target_is_noop(self) -> None:
         now = datetime.now(UTC)
         session = _RoutedSession(trigger=_make_trigger(max_concurrent_runs=3))
         outcome: dict[str, Any] = {}
@@ -322,8 +288,7 @@ class TestOngoingTopup:
         assert outcome["status"] == "noop"
 
     @pytest.mark.asyncio
-    async def test_effective_target_is_min_of_trigger_and_pipeline(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_effective_target_is_min_of_trigger_and_pipeline(self) -> None:
         now = datetime.now(UTC)
         # Pipeline cap (2) lower than trigger target (5) -> 2 created.
         session = _RoutedSession(trigger=_make_trigger(max_concurrent_runs=5), pipeline_max=2)
@@ -336,8 +301,7 @@ class TestOngoingTopup:
         assert len(created) == 3
 
     @pytest.mark.asyncio
-    async def test_pipeline_missing_skips(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_pipeline_missing_skips(self) -> None:
         now = datetime.now(UTC)
         session = _RoutedSession(trigger=_make_trigger())
         session._pipeline_max = None
@@ -349,8 +313,7 @@ class TestOngoingTopup:
         create_run.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_inactive_trigger_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_inactive_trigger_skipped(self) -> None:
         now = datetime.now(UTC)
         session = _RoutedSession(trigger=_make_trigger(active=False))
         outcome: dict[str, Any] = {}
@@ -361,8 +324,7 @@ class TestOngoingTopup:
         create_run.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_missing_trigger_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_missing_trigger_skipped(self) -> None:
         now = datetime.now(UTC)
         session = _RoutedSession(trigger=_make_trigger())
         session._trigger = None
@@ -374,10 +336,9 @@ class TestOngoingTopup:
         create_run.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_trigger_read_filters_soft_deleted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_trigger_read_filters_soft_deleted(self) -> None:
         """The trigger SELECT filters deleted_at IS NULL — a soft-deleted ongoing
         trigger can never top up."""
-        _patch_env(monkeypatch)
         now = datetime.now(UTC)
         session = _RoutedSession(trigger=_make_trigger())
         await _run_topup(session, now=now, in_flight=0)
@@ -386,8 +347,7 @@ class TestOngoingTopup:
         assert "deleted_at IS NULL" in str(trigger_stmts[0])
 
     @pytest.mark.asyncio
-    async def test_busy_lock_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_busy_lock_skipped(self) -> None:
         now = datetime.now(UTC)
         session = _RoutedSession(trigger=_make_trigger(), lock=False)
         outcome: dict[str, Any] = {}
@@ -398,10 +358,9 @@ class TestOngoingTopup:
         create_run.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_spend_limit_reached_skips_and_stamps_last_fired(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_spend_limit_reached_skips_and_stamps_last_fired(self) -> None:
         """Over-budget daemon: spend_limit_reached event, skip-NOT-defer
         (last_fired_at still stamped), zero runs."""
-        _patch_env(monkeypatch)
         now = datetime.now(UTC)
         trigger = _make_trigger(daily_spend_limit=Decimal("50.00"))
         session = _RoutedSession(trigger=trigger, today_cost=Decimal("60.00"))
@@ -419,8 +378,7 @@ class TestOngoingTopup:
         )
 
     @pytest.mark.asyncio
-    async def test_spend_limit_below_creates_runs(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_spend_limit_below_creates_runs(self) -> None:
         now = datetime.now(UTC)
         trigger = _make_trigger(max_concurrent_runs=2, daily_spend_limit=Decimal("50.00"))
         session = _RoutedSession(trigger=trigger, today_cost=Decimal("10.00"))
@@ -429,8 +387,7 @@ class TestOngoingTopup:
         create_run.assert_awaited()
 
     @pytest.mark.asyncio
-    async def test_org_paused_skips(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_org_paused_skips(self) -> None:
         now = datetime.now(UTC)
         session = _RoutedSession(trigger=_make_trigger())
         outcome: dict[str, Any] = {}
@@ -442,11 +399,10 @@ class TestOngoingTopup:
         assert outcome["reason"] == "triggers_paused"
 
     @pytest.mark.asyncio
-    async def test_triggers_paused_mid_loop_stops_creating(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_triggers_paused_mid_loop_stops_creating(self) -> None:
         """TOCTOU race backstop: the org pauses MID top-up -> the loop stops, the
         runs already created are returned (they dispatch below), no SAQ retry
         storm from an unhandled exception."""
-        _patch_env(monkeypatch)
         from modulo.core.exceptions import TriggersPausedError
 
         now = datetime.now(UTC)
@@ -460,12 +416,11 @@ class TestOngoingTopup:
         assert outcome["reason"] == "triggers_paused"
 
     @pytest.mark.asyncio
-    async def test_pipeline_not_runnable_mid_loop_stops_creating(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_pipeline_not_runnable_mid_loop_stops_creating(self) -> None:
         """FAR-1528: an archived/soft-deleted pipeline refuses the top-up the
         SAME way the pause backstop does — the loop stops, runs already created
         stay, and the refusal lands in the outcome as a typed skip instead of
         escaping as an SAQ job failure on every tick."""
-        _patch_env(monkeypatch)
         from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError
 
         now = datetime.now(UTC)
@@ -481,11 +436,10 @@ class TestOngoingTopup:
 
     @pytest.mark.asyncio
     async def test_pipeline_not_runnable_on_first_create_skips_without_events(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
     ) -> None:
         """First refusal (nothing created yet) -> empty result + typed skip and
         NO accepted/on-going TriggerEvent."""
-        _patch_env(monkeypatch)
         from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError
 
         now = datetime.now(UTC)
@@ -502,12 +456,11 @@ class TestOngoingTopup:
         assert outcome["reason"] == PIPELINE_NOT_RUNNABLE_SKIP_REASON
 
     @pytest.mark.asyncio
-    async def test_pipeline_not_runnable_without_outcome_does_not_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_pipeline_not_runnable_without_outcome_does_not_raise(self) -> None:
         """FAR-1528: the refusal is swallowed even when the caller supplied no
         outcome envelope (outcome=None) — there is nothing to record it in, but
         the top-up job must still return instead of escaping as an SAQ job
         failure on every tick."""
-        _patch_env(monkeypatch)
         from modulo.core.exceptions import PipelineNotRunnableError
 
         now = datetime.now(UTC)
@@ -525,8 +478,7 @@ class TestOngoingTopup:
 
 class TestOngoingSnapshotResolution:
     @pytest.mark.asyncio
-    async def test_pinned_valid_snapshot_used(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_pinned_valid_snapshot_used(self) -> None:
         now = datetime.now(UTC)
         pinned = uuid.uuid4()
         session = _RoutedSession(
@@ -541,10 +493,9 @@ class TestOngoingSnapshotResolution:
             assert call.kwargs["input_payload"] == {"topic": "x"}
 
     @pytest.mark.asyncio
-    async def test_pinned_snapshot_missing_no_pipeline_skip(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_pinned_snapshot_missing_no_pipeline_skip(self) -> None:
         """Pinned-but-missing -> explicit no_pipeline event + skip (NEVER a
         silent auto-create)."""
-        _patch_env(monkeypatch)
         now = datetime.now(UTC)
         pinned = uuid.uuid4()
         session = _RoutedSession(trigger=_make_trigger(config_json={"snapshot_id": str(pinned)}), snapshot=None)
@@ -557,8 +508,7 @@ class TestOngoingSnapshotResolution:
         assert log_event.await_args.kwargs["result"] == "no_pipeline"
 
     @pytest.mark.asyncio
-    async def test_invalid_pinned_snapshot_no_pipeline_skip(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_invalid_pinned_snapshot_no_pipeline_skip(self) -> None:
         now = datetime.now(UTC)
         session = _RoutedSession(trigger=_make_trigger(config_json={"snapshot_id": "not-a-uuid"}))
         outcome: dict[str, Any] = {}
@@ -570,8 +520,7 @@ class TestOngoingSnapshotResolution:
         assert log_event.await_args.kwargs["result"] == "no_pipeline"
 
     @pytest.mark.asyncio
-    async def test_no_pin_uses_latest_snapshot(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_no_pin_uses_latest_snapshot(self) -> None:
         now = datetime.now(UTC)
         latest = uuid.uuid4()
         session = _RoutedSession(trigger=_make_trigger(config_json={}))
@@ -581,8 +530,7 @@ class TestOngoingSnapshotResolution:
             assert call.kwargs["snapshot_id"] == latest
 
     @pytest.mark.asyncio
-    async def test_no_pin_no_latest_auto_creates_snapshot(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_no_pin_no_latest_auto_creates_snapshot(self) -> None:
         now = datetime.now(UTC)
         auto_id = uuid.uuid4()
         session = _RoutedSession(trigger=_make_trigger(config_json={}))
@@ -598,8 +546,7 @@ class TestOngoingSnapshotResolution:
             assert call.kwargs["snapshot_id"] == auto_id
 
     @pytest.mark.asyncio
-    async def test_auto_create_failure_no_pipeline_skip(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_auto_create_failure_no_pipeline_skip(self) -> None:
         now = datetime.now(UTC)
         session = _RoutedSession(trigger=_make_trigger(config_json={}))
         outcome: dict[str, Any] = {}
@@ -624,8 +571,7 @@ class TestOngoingSnapshotResolution:
 
 class TestPersistentFailureDeactivation:
     @pytest.mark.asyncio
-    async def test_five_consecutive_failures_deactivates_trigger(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_five_consecutive_failures_deactivates_trigger(self) -> None:
         now = datetime.now(UTC)
         pinned = uuid.uuid4()
         session = _RoutedSession(trigger=_make_trigger(config_json={"snapshot_id": str(pinned)}), snapshot=None)
@@ -638,8 +584,7 @@ class TestPersistentFailureDeactivation:
         assert "active" in str(update_stmts[0]).lower()
 
     @pytest.mark.asyncio
-    async def test_failure_below_cap_does_not_deactivate(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_failure_below_cap_does_not_deactivate(self) -> None:
         now = datetime.now(UTC)
         pinned = uuid.uuid4()
         session = _RoutedSession(trigger=_make_trigger(config_json={"snapshot_id": str(pinned)}), snapshot=None)
@@ -659,8 +604,7 @@ class TestPersistentFailureDeactivation:
         assert await ch._clear_ongoing_failure(None, TRIGGER_ID) is None
 
     @pytest.mark.asyncio
-    async def test_success_clears_failure_counter(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_success_clears_failure_counter(self) -> None:
         now = datetime.now(UTC)
         session = _RoutedSession(trigger=_make_trigger())
         redis_client = AsyncMock()
@@ -675,8 +619,7 @@ class TestPersistentFailureDeactivation:
 
 class TestDispatchOngoingRuns:
     @pytest.mark.asyncio
-    async def test_one_failing_dispatch_does_not_abort_the_rest(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_one_failing_dispatch_does_not_abort_the_rest(self) -> None:
         run_ids = [uuid.uuid4(), uuid.uuid4(), uuid.uuid4()]
         with (
             patch.object(ch, "get_settings", return_value=_settings()),
@@ -694,8 +637,7 @@ class TestDispatchOngoingRuns:
         assert outcomes[2] == {"run_id": str(run_ids[2]), "outcome": "ok", "job_id": "job-3"}
 
     @pytest.mark.asyncio
-    async def test_empty_run_list_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_empty_run_list_returns_empty(self) -> None:
         with (
             patch.object(ch, "get_settings", return_value=_settings()),
             patch("modulo.core.dispatch.dispatch_run", new_callable=AsyncMock) as dispatch,
@@ -712,10 +654,9 @@ class TestDispatchOngoingRuns:
 
 class TestFireOngoingTrigger:
     @pytest.mark.asyncio
-    async def test_retry_is_idempotent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_retry_is_idempotent(self) -> None:
         """fire_ongoing_trigger called twice: the first call commits 2 runs, so
         the second (a SAQ retry) counts those 2 as in-flight and creates 0."""
-        _patch_env(monkeypatch)
         session = _RoutedSession(trigger=_make_trigger(max_concurrent_runs=2))
         factory = MagicMock(return_value=session)
         redis_client = AsyncMock()
@@ -765,13 +706,12 @@ class TestFireOngoingTrigger:
         redis_client.aclose.assert_awaited()
 
     @pytest.mark.asyncio
-    async def test_stats_write_sets_self_expiring_ttl(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_stats_write_sets_self_expiring_ttl(self) -> None:
         """2026-09 Redis audit: the per-trigger debug summary key
         (``saq:cron:stats:ongoing:{trigger_id}``) carries a TTL so keys for
         DELETED triggers self-expire instead of accumulating forever (the
         unbounded keyspace-growth offender). No consumer gates on this key —
         debug-only — so expiry loses no signal."""
-        _patch_env(monkeypatch)
         session = _RoutedSession(trigger=_make_trigger(max_concurrent_runs=2))
         factory = MagicMock(return_value=session)
         redis_client = AsyncMock()

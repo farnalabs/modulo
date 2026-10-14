@@ -5,7 +5,8 @@ Product-specific agent guidance for the `farnalabs/modulo` repository.
 ## What this repo is
 
 Self-hosted Agentic Delivery Governance for agentic SDLC pipelines. Backend:
-Python 3.12 FastAPI. Frontend: Vue 3 + Vite SPA. Runs on Postgres + Redis.
+Python 3.12 FastAPI. Frontend: Vue 3 + Vite SPA on the PrimeVue component
+library. Runs on Postgres + Redis.
 Product requirements and behaviour spec live in `docs/` and the product map
 `frontend/src/manifest.yaml` (ADR 008). The PRD is retired.
 
@@ -92,3 +93,30 @@ Rules:
 2. Read each layer from the **frozen record the consumer read** — never from a live row, a checkpoint, or caller-influenced input. Where an override namespace exists specifically so caller input can never populate it (here: the system-reserved `_run_overrides`), sourcing it from `run_context`/`input_payload` reintroduces the injection vector that namespace exists to close.
 3. Audit the fix for **leftover live reads**. A live-state dependency that survives a "read the frozen record" change — here, a deleted agent still 404ing a historical read whose frozen record held everything needed — is the same defect in stronger form.
 4. Prove the reconstruction with a test that pins the layered case, not just the base case. A test that only exercises "snapshot template differs from live template" passes while the variant-override path is still wrong.
+
+### Org-level ledger aggregations must filter `team_id IS NULL` (2026-10-10)
+
+`org_daily_run_counts` is keyed `(organisation_id, team_id, run_date)`; the `team_id IS NULL` row is the ORG-LEVEL total, and `cost_controller.check_and_record_spend` writes it for EVERY terminal run *in addition to* a team row when the run has a team — so the org row already includes team-owned runs and the team rows are an extra breakdown. Any aggregation that sums `run_count` / `total_spend_usd` grouped by date WITHOUT `team_id IS NULL` therefore double-counts every team-owned run.
+
+Two independent sites shipped with the omission: `core/reports/quality_report.py` (`generate_quality_report`'s daily-trend query) and `api/routes/dashboard.py` (`_load_daily_trend`, `_load_trend_run_and_spend`) — each trend disagreed with its own summary, which correctly filtered `team_id IS NULL`.
+
+Rules:
+
+1. Any `select(func.sum(OrgDailyRunCount.run_count/.total_spend_usd))` intended as an ORG-LEVEL figure must include the canonical predicate `org_level_predicate()` imported from `modulo.db.crud.daily_run_count` (which is the `team_id IS NULL` scope) — never a hand-written `OrgDailyRunCount.team_id.is_(None)` literal and never an omitted scope. Only the deliberate per-team breakdown aggregates (`cost_controller` `group_by=team`) omit it.
+2. When you add an org-level ledger read, grep for every sibling `OrgDailyRunCount` aggregation in the same change and confirm each applies the same scope — the org-row-includes-team-row model is the thing that makes an unscoped SUM silently wrong.
+3. An aggregation that disagrees with the endpoint/report's own summary number is the symptom; a mocked session cannot expose it (the defect is in the SQL SUM) — prove such a fix against a real DB (in-memory SQLite is sufficient; the SUM/filter logic is dialect-independent) with both an org row and a team row seeded for one date.
+
+### A soft-delete-semantics test whose process never imports the ORM session silently tests the wrong thing (2026-10-14)
+
+The global soft-delete filter is registered by an IMPORT SIDE EFFECT: `modulo.db.soft_delete.register_soft_delete_filter()` is what installs the `do_orm_execute` listener that injects `WHERE deleted_at IS NULL` into ORM SELECTs (and `session.get`'s fresh-fetch path), and it runs when `modulo.db.session` is imported. A test module that asserts soft-delete semantics but never imports `modulo.db.session` therefore runs in a process where the filter was never registered — the ORM returns soft-deleted rows and the test asserts the OPPOSITE of production behaviour.
+
+Concretely, during the `collection_install` soft-delete change (the install row is now retired by a `deleted_at` stamp instead of being deleted), `tests/integration/test_library_collection_lifecycle.py` failed in two ways that looked like production bugs: a re-install after uninstall raised "already installed" (the soft-deleted row was still visible to the install guard), and a plain read of the retired row returned the object instead of `None`. Both cleared the moment the module called `register_soft_delete_filter()` at import — the same house pattern already used by sibling integration modules (`test_soft_delete_filter.py`, `test_viewmodel_soft_deleted_team.py`, `test_run_daily_facts.py`, `test_cost_attribution.py`).
+
+Production is unaffected — app startup imports `modulo.db.session`, so the listener is always installed there. This bites test processes only, and it bites in the direction of a FALSE PASS whenever the assertion happens to line up with the unfiltered result, which makes it worse than a flaky test: the suite is green while asserting the inverse of the shipped contract.
+
+Rules:
+
+1. Any test module that asserts soft-delete behaviour (a row is hidden from a plain read / a reinstall succeeds / a count excludes deleted rows) must ensure the filter is registered in its own process — call the idempotent `register_soft_delete_filter()` at module import, as the sibling integration modules do.
+2. Do not rely on "some other import probably pulled it in". The registration is a side effect of one specific module (`modulo.db.session`), and whether it has fired depends on which imports happened to run first in that process; assert the precondition explicitly in the module that depends on it (register at import, and — like `test_soft_delete_filter.py` — optionally assert `sqlalchemy.event.contains(SASession, "do_orm_execute", _apply_soft_delete_filter)` so a future removal of the registration fails loudly).
+3. When a soft-delete assertion fails in a way that looks like the filter is inverted (a retired row reads as live, a uniqueness guard reports "already installed" after an uninstall), check filter registration in the test process BEFORE debugging the production code.
+4. This is a test-process concern only. Production and app startup register the filter normally, so a repro that only fails under pytest and never in the app is the signature of this class.

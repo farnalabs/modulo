@@ -1674,6 +1674,47 @@ async def test_materialize_does_not_warn_on_manual_node_with_schema(monkeypatch:
     assert not any("manual node without an output schema" in w for w in result["warnings"])
 
 
+async def test_materialize_strips_declared_policy_gate_with_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1666: a bundle cannot carry gate rows, so a declared block is stripped.
+
+    The bundle exports no ``policy_gates`` section and evals are not imported,
+    so a declared ``policy_gate`` would persist INERT. The import path removes
+    it (the shared strip helper) and discloses the drop in the import warnings.
+    """
+    created = _patch_crud(monkeypatch)
+    gate_node = {
+        "id": str(uuid.uuid4()),
+        "node_type": "agent",
+        "label": "Gated",
+        "position": {"x": 0, "y": 0},
+        "policy_gate": {"eval_id": str(uuid.uuid4()), "action": "block"},
+    }
+    bundle = _make_bundle()
+    bundle["pipeline"]["graph_nodes_json"] = [gate_node]
+
+    result = await materialize_import(_FakeSession(_no_existing_schema_result()), _ORG_ID, _ACCOUNT_ID, bundle)
+
+    persisted = created["pipeline"].return_value.graph_nodes_json
+    assert len(persisted) == 1
+    assert "policy_gate" not in persisted[0]
+    assert any("policy_gate declaration(s) were removed on import" in w for w in result["warnings"])
+
+
+async def test_materialize_keeps_gate_free_graph_without_policy_gate_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-1666: a graph with no declared gates imports without the strip warning."""
+    _patch_crud(monkeypatch)
+    bundle = _make_bundle()
+    bundle["pipeline"]["graph_nodes_json"] = [
+        {"id": str(uuid.uuid4()), "node_type": "agent", "label": "Plain", "position": {"x": 0, "y": 0}}
+    ]
+
+    result = await materialize_import(_FakeSession(_no_existing_schema_result()), _ORG_ID, _ACCOUNT_ID, bundle)
+
+    assert not any("policy_gate declaration(s) were removed on import" in w for w in result["warnings"])
+
+
 async def test_materialize_rewires_connector_binding_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     created = _patch_crud(monkeypatch)
     export_schema_id = uuid.uuid4()
@@ -2297,3 +2338,129 @@ async def test_apply_agent_bindings_unresolvable_omitted():
 
     assert replace_mock.await_count == 0
     assert any("did not resolve" in w for w in ctx.warnings)
+
+
+@pytest.mark.asyncio
+async def test_apply_agent_bindings_malformed_payloads_omitted():
+    """A non-dict payload and a payload missing a required key are each OMITTED
+    with a warning while a valid sibling still persists."""
+    ctx = _make_ctx({}, rows=[])
+    agent = SimpleNamespace(name="agent-z", id=uuid.uuid4())
+    backend = _make_model_backend(uuid.uuid4(), name="mb-export")
+    ad = {
+        "model_backend_bindings": [
+            "not-an-object",
+            {"model_backend_name": "mb-export"},  # missing target_env_var + source_field
+            _binding("mb-export"),
+        ]
+    }
+
+    with pytest.MonkeyPatch().context() as mp:
+        replace_mock = AsyncMock(return_value=None)
+        mp.setattr(mod, "replace_agent_bindings", replace_mock)
+
+        await mod._apply_agent_bindings(
+            ctx,
+            agent,
+            ad,
+            {"mb-export": backend},
+            ctx.warnings,
+            bundle_model_backends=[{"name": "mb-export", "id": str(uuid.uuid4())}],
+        )
+
+    assert replace_mock.await_count == 1
+    assert any("not an object" in w for w in ctx.warnings)
+    assert any("missing key" in w for w in ctx.warnings)
+    assert len(replace_mock.await_args.kwargs["bindings_specs"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_agent_bindings_invalid_uuid_candidates_ignored():
+    """Non-UUID override / stamped candidates are ignored and the chain falls
+    through to the name backend (covers the suppressed ValueError paths)."""
+    export_uuid = uuid.uuid4()
+    name_uuid = uuid.uuid4()
+    name_backend = _make_model_backend(name_uuid, name="mb-export")
+    ctx = _make_ctx({str(export_uuid): "not-a-uuid"}, rows=[])
+    agent = SimpleNamespace(name="agent-i", id=uuid.uuid4())
+    ad = {"model_backend_bindings": [_binding("mb-export", stamped_id="also-not-a-uuid")]}
+
+    with pytest.MonkeyPatch().context() as mp:
+        replace_mock = AsyncMock(return_value=None)
+        mp.setattr(mod, "replace_agent_bindings", replace_mock)
+
+        await mod._apply_agent_bindings(
+            ctx,
+            agent,
+            ad,
+            {"mb-export": name_backend},
+            ctx.warnings,
+            bundle_model_backends=[{"name": "mb-export", "id": str(export_uuid)}],
+        )
+
+    assert replace_mock.await_count == 1
+    assert replace_mock.await_args.kwargs["bindings_specs"][0]["_backend_id"] == name_uuid
+
+
+@pytest.mark.asyncio
+async def test_apply_agent_bindings_resolution_exception_warns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unexpected exception while resolving a backend is caught, warned and
+    the binding is omitted (never an import-crashing error)."""
+    ctx = _make_ctx({}, rows=[])
+    agent = SimpleNamespace(name="agent-e", id=uuid.uuid4())
+    ad = {"model_backend_bindings": [_binding("mb-export")]}
+
+    def _boom(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("boom")
+
+    replace_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(mod, "_id_backend", _boom)
+    monkeypatch.setattr(mod, "replace_agent_bindings", replace_mock)
+
+    await mod._apply_agent_bindings(ctx, agent, ad, {"mb-export": _make_model_backend(uuid.uuid4())}, ctx.warnings)
+
+    replace_mock.assert_not_awaited()
+    assert any("could not be resolved" in w for w in ctx.warnings)
+
+
+@pytest.mark.asyncio
+async def test_apply_agent_bindings_resolution_cancelled_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CancelledError during resolution is re-raised, never swallowed as a warning."""
+    ctx = _make_ctx({}, rows=[])
+    agent = SimpleNamespace(name="agent-c", id=uuid.uuid4())
+    ad = {"model_backend_bindings": [_binding("mb-export")]}
+
+    def _cancel(*_args: Any, **_kwargs: Any) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(mod, "_id_backend", _cancel)
+
+    with pytest.raises(asyncio.CancelledError):
+        await mod._apply_agent_bindings(ctx, agent, ad, {"mb-export": _make_model_backend(uuid.uuid4())}, ctx.warnings)
+
+
+@pytest.mark.asyncio
+async def test_apply_agent_bindings_persist_exception_warns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A persistence failure is warned, not raised."""
+    ctx = _make_ctx({}, rows=[])
+    agent = SimpleNamespace(name="agent-p", id=uuid.uuid4())
+    ad = {"model_backend_bindings": [_binding("mb-export")]}
+    replace_mock = AsyncMock(side_effect=RuntimeError("db down"))
+    monkeypatch.setattr(mod, "replace_agent_bindings", replace_mock)
+
+    await mod._apply_agent_bindings(ctx, agent, ad, {"mb-export": _make_model_backend(uuid.uuid4())}, ctx.warnings)
+
+    assert any("were not imported" in w for w in ctx.warnings)
+
+
+@pytest.mark.asyncio
+async def test_apply_agent_bindings_persist_cancelled_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CancelledError during persistence is re-raised, never swallowed as a warning."""
+    ctx = _make_ctx({}, rows=[])
+    agent = SimpleNamespace(name="agent-pc", id=uuid.uuid4())
+    ad = {"model_backend_bindings": [_binding("mb-export")]}
+    replace_mock = AsyncMock(side_effect=asyncio.CancelledError)
+    monkeypatch.setattr(mod, "replace_agent_bindings", replace_mock)
+
+    with pytest.raises(asyncio.CancelledError):
+        await mod._apply_agent_bindings(ctx, agent, ad, {"mb-export": _make_model_backend(uuid.uuid4())}, ctx.warnings)

@@ -651,22 +651,6 @@
           </table>
         </div>
       </SectionCard>
-      <!-- Product Primer -->
-      <SectionCard
-        :title="$t('views.AdminAssistantView.product_primer')"
-        :description="$t('views.AdminAssistantView.product_primer_description')"
-      >
-        <div class="flex items-center gap-3">
-          <Button
-            :disabled="primerSaving"
-            data-testid="assistant-primer-regenerate"
-            @click="regeneratePrimer"
-          >
-            {{ primerSaving ? $t('views.AdminAssistantView.regenerating') : $t('views.AdminAssistantView.regenerate_primer') }}
-          </Button>
-          <span v-if="primerMessage" class="text-sm text-success">{{ primerMessage }}</span>
-        </div>
-      </SectionCard>
     </template>
   </div>
   </FeatureGate>
@@ -674,7 +658,7 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import SectionCard from '../components/shared/SectionCard.vue'
-import { ref, reactive, computed, watch, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch } from 'vue'
 import { Check, X, Pencil, Trash2 } from '@lucide/vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
@@ -713,8 +697,6 @@ const tooltipSaveExtraInstructions = computed(() => t('views.AdminAssistantView.
 const tooltipSaveRateLimits = computed(() => t('views.AdminAssistantView.save_rate_limits_threshold_no_go_patterns_and_allowlist'))
 
 const configSaving = ref(false)
-
-let primerTimer: ReturnType<typeof setTimeout> | null = null
 
 interface ProviderInfo {
   id: string
@@ -787,8 +769,6 @@ watch(() => contextSourcesData.value, (data) => {
 
 const skillModes = ref<Record<string, string>>({})
 const skillModeSaving = ref<Record<string, boolean>>({})
-const primerSaving = ref(false)
-const primerMessage = ref<string | null>(null)
 
 const providerStatus = ref<ProviderStatus[]>([])
 const customProviderStatus = ref<ProviderStatus[]>([])
@@ -1058,25 +1038,6 @@ async function saveSkillSourceMode(skill: SkillItem) {
   }
 }
 
-async function regeneratePrimer() {
-  primerSaving.value = true
-  primerMessage.value = null
-  try {
-    const { error: err } = await (api as any).POST('/api/v1/admin/assistant/primer/regenerate')
-    if (err) {
-      primerMessage.value = `${t('views.AdminAssistantView.failed')}: ${formatApiError(err)}`
-    } else {
-      primerMessage.value = t('views.AdminAssistantView.primer_regenerated')
-    }
-  } catch (e: unknown) {
-    primerMessage.value = `${t('views.AdminAssistantView.failed')}: ${formatApiError(e)}`
-  } finally {
-    primerSaving.value = false
-    if (primerTimer) clearTimeout(primerTimer)
-    primerTimer = setTimeout(() => { primerMessage.value = null }, 4000)
-  }
-}
-
 const { data: usersResp, loading: usersLoading, load: loadUsers } = useDataFetch(
   () => api.GET('/api/v1/admin/users', { params: { query: { page_size: 1000 } } }),
   { immediate: false }
@@ -1215,8 +1176,4 @@ async function loadAll() {
 }
 
 loadAll()
-
-onUnmounted(() => {
-  if (primerTimer) clearTimeout(primerTimer)
-})
 </script>

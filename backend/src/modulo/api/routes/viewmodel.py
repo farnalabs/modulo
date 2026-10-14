@@ -6,12 +6,13 @@ GET /api/v1/viewmodel/current — single-request aggregate for the frontend
 
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,18 +21,24 @@ from modulo.api.db_error_handling import handle_db_errors, raise_session_contrac
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.feature_flags import resolve_plan_context
+from modulo.core.feature_flags import PlanContext, resolve_plan_context
 from modulo.db.crud.account import get_account_by_id
+from modulo.db.crud.base import PageResult
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.pipeline import list_pipelines
 from modulo.db.crud.run import list_runs
 from modulo.db.crud.team_membership import list_team_memberships_for_account
 from modulo.db.crud.view import get_view, list_views
+from modulo.db.models.account import Account
 from modulo.db.models.hitl_claim import HitlClaim
+from modulo.db.models.organisation import Organisation
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import HITL_ACTIONABLE_RUN_STATUSES, Run
 from modulo.db.models.team import Team
+from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.view import SavedView
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.db.soft_delete import include_soft_deleted
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -192,21 +199,50 @@ async def license_info(
     settings: Settings = Depends(get_settings),
 ) -> LicenseInfo:
     try:
-        has_license_key = bool(settings.modulo_license_key)
-        features: list[str] = []
-        if has_license_key:
-            features = ["notifications"]
-        return LicenseInfo(
-            tier="team" if has_license_key else "community",
-            features=features,
-            is_valid=True,
-        )
+        return _resolve_license_info(settings)
     except Exception:
         logger.exception("license_info")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve license information",
         ) from None
+
+
+def _resolve_license_info(settings: Settings) -> LicenseInfo:
+    """Resolve the public licence view from the deployment-level licence ladder.
+
+    FAR-1720: this endpoint is unauthenticated and org-less, so it mirrors
+    rungs 2 and 3 of ``core.feature_flags._resolve_paid_plan`` (the canonical
+    ladder) exactly — the org-level rung does not apply:
+
+    1. System-level in-memory licence (``store_license()``) — its tier and
+       features are reported, ``is_valid=True``.
+    2. System-level env-var licence (``settings.modulo_license_key``) — only
+       reported when ``parse_and_verify`` confirms it; an unverifiable key
+       falls through (never trusted on mere presence).
+    3. No valid licence — ``tier="community"``, no features,
+       ``is_valid=False``.
+
+    The response shape stays ``LicenseInfo`` (tier / features / is_valid);
+    neither the raw key nor org-scoped fields are exposed.
+    """
+    from modulo.core.license import get_license, parse_and_verify
+
+    lic = get_license()
+    if lic is not None:
+        return LicenseInfo(tier=lic.tier, features=list(lic.features), is_valid=True)
+
+    raw_key: str = getattr(settings, "modulo_license_key", "") or ""
+    if raw_key:
+        validation = parse_and_verify(raw_key)
+        if validation.valid and validation.license_data is not None:
+            return LicenseInfo(
+                tier=validation.license_data.tier,
+                features=list(validation.license_data.features),
+                is_valid=True,
+            )
+
+    return LicenseInfo(tier="community", features=[], is_valid=False)
 
 
 @router.get("/api/v1/me")
@@ -272,102 +308,7 @@ async def viewmodel_current(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can use view_as_team")
 
     try:
-        async with session.begin():
-            await set_rls_org(session, current_user.organisation_id)
-            await set_rls_user_context(session, current_user.account_id, current_user.org_role or "")
-
-            if view_as_team is not None and current_user.organisation_id is None:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Cannot use view_as_team without an organisation",
-                )
-
-            if view_as_team is not None:
-                team_result = await session.execute(
-                    select(Team).where(
-                        Team.id == view_as_team,
-                        Team.organisation_id == current_user.organisation_id,
-                        Team.deleted_at.is_(None),
-                    )
-                )
-                team = team_result.scalar_one_or_none()
-                if team is None:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
-
-            org = None
-            if current_user.organisation_id is not None:
-                org = await get_organisation(session, current_user.organisation_id)
-                if org is None:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
-            elif not current_user.is_system_admin:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
-
-            account = await get_account_by_id(session, current_user.account_id)
-            if account is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
-
-            memberships = await list_team_memberships_for_account(session, current_user.account_id)
-
-            if current_user.organisation_id is not None:
-                pipelines_page = await list_pipelines(
-                    session, page=1, page_size=20, organisation_id=current_user.organisation_id
-                )
-                runs_page = await list_runs(session, page=1, page_size=10)
-
-                user_team_ids = [m.team_id for m in memberships]
-                # FAR-645: join ``runs`` and filter to the actionable run
-                # statuses — identical semantics to the org pending list
-                # (``HITLManager.list_pending``). Without the filter, gates on
-                # terminal runs still rendered on the dashboard and claiming
-                # them 409'd.
-                hitl_query = (
-                    select(HitlClaim, Team.name.label("required_team_name"))
-                    .outerjoin(Team, HitlClaim.required_team_id == Team.id)
-                    .join(Run, HitlClaim.run_id == Run.id)
-                    .where(
-                        HitlClaim.organisation_id == current_user.organisation_id,
-                        HitlClaim.decision.is_(None),
-                        Run.status.in_(HITL_ACTIONABLE_RUN_STATUSES),
-                    )
-                )
-                if user_team_ids:
-                    hitl_query = hitl_query.where(
-                        HitlClaim.required_team_id.is_(None) | HitlClaim.required_team_id.in_(user_team_ids)
-                    )
-                else:
-                    hitl_query = hitl_query.where(HitlClaim.required_team_id.is_(None))
-
-                pending_hitl_result = await session.execute(hitl_query)
-                pending_hitl = [
-                    PendingHitlReview(
-                        id=h.id,
-                        run_id=h.run_id,
-                        pipeline_id=h.pipeline_id,
-                        review_id=h.review_id,
-                        claimed_by=h.account_id,
-                        expires_at=h.expires_at,
-                        required_team_id=h.required_team_id,
-                        required_team_name=team_name,
-                    )
-                    for h, team_name in pending_hitl_result.all()
-                ]
-
-                all_views_result = await list_views(session, page=1, page_size=100)
-                all_views = [_enrich_view(v, current_user.account_id) for v in all_views_result.items]
-
-                current_view = None
-                if current_view_id is not None:
-                    view = await get_view(session, current_view_id)
-                    if view is not None:
-                        current_view = _enrich_view(view, current_user.account_id)
-            else:
-                pipelines_page = None
-                runs_page = None
-                pending_hitl = []
-                all_views = []
-                current_view = None
-
-            plan_ctx = await resolve_plan_context(settings, session, org=org)
+        fetched = await _fetch_viewmodel(session, current_user, settings, view_as_team, current_view_id)
     except ProgrammingError:
         logger.exception("viewmodel.viewmodel_current")
         raise HTTPException(
@@ -389,7 +330,9 @@ async def viewmodel_current(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to load viewmodel data.",
         ) from None
-    enabled_features = plan_ctx.list_enabled_features()
+
+    org = fetched.org
+    enabled_features = fetched.plan_ctx.list_enabled_features()
     feature_flags = [
         FeatureFlagInfo(
             name=flag.name,
@@ -400,6 +343,8 @@ async def viewmodel_current(
         for flag in enabled_features
     ]
 
+    pipelines_page = fetched.pipelines_page
+    runs_page = fetched.runs_page
     return ViewModelCurrent(
         user=UserInfo(username=current_user.username),
         org=OrganisationInfo(
@@ -410,9 +355,9 @@ async def viewmodel_current(
             else {},
         ),
         org_role=current_user.org_role or "",
-        team_memberships=[TeamMembershipInfo(team_id=m.team_id, team_role=m.role) for m in memberships],
+        team_memberships=[TeamMembershipInfo(team_id=m.team_id, team_role=m.role) for m in fetched.memberships],
         team_memberships_truncated=False,
-        preferences=account.preferences,
+        preferences=fetched.account.preferences,
         feature_flags=feature_flags,
         plan=PlanInfo(
             tier=_resolve_tier(settings, org=org),
@@ -424,9 +369,9 @@ async def viewmodel_current(
         pipelines_total=pipelines_page.total if pipelines_page else 0,
         recent_runs=[RunSummary.model_validate(r) for r in (runs_page.items if runs_page else [])],
         runs_total=runs_page.total if runs_page else 0,
-        pending_hitl_reviews=[PendingHitlReview.model_validate(h) for h in pending_hitl],
-        views=all_views,
-        current_view=current_view,
+        pending_hitl_reviews=[PendingHitlReview.model_validate(h) for h in fetched.pending_hitl],
+        views=fetched.all_views,
+        current_view=fetched.current_view,
         is_system_admin=current_user.is_system_admin,
     )
 
@@ -485,7 +430,16 @@ def _enrich_view(view: SavedView, user_id: uuid.UUID) -> ViewInfo:
 
 
 def _resolve_tier(settings: Settings, org: Any | None = None) -> str:
-    from modulo.core.license import get_license, parse_and_verify
+    """Resolve the deployment tier for ``/viewmodel/current``'s ``plan.tier``.
+
+    Mirrors the canonical licence ladder (``core.feature_flags._resolve_paid_plan``):
+    org-level key, then the in-memory licence, then the env-var key — each key
+    trusted only after verification (``parse_and_verify`` / the shared
+    ``verify_license_key`` wrapper, never on mere presence) so this resolver
+    cannot disagree with ``_resolve_license_info`` for the same deployment
+    state. Falls back to ``community``.
+    """
+    from modulo.core.license import get_license, parse_and_verify, verify_license_key
 
     if org is not None:
         org_key = org.settings_json.get("license_key") if hasattr(org, "settings_json") else None
@@ -497,6 +451,210 @@ def _resolve_tier(settings: Settings, org: Any | None = None) -> str:
     lic = get_license()
     if lic is not None:
         return lic.tier
-    if settings.modulo_license_key:
-        return "team"
+    # FAR-1733: the env-var key is only trusted after verification — an
+    # unverifiable key falls through to community (never "team" on presence).
+    env_data = verify_license_key(getattr(settings, "modulo_license_key", "") or "")
+    if env_data is not None:
+        return env_data.tier
     return "community"
+
+
+# ---------------------------------------------------------------------------
+# /viewmodel/current fetch helpers
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _ViewModelFetch:
+    """DB-fetched inputs for one ``/viewmodel/current`` response."""
+
+    org: Organisation | None
+    account: Account
+    memberships: list[TeamMembership]
+    pipelines_page: PageResult[Pipeline] | None
+    runs_page: PageResult[Run] | None
+    pending_hitl: list[PendingHitlReview]
+    all_views: list[ViewInfo]
+    current_view: ViewInfo | None
+    plan_ctx: PlanContext
+
+
+async def _fetch_viewmodel(
+    session: AsyncSession,
+    current_user: AuthenticatedPrincipal,
+    settings: Settings,
+    view_as_team: uuid.UUID | None,
+    current_view_id: uuid.UUID | None,
+) -> _ViewModelFetch:
+    """Fetch everything ``/viewmodel/current`` aggregates, inside one transaction.
+
+    ``HTTPException`` raised here (400/404 validation) propagates to the
+    endpoint's exception ladder, which re-raises it untouched.
+    """
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        await set_rls_user_context(session, current_user.account_id, current_user.org_role or "")
+
+        await _require_view_as_team_scope(session, current_user, view_as_team)
+
+        org = await _resolve_viewmodel_org(session, current_user)
+
+        account = await get_account_by_id(session, current_user.account_id)
+        if account is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+
+        memberships = await list_team_memberships_for_account(session, current_user.account_id)
+
+        pipelines_page: PageResult[Pipeline] | None
+        runs_page: PageResult[Run] | None
+        pending_hitl: list[PendingHitlReview]
+        all_views: list[ViewInfo]
+        current_view: ViewInfo | None
+        if current_user.organisation_id is not None:
+            pipelines_page, runs_page, pending_hitl, all_views, current_view = await _load_org_dashboard(
+                session,
+                current_user.organisation_id,
+                current_user.account_id,
+                memberships,
+                current_view_id,
+            )
+        else:
+            pipelines_page = None
+            runs_page = None
+            pending_hitl = []
+            all_views = []
+            current_view = None
+
+        plan_ctx = await resolve_plan_context(settings, session, org=org)
+
+    return _ViewModelFetch(
+        org=org,
+        account=account,
+        memberships=memberships,
+        pipelines_page=pipelines_page,
+        runs_page=runs_page,
+        pending_hitl=pending_hitl,
+        all_views=all_views,
+        current_view=current_view,
+        plan_ctx=plan_ctx,
+    )
+
+
+async def _require_view_as_team_scope(
+    session: AsyncSession,
+    current_user: AuthenticatedPrincipal,
+    view_as_team: uuid.UUID | None,
+) -> None:
+    """Validate a ``view_as_team`` request: 400 without an org, 404 for an unknown team."""
+    if view_as_team is None:
+        return
+    if current_user.organisation_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot use view_as_team without an organisation",
+        )
+    team_result = await session.execute(
+        select(Team).where(
+            Team.id == view_as_team,
+            Team.organisation_id == current_user.organisation_id,
+            Team.deleted_at.is_(None),
+        )
+    )
+    if team_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
+
+async def _resolve_viewmodel_org(
+    session: AsyncSession,
+    current_user: AuthenticatedPrincipal,
+) -> Organisation | None:
+    """Load the caller's organisation (404 when missing); system admins may have none."""
+    if current_user.organisation_id is None:
+        if not current_user.is_system_admin:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+        return None
+    org = await get_organisation(session, current_user.organisation_id)
+    if org is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+    return org
+
+
+async def _load_org_dashboard(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    account_id: uuid.UUID,
+    memberships: list[TeamMembership],
+    current_view_id: uuid.UUID | None,
+) -> tuple[PageResult[Pipeline], PageResult[Run], list[PendingHitlReview], list[ViewInfo], ViewInfo | None]:
+    """Load the org-scoped dashboard slice: pipelines, runs, pending HITL reviews, saved views."""
+    pipelines_page = await list_pipelines(session, page=1, page_size=20, organisation_id=organisation_id)
+    runs_page = await list_runs(session, page=1, page_size=10)
+
+    user_team_ids = [m.team_id for m in memberships]
+    pending_hitl = await _fetch_pending_hitl_reviews(session, organisation_id, user_team_ids)
+
+    all_views_result = await list_views(session, page=1, page_size=100)
+    all_views = [_enrich_view(v, account_id) for v in all_views_result.items]
+
+    current_view = None
+    if current_view_id is not None:
+        view = await get_view(session, current_view_id)
+        if view is not None:
+            current_view = _enrich_view(view, account_id)
+
+    return pipelines_page, runs_page, pending_hitl, all_views, current_view
+
+
+async def _fetch_pending_hitl_reviews(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    user_team_ids: list[uuid.UUID],
+) -> list[PendingHitlReview]:
+    """Pending HITL claims visible to the user, restricted to actionable run statuses.
+
+    FAR-645: join ``runs`` and filter to the actionable run statuses —
+    identical semantics to the org pending list
+    (``HITLManager.list_pending``). Without the filter, gates on
+    terminal runs still rendered on the dashboard and claiming
+    them 409'd.
+    """
+    hitl_query = (
+        select(HitlClaim, Team.name.label("required_team_name"))
+        .outerjoin(Team, HitlClaim.required_team_id == Team.id)
+        .join(Run, HitlClaim.run_id == Run.id)
+        .where(
+            HitlClaim.organisation_id == organisation_id,
+            HitlClaim.decision.is_(None),
+            Run.status.in_(HITL_ACTIONABLE_RUN_STATUSES),
+        )
+    )
+    if user_team_ids:
+        hitl_query = hitl_query.where(
+            HitlClaim.required_team_id.is_(None) | HitlClaim.required_team_id.in_(user_team_ids)
+        )
+    else:
+        hitl_query = hitl_query.where(HitlClaim.required_team_id.is_(None))
+
+    # FAR-1653: include_soft_deleted so a soft-deleted required
+    # team's name still renders on this historical read (the
+    # outer join would otherwise NULL the label via the global
+    # soft-delete filter's ON-clause criteria).
+    # ``Select[Any]`` cast: include_soft_deleted's ``T: Select[Any]``
+    # bound rejects the concrete ``Select[HitlClaim, str]`` the
+    # entity-plus-column select infers (SQLAlchemy's type parameters
+    # are invariant) — same pattern as lifecycle_maps/pipelines
+    # scope reads.
+    pending_hitl_result = await session.execute(include_soft_deleted(cast(Select[Any], hitl_query)))
+    return [
+        PendingHitlReview(
+            id=h.id,
+            run_id=h.run_id,
+            pipeline_id=h.pipeline_id,
+            review_id=h.review_id,
+            claimed_by=h.account_id,
+            expires_at=h.expires_at,
+            required_team_id=h.required_team_id,
+            required_team_name=team_name,
+        )
+        for h, team_name in pending_hitl_result.all()
+    ]

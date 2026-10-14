@@ -40,7 +40,7 @@ from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
 
-from modulo.core.run_context.autonomy import PIPELINE_MAX_AUTONOMY_KEY
+from modulo.core.run_context.autonomy import PIPELINE_EARNED_AT_START_KEY, PIPELINE_MAX_AUTONOMY_KEY
 from modulo.db.lifecycle_refs import notify_refs_shadow_strip_hit
 
 _log = logging.getLogger(__name__)
@@ -106,6 +106,11 @@ _RESERVED_RUN_CONTEXT_KEYS = frozenset(
         # overwrite it — raising the ceiling would let the same agent that
         # writes autonomy_recommendation also lift the cap on itself.
         PIPELINE_MAX_AUTONOMY_KEY,
+        # FAR-1175 S1: the earned level pinned at run start. A context-setter
+        # must never overwrite it — overwriting the pin would let the same agent
+        # that writes autonomy_recommendation also erase its own in-flight
+        # ceiling (the pin is what stops a live promotion loosening a run).
+        PIPELINE_EARNED_AT_START_KEY,
         "_run_context_write_log",
         "_work_item_refs",
     }

@@ -19,8 +19,6 @@ from typing import Any
 import httpx
 import pytest
 import respx
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
@@ -35,18 +33,6 @@ from modulo.connectors.teamcity import TeamCityConnector
 from modulo.core.connector_hub import _TracedConnector
 
 _DISPATCH_OPS = ("trigger_run", "get_run_status", "get_run_logs", "list_runs")
-
-
-@pytest.fixture
-def exporter() -> InMemorySpanExporter:
-    return InMemorySpanExporter()
-
-
-@pytest.fixture
-def tracer(exporter: InMemorySpanExporter):
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    return provider.get_tracer("test")
 
 
 @dataclass(frozen=True)

@@ -283,6 +283,21 @@ class TestScanCheckpointRetention:
         assert entry.entity_type is None
 
 
+# Categories registered with ``entity_type=None`` by design (DETECTION-ONLY):
+# their scan functions set ``entity_type`` directly on candidates (or leave it
+# empty for dedicated purge surfaces) and the category is never a generic
+# cleanup target. Adding a detection-only scanner requires a deliberate entry
+# here; forgetting ``entity_type`` on a deletable scanner fails the guard below
+# instead of silently degrading (FAR-338).
+_DETECTION_ONLY_CATEGORIES = frozenset(
+    {
+        "checkpoint_retention",
+        "degraded_composite_templates",
+        "invalid_org_fk",
+    }
+)
+
+
 class TestScannerRegistry:
     def test_every_scanner_has_label_and_description(self) -> None:
         for entry in _SCANNERS:
@@ -301,6 +316,21 @@ class TestScannerRegistry:
             assert entry.entity_type in ENTITY_MODEL_MAP, (
                 f"{entry.category} -> {entry.entity_type} missing from ENTITY_MODEL_MAP"
             )
+
+    def test_every_scanner_has_entity_type_or_is_detection_only(self) -> None:
+        """Every scanner declares a cleanup ``entity_type`` unless it is a
+        deliberately-registered detection-only category.
+
+        ``entity_type`` defaults to ``None`` on the ``Scanner`` dataclass, so
+        omitting it on a deletable scanner would silently register the category
+        as detection-only: candidates keep an empty ``entity_type`` and the
+        cleanup endpoint cannot delete them. The exact-set assertion forces a
+        deliberate decision in both directions — a forgotten ``entity_type``
+        grows the set, and a stale allowlist entry (one that gained an
+        ``entity_type`` or left the registry) shrinks it (FAR-338).
+        """
+        detection_only = {entry.category for entry in _SCANNERS if entry.entity_type is None}
+        assert detection_only == _DETECTION_ONLY_CATEGORIES
 
     @pytest.mark.asyncio
     async def test_detection_only_scanner_preserves_candidate_entity_type(self) -> None:

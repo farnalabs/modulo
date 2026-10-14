@@ -85,7 +85,6 @@ COPY scripts/ /app/scripts/
 COPY deploy/fly/entrypoint.sh /entrypoint.sh
 COPY deploy/fly/release.sh /release.sh
 COPY deploy/fly/bootstrap_db.py /app/deploy/fly/bootstrap_db.py
-RUN chmod +x /entrypoint.sh && chmod +x /release.sh
 
 # Run as the unprivileged www-data user (docker:S6471). nginx binds the
 # unprivileged port 8080, so setcap is applied for parity with the SPA image
@@ -93,7 +92,10 @@ RUN chmod +x /entrypoint.sh && chmod +x /release.sh
 # runtime-config.js into /usr/share/nginx/html at boot, hence the html chown.
 # Debian nginx keeps proxy/body temp files under /var/lib/nginx (not
 # /var/cache/nginx), so those dirs are pre-created and chowned for non-root.
-RUN mkdir -p \
+# The chmod is merged into this RUN (docker:S7031): same commands, same order,
+# same root user — one layer instead of two consecutive RUN instructions.
+RUN chmod +x /entrypoint.sh && chmod +x /release.sh && \
+    mkdir -p \
     /var/cache/nginx \
     /var/lib/nginx/body \
     /var/lib/nginx/fastcgi \

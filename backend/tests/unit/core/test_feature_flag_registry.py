@@ -476,7 +476,7 @@ class TestResolveSsoUnrestrictedProvisioning:
         registry = AsyncMock()
         registry.resolve_flag = AsyncMock(return_value=True)
         with patch("modulo.core.feature_flags.get_registry", return_value=registry):
-            assert (await resolve_sso_unrestricted_provisioning(None, org_id=self._ORG)) is True
+            assert (await resolve_sso_unrestricted_provisioning(org_id=self._ORG)) is True
 
     async def test_false_when_flag_off(self) -> None:
         from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
@@ -484,7 +484,7 @@ class TestResolveSsoUnrestrictedProvisioning:
         registry = AsyncMock()
         registry.resolve_flag = AsyncMock(return_value=False)
         with patch("modulo.core.feature_flags.get_registry", return_value=registry):
-            assert (await resolve_sso_unrestricted_provisioning(None, org_id=self._ORG)) is False
+            assert (await resolve_sso_unrestricted_provisioning(org_id=self._ORG)) is False
 
     async def test_fails_closed_when_registry_raises(self, caplog) -> None:
         from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
@@ -495,7 +495,7 @@ class TestResolveSsoUnrestrictedProvisioning:
             patch("modulo.core.feature_flags.get_registry", return_value=registry),
             caplog.at_level("ERROR"),
         ):
-            assert (await resolve_sso_unrestricted_provisioning(None, org_id=self._ORG)) is False
+            assert (await resolve_sso_unrestricted_provisioning(org_id=self._ORG)) is False
         assert "failing closed" in caplog.text
 
     async def test_fails_closed_when_get_registry_raises(self, caplog) -> None:
@@ -505,7 +505,7 @@ class TestResolveSsoUnrestrictedProvisioning:
             patch("modulo.core.feature_flags.get_registry", side_effect=RuntimeError("no registry")),
             caplog.at_level("ERROR"),
         ):
-            assert (await resolve_sso_unrestricted_provisioning(None, org_id=self._ORG)) is False
+            assert (await resolve_sso_unrestricted_provisioning(org_id=self._ORG)) is False
         assert "failing closed" in caplog.text
 
     async def test_cancelled_error_propagates(self) -> None:
@@ -519,4 +519,4 @@ class TestResolveSsoUnrestrictedProvisioning:
             patch("modulo.core.feature_flags.get_registry", return_value=registry),
             pytest.raises(asyncio.CancelledError),
         ):
-            await resolve_sso_unrestricted_provisioning(None, org_id=self._ORG)
+            await resolve_sso_unrestricted_provisioning(org_id=self._ORG)

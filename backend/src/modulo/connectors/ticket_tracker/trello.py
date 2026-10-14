@@ -9,10 +9,12 @@ otherwise it's "open".
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_datetime import safe_datetime as _safe_datetime
 from modulo.connectors.base import (
     ConnectorPayload,
@@ -22,7 +24,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
-from modulo.connectors.security import CredentialRedactor
+from modulo.connectors.security import CredentialRedactor, redacting
 from modulo.connectors.ticket_tracker.base import Ticket, TicketFilter, TicketTrackerBase
 from modulo.core.ssrf import pinned_async_client_sync
 
@@ -55,8 +57,13 @@ class TrelloTicketTracker(TicketTrackerBase):
             raise ValueError("Trello connector requires api_key and token credentials")
         # Credential redaction now lives in the shared ``CredentialRedactor``
         # (FAR-507) instead of a per-connector fork — Trello's ``key``/``token``
-        # are the secret values, and the same scrubbing covers every entry point.
-        self._redactor = CredentialRedactor([self._api_key, self._token])
+        # go into the URL query string on every request, so ``scrub_url`` is
+        # required to scrub a transport error's ``request.url`` too. The
+        # ``@redacting`` wrapper covers the error paths that escape a method.
+        self._redactor = CredentialRedactor([self._api_key, self._token], scrub_url=True, chain_cause=False)
+
+    def _credential_values(self) -> Sequence[str]:
+        return self._redactor.secrets
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -81,8 +88,10 @@ class TrelloTicketTracker(TicketTrackerBase):
         # connection (never re-resolved at connect time — closes DNS rebinding).
         # key/token are passed as query parameters per request (never headers),
         # and error redaction is preserved by the existing _redact wrappers.
-        return pinned_async_client_sync(self._base_url)
+        return pinned_async_client_sync(self._base_url, verify=egress_ssl_context(self))
 
+    @redacting
+    # Defence-in-depth: health_check catches internally today; guards against a future escape.
     async def health_check(self) -> HealthResult:
         try:
             async with self._client() as client:
@@ -96,7 +105,7 @@ class TrelloTicketTracker(TicketTrackerBase):
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            return health_check_failure(_RedactedTrelloError(self._health_failure_detail(e)))
+            return health_check_failure(_RedactedTrelloError(self._health_failure_detail(e)), self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         filters = q.filters or {}

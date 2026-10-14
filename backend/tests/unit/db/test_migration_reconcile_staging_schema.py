@@ -34,6 +34,7 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # and FAR-583's 0192_run_node_outputs re-parents onto 0191 with its
 # 0193_run_node_outputs_sweep_index chaining onto 0192, and 0194_uuid_pk_server_defaults
 # (FAR-718, from main) chains off 0193; improve-database's 0197/0198/0199 chain off it,
+# 0200_runs_runner_marker_sweep_index chains off 0199,
 # 0201_spend_anomaly_unique_org_date (from main) chains off 0200, 0202_runs_error_code_claimed_by_indexes
 # (from main) chains off 0201, 0195_hitl_claim_gate_config_json (FAR-634, from main) chains off 0202,
 # 0203_triggers_add_name (FAR-681 slice 2, from main) chains off 0195, FAR-681
@@ -45,8 +46,10 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # chains off 0208, FAR-764's 0210_community_gate chains off 0209, and FAR-775's
 # 0211_variant_batch_state chains off 0210, and 0212_variant_batch_state_updated_at chains off 0211,
 # and FAR-788's 0213_runs_rerun_trigger_type chains off 0212, and
-# 0215_drop_runs_blob_columns chains off 0213, FAR-748's 0216_audit_events_sweep_detection_index
+# 0214_connector_instance_indexes_unique chains off 0213, and
+# 0215_drop_runs_blob_columns chains off 0214, FAR-748's 0216_audit_events_sweep_detection_index
 # chains off 0215, 0217_hitl_claims_decided_by chains off 0216,
+# 0218_eval_cluster_indexes chains off 0217,
 # and 0219_eval_cluster_check_constraints chains off 0218,
 # and 0220_run_node_artifacts chains off 0219,
 # and FAR-802's 0221_workspace_inputs_env_profiles chains off 0220,
@@ -123,8 +126,24 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0289_pipelines_environment_profile chains off 0288_runs_execution_origin, and
 # 0290_scheduled_reports_due_scan chains off 0289_pipelines_environment_profile, and
 # 0291_invitations_lookup_constraints chains off 0290_scheduled_reports_due_scan, and
-# 0292_audit_events_resource_lookup chains off 0291_invitations_lookup_constraints as the chain head.
-_CHAIN_HEAD_MIGRATION = "0292_audit_events_resource_lookup"
+# 0292_audit_events_resource_lookup chains off 0291_invitations_lookup_constraints, and
+# 0293_oauth_clients_team_id chains off 0292_audit_events_resource_lookup, and
+# 0294_eval_results_org_fk chains off 0293_oauth_clients_team_id, and
+# 0295_decision_record_event_identity chains off 0294_eval_results_org_fk, and
+# 0296_benign_run_outcomes chains off 0295_decision_record_event_identity, and
+# 0297_autonomy_gating_s1 chains off 0296_benign_run_outcomes, and
+# 0298_accounts_kind chains off 0297_autonomy_gating_s1, and
+# 0299_accounts_service_identity chains off 0298_accounts_kind, and
+# 0300_benign_facts_repair chains off 0299_accounts_service_identity,
+# 0301_oauth_consent_state_preauth_rls chains off 0300_benign_facts_repair,
+# 0302_runs_run_grouping chains off 0301_oauth_consent_state_preauth_rls, and
+# 0303_feedback_records_lookup_indexes chains off 0302_runs_run_grouping, and
+# 0305_guardrail_escalate_action chains off 0304_metrics_staging_recorded_at_index, and
+# 0306_trigger_secret_encryption chains off 0305_guardrail_escalate_action, and
+# 0307_runs_guardrail_override_resume_pending chains off 0306_trigger_secret_encryption, and
+# 0308_runs_dispatch_phase_history chains off 0307_runs_guardrail_override_resume_pending, and
+# 0310_library_cluster_db_hardening chains off 0308_runs_dispatch_phase_history as the chain head.
+_CHAIN_HEAD_MIGRATION = "0310_library_cluster_db_hardening"
 
 
 def _source(name: str) -> str:

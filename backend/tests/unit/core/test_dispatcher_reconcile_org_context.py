@@ -78,6 +78,7 @@ class _ReconcileSession:
         self._fail_org_index = fail_org_index
         self._org_index_served = False
         self.executed: list[str] = []
+        self.rollbacks = 0
 
     async def __aenter__(self) -> Self:
         return self
@@ -87,6 +88,11 @@ class _ReconcileSession:
 
     def begin(self) -> _Begin:
         return _Begin()
+
+    async def rollback(self) -> None:
+        """``AsyncSession.rollback()`` — the read-failed swallow calls this
+        explicitly per org (FAR-1644/M3) before unwinding its counts."""
+        self.rollbacks += 1
 
     def get_bind(self) -> MagicMock:
         bind = MagicMock()
@@ -158,7 +164,7 @@ async def _drain() -> None:
         await asyncio.sleep(0)
 
 
-async def _drive() -> dict[str, Any]:
+async def _drive() -> tuple[dict[str, Any], _ReconcileSession]:
     session = _ReconcileSession([ORG1, ORG2])
     factory = MagicMock(return_value=session)
     redis_client = AsyncMock()
@@ -173,7 +179,7 @@ async def _drive() -> dict[str, Any]:
         patch.object(ch, "_update_reconcile_telemetry", new_callable=AsyncMock),
     ):
         redis_cls.from_url.return_value = redis_client
-        return await ch.dispatcher_reconcile()
+        return await ch.dispatcher_reconcile(), session
 
 
 async def test_per_org_read_failures_are_attributed_to_their_own_orgs(
@@ -190,7 +196,7 @@ async def test_per_org_read_failures_are_attributed_to_their_own_orgs(
     """
     assert org_id_var.get() is None
 
-    summary = await _drive()
+    summary, session = await _drive()
     await _drain()
 
     assert summary["status"] == "ok"
@@ -199,6 +205,10 @@ async def test_per_org_read_failures_are_attributed_to_their_own_orgs(
     assert any(f"read failed (org {ORG2})" in message for message in messages)
     # Exactly one forwarded record per org, each bound to ITS OWN tick:
     assert sink.orgs == [str(ORG1), str(ORG2)]
+    # FAR-1644/M3: each of those swallowed read failures also rolled its own
+    # transaction back before unwinding — one rollback per org, never a
+    # committed-but-unwound org.
+    assert session.rollbacks == 2
     # Scoped to the tick — the caller's context never saw the bind.
     assert org_id_var.get() is None
 

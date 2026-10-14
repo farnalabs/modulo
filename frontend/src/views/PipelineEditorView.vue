@@ -4,7 +4,7 @@
       <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
     </div>
     <div v-else-if="pageError" class="flex flex-1 items-center justify-center">
-      <div class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">{{ pageError }}</div>
+      <ErrorAlert :message="pageError" :on-retry="reloadPage" />
     </div>
     <template v-else>
       <div class="flex min-w-0 flex-1 flex-col">
@@ -178,6 +178,54 @@
                 <option value="notify_on_complete">{{ $t('views.PipelineEditorView.autonomy_notify_on_complete') }}</option>
                 <option value="fully_autonomous">{{ $t('views.PipelineEditorView.autonomy_fully_autonomous') }}</option>
               </select>
+            </div>
+            <!-- FAR-1696 (ADR 043 S5): progressive-autonomy visibility panel,
+                 mounted next to the ceiling control it reads alongside. The
+                 panel renders the pipeline's default / ceiling / earned levels
+                 and carries the admin/owner manual demote / promote actions;
+                 a successful change refetches the pipeline below. -->
+            <div class="relative">
+              <button
+                type="button"
+                ref="autonomyPanelToggleRef"
+                :class="btnToolbarSecondary"
+                :aria-expanded="autonomyPanelOpen"
+                aria-haspopup="dialog"
+                :aria-controls="autonomyPanelDialogId"
+                data-testid="pipeline-editor-autonomy-panel-toggle"
+                @click="toggleAutonomyPanel"
+              >
+                {{ $t('views.PipelineEditorView.autonomy_panel_toggle') }}
+              </button>
+              <dialog
+                v-if="autonomyPanelOpen"
+                open
+                :id="autonomyPanelDialogId"
+                ref="autonomyPanelDialogRef"
+                class="absolute right-0 left-auto top-full z-50 mt-1 w-80 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-card p-3 shadow-lg"
+                tabindex="-1"
+                :aria-label="$t('views.PipelineEditorView.autonomy_panel_title')"
+                data-testid="pipeline-editor-autonomy-panel-dialog"
+              >
+                <ProgressiveAutonomyPanel
+                  :pipeline-id="pipelineId"
+                  :default-level="pipeline?.default_autonomy_level ?? null"
+                  :max-level="pipeline?.max_autonomy_level ?? null"
+                  :earned-level="pipeline?.earned_autonomy_level ?? null"
+                  :earned-updated-at="pipeline?.earned_autonomy_updated_at ?? null"
+                  @changed="onAutonomyChanged"
+                />
+                <div class="mt-3 flex justify-end">
+                  <button
+                    type="button"
+                    :class="btnToolbarSecondary"
+                    data-testid="pipeline-editor-autonomy-panel-close"
+                    @click="closeAutonomyPanel"
+                  >
+                    {{ $t('common.close') }}
+                  </button>
+                </div>
+              </dialog>
             </div>
             <!-- FAR-1558: per-pipeline environment profile - the runtime provider
                  this pipeline's runs dispatch on. Gated on the
@@ -580,9 +628,7 @@
                 data-testid="pipeline-editor-run-prompt"
               />
             </div>
-            <div v-if="runError" class="rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive">
-              {{ runError }}
-            </div>
+            <ErrorAlert v-if="runError" :message="runError" :retryable="false" />
             <div v-if="emptyRunWarning" class="rounded-lg bg-warning/10 border border-warning/30 p-3 text-sm text-warning-text">
               {{ emptyRunWarning }}
             </div>
@@ -1283,9 +1329,8 @@
               {{ $t('views.PipelineEditorView.close') }}
             </button>
           </div>
-          <div v-if="edgeSaveError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-            {{ edgeSaveError }}
-          </div>
+          <!-- retry = click Save Edge again; no separate loader -->
+          <ErrorAlert v-if="edgeSaveError" :message="edgeSaveError" :retryable="false" :compact="true" />
         </div>
       </aside>
     </template>
@@ -1347,9 +1392,8 @@
             <p class="mt-0.5 font-medium">{{ $t('views.PipelineEditorView.input_label') }} {{ agentSchemaName(selectedAgent, 'input') }}</p>
             <p class="font-medium">{{ $t('views.PipelineEditorView.output_label') }} {{ agentSchemaName(selectedAgent, 'output') }}</p>
           </div>
-          <div v-if="convertError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-            {{ convertError }}
-          </div>
+          <!-- retry = click Convert again; no separate loader -->
+          <ErrorAlert v-if="convertError" :message="convertError" :retryable="false" :compact="true" />
       </div>
     </FormDialog>
     <FormDialog
@@ -1385,9 +1429,8 @@
   </template>
 </Select>
         </div>
-        <div v-if="revertError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-          {{ revertError }}
-        </div>
+        <!-- retry = click Revert again; no separate loader -->
+        <ErrorAlert v-if="revertError" :message="revertError" :retryable="false" :compact="true" />
       </div>
     </FormDialog>
     <FormDialog
@@ -1438,9 +1481,8 @@
             </label>
           </div>
         </div>
-        <div v-if="saveAsError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-          {{ saveAsError }}
-        </div>
+        <!-- retry = click Save again; no separate loader -->
+        <ErrorAlert v-if="saveAsError" :message="saveAsError" :retryable="false" :compact="true" />
       </div>
     </FormDialog>
     <FormDialog
@@ -1462,9 +1504,8 @@
             @keyup.enter="handleRename"
           />
         </div>
-        <div v-if="renameError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-          {{ renameError }}
-        </div>
+        <!-- retry = click Save again; no separate loader -->
+        <ErrorAlert v-if="renameError" :message="renameError" :retryable="false" :compact="true" />
       </div>
     </FormDialog>
     <FormDialog
@@ -1477,9 +1518,8 @@
       <p class="mb-4 text-sm text-muted-foreground">
         {{ $t('views.PipelineEditorView.delete_pipeline_confirm') }}
       </p>
-      <div v-if="deleteError" class="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-        {{ deleteError }}
-      </div>
+      <!-- retry = click Delete again; no separate loader -->
+      <ErrorAlert v-if="deleteError" :message="deleteError" :retryable="false" class="mb-4" :compact="true" />
     </FormDialog>
 
     <PipelineSnapshotTimeline v-if="showVersionTimeline" :pipeline-id="pipelineId" @close="showVersionTimeline = false" />
@@ -1498,16 +1538,20 @@ import { formatApiError, throwOnError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 
 import FormDialog from '../components/shared/FormDialog.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FlowControls from '../components/shared/FlowControls.vue'
 import PipelineSnapshotTimeline from '../components/pipeline/PipelineSnapshotTimeline.vue'
 import SandboxCommandsEditor from '../components/pipeline/SandboxCommandsEditor.vue'
 import SnapshotLockCard from '../components/pipeline/SnapshotLockCard.vue'
+import ProgressiveAutonomyPanel from '../components/pipeline/ProgressiveAutonomyPanel.vue'
 import AgentRunnerBindings from '../components/agent/AgentRunnerBindings.vue'
 import { shortId } from '../utils/format'
 import { CANVAS_EDGE_STROKE } from '../constants/canvas'
 import { api } from '../lib/api/client'
 import { useApi } from '../composables/useApi'
 import { useCurrentUser } from '../composables/useCurrentUser'
+import { useProductAnalytics } from '../composables/useProductAnalytics'
+import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
 import { useEnvironmentProfilesStore } from '../stores/environmentProfiles'
 import { runnerTierLabelKeyForProvider } from '../lib/runnerTiers'
 import Button from 'primevue/button'
@@ -1526,6 +1570,7 @@ function withTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, ms = 15000
 const TOGGLE_REQUEST_TIMEOUT_MS = 30000
 
 const { t } = useI18n()
+const { track } = useProductAnalytics()
 
 function nodeTypeBadgeClass(nodeType: string): string {
   if (nodeType === 'manual') return 'badge badge-status-warning'
@@ -1803,31 +1848,82 @@ const retryPolicySaveBlocked = computed(
   () => retryPolicyMode.value === 'specific' && retryPolicyEvents.value.length === 0,
 )
 
+// FAR-649: coverage mode from the stored shape. An ABSENT `on` (key
+// missing or null) renders as All-errors — the runtime resolves it to all
+// retryable events. An explicit `on` list renders as granular (a stored
+// empty list is retry-effectively-off, surfaced by the zero-selected
+// warning). A malformed non-list `on` fail-closes at runtime (no retry),
+// so it renders as granular with nothing selected to surface the warning.
+function _coverageFromStored(rp: RetryPolicy): { mode: 'all' | 'specific'; events: string[] } {
+  const stored = rp as Record<string, unknown>
+  if (stored.on === undefined || stored.on === null) {
+    return { mode: 'all', events: [] }
+  }
+  if (Array.isArray(stored.on)) {
+    return {
+      mode: 'specific',
+      events: (stored.on as unknown[]).filter((e): e is string =>
+        retryPolicyEventValues.has(e as string),
+      ),
+    }
+  }
+  return { mode: 'specific', events: [] }
+}
+
+function _maxRetriesFromStored(rp: RetryPolicy): number {
+  const max = typeof rp.max_retries === 'number' ? Math.round(rp.max_retries) : 0
+  return Math.min(5, Math.max(0, max))
+}
+
+// FAR-525: the run-level backoff schedule. Out-of-range stored values are
+// clamped here for editing ONLY — the runtime resolver fails open to the
+// default 45s x 2.0 schedule, which the caller surfaces via `clamped`.
+function _scheduleFromStored(rp: RetryPolicy): {
+  delay: number
+  multiplier: number
+  clamped: boolean
+} {
+  const stored = rp as Record<string, unknown>
+  const schedule = stored.backoff_schedule
+  if (!schedule || typeof schedule !== 'object' || Array.isArray(schedule)) {
+    return { delay: 45, multiplier: 2, clamped: false }
+  }
+  const s = schedule as Record<string, unknown>
+  let clamped = false
+
+  const rawDelay = Number(s.delay_seconds)
+  let delay: number
+  if (Number.isFinite(rawDelay) && rawDelay >= 1 && rawDelay <= 300) {
+    delay = Math.round(rawDelay)
+  } else {
+    delay = Number.isFinite(rawDelay) ? Math.min(300, Math.max(1, Math.round(rawDelay))) : 45
+    clamped = true
+  }
+
+  let multiplier: number
+  if (s.multiplier === undefined) {
+    multiplier = 2
+  } else {
+    const rawMult = Number(s.multiplier)
+    if (Number.isFinite(rawMult) && rawMult >= 1 && rawMult <= 10) {
+      multiplier = rawMult
+    } else {
+      multiplier = Number.isFinite(rawMult) ? Math.min(10, Math.max(1, rawMult)) : 2
+      clamped = true
+    }
+  }
+
+  return { delay, multiplier, clamped }
+}
+
 function syncRetryPolicyFromPipeline() {
   const rp = (pipeline.value as PipelineRetryPolicySource | null)?.retry_policy
   retryPolicyScheduleWarning.value = null
   if (rp && typeof rp === 'object' && !Array.isArray(rp)) {
-    // FAR-649: coverage mode from the stored shape. An ABSENT `on` (key
-    // missing or null) renders as All-errors — the runtime resolves it to all
-    // retryable events. An explicit `on` list renders as granular (a stored
-    // empty list is retry-effectively-off, surfaced by the zero-selected
-    // warning). A malformed non-list `on` fail-closes at runtime (no retry),
-    // so it renders as granular with nothing selected to surface the warning.
-    const stored = rp as Record<string, unknown>
-    if (stored.on === undefined || stored.on === null) {
-      retryPolicyMode.value = 'all'
-      retryPolicyEvents.value = []
-    } else if (Array.isArray(stored.on)) {
-      retryPolicyMode.value = 'specific'
-      retryPolicyEvents.value = (stored.on as unknown[]).filter((e): e is string =>
-        retryPolicyEventValues.has(e as string),
-      )
-    } else {
-      retryPolicyMode.value = 'specific'
-      retryPolicyEvents.value = []
-    }
-    const max = typeof rp.max_retries === 'number' ? Math.round(rp.max_retries) : 0
-    retryPolicyMaxRetries.value = Math.min(5, Math.max(0, max))
+    const coverage = _coverageFromStored(rp)
+    retryPolicyMode.value = coverage.mode
+    retryPolicyEvents.value = coverage.events
+    retryPolicyMaxRetries.value = _maxRetriesFromStored(rp)
 
     // FAR-525: keep the legacy node-level inherited `backoff` so a save can
     // re-send it losslessly (the editor rebuilds the policy from a whitelist).
@@ -1835,38 +1931,10 @@ function syncRetryPolicyFromPipeline() {
     retryPolicyLegacyBackoff.value =
       typeof legacyBackoff === 'number' && Number.isFinite(legacyBackoff) ? legacyBackoff : undefined
 
-    // FAR-525: load the run-level backoff schedule into the panel. Out-of-range
-    // stored values are clamped here for editing ONLY — the runtime resolver
-    // fails open to the default 45s x 2.0 schedule, which the warning surfaces.
-    let scheduleClamped = false
-    const schedule = (rp as Record<string, unknown>).backoff_schedule
-    if (schedule && typeof schedule === 'object' && !Array.isArray(schedule)) {
-      const s = schedule as Record<string, unknown>
-      const rawDelay = Number(s.delay_seconds)
-      if (Number.isFinite(rawDelay) && rawDelay >= 1 && rawDelay <= 300) {
-        retryPolicyDelaySeconds.value = Math.round(rawDelay)
-      } else {
-        retryPolicyDelaySeconds.value = Number.isFinite(rawDelay)
-          ? Math.min(300, Math.max(1, Math.round(rawDelay)))
-          : 45
-        scheduleClamped = true
-      }
-      if (s.multiplier === undefined) {
-        retryPolicyMultiplier.value = 2
-      } else {
-        const rawMult = Number(s.multiplier)
-        if (Number.isFinite(rawMult) && rawMult >= 1 && rawMult <= 10) {
-          retryPolicyMultiplier.value = rawMult
-        } else {
-          retryPolicyMultiplier.value = Number.isFinite(rawMult) ? Math.min(10, Math.max(1, rawMult)) : 2
-          scheduleClamped = true
-        }
-      }
-    } else {
-      retryPolicyDelaySeconds.value = 45
-      retryPolicyMultiplier.value = 2
-    }
-    if (scheduleClamped) {
+    const schedule = _scheduleFromStored(rp)
+    retryPolicyDelaySeconds.value = schedule.delay
+    retryPolicyMultiplier.value = schedule.multiplier
+    if (schedule.clamped) {
       retryPolicyScheduleWarning.value = t('views.PipelineEditorView.retry_policy_schedule_clamped_warning')
     }
   } else {
@@ -1915,6 +1983,57 @@ watch(retryPolicyOpen, (open) => {
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onRetryPolicyKeydown)
 })
+
+// FAR-1696 (ADR 043 S5): progressive-autonomy panel popover. Same
+// open/Escape/focus-return shape as the retry-policy panel above it, and the
+// same toggle→panel aria-controls wiring (the toggle button references this
+// dialog id so AT can announce the controlled element).
+const autonomyPanelDialogId = 'pipeline-editor-autonomy-panel-dialog'
+const autonomyPanelOpen = ref(false)
+const autonomyPanelToggleRef = ref<HTMLButtonElement | null>(null)
+const autonomyPanelDialogRef = ref<HTMLDialogElement | null>(null)
+
+function toggleAutonomyPanel() {
+  autonomyPanelOpen.value = !autonomyPanelOpen.value
+  if (autonomyPanelOpen.value) {
+    nextTick(() => {
+      autonomyPanelDialogRef.value?.focus()
+    })
+  } else {
+    autonomyPanelToggleRef.value?.focus()
+  }
+}
+
+function closeAutonomyPanel() {
+  autonomyPanelOpen.value = false
+  autonomyPanelToggleRef.value?.focus()
+}
+
+function onAutonomyPanelKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && autonomyPanelOpen.value) {
+    event.preventDefault()
+    closeAutonomyPanel()
+  }
+}
+
+watch(autonomyPanelOpen, (open) => {
+  if (open) {
+    document.addEventListener('keydown', onAutonomyPanelKeydown)
+  } else {
+    document.removeEventListener('keydown', onAutonomyPanelKeydown)
+  }
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onAutonomyPanelKeydown)
+})
+
+// A manual demote/promote writes earned_autonomy_level server-side; refetch
+// the pipeline so the toolbar ceiling control, the panel and any other
+// pipeline-derived state all re-read the same persisted value.
+async function onAutonomyChanged() {
+  await loadPipeline()
+}
 
 async function saveRetryPolicy() {
   if (retryPolicySaving.value) return
@@ -2328,15 +2447,21 @@ async function loadParamSets() {
 
 const canConvert = computed(() => pickerAgentId.value !== '__all__' && pickerConnectorId.value !== '__all__')
 
+// Backend node types that map 1:1 onto their canvas type. Everything else
+// (including 'agent') collapses into the generic agent node — except dispatch,
+// which is a first-class canvas type (FAR-1141) and must never be collapsed.
+// A Map (not an object literal) so an unknown node_type such as 'constructor'
+// or 'toString' cannot resolve to an inherited Object.prototype member — it
+// must fall through to 'agent', matching the original ternary chain.
+const CANVAS_TYPE_BY_BACKEND_TYPE = new Map<string, string>([
+  ['manual', 'manual'],
+  ['router', 'router'],
+  ['hitl', 'hitl'],
+  ['dispatch', 'dispatch'],
+])
+
 function convertBackendNode(n: any): any {
-  const nodeType =
-    n.node_type === 'manual' ? 'manual'
-    : n.node_type === 'router' ? 'router'
-    : n.node_type === 'hitl' ? 'hitl'
-    // FAR-1141: dispatch is a first-class canvas type — never collapse it
-    // into the generic `agent` node.
-    : n.node_type === 'dispatch' ? 'dispatch'
-    : 'agent'
+  const nodeType = CANVAS_TYPE_BY_BACKEND_TYPE.get(n.node_type) ?? 'agent'
   return {
     id: n.id,
     type: nodeType,
@@ -3224,7 +3349,10 @@ async function triggerRun() {
     // RunResponse's id field is run_id (POST /api/v1/runs) — reading `.id`
     // navigated to /runs/undefined (FAR-1246). Typed off the generated schema
     // so a field rename fails vue-tsc instead of silently breaking the nav.
-    if (data) router.push({ name: 'run-detail', params: { id: data.run_id } })
+    if (data) {
+      track(ANALYTICS_EVENTS.PIPELINE_RUN_STARTED, { run_id: data.run_id })
+      router.push({ name: 'run-detail', params: { id: data.run_id } })
+    }
   } catch (e: unknown) {
     runError.value = formatApiError(e)
   } finally {
@@ -3270,7 +3398,7 @@ async function loadLifecycleMaps() {
 // initialised before the fetcher can run.
 const pageError = ref<string | null>(null)
 
-const { loading } = useDataFetch<null>(
+const { loading, load: reloadPage } = useDataFetch<null>(
   async () => {
     pageError.value = null
     await Promise.all([loadPipeline(), loadGraph(), loadCatalog(), loadFolders(), loadLifecycleMaps()])

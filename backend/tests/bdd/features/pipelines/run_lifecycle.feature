@@ -18,8 +18,8 @@ Feature: Pipeline Run Lifecycle
   Scenario: Successful run completes
     Given a running pipeline "deploy-service" with stub model backend
     When all nodes complete without error
-    Then the run status becomes "completed"
-    And the run has a final_state
+    Then the run status becomes "complete"
+    And the run has reached a terminal state
 
   Scenario: Failed run is marked failed
     Given a running pipeline "deploy-service"

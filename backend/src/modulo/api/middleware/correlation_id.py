@@ -10,7 +10,7 @@ Thread-safe via contextvars.
 """
 
 import uuid
-from typing import Any
+from collections.abc import Awaitable, Callable
 
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -21,13 +21,17 @@ REQUEST_ID_HEADER = "X-Request-ID"
 
 
 class CorrelationIdMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next: Any) -> Response:
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
         correlation_id = str(uuid.uuid4())
         request.state.correlation_id = correlation_id
         request.state.request_id = correlation_id
         token = correlation_id_var.set(correlation_id)
         try:
-            response: Response = await call_next(request)
+            response = await call_next(request)
             response.headers[REQUEST_ID_HEADER] = correlation_id
             return response
         finally:

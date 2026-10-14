@@ -23,9 +23,9 @@ answers) and assert:
 * a cross-team connector binding is rejected 409, named
   ``connector_team_mismatch``, and the rejection happens BEFORE the graph write
   (``_save_graph`` is never called),
-* an ORG-ONLY connector on a TEAM pipeline is rejected 409 the same way
-  (FAR-1515) — before this the save accepted a graph whose every run is
-  team-scoped and rejected at the connector gate,
+* an ORG-visibility connector on a TEAM pipeline is ACCEPTED (FAR-1618 — org
+  resources are shared across the organisation; this reverses the FAR-1515
+  reverse direction and the FAR-516 run-gate it mirrored),
 * an org connector on an ORG pipeline, or the pipeline's own team connector,
   is accepted,
 * ``_resolve_graph_references`` runs before the write and its 422 stops the write,
@@ -139,10 +139,12 @@ def _gate_clearing_connector_session() -> AsyncMock:
     connector, so ``connector_team_mismatch`` is False and the save reaches
     the step under test — reference resolution, post-write validation, the
     advisory return, the edge mapping. Every test that needs to get PAST the
-    connector gate uses this instead of hand-picking a visibility: since
-    FAR-1515 an org-only connector on a team pipeline is its own 409, so
-    ``visibility="org"`` here would stop the request before the step it exists
-    to exercise.
+    connector gate uses this instead of hand-picking a visibility: a
+    DIFFERENT team's connector (or one owned by nobody) is the 409 case, so
+    that is what would stop the request before the step it exists to
+    exercise. (Since FAR-1618 an org connector would also clear the gate, but
+    the team-owned one is the conservative choice: it exercises the strictest
+    passing path.)
     """
     return _enforcement_session(connector_visibility="team", connector_owner_team=_PIPELINE_TEAM)
 
@@ -245,38 +247,31 @@ async def test_cross_team_connector_binding_is_rejected_before_the_write() -> No
     resolve.assert_not_awaited()
 
 
-async def test_org_only_connector_on_team_pipeline_is_rejected_409() -> None:
-    """FAR-1515: a TEAM pipeline pinning an ORG-ONLY connector must not persist.
+async def test_org_visibility_connector_on_team_pipeline_reaches_the_write() -> None:
+    """FAR-1618: a TEAM pipeline pinning an ORG-visibility connector PERSISTS.
 
-    Every run of a team-owned pipeline is team-scoped, and the ConnectorHub ACL
-    fails closed on team-scoped access to an org-only connector (FAR-516), so a
-    save accepted here produced a graph whose runs could never execute. This
-    fails without the new check: the predicate returned False for every
-    non-team connector, so ``_save_graph`` used to be reached.
-
-    The detail must be actionable too — a named error alone tells the client
-    WHAT happened, not what to do about it.
+    Org-wide resources are shared across the organisation — teams are a
+    visibility grouping, not a credential trust boundary — so the save gate
+    has nothing to refuse. This is the exact request the FAR-1515 reverse
+    direction rejected 409 (with a "flip the connector to `team`" detail) and
+    that the FAR-516 run-gate would then have failed at execution time; both
+    are removed, and ``_save_graph`` must now be reached.
     """
     session = _enforcement_session(connector_visibility="org", connector_owner_team=None)
-    save = AsyncMock(return_value=([], []))
-    resolve = AsyncMock(return_value=([], []))
+    saved_nodes = [_converted_node()]
+    save = AsyncMock(return_value=(saved_nodes, []))
 
     with (
         patch(f"{_PREFIX}_save_graph", new=save),
-        patch(f"{_PREFIX}_resolve_graph_references", new=resolve),
+        patch(f"{_PREFIX}_resolve_graph_references", new=AsyncMock(return_value=([], []))),
         patch(f"{_PREFIX}_validate_graph_save", new=AsyncMock(return_value=[])),
-        pytest.raises(HTTPException) as excinfo,
     ):
         # ``_save``'s default pipeline owner IS ``_PIPELINE_TEAM`` - a team pipeline.
-        await _save(session)
+        result = await _save(session)
 
-    assert excinfo.value.status_code == 409, excinfo.value.detail
-    detail = str(excinfo.value.detail)
-    assert "connector_team_mismatch" in detail, detail
-    assert "is org-only" in detail, detail
-    assert "flip the connector to `team`" in detail, detail
-    save.assert_not_awaited()
-    resolve.assert_not_awaited()
+    assert result is not None
+    assert result[0] == saved_nodes
+    save.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -292,12 +287,14 @@ async def test_org_only_connector_on_team_pipeline_is_rejected_409() -> None:
         ("org", None, None),
         # A team-private connector IS usable by a pipeline owned by that team.
         ("team", _PIPELINE_TEAM, _PIPELINE_TEAM),
-        # The reverse of each case above is refused and has its own test: an
-        # org-only connector on a TEAM pipeline (FAR-1515), and a team-private
-        # connector on an org pipeline or another team's pipeline - both
-        # covered by the mismatch predicate tests.
+        # FAR-1618: an ORG-wide connector is usable by a TEAM pipeline too —
+        # org resources stay shared across the organisation.
+        ("org", None, _PIPELINE_TEAM),
+        # The remaining direction is refused and has its own test: a
+        # team-private connector on an org pipeline or another team's
+        # pipeline (covered by the mismatch predicate tests).
     ],
-    ids=["org_visible_on_org_pipeline", "same_team"],
+    ids=["org_visible_on_org_pipeline", "same_team", "org_visible_on_team_pipeline"],
 )
 async def test_allowed_connector_bindings_reach_the_write(
     visibility: str,

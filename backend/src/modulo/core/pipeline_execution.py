@@ -31,6 +31,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from langgraph.errors import NodeCancelledError
@@ -38,9 +39,47 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, async_sessionmaker
 
+# FAR-1649: the ``PHASE_*`` label values themselves live in the
+# dependency-free leaf ``modulo.core.dispatch_phases``. They moved there so
+# ``cron_helpers`` / ``run_admission`` can branch on them without importing
+# THIS module, which reaches langgraph at module level. Every
+# ``pipeline_execution.PHASE_*`` name keeps resolving here for every existing
+# importer (saq_worker, executor, tests) while the values have ONE
+# definition — exported EXPLICITLY via ``__all__`` below, because this
+# package's mypy config disables implicit re-exports (a plain
+# ``from ... import`` is not an export under ``no_implicit_reexport``).
+from modulo.core.dispatch_phases import (
+    PHASE_CAPACITY_CHECK,
+    PHASE_CLAIMED,
+    PHASE_EXECUTOR_RUNNING,
+    PHASE_FIRST_NODE_DISPATCHED,
+    PHASE_GRAPH_COMPILE,
+    PHASE_INIT_ENV,
+    PHASE_LOADING_CONTEXT,
+    PHASE_LOADING_SETUP,
+    PHASE_NOT_STARTED,
+    PHASE_SETUP_COMPLETE,
+    PHASE_SPEND_CHECK,
+    PHASE_STREAMING,
+)
 from modulo.db.crud.run import get_run
 from modulo.db.models.run import ACTIVE_RUN_STATUSES
 from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
+
+__all__ = [
+    "PHASE_CAPACITY_CHECK",
+    "PHASE_CLAIMED",
+    "PHASE_EXECUTOR_RUNNING",
+    "PHASE_FIRST_NODE_DISPATCHED",
+    "PHASE_GRAPH_COMPILE",
+    "PHASE_INIT_ENV",
+    "PHASE_LOADING_CONTEXT",
+    "PHASE_LOADING_SETUP",
+    "PHASE_NOT_STARTED",
+    "PHASE_SETUP_COMPLETE",
+    "PHASE_SPEND_CHECK",
+    "PHASE_STREAMING",
+]
 
 _log = logging.getLogger(__name__)
 
@@ -54,18 +93,10 @@ _log = logging.getLogger(__name__)
 # (the claim+setup side) and the executor (the dispatch side).  When the
 # zombie watchdog fires, it reads the tracker to report WHERE the executor is
 # stuck — not just THAT it is stuck.
-PHASE_NOT_STARTED = "not_started"
-PHASE_CLAIMED = "claimed"
-PHASE_LOADING_SETUP = "loading_setup"
-PHASE_SETUP_COMPLETE = "setup_complete"
-PHASE_EXECUTOR_RUNNING = "executor_running"
-PHASE_LOADING_CONTEXT = "loading_context"
-PHASE_CAPACITY_CHECK = "capacity_check"
-PHASE_SPEND_CHECK = "spend_check"
-PHASE_INIT_ENV = "init_env"
-PHASE_GRAPH_COMPILE = "graph_compile"
-PHASE_STREAMING = "streaming"
-PHASE_FIRST_NODE_DISPATCHED = "first_node_dispatched"
+#
+# FAR-1649: the ``PHASE_*`` label values themselves live in the
+# dependency-free leaf ``modulo.core.dispatch_phases`` and are re-exported
+# from the import block above — see the note there.
 
 # Attribute name used to attach the DispatchPhaseTracker to the executor instance.
 DISPATCH_TRACKER_ATTR = "_dispatch_phase_tracker"
@@ -79,7 +110,9 @@ DISPATCH_TRACKER_ATTR = "_dispatch_phase_tracker"
 # ``dispatch_phase='claimed'`` stamp (see ``_CLAIM_UPDATE_SQL`` below) is the
 # guaranteed floor and resets on every re-claim; these later entries are
 # best-effort instrumentation layered on top. ``PHASE_CLAIMED`` is
-# deliberately excluded — re-writing it here would duplicate the floor.
+# deliberately excluded — re-writing it here would duplicate the floor
+# (FAR-1714: the claim's own history entry rides the claim statement itself,
+# so a tracker-recorded ``claimed`` would also duplicate the timeline).
 # FAR-1422: ``PHASE_FIRST_NODE_DISPATCHED`` makes the pre-node vs
 # node-started transition durable — a run that STARTED a node then hung
 # persists ``first_node_dispatched`` instead of looking like it never
@@ -106,6 +139,13 @@ DURABLE_PHASES: frozenset[str] = frozenset(
 # the exact contract this writer already promises. N/A, no change.
 PHASE_WRITE_TIMEOUT_SECONDS = 2.0
 
+# FAR-1714: bound on the dropped-write counter bump (``_record_drop``).
+# DELIBERATELY tighter than ``PHASE_WRITE_TIMEOUT_SECONDS``: instrumenting an
+# abandoned write must not cost as much as the abandoned write itself, or
+# every drop would double the flush latency exactly when the DB is saturated
+# (the FAR-1511 condition this counter exists to expose).
+DROP_COUNTER_WRITE_TIMEOUT_SECONDS = 0.5
+
 # FAR-1088 (W2): the single guarded UPDATE for a post-claim phase entry.
 #
 # * ``claim_token=:tok`` fences superseded attempts: a successor re-claim
@@ -117,18 +157,53 @@ PHASE_WRITE_TIMEOUT_SECONDS = 2.0
 # * Both the SET value and the guard use the DB clock (``now()``), the same
 #   clock the claim's floor stamp used — so client/DB clock skew can never
 #   reject a legitimate forward entry.
+# * FAR-1714: the same guarded SET appends ``{"phase", "entered_at"}`` onto
+#   the ``dispatch_phase_history`` JSONB array, so the full per-attempt phase
+#   timeline is queryable after the fact (only the LAST phase survives in the
+#   two scalar columns). The append is inside this statement — never a second
+#   write — so it inherits the token fence AND the monotonic guard: every
+#   append both stores ``entered_at=now()`` and is guarded by
+#   ``entered_at <= now()``, hence the stored ``dispatch_phase_entered_at``
+#   is always the timestamp of the LAST history entry, and an out-of-order
+#   commit can neither move the phase backwards nor splice an older entry
+#   after a newer one (history stays non-decreasing).
+# ``:phase`` is used twice (the scalar SET and the JSONB append), so the
+# append's occurrence is CAST to ``text`` explicitly: without it asyncpg/
+# Postgres cannot infer the parameter's type from the variadic-``any``
+# ``jsonb_build_object`` and the statement fails with "could not determine
+# data type of parameter $1".
 _PHASE_UPDATE_SQL = text(
-    "UPDATE runs SET dispatch_phase=:phase, dispatch_phase_entered_at=now() "
+    "UPDATE runs SET dispatch_phase=:phase, dispatch_phase_entered_at=now(), "
+    "dispatch_phase_history=coalesce(dispatch_phase_history, '[]'::jsonb)"
+    "||jsonb_build_array(jsonb_build_object('phase', CAST(:phase AS text), 'entered_at', now())) "
     "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok "
     "AND (dispatch_phase_entered_at IS NULL OR dispatch_phase_entered_at <= now()) "
     "RETURNING id"
+)
+
+# FAR-1714: count an abandoned (timed-out / failed) durable phase write on the
+# run row — the durable saturation signal FAR-1511 could previously only see
+# in ephemeral worker logs (10-13 drops/min on prod, unobservable after the
+# fact).
+#
+# * NOT claim-token fenced, DELIBERATELY: a drop is an observation about the
+#   DATABASE being slow, not attempt state. The write is additive
+#   (``+ 1`` — it never overwrites anything), so a superseded attempt's
+#   drops still belong on the row; they are exactly the signal wanted when
+#   saturation outlives one attempt.
+# * RLS still applies — the org context is set on the connection first, the
+#   same way ``DispatchPhaseWriter._write`` does it.
+# * Not monotonic-guarded: a drop can be recorded whether or not a phase
+#   entry landed (the whole point is counting the entries that did NOT).
+_DROP_COUNTER_UPDATE_SQL = text(
+    "UPDATE runs SET dispatch_phase_write_drops=dispatch_phase_write_drops+1 WHERE id=:rid AND organisation_id=:oid"
 )
 
 
 class DispatchPhaseWriter:
     """Durable, best-effort writer for post-claim dispatch-phase entries.
 
-    FAR-1088 (W2). Four load-bearing properties (a previous design violated
+    FAR-1088 (W2). Five load-bearing properties (a previous design violated
     the middle two and was rejected):
 
     1. **Single-flight + coalescing** — at most ONE write is in flight per
@@ -144,6 +219,11 @@ class DispatchPhaseWriter:
        token fence (see ``_PHASE_UPDATE_SQL``).
     4. **No clearing** — nothing here resets the columns; only a re-claim
        does (and the columns are internal, not API-projected).
+    5. **Dropped writes are counted durably** (FAR-1714) — an abandoned write
+       bumps ``runs.dispatch_phase_write_drops`` so saturation is visible
+       from the DB, not only from ephemeral worker logs. The bump is itself
+       best-effort: bounded by ``DROP_COUNTER_WRITE_TIMEOUT_SECONDS``,
+       fail-soft, and never raises into the run.
     """
 
     def __init__(
@@ -242,6 +322,7 @@ class DispatchPhaseWriter:
                     phase,
                     self._timeout_seconds,
                 )
+                await self._record_drop()
             except Exception:
                 _log.warning(
                     "dispatch_phase.write_failed run=%s phase=%s (dropped)",
@@ -249,6 +330,51 @@ class DispatchPhaseWriter:
                     phase,
                     exc_info=True,
                 )
+                await self._record_drop()
+
+    async def _record_drop(self) -> None:
+        """Durably count one abandoned phase write (FAR-1714).
+
+        Called from ``_drain``'s timeout and failure arms — the two places a
+        write is abandoned. Best-effort like every write here: bounded,
+        fail-soft, and NEVER raising into the run (the WARNING log above is
+        the guaranteed signal; the counter is the durable one). A bump that
+        itself times out or fails is logged and dropped — a counter cannot
+        count its own failure. ``CancelledError`` propagates: worker/job
+        shutdown is not ours to swallow (mirrors ``_drain``).
+
+        Deliberately NOT counted: ``record`` scheduling drops with no running
+        loop — counting those needs a write, which needs the loop that is
+        missing, and the flush-time log line remains their signal.
+        """
+        try:
+            await asyncio.wait_for(self._bump_drop_counter(), timeout=DROP_COUNTER_WRITE_TIMEOUT_SECONDS)
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError:
+            _log.warning(
+                "dispatch_phase.drop_counter_timeout run=%s (dropped)",
+                self._run_id,
+            )
+        except Exception:
+            _log.warning(
+                "dispatch_phase.drop_counter_write_failed run=%s (dropped)",
+                self._run_id,
+                exc_info=True,
+            )
+
+    async def _bump_drop_counter(self) -> None:
+        async with self._engine.connect() as c:
+            # RLS org context — the runs policy matches zero rows without it.
+            await c.execute(
+                text(_SQL_SET_ORG_ID),
+                {"val": self._org_id},
+            )
+            await c.execute(
+                _DROP_COUNTER_UPDATE_SQL,
+                {"rid": self._run_id, "oid": self._org_id},
+            )
+            await c.commit()
 
     async def _write(self, phase: str) -> None:
         async with self._engine.connect() as c:
@@ -392,6 +518,153 @@ CAPACITY_TIMEOUT_TTL_MINUTES = 120
 # be resurrected forever).
 _STRANDED_REDISPATCH_TTL_MINUTES = 12
 
+# FAR-1715: independent zero-progress terminaliser for ``dispatcher='saq'``
+# runs, living in the 5-min ``stale_run_recovery_sweep`` as a budget-
+# independent second path to dispatcher_reconcile's ~135-min age bound (whose
+# per-org budgets can lag — FAR-1643). It shares the ZERO-progress predicate
+# shape (:data:`cron_helpers._ZERO_PROGRESS_SHAPE_SQL`, imported lazily at
+# call time — single definition, so it cannot drift from the reconcile
+# router's) and the SAME Settings knob
+# (``saq_zero_progress_max_age_minutes``). Guarded by ``status='running'`` so
+# double-firing with dispatcher_reconcile is a no-op: whichever path reaches
+# the row first terminalises it, the other then matches nothing. The per-org
+# row cap resolves the EXISTING
+# ``dispatcher_reconcile_terminalize_max_per_tick`` knob (default 25) at
+# sweep time; this constant is only that knob's CODED fallback for stand-in
+# settings objects, so the draining cadence matches the reconcile
+# terminalisers under every configuration.
+_SAQ_ZERO_PROGRESS_SWEEP_MAX_ROWS = 25
+# Synthetic detail for the sweep's zero-progress terminalisations (mirrors the
+# reconcile age gate's detail shape): a constant prefix; the per-row
+# ``node_attempts=`` / ``claims=`` / ``dispatch_phase=`` values are
+# concatenated onto it by the UPDATE itself (one bind param for the prefix,
+# N row shapes). Names THIS sweep as the writer so provenance is visible in
+# the run's error_detail (the reconcile paths name themselves the same way).
+_SAQ_ZERO_PROGRESS_DETAIL_PREFIX_FMT = (
+    "No node progress within the {age}m age bound (stale_run_recovery zero-progress sweep; "
+)
+
+
+@dataclass(frozen=True)
+class _SaqZeroProgressEmission:
+    """Normalised per-row diagnostics for the sweep's FAR-714 class signal.
+
+    The raw UPDATE RETURNING row (see the SQL template's RETURNING list) is
+    projected through :func:`_saq_zero_progress_emission` into this value
+    object: UTC-normalised timestamps plus the derived elapsed values, so the
+    log/ingest formatting is a pure, branch-light projection of it.
+    """
+
+    run_id: uuid.UUID
+    pipeline_id: uuid.UUID | None
+    trigger_id: uuid.UUID | None
+    claim_count: int
+    dispatch_phase: str | None
+    dispatch_phase_elapsed: float | None
+    zombie_age_minutes: float | None
+    saq_queue_wait_seconds: float | None
+    dispatched_at: datetime | None
+    started_at: datetime | None
+
+
+def _utc_or_none(value: datetime | None) -> datetime | None:
+    """Normalise a possibly-naive DB timestamp to UTC-aware, or None.
+
+    asyncpg can hand back naive datetimes for timestamp columns; the elapsed
+    arithmetic below must never mix naive and aware values.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
+def _seconds_between(end: datetime | None, start: datetime | None) -> float | None:
+    """Non-negative seconds from ``start`` to ``end``; None if either is None."""
+    if end is None or start is None:
+        return None
+    return max((end - start).total_seconds(), 0.0)
+
+
+def _format_optional(value: float | None, *, spec: str = ".0f", suffix: str = "") -> str:
+    """Render an optional numeric diagnostic as ``<value><suffix>`` or 'unknown'."""
+    if value is None:
+        return "unknown"
+    return f"{value:{spec}}{suffix}"
+
+
+def _saq_zero_progress_emission(row: Any, completed_at: datetime) -> _SaqZeroProgressEmission:
+    """Project one UPDATE RETURNING row into a normalised emission record."""
+    (
+        run_id,
+        pipeline_id,
+        trigger_id,
+        claim_count,
+        dispatch_phase,
+        dispatch_phase_entered_at,
+        started_at,
+        dispatched_at,
+    ) = row
+    started = _utc_or_none(started_at)
+    dispatched = _utc_or_none(dispatched_at)
+    phase_entered = _utc_or_none(dispatch_phase_entered_at)
+    zombie_seconds = _seconds_between(completed_at, started)
+    return _SaqZeroProgressEmission(
+        run_id=run_id,
+        pipeline_id=pipeline_id,
+        trigger_id=trigger_id,
+        claim_count=claim_count,
+        dispatch_phase=dispatch_phase,
+        dispatch_phase_elapsed=_seconds_between(completed_at, phase_entered),
+        zombie_age_minutes=None if zombie_seconds is None else zombie_seconds / 60,
+        saq_queue_wait_seconds=_seconds_between(started, dispatched),
+        dispatched_at=dispatched,
+        started_at=started,
+    )
+
+
+def _log_saq_zero_progress_emission(
+    emission: _SaqZeroProgressEmission, *, org_id: uuid.UUID, max_age_minutes: int
+) -> None:
+    """Alert-grade, per-run log — same shape as the chokepoint's log so a
+    burst is visible with per-run attribution."""
+    _log.error(
+        "stale_run_recovery.claimed_but_never_dispatched run=%s org=%s claim_count=%s "
+        "pipeline=%s trigger=%s dispatch_phase=%s dispatch_phase_elapsed=%s "
+        "zombie_age_minutes=%s saq_queue_wait_seconds=%s — zero-progress SAQ run "
+        "terminal-failed with %s by the stale_run_recovery sweep (age bound %d min)",
+        emission.run_id,
+        org_id,
+        emission.claim_count,
+        emission.pipeline_id,
+        emission.trigger_id,
+        emission.dispatch_phase if emission.dispatch_phase is not None else "unknown",
+        _format_optional(emission.dispatch_phase_elapsed, spec=".1f", suffix="s"),
+        _format_optional(emission.zombie_age_minutes),
+        _format_optional(emission.saq_queue_wait_seconds, suffix="s"),
+        EXECUTOR_STALLED_ERROR_CODE,
+        max_age_minutes,
+    )
+
+
+def _saq_zero_progress_ingest_context(emission: _SaqZeroProgressEmission) -> dict[str, object]:
+    """The error-event context mirroring the reconcile chokepoint's per-run
+    diagnostics (so the shared Error Dashboard group detail matches)."""
+    return {
+        "run_id": str(emission.run_id),
+        "pipeline_id": str(emission.pipeline_id) if emission.pipeline_id is not None else None,
+        "trigger_id": str(emission.trigger_id) if emission.trigger_id is not None else None,
+        "claim_count": emission.claim_count,
+        "dispatch_phase": emission.dispatch_phase,
+        "dispatch_phase_elapsed": emission.dispatch_phase_elapsed,
+        "zombie_age_minutes": emission.zombie_age_minutes,
+        "saq_queue_wait_seconds": emission.saq_queue_wait_seconds,
+        "dispatched_at": emission.dispatched_at.isoformat() if emission.dispatched_at is not None else None,
+        "started_at": emission.started_at.isoformat() if emission.started_at is not None else None,
+    }
+
+
 # Claim caps are a SINGLE source of truth: ``SAQ_RUN_CLAIM_CAP`` in settings
 # (default 20). Execute (plan F4) and resume (plan F6a) claims both resolve the
 # cap from settings via :func:`_resolve_claim_cap` — the old execute-only
@@ -527,10 +800,26 @@ def _resolve_claim_cap(claim_cap: int | None) -> int:
 # it is written on EVERY claim (execute re-dispatch/re-claim AND the HITL
 # resume claim), a re-claim resets the phase, so a re-woken run can never
 # report a previous attempt's stale phase. Every claim site stamps.
+#
+# FAR-1714: each claim ALSO appends a ``{"phase": "claimed", "entered_at"}``
+# entry onto ``dispatch_phase_history`` in the same statement. The scalar
+# floor keeps only the CURRENT attempt's claim time (the later durable phases
+# overwrite it), but history is cumulative and NEVER reset — so the claim
+# entry doubles as the ATTEMPT BOUNDARY: split the array on its ``claimed``
+# entries and every attempt's claim→first-node interval decomposes from the
+# DB, including the wedged attempt a later re-claim superseded (exactly the
+# 10-08→10-12 incident window that ephemeral logs could not reconstruct).
+# One statement, no extra connection, same guaranteed-succeeds write as the
+# floor stamp.
+_CLAIM_HISTORY_APPEND = (
+    "dispatch_phase_history=coalesce(dispatch_phase_history, '[]'::jsonb)"
+    "||jsonb_build_array(jsonb_build_object('phase', 'claimed', 'entered_at', now())) "
+)
 _CLAIM_UPDATE_SQL = text(
-    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, "
-    "dispatch_phase='claimed', dispatch_phase_entered_at=now() "
-    "WHERE id=:rid AND organisation_id=:oid "
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, "  # nosec B608  # noqa: S608 - concatenates module constants only (never caller data)
+    "dispatch_phase='claimed', dispatch_phase_entered_at=now(), "
+    + _CLAIM_HISTORY_APPEND
+    + "WHERE id=:rid AND organisation_id=:oid "
     "AND (status = 'pending' "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
     "AND claim_count < :claim_cap "
@@ -538,9 +827,10 @@ _CLAIM_UPDATE_SQL = text(
 )
 
 _CLAIM_UPDATE_SQL_WITH_TOKEN = text(
-    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok, "
-    "dispatch_phase='claimed', dispatch_phase_entered_at=now() "
-    "WHERE id=:rid AND organisation_id=:oid "
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok, "  # nosec B608  # noqa: S608 - concatenates module constants only (never caller data)
+    "dispatch_phase='claimed', dispatch_phase_entered_at=now(), "
+    + _CLAIM_HISTORY_APPEND
+    + "WHERE id=:rid AND organisation_id=:oid "
     "AND (status = 'pending' "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
     "AND claim_count < :claim_cap "
@@ -1356,8 +1646,6 @@ async def zombie_watchdog(
         # Expected: first_progress did not fire within the grace window.
         # Stall handling follows below.
         pass
-    except asyncio.CancelledError:
-        raise
 
     if exec_task.done():
         return
@@ -1610,7 +1898,6 @@ async def node_deadline_watchdog(
     node_completed_event: asyncio.Event,
     run_done_event: asyncio.Event,
     node_deadlines: dict[str, tuple[float, int]],
-    default_timeout: int | None = None,
     retry_hook: Callable[[str, str], Awaitable[Any]] | None = None,
 ) -> None:
     """Fail a node that does not COMPLETE within its configured ``timeout_seconds``.
@@ -1659,9 +1946,6 @@ async def node_deadline_watchdog(
     an already-finished run and never double-fails with the idle-watchdog or the
     35-min backstop.
     """
-    if default_timeout is None:
-        default_timeout = int(get_settings().saq_node_default_timeout_seconds)
-
     while True:
         # Stand down if the run is already over or the executor finished. We
         # also wait on exec_task.done() (below) so that when the wrapper cancels
@@ -1906,6 +2190,8 @@ async def run_executor_with_watchdog(
     # _prepare_and_stream before streaming). Pass the same object — NOT a copy
     # — so the watchdog sees the per-node timeouts once they are filled in.
     node_timeouts = executor._node_timeouts if executor is not None else {}
+    # Settings default for nodes with no explicit timeout — read by the
+    # _on_node_started closure above (node_timeouts.get(nid, default_timeout)).
     default_timeout = get_settings().saq_node_default_timeout_seconds
     node_deadline_task = asyncio.create_task(
         node_deadline_watchdog(
@@ -1918,7 +2204,6 @@ async def run_executor_with_watchdog(
             node_completed_event=node_completed_event,
             run_done_event=run_done_event,
             node_deadlines=node_deadlines,
-            default_timeout=default_timeout,
             retry_hook=watchdog_retry_hook,
         ),
         name=f"saq-node-deadline-watchdog-{rid}",
@@ -2345,6 +2630,19 @@ async def _sweep_org_stale_runs(
             "AND organisation_id = :oid "
             "AND created_at < now() - (:nd_window * interval '1 second') "
             "AND dispatched_at IS NULL "
+            # FAR-1623: a run that has ever been CLAIMED is not "never
+            # dispatched" — it was dispatched, then lost (or was reset to
+            # pending by the heartbeat-stale slot reconciliation in
+            # run_admission.reconcile_pipeline_slots, FAR-779/812). That reset
+            # NULLs dispatched_at/heartbeat_at and stamps error_code
+            # 'heartbeat_stale' so dispatcher_reconcile re-dispatches the run;
+            # without this guard the never-dispatched branch matched it
+            # immediately and killed the retry (34/34 harness.dispatch_failed
+            # deaths, FAR-1603 RCA). claim_count=0 is the discriminator: the
+            # reset run carries claim_count >= 1. The error_code exclusion is
+            # belt-and-braces against the reset marker.
+            "AND claim_count = 0 "
+            "AND (error_code IS DISTINCT FROM 'heartbeat_stale') "
             "AND cancellation_requested = false "
             "AND (error_code IS NULL OR error_code NOT IN ('org_capacity_limited', 'pipeline_capacity')) "
             "AND (dispatcher IS NULL OR dispatcher != 'saq') "
@@ -2454,6 +2752,152 @@ async def _sweep_org_stale_runs(
     return never_count, capacity_timeout_count, lost_count
 
 
+# FAR-1715: the sweep's zero-progress UPDATE, assembled from a static template
+# + str.replace (the SAME construction cron_helpers' FAR-1329 statements use —
+# bandit/ruff S608 flag f-string/format SQL construction): the ONLY thing
+# substituted is the shared ``_ZERO_PROGRESS_SHAPE_SQL`` module constant from
+# cron_helpers, never caller data. The token spelling matches
+# ``cron_helpers._ZERO_PROGRESS_SHAPE_TOKEN`` so the two assemblies stay
+# interchangeable; a unit test pins the assembled SQL against the shared shape.
+_SAQ_ZERO_PROGRESS_SHAPE_TOKEN = "__ZERO_PROGRESS_SHAPE__"
+_SAQ_ZERO_PROGRESS_SQL_TEMPLATE = (
+    "UPDATE runs SET status='failed', error_code=:code, "
+    # Same appended-row-shape detail as the reconcile age gate (FAR-1329):
+    # per-row node/attempt/phase counts concatenated by the UPDATE itself.
+    "error_detail=:detail || 'node_attempts=' || COALESCE(node_attempt_count,0)::text "
+    "|| ', claims=' || COALESCE(claim_count,0)::text "
+    "|| ', dispatch_phase=' || COALESCE(dispatch_phase, 'unknown') || ')', "
+    "completed_at=now() "
+    "WHERE ctid IN ("
+    "  SELECT ctid FROM runs "
+    "  WHERE status='running' "
+    "  AND organisation_id=:oid "
+    " AND dispatcher='saq' "
+    "  AND started_at < now() - (:max_age_minutes * interval '1 minute') "
+    "  AND __ZERO_PROGRESS_SHAPE__ "
+    "  LIMIT :max_rows) "
+    # FAR-1715 pre-PR QA M2: RETURNING the diagnostic columns the FAR-714
+    # class emission needs (mirror of the chokepoint's per-run context) — the
+    # rows are terminal after this UPDATE, so re-reading them for pipeline /
+    # trigger / claim / phase attribution would cost a second statement for
+    # data this one already touches.
+    "RETURNING id, pipeline_id, trigger_id, claim_count, dispatch_phase, "
+    "dispatch_phase_entered_at, started_at, dispatched_at"
+)
+
+
+async def _sweep_org_saq_zero_progress_runs(
+    conn: AsyncConnection,
+    *,
+    org_id: uuid.UUID,
+    max_age_minutes: int,
+    max_rows: int,
+    terminalised_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+) -> int:
+    """FAR-1715: terminalise aged zero-progress ``dispatcher='saq'`` runs.
+
+    An independent, budget-independent home for the ~135-min zero-progress
+    age bound: ``stale_run_recovery_sweep`` runs at the 5-min cadence and does
+    not share ``dispatcher_reconcile``'s per-org tick budgets (FAR-1643), so a
+    reconcile pass that is delayed or budget-starved no longer leaves a
+    wedged zero-progress SAQ run without a terminaliser between ticks.
+
+    Selection = the SAME zero-progress predicate shape the reconcile nodeless
+    router selects with (:data:`cron_helpers._ZERO_PROGRESS_SHAPE_SQL`,
+    imported here lazily for the same import-layering reason this module's
+    other cron_helpers imports are lazy — cron_helpers must not import this
+    module, and this module reaches langgraph at module level) PLUS the SAME
+    age bound the reconcile paths use (the shared Settings knob
+    ``saq_zero_progress_max_age_minutes``, bound by the caller). It therefore
+    matches exactly the rows ``_terminalize_aged_nodeless_zombies`` would
+    collect — double-firing with dispatcher_reconcile is a no-op: the
+    ``status='running'`` guard means whichever path reaches the row first
+    terminalises it and the other then matches nothing.
+
+    Terminalises with ``executor_stalled`` — the SAME error_code the
+    reconcile age-bound nodeless router writes for this class (FAR-714
+    chokepoint semantics; ``_NODELESS_ZOMBIE_ERROR_CODE`` there, the
+    ``EXECUTOR_STALLED_ERROR_CODE`` twin here) — with a detail that names
+    THIS sweep as the writer. The per-org UPDATE is row-capped
+    (``WHERE ctid IN (... LIMIT :max_rows)``) so a large backlog drains
+    across ticks instead of one unbounded storm; the predicate re-selects the
+    remaining rows next tick.
+
+    FAR-714 observability (pre-PR QA M2): when THIS sweep wins the race
+    against dispatcher_reconcile — the exact degraded-fleet scenario it
+    exists to cover — the reconcile chokepoint never fires for the row, so
+    this helper emits the SAME class signal itself: an alert-grade ERROR log
+    plus a ``source='saq'`` error ingest with the SHARED stable message
+    (``cron_helpers._NODELESS_ZOMBIE_STABLE_MESSAGE``), so the run lands in
+    the SAME Error Dashboard group the chokepoint feeds
+    (``context_json.function='stale_run_recovery'`` names the writer). The
+    raw atomic UPDATE is deliberately kept as the terminal write — its
+    ``status='running'`` WHERE-guard is what makes double-firing with the
+    chokepoint a no-op under READ COMMITTED, and routing the write through
+    the ORM chokepoint would trade that atomicity away for no gain. The
+    ingest is fail-open (``_ingest_saq_error`` never raises), same as the
+    chokepoint's.
+
+    Runs inside the caller's RLS-scoped transaction (re-issues the org
+    ``set_config`` and the hot-``runs`` row-lock bound so the helper is
+    self-contained; both are idempotent transaction-scoped statements).
+    Appends each terminalised ``(run_id, org_id)`` to ``terminalised_run_ids``
+    so the caller's post-commit machinery advances journeys and writes the
+    compensating daily facts (FAR-143 follow-up / FAR-162 P6'), exactly like
+    the other terminal UPDATEs. Returns the number of rows terminalised.
+    """
+    from modulo.core.cron_helpers import (
+        _NODELESS_ZOMBIE_STABLE_MESSAGE,
+        _ZERO_PROGRESS_SHAPE_SQL,
+        _ZERO_PROGRESS_SHAPE_TOKEN,
+        _ingest_saq_error,
+    )
+    from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
+
+    await _bound_hot_runs_row_lock(conn)
+    await conn.execute(
+        text(_SQL_SET_ORG_ID),
+        {"val": str(org_id)},
+    )
+    assembled = _SAQ_ZERO_PROGRESS_SQL_TEMPLATE.replace(_ZERO_PROGRESS_SHAPE_TOKEN, _ZERO_PROGRESS_SHAPE_SQL)
+    result = await conn.execute(
+        text(assembled),
+        {
+            "oid": str(org_id),
+            "code": EXECUTOR_STALLED_ERROR_CODE,
+            "detail": _SAQ_ZERO_PROGRESS_DETAIL_PREFIX_FMT.format(age=max_age_minutes),
+            "final_key": FINAL_ATTEMPT_KEY,
+            # FAR-1649: bind the SHARED phase constant — raw SQL and the ORM
+            # predicate read one definition, never two spellings to pin.
+            "first_node_phase": PHASE_FIRST_NODE_DISPATCHED,
+            "max_age_minutes": max_age_minutes,
+            "max_rows": max_rows,
+        },
+    )
+    rows = result.all()
+    terminalised_run_ids.extend((row[0], org_id) for row in rows)
+    completed_at = datetime.now(UTC)
+    for row in rows:
+        emission = _saq_zero_progress_emission(row, completed_at)
+        # Alert-grade, per run — same shape as the chokepoint's log so a burst
+        # is visible with per-run attribution (the aggregate sweep summary is
+        # logged by the caller).
+        _log_saq_zero_progress_emission(emission, org_id=org_id, max_age_minutes=max_age_minutes)
+        await _ingest_saq_error(
+            # Vestigial param (see ``_ingest_saq_error``): the ingest
+            # opens its OWN session/transaction; pass this org
+            # transaction's conn for caller symmetry.
+            conn,
+            org_id,
+            function="stale_run_recovery",
+            # STABLE message (no run id) — the SHARED class constant, so this
+            # writer and the reconcile chokepoint feed ONE group.
+            message=_NODELESS_ZOMBIE_STABLE_MESSAGE,
+            context=_saq_zero_progress_ingest_context(emission),
+        )
+    return len(rows)
+
+
 async def _redispatch_stranded_rows(stranded_rows: list[Any]) -> dict[str, int]:
     """Re-dispatch stranded capacity-blocked rows; return per-outcome counts.
 
@@ -2506,7 +2950,12 @@ async def stale_run_recovery_sweep(
     """Sweep stale pending and running pipeline runs.
 
     - Pending runs older than the never-dispatched window with no
-      ``dispatched_at`` are marked ``failed`` with ``never_dispatched``.
+      ``dispatched_at`` AND ``claim_count = 0`` (never claimed) are marked
+      ``failed`` with ``never_dispatched``. A run that was claimed and then
+      reset to pending for re-dispatch (``error_code='heartbeat_stale'``,
+      FAR-779/812) carries ``claim_count >= 1`` and is therefore excluded —
+      the never-dispatched branch must not kill a retry that is about to be
+      re-dispatched (FAR-1623).
     - Stranded capacity-blocked pending runs (``error_code`` in
       ``org_capacity_limited``/``pipeline_capacity``) whose heartbeat is stale
       are RE-DISPATCHED (durable restart durability — see
@@ -2515,8 +2964,17 @@ async def stale_run_recovery_sweep(
       marked ``failed`` with ``capacity_timeout``.
     - Running runs with a heartbeat older than the worker-lost window and
       5+ claims are marked ``failed`` with ``worker_lost``.
+    - FAR-1715: running ``dispatcher='saq'`` runs with ZERO node progress
+      whose ``started_at`` is older than the shared zero-progress age bound
+      (Settings ``saq_zero_progress_max_age_minutes``, ~135m at the default)
+      are marked ``failed`` with ``executor_stalled`` — an independent,
+      budget-independent second path to dispatcher_reconcile's age-bound
+      nodeless router, sharing its predicate shape and knob
+      (:func:`_sweep_org_saq_zero_progress_runs`). The ``status='running'``
+      guard makes double-firing with the reconcile path a no-op.
     - Every run terminalised by the sweep (never_dispatched / capacity_timeout
-      / worker_lost) has its journeys advanced from its CREATE-STAMPED refs
+      / worker_lost / saq zero-progress) has its journeys advanced from its
+      CREATE-STAMPED refs
       (FAR-143 follow-up) — the raw UPDATEs never run ``finalize_cost``, so
       without this the swept runs' journeys would never move. Fail-open per
       run; stranded capacity-blocked runs are re-dispatched, never terminal,
@@ -2544,9 +3002,30 @@ async def stale_run_recovery_sweep(
     settings = get_settings()
     nd_window = never_dispatched_window if never_dispatched_window is not None else settings.saq_never_dispatched_window
     wl_window = worker_lost_window if worker_lost_window is not None else settings.saq_worker_lost_window
+    # FAR-1715: resolve the shared zero-progress age bound ONCE per sweep from
+    # the Settings knob (lazy import — same layering contract as this module's
+    # other cron_helpers imports). The already-resolved ``settings`` is passed
+    # in so the knob is read from the SAME object as the legacy windows
+    # above. Falls back to the historical ~135m derivation when the settings
+    # double lacks the field.
+    #
+    # The per-org row cap resolves the EXISTING reconcile knob
+    # ``dispatcher_reconcile_terminalize_max_per_tick`` (default 25) so both
+    # age-bound terminalisers drain a backlog at the same capped cadence —
+    # one knob to tune, never two. ``_int_setting``'s coded fallback is this
+    # module's constant (also 25), so a stand-in settings object keeps the
+    # same protective cap and the default behaviour is unchanged.
+    from modulo.core.cron_helpers import _int_setting, _saq_zero_progress_max_age_minutes
+
+    zero_progress_max_age = _saq_zero_progress_max_age_minutes(settings)
+    zero_progress_max_rows = _int_setting(
+        getattr(settings, "dispatcher_reconcile_terminalize_max_per_tick", None),
+        _SAQ_ZERO_PROGRESS_SWEEP_MAX_ROWS,
+    )
     never_count = 0
     lost_count = 0
     capacity_timeout_count = 0
+    zero_progress_count = 0
     stranded_rows: list[Any] = []
     # Runs terminalised to ``failed`` by this sweep — (run_id, org_id) —
     # whose journeys must advance once the UPDATEs commit (FAR-143 follow-up).
@@ -2567,6 +3046,7 @@ async def stale_run_recovery_sweep(
                 "never_dispatched_swept": 0,
                 "worker_lost_swept": 0,
                 "capacity_timeout_swept": 0,
+                "saq_zero_progress_swept": 0,
                 "stranded_capacity_redispatched": 0,
                 "redispatch_outcomes": {},
             }
@@ -2581,9 +3061,21 @@ async def stale_run_recovery_sweep(
                     stranded_rows=stranded_rows,
                     terminalised_run_ids=terminalised_run_ids,
                 )
+                # FAR-1715: the independent SAQ zero-progress branch runs in
+                # the SAME per-org transaction, after the legacy branches (its
+                # row-lock bound and org set_config are re-issued — both
+                # idempotent transaction-scoped statements).
+                zero_progress_delta = await _sweep_org_saq_zero_progress_runs(
+                    conn,
+                    org_id=org_id,
+                    max_age_minutes=zero_progress_max_age,
+                    max_rows=zero_progress_max_rows,
+                    terminalised_run_ids=terminalised_run_ids,
+                )
                 never_count += never_delta
                 capacity_timeout_count += capacity_delta
                 lost_count += lost_delta
+                zero_progress_count += zero_progress_delta
         stranded_count = len(stranded_rows)
 
         # Re-dispatch AFTER each org's sweep transaction commits so dispatch_run's
@@ -2599,13 +3091,14 @@ async def stale_run_recovery_sweep(
         for run_id, run_org_id in terminalised_run_ids:
             await _advance_terminalised_run(async_engine, run_id, run_org_id)
 
-        if never_count or lost_count or capacity_timeout_count or stranded_count:
+        if never_count or lost_count or capacity_timeout_count or zero_progress_count or stranded_count:
             _log.info(
-                "Stale run recovery: %d never-dispatched, %d capacity-timeout, %d worker-lost runs swept, "
-                "%d stranded capacity-blocked runs re-dispatched (%s)",
+                "Stale run recovery: %d never-dispatched, %d capacity-timeout, %d worker-lost, "
+                "%d saq zero-progress runs swept, %d stranded capacity-blocked runs re-dispatched (%s)",
                 never_count,
                 capacity_timeout_count,
                 lost_count,
+                zero_progress_count,
                 stranded_count,
                 redispatch_outcomes,
             )
@@ -2613,6 +3106,7 @@ async def stale_run_recovery_sweep(
             "never_dispatched_swept": never_count,
             "worker_lost_swept": lost_count,
             "capacity_timeout_swept": capacity_timeout_count,
+            "saq_zero_progress_swept": zero_progress_count,
             "stranded_capacity_redispatched": stranded_count,
             "redispatch_outcomes": redispatch_outcomes,
         }
@@ -2630,6 +3124,7 @@ async def stale_run_recovery_sweep(
             "never_dispatched_swept": never_count,
             "worker_lost_swept": lost_count,
             "capacity_timeout_swept": capacity_timeout_count,
+            "saq_zero_progress_swept": zero_progress_count,
             "stranded_capacity_redispatched": 0,
             "redispatch_outcomes": {},
             "error": f"sweep_failed ({type(exc).__name__}: {exc})"[:200],
@@ -2650,10 +3145,20 @@ async def stale_run_recovery_sweep(
 # strand it forever. Atomicity fences concurrent claims instead: the first
 # claimer moves the row to 'running', a concurrent claimer then sees a fresh
 # heartbeat and loses.
+# FAR-1728: both resume claim variants also clear
+# ``guardrail_override_resume_pending`` — the dedicated marker column the
+# guardrail-override flip sets (recovery.guardrail_override, node-started
+# branch only) and the reconcile self-heal leg selects on. This statement is
+# the SINGLE CLEARER: a successful claim stamps ``dispatch_phase='claimed'``
+# AND clears the marker in the same UPDATE, so the row leaves the self-heal
+# class and the flag never lingers past a successful claim. The clear is
+# unconditional and safe for every other resume-claim caller (HITL resume,
+# recover-node): those rows already carry false, so the write is a no-op
+# for them.
 _RESUME_CLAIM_UPDATE_SQL = text(
-    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, "
-    "dispatch_phase='claimed', dispatch_phase_entered_at=now() "
-    "WHERE id=:rid AND organisation_id=:oid "
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, "  # nosec B608  # noqa: S608 - concatenates module constants only (never caller data)
+    "dispatch_phase='claimed', dispatch_phase_entered_at=now(), "
+    "guardrail_override_resume_pending=false, " + _CLAIM_HISTORY_APPEND + "WHERE id=:rid AND organisation_id=:oid "
     "AND (status IN ('awaiting_human', 'claimed', 'hitl_parked') "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
     "AND claim_count < :claim_cap "
@@ -2661,9 +3166,9 @@ _RESUME_CLAIM_UPDATE_SQL = text(
 )
 
 _RESUME_CLAIM_UPDATE_SQL_WITH_TOKEN = text(
-    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok, "
-    "dispatch_phase='claimed', dispatch_phase_entered_at=now() "
-    "WHERE id=:rid AND organisation_id=:oid "
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok, "  # nosec B608  # noqa: S608 - concatenates module constants only (never caller data)
+    "dispatch_phase='claimed', dispatch_phase_entered_at=now(), "
+    "guardrail_override_resume_pending=false, " + _CLAIM_HISTORY_APPEND + "WHERE id=:rid AND organisation_id=:oid "
     "AND (status IN ('awaiting_human', 'claimed', 'hitl_parked') "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
     "AND claim_count < :claim_cap "
@@ -2709,9 +3214,15 @@ def build_resume_claim_update(
     FAR-1088: both resume claim variants stamp ``dispatch_phase='claimed'`` +
     its entry timestamp in this same statement, exactly like the execute
     claim variants (``build_claim_update``) — a resumed run's phase floor is
-    written atomically with the resume claim, so every claim site stamps and
+    written atomically with the resume claim, and every claim site stamps and
     a re-claim always resets the phase (see the note above
     ``_CLAIM_UPDATE_SQL``).
+
+    FAR-1728: both variants ALSO clear ``runs.guardrail_override_resume_pending``
+    in this same statement — the single clearer of the guardrail-override
+    resume self-heal marker (see the template comment above), so a successful
+    claim takes the row out of the self-heal class and clears the flag in one
+    atomic write.
     """
     if claim_token is not None:
         return _RESUME_CLAIM_UPDATE_SQL_WITH_TOKEN

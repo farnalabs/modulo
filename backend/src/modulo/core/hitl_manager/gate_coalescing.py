@@ -60,6 +60,7 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.audit_logger import append_audit_event
+from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.run import (
     COALESCE_CANDIDATE_LIMIT,
     COALESCE_KEY_FIELD,
@@ -135,6 +136,14 @@ async def evaluate_gate_coalescing(
     (the existing open gate decides; the executor terminalises the duplicate
     run), ``"raise"`` when the caller proceeds with normal gate creation.
     """
+    # FAR-1610 lock bound: the supersede path takes the hot ``runs`` row lock
+    # (``unpark_parked_run``) — and the per-work-item advisory lock below — in
+    # the caller's transaction. Issue the transaction-scoped bound FIRST, in
+    # the caller's transaction, before any lock, so a contended row surfaces as
+    # a bounded 55P03 (visible through the executor's interrupt error handling)
+    # rather than an unbounded wait. The shared ``unpark_parked_run`` stays
+    # unbounded — FAR-1601.
+    await set_mutation_row_lock_timeout(session)
     run_row = (
         await session.execute(
             select(Run.input_payload, Run.input_hash).where(Run.id == run_id, Run.organisation_id == org_id)

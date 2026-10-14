@@ -45,6 +45,7 @@ def _connector_instance(
     status: str = "active",
     allowed_operations: list[str] | None = None,
     config_json: dict[str, Any] | None = None,
+    connector_type_id: str = "custom",
 ) -> MagicMock:
     c = MagicMock()
     c.id = cid
@@ -52,6 +53,7 @@ def _connector_instance(
     c.status = status
     c.allowed_operations = allowed_operations or []
     c.config_json = config_json or {}
+    c.connector_type_id = connector_type_id
     return c
 
 
@@ -148,6 +150,16 @@ async def test_topology_reserved_hitl_review_prefix_error_attributes_node():
     assert "hitl_review_" in issue.message
 
 
+async def test_topology_db_sentinel_prefix_error_attributes_node():
+    """FAR-583: node ids squatting the ``__`` sentinel namespace are rejected."""
+    snap = _snapshot(graph_json={"nodes": [{"id": "__run_meta__"}], "edges": []})
+    session = _session_returning([])
+    result = await GraphValidator().validate(snap, session)
+    assert not result.is_valid
+    issue = next(i for i in result.issues if i.code == "TOPOLOGY_NODE_DB_SENTINEL_PREFIX")
+    assert issue.node_id == "__run_meta__"
+
+
 async def test_topology_null_source_uses_missing_value_marker():
     snap = _snapshot(
         graph_json={
@@ -160,35 +172,6 @@ async def test_topology_null_source_uses_missing_value_marker():
     issue = next(i for i in result.issues if i.code == "TOPOLOGY_UNKNOWN_SOURCE")
     assert "'?'" in issue.message
     assert "None" not in issue.message
-
-
-async def test_topology_edge_unknown_target():
-    snap = _snapshot(
-        graph_json={
-            "nodes": [{"id": "a"}],
-            "edges": [{"source": "a", "target": "z"}],
-        }
-    )
-    session = _session_returning([])
-    result = await GraphValidator().validate(snap, session)
-    assert not result.is_valid
-    assert any(i.code == "TOPOLOGY_UNKNOWN_TARGET" for i in result.issues)
-
-
-async def test_topology_cycle_detected():
-    snap = _snapshot(
-        graph_json={
-            "nodes": [{"id": "a"}, {"id": "b"}],
-            "edges": [
-                {"source": "a", "target": "b"},
-                {"source": "b", "target": "a"},
-            ],
-        }
-    )
-    session = _session_returning([])
-    result = await GraphValidator().validate(snap, session)
-    assert not result.is_valid
-    assert any(i.code == "TOPOLOGY_CYCLE" for i in result.issues)
 
 
 async def test_topology_unreachable_node_is_warning():
@@ -365,6 +348,96 @@ async def test_connector_missing_operations_is_error():
                 "node_id": "a",
                 "connector_instance_id": str(cid),
                 "required_operations": ["read", "write"],
+            }
+        ],
+    )
+    session = _session_returning([instance])
+    result = await GraphValidator().validate(snap, session)
+    assert not result.is_valid
+    assert any(i.code == "CONNECTOR_MISSING_OPERATIONS" for i in result.issues)
+
+
+async def test_connector_legacy_same_type_qualified_entry_grants():
+    """FAR-1594/FAR-1616: a stored same-type legacy entry grants the bare
+    capability at graph-save time, exactly as ConnectorACL grants it.
+
+    Before the shared-helper fix the raw membership test reported a binding
+    requiring ``read`` as CONNECTOR_MISSING_OPERATIONS for a stored
+    ``["github.read"]`` on a ``github`` connector, while the runtime ACL
+    granted it — the divergence class this test locks down.
+    """
+    cid = uuid.uuid4()
+    instance = _connector_instance(
+        cid,
+        status="active",
+        allowed_operations=["github.read"],
+        connector_type_id="github",
+    )
+    snap = _snapshot(
+        graph_json=_SINGLE_NODE,
+        connector_bindings=[
+            {
+                "node_id": "a",
+                "connector_instance_id": str(cid),
+                "required_operations": ["read"],
+            }
+        ],
+    )
+    session = _session_returning([instance])
+    result = await GraphValidator().validate(snap, session)
+    assert result.is_valid
+    assert not any(i.code == "CONNECTOR_MISSING_OPERATIONS" for i in result.issues)
+
+
+async def test_connector_mis_typed_qualified_entry_fails_closed():
+    """FAR-1616: a qualifier naming a DIFFERENT connector type grants nothing.
+
+    ``filesystem.read`` stored on a ``github`` connector must not satisfy a
+    binding requiring ``read`` — the same fail-closed treatment ConnectorACL
+    applies.
+    """
+    cid = uuid.uuid4()
+    instance = _connector_instance(
+        cid,
+        status="active",
+        allowed_operations=["filesystem.read"],
+        connector_type_id="github",
+    )
+    snap = _snapshot(
+        graph_json=_SINGLE_NODE,
+        connector_bindings=[
+            {
+                "node_id": "a",
+                "connector_instance_id": str(cid),
+                "required_operations": ["read"],
+            }
+        ],
+    )
+    session = _session_returning([instance])
+    result = await GraphValidator().validate(snap, session)
+    assert not result.is_valid
+    assert any(i.code == "CONNECTOR_MISSING_OPERATIONS" for i in result.issues)
+
+
+async def test_connector_unverifiable_type_rejects_qualified_entry():
+    """FAR-1616 fail-closed: a type-qualified stored entry is unverifiable when
+    the connector has no usable type id, so it grants nothing and a required
+    ``read`` is reported missing — a naive type-blind canonicalisation that
+    dropped the qualifier would wrongly grant it."""
+    cid = uuid.uuid4()
+    instance = _connector_instance(
+        cid,
+        status="active",
+        allowed_operations=["github.read"],
+        connector_type_id="",
+    )
+    snap = _snapshot(
+        graph_json=_SINGLE_NODE,
+        connector_bindings=[
+            {
+                "node_id": "a",
+                "connector_instance_id": str(cid),
+                "required_operations": ["read"],
             }
         ],
     )

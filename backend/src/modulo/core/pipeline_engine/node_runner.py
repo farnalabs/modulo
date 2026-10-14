@@ -43,7 +43,6 @@ Eval-before-interrupt ((Section 8.17):
 
 import asyncio
 import base64
-import concurrent.futures
 import difflib
 import hashlib
 import json
@@ -54,7 +53,7 @@ import re as _re
 import socket
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import asdict as _dc_asdict
@@ -102,7 +101,12 @@ from modulo.core.cost_controller.breakdown.params import (
     coerce_reported_token,
     is_proven_zero_token_usage,
 )
-from modulo.core.eval_engine import EvalEngine, EvalResult, EvalType
+from modulo.core.credential_issuer import (
+    RUN_CREDENTIAL_PROVENANCE_ENV,
+    IssuedRunCredential,
+    default_credential_issuer,
+)
+from modulo.core.eval_engine import EvalEngine, EvalResult
 from modulo.core.guardrails.loop_intercept import LoopInterceptConfig
 from modulo.core.node_output_split import (
     DEFAULT_NODE_TYPE,
@@ -130,6 +134,11 @@ from modulo.core.pipeline_engine.jmespath_eval import (
     compile_jmespath,
     evaluate_jmespath_condition,
 )
+from modulo.core.pipeline_engine.llm_judge import (
+    invoke_backend,
+    resolve_llm_judge_callable,
+    run_coroutine_sync,
+)
 from modulo.core.pipeline_engine.sandbox_errors import (
     SandboxNodeFailedError as SandboxNodeFailedError,  # noqa: PLC0414 - explicit re-export
 )
@@ -140,8 +149,11 @@ from modulo.core.pipeline_engine.sandbox_mode import (
     _validate_sandbox_mode_config,
     sandbox_jinja_environment,
 )
+from modulo.core.provenance import DISPATCH_DATUM_PROVENANCE, PROVENANCE_KEY, WITNESSED_VIA_KEY
 from modulo.core.run_context.autonomy import (
     AutonomyResolution,
+    is_autonomy_gating_enabled,
+    read_live_earned_autonomy,
     resolve_autonomy,
     should_notify_on_complete,
     should_skip_hitl_review,
@@ -4427,6 +4439,327 @@ def _finalize_node_result(
     return result
 
 
+def _community_gated_stub(
+    state: dict[str, Any],
+    *,
+    node_id: str,
+    agent_id: uuid.UUID | None,
+) -> dict[str, Any] | None:
+    """FAR-764 community-execution gate (ADR 032 D2): the block stub.
+
+    Community-sourced agents that have not been granted by the operator are
+    restricted to read-only / no-tool scope. The gated agent set is seeded
+    into state by the executor at run start. A gated node returns a stub
+    artifact instead of invoking the model - the agent cannot execute until
+    the operator grants access. Returns ``None`` when no gate applies.
+    """
+    gated = state.get("_community_gated_agents") or set()
+    # Compare the canonicalised UUID form, not the raw snapshot string - a
+    # non-canonical rendering (uppercase / brace / no-dash) of the same agent
+    # id would otherwise slip past the gate and fail it open.
+    if agent_id is not None and str(agent_id) in gated:
+        return {
+            "artifacts": [
+                {
+                    "node_id": node_id,
+                    "status": "blocked",
+                    "reason": "community_sourced_not_granted",
+                }
+            ]
+        }
+    return None
+
+
+def _missing_backend_stub(*, node_id: str, agent_id: uuid.UUID | None) -> dict[str, Any]:
+    """FAR-1115: no ``model_backend_id`` - raise (agent node) or stub (plain).
+
+    An agent node (model-backed by intent) whose agent resolves to no
+    model_backend_id is a misconfiguration - not a legitimate stub. Surface a
+    clear, actionable error naming both the node and the agent so the
+    operator can fix the config immediately. Connector-binding / manual nodes
+    without agent_id keep the original stub behavior (byte-identical).
+    """
+    if agent_id is not None:
+        raise NodeMissingModelBackendError(node_id=node_id, agent_id=str(agent_id))
+    return {"artifacts": [{"node_id": node_id, "status": "executed"}]}
+
+
+async def _dispatch_node(
+    node_def: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    node_id: str,
+    agent_id: uuid.UUID | None,
+    max_input_length: int | None,
+) -> tuple[dict[str, Any] | None, str, str, Any]:
+    """Node-start gates and stub dispatch (FAR-215 / FAR-764 / FAR-1115).
+
+    Runs the mid-run conformance gate, the community-execution gate and the
+    missing-model-backend branch, resolving the FAR-332/342 run overrides on
+    the way.  Returns ``(stub, model_backend_id_str, prompt_template,
+    raw_input)``:
+
+    - *stub* is not ``None`` -> return it from the node without invoking the
+      model (community-gate block, or the connector/manual stub for a node
+      with no backend); the other elements are placeholders.
+    - *stub* is ``None`` -> the agent path proceeds with the resolved backend
+      id, prompt template, and the PRE-truncation ``raw_input`` (the same
+      value the original inline body captured before truncating).
+
+    Raises :class:`NodeMissingModelBackendError` when an agent node's agent
+    resolves to no model backend (FAR-1115) - a misconfiguration, never a
+    silent stub.
+    """
+    # FAR-215: mid-run capability re-check at node start. If a bound
+    # block-action guardrail's conformance claim is absent/unknown against
+    # the live manifest, the node is blocked and routed to HITL - the gate
+    # raises a LangGraph interrupt, so control never reaches the node body.
+    await _run_conformance_gate(state, node_id=node_id, agent_id=agent_id)
+
+    # FAR-764: community execution gate (ADR 032 D2) - one-line stub branch.
+    gated_stub = _community_gated_stub(state, node_id=node_id, agent_id=agent_id)
+    if gated_stub is not None:
+        return gated_stub, "", "", ""
+
+    run_context: dict[str, Any] = state.get("run_context") or {}
+    raw_input = run_context.get("input", {})
+
+    # Truncate input if max_input_length is configured for this agent.
+    # ORDER IS LOAD-BEARING: the truncation happens BEFORE the stub branch
+    # below, so even a node that never reaches the model leaves the
+    # truncated input in state (pinned by
+    # test_node_runner_truncates_input_in_state).
+    if max_input_length is not None and isinstance(raw_input, str):
+        run_context["input"] = truncate_input(raw_input, max_input_length)
+
+    # Get agent data from node_def (embedded at snapshot creation).
+    prompt_template = node_def.get("prompt_template") or ""
+    model_backend_id_str = node_def.get("model_backend_id")
+
+    # FAR-332: a model_backend_id run_context override (fired by the variant
+    # comparison / A/B test views) takes precedence over the snapshot-embedded
+    # node_def backend, so every variant can run on a different model backend.
+    # The override is namespaced under the reserved TOP-LEVEL ``_run_overrides``
+    # key, seeded by the executor from the run's frozen variant config - never
+    # read from ``run_context["input"]``, where a bare top-level
+    # ``model_backend_id`` (or a crafted ``_run_overrides``) in user-supplied
+    # input is DATA and could silently reroute model routing.
+    #
+    # FAR-342: a prompt_templates override (resolved from the variant's
+    # prompt_version picker at run creation) likewise takes precedence over
+    # the snapshot-embedded node_def prompt, so every variant renders with
+    # its own prompt version. The override is a PER-AGENT map, so each node
+    # reads ONLY the template for its own agent - one agent's template never
+    # clobbers another's in a multi-agent snapshot. When the node's agent is
+    # absent from the map, fall back to the node_def prompt. Because the
+    # executor only ever seeds this from ``variant_config_snapshot``, a NORMAL
+    # run that carries ``_run_overrides`` as caller input never reaches this
+    # boundary (FAR-342 injection surface closed).
+    model_backend_id_str, prompt_template = _resolve_node_run_overrides(
+        run_context,
+        agent_id,
+        model_backend_id_str=model_backend_id_str,
+        prompt_template=prompt_template,
+    )
+
+    # If no model_backend_id, fall back to stub behavior
+    # (connector_binding nodes, manual nodes routed through wrong path, etc.).
+    # FAR-1115 lives in ``_missing_backend_stub``: raise for a misconfigured
+    # agent node, byte-identical stub otherwise.
+    if not model_backend_id_str:
+        return _missing_backend_stub(node_id=node_id, agent_id=agent_id), "", "", ""
+    return None, model_backend_id_str, prompt_template, raw_input
+
+
+def _build_repair_invoke(model_backend_id_str: str) -> Any:
+    """Build the strict-mode repair re-invoke callable for an agent node.
+
+    FIX B (FAR-899): the standard agent path has access to the
+    ModelBackendHub and can re-invoke the same backend with the repair
+    prompt. ``run_repair_loop`` calls this SYNCHRONOUSLY while the node
+    coroutine is already on the event loop, so bridge to the async backend
+    with ``run_coroutine_sync`` (the same worker-loop bridge the LLM-judge
+    callable uses, bounded per FAR-1652). An async repair fn here would hand
+    ``json.loads`` an un-awaited coroutine and crash the node instead of
+    repairing it.
+
+    The backend id is parsed safely - non-UUID backend ids (mock/stub/aliased
+    backends, common in unit tests and some real graphs) must not crash the
+    node: when the id cannot be resolved to a UUID this returns ``None``,
+    skipping the repair invoke entirely so the node takes the existing
+    documented hard-fail path (strict-mode validation failures are terminal).
+    """
+    from modulo.core.pipeline_engine.decorator import get_model_backend_hub
+
+    hub = get_model_backend_hub()
+    backend_id = _parse_uuid_opt(model_backend_id_str)
+    if backend_id is None:
+        return None
+
+    def _std_repair_invoke(prompt: str) -> str:
+        """Re-invoke the same model backend with the repair prompt."""
+        if hub is None:
+            raise RuntimeError("ModelBackendHub not available for repair invoke")
+        resp = run_coroutine_sync(invoke_backend(hub, backend_id, [HumanMessage(content=prompt)]))
+        return resp.content if hasattr(resp, "content") else str(resp)
+
+    return _std_repair_invoke
+
+
+async def _stamp_schema_enforcement(
+    record: Any,
+    *,
+    node_id: str,
+    state: dict[str, Any],
+) -> None:
+    """Persist a FAR-902 schema-enforcement record before terminalization.
+
+    D3 ordering: the record rides on the result (success arm) or on the
+    ``OutputSchemaValidationError`` (terminal-failure arm) and is written
+    UNCHANGED to ``run_node_outputs`` via the conformance-context session
+    factory BEFORE the node result returns / the exception propagates.
+    Persistence is best-effort - any error is logged and swallowed by
+    ``_persist_enforcement_record_best_effort`` (``CancelledError`` still
+    propagates). A ``None`` record is a no-op inside that helper.
+    """
+    ctx = get_conformance_ctx()
+    session_factory = ctx[0] if ctx is not None else None
+    org_id = ctx[1] if ctx is not None else None
+    run_id = state.get("_run_id")
+    await _persist_enforcement_record_best_effort(
+        record,
+        session_factory=session_factory,
+        run_id=run_id,
+        org_id=org_id,
+        node_id=node_id,
+        attempt_key=(f"run:{run_id}:node:{node_id}:agent" if run_id is not None else None),
+    )
+
+
+async def _run_agent_node(
+    node_def: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    node_id: str,
+    model_backend_id_str: str,
+    prompt_template: str,
+    raw_input: Any,
+    dag_ancestor_ids: frozenset[str] | None,
+) -> dict[str, Any]:
+    """Render, invoke, validate and finalize an agent (model-backed) node.
+
+    The agent path after ``_dispatch_node`` handed over a resolved backend:
+    scope the run_context view (FAR-418), inject declared work-item refs
+    (FAR-794/795), render the prompt (FAR-332/342), invoke the model backend
+    (FAR-898/899/900), validate the output, and carry the FAR-902
+    schema-enforcement record off to retention BEFORE the node result is
+    returned (D3 ordering) - the record never leaks into node telemetry.
+    """
+    run_context: dict[str, Any] = state.get("run_context") or {}
+    output_schema_json = node_def.get("output_schema_json")
+
+    # FAR-418: context_scope - the agent's run_context VIEW (the keys fed to
+    # the prompt template) is allowlist-gated to the node's need-to-know set.
+    # The machinery reads (run_overrides, autonomy) still use the full
+    # run_context so internal control keys are never starved.
+    _node_cap = node_def.get("capability_scope") or {}
+    scoped_run_context = filter_run_context_scope(run_context, _node_cap.get("context_scope"))
+    # FAR-418 (MAJOR-3 fix): the need-to-know boundary must also bind the
+    # ``state.run_context`` view. ``state`` otherwise carries the full,
+    # unscoped run_context, so a template could read gated keys via
+    # ``{{ state.run_context.<key> }}`` and defeat the boundary. Pass a
+    # shallow copy with the scoped run_context in place - the live state dict
+    # is never mutated.
+    scoped_state = dict(state)
+    scoped_state["run_context"] = scoped_run_context
+    # FAR-794 slice 2b: declare-and-inject the run's refs when
+    # THIS node's input schema declares ``work_item_refs`` - read-only at
+    # node start, never failing the node (a read failure yields [], not a
+    # raise), and capped deterministically by the unified refs cap.
+    # FAR-795: the injection is now the FULL set - create-time refs plus
+    # the refs emitted by this node's DAG ancestors (folded from the
+    # accumulated artifacts; skipped/failed attempts contribute per
+    # status), deduped and capped over the union by the pure collector.
+    # ``dag_ancestor_ids`` is frozen at compile time from graph_json
+    # (graph_cache); a None (unthreaded caller) degrades to create-time
+    # refs only, never to a raise.
+    node_work_item_refs = (
+        _node_ancestor_injected_work_item_refs(node_id, run_context, state, dag_ancestor_ids)
+        if _node_declares_work_item_refs(node_def)
+        else None
+    )
+    rendered_prompt, routing_mode = _render_agent_prompt(
+        state=scoped_state,
+        run_context=scoped_run_context,
+        raw_input=raw_input,
+        prompt_template=prompt_template,
+        node_def=node_def,
+        work_item_refs=node_work_item_refs,
+    )
+
+    # FAR-900: resolve the schema_profile for rendering before dispatch.
+    _node_schema_profile = _resolve_schema_profile(node_def)
+    # FAR-902: track whether the provider actually used native structured output.
+    _native_output_flag: list[bool] = [False]
+    output_data = await _invoke_node_model(
+        rendered_prompt,
+        model_backend_id_str,
+        node_id,
+        output_schema_json=output_schema_json,
+        schema_profile=_node_schema_profile,
+        _native_output_flag=_native_output_flag,
+    )
+
+    # FAR-899: schema validator mode - resolved from the effective-setting
+    # store (org.settings_json -> system_config -> env var -> "lenient").
+    # FIX E: single helper replaces 3 copy-pasted blocks.
+    _ctx = get_conformance_ctx()
+    _sf = _ctx[0] if _ctx is not None else None
+    _schema_validator_mode = await _resolve_schema_validator_mode(
+        state,
+        session_factory=_sf,
+        node_id=node_id,
+    )
+
+    # FIX B: create a repair invoke callable so the repair loop is reachable
+    # (rationale lives in ``_build_repair_invoke``).
+    _repair_fn = _build_repair_invoke(model_backend_id_str)
+
+    try:
+        _node_result = _finalize_node_result(
+            node_id,
+            output_data,
+            output_schema_json,
+            routing_mode,
+            mode=_schema_validator_mode,
+            schema_id=node_def.get("output_schema_id", "unknown"),
+            schema_version=node_def.get("output_schema_version", 0),
+            _repair_invoke_fn=_repair_fn,
+            resolved_profile=_node_schema_profile or "verbatim",
+            native_output=_native_output_flag[0],
+        )
+    except OutputSchemaValidationError as _schema_exc:
+        # FAR-902 (D3): persist the terminal-failure enforcement record
+        # BEFORE the node is terminalized, then re-raise unchanged.
+        await _stamp_schema_enforcement(
+            getattr(_schema_exc, "enforcement_record", None),
+            node_id=node_id,
+            state=state,
+        )
+        raise
+
+    # FAR-902: persist the enforcement record BEFORE terminalization.
+    # The record was built by _finalize_node_result and carried on the
+    # result dict under ``_schema_enforcement_record``.  Persist it via
+    # the conformance-context session_factory and remove it from the
+    # result so it never leaks into node telemetry (D3 ordering).
+    _enforcement_rec = _node_result.pop("_schema_enforcement_record", None)
+    if _enforcement_rec is not None:
+        await _stamp_schema_enforcement(_enforcement_rec, node_id=node_id, state=state)
+
+    return _node_result
+
+
 def make_node_fn(
     node_def: dict[str, Any],
     *,
@@ -4451,240 +4784,38 @@ def make_node_fn(
 
     When *token_budget* is set, per-node token budget is enforced at the
     executor level via ``node_token_budgets`` during ``_stream_graph()``.
+    The closure is a thin orchestrator: ``_dispatch_node`` runs the node-start
+    gates and stub branches (FAR-215/764/1115, truncation, FAR-332/342
+    overrides), while ``_run_agent_node`` scopes, renders, invokes,
+    validates and carries the FAR-902 enforcement record to retention.
     """
     node_id: str = str(node_def["id"])
 
     @cancellable_node(timeout=timeout, role=role)
     async def _node(state: dict[str, Any]) -> dict[str, Any]:
-        # FAR-215: mid-run capability re-check at node start. If a bound
-        # block-action guardrail's conformance claim is absent/unknown against
-        # the live manifest, the node is blocked and routed to HITL — the gate
-        # raises a LangGraph interrupt, so control never reaches the node body.
-        agent_id_raw = node_def.get("agent_id")
-        agent_id = _parse_uuid_opt(agent_id_raw)
-        await _run_conformance_gate(state, node_id=node_id, agent_id=agent_id)
-
-        # FAR-764: community execution gate (ADR 032 D2).  Community-sourced
-        # agents that have not been granted by the operator are restricted to
-        # read-only / no-tool scope.  The gated agent set is seeded into state
-        # by the executor at run start.  A gated node returns a stub artifact
-        # instead of invoking the model — the agent cannot execute until the
-        # operator grants access.
-        gated = state.get("_community_gated_agents") or set()
-        # Compare the canonicalised UUID form, not the raw snapshot string — a
-        # non-canonical rendering (uppercase / brace / no-dash) of the same agent
-        # id would otherwise slip past the gate and fail it open.
-        if agent_id is not None and str(agent_id) in gated:
-            return {
-                "artifacts": [
-                    {
-                        "node_id": node_id,
-                        "status": "blocked",
-                        "reason": "community_sourced_not_granted",
-                    }
-                ]
-            }
-
-        run_context: dict[str, Any] = state.get("run_context") or {}
-        raw_input = run_context.get("input", {})
-
-        # Truncate input if max_input_length is configured for this agent.
-        if max_input_length is not None and isinstance(raw_input, str):
-            run_context["input"] = truncate_input(raw_input, max_input_length)
-
-        # Get agent data from node_def (embedded at snapshot creation).
-        prompt_template = node_def.get("prompt_template") or ""
-        model_backend_id_str = node_def.get("model_backend_id")
-        output_schema_json = node_def.get("output_schema_json")
-
-        # FAR-332: a model_backend_id run_context override (fired by the variant
-        # comparison / A/B test views) takes precedence over the snapshot-embedded
-        # node_def backend, so every variant can run on a different model backend.
-        # The override is namespaced under the reserved TOP-LEVEL ``_run_overrides``
-        # key, seeded by the executor from the run's frozen variant config — never
-        # read from ``run_context["input"]``, where a bare top-level
-        # ``model_backend_id`` (or a crafted ``_run_overrides``) in user-supplied
-        # input is DATA and could silently reroute model routing.
-        #
-        # FAR-342: a prompt_templates override (resolved from the variant's
-        # prompt_version picker at run creation) likewise takes precedence over
-        # the snapshot-embedded node_def prompt, so every variant renders with
-        # its own prompt version. The override is a PER-AGENT map, so each node
-        # reads ONLY the template for its own agent — one agent's template never
-        # clobbers another's in a multi-agent snapshot. When the node's agent is
-        # absent from the map, fall back to the node_def prompt. Because the
-        # executor only ever seeds this from ``variant_config_snapshot``, a NORMAL
-        # run that carries ``_run_overrides`` as caller input never reaches this
-        # boundary (FAR-342 injection surface closed).
-        model_backend_id_str, prompt_template = _resolve_node_run_overrides(
-            run_context,
-            agent_id,
+        # Thin orchestrator (S3776 structural split): the node-start gates,
+        # stub branches, truncation and run overrides live in
+        # ``_dispatch_node``; the agent path (scope, render, invoke,
+        # validate, FAR-902 enforcement carry) lives in ``_run_agent_node``.
+        agent_id = _parse_uuid_opt(node_def.get("agent_id"))
+        stub, model_backend_id_str, prompt_template, raw_input = await _dispatch_node(
+            node_def,
+            state,
+            node_id=node_id,
+            agent_id=agent_id,
+            max_input_length=max_input_length,
+        )
+        if stub is not None:
+            return stub
+        return await _run_agent_node(
+            node_def,
+            state,
+            node_id=node_id,
             model_backend_id_str=model_backend_id_str,
             prompt_template=prompt_template,
-        )
-
-        # If no model_backend_id, fall back to stub behavior
-        # (connector_binding nodes, manual nodes routed through wrong path, etc.).
-        if not model_backend_id_str:
-            # FAR-1115: an agent node (model-backed by intent) whose agent
-            # resolves to no model_backend_id is a misconfiguration — not a
-            # legitimate stub.  Surface a clear, actionable error naming both
-            # the node and the agent so the operator can fix the config
-            # immediately.  Connector-binding / manual nodes without agent_id
-            # keep the original stub behavior (byte-identical).
-            if agent_id is not None:
-                raise NodeMissingModelBackendError(node_id=node_id, agent_id=str(agent_id))
-            return {"artifacts": [{"node_id": node_id, "status": "executed"}]}
-
-        # FAR-418: context_scope — the agent's run_context VIEW (the keys fed to
-        # the prompt template) is allowlist-gated to the node's need-to-know set.
-        # The machinery reads (run_overrides, autonomy) still use the full
-        # run_context so internal control keys are never starved.
-        _node_cap = node_def.get("capability_scope") or {}
-        scoped_run_context = filter_run_context_scope(run_context, _node_cap.get("context_scope"))
-        # FAR-418 (MAJOR-3 fix): the need-to-know boundary must also bind the
-        # ``state.run_context`` view. ``state`` otherwise carries the full,
-        # unscoped run_context, so a template could read gated keys via
-        # ``{{ state.run_context.<key> }}`` and defeat the boundary. Pass a
-        # shallow copy with the scoped run_context in place — the live state dict
-        # is never mutated.
-        scoped_state = dict(state)
-        scoped_state["run_context"] = scoped_run_context
-        # FAR-794 slice 2b: declare-and-inject the run's refs when
-        # THIS node's input schema declares ``work_item_refs`` — read-only at
-        # node start, never failing the node (a read failure yields [], not a
-        # raise), and capped deterministically by the unified refs cap.
-        # FAR-795: the injection is now the FULL set — create-time refs plus
-        # the refs emitted by this node's DAG ancestors (folded from the
-        # accumulated artifacts; skipped/failed attempts contribute per
-        # status), deduped and capped over the union by the pure collector.
-        # ``dag_ancestor_ids`` is frozen at compile time from graph_json
-        # (graph_cache); a None (unthreaded caller) degrades to create-time
-        # refs only, never to a raise.
-        node_work_item_refs = (
-            _node_ancestor_injected_work_item_refs(node_id, run_context, state, dag_ancestor_ids)
-            if _node_declares_work_item_refs(node_def)
-            else None
-        )
-        rendered_prompt, routing_mode = _render_agent_prompt(
-            state=scoped_state,
-            run_context=scoped_run_context,
             raw_input=raw_input,
-            prompt_template=prompt_template,
-            node_def=node_def,
-            work_item_refs=node_work_item_refs,
+            dag_ancestor_ids=dag_ancestor_ids,
         )
-
-        # FAR-900: resolve the schema_profile for rendering before dispatch.
-        _node_schema_profile = _resolve_schema_profile(node_def)
-        # FAR-902: track whether the provider actually used native structured output.
-        _native_output_flag: list[bool] = [False]
-        output_data = await _invoke_node_model(
-            rendered_prompt,
-            model_backend_id_str,
-            node_id,
-            output_schema_json=output_schema_json,
-            schema_profile=_node_schema_profile,
-            _native_output_flag=_native_output_flag,
-        )
-
-        # FAR-899: schema validator mode — resolved from the effective-setting
-        # store (org.settings_json → system_config → env var → "lenient").
-        # FIX E: single helper replaces 3 copy-pasted blocks.
-        _ctx = get_conformance_ctx()
-        _sf = _ctx[0] if _ctx is not None else None
-        _schema_validator_mode = await _resolve_schema_validator_mode(
-            state,
-            session_factory=_sf,
-            node_id=node_id,
-        )
-
-        # FIX B: create a repair invoke callable so the repair loop is reachable.
-        # The standard agent path has access to the ModelBackendHub and can
-        # re-invoke the same backend with the repair prompt. ``run_repair_loop``
-        # calls this SYNCHRONOUSLY while the node coroutine is already on the
-        # event loop, so bridge to the async backend with ``_run_coroutine_sync``
-        # (the same worker-loop bridge the LLM-judge callable uses). An async
-        # repair fn here would hand ``json.loads`` an un-awaited coroutine and
-        # crash the node instead of repairing it.
-        from modulo.core.pipeline_engine.decorator import get_model_backend_hub
-
-        _repair_hub = get_model_backend_hub()
-        # FAR-899 repair: parse the backend id safely — non-UUID backend ids
-        # (mock/stub/aliased backends, common in unit tests and some real
-        # graphs) must not crash the node.  When the id cannot be resolved
-        # to a UUID, skip the repair invoke entirely and let the node take
-        # the existing documented hard-fail path.
-        _repair_backend_id = _parse_uuid_opt(model_backend_id_str)
-
-        if _repair_backend_id is not None:
-
-            def _std_repair_invoke(prompt: str) -> str:
-                """Re-invoke the same model backend with the repair prompt."""
-                if _repair_hub is None:
-                    raise RuntimeError("ModelBackendHub not available for repair invoke")
-                _resp = _run_coroutine_sync(
-                    _invoke_backend(_repair_hub, _repair_backend_id, [HumanMessage(content=prompt)])
-                )
-                return _resp.content if hasattr(_resp, "content") else str(_resp)
-
-            _repair_fn: Any = _std_repair_invoke
-        else:
-            # Non-UUID backend id → repair invoke unavailable; strict-mode
-            # validation failures are terminal (the documented hard-fail path).
-            _repair_fn = None
-
-        try:
-            _node_result = _finalize_node_result(
-                node_id,
-                output_data,
-                output_schema_json,
-                routing_mode,
-                mode=_schema_validator_mode,
-                schema_id=node_def.get("output_schema_id", "unknown"),
-                schema_version=node_def.get("output_schema_version", 0),
-                _repair_invoke_fn=_repair_fn,
-                resolved_profile=_node_schema_profile or "verbatim",
-                native_output=_native_output_flag[0],
-            )
-        except OutputSchemaValidationError as _schema_exc:
-            # FAR-902 (D3): persist the terminal-failure enforcement record
-            # BEFORE the node is terminalized, then re-raise unchanged.
-            _ef_ctx = get_conformance_ctx()
-            _ef_sf = _ef_ctx[0] if _ef_ctx is not None else None
-            _ef_org = _ef_ctx[1] if _ef_ctx is not None else None
-            _ef_run_id = state.get("_run_id")
-            await _persist_enforcement_record_best_effort(
-                getattr(_schema_exc, "enforcement_record", None),
-                session_factory=_ef_sf,
-                run_id=_ef_run_id,
-                org_id=_ef_org,
-                node_id=node_id,
-                attempt_key=(f"run:{_ef_run_id}:node:{node_id}:agent" if _ef_run_id is not None else None),
-            )
-            raise
-
-        # FAR-902: persist the enforcement record BEFORE terminalization.
-        # The record was built by _finalize_node_result and carried on the
-        # result dict under ``_schema_enforcement_record``.  Persist it via
-        # the conformance-context session_factory and remove it from the
-        # result so it never leaks into node telemetry (D3 ordering).
-        _enforcement_rec = _node_result.pop("_schema_enforcement_record", None)
-        if _enforcement_rec is not None:
-            _ef_ctx = get_conformance_ctx()
-            _ef_sf = _ef_ctx[0] if _ef_ctx is not None else None
-            _ef_org = _ef_ctx[1] if _ef_ctx is not None else None
-            _ef_run_id = state.get("_run_id")
-            await _persist_enforcement_record_best_effort(
-                _enforcement_rec,
-                session_factory=_ef_sf,
-                run_id=_ef_run_id,
-                org_id=_ef_org,
-                node_id=node_id,
-                attempt_key=(f"run:{_ef_run_id}:node:{node_id}:agent" if _ef_run_id is not None else None),
-            )
-
-        return _node_result
 
     _node.__name__ = f"node_{node_id}"
     return _node
@@ -4787,83 +4918,6 @@ def make_router_node_fn(
 
     _router.__name__ = f"router_{node_id}" if node_id else "router"
     return _router
-
-
-async def _invoke_backend(
-    hub: Any,
-    backend_id: uuid.UUID,
-    messages: list[Any],
-) -> Any:
-    """Resolve a backend from the hub and invoke it asynchronously."""
-    backend = await hub.get(backend_id)
-    return await backend.invoke(messages)
-
-
-_JUDGE_EXECUTOR: concurrent.futures.ThreadPoolExecutor | None = None
-
-
-def _run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> Any:
-    """Run an async coroutine to completion from a sync context.
-
-    ``make_hitl_review_fn`` runs inside an already-running asyncio event loop,
-    so ``asyncio.run`` and ``loop.run_until_complete`` both raise "This event
-    loop is already running". The LLMJudgeCallable protocol is synchronous, so
-    we bridge sync -> async by executing the coroutine on a dedicated event
-    loop in a worker thread and blocking on the result.
-    """
-    global _JUDGE_EXECUTOR
-    if _JUDGE_EXECUTOR is None:
-        _JUDGE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="llm-judge",
-        )
-
-    def _run() -> Any:
-        return asyncio.run(coro)
-
-    future: concurrent.futures.Future[Any] = _JUDGE_EXECUTOR.submit(_run)
-    return future.result()
-
-
-def _build_llm_judge_callable(
-    hub: Any,
-    backend_id_str: str,
-) -> Callable[[dict[str, Any], EvalDefDTO], dict[str, Any]]:
-    """Build a synchronous LLM judge callable backed by a model backend.
-
-    The ``LLMJudgeCallable`` protocol is synchronous, but ``make_hitl_review_fn``
-    runs inside an already-running asyncio event loop. We bridge sync -> async
-    by running the async backend invoke on a dedicated event loop in a worker
-    thread via ``_run_coroutine_sync``.
-    """
-    backend_id = uuid.UUID(backend_id_str)
-
-    def _judge(
-        output: dict[str, Any],
-        eval_def: EvalDefDTO,
-    ) -> dict[str, Any]:
-        field = eval_def.config.get("field", "")
-        content = output.get(field, "")
-        prompt = (
-            "Evaluate the following output and return JSON with keys passed "
-            "(bool), score (float 0-1), detail (str).\n\n"
-            f"Output:\n{content}"
-        )
-        messages = [HumanMessage(content=prompt)]
-        response = _run_coroutine_sync(_invoke_backend(hub, backend_id, messages))
-        text = response.content if hasattr(response, "content") else str(response)
-        try:
-            parsed = json.loads(text)
-        except ValueError:
-            parsed = {"passed": False, "score": 0.0, "detail": text}
-        detail = parsed.get("detail", "")
-        return {
-            "passed": bool(parsed.get("passed", False)),
-            "score": parsed.get("score"),
-            "detail": str(detail) if detail is not None else "",
-        }
-
-    return _judge
 
 
 def _resolve_gate_eval_envelope(
@@ -5265,17 +5319,6 @@ def _hitl_review_condition_evaluate(
     }
 
 
-def _resolve_llm_judge_callable(eval_def: Any) -> Any:
-    """Resolve the LLM judge callable for an eval definition, if configured."""
-    if eval_def.eval_type == EvalType.LLM_JUDGE and eval_def.config.get("model_backend_id"):
-        from modulo.core.pipeline_engine.decorator import get_model_backend_hub
-
-        hub = get_model_backend_hub()
-        if hub is not None:
-            return _build_llm_judge_callable(hub, str(eval_def.config["model_backend_id"]))
-    return None
-
-
 async def _run_gate_evals(
     state: dict[str, Any],
     eval_definitions: Sequence[EvalDefDTO] | None,
@@ -5320,7 +5363,7 @@ async def _run_gate_evals(
         org_id=org_id,
         session_factory=session_factory,
         node_id=review_id,
-        resolve_llm_judge=_resolve_llm_judge_callable,
+        resolve_llm_judge=resolve_llm_judge_callable,
         on_eval_result=_on_gate_eval_result,
     )
 
@@ -5361,15 +5404,34 @@ def _hitl_review_eval_condition_skip(
 
 
 def _hitl_review_autonomy_result(
-    review_id: str, state: dict[str, Any], human_only: bool
+    review_id: str,
+    state: dict[str, Any],
+    human_only: bool,
+    *,
+    earned_live: str | None = None,
+    gating_enabled: bool = False,
 ) -> tuple[AutonomyResolution, dict[str, Any] | None]:
-    """Resolve the ceiling-clamped autonomy level; return skip/auto-approve artifact, if any."""
+    """Resolve the ceiling-clamped autonomy level; return skip/auto-approve artifact, if any.
+
+    ``earned_live`` / ``gating_enabled`` (FAR-1175) are read by the async gate
+    caller (the pipeline's live earned level + the org's ``autonomy_gating``
+    flag) and forwarded to :func:`resolve_autonomy`, which combines the live
+    earned level with the run's pinned-at-start level. Defaults reproduce the
+    S0 signature exactly so existing callers/tests are unaffected.
+    """
     # Determine effective autonomy level from run_context (FAR-1163: a
     # context-setter's recommendation is clamped to the pipeline's
-    # max_autonomy_level ceiling pinned as ``_pipeline_max_autonomy``).
+    # max_autonomy_level ceiling pinned as ``_pipeline_max_autonomy``;
+    # FAR-1175 S1: with gating on, the base is the earned level — read live
+    # and combined with the run's pinned-at-start value inside resolve_autonomy).
     run_context: dict[str, Any] = state.get("run_context") or {}
     pipeline_default: str | None = run_context.get("_pipeline_default_autonomy")
-    resolution = resolve_autonomy(pipeline_default, run_context)
+    resolution = resolve_autonomy(
+        pipeline_default,
+        run_context,
+        earned_live=earned_live,
+        gating_enabled=gating_enabled,
+    )
     autonomy = resolution.effective
     human_only_effective: bool = human_only
 
@@ -5512,7 +5574,28 @@ def make_hitl_review_fn(
             return eval_condition_skip
 
         # --- Autonomy skip/approve. ---
-        resolution, autonomy_result = _hitl_review_autonomy_result(review_id, state, human_only)
+        # FAR-1175 S1: the org's ``autonomy_gating`` flag is resolved FIRST
+        # (fail-open, default OFF). Only when the flag is ON do we read the
+        # pipeline's live earned level — with the flag off (the default) the
+        # gate path costs NO extra per-gate SELECT and is byte-identical to S0.
+        # The live earned level is combined with the run's pinned-at-start value
+        # INSIDE resolve_autonomy so a demotion bites this in-flight run while a
+        # promotion does not.
+        gating_enabled = await is_autonomy_gating_enabled(org_id=org_id)
+        earned_live: str | None = None
+        if gating_enabled:
+            earned_live = await read_live_earned_autonomy(
+                session_factory,
+                org_id=org_id,
+                pipeline_id=state.get("_pipeline_id"),
+            )
+        resolution, autonomy_result = _hitl_review_autonomy_result(
+            review_id,
+            state,
+            human_only,
+            earned_live=earned_live,
+            gating_enabled=gating_enabled,
+        )
         autonomy = resolution.effective
         # FAR-1163 S0: when the recommendation was clamped to the ceiling,
         # record the clamp (requested/effective/ceiling) IN ADDITION to the
@@ -6313,12 +6396,17 @@ async def _await_dispatch_terminal(
 
 
 def _stamp_dispatch_provenance(result: Any, instance_id: str) -> Any:
-    """Stamp FAR-1141 provenance onto a dispatch node's output.
+    """Stamp FAR-1141 / FAR-1693 provenance onto a dispatch node's output.
 
     A dispatch node WITNESSES state on the customer's own substrate — it never
-    executed anything — so its output carries:
+    executed anything — so its output carries, all ENGINE-ASSIGNED:
 
-    * ``witnessed_via``          the connector instance id it read through
+    * ``provenance``             the unified taxonomy class ``reported`` — the
+      substrate's datum arrived from an external surface (FAR-1693). NEVER
+      ``attested``: that would imply the substrate's data is true, which the
+      contract forecloses.
+    * ``witnessed_via``          the connector instance id it read through —
+      the CHANNEL STAMP of the ``reported`` class, not a class of its own.
     * ``execution_identity``     ``"customer_substrate"`` (never ``modulo``)
     * ``declared_external_cost`` ``None`` — Modulo declares NO cost for work it
       did not run
@@ -6330,11 +6418,16 @@ def _stamp_dispatch_provenance(result: Any, instance_id: str) -> Any:
     pass through unstamped, so a witnessed run list read as an array Modulo
     produced. The key set is the one
     :data:`modulo.core.node_output_split.DISPATCH_PROVENANCE_FIELDS` lifts back
-    out on the failed-artifact path, so the two cannot drift. Never raises.
+    out on the failed-artifact path, so the two cannot drift.
+
+    Each provenance key is OVERWRITTEN, never merged — a hostile or
+    prompt-injected substrate result cannot assert its own class or channel
+    (ADR-034's engine-assignment rule). Never raises.
     """
     if isinstance(result, dict):
         stamped = dict(result)
-        stamped["witnessed_via"] = instance_id
+        stamped[PROVENANCE_KEY] = DISPATCH_DATUM_PROVENANCE
+        stamped[WITNESSED_VIA_KEY] = instance_id
         stamped["execution_identity"] = "customer_substrate"
         stamped["declared_external_cost"] = None
         if "status" in stamped:
@@ -6342,7 +6435,8 @@ def _stamp_dispatch_provenance(result: Any, instance_id: str) -> Any:
         return stamped
     return {
         "result": result,
-        "witnessed_via": instance_id,
+        PROVENANCE_KEY: DISPATCH_DATUM_PROVENANCE,
+        WITNESSED_VIA_KEY: instance_id,
         "execution_identity": "customer_substrate",
         "declared_external_cost": None,
     }
@@ -7482,6 +7576,21 @@ async def _sandbox_acquire_dispatch_marker_best_effort(
     the sweep/heartbeat path heals the row — accepted, because failing the
     dispatch over a marker write would turn a DB hiccup into a dispatch
     outage.
+
+    Lock bound (FAR-1611, the FAR-1601/1584/1592 class): this is a writer on
+    the hot ``runs`` row with NO client-side ``asyncio.wait_for`` bound, so
+    its transaction issues the transaction-scoped ``lock_timeout``
+    (``db.crud.row_lock.set_mutation_row_lock_timeout``, ``Settings.
+    mutation_row_lock_timeout_ms``) BEFORE its first lock — a contended row
+    lock waits at most that long, never the unbounded, >=30-minute silent
+    wait HAProxy culls mid-operation (FAR-1524 O11). Because this write is
+    best-effort, the bounded wait expiring (SQLSTATE 55P03) is handled
+    NON-silently and without changing the outcome: a distinct
+    ``sandbox_agent.best_effort_marker_lock_timeout`` WARNING carries the
+    SQLSTATE + the (markerless) recovery, and the SAME claim-token-derived
+    fallback key is returned — exactly the fail-open the generic handler
+    already gives, just no longer indistinguishable from a real DB fault. The
+    marker sweep / rollback-detector healing is the designed backstop.
     """
     if session_factory is None or not claim_lease:
         return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
@@ -7494,12 +7603,17 @@ async def _sandbox_acquire_dispatch_marker_best_effort(
         return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
     from sqlalchemy import text as _sql_text
 
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
     from modulo.db.rls import set_rls_execution_context, set_rls_org
+    from modulo.db.sqlstates import is_row_lock_timeout
 
     try:
         async with session_factory() as session, session.begin():
             await set_rls_org(session, org_uuid)
             await set_rls_execution_context(session)
+            # FAR-1611: bound this transaction's row-lock waits first (the
+            # helper takes no lock itself, so it cannot disturb ordering).
+            await set_mutation_row_lock_timeout(session)
             row = (
                 await session.execute(
                     _sql_text(
@@ -7531,7 +7645,28 @@ async def _sandbox_acquire_dispatch_marker_best_effort(
             return key
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception as exc:
+        if is_row_lock_timeout(exc):
+            # FAR-1611: the BOUNDED wait expired (55P03). Never silent, never
+            # a different outcome — the write is best-effort BY DESIGN, so the
+            # transaction rolled back whole and the dispatch proceeds
+            # MARKERLESS exactly as the generic fail-open below; the distinct
+            # event keeps this from being confused with an unexpected DB fault.
+            _log.warning(
+                "sandbox_agent.best_effort_marker_lock_timeout",
+                extra={
+                    "run_id": run_id,
+                    "org_id": str(org_uuid),
+                    "node_id": node_id,
+                    "note": (
+                        "bounded wait expired (SQLSTATE 55P03); marker NOT written (transaction "
+                        "rolled back), dispatch proceeds markerless (fail-open) and the marker "
+                        "sweep / rollback-detector heals the row"
+                    ),
+                },
+                exc_info=True,
+            )
+            return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
         _log.warning(
             "sandbox_agent.best_effort_marker_failed",
             extra={
@@ -7566,6 +7701,22 @@ async def _sandbox_store_dispatch_marker_sandbox(
     ``via_provider`` (FAR-1050) stamps the provider-routing state onto the
     SAME marker, so a run is attributable to provider-mediated execution
     from the persisted dispatch marker alone (ADR 040 revert observability).
+
+    FAR-1611 — deliberately NOT given the FAR-1601 lock bound. Audited, not
+    skipped. This write persists ``runs.sandbox_id``, the ONLY durable record
+    the heartbeat-lost kill path reads (``pipeline_execution.
+    _kill_sandbox_best_effort`` -> ``SELECT sandbox_id FROM runs``): the
+    in-process teardown handles the normal path, but when the worker is culled
+    the heartbeat-lost kill is the sole reaper, and there is no Modulo-side
+    sweep that re-creates a lost ``sandbox_id`` (the sandbox lingers until the
+    provider's own timeout). A bounded wait expiring here would therefore
+    permanently drop that record on a transient row-lock contention — state
+    loss with no recovery — while the caller has NO dedicated 55P03 contract:
+    the exception surfaces in the dispatch's generic ``except Exception`` as
+    ``sandbox_agent.command_failed``, not as a recoverable marker fault. Until
+    that caller is given a fail-open contract that keeps the sandbox
+    reclaimable, bounding this write is unsafe; the unbounded wait is the
+    lesser hazard and is recorded as the remaining FAR-1611 gap.
     """
     if session_factory is None or not claim_lease:
         return
@@ -7621,6 +7772,21 @@ async def _sandbox_store_script_lease(
     re-stamps the D8 tier attribution.  Required (FAR-995) — every call
     site must pass its value explicitly. ``via_provider`` carries the
     FAR-1050 provider-routing state alongside it.
+
+    Lock bound (FAR-1611, the FAR-1601/1584/1592 class): this writer on the
+    hot ``runs`` row had NO client-side ``asyncio.wait_for`` bound, so its
+    transaction issues the transaction-scoped ``lock_timeout`` (``db.crud.
+    row_lock.set_mutation_row_lock_timeout``, ``Settings.
+    mutation_row_lock_timeout_ms``) BEFORE its first lock. A bounded wait
+    expiring (SQLSTATE 55P03) is NOT fail-open here, and MUST NOT be: the
+    lease is the exactly-once fence, so proceeding to ``sandbox.commands.run``
+    without a persisted claim would silently degrade the node to at-least-once
+    (a later fault would be re-dispatchable and the script could double-run).
+    The expiry is therefore claimed NON-silently under the distinct
+    ``sandbox_agent.script_lease_lock_timeout`` WARNING and RE-RAISED: the
+    caller never sets ``_script_lease_claimed``, the script process never
+    starts, and the run stays pre-claim (safe to re-dispatch / sweep). The
+    marker sweep's fence rules own any partially-written lease state.
     """
     if session_factory is None or not claim_lease:
         return
@@ -7636,124 +7802,111 @@ async def _sandbox_store_script_lease(
     from modulo.core.runner_capacity import (
         MARKER_STATE_SCRIPT_EXECUTING,
     )
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
     from modulo.db.rls import set_rls_execution_context, set_rls_org
+    from modulo.db.sqlstates import is_row_lock_timeout
 
-    async with session_factory() as session, session.begin():
-        await set_rls_org(session, org_uuid)
-        await set_rls_execution_context(session)
-        result = await session.execute(
-            _sql_text(
-                "UPDATE runs SET sandbox_dispatch_state=:marker "
-                "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running'"
-            ),
-            {
-                "rid": run_id,
-                "oid": str(org_uuid),
-                "tok": claim_lease,
-                "marker": json.dumps(
-                    {
-                        "state": MARKER_STATE_SCRIPT_EXECUTING,
-                        "attempt_key": attempt_key or "",
-                        "provider": provider,
-                        "via_provider": bool(via_provider),
-                        "written_at": datetime.now(UTC).isoformat(),
-                    }
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            await set_rls_execution_context(session)
+            # FAR-1611: bound this transaction's row-lock waits first (the
+            # helper takes no lock itself, so it cannot disturb ordering).
+            await set_mutation_row_lock_timeout(session)
+            result = await session.execute(
+                _sql_text(
+                    "UPDATE runs SET sandbox_dispatch_state=:marker "
+                    "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running'"
                 ),
-            },
-        )
-        if result.rowcount == 0:
-            # The UPDATE was fenced on claim_token + status but matched
-            # zero rows — the claim was superseded (token rotated by a
-            # successor) or the run is no longer running. The lease was
-            # NEVER acquired, so a subsequent fault must NOT be treated as
-            # post-claim/terminal. Fail as a RETRYABLE SupersededNodeError
-            # so the caller never marks the lease claimed.
-            raise SupersededNodeError("script lease denied — run superseded or not running")
+                {
+                    "rid": run_id,
+                    "oid": str(org_uuid),
+                    "tok": claim_lease,
+                    "marker": json.dumps(
+                        {
+                            "state": MARKER_STATE_SCRIPT_EXECUTING,
+                            "attempt_key": attempt_key or "",
+                            "provider": provider,
+                            "via_provider": bool(via_provider),
+                            "written_at": datetime.now(UTC).isoformat(),
+                        }
+                    ),
+                },
+            )
+            if result.rowcount == 0:
+                # The UPDATE was fenced on claim_token + status but matched
+                # zero rows — the claim was superseded (token rotated by a
+                # successor) or the run is no longer running. The lease was
+                # NEVER acquired, so a subsequent fault must NOT be treated as
+                # post-claim/terminal. Fail as a RETRYABLE SupersededNodeError
+                # so the caller never marks the lease claimed.
+                raise SupersededNodeError("script lease denied — run superseded or not running")
+    except asyncio.CancelledError:
+        raise
+    except SupersededNodeError:
+        raise
+    except Exception as exc:
+        if is_row_lock_timeout(exc):
+            # FAR-1611: the BOUNDED wait expired (55P03). Claim it LOUDLY and
+            # re-raise — the caller must NOT mark the lease claimed and the
+            # script must NOT start (see the docstring): the run stays
+            # pre-claim, so a re-dispatch is exactly-once-safe and the sweep
+            # owns any partially-written lease state.
+            _log.warning(
+                "sandbox_agent.script_lease_lock_timeout",
+                extra={
+                    "run_id": run_id,
+                    "org_id": str(org_uuid),
+                    "attempt_key": attempt_key,
+                    "note": (
+                        "bounded wait expired (SQLSTATE 55P03); lease NOT acquired (transaction "
+                        "rolled back), script NOT started, run stays pre-claim (re-dispatchable)"
+                    ),
+                },
+                exc_info=True,
+            )
+        raise
 
 
-async def _sandbox_mint_run_api_key_for_sandbox(
+async def _sandbox_issue_run_credential_for_sandbox(
     *,
     session_factory: Callable[..., Any] | None,
     org_id: str,
     run_id: str,
     node_id: str,
     sandbox_timeout: int,
-) -> str | None:
-    """Mint a short-TTL runner-role API key for this script-mode sandbox (FAR-296 Phase 3b).
+) -> IssuedRunCredential | None:
+    """Issue a run-scoped Modulo credential for this sandbox (FAR-1690 slice A1).
 
-    Returns the raw key value, or None when minting is unavailable/failed
-    (fail-open — the sandbox runs without the key rather than failing the
-    dispatch). TTL = max(15 min, node_timeout + 5 min), capped by the
-    org-level max (default 1 hour). The raw value is returned to the
-    caller only, which injects it into the sandbox envs — it is NEVER
-    logged, checkpointed, or placed in LangGraph state.
+    EVERY sandbox dispatch — script AND llm mode — issues a short-TTL,
+    run-scoped runner-role API key through the :class:`CredentialIssuer` seam
+    (``core.credential_issuer``). The default Modulo-minted provider computes
+    the TTL as ``max(15 min, node_timeout + 5 min)`` capped by the org max
+    (default 1 hour), links the key to the run (``OrgApiKey.run_id``), and
+    stamps the issuance provenance ``modulo_minted`` (attested — NEVER
+    ``observed``).
+
+    Fail-open: a mint failure returns ``None`` — the sandbox runs without the
+    key rather than failing the dispatch. The raw secret rides on the returned
+    handle only; it is NEVER logged, checkpointed, or placed in LangGraph state.
     """
-    if session_factory is None:
-        return None
-    org_id_raw = org_id
-    try:
-        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
-    except (TypeError, ValueError):
-        org_uuid = None
-    if org_uuid is None:
-        return None
-    try:
-        run_uuid = uuid.UUID(str(run_id))
-    except (TypeError, ValueError):
-        return None
-    try:
-        from modulo.auth.api_key import mint_run_api_key
-        from modulo.db.crud.run import get_run_api_key_ttl_seconds
-
-        ttl_seconds = await get_run_api_key_ttl_seconds(session_factory, org_uuid, sandbox_timeout)
-        async with session_factory() as session, session.begin():
-            await set_rls_org(session, org_uuid)
-            await set_rls_execution_context(session)
-            # account_id: the run's triggering user; fall back to the
-            # first active admin in the org when the run row has none.
-            from sqlalchemy import text as _sql_text
-
-            row = (
-                await session.execute(
-                    _sql_text("SELECT account_id FROM runs WHERE id=:rid AND organisation_id=:oid"),
-                    {"rid": str(run_uuid), "oid": str(org_uuid)},
-                )
-            ).fetchone()
-            account_id_raw = row[0] if row else None
-            if account_id_raw is None:
-                admin_row = (
-                    await session.execute(
-                        _sql_text(
-                            "SELECT a.id FROM accounts a JOIN org_memberships om ON om.account_id = a.id "
-                            "WHERE om.organisation_id=:oid AND om.role='admin' AND om.deactivated_at IS NULL "
-                            "ORDER BY a.created_at LIMIT 1"
-                        ),
-                        {"oid": str(org_uuid)},
-                    )
-                ).fetchone()
-                account_id_raw = admin_row[0] if admin_row else None
-            if account_id_raw is None:
-                return None
-            minted = await mint_run_api_key(
-                session,
-                org_id=org_uuid,
-                run_id=run_uuid,
-                node_id=node_id,
-                account_id=uuid.UUID(str(account_id_raw)),
-                ttl_seconds=ttl_seconds,
-            )
-            if minted is None:
-                return None
-            _key_row, full_key = minted
-            return full_key
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.exception(
-            "sandbox_agent.run_api_key_mint_failed",
-            extra={"run_id": run_id, "node_id": node_id},
+    issuer = default_credential_issuer()
+    issued = await issuer.issue_for_run(
+        session_factory=session_factory,
+        org_id=org_id,
+        run_id=run_id,
+        node_id=node_id,
+        sandbox_timeout=sandbox_timeout,
+    )
+    if issued is not None:
+        # Provenance is stamped on the run's telemetry (attested evidence), in
+        # addition to the ``MODULO_CREDENTIAL_PROVENANCE`` env stamp applied by
+        # the dispatch site.
+        _emit_script_span_event(
+            "credential.issued",
+            {"run_id": run_id, "node_id": node_id, **issuer.describe()},
         )
-        return None
+    return issued
 
 
 async def _sandbox_clear_dispatch_marker(
@@ -7767,6 +7920,21 @@ async def _sandbox_clear_dispatch_marker(
 
     A superseded original (token rotated by a successor) must not clear
     the successor's dispatch marker / sandbox id.
+
+    Lock bound (FAR-1611, the FAR-1601/1584/1592 class): this teardown writer
+    on the hot ``runs`` row had NO client-side ``asyncio.wait_for`` bound, so
+    its transaction issues the transaction-scoped ``lock_timeout`` (``db.crud.
+    row_lock.set_mutation_row_lock_timeout``, ``Settings.
+    mutation_row_lock_timeout_ms``) BEFORE its first lock. The clear is
+    BEST-EFFORT (the dispatch marker is a capacity signal, not a correctness
+    dependency), so a bounded wait expiring (SQLSTATE 55P03) is claimed
+    NON-silently under the distinct ``sandbox_agent.
+    dispatch_marker_clear_lock_timeout`` WARNING and then swallowed: the
+    transaction rolled back whole, the marker SURVIVES (the run is past its
+    teardown and no longer holds capacity), and the marker sweep clears it
+    under its own stale-marker rules. Any OTHER failure still propagates to
+    the caller's existing ``sandbox_agent.dispatch_marker_clear_failed``
+    handler, so the two remain distinguishable.
     """
     if session_factory is None or not claim_lease:
         return
@@ -7779,18 +7947,45 @@ async def _sandbox_clear_dispatch_marker(
         return
     from sqlalchemy import text as _sql_text
 
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
     from modulo.db.rls import set_rls_execution_context, set_rls_org
+    from modulo.db.sqlstates import is_row_lock_timeout
 
-    async with session_factory() as session, session.begin():
-        await set_rls_org(session, org_uuid)
-        await set_rls_execution_context(session)
-        await session.execute(
-            _sql_text(
-                "UPDATE runs SET sandbox_dispatch_state=NULL, sandbox_id=NULL "
-                "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok"
-            ),
-            {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
-        )
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            await set_rls_execution_context(session)
+            # FAR-1611: bound this transaction's row-lock waits first (the
+            # helper takes no lock itself, so it cannot disturb ordering).
+            await set_mutation_row_lock_timeout(session)
+            await session.execute(
+                _sql_text(
+                    "UPDATE runs SET sandbox_dispatch_state=NULL, sandbox_id=NULL "
+                    "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok"
+                ),
+                {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if is_row_lock_timeout(exc):
+            # FAR-1611: the BOUNDED wait expired (55P03). Never silent, never
+            # raised — the clear is best-effort and the marker sweep owns the
+            # surviving stale marker (transaction rolled back whole).
+            _log.warning(
+                "sandbox_agent.dispatch_marker_clear_lock_timeout",
+                extra={
+                    "run_id": run_id,
+                    "org_id": str(org_uuid),
+                    "note": (
+                        "bounded wait expired (SQLSTATE 55P03); marker NOT cleared (transaction "
+                        "rolled back), marker SURVIVES teardown and the marker sweep clears it"
+                    ),
+                },
+                exc_info=True,
+            )
+            return
+        raise
 
 
 def _emit_script_span_event(name: str, attrs: dict[str, Any]) -> None:
@@ -9546,6 +9741,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     # instead of raising UnboundLocalError that replaces the cancellation.
     _drain_fn: Any = None
     _drained_chunks: list[str] = []
+    # FAR-704: the cancellation-triage marker (below, in the CancelledError
+    # handler) reads the idle-watchdog stall reason so a stall kill's
+    # no_output_reason carries it. Pre-bound at function scope for the same
+    # reason as _drain_fn: a cancellation during provisioning must not hit
+    # UnboundLocalError inside the handler (the inner try re-assigns it
+    # when the dispatch gets far enough to resolve the stall detector).
+    stall_reason: str | None = None
     # FAR-211: the local loop-interception callback server, started when the
     # node's loop_intercept config is enabled AND the pipeline has bound
     # guardrails. Pre-bound at function scope so the finally-block teardown
@@ -9655,17 +9857,16 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             via_provider=True,
         )
 
-    async def _mint_run_api_key_for_sandbox() -> str | None:
-        """Mint a short-TTL runner-role API key for this script-mode sandbox (FAR-296 Phase 3b).
+    async def _issue_run_credential_for_sandbox() -> IssuedRunCredential | None:
+        """Issue a short-TTL run-scoped credential for this sandbox (FAR-1690 A1).
 
-        Returns the raw key value, or None when minting is unavailable/failed
-        (fail-open — the sandbox runs without the key rather than failing the
-        dispatch). TTL = max(15 min, node_timeout + 5 min), capped by the
-        org-level max (default 1 hour). The raw value is returned to the
-        caller only, which injects it into the sandbox envs — it is NEVER
-        logged, checkpointed, or placed in LangGraph state.
+        Returns the issued credential handle (secret + issuance provenance), or
+        None when issuance is unavailable/failed (fail-open — the sandbox runs
+        without the key rather than failing the dispatch). The raw secret is
+        returned to the caller only, which injects it into the sandbox envs —
+        it is NEVER logged, checkpointed, or placed in LangGraph state.
         """
-        return await _sandbox_mint_run_api_key_for_sandbox(
+        return await _sandbox_issue_run_credential_for_sandbox(
             session_factory=session_factory,
             org_id=org_id,
             run_id=run_id,
@@ -9932,6 +10133,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             raise SandboxTierRefusedError(
                 f"Node '{node_id}' egress refused on {_egress_tier} tier: {_egress_resolved.refusal}"
             )
+        # FAR-1690: record the TYPED egress posture (never a boolean) on the
+        # workspace, riding the same provider-neutral workspace_metadata carrier
+        # as the allowlist below. Full rationale lives on EgressPosture in
+        # core/pipeline_engine/egress.py and the mirrored comment in
+        # runner_dispatch._workspace_spec_for_dispatch; kept as a pointer here so
+        # the two dispatch sites cannot drift.
+        _metadata["modulo.egress.posture"] = _egress_resolved.posture.value
         if _egress_resolved.policy == "selected" and _egress_resolved.allowlist:
             _metadata["egress_allowlist"] = json.dumps(_egress_resolved.allowlist)
         # FAR-1051 (qa-iterate): run/org/node attribution rides the spec's
@@ -10419,7 +10627,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # Track the last time the agent emitted output so the idle
             # watchdog can fail fast on stalls (FAR-97). The callbacks run
             # from the SDK's event task and may be async or sync.
-            stall_reason: str | None = None
+            stall_reason = None
 
             # FAR-98: stall_timeout_seconds (node config) overrides the idle
             # watchdog's silence window. Resolve the DEFAULT at runtime so
@@ -10556,7 +10764,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # System env vars first — provide defaults from the host. DO NOT
             # move pipeline env before these: pipelines need to override
             # GITHUB_TOKEN for identity separation (e.g. PR Reviewer uses
-            # modulo-reviewbot PAT, not the system default farnalabs bot).
+            # modulo-reviewbot PAT, not the default GITHUB_TOKEN identity).
             # The reserved-prefix validator already prevents overriding
             # MODULO_* vars, so update() below is the sanctioned override.
             # FAR-592 (D6): ``_runner_bindings`` was resolved BEFORE the sandbox
@@ -10605,15 +10813,18 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         "node_id": node_id,
                     },
                 )
-                # FAR-296 Phase 3b: mint a short-TTL runner-role API key so
-                # the script can authenticate to the Modulo API with a
-                # restricted identity. The key is per-run, revoked at run
-                # finalization, and never the long-lived host credentials.
-                # Fail-open: a mint failure leaves the key absent (the
-                # sandbox still runs).
-                _run_api_key = await _mint_run_api_key_for_sandbox()
-                if _run_api_key:
-                    sandbox_envs["MODULO_API_KEY"] = _run_api_key
+            # FAR-1690 slice A1: EVERY sandbox dispatch (script AND llm mode)
+            # issues a short-TTL, run-scoped runner-role API key through the
+            # CredentialIssuer seam, so the workspace always holds a run-scoped
+            # token and never only the long-lived host credentials. The key is
+            # per-run, revoked at run finalization (and by the compensating
+            # sweep), and its issuance provenance is stamped as
+            # ``modulo_minted`` (attested — NEVER ``observed``). Fail-open: an
+            # issuance failure leaves the key absent (the sandbox still runs).
+            _issued_credential = await _issue_run_credential_for_sandbox()
+            if _issued_credential is not None:
+                sandbox_envs["MODULO_API_KEY"] = _issued_credential.secret
+                sandbox_envs[RUN_CREDENTIAL_PROVENANCE_ENV] = _issued_credential.provenance
             _bridge_wrapped_command = rendered_agent_command
             # FAR-211: start the loop-interception callback server + write
             # the bridge client into the sandbox. Best-effort and
@@ -11218,8 +11429,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             _sandbox_repair_info: dict[str, int] = {}
             try:
                 # FAR-899: use real JSON Schema validation with mode support
-                # FAR-901: pass schema_dir + node_id so the validator reads
-                # the on-disk contract version.
                 # FAR-902: collect repair stats for the enforcement record.
                 _val_outcome, _val_errors, _ = _validate_against_schema(
                     output_json,
@@ -11228,8 +11437,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     schema_id=schema_id,
                     schema_version=schema_version,
                     _repair_invoke_fn=_sandbox_repair_invoke_fn,
-                    schema_dir=_contract_local_tmp,
-                    node_id=node_id,
                     _repair_info=_sandbox_repair_info,
                 )
                 # FIX H: log the validation outcome for observability
@@ -11571,44 +11778,100 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     "sandbox_agent.cancel_retention_drain_failed",
                     extra={"node_id": node_id, "run_id": run_id},
                 )
+        # FAR-704: retain cancellation TRIAGE evidence whenever a sandbox
+        # existed. The absolute node-deadline watchdog (pipeline_execution)
+        # cancels this dispatch before output.json is ever read, so no node
+        # envelope reaches run_node_outputs — without this marker the run
+        # detail carries nodes:[] and Mode 2 (healthy agent killed at E2B
+        # endAt) vs Mode 3 (provider op-timeout) cannot be told apart
+        # post-hoc. The marker is the dedicated attempt_key-keyed retention
+        # store (FAR-188); it NEVER rides outputs_json / node_telemetry_json
+        # (the Agent Return Contract columns). The FAR-228 delivery_done
+        # stamp rides the SAME marker when the sentinel was drained (the
+        # marker merge is monotone — a later retry never unsets it).
+        if sandbox is not None:
             _drained_tail = "".join(_drained_chunks)
-            if delivery_sentinel and _source_contains_delivery_sentinel(_drained_tail, delivery_sentinel):
-                _cancel_marker: dict[str, Any] = {
-                    "_modulo_marker": True,
-                    "status": "failed",
-                    "summary": (
-                        "Sandbox agent cancelled after delivery sentinel observed — "
-                        "delivery_done retained (idempotency gate)"
+            # The E2B kill reason only lives in the sandbox logs, and the
+            # logs endpoint only serves live sandboxes — fetch the tail
+            # BEFORE the finally-block kill, while the sandbox may still be
+            # alive (FAR-97/FAR-197 observability, mirrored here). Guarded +
+            # bounded + cancel-safe: a nested cancel or any error degrades
+            # to an empty tail, never blocks the marker write or the
+            # original cancellation's re-raise.
+            _cancel_log_tail = ""
+            try:
+                _cancel_log_tail = await asyncio.wait_for(
+                    asyncio.shield(
+                        _read_log_tail_via_provider(
+                            _sandbox_id,
+                            max_bytes=6000,
+                            provider_type=_resolved_provider,
+                            borrowed_provider=_dispatch_provider,
+                        )
                     ),
-                    "raw_output": _redact_raw_output(_drained_tail)[:_stdout_cap],
-                    "parse_error": "",
-                    "pr_url": _extract_pr_url(_drained_tail),
-                    "exit_code": -1,
-                    "stdout_length": len(_drained_tail),
-                    "stderr_length": 0,
-                    "attempt_key": attempt_key,
-                    "node_id": node_id,
-                    "delivery_done": True,
-                }
-                try:
-                    await _sandbox_cancel_retention_persist(
-                        session_factory=session_factory,
-                        run_id=run_id,
-                        org_id=org_id,
-                        node_id=node_id,
-                        attempt_key=attempt_key,
-                        marker=_cancel_marker,
-                    )
-                # Nested cancellation here is deliberate — idempotency-gate cleanup
-                # must not re-raise early or the delivery-done marker is skipped
-                # (FAR-228 fix); the original cancellation re-raises at line 4566.
-                except asyncio.CancelledError:  # NOSONAR
-                    _uncancel_current_task()
-                except Exception:
-                    _log.exception(
-                        "sandbox_agent.cancel_retention_persist_failed",
-                        extra={"node_id": node_id, "run_id": run_id},
-                    )
+                    timeout=_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT,
+                )
+            # Nested cancellation is deliberate — the triage marker must
+            # still be written; the original cancellation re-raises below.
+            except asyncio.CancelledError:  # NOSONAR
+                _uncancel_current_task()
+            except Exception:
+                _log.exception(
+                    "sandbox_agent.cancel_log_tail_fetch_failed",
+                    extra={"node_id": node_id, "run_id": run_id},
+                )
+            _cancel_sentinel_hit = bool(
+                delivery_sentinel and _source_contains_delivery_sentinel(_drained_tail, delivery_sentinel)
+            )
+            _cancel_no_output_reason = (
+                stall_reason
+                or "Sandbox attempt cancelled before a terminal node envelope was produced "
+                "(node-deadline watchdog, run cancel, or worker shutdown)"
+            )
+            _cancel_marker: dict[str, Any] = {
+                "_modulo_marker": True,
+                "status": "failed",
+                "summary": (
+                    "Sandbox agent cancelled after delivery sentinel observed — "
+                    "delivery_done retained (idempotency gate)"
+                    if _cancel_sentinel_hit
+                    else "Sandbox agent cancelled — triage evidence retained (FAR-704)"
+                ),
+                "raw_output": _redact_raw_output(_drained_tail)[:_stdout_cap],
+                "parse_error": "",
+                "pr_url": _extract_pr_url(_drained_tail),
+                "exit_code": -1,
+                "stdout_length": len(_drained_tail),
+                "stderr_length": 0,
+                "attempt_key": attempt_key,
+                "node_id": node_id,
+                # FAR-704 triage surface: the run detail API projects markers
+                # carrying this flag into RunResponse.deadline_triage.
+                "deadline_triage": True,
+                "no_output_reason": sanitize_error_text(_cancel_no_output_reason),
+                "sandbox_log_tail": sanitize_error_text(_redact_raw_output(_cancel_log_tail)),
+            }
+            if _cancel_sentinel_hit:
+                _cancel_marker["delivery_done"] = True
+            try:
+                await _sandbox_cancel_retention_persist(
+                    session_factory=session_factory,
+                    run_id=run_id,
+                    org_id=org_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                    marker=_cancel_marker,
+                )
+            # Nested cancellation here is deliberate — idempotency-gate cleanup
+            # must not re-raise early or the delivery-done marker is skipped
+            # (FAR-228 fix); the original cancellation re-raises at line 4566.
+            except asyncio.CancelledError:  # NOSONAR
+                _uncancel_current_task()
+            except Exception:
+                _log.exception(
+                    "sandbox_agent.cancel_retention_persist_failed",
+                    extra={"node_id": node_id, "run_id": run_id},
+                )
         raise
     except (SupersededNodeError, SandboxNodeFailedError, ScriptModeError):
         # A6: the retryable/superseded node-failure classes propagate to the
@@ -12406,8 +12669,6 @@ def _validate_against_schema(
     schema_version: int = 0,
     repair_budget_config: Any = None,
     _repair_invoke_fn: Any | None = None,
-    schema_dir: "Path | None" = None,
-    node_id: str | None = None,
     _repair_info: dict[str, int] | None = None,
 ) -> tuple[str, list[dict[str, Any]], Any]:
     """Validate *data* against *schema* using Draft202012Validator.

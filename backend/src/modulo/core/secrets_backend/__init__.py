@@ -16,6 +16,29 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from modulo.core.secrets_backend.references import (
+    SECRET_REF_SCHEME,
+    CredentialReferenceError,
+    is_secret_ref,
+    parse_secret_ref,
+    resolve_credential,
+    resolve_credential_reference,
+)
+
+__all__ = [
+    "DEFAULT_TIMEOUT",
+    "SECRET_REF_SCHEME",
+    "CredentialReferenceError",
+    "SecretsBackend",
+    "create_secrets_backend",
+    "is_secret_ref",
+    "parse_secret_ref",
+    "resolve_credential",
+    "resolve_credential_reference",
+    "run_sync",
+    "validate_key",
+]
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,6 +66,16 @@ class SecretsBackend(ABC):
     All methods are async-safe. Implementations must not log or leak secret
     values in exception messages, tracebacks, or span attributes.
     """
+
+    #: Whether this backend partitions secrets by organisation. The default
+    #: ``FernetSecretsBackend`` overrides this to ``True`` — every read/write is
+    #: scoped by ``secrets.organisation_id``. Externally-hosted backends (Vault,
+    #: AWS Secrets Manager) resolve a GLOBAL key namespace (the same key name is
+    #: the same secret for every organisation) and cannot be re-keyed per-org
+    #: without breaking already-stored secrets, so they keep the ``False``
+    #: default. FAR-1640 uses this flag to fail closed on the credential-
+    #: reference path in a multi-org deployment (see ``references``).
+    organisation_scoped: bool = False
 
     @abstractmethod
     async def get_secret(self, key: str) -> str:

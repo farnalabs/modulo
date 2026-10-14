@@ -114,6 +114,16 @@ class RunDailyFact(OrgScoped):
     # FAR-102 enrichment — stall dimensions + other run facts (migration 0071).
     # All nullable where the source run may not carry the value.
     error_code: Mapped[str | None] = mapped_column(String(255), comment="the stall dimension — from Run.error_code")
+    # FAR-707: the run's terminal classification was ``benign`` (a
+    # business-expected outcome — an explicit per-pipeline benign signature
+    # matched) when this fact was written. The analytics read path drops these
+    # rows from failure rates WITHOUT joining ``runs`` (ADR 020) and the marker
+    # outlives the 90-day run purge. NULL = written before this column existed
+    # or before the run's classification was persisted (raw-SQL terminalizers
+    # are classified by the reconcile sweep AFTER the fact write) — readers
+    # treat NULL as "not benign", i.e. fail-open to the historical counting.
+    # Migration 0296; stamped by ``core.analytics.record_run_facts``.
+    benign: Mapped[bool | None] = mapped_column(Boolean)
     claim_count: Mapped[int | None] = mapped_column(Integer)
     queue_wait_ms: Mapped[int | None] = mapped_column(
         BigInteger, comment="Run.started_at - Run.dispatched_at when both present, else NULL"
@@ -239,6 +249,16 @@ class RunDailyFact(OrgScoped):
         comment=(
             "node-deadline watchdog firings — from Run.node_deadline_watchdog_fired_count (NULL for pre-FAR-1463 facts)"
         ),
+    )
+    # FAR-1175 (ADR 043 S1): the autonomy level the run's HITL gates resolved
+    # under, sourced at fact-write time from the run's most recent
+    # ``run.autonomy_level_applied`` audit event (autonomy-study.md §3.3) so the
+    # analytics surface can bucket by autonomy WITHOUT re-joining the audit
+    # chain. NULL when no autonomy event was recorded (pre-FAR-1175 facts,
+    # runs with no HITL gate, or analytics-only runs). Migration 0295.
+    autonomy_level: Mapped[str | None] = mapped_column(
+        String(30),
+        comment="effective autonomy level applied to the run (from run.autonomy_level_applied; NULL if none)",
     )
 
     team: Mapped["Team | None"] = relationship(foreign_keys=[team_id])

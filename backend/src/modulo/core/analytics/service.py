@@ -88,6 +88,8 @@ _SQL_SET_STATEMENT_TIMEOUT = "SELECT set_config('statement_timeout', :ms, true)"
 _SQL_SET_TIMEZONE_UTC = "SELECT set_config('timezone', 'UTC', true)"
 _ERR_DATABASE_UNAVAILABLE = "Database temporarily unavailable."
 _ERR_RATE_LIMIT_EXCEEDED = "Rate limit exceeded"
+_MSG_MIGRATION_REQUIRED = "Feature is not available. Run database migrations to enable it."
+_MSG_QUERY_TIMEOUT = "query exceeded timeout — reduce the date range"
 
 # Max date range accepted by the bucketed query (matches the old route guard).
 _MAX_QUERY_RANGE_DAYS = 365
@@ -381,13 +383,11 @@ async def _execute_with_guards(
             raise
         except ProgrammingError:
             _log.exception("analytics.query.programming_error", extra={"org_id": str(org_id)})
-            raise AnalyticsMigrationRequiredError(
-                "Feature is not available. Run database migrations to enable it."
-            ) from None
+            raise AnalyticsMigrationRequiredError(_MSG_MIGRATION_REQUIRED) from None
         except DBAPIError as exc:
             if _is_query_canceled(exc):
                 _log.warning("analytics.query.timeout", extra={"org_id": str(org_id)})
-                raise AnalyticsQueryTimeoutError("query exceeded timeout — reduce the date range") from None
+                raise AnalyticsQueryTimeoutError(_MSG_QUERY_TIMEOUT) from None
             _log.exception("analytics.query.db_error", extra={"org_id": str(org_id)})
             raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
         except SQLAlchemyError:
@@ -742,6 +742,16 @@ _EXPORT_COLUMNS: tuple[Any, ...] = (
     # must be able to separate runs whose work happened on the customer's
     # substrate from ones Modulo executed, exactly like the bucketed series.
     RunDailyFact.execution_origin,
+    # FAR-1175 (ADR 043 S1): the effective autonomy level the run resolved
+    # under — an export consumer must be able to bucket autonomous vs
+    # human-reviewed runs without re-joining the audit chain.
+    RunDailyFact.autonomy_level,
+    # FAR-707: the run's terminal classification was ``benign`` (a
+    # business-expected outcome). Exported so an auditor pulling raw facts can
+    # reproduce the failure-rate figures the analytics surfaces report — the
+    # benign rows are excluded there, so the exported flag is what makes the
+    # exclusion auditable rather than invisible.
+    RunDailyFact.benign,
 )
 
 _EXPORT_COLUMN_NAMES: tuple[str, ...] = tuple(c.name for c in _EXPORT_COLUMNS)
@@ -888,13 +898,11 @@ async def export_facts(
             raise
         except ProgrammingError:
             _log.exception("analytics.export.programming_error", extra={"org_id": str(org_id)})
-            raise AnalyticsMigrationRequiredError(
-                "Feature is not available. Run database migrations to enable it."
-            ) from None
+            raise AnalyticsMigrationRequiredError(_MSG_MIGRATION_REQUIRED) from None
         except DBAPIError as exc:
             if _is_query_canceled(exc):
                 _log.warning("analytics.export.timeout", extra={"org_id": str(org_id)})
-                raise AnalyticsQueryTimeoutError("query exceeded timeout — reduce the date range") from None
+                raise AnalyticsQueryTimeoutError(_MSG_QUERY_TIMEOUT) from None
             _log.exception("analytics.export.db_error", extra={"org_id": str(org_id)})
             raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
         except SQLAlchemyError:
@@ -1037,13 +1045,11 @@ async def stream_export_facts(
             raise
         except ProgrammingError:
             _log.exception("analytics.scan.programming_error", extra={"org_id": str(org_id)})
-            raise AnalyticsMigrationRequiredError(
-                "Feature is not available. Run database migrations to enable it."
-            ) from None
+            raise AnalyticsMigrationRequiredError(_MSG_MIGRATION_REQUIRED) from None
         except DBAPIError as exc:
             if _is_query_canceled(exc):
                 _log.warning("analytics.scan.timeout", extra={"org_id": str(org_id)})
-                raise AnalyticsQueryTimeoutError("query exceeded timeout — reduce the date range") from None
+                raise AnalyticsQueryTimeoutError(_MSG_QUERY_TIMEOUT) from None
             _log.exception("analytics.scan.db_error", extra={"org_id": str(org_id)})
             raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
         except SQLAlchemyError:

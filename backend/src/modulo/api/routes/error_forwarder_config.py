@@ -49,6 +49,11 @@ from modulo.db.rls import set_rls_org
 _CODE_ERROR_FORWARDER_MANAGE = "error_forwarder.manage"
 _CODE_ERROR_FORWARDER_CONFIG_TEST = "error_forwarder_config.test_forwarder"
 
+_CODE_ERROR_FORWARDER_CONFIG_LIST_FORWARDERS = "error_forwarder_config.list_forwarders"
+_CODE_ERROR_FORWARDER_CONFIG_CONFIGURE_FORWARDER = "error_forwarder_config.configure_forwarder"
+_CODE_ERROR_FORWARDER_CONFIG_DELETE_FORWARDER = "error_forwarder_config.delete_forwarder"
+_CODE_ERROR_FORWARDER_CONFIG_RESTORE_FORWARDER = "error_forwarder_config.restore_forwarder"
+
 
 _log = logging.getLogger(__name__)
 
@@ -316,14 +321,14 @@ async def list_forwarders(
             )
             existing = {r.forwarder_type: r for r in result.scalars().all()}
     except ProgrammingError as exc:
-        _log.exception("error_forwarder_config.list_forwarders")
+        _log.exception(_CODE_ERROR_FORWARDER_CONFIG_LIST_FORWARDERS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "error_forwarder_config.list_forwarders")
-        _log.exception("error_forwarder_config.list_forwarders")
+        raise_session_contract_error(exc, _CODE_ERROR_FORWARDER_CONFIG_LIST_FORWARDERS)
+        _log.exception(_CODE_ERROR_FORWARDER_CONFIG_LIST_FORWARDERS)
         _log.warning("error_tracking.list_forwarders_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -400,14 +405,14 @@ async def configure_forwarder(
             cfg.updated_at = datetime.now(UTC)
             await session.flush()
     except ProgrammingError as exc:
-        _log.exception("error_forwarder_config.configure_forwarder")
+        _log.exception(_CODE_ERROR_FORWARDER_CONFIG_CONFIGURE_FORWARDER)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "error_forwarder_config.configure_forwarder")
-        _log.exception("error_forwarder_config.configure_forwarder")
+        raise_session_contract_error(exc, _CODE_ERROR_FORWARDER_CONFIG_CONFIGURE_FORWARDER)
+        _log.exception(_CODE_ERROR_FORWARDER_CONFIG_CONFIGURE_FORWARDER)
         _log.warning("error_tracking.configure_forwarder_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -533,14 +538,14 @@ async def delete_forwarder(
             )
             deleted = result.scalar_one_or_none()
     except ProgrammingError as exc:
-        _log.exception("error_forwarder_config.delete_forwarder")
+        _log.exception(_CODE_ERROR_FORWARDER_CONFIG_DELETE_FORWARDER)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "error_forwarder_config.delete_forwarder")
-        _log.exception("error_forwarder_config.delete_forwarder")
+        raise_session_contract_error(exc, _CODE_ERROR_FORWARDER_CONFIG_DELETE_FORWARDER)
+        _log.exception(_CODE_ERROR_FORWARDER_CONFIG_DELETE_FORWARDER)
         _log.warning("error_tracking.delete_forwarder_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -594,14 +599,14 @@ async def restore_forwarder(
             )
             cfg = result.scalar_one_or_none()
     except ProgrammingError as exc:
-        _log.exception("error_forwarder_config.restore_forwarder")
+        _log.exception(_CODE_ERROR_FORWARDER_CONFIG_RESTORE_FORWARDER)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "error_forwarder_config.restore_forwarder")
-        _log.exception("error_forwarder_config.restore_forwarder")
+        raise_session_contract_error(exc, _CODE_ERROR_FORWARDER_CONFIG_RESTORE_FORWARDER)
+        _log.exception(_CODE_ERROR_FORWARDER_CONFIG_RESTORE_FORWARDER)
         _log.warning("error_tracking.restore_forwarder_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

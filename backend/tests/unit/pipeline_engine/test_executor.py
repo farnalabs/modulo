@@ -40,6 +40,7 @@ from modulo.core.pipeline_engine.runtime_retry import (
     COMPENSATION_FAILED_CODE,
     CompensationFailedError,
 )
+from modulo.core.run_context.autonomy import PIPELINE_EARNED_AT_START_KEY
 from modulo.db.crud.run import SandboxConcurrencyLimit
 from modulo.otel_bridge import trace_id_for_thread
 from tests.unit.api.mock_session import make_empty_execute_result
@@ -1440,6 +1441,199 @@ async def test_execute_seeds_state_with_run_context():
     assert captured_state["run_context"]["cancelled"] is False
     assert captured_state["run_context"]["input"] == {"task": "do it"}
     assert not captured_state["artifacts"]
+
+
+# ---------------------------------------------------------------------------
+# FAR-1175 S1 — earned autonomy pinned at run start
+# ---------------------------------------------------------------------------
+
+
+def _pipeline_with_earned(level: str | None) -> MagicMock:
+    pipeline = MagicMock()
+    pipeline.earned_autonomy_level = level
+    return pipeline
+
+
+def _earned_executor(
+    monkeypatch: pytest.MonkeyPatch, *, live: str | None, error: Exception | None = None
+) -> PipelineExecutor:
+    """Build an executor whose ``_resolve_earned_at_start`` live read is wired.
+
+    Patches the lazily-imported crud/RLS seams the method uses.
+    """
+    if error is not None:
+        monkeypatch.setattr(
+            "modulo.db.crud.pipeline.get_pipeline",
+            AsyncMock(side_effect=error),
+        )
+    else:
+        monkeypatch.setattr(
+            "modulo.db.crud.pipeline.get_pipeline",
+            AsyncMock(return_value=_pipeline_with_earned(live)),
+        )
+    monkeypatch.setattr("modulo.db.rls.set_rls_org", AsyncMock())
+    executor = PipelineExecutor(MagicMock())
+    executor._session_factory = _make_session_factory(_make_session(_make_snapshot()))
+    return executor
+
+
+def _earned_snapshot(*, default: str | None, ceiling: str | None) -> MagicMock:
+    snap = _make_snapshot()
+    snap.default_autonomy_level = default
+    snap.max_autonomy_level = ceiling
+    return snap
+
+
+async def test_resolve_earned_at_start_prefers_live_level(monkeypatch: pytest.MonkeyPatch) -> None:
+    executor = _earned_executor(monkeypatch, live="notify_on_complete")
+    snap = _earned_snapshot(default="manual_approval", ceiling=None)
+
+    result = await executor._resolve_earned_at_start(uuid.uuid4(), uuid.uuid4(), snap)
+
+    assert result == "notify_on_complete"
+
+
+async def test_resolve_earned_at_start_falls_back_to_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A never-promoted pipeline (NULL earned column) pins its default."""
+    executor = _earned_executor(monkeypatch, live=None)
+    snap = _earned_snapshot(default="notify_on_complete", ceiling=None)
+
+    result = await executor._resolve_earned_at_start(uuid.uuid4(), uuid.uuid4(), snap)
+
+    assert result == "notify_on_complete"
+
+
+async def test_resolve_earned_at_start_clamps_to_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A live earned level above the snapshot ceiling is clamped down (levels
+    are ranked, never compared as strings)."""
+    executor = _earned_executor(monkeypatch, live="fully_autonomous")
+    snap = _earned_snapshot(default="manual_approval", ceiling="notify_on_complete")
+
+    result = await executor._resolve_earned_at_start(uuid.uuid4(), uuid.uuid4(), snap)
+
+    assert result == "notify_on_complete"
+
+
+async def test_resolve_earned_at_start_returns_none_without_any_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executor = _earned_executor(monkeypatch, live=None)
+    snap = _earned_snapshot(default=None, ceiling=None)
+
+    result = await executor._resolve_earned_at_start(uuid.uuid4(), uuid.uuid4(), snap)
+
+    assert result is None
+
+
+async def test_resolve_earned_at_start_read_failure_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient read failure must NOT seed a pin of ``None`` (which would let
+    a later live promotion loosen the run) — it degrades to the pinned default."""
+    executor = _earned_executor(monkeypatch, live=None, error=RuntimeError("db down"))
+    snap = _earned_snapshot(default="notify_on_complete", ceiling=None)
+
+    result = await executor._resolve_earned_at_start(uuid.uuid4(), uuid.uuid4(), snap)
+
+    assert result == "notify_on_complete"
+
+
+async def test_resolve_earned_at_start_invalid_live_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unparseable earned value (the DB CHECK should prevent this) is not
+    seeded as a pin."""
+    executor = _earned_executor(monkeypatch, live="bogus_level")
+    snap = _earned_snapshot(default="manual_approval", ceiling=None)
+
+    result = await executor._resolve_earned_at_start(uuid.uuid4(), uuid.uuid4(), snap)
+
+    assert result is None
+
+
+async def test_resolve_earned_at_start_cancellation_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executor = _earned_executor(monkeypatch, live=None, error=asyncio.CancelledError())
+    snap = _earned_snapshot(default="manual_approval", ceiling=None)
+
+    with pytest.raises(asyncio.CancelledError):
+        await executor._resolve_earned_at_start(uuid.uuid4(), uuid.uuid4(), snap)
+
+
+async def test_resolve_earned_at_start_unparseable_ceiling_imposes_no_clamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stored ceiling the enum cannot parse must not clamp (falls back to the
+    base) — mirrors runtime resolution's lenient ceiling handling."""
+    executor = _earned_executor(monkeypatch, live="notify_on_complete")
+    snap = _earned_snapshot(default="manual_approval", ceiling="banana")
+
+    result = await executor._resolve_earned_at_start(uuid.uuid4(), uuid.uuid4(), snap)
+
+    assert result == "notify_on_complete"
+
+
+async def test_resolve_earned_at_start_missing_pipeline_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No pipeline row (deleted between scheduling and execution) reads as no
+    live earned level, so the run pins the default rather than nothing."""
+    monkeypatch.setattr("modulo.db.crud.pipeline.get_pipeline", AsyncMock(return_value=None))
+    monkeypatch.setattr("modulo.db.rls.set_rls_org", AsyncMock())
+    executor = PipelineExecutor(MagicMock())
+    executor._session_factory = _make_session_factory(_make_session(_make_snapshot()))
+    snap = _earned_snapshot(default="notify_on_complete", ceiling=None)
+
+    result = await executor._resolve_earned_at_start(uuid.uuid4(), uuid.uuid4(), snap)
+
+    assert result == "notify_on_complete"
+
+
+async def test_execute_seeds_pinned_earned_autonomy_at_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """execute() pins the live earned level into the run's initial state as
+    ``_pipeline_earned_at_start`` — the value the gate combines (min) with the
+    live level so a promotion never loosens an in-flight run."""
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="complete")
+    snapshot = _make_snapshot()
+    snapshot.default_autonomy_level = "manual_approval"
+    snapshot.max_autonomy_level = None
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    captured_state: dict[str, Any] = {}
+
+    async def _capture_stream(state: Any, config: Any, *, version: str = "v1") -> Any:
+        captured_state.update(state)
+        return
+        yield  # pragma: no cover
+
+    compiled = MagicMock()
+    compiled.astream_events = _capture_stream
+
+    monkeypatch.setattr(
+        "modulo.db.crud.pipeline.get_pipeline",
+        AsyncMock(return_value=_pipeline_with_earned("notify_on_complete")),
+    )
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={"task": "x"})
+
+    assert captured_state["run_context"][PIPELINE_EARNED_AT_START_KEY] == "notify_on_complete"
 
 
 async def test_execute_fires_on_first_progress_once():
@@ -3851,11 +4045,11 @@ def _finalize_args(run_id: uuid.UUID, org_id: uuid.UUID) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_revoke_run_api_key_helper_uses_session_factory():
-    """_revoke_run_api_key opens a session, sets RLS, and calls revoke_run_api_key.
+async def test_seal_run_teardown_helper_calls_seal():
+    """_seal_run_teardown delegates to run_teardown.seal_run_teardown.
 
-    A failure inside the helper is swallowed (failure-isolated) — it never
-    propagates to the caller.
+    The seal itself owns the revoke→destroy→fact ordering (FAR-1690 A3); the
+    executor hook only supplies the session factory and isolates failures.
     """
     session = AsyncMock(spec=AsyncSession)
     session.begin = MagicMock(return_value=_begin_cm())
@@ -3865,20 +4059,26 @@ async def test_revoke_run_api_key_helper_uses_session_factory():
 
     run_id = uuid.uuid4()
     org_id = uuid.uuid4()
-    with patch("modulo.auth.api_key.revoke_run_api_key", new=AsyncMock(return_value=1)) as revoke_mock:
-        await executor._revoke_run_api_key(run_id=run_id, org_id=org_id)
+    with patch("modulo.core.run_teardown.seal_run_teardown", new=AsyncMock()) as seal_mock:
+        await executor._seal_run_teardown(run_id=run_id, org_id=org_id)
 
-    revoke_mock.assert_awaited_once()
-    assert revoke_mock.await_args.kwargs["run_id"] == run_id
-    assert revoke_mock.await_args.kwargs["org_id"] == org_id
+    seal_mock.assert_awaited_once()
+    assert seal_mock.await_args.kwargs["run_id"] == run_id
+    assert seal_mock.await_args.kwargs["org_id"] == org_id
+    assert seal_mock.await_args.kwargs["session_factory"] is factory
 
 
 @pytest.mark.asyncio
-async def test_revoke_run_api_key_helper_failure_is_swallowed():
-    """A revocation failure is logged and swallowed — it never propagates."""
+async def test_seal_run_teardown_helper_propagates_for_the_call_site_to_isolate():
+    """_seal_run_teardown does NOT swallow: isolation is the call site's job.
+
+    ``_finalize_run_after_stream`` wraps the hook in try/except (pinned by
+    ``test_finalize_run_after_stream_seal_failure_is_isolated``); keeping the
+    hook itself plain means a seal failure is never silently double-swallowed.
+    """
 
     async def _raise_boom(*_args: Any, **_kwargs: Any) -> None:
-        raise RuntimeError("revoke boom")
+        raise RuntimeError("seal boom")
 
     session = AsyncMock(spec=AsyncSession)
     session.begin = MagicMock(return_value=_begin_cm())
@@ -3886,13 +4086,16 @@ async def test_revoke_run_api_key_helper_failure_is_swallowed():
     executor = PipelineExecutor(MagicMock())
     executor._session_factory = factory  # type: ignore[assignment]
 
-    with patch("modulo.auth.api_key.revoke_run_api_key", new=_raise_boom):
-        await executor._revoke_run_api_key(run_id=uuid.uuid4(), org_id=uuid.uuid4())
+    with (
+        patch("modulo.core.run_teardown.seal_run_teardown", new=_raise_boom),
+        pytest.raises(RuntimeError, match="seal boom"),
+    ):
+        await executor._seal_run_teardown(run_id=uuid.uuid4(), org_id=uuid.uuid4())
 
 
 @pytest.mark.asyncio
-async def test_finalize_run_after_stream_revokes_run_api_key():
-    """Finalization revokes the per-run runner-role API key (FAR-296 Phase 3b)."""
+async def test_finalize_run_after_stream_seals_run_teardown():
+    """Finalization seals the run's teardown (FAR-1690 A3 joint revoke)."""
     run_id = uuid.uuid4()
     org_id = uuid.uuid4()
     session = AsyncMock(spec=AsyncSession)
@@ -3904,24 +4107,24 @@ async def test_finalize_run_after_stream_revokes_run_api_key():
     with (
         patch.object(executor, "_compute_run_work_intact", return_value=None),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
-        patch.object(executor, "_revoke_run_api_key", new=AsyncMock()) as revoke_mock,
+        patch.object(executor, "_seal_run_teardown", new=AsyncMock()) as seal_mock,
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=MagicMock())),
     ):
         final_run = await executor._finalize_run_after_stream(**_finalize_args(run_id, org_id))
 
     assert final_run is not None
-    revoke_mock.assert_awaited_once()
-    assert revoke_mock.await_args.kwargs["run_id"] == run_id
-    assert revoke_mock.await_args.kwargs["org_id"] == org_id
+    seal_mock.assert_awaited_once()
+    assert seal_mock.await_args.kwargs["run_id"] == run_id
+    assert seal_mock.await_args.kwargs["org_id"] == org_id
 
 
 @pytest.mark.asyncio
-async def test_finalize_run_after_stream_revocation_failure_is_isolated():
-    """A revocation failure never crashes finalization — the run still returns."""
+async def test_finalize_run_after_stream_seal_failure_is_isolated():
+    """A seal failure never crashes finalization — the run still returns."""
 
     async def _raise_boom(*_args: Any, **_kwargs: Any) -> None:
-        raise RuntimeError("revoke boom")
+        raise RuntimeError("seal boom")
 
     run_id = uuid.uuid4()
     org_id = uuid.uuid4()
@@ -3934,7 +4137,7 @@ async def test_finalize_run_after_stream_revocation_failure_is_isolated():
     with (
         patch.object(executor, "_compute_run_work_intact", return_value=None),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
-        patch.object(executor, "_revoke_run_api_key", new=_raise_boom),
+        patch.object(executor, "_seal_run_teardown", new=_raise_boom),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=MagicMock())),
     ):
@@ -3994,7 +4197,7 @@ async def _finalize_with_patched_tail(
     with (
         patch.object(executor, "_compute_run_work_intact", return_value=None),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
-        patch.object(executor, "_revoke_run_api_key", new=AsyncMock()),
+        patch.object(executor, "_seal_run_teardown", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=MagicMock())),
     ):
@@ -4193,7 +4396,7 @@ async def test_finalize_downgrades_stored_telemetry_failure_from_prior_segment_o
     with (
         patch.object(executor, "_compute_run_work_intact", return_value=None),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
-        patch.object(executor, "_revoke_run_api_key", new=AsyncMock()),
+        patch.object(executor, "_seal_run_teardown", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=stored_run)),
     ):
@@ -4223,7 +4426,7 @@ async def test_finalize_downgrades_stored_schema_validation_failure():
     with (
         patch.object(executor, "_compute_run_work_intact", return_value=None),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
-        patch.object(executor, "_revoke_run_api_key", new=AsyncMock()),
+        patch.object(executor, "_seal_run_teardown", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=stored_run)),
     ):
@@ -4263,7 +4466,7 @@ async def test_finalize_keeps_complete_for_failed_status_without_synthetic_marke
     with (
         patch.object(executor, "_compute_run_work_intact", return_value=None),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
-        patch.object(executor, "_revoke_run_api_key", new=AsyncMock()),
+        patch.object(executor, "_seal_run_teardown", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=stored_run)),
     ):
@@ -4289,7 +4492,7 @@ async def test_finalize_downgrade_checks_live_and_stored_views_without_clobberin
     with (
         patch.object(executor, "_compute_run_work_intact", return_value=None),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
-        patch.object(executor, "_revoke_run_api_key", new=AsyncMock()),
+        patch.object(executor, "_seal_run_teardown", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=stored_run)),
     ):
@@ -4326,7 +4529,7 @@ async def test_finalize_keeps_complete_for_pre_p1b_legacy_row_without_marker():
     with (
         patch.object(executor, "_compute_run_work_intact", return_value=None),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
-        patch.object(executor, "_revoke_run_api_key", new=AsyncMock()),
+        patch.object(executor, "_seal_run_teardown", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=stored_run)),
     ):
@@ -4372,7 +4575,7 @@ async def test_finalize_stored_output_read_failure_falls_back_to_live_scan():
     with (
         patch.object(executor, "_compute_run_work_intact", return_value=None),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
-        patch.object(executor, "_revoke_run_api_key", new=AsyncMock()),
+        patch.object(executor, "_seal_run_teardown", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch("modulo.core.pipeline_engine.executor.get_run", new=get_run_mock),
     ):
@@ -4397,7 +4600,7 @@ async def test_finalize_skips_stored_output_read_when_not_complete():
     with (
         patch.object(executor, "_compute_run_work_intact", return_value=None),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
-        patch.object(executor, "_revoke_run_api_key", new=AsyncMock()),
+        patch.object(executor, "_seal_run_teardown", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=MagicMock())) as get_run_mock,
     ):

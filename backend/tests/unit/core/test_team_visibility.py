@@ -1,4 +1,4 @@
-"""Unit tests for cross-team binding enforcement (PRD §9.3, FAR-1515).
+"""Unit tests for cross-team binding enforcement (PRD §9.3, FAR-1515, FAR-1618).
 
 Covers both resource types that the pipeline-save command layer gates on:
 team-private connector instances and team-private model backends. The two
@@ -7,12 +7,13 @@ each half is exercised end-to-end (pure rule -> detail builder -> async DB
 fetch) to prove the shared abstraction is not only tested through the
 connector half.
 
-The connector rule has TWO directions (FAR-1515): a team-private connector
-reaching outside its team, and a team pipeline pinning an ORG-ONLY connector
-(the save-time mirror of the executor's team-scoped invocation gate). The
-model-backend rule stays team-private-only on purpose — ModelBackendHub has no
-invocation-time visibility gate to mirror — so its direction matrix is
-asserted unchanged here.
+The rule has ONE direction: a team-PRIVATE row is only usable by its owner
+team's pipeline (a different team, or an org pipeline with no owner team, is
+a mismatch), while an ORG-visibility row is shared across the organisation
+and never mismatches (FAR-1618 removed the reverse direction FAR-1515 had
+briefly added — a team pipeline pinning an org connector — together with the
+FAR-516 run-gate it mirrored). The connector and model-backend predicates now
+say exactly the same thing, so both direction matrices are asserted here.
 """
 
 import uuid
@@ -91,12 +92,13 @@ def _model_backend(*, visibility: str, owner_team_id: uuid.UUID | None, name: st
         ("org", None, None, False),
         ("org", _TEAM_A, None, False),
         (None, None, None, False),
-        # FAR-1515: a TEAM pipeline pinning an ORG-ONLY connector is a mismatch
-        # (every run would be team-scoped and rejected at the connector gate).
-        ("org", None, _TEAM_A, True),
-        ("org", _TEAM_A, _TEAM_B, True),
-        (None, _TEAM_A, _TEAM_B, True),
-        (None, None, _TEAM_A, True),
+        # FAR-1618: an ORG-visibility connector is shared across the org, so a
+        # TEAM pipeline binding it is NOT a mismatch (reverts FAR-1515's
+        # reverse direction and the FAR-516 run-gate it mirrored).
+        ("org", None, _TEAM_A, False),
+        ("org", _TEAM_A, _TEAM_B, False),
+        (None, _TEAM_A, _TEAM_B, False),
+        (None, None, _TEAM_A, False),
     ],
     ids=[
         "team_conn_other_team",
@@ -121,16 +123,19 @@ def test_connector_team_mismatch_rule(
     assert connector_team_mismatch(visibility, connector_team, pipeline_team) is expected
 
 
-def test_team_pipeline_rejects_an_org_only_connector() -> None:
-    """FAR-1515: the exact gap — this used to save a graph that could never run.
+def test_team_pipeline_accepts_an_org_visibility_connector() -> None:
+    """FAR-1618: the exact gap this reverses — a team pipeline may pin an org connector.
 
-    The executor sets ``request_visibility="team"`` for a run with an owner
-    team, and ``ConnectorACL.check`` fails closed on team-scoped access to an
-    org-only connector, so a save accepted here produced a dead-on-arrival
-    graph. Without the new check both assertions below return False.
+    An org-visibility connector is shared across the organisation (teams are a
+    visibility grouping, not a credential trust boundary), so binding it to a
+    team pipeline is NOT a mismatch — neither at save time nor at run time,
+    the FAR-516 run-gate having been removed with this rule. Before FAR-1618
+    both assertions below returned True (the FAR-1515 reverse direction).
     """
-    assert connector_team_mismatch("org", None, _TEAM_A) is True
-    assert connector_team_mismatch(None, None, _TEAM_A) is True
+    assert connector_team_mismatch("org", None, _TEAM_A) is False
+    assert connector_team_mismatch(None, None, _TEAM_A) is False
+    # ...and the same is true whatever team owns the org-visibility connector.
+    assert connector_team_mismatch("org", _TEAM_B, _TEAM_A) is False
 
 
 def test_org_pipeline_still_accepts_an_org_connector() -> None:
@@ -151,7 +156,6 @@ def test_detail_contains_named_error() -> None:
         connector_name="eng-db",
         connector_owner_team_id=_TEAM_A,
         pipeline_owner_team_id=_TEAM_B,
-        connector_visibility="team",
         node_id=_NODE_ID,
     )
     detail = connector_team_mismatch_detail([mismatch])
@@ -167,7 +171,6 @@ def test_detail_joins_multiple_mismatches() -> None:
         connector_name="db-a",
         connector_owner_team_id=_TEAM_A,
         pipeline_owner_team_id=_TEAM_B,
-        connector_visibility="team",
         node_id=_NODE_ID,
     )
     m2 = ConnectorTeamMismatch(
@@ -175,7 +178,6 @@ def test_detail_joins_multiple_mismatches() -> None:
         connector_name="db-b",
         connector_owner_team_id=_TEAM_B,
         pipeline_owner_team_id=_TEAM_A,
-        connector_visibility="team",
         node_id="node-2",
     )
     detail = connector_team_mismatch_detail([m1, m2])
@@ -188,29 +190,30 @@ def test_detail_joins_multiple_mismatches() -> None:
     assert "; " in detail
 
 
-def test_org_only_detail_names_the_fix() -> None:
-    """FAR-1515: the org-only case must not claim the connector is team-private.
+def test_detail_builder_has_no_org_only_branch() -> None:
+    """FAR-1618: the org-only message branch was removed with the rule it served.
 
-    The detail is the actionable half of the 409 — it has to say what the
-    operator should actually do (flip to ``team`` or duplicate), not describe
-    a state the connector is not in.
+    An org-visibility connector never mismatches, and (since the field's
+    removal) a ``ConnectorTeamMismatch`` cannot even carry a visibility any
+    more — so the only message the builder can render is the team-private one.
+    This pins both halves: the vestigial field cannot come back silently, and
+    the removed "is org-only / flip the connector to `team`" text stays gone.
     """
     mismatch = ConnectorTeamMismatch(
         connector_id=uuid.uuid4(),
         connector_name="shared-ci",
         connector_owner_team_id=None,
         pipeline_owner_team_id=_TEAM_A,
-        connector_visibility="org",
         node_id=_NODE_ID,
     )
+    assert not hasattr(mismatch, "connector_visibility")
     detail = connector_team_mismatch_detail([mismatch])
     assert detail.startswith(CONNECTOR_TEAM_MISMATCH)
     assert "shared-ci" in detail
-    assert "is org-only" in detail
-    assert "is team-private" not in detail
-    assert str(_TEAM_A) in detail
-    assert "flip the connector to `team`" in detail
-    assert "duplicate it" in detail
+    assert "is team-private" in detail
+    assert "is org-only" not in detail
+    assert "flip the connector to `team`" not in detail
+    assert "duplicate it" not in detail
 
 
 # ---------------------------------------------------------------------------
@@ -282,28 +285,29 @@ async def test_org_connector_is_allowed_on_an_org_pipeline() -> None:
 
 
 @pytest.mark.asyncio
-async def test_org_connector_on_a_team_pipeline_returns_mismatch() -> None:
-    """FAR-1515: team pipeline + org-only connector is now a named mismatch.
+async def test_org_connector_on_a_team_pipeline_is_allowed() -> None:
+    """FAR-1618: team pipeline + org-visibility connector is NOT a mismatch.
 
-    Fails without the new check: ``connector_team_mismatch`` returned False
-    for any non-team connector, so this row used to pass the save gate while
-    every run was rejected at the connector gate.
+    Reverses FAR-1515's reverse direction: an org-visibility connector is
+    shared across the organisation, so the save gate finds nothing to refuse.
+    Before FAR-1618 this returned exactly one mismatch (and its 409 detail
+    named the removed "flip the connector to `team`" fix).
     """
     conn = _connector(visibility="org", owner_team_id=None, name="shared")
     bindings = [{"node_id": _NODE_ID, "connector_instance_id": str(conn.id)}]
     session = _mock_session([conn])
     mismatches = await find_connector_team_mismatches(session, _ORG_ID, _TEAM_A, bindings)
-    assert len(mismatches) == 1
-    assert mismatches[0].connector_id == conn.id
-    assert mismatches[0].connector_name == "shared"
-    assert mismatches[0].connector_visibility == "org"
-    assert mismatches[0].connector_owner_team_id is None
-    assert mismatches[0].pipeline_owner_team_id == _TEAM_A
-    assert mismatches[0].node_id == _NODE_ID
-    detail = connector_team_mismatch_detail(mismatches)
-    assert detail.startswith(CONNECTOR_TEAM_MISMATCH)
-    assert "is org-only" in detail
-    assert "flip the connector to `team`" in detail
+    assert not mismatches
+
+
+@pytest.mark.asyncio
+async def test_org_connector_owned_by_another_team_is_allowed() -> None:
+    """FAR-1618: ownership never makes an org-visibility connector team-private."""
+    conn = _connector(visibility="org", owner_team_id=_TEAM_B, name="shared")
+    bindings = [{"node_id": _NODE_ID, "connector_instance_id": str(conn.id)}]
+    session = _mock_session([conn])
+    mismatches = await find_connector_team_mismatches(session, _ORG_ID, _TEAM_A, bindings)
+    assert not mismatches
 
 
 @pytest.mark.asyncio
@@ -434,10 +438,13 @@ async def test_invalid_binding_ids_are_ignored() -> None:
 # ---------------------------------------------------------------------------
 # model_backend_team_mismatch (pure rule, PRD §9.3 mirror of the connector rule)
 #
-# Deliberately NOT widened to the org-only case (FAR-1515 parity finding):
-# ModelBackendHub resolves a pin with hub.get(backend_id) and never consults
-# visibility, so a save-time rejection would refuse a graph the run accepts.
-# The rows below pin that the direction matrix is UNCHANGED.
+# The two predicates now say the same thing (FAR-1618 restated the parity
+# note): an org-visibility row never mismatches, a team-private row
+# mismatches every pipeline outside its owner team. ModelBackendHub resolves
+# a pin with hub.get(backend_id) and never consults visibility — and after
+# FAR-1618 neither does the connector hub — so neither rule has an
+# invocation-time counterpart to mirror. The rows below pin that the
+# model-backend direction matrix is UNCHANGED by this ticket.
 # ---------------------------------------------------------------------------
 
 

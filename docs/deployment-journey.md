@@ -20,6 +20,10 @@ codebase, same Docker images, same RuntimeProvider ABC.
 | SQLite mode | Python 3.12, `uv` | Set `MODULO_DB=sqlite`, run `uv run uvicorn modulo.api.main:app` | `LocalRuntimeProvider` |
 | Full stack with Docker | Docker Compose | `docker compose -f docker-compose.local.yml --profile observability up -d` | `LocalRuntimeProvider` |
 
+SQLite removes the separate PostgreSQL service, but it does not remove the Redis
+requirement. Start Redis and both SAQ workers before running pipelines or cron and
+polling triggers; the API refuses to boot when `REDIS_URL` is empty.
+
 For a full walkthrough, see `docs/quickstart.md` and `AGENTS.md` §Local Development Setup.
 
 ### Limits

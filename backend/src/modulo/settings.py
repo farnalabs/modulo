@@ -179,7 +179,7 @@ class Settings(BaseSettings):
     # ADR 005: single-org invariant for self-hosted. When False (default),
     # org creation is blocked, org-slug login is rejected, and the login-context
     # endpoint always reports single-org. Set MODULO_MULTI_ORG_ENABLED=true to
-    # enable multi-org behaviour (reserved for future FarnaLabs SaaS).
+    # enable multi-org behaviour (reserved for future multi-organisation deployments).
     modulo_multi_org_enabled: bool = Field(False)
 
     # Demo auto-login experience (FAR-535). All three must be set — MODULO_DEMO_ENABLED
@@ -223,6 +223,19 @@ class Settings(BaseSettings):
     # webhook (FAR-179). Empty (default) disables issuance — signing fails
     # closed until the operator configures it.
     modulo_license_private_key: str = Field(default="", repr=False)
+
+    # Offline-verifiable evidence (FAR-1697). Ed25519 private key (PEM) that
+    # signs the compliance export manifest, so a third party holding only the
+    # artefact + the published public key can verify authorship, re-verify the
+    # embedded audit chain and re-derive every derived value. The matching
+    # public key is derived and published via the admin verification-key
+    # endpoint and embedded in each pack. Empty (default) disables signed
+    # evidence - signing fails closed until the operator configures it.
+    # repr=False so the private key never leaks into logs/settings dumps.
+    modulo_evidence_signing_key: str = Field(default="", repr=False)
+    # Human-readable identity stamped into the signed manifest as the exporter.
+    # Empty (default) falls back to "modulo". Never a credential.
+    modulo_evidence_exporter_identity: str = Field("")
 
     # Stripe billing — purchase fulfilment webhook (FAR-178). Empty defaults
     # keep the app bootable without Stripe configured; when both keys are set,
@@ -411,6 +424,28 @@ class Settings(BaseSettings):
     # Per-run execution ceiling for SAQ execute_run (dispatch.py): the job must
     # reach a terminal state within this budget or the worker fails it.
     saq_run_timeout: int = Field(default=7200, alias="SAQ_RUN_TIMEOUT", ge=300, le=86400)
+    # FAR-1715: age bound (minutes) past ``runs.started_at`` at which a
+    # ``dispatcher='saq'`` run with ZERO node progress is terminalised — the
+    # dispatcher_reconcile nodeless router / mid-graph age gate AND the
+    # independent stale_run_recovery zero-progress branch, which share this
+    # ONE knob. UNSET (the default) keeps the pre-FAR-1715 bound exactly:
+    # cron_helpers derives ``max(SAQ_RUN_TIMEOUT // 60, 120) + 15`` (135 min at
+    # the shipped 7200s) when the field is None, so the default behaviour is
+    # unchanged. An EXPLICIT pin is validated by
+    # ``_saq_zero_progress_max_age_invariant`` below: it must cover the worst
+    # window of EVERY consumer — both the zero-progress consumers' pre-node
+    # window (``saq_setup_grace_seconds`` + ``MAX_NODE_TIMEOUT_SECONDS``) and
+    # the mid-graph age gate's floor (a run may legitimately execute up to
+    # ``SAQ_RUN_TIMEOUT``, floored at 2h, plus a 15-min skew — 135 min at the
+    # shipped defaults). So the bound can never be pinned low enough to kill a
+    # legitimately slow-starting run (run 32420's first node started at 1h43m
+    # — FAR-1680 P0 measurement) OR a still-progressing mid-graph run (a pin
+    # in [65, 134] would drop the mid-graph gate below the maximum legitimate
+    # run duration and falsely fail a live run ``no_progress`` — FAR-1715
+    # pre-PR QA M1).
+    saq_zero_progress_max_age_minutes: int | None = Field(
+        default=None, alias="SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES", ge=1, le=10080
+    )
     # Per-claim cap on SAQ claim attempts for dispatcher='saq' runs (F3a).
     # Single source of truth (retro item 9): execute and resume claims in
     # pipeline_execution resolve this value via _resolve_claim_cap; cron_helpers
@@ -622,15 +657,18 @@ class Settings(BaseSettings):
     # minutes is a claimed-but-never-executed zombie (the execute_run watchdog
     # normally fails it at SAQ_SETUP_GRACE_SECONDS; this branch catches the case
     # where the worker process itself is wedged and cannot run the watchdog).
-    # MUST exceed the pipeline's max node timeout so a legitimate long first
-    # node (which writes its first checkpoint only after completing) is never
-    # failed. Default 35 min > the 1800s node timeout used by agent pipelines
-    # (5 min margin for graph compile + reconcile tick cadence). Reduced from
-    # 45 min by FAR-199: a wedged worker fleet left claimed-but-nodeless runs
-    # 'running' for the whole window (observed executor_stalled /
-    # never_dispatched runs sitting 45-70 min before terminalization); 35 min
-    # bounds that accumulation while staying above the max node timeout so a
-    # slow-but-healthy first node is never false-failed. Tunable per deploy.
+    # FAR-1740: this is now only the FLOOR — the effective window is derived
+    # PER-PIPELINE from the pipeline's longest node ``timeout_seconds`` as
+    # ``ceil(max_node_timeout/60) + 5`` minutes, clamped to
+    # ``[saq_claimed_nodeless_minutes, 1440]`` (cron_helpers
+    # ``pipeline_nodeless_window_minutes``), so a 3300s-node pipeline gets a
+    # 60-minute window and a slow-but-healthy first node is never false-failed.
+    # Default 35 min keeps the historical behaviour for the 1800s-node agent
+    # pipelines exactly (5 min margin for graph compile + reconcile tick
+    # cadence). Reduced from 45 min by FAR-199: a wedged worker fleet left
+    # claimed-but-nodeless runs 'running' for the whole window (observed
+    # executor_stalled / never_dispatched runs sitting 45-70 min before
+    # terminalization); 35 min bounds that accumulation. Tunable per deploy.
     saq_claimed_nodeless_minutes: int = Field(default=35, alias="SAQ_CLAIMED_NODELESS_MINUTES", ge=5, le=1440)
     # FAR-873: early-detect window for claimed-but-nodeless zombies. A SAQ run
     # that has been 'running' with a FRESH heartbeat but ZERO progress after
@@ -1038,6 +1076,15 @@ class Settings(BaseSettings):
     # settings can override this per-organisation via the admin email-settings API.
     smtp_timeout: int = Field(30, ge=1, le=120)
 
+    # Guardrail destroy-redaction pepper (FAR-209 Track B). The keyed secret
+    # the ``destroy`` redaction mode HMACs its replacement tokens with. Empty
+    # (default) means unset: a guardrail with a destroy-mode redaction rule
+    # then fails CLOSED at the edge (GuardrailRedactionMechanismError ->
+    # terminal block) — never an unredacted persist, never a masks-only
+    # fallback. Rotate via env (GUARDRAIL_DESTROY_PEPPER); rotation breaks
+    # cross-run linkage of previously destroyed tokens by design.
+    guardrail_destroy_pepper: str = Field(default="", repr=False)
+
     # populate_by_name (FAR-1500): constructor kwargs may use a field's NAME as
     # well as its alias. Without it, a name-keyed kwarg for an aliased field is
     # silently dropped by ``extra="ignore"`` — ``Settings(environment="prod")``
@@ -1243,6 +1290,66 @@ class Settings(BaseSettings):
                 f"({MAX_NODE_TIMEOUT_SECONDS}) = {required}s: the FAR-1088 in-flight shield would expire "
                 "before the node deadline, letting the nodeless backstop claim a live attempt. "
                 f"Raise it to >= {required}, or unset it to derive from the grace."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _saq_zero_progress_max_age_invariant(self) -> "Settings":
+        """FAIL (never warn): an explicit zero-progress age bound must cover
+        the worst window of EVERY consumer of the shared knob.
+
+        FAR-1715: ``saq_zero_progress_max_age_minutes`` is the age bound at
+        which a zero-progress ``dispatcher='saq'`` run is terminalised
+        (dispatcher_reconcile's nodeless router / mid-graph gate, and the
+        stale_run_recovery zero-progress branch). The bound must never sit
+        below the longest window in which a legitimate run may still be alive,
+        so the floor is the MAX of the two consumers' floors:
+
+        * zero-progress consumers (nodeless router, stale_run_recovery
+          branch): the worst-case legitimate pre-node window —
+          ``saq_setup_grace_seconds`` (time to first dispatch) +
+          ``MAX_NODE_TIMEOUT_SECONDS`` (the GraphValidator cap on one node's
+          ``timeout_seconds``), expressed in MINUTES — the knob's unit — via
+          ceiling division: 65 min at the shipped defaults (600s + 3300s =
+          3900s).
+        * the mid-graph age gate (``_terminalize_mid_graph_wedges``): a run
+          with node progress may legitimately execute up to ``SAQ_RUN_TIMEOUT``
+          (it shares this knob), so its floor is the pre-FAR-1715 derivation
+          ``max(SAQ_RUN_TIMEOUT // 60, 120) + 15`` — 135 min at the shipped
+          7200s. A pin below that floor would falsely fail a still-progressing
+          mid-graph run ``no_progress`` (FAR-1715 pre-PR QA M1: the former
+          pre-node-only invariant accepted a pin in [65, 134] that dropped the
+          mid-graph bound under the maximum legitimate run duration).
+
+        At the shipped defaults the binding floor is the mid-graph one (135),
+        which equals the unset derivation, so the default behaviour is
+        unchanged. Unset (None) is left for cron_helpers to derive the
+        historical default, so only an EXPLICIT pin is validated here —
+        mirroring ``_nodeless_in_flight_floor_invariant`` above.
+        """
+        if self.saq_zero_progress_max_age_minutes is None:
+            return self
+        pre_node_seconds = self.saq_setup_grace_seconds + MAX_NODE_TIMEOUT_SECONDS
+        # Ceiling division: minutes granularity must never round the
+        # requirement DOWN (a grace+cap that is not a whole number of minutes
+        # still requires the next whole minute of coverage).
+        pre_node_minutes = (pre_node_seconds + 59) // 60
+        # Mid-graph gate floor — the SAME derivation cron_helpers falls back
+        # to (``_MID_GRAPH_WEDGE_MAX_AGE_MINUTES``), computed from THIS
+        # Settings' ``saq_run_timeout`` so the floor tracks the operator's
+        # actual timeout knob, never a stale module constant.
+        mid_graph_minutes = max(self.saq_run_timeout // 60, 120) + 15
+        required_minutes = max(pre_node_minutes, mid_graph_minutes)
+        if self.saq_zero_progress_max_age_minutes < required_minutes:
+            raise ValueError(
+                f"SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES={self.saq_zero_progress_max_age_minutes} does not cover "
+                f"the worst-case legitimate window of every consumer: the pre-node window "
+                f"SAQ_SETUP_GRACE_SECONDS ({self.saq_setup_grace_seconds}) + max node timeout "
+                f"({MAX_NODE_TIMEOUT_SECONDS}) = {pre_node_seconds}s = {pre_node_minutes} min, and the mid-graph "
+                f"gate floor max(SAQ_RUN_TIMEOUT ({self.saq_run_timeout}) // 60, 120) + 15 = {mid_graph_minutes} min "
+                f"= {required_minutes} min binding. A lower bound would terminalise a legitimately slow-starting "
+                "run before its first node, or falsely fail a still-progressing mid-graph run no_progress. "
+                f"Raise it to >= {required_minutes}, or unset it to keep the historical default."
             )
         return self
 

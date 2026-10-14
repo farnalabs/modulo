@@ -13,10 +13,12 @@ code:
   - backend/src/modulo/core/workflow_import_export/__init__.py
   - backend/src/modulo/db/models/run.py
   - backend/src/modulo/db/migrations/versions/0150_add_router_no_match_status.py
+  - backend/src/modulo/db/migrations/versions/0284_add_rejected_run_status.py
   - frontend/src/views/PipelineEditorView.vue
   - frontend/src/constants/runStatuses.ts
 unit-tests:
   - backend/tests/unit/pipeline_engine/test_router_hitl_nodes.py
+  - backend/tests/unit/pipeline_engine/test_hitl_reject_terminate.py
   - backend/tests/integration/test_analytics_endpoint.py
 bdd:
   - backend/tests/bdd/features/pipelines/router_nodes.feature
@@ -47,11 +49,12 @@ registry (`feat-router`).
 - [x] LLM classifier mode (`mode == "classifier"`) matches the
       `state["_llm_next_node"]` label to a rule `label`, falling back to the
       default rule
-- [x] Router shares ONE truthiness rule (`bool(...)`) with every other JMESPath
-      guard site (conditional edges, loop counters, HITL gate conditions,
-      polling triggers) via the consolidated evaluator
+- [x] Router shares ONE truthiness rule (`bool(...)`) with the pipeline-engine
+      JMESPath guard sites (conditional edges, loop counters, HITL gate conditions)
+      via the consolidated compiler/evaluator `compile_jmespath` /
       `evaluate_jmespath_condition` (`jmespath_eval.py`); invalid expressions
-      surface a `ValueError`
+      surface a `ValueError`. Polling-trigger conditions are a separate
+      (type-aware) evaluator in `trigger_engine/polling.py`, not this one
 - [x] Compile-time default-rule enforcement: a *new* Router node without a
       `default` rule raises `RouterConfigError` (classifier mode exempt);
       existing conditional-edge graphs remain valid (backward compat)
@@ -97,8 +100,8 @@ registry (`feat-router`).
 - 2026-09-25: **Improve Architecture product-map walk** — closed the stale
   `feat-router` "partial" in the manifest feature registry: complex / nested
   conditional routing ships through the full standard JMESPath engine — router
-  guards, conditional edges, loop counters, HITL gate conditions and polling
-  triggers all evaluate via the single consolidated `compile_jmespath` /
+  guards, conditional edges, loop counters and HITL gate conditions all evaluate
+  via the single consolidated `compile_jmespath` /
   `evaluate_jmespath_condition` (truthiness `bool(...)`) in
   `core/pipeline_engine/jmespath_eval.py`, so nested filters/projections /
   `contains` / multi-level access are first-class while an invalid expression

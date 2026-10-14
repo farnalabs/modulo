@@ -67,7 +67,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import asyncpg  # type: ignore[import-untyped]  # asyncpg does not publish a py.typed marker
 
-from modulo.db.bootstrap import split_postgres_sslmode
+from modulo.db.url_utils import split_postgres_sslmode
 
 # FK on-delete action shared by the nullable-account FKs below: deleting the
 # account nulls the child column rather than cascading.

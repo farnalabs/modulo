@@ -10,6 +10,7 @@
             v-for="t in timespans"
             :key="t.value"
             :data-testid="`analytics-timespan-${t.value}`"
+            :aria-pressed="filters.timespan === t.value"
             :class="[
               'rounded px-3 py-1 text-xs font-medium transition-colors',
               filters.timespan === t.value
@@ -35,6 +36,7 @@
               aria-disabled="true"
               class="cursor-not-allowed rounded bg-primary px-3 py-1 text-xs font-medium text-primary-foreground opacity-70"
               data-testid="analytics-group-by-hour"
+              :aria-pressed="true"
             >
               {{ $t("views.AnalyticsView.group_by_hour") }}
             </button>
@@ -44,6 +46,7 @@
             v-for="g in groupByOptions"
             :key="g.value"
             :data-testid="`analytics-group-by-${g.value}`"
+            :aria-pressed="filters.groupBy === g.value"
             :class="[
               'rounded px-3 py-1 text-xs font-medium transition-colors',
               filters.groupBy === g.value
@@ -66,6 +69,7 @@
             v-for="m in measures"
             :key="m.value"
             :data-testid="`analytics-measure-${m.value}`"
+            :aria-pressed="measure === m.value"
             :class="[
               'rounded px-3 py-1 text-xs font-medium transition-colors',
               measure === m.value

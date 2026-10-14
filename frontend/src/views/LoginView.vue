@@ -53,11 +53,16 @@
 
       <!-- Single-org: render login directly (auto-skipped from login-context) -->
       <template v-else>
-        <div v-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive" role="alert" aria-live="assertive">
-          {{ error }}
-        </div>
+        <!-- Login failure: the user corrects the credentials and submits again. -->
+        <ErrorAlert
+          v-if="error"
+          :message="error"
+          :retryable="false"
+          role="alert"
+          aria-live="assertive"
+        />
 
-        <form @submit.prevent="() => login()" class="rounded-xl border bg-card p-6 space-y-4 shadow-sm">
+        <form @submit.prevent="handleLogin" class="rounded-xl border bg-card p-6 space-y-4 shadow-sm">
           <div class="space-y-2">
             <label for="loginview-field-2" class="text-sm font-medium">{{ $t('common.email') }}</label>
             <input id="loginview-field-2"
@@ -147,6 +152,7 @@ import { setAccessToken } from '../lib/api/client'
 import { setMustChangePassword } from '../lib/mustChangePassword'
 import type { components } from '../lib/api/schema'
 import SsoBrandMark from '../components/SsoBrandMark.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 interface SsoProviderInfo {
   provider_id: string
@@ -312,6 +318,16 @@ function rememberSsoMethod(method: string) {
 const router = useRouter()
 const email = ref('')
 const password = ref('')
+
+/**
+ * Submit the credential form. `login` rejects by design on failure and the
+ * `error` ref (rendered by ErrorAlert above the form) already surfaces it —
+ * the rejection itself is caught here so it can never escape the event
+ * handler as an unhandled promise rejection. Mirrors OrgLoginView.handleLogin.
+ */
+function handleLogin() {
+  login().catch(() => {})
+}
 
 const { loading, error, mutate: login } = useMutation(async () => {
   const res = await fetch('/api/v1/auth/login', {

@@ -285,6 +285,7 @@ async def test_gate_eval_persist_stamps_definition_version(monkeypatch) -> None:
     await eval_persist_order.run_evals_persist_before_decide(
         eval_defs=[eval_def],
         resolve_eval_target=lambda ed: {"text": "a"},
+        resolve_llm_judge=lambda _ed: None,
         run_id=uuid.uuid4(),
         org_id=org_id,
         session_factory=_Factory(),
@@ -292,3 +293,33 @@ async def test_gate_eval_persist_stamps_definition_version(monkeypatch) -> None:
 
     assert captured, "write site must persist an EvalResult row"
     assert captured[0].eval_definition_version == 9
+
+
+# --------------------------------------------------------------------------- #
+# FAR-1729: source-table pins — the NULL-version lookup reads ``evals``       #
+# --------------------------------------------------------------------------- #
+class TestFar1729ResolveVersionSourcePin:
+    """The unpinned version lookup must query ``evals``, never the frozen table.
+
+    ``eval_definitions`` was frozen by the 0254 cutover (no production write
+    path post-cutover); reading it here raises ``SuiteRunError`` for every
+    post-cutover definition. These pins fail if the source is reverted.
+    """
+
+    def test_unpinned_lookup_compiles_against_evals_table(self) -> None:
+        captured: list[str] = []
+
+        class _CaptureResult:
+            def scalar_one_or_none(self):
+                return None
+
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=lambda stmt, *a, **k: captured.append(str(stmt)) or _CaptureResult())
+
+        with pytest.raises(SuiteRunError, match="not found while resolving version"):
+            asyncio.run(resolve_eval_definition_version(session, uuid.uuid4(), uuid.uuid4()))
+
+        assert captured, "the resolver must issue a definition lookup"
+        compiled = captured[0]
+        assert "evals" in compiled, f"lookup must read the evals table, got: {compiled}"
+        assert "eval_definitions" not in compiled, f"lookup must not read the frozen table, got: {compiled}"

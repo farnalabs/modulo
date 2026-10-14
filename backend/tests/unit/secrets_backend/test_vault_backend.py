@@ -238,15 +238,51 @@ class TestVaultSecretsBackend:
         with pytest.raises(asyncio.CancelledError):
             await backend.get_secret("my-key")
 
-    async def test_secret_path_rejects_dot_dot(self, mock_hvac: MagicMock) -> None:
+    @pytest.mark.parametrize(
+        "key",
+        [
+            pytest.param("../../etc/passwd", id="dot-dot-prefix"),
+            pytest.param("key/../subkey", id="dot-dot-embedded"),
+            pytest.param("..", id="dot-dot-only"),
+            pytest.param("/absolute/path", id="leading-slash"),
+        ],
+    )
+    async def test_get_secret_rejects_unsafe_paths(self, mock_hvac: MagicMock, key: str) -> None:
+        """Traversal and absolute keys must be rejected before any Vault read."""
         backend = _make_backend()
         with pytest.raises(ValueError, match="invalid secret key"):
-            await backend.get_secret("../../etc/passwd")
+            await backend.get_secret(key)
+        backend._client.secrets.kv.v2.read_secret_version.assert_not_called()
 
-    async def test_secret_path_rejects_leading_slash(self, mock_hvac: MagicMock) -> None:
+    @pytest.mark.parametrize(
+        "key",
+        [
+            pytest.param("../traversal", id="dot-dot"),
+            pytest.param("key/../subkey", id="dot-dot-embedded"),
+            pytest.param("/absolute/path", id="leading-slash"),
+        ],
+    )
+    async def test_set_secret_rejects_unsafe_paths(self, mock_hvac: MagicMock, key: str) -> None:
+        """Writes must reject traversal keys too, so no secret is written outside the prefix."""
         backend = _make_backend()
         with pytest.raises(ValueError, match="invalid secret key"):
-            await backend.get_secret("/absolute/path")
+            await backend.set_secret(key, "value")
+        backend._client.secrets.kv.v2.create_or_update_secret.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            pytest.param("../traversal", id="dot-dot"),
+            pytest.param("key/../subkey", id="dot-dot-embedded"),
+            pytest.param("/absolute/path", id="leading-slash"),
+        ],
+    )
+    async def test_delete_secret_rejects_unsafe_paths(self, mock_hvac: MagicMock, key: str) -> None:
+        """Deletes must reject traversal keys, or a foreign path could be wiped."""
+        backend = _make_backend()
+        with pytest.raises(ValueError, match="invalid secret key"):
+            await backend.delete_secret(key)
+        backend._client.secrets.kv.v2.delete_metadata_and_all_versions.assert_not_called()
 
     async def test_get_secret_forbidden_raises_permission_error(self, mock_hvac: MagicMock) -> None:
         backend = _make_backend()
@@ -254,36 +290,6 @@ class TestVaultSecretsBackend:
 
         with pytest.raises(PermissionError, match="permission denied"):
             await backend.get_secret("restricted-key")
-
-    async def test_get_secret_key_path_contains_dot_dot_raises(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend()
-        with pytest.raises(ValueError, match="invalid secret key"):
-            await backend.get_secret("key/../subkey")
-
-    async def test_get_secret_key_contains_only_dot_dot_raises(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend()
-        with pytest.raises(ValueError, match="invalid secret key"):
-            await backend.get_secret("..")
-
-    async def test_set_secret_rejects_dot_dot_path(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend()
-        with pytest.raises(ValueError, match="invalid secret key"):
-            await backend.set_secret("../traversal", "value")
-
-    async def test_set_secret_rejects_leading_slash(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend()
-        with pytest.raises(ValueError, match="invalid secret key"):
-            await backend.set_secret("/absolute/path", "value")
-
-    async def test_delete_secret_rejects_dot_dot_path(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend()
-        with pytest.raises(ValueError, match="invalid secret key"):
-            await backend.delete_secret("../traversal")
-
-    async def test_delete_secret_rejects_leading_slash(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend()
-        with pytest.raises(ValueError, match="invalid secret key"):
-            await backend.delete_secret("/absolute/path")
 
     def test_missing_addr_raises_value_error(self, monkeypatch, mock_hvac: MagicMock) -> None:
         monkeypatch.delenv("VAULT_ADDR", raising=False)

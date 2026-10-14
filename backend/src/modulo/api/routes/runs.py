@@ -29,6 +29,7 @@ from modulo.api.constants import (
     MSG_UNEXPECTED_ERROR,
 )
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import (
     _get_engine,
     _get_session_factory,
@@ -48,7 +49,12 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.cost_controller.breakdown.params import compute_run_warnings, compute_run_warnings_count
 from modulo.core.dispatch import dispatch_run
-from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, RateLimitConflictError
+from modulo.core.exceptions import (
+    OrgDeletedError,
+    PipelineNotRunnableError,
+    RateLimitConflictError,
+    SnapshotLockNotAvailableError,
+)
 from modulo.core.guardrails import GuardrailSummary
 from modulo.core.line_diff import iter_line_diffs
 from modulo.core.node_output_split import node_return, node_stderr_artifact, node_stdout_artifact, node_telemetry
@@ -63,16 +69,19 @@ from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
     GuardrailOverrideError,
+    GuardrailOverrideNoCheckpointError,
     GuardrailOverrideRejectedError,
     GuardrailOverrideRequiredError,
     NodeAlreadyCompletedError,
     NodeNotFoundInGraphError,
     RecoveryNotAllowedError,
     guardrail_override,
+    guardrail_override_job_type,
     recover_node,
 )
 from modulo.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
 from modulo.core.rate_limiter import TokenBucketRegistry
+from modulo.core.run_log_correlation import RunLogEntry, correlate_run_logs
 from modulo.core.run_provenance import run_provenance_fields
 from modulo.core.secret_patterns import mask_secret_values_in_text
 from modulo.core.trigger_engine import TriggerEngine
@@ -82,6 +91,7 @@ from modulo.db.crud.node_observation import observe_node
 from modulo.db.crud.observability import get_otel_config
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
+from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.run import (
     WorkItemRefsRequiredError,
     count_active_runs_for_org,
@@ -101,6 +111,7 @@ from modulo.db.crud.run_node_outputs import (
     RunBlobs,
     read_run_blobs,
     read_run_markers,
+    read_run_telemetry,
 )
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
@@ -111,6 +122,7 @@ from modulo.db.models.run import CANCEL_REASON_USER_REQUESTED, TERMINAL_STATUSES
 from modulo.db.models.run_node_outputs import RunNodeOutput
 from modulo.db.models.trigger import Trigger
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 from modulo.otel_bridge import trace_id_for_thread
 from modulo.settings import Settings, get_settings
 
@@ -125,6 +137,18 @@ _CODE_RUN_LIST = "run.list"
 _CODE_RUNS_TRIGGER_RUN = "runs.trigger_run"
 _CODE_RUNS_TRIGGER_RERUN = "runs.trigger_rerun"
 _CODE_RUNS_REVEAL_NODE_PROMPT = "runs.reveal_node_prompt"
+
+_CODE_RUNS_GET_RUN_STATUS = "runs.get_run_status"
+_CODE_RUNS_CANCEL_RUN = "runs.cancel_run"
+_CODE_RUNS_GET_RUN_IO_ENDPOINT = "runs.get_run_io_endpoint"
+_CODE_RUNS_GET_RUN_WORK_ITEM_ENRICHMENT = "runs.get_run_work_item_enrichment"
+_CODE_RUNS_EXPORT_RUN_FIXTURE = "runs.export_run_fixture"
+_CODE_RUNS_GET_RUN_WORKSPACE_EVENTS = "runs.get_run_workspace_events"
+_CODE_RUNS_GET_RUN_LOGS = "runs.get_run_logs"
+_CODE_RUNS_GET_RUN_NODE_OUTPUT = "runs.get_run_node_output"
+_CODE_RUNS_RECOVER_RUN_NODE = "runs.recover_run_node"
+_CODE_RUNS_DIFF_NODE_OUTPUT = "runs.diff_node_output"
+_CODE_RUN_STATUS = "run.status"
 
 
 _log = logging.getLogger(__name__)
@@ -298,6 +322,76 @@ async def _do_get_workspace_inputs(
     except Exception:
         _log.warning(
             "runs.workspace_inputs_unavailable",
+            extra={"run_id": str(run_id)},
+            exc_info=True,
+        )
+        return None
+
+
+# FAR-704: display-side bounds for the triage tails. The stored marker's
+# raw_output is capped at the node's retention cap (up to 512 KB) and the
+# log tail at 6 KB — a run-detail response must carry a bounded display
+# slice, never the full retained blob.
+_TRIAGE_RAW_OUTPUT_TAIL_CHARS = 4000
+_TRIAGE_LOG_TAIL_CHARS = 6000
+
+
+def _deadline_triage_from_markers(markers: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Project cancellation/deadline-kill triage markers for the run detail (FAR-704).
+
+    Only markers carrying the ``deadline_triage is True`` signature are
+    surfaced; every other raw-output marker (delivery-done, no-parseable
+    output, stall) is ignored here. String fields are truncated to bounded
+    display tails (the retained marker stays authoritative in the store).
+    Sorted by attempt_key for a deterministic response order.
+    """
+    if not isinstance(markers, dict):
+        return []
+    entries: list[dict[str, Any]] = []
+    for attempt_key in sorted(k for k in markers if isinstance(k, str)):
+        marker = markers[attempt_key]
+        if not isinstance(marker, dict) or marker.get("deadline_triage") is not True:
+            continue
+        raw_output = str(marker.get("raw_output") or "")
+        log_tail = str(marker.get("sandbox_log_tail") or "")
+        entries.append(
+            {
+                "node_id": marker.get("node_id"),
+                "attempt_key": attempt_key,
+                "no_output_reason": marker.get("no_output_reason"),
+                "sandbox_log_tail": log_tail[-_TRIAGE_LOG_TAIL_CHARS:] if log_tail else "",
+                "raw_output_tail": raw_output[-_TRIAGE_RAW_OUTPUT_TAIL_CHARS:] if raw_output else "",
+                "stdout_length": marker.get("stdout_length"),
+                "stderr_length": marker.get("stderr_length"),
+                "delivery_done": marker.get("delivery_done") is True,
+            }
+        )
+    return entries
+
+
+async def _do_get_deadline_triage(
+    factory: async_sessionmaker[AsyncSession],
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+) -> list[dict[str, Any]] | None:
+    """Load the run's deadline-kill triage evidence (FAR-704).
+
+    Reads the run's raw-output retention markers through the repo reader and
+    projects the ``deadline_triage``-signed ones. Best-effort like
+    ``_do_get_workspace_inputs``: a DB failure degrades to None (the run
+    response is valid without triage evidence); empty list when the run has
+    no triage markers.
+    """
+    try:
+        async with factory() as session, session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            markers = await read_run_markers(session, run_id=run_id, organisation_id=principal.organisation_id)
+            return _deadline_triage_from_markers(markers)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "runs.deadline_triage_unavailable",
             extra={"run_id": str(run_id)},
             exc_info=True,
         )
@@ -820,6 +914,12 @@ class RunResponse(BaseModel):
     # Modulo-executed one. Additive/nullable — existing consumers are
     # unaffected.
     execution_origin: str | None = None
+    # FAR-1693: the unified provenance class of the run's externally-sourced
+    # data — ``reported`` for a dispatched run (the substrate's datum arrived
+    # from an external surface), ``None`` for an executed / legacy run. Engine-
+    # derived from ``execution_origin`` via ``core.provenance``; additive and
+    # always present alongside ``execution_origin``.
+    provenance: str | None = None
     trigger_actor: str | None = None
     trigger_id: uuid.UUID | None = None
     heartbeat_at: datetime | None = None
@@ -836,6 +936,15 @@ class RunResponse(BaseModel):
     # resolved/final SHAs — never credentials.  Absent when no workspace
     # inputs were configured for this run.
     workspace_inputs: list[dict[str, Any]] | None = None
+    # FAR-704: node-deadline / cancellation triage evidence, projected from
+    # the FAR-188 raw-output retention markers (run_node_outputs keyed by
+    # attempt_key) that carry the ``deadline_triage`` signature. Each entry
+    # carries the redacted output tail, the sandbox log tail, and the
+    # no_output_reason, so a deadline kill (error_code
+    # node_deadline_exceeded) is triageable from the run page even though no
+    # node envelope reached the Agent Return Contract columns. Empty list
+    # when the run has no such marker; None on a failed read.
+    deadline_triage: list[dict[str, Any]] | None = None
 
 
 async def _run_gate_fired(session: AsyncSession, run: Any) -> bool:
@@ -927,6 +1036,7 @@ def _build_run_response(
     *,
     gate_fired: bool = False,
     workspace_inputs: list[dict[str, Any]] | None = None,
+    deadline_triage: list[dict[str, Any]] | None = None,
 ) -> RunResponse:
     """Build a RunResponse from a Run ORM entity, populating derived fields.
 
@@ -1026,6 +1136,7 @@ def _build_run_response(
         warnings=compute_run_warnings(run.cost_breakdown),
         input_payload=input_payload,
         workspace_inputs=workspace_inputs,
+        deadline_triage=deadline_triage,
     )
 
 
@@ -1292,6 +1403,26 @@ async def trigger_run(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="This pipeline requires work_item_refs but none were supplied",
+        ) from None
+
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1625: a per-pipeline snapshot lock's bounded wait was exhausted
+        # under concurrent triggers. That is CONTENTION, not an unexpected fault
+        # — a truthful, retryable 503 (matching the webhook and MCP trigger
+        # paths), so a lost race can be retried rather than surfacing as a
+        # generic 500. Both bounded waits on the snapshot path report here: the
+        # graph-copy advisory lock's acquisition budget and the allocation row
+        # lock's transaction-scoped lock_timeout.
+        _log.warning("runs.trigger_run snapshot_lock_busy: %s", exc)
+        log_service_unavailable(
+            "snapshot_lock_unavailable",
+            exc,
+            route=_CODE_RUNS_TRIGGER_RUN,
+            detail="snapshot lock unavailable; retry the trigger",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Pipeline snapshot lock unavailable - retry the trigger",
         ) from None
 
     except StorageExhaustedError:
@@ -1588,7 +1719,7 @@ async def get_run_heatmap_endpoint(
 async def get_run_status(
     run_id: uuid.UUID,
     factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
-    principal: TenantPrincipal = require_permission_any_credential("run.status"),
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_RUN_STATUS),
 ) -> RunResponse:
     try:
         # qa M15: run + gate_fired derive in ONE transaction (the removed
@@ -1600,22 +1731,23 @@ async def get_run_status(
             lambda: _do_get_run_observability(factory, principal, run)
         )
         workspace_inputs = await _run_with_retry(lambda: _do_get_workspace_inputs(factory, principal, run_id))
+        deadline_triage = await _run_with_retry(lambda: _do_get_deadline_triage(factory, principal, run_id))
     except IntegrityError:
-        _log.exception("runs.get_run_status")
+        _log.exception(_CODE_RUNS_GET_RUN_STATUS)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
 
     except ProgrammingError:
-        _log.exception("runs.get_run_status")
+        _log.exception(_CODE_RUNS_GET_RUN_STATUS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.get_run_status")
+        raise_session_contract_error(exc, _CODE_RUNS_GET_RUN_STATUS)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1649,6 +1781,7 @@ async def get_run_status(
         ),
         gate_fired=gate_fired,
         workspace_inputs=workspace_inputs,
+        deadline_triage=deadline_triage,
     )
 
 
@@ -1660,7 +1793,18 @@ async def _cancel_run(session: AsyncSession, principal: TenantPrincipal, run_id:
     running run cancelled cross-process is routed through finalize_cost,
     re-reading the STORED cumulative sets; a NEVER-PAUSED in-flight run has none
     and forfeits its accrued cost (cost_components_partial_spend_lost log).
+
+    FAR-1610 lock bound: this is a REQUEST path on the hot ``runs`` row, and the
+    FIRST lock in the caller's transaction is ``request_cancellation``'s
+    ``SELECT ... FOR UPDATE`` below (``get_run`` is a plain read). The bound is
+    issued HERE — the caller of the shared ``request_cancellation`` — before
+    that lock, so a contended row surfaces as a bounded 55P03 the route maps to
+    a visible 409 rather than an unbounded wait. It is transaction-scoped, so
+    it also bounds the ``finalize_cancelled_run`` write that follows. (Bounding
+    inside the shared CRUD function instead would let a broad ``except
+    Exception`` caller swallow the 55P03 into a silent lost write — FAR-1601.)
     """
+    await set_mutation_row_lock_timeout(session)
     run = await get_run(session, run_id, organisation_id=principal.organisation_id)
 
     if run is None:
@@ -1710,20 +1854,37 @@ async def cancel_run(
             await set_rls_org(session, principal.organisation_id)
             await _cancel_run(session, principal, run_id)
     except IntegrityError:
-        _log.exception("runs.cancel_run")
+        _log.exception(_CODE_RUNS_CANCEL_RUN)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("runs.cancel_run")
+        _log.exception(_CODE_RUNS_CANCEL_RUN)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.cancel_run")
+        raise_session_contract_error(exc, _CODE_RUNS_CANCEL_RUN)
+        if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
+            # FAR-1610: the transaction-scoped bound
+            # (``mutation_row_lock_timeout_ms``) on the hot ``runs`` row — taken
+            # first by ``request_cancellation``'s ``SELECT ... FOR UPDATE`` and
+            # also bounding ``finalize_cancelled_run``'s write (FAR-1642) —
+            # expired (55P03). The DB is healthy and another change holds the
+            # row, so answer 409, never the retry-inviting 503 the rest of this
+            # arm returns (mirrors api.db_error_handling /
+            # product_analytics_identity).
+            _log.warning("runs.cancel_run.lock_timeout")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Timed out waiting for a lock while cancelling this run; another change is in progress. "
+                    "Re-issue the cancel once the other change completes."
+                ),
+            ) from None
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1956,7 +2117,7 @@ def _build_run_io_response(run: Run, node_labels: dict[str, str], blobs: RunBlob
 
 
 @router.get("/{run_id}/io")
-@handle_db_errors("runs.get_run_io_endpoint")
+@handle_db_errors(_CODE_RUNS_GET_RUN_IO_ENDPOINT)
 async def get_run_io_endpoint(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -1987,20 +2148,20 @@ async def get_run_io_endpoint(
                 else await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
             )
     except IntegrityError:
-        _log.exception("runs.get_run_io_endpoint")
+        _log.exception(_CODE_RUNS_GET_RUN_IO_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("runs.get_run_io_endpoint")
+        _log.exception(_CODE_RUNS_GET_RUN_IO_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.get_run_io_endpoint")
+        raise_session_contract_error(exc, _CODE_RUNS_GET_RUN_IO_ENDPOINT)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2044,12 +2205,12 @@ class WorkItemEnrichmentResponse(BaseModel):
     items: list[WorkItemEnrichmentItem] = Field(default_factory=list)
 
 
-@router.get("/{run_id}/work-items/enrichment", response_model=WorkItemEnrichmentResponse)
-@handle_db_errors("runs.get_run_work_item_enrichment")
+@router.get("/{run_id}/work-items/enrichment")
+@handle_db_errors(_CODE_RUNS_GET_RUN_WORK_ITEM_ENRICHMENT)
 async def get_run_work_item_enrichment(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission_any_credential("run.status"),
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_RUN_STATUS),
     settings: Settings = Depends(get_settings),
 ) -> WorkItemEnrichmentResponse:
     """Live GitHub enrichment for the run's PR work-item badges (FAR-737).
@@ -2074,19 +2235,19 @@ async def get_run_work_item_enrichment(
     except HTTPException:
         raise
     except IntegrityError:
-        _log.exception("runs.get_run_work_item_enrichment")
+        _log.exception(_CODE_RUNS_GET_RUN_WORK_ITEM_ENRICHMENT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("runs.get_run_work_item_enrichment")
+        _log.exception(_CODE_RUNS_GET_RUN_WORK_ITEM_ENRICHMENT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.get_run_work_item_enrichment")
+        raise_session_contract_error(exc, _CODE_RUNS_GET_RUN_WORK_ITEM_ENRICHMENT)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2107,7 +2268,7 @@ async def get_run_work_item_enrichment(
 
 
 @router.get("/{run_id}/export-fixture")
-@handle_db_errors("runs.export_run_fixture")
+@handle_db_errors(_CODE_RUNS_EXPORT_RUN_FIXTURE)
 async def export_run_fixture(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -2134,20 +2295,20 @@ async def export_run_fixture(
             # (the response body is built after the tx closes).
             blobs = await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
     except IntegrityError:
-        _log.exception("runs.export_run_fixture")
+        _log.exception(_CODE_RUNS_EXPORT_RUN_FIXTURE)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("runs.export_run_fixture")
+        _log.exception(_CODE_RUNS_EXPORT_RUN_FIXTURE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.export_run_fixture")
+        raise_session_contract_error(exc, _CODE_RUNS_EXPORT_RUN_FIXTURE)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2223,7 +2384,7 @@ async def get_run_workspace_lease(
 
 
 @router.get("/{run_id}/workspace-events")
-@handle_db_errors("runs.get_run_workspace_events")
+@handle_db_errors(_CODE_RUNS_GET_RUN_WORKSPACE_EVENTS)
 async def get_run_workspace_events(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -2255,20 +2416,20 @@ async def get_run_workspace_events(
             )
             events = result.scalars().all()
     except IntegrityError:
-        _log.exception("runs.get_run_workspace_events")
+        _log.exception(_CODE_RUNS_GET_RUN_WORKSPACE_EVENTS)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("runs.get_run_workspace_events")
+        _log.exception(_CODE_RUNS_GET_RUN_WORKSPACE_EVENTS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.get_run_workspace_events")
+        raise_session_contract_error(exc, _CODE_RUNS_GET_RUN_WORKSPACE_EVENTS)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2291,6 +2452,120 @@ async def get_run_workspace_events(
         }
         for evt in events
     ]
+
+
+# ---------------------------------------------------------------------------
+# Run-correlated logs (FAR-1690 A4)
+# ---------------------------------------------------------------------------
+
+
+class RunLogEntryModel(BaseModel):
+    """One provenance-typed entry in the run-keyed log correlation view (FAR-1690 A4)."""
+
+    run_id: uuid.UUID
+    node_id: str | None = None
+    attempt_key: str | None = None
+    source: str
+    provenance: str
+    witnessed_via: str | None = None
+    provider: str | None = None
+    provider_ref: str | None = None
+    recorded_at: str | None = None
+    excerpt: str
+
+
+class RunLogsResponse(BaseModel):
+    """The run-keyed log correlation projection (FAR-1690 A4)."""
+
+    run_id: uuid.UUID
+    entries: list[RunLogEntryModel]
+
+
+async def _do_get_run_logs(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+) -> list[RunLogEntry]:
+    """Compose the run's provenance-typed log entries from existing stores.
+
+    Three sources, all keyed by ``run_id`` and none new (A4 adds no store):
+    the run's ``audit_events`` (attested), the retained workspace log tail
+    (observed — captured by ``read_log_tail`` and persisted on markers /
+    telemetry), and a dispatched node's folded-back telemetry (reported, with
+    its ``witnessed_via`` channel stamp). Runs inside the caller's transaction
+    (RLS already set); a foreign-org run id raises 404 before any source read.
+    """
+    from modulo.db.models.audit_event import AuditEvent
+
+    run = await get_run(session, run_id, organisation_id=principal.organisation_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
+    event_rows = (
+        (
+            await session.execute(
+                select(AuditEvent)
+                .where(
+                    AuditEvent.organisation_id == principal.organisation_id,
+                    AuditEvent.resource_id == run_id,
+                    AuditEvent.resource_type.in_(("run", "workspace")),
+                )
+                .order_by(AuditEvent.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    markers = await read_run_markers(session, run_id=run_id, organisation_id=principal.organisation_id)
+    telemetry = await read_run_telemetry(session, run_id=run_id, organisation_id=principal.organisation_id)
+    events = [
+        {
+            "event_type": row.event_type,
+            "detail": sanitize_error_text((row.payload_json or {}).get("detail")),
+            "recorded_at": row.created_at,
+        }
+        for row in event_rows
+    ]
+    return correlate_run_logs(events=events, markers=markers, telemetry=telemetry)
+
+
+@router.get("/{run_id}/logs")
+@handle_db_errors(_CODE_RUNS_GET_RUN_LOGS)
+async def get_run_logs(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
+) -> RunLogsResponse:
+    """Return a run's correlated, provenance-typed log view (FAR-1690 A4).
+
+    A single read endpoint joining the run's structured events, retained
+    workspace log tail (captured via the runtime provider's ``read_log_tail``),
+    and any dispatch-origin substrate entries — each stamped with its governed
+    class (``observed`` / ``reported`` / ``attested``). Unlike the FAR-704
+    ``deadline_triage`` surface, the workspace tail is available for **every**
+    run, not only a deadline-killed one. Display excerpts stay bounded (6 KB
+    tail); no raw payload is added.
+    """
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        entries = await _do_get_run_logs(session, principal, run_id)
+    return RunLogsResponse(
+        run_id=run_id,
+        entries=[
+            RunLogEntryModel(
+                run_id=run_id,
+                node_id=entry.node_id,
+                attempt_key=entry.attempt_key,
+                source=entry.source,
+                provenance=entry.provenance,
+                witnessed_via=entry.witnessed_via,
+                provider=entry.provider,
+                provider_ref=entry.provider_ref,
+                recorded_at=entry.recorded_at.isoformat() if entry.recorded_at is not None else None,
+                excerpt=entry.excerpt,
+            )
+            for entry in entries
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2339,7 +2614,7 @@ class NodeOutputResponse(BaseModel):
 
 
 @router.get("/{run_id}/nodes/{node_id}/output")
-@handle_db_errors("runs.get_run_node_output")
+@handle_db_errors(_CODE_RUNS_GET_RUN_NODE_OUTPUT)
 async def get_run_node_output(
     run_id: uuid.UUID,
     node_id: str,
@@ -2377,20 +2652,20 @@ async def get_run_node_output(
                 else await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
             )
     except IntegrityError:
-        _log.exception("runs.get_run_node_output")
+        _log.exception(_CODE_RUNS_GET_RUN_NODE_OUTPUT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("runs.get_run_node_output")
+        _log.exception(_CODE_RUNS_GET_RUN_NODE_OUTPUT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.get_run_node_output")
+        raise_session_contract_error(exc, _CODE_RUNS_GET_RUN_NODE_OUTPUT)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2464,7 +2739,7 @@ async def get_run_events(
     since_seq: int = Query(0, ge=0),
     node_id: str | None = Query(None),
     factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
-    principal: TenantPrincipal = require_permission_any_credential("run.status"),
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_RUN_STATUS),
 ) -> RunEventsResponse:
     """Return live events for a run since a sequence number.
 
@@ -2555,7 +2830,7 @@ async def observe_run_node(
         ) from None
 
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.observe_run_node")
+        raise_session_contract_error(exc, _CODE_RUNS_OBSERVE_RUN_NODE)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2597,7 +2872,7 @@ async def observe_run_node(
         ) from None
 
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.observe_run_node")
+        raise_session_contract_error(exc, _CODE_RUNS_OBSERVE_RUN_NODE)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2641,7 +2916,7 @@ class NodeRecoverResponse(BaseModel):
     status_code=status.HTTP_200_OK,
     dependencies=[Depends(audited("run_node_recovered", "run_node", principal_dep=get_current_tenant_user))],
 )
-@handle_db_errors("runs.recover_run_node")
+@handle_db_errors(_CODE_RUNS_RECOVER_RUN_NODE)
 async def recover_run_node(
     run_id: uuid.UUID,
     node_id: str,
@@ -2759,20 +3034,20 @@ async def recover_run_node(
             except ConcurrentRecoveryError as exc:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except IntegrityError:
-        _log.exception("runs.recover_run_node")
+        _log.exception(_CODE_RUNS_RECOVER_RUN_NODE)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("runs.recover_run_node")
+        _log.exception(_CODE_RUNS_RECOVER_RUN_NODE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.recover_run_node")
+        raise_session_contract_error(exc, _CODE_RUNS_RECOVER_RUN_NODE)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2878,9 +3153,22 @@ async def guardrail_override_run(
     override is the ONLY remediation: it re-runs the guardrail pass on the
     supplied ``input_data`` (re-block safe default — a still-violating input is
     refused with 422 and the run stays terminal), persists the post-redaction
-    payload, flips the run to ``pending`` with ``is_replay=True``, and
-    re-dispatches it from run start (execute_run — the blocked run never
-    executed, so there is no checkpoint to resume).
+    payload, flips the run with ``is_replay=True``, and re-dispatches it. The
+    flip target and job type branch on node progress (FAR-1711): a node-
+    STARTED run (durable ``first_node_dispatched`` phase — a node-scoped
+    ``block`` eval terminalizes from a completed node) flips to ``running``
+    and is re-dispatched as ``resume_run`` (checkpoint resume — FAR-1649:
+    never re-execute a node-started run); the genuine zero-node block (run-
+    level interception at creation, NULL / pre-node phase) flips to
+    ``pending`` and is re-dispatched from run start (execute_run).
+
+    A node-started run is refused with 409 when its thread carries no
+    resumable checkpoint (``GuardrailOverrideNoCheckpointError``, FAR-1711
+    M1 — the reachable case is a non-interactive pipeline, which never
+    persists one): resuming it would silently re-execute it, so the run is
+    left terminal eval_blocked rather than burned. The checkpoint never
+    appears later, so re-calling this endpoint returns the same 409 — the
+    remediation for such a run is a NEW run, not another override attempt.
 
     Requires operator or admin role.
     """
@@ -2918,6 +3206,16 @@ async def guardrail_override_run(
                 # run stays terminal eval_failed; 422 = the supplied input is
                 # unprocessable for this run.
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)[:200]) from exc
+            except GuardrailOverrideNoCheckpointError as exc:
+                # FAR-1711 (M1) fail-closed: the run started a node but has no
+                # resumable checkpoint, so a ``resume_run`` would re-execute it
+                # (FAR-1649). The run stays terminal eval_blocked and the
+                # operator gets a distinct 409 rather than a silently-burned
+                # run. Re-calling this endpoint returns the SAME 409 — a
+                # ``first_node_dispatched`` thread with no root checkpoint
+                # never grows one — so the true remediation is a NEW run
+                # against the pipeline, not another override attempt.
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)[:200]) from exc
             except GuardrailOverrideError as exc:
                 # Not a guardrail-blocked terminal run — nothing to override.
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)[:200]) from exc
@@ -2953,14 +3251,21 @@ async def guardrail_override_run(
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
-    # Re-dispatch the pending run from run start (execute_run). The blocked run
-    # never executed, so there is no checkpoint to resume from — dispatch_run
-    # enqueues the default execute_run job with no resume data.
+    # FAR-1711: the re-dispatch job type is the ONE shared predicate
+    # ``guardrail_override`` owns (it also chose the flip target), so the
+    # route never re-derives it from a magic status string. A node-STARTED
+    # eval-blocked run was left ``running`` (the recover-node lock status)
+    # and must be re-dispatched as ``resume_run`` — checkpoint resume, never
+    # re-execution (FAR-1649). The genuine zero-node block stays ``pending``
+    # and is re-dispatched from run start (execute_run) with no resume data —
+    # no node ever ran, so there is nothing to resume.
+    job_type = guardrail_override_job_type(run)
     try:
         outcome, _job_id = await dispatch_run(
             str(run_id),
             str(principal.organisation_id),
             queue="runs",
+            job_type=job_type,
         )
     except Exception as exc:
         _log.exception("run.guardrail_override_dispatch_failed")
@@ -3511,7 +3816,7 @@ class NodeOutputDiffResponse(BaseModel):
 # masking and returns a line-level diff - it writes nothing. Deliberately left
 # in audit_coverage_baseline.txt.
 @router.post("/diff")
-@handle_db_errors("runs.diff_node_output")
+@handle_db_errors(_CODE_RUNS_DIFF_NODE_OUTPUT)
 async def diff_node_output(
     req: NodeOutputDiffRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -3542,21 +3847,21 @@ async def diff_node_output(
                 else await read_run_blobs(session, run_id=req.run_id_b, organisation_id=principal.organisation_id)
             )
     except IntegrityError:
-        _log.exception("runs.diff_node_output")
+        _log.exception(_CODE_RUNS_DIFF_NODE_OUTPUT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
 
     except ProgrammingError:
-        _log.exception("runs.diff_node_output")
+        _log.exception(_CODE_RUNS_DIFF_NODE_OUTPUT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.diff_node_output")
+        raise_session_contract_error(exc, _CODE_RUNS_DIFF_NODE_OUTPUT)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

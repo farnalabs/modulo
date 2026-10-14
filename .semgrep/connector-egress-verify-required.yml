@@ -1,0 +1,53 @@
+rules:
+  # FAR-1650 follow-up: structural enforcement for the per-instance egress TLS
+  # context. Every connector egress client/transport must receive an explicit
+  # ``verify=`` argument. The canonical value is ``egress_ssl_context(self)``
+  # (the per-instance cached context from connectors/_egress.py); omitting
+  # ``verify`` makes the pinned transport silently build a fresh TLS context per
+  # call — the CA-bundle load FAR-1650's cache exists to eliminate — and invites
+  # verify-policy drift between connectors. An explicit non-cached value (e.g.
+  # the REST connector's operator-controlled ``self._verify_tls``) satisfies
+  # this rule: the invariant is "an explicit verify is passed", not "the cached
+  # context is used", because an operator-intentional verify override is
+  # legitimate connector configuration.
+  #
+  # Match shape: both factories are keyword-only after the first argument
+  # (``def pinned_async_client_sync(url, *, ..., verify=..., ...)``), so
+  # ``verify`` can only ever appear as a keyword argument — a
+  # ``... , verify=$V, ...`` argument pattern cannot produce a false omission.
+  #
+  # Residuals (documented, same class as ``no-raw-httpx-client``):
+  # * Rebound aliases (``import pinned_async_client_sync as X``) are not
+  #   matched — semgrep matches the literal callee name. All current connector
+  #   sites use the direct ``from modulo.core.ssrf import pinned_async_client_sync``
+  #   / ``pinned_async_transport_sync`` form.
+  # * ``core/ssrf.py`` itself is deliberately out of scope (the paths filter pins
+  #   this rule to ``backend/src/modulo/connectors/**``): inside the factory,
+  #   ``pinned_async_client_sync`` legitimately delegates to
+  #   ``pinned_async_transport_sync(verify=verify, ...)`` — a delegation with an
+  #   explicit verify, which is exactly the invariant this rule protects.
+  - id: connector-egress-verify-required
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: pinned_async_client_sync(...)
+              - pattern-not: pinned_async_client_sync(..., verify=$VERIFY, ...)
+          - patterns:
+              - pattern: pinned_async_transport_sync(...)
+              - pattern-not: pinned_async_transport_sync(..., verify=$VERIFY, ...)
+    message: >
+      Connector egress factory called without an explicit `verify=` argument.
+      Without one the pinned transport silently builds a fresh TLS context on
+      every call (the CA-bundle load FAR-1650's per-instance cache removes) and
+      verify policy can drift between connectors. Pass
+      `verify=egress_ssl_context(self)` (imported from modulo.connectors._egress)
+      so every client reuses the connector instance's cached TLS context with
+      the trust_env resolved by the shared modulo.core.ssrf.default_trust_env
+      resolver. A deliberate operator-controlled override (e.g. the REST
+      connector's `self._verify_tls`) satisfies the rule — the invariant is an
+      EXPLICIT verify, never an omitted one.
+    languages: [python]
+    severity: ERROR
+    paths:
+      include:
+        - "**/backend/src/modulo/connectors/**"

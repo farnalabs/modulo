@@ -56,8 +56,6 @@ class RequestTimeoutMiddleware(BaseHTTPMiddleware):
                 problem_type=ProblemType.GATEWAY_TIMEOUT,
                 detail=f"Request exceeded {timeout}s timeout",
             ).to_response()
-        except asyncio.CancelledError:
-            raise
 
     def _timeout_for(self, path: str) -> int:
         for prefix, to in self._overrides.items():

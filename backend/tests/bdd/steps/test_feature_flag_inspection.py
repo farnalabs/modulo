@@ -15,12 +15,17 @@ codes, the ``license`` / ``flags`` response shapes, per-flag field presence,
 the unknown-flag 404, the toggle override write-back (``overridden: true``) for
 a community-tier flag, the 403 team-tier gate that refuses to enable a
 team-tier flag without a team licence, and the public ``/api/v1/license``
-surface.
+surface — which under FAR-1720 resolves the real licence (stored in-memory
+licence, else a verified env-var key) and reports community /
+``is_valid=False`` when none is present.
 """
 
 from __future__ import annotations
 
+import base64
 import contextlib
+import json
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -33,6 +38,12 @@ with contextlib.suppress(FileNotFoundError, OSError):
 
 def _make_mock_session() -> Any:
     session = AsyncMock()
+    # FAR-1639 (FAR-1629 sweep): in_transaction() and add() are SYNC
+    # AsyncSession methods — bare-AsyncMock children type them as async, so
+    # production code reaching set_rls_* (db/rls.py) passes the guard
+    # vacuously (an unawaited coroutine is truthy).
+    session.in_transaction = MagicMock(return_value=True)
+    session.add = MagicMock()
 
     mock_scalars = MagicMock()
     mock_scalars.all.return_value = []
@@ -58,6 +69,14 @@ def _make_mock_session() -> Any:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # FAR-1639: the flag-override audit writes open a nested transaction
+    # (``session.begin_nested()`` in core/audit_logger) before their chain-head
+    # read — type the nested CM's sync contract the same way as ``begin`` (see
+    # ``_make_audit_session`` in test_scim_provisioning.py for the full shape).
+    nested_cm = AsyncMock()
+    nested_cm.__aenter__ = AsyncMock(return_value=None)
+    nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested_cm)
     session.flush = AsyncMock()
 
     return session
@@ -69,12 +88,18 @@ def _setup_client(ctx: dict[str, Any]) -> None:
     from modulo.api.main import app as _app
     from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
     from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-    from modulo.core.license import clear_license
+    from modulo.core.license import clear_license, store_license
     from modulo.settings import Settings, get_settings
 
     # Hermetic tier resolution: a stored license from another licensing
     # scenario must not leak into the feature-flag tier/has_license_key payload.
     clear_license()
+    # FAR-1720: a scenario that pre-stored a signed licence re-seeds it after
+    # the clear, so the in-memory rung survives into the request.
+    stored = ctx.get("stored_license")
+    if stored is not None:
+        key, data = stored
+        store_license(key, data)
 
     mock_session = _make_mock_session()
 
@@ -156,6 +181,44 @@ def database_has_feature_flags() -> None:
 @given("I have a valid session")
 def valid_session(ctx: dict[str, Any]) -> None:
     ctx["is_admin"] = True
+
+
+@given("a signed licence is stored in memory")
+def signed_license_stored(ctx: dict[str, Any]) -> None:
+    """Seed the in-memory licence rung (FAR-1720) for the public endpoint.
+
+    Signs a real team payload with a per-scenario Ed25519 keypair and stores
+    the parsed data via ``store_license`` — the in-memory rung of the licence
+    ladder the public ``/api/v1/license`` surface now reads.
+    """
+    from modulo.core.license import LicenseData, set_public_key
+    from modulo.core.registry.crypto import generate_keypair, sign_primitive
+
+    keypair = generate_keypair()
+    set_public_key(keypair["public_key"])
+    payload = {
+        "tier": "team",
+        "features": ["sso", "team_rbac", "audit_viewer"],
+        "expires_at": (datetime.now(UTC) + timedelta(days=365)).isoformat(),
+        "org_id": "bdd-org",
+    }
+    sig_hex = sign_primitive(payload, keypair["private_key"])
+    payload_b64 = (
+        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
+        .decode()
+        .rstrip("=")
+    )
+    sig_b64 = base64.urlsafe_b64encode(bytes.fromhex(sig_hex)).decode().rstrip("=")
+    raw_key = f"{payload_b64}.{sig_b64}"
+    data = LicenseData(
+        tier=payload["tier"],
+        features=list(payload["features"]),
+        expires_at=payload["expires_at"],
+        org_id=payload["org_id"],
+        raw_payload=payload,
+        raw_key=raw_key,
+    )
+    ctx["stored_license"] = (raw_key, data)
 
 
 # ── When steps ────────────────────────────────────────────────────────────────
@@ -258,3 +321,15 @@ def response_tier_field(request: Any) -> None:
 def response_features_list(request: Any) -> None:
     features = request.node._resp.json()["features"]
     assert isinstance(features, list), f"expected a features list, got {type(features).__name__}"
+
+
+@then(parsers.parse('the response field "{field}" is true'))
+def response_field_is_true(field: str, request: Any) -> None:
+    data = request.node._resp.json()
+    assert data[field] is True, f"Expected {field}=True, got {data.get(field)!r}"
+
+
+@then(parsers.parse('the response field "{field}" is false'))
+def response_field_is_false(field: str, request: Any) -> None:
+    data = request.node._resp.json()
+    assert data[field] is False, f"Expected {field}=False, got {data.get(field)!r}"

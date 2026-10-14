@@ -1,10 +1,12 @@
 """TeamCity CI/CD connector — triggers and observes builds via the TeamCity REST API."""
 
+from collections.abc import Sequence
 from typing import Any, cast
 
 import httpx
 
 from modulo.connectors._ci_test_double import CITestDoubleMixin
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
@@ -53,6 +55,9 @@ class TeamCityConnector(ConnectorBase):
         self._token = token
         self._base_url = base_url.rstrip("/")
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.TEAMCITY
@@ -71,6 +76,7 @@ class TeamCityConnector(ConnectorBase):
             base_url=self._base_url,
             headers=self._auth_header(),
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     def _run_from_build(self, data: dict[str, Any], *, fallback_run_id: str = "") -> CIRun:
@@ -106,11 +112,13 @@ class TeamCityConnector(ConnectorBase):
                 return HealthResult(ok=True)
             if r.status_code in (401, 403):
                 return HealthResult(ok=False, detail="Authentication failed: invalid token")
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+            return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"TeamCity API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(f"TeamCity API HTTP {exc.response.status_code}: {exc.response.text}")[
+                    :200
+                ],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="TeamCity API timeout")
@@ -121,7 +129,7 @@ class TeamCityConnector(ConnectorBase):
             # base_url by raising — and the default base_url is loopback. A health
             # check must REPORT that as unhealthy (surfacing the guard's
             # remediation text), never propagate it.
-            return HealthResult(ok=False, detail=str(exc)[:200])
+            return HealthResult(ok=False, detail=self._redacted_detail(str(exc))[:200])
 
     async def trigger_run(
         self,

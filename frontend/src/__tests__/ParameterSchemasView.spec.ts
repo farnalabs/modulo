@@ -14,6 +14,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import ParameterSchemasView from '../views/ParameterSchemasView.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { api } from '../lib/api/client'
 
 async function flush() {
@@ -102,7 +103,12 @@ describe('ParameterSchemasView — list', () => {
     const wrapper = mount(ParameterSchemasView)
     await nextTick()
     expect(wrapper.find('[data-testid="paramschema-new"]').exists()).toBe(true)
-    expect(wrapper.find('table').exists()).toBe(false)
+    // STATE-3: the list renders a pulse skeleton (TableSkeleton), not a spinner
+    // and not a blank region.
+    const skeleton = wrapper.find('[role="status"][aria-busy="true"]')
+    expect(skeleton.exists()).toBe(true)
+    expect(skeleton.findAll('.animate-pulse').length).toBeGreaterThan(0)
+    expect(wrapper.find('[data-testid="paramschema-delete"]').exists()).toBe(false)
   })
 
   it('renders the schema table with name, version and parameter count', async () => {
@@ -228,6 +234,17 @@ describe('ParameterSchemasView — editor', () => {
     await flush()
     expect(wrapper.text()).toContain('name conflict')
     expect(wrapper.text()).not.toContain('Schema saved as new version.')
+
+    // FAR-1669 prove-the-fix: saveError must render through the SHARED
+    // ErrorAlert — the pre-conversion bespoke div also showed the message
+    // under the same markup, so findComponent is what fails on a revert.
+    // Exactly one error surface, and it is non-retryable: the user fixes the
+    // form and clicks Save again (an automatic Retry could double-create).
+    const alerts = wrapper.findAllComponents(ErrorAlert)
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0].props('retryable')).toBe(false)
+    expect(alerts[0].text()).toContain('name conflict')
+    expect(alerts[0].find('[data-testid="error-alert-retry"]').exists()).toBe(false)
   })
 
   it('creates a new schema via POST when no schema is being edited (new-schema path)', async () => {
@@ -311,9 +328,12 @@ describe('ParameterSchemasView — editor', () => {
     }
 
     // string: the parameter card renders two checkboxes — Required first,
-    // then Multiline (only visible for string params).
+    // then Multiline (only visible for string params). The seeded parameter
+    // starts required, so toggle it OFF to exercise the v-model setter.
     const checkboxes = wrapper.findAll('input[type="checkbox"]')
     expect(checkboxes).toHaveLength(2)
+    await checkboxes[0].setValue(false)
+    expect(vm.schemaForm.parameters[0].required).toBe(false)
     await checkboxes[1].setValue(true)
     expect(vm.schemaForm.parameters[0].multiline).toBe(true)
 
@@ -413,6 +433,42 @@ describe('ParameterSchemasView — parameter sets tab', () => {
     await switchTab(wrapper, 'Parameter Sets')
     return wrapper
   }
+
+  it('keeps the description row visible with an em-dash fallback (STATE-6)', async () => {
+    const wrapper = await openEditorAtSetsTab([
+      setItem({ id: 'set-1', name: 'No Desc Values', description: null }),
+      setItem({ id: 'set-2', name: 'Described Values', description: 'prod' }),
+    ])
+    expect(wrapper.text()).toContain('No Desc Values')
+    expect(wrapper.text()).toContain('Described Values')
+    // The empty description must still render its row (with '—'), not vanish.
+    const emptyRow = wrapper.find('[data-testid="paramschema-set-set-1"]')
+    expect(emptyRow.text()).toContain('—')
+    expect(wrapper.find('[data-testid="paramschema-set-set-2"]').text()).toContain('prod')
+  })
+
+  it('renders a pulse skeleton while the sets tab is still loading', async () => {
+    mockGet((url) => {
+      if (url === '/api/v1/parameter-schemas/{schema_id}/sets') return new Promise(() => {})
+      if (url === '/api/v1/parameter-schemas') return listPayload()
+      if (url === '/api/v1/schemas') return listPayload()
+      if (url === '/api/v1/model-backends') return { data: { items: [] }, error: undefined }
+      return { data: undefined, error: { detail: 'x' } }
+    })
+    const wrapper = mount(ParameterSchemasView)
+    await flush()
+    await wrapper.find('tbody tr').trigger('click')
+    await flush()
+    await switchTab(wrapper, 'Parameter Sets')
+    // <output> carries the implicit ARIA status role natively (SonarCloud
+    // Web:S6819) — assert the native element rather than a redundant role.
+    const skeleton = wrapper.find('output[aria-busy="true"]')
+    expect(skeleton.exists()).toBe(true)
+    expect(skeleton.element.tagName).toBe('OUTPUT')
+    expect(skeleton.attributes('aria-label')).toBe('Loading parameter sets...')
+    expect(skeleton.findAll('.animate-pulse').length).toBeGreaterThan(0)
+    expect(wrapper.text()).not.toContain('No parameter sets yet.')
+  })
 
   it('loads and lists parameter sets when the tab opens', async () => {
     const wrapper = await openEditorAtSetsTab()
@@ -566,6 +622,29 @@ describe('ParameterSchemasView — references tab', () => {
     await switchTab(wrapper, 'References')
     return wrapper
   }
+
+  it('renders a pulse skeleton while the references tab is still loading', async () => {
+    mockGet((url) => {
+      if (url === '/api/v1/parameter-schemas/{schema_id}/references') return new Promise(() => {})
+      if (url === '/api/v1/parameter-schemas') return listPayload()
+      if (url === '/api/v1/schemas') return listPayload()
+      if (url === '/api/v1/model-backends') return { data: { items: [] }, error: undefined }
+      return { data: undefined, error: { detail: 'x' } }
+    })
+    const wrapper = mount(ParameterSchemasView)
+    await flush()
+    await wrapper.find('tbody tr').trigger('click')
+    await flush()
+    await switchTab(wrapper, 'References')
+    // <output> carries the implicit ARIA status role natively (SonarCloud
+    // Web:S6819) — assert the native element rather than a redundant role.
+    const skeleton = wrapper.find('output[aria-busy="true"]')
+    expect(skeleton.exists()).toBe(true)
+    expect(skeleton.element.tagName).toBe('OUTPUT')
+    expect(skeleton.attributes('aria-label')).toBe('Loading schema references...')
+    expect(skeleton.findAll('.animate-pulse').length).toBeGreaterThan(0)
+    expect(wrapper.text()).not.toContain('Agents Using This Schema')
+  })
 
   it('lists agents and sets that reference the schema', async () => {
     const wrapper = await openEditorAtRefsTab({

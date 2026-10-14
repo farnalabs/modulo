@@ -45,9 +45,12 @@
             </ul>
           </div>
 
-          <div v-if="saveError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
-            {{ saveError }}
-          </div>
+          <!--
+            saveError carries both schema-load and save failures; a Retry would
+            refetch the list, not resubmit the form, so none is offered — the
+            user re-clicks Save (or reloads) after reading the message.
+          -->
+          <ErrorAlert v-if="saveError" :message="saveError" :retryable="false" />
 
           <div v-if="saveSuccess" class="rounded-lg border border-success/50 bg-success/10 p-4 text-sm text-success">
             {{ saveSuccess }}
@@ -85,9 +88,12 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
+import { useProductAnalytics } from '../composables/useProductAnalytics'
+import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
 import { buildJsonSchema, parseDefinitionToFields, type SchemaField } from '../utils/schema-definition'
 import FeatureGate from '../components/FeatureGate.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
 import Button from 'primevue/button'
@@ -99,6 +105,8 @@ import SchemaJsonPreview from '../components/schema/SchemaJsonPreview.vue'
 const { t } = useI18n()
 
 const route = useRoute()
+
+const { track } = useProductAnalytics()
 
 const schemas = ref<SchemaItem[]>([])
 const loadingSchemas = ref(true)
@@ -310,6 +318,8 @@ async function saveSchema() {
         return
       }
       if (!schemaData) return
+
+      track(ANALYTICS_EVENTS.SCHEMA_CREATED, { schema_id: schemaData.id })
 
       const { error: versionErr } = await api.POST('/api/v1/schemas/{schema_id}/versions', {
         params: { path: { schema_id: schemaData.id } },

@@ -35,6 +35,76 @@ class AnswerValidationError(ValueError):
     """Raised when a HITL answer fails validation against the gate contract."""
 
 
+async def _choice_gate_requires_answer(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    review_id: str,
+    org_id: uuid.UUID,
+) -> bool:
+    """Return True when the resolved gate declares a ``kind: choice`` contract."""
+    config = await resolve_hitl_review_config(
+        session,
+        run_id=run_id,
+        review_id=review_id,
+        org_id=org_id,
+    )
+    rc = config.get("response_contract") if isinstance(config, dict) else None
+    return isinstance(rc, dict) and rc.get("kind") == "choice"
+
+
+def _validate_choice(answer: dict[str, Any], response_contract: dict[str, Any]) -> None:
+    """Validate a ``kind: choice`` answer against the declared option set."""
+    option_id = answer.get("option_id")
+    if not isinstance(option_id, str) or not option_id:
+        raise AnswerValidationError("answer must have a non-empty 'option_id' string")
+    options = response_contract.get("options")
+    if not isinstance(options, list):
+        raise AnswerValidationError("gate response_contract has no options")
+    valid_ids: set[str] = {opt["id"] for opt in options if isinstance(opt, dict) and isinstance(opt.get("id"), str)}
+    if option_id not in valid_ids:
+        raise AnswerValidationError(
+            f"option_id {option_id!r} is not a valid option for this gate; valid ids: {sorted(valid_ids)}"
+        )
+
+
+def _validate_approval(answer: dict[str, Any]) -> None:
+    """Reject an ``option_id`` on an approval gate (contract-declared or implicit).
+
+    Belt-and-suspenders with the answer-kind mismatch check — an attacker
+    sending an arbitrary option_id on an approval gate would bypass the
+    mismatch check but must not succeed here.
+    """
+    option_id = answer.get("option_id")
+    if isinstance(option_id, str) and option_id:
+        raise AnswerValidationError("option_id is not permitted on an approval gate")
+
+
+def _validate_no_contract_answer(answer: dict[str, Any], kind: str) -> None:
+    """Validate an answer against an implicit approval gate (no contract declared)."""
+    if kind != "approval":
+        raise AnswerValidationError(f"gate has no response_contract; answer kind must be 'approval', got {kind!r}")
+    # Reject option_id on a no-contract (approval) gate.
+    _validate_approval(answer)
+
+
+def _validate_contract_answer(answer: dict[str, Any], response_contract: dict[str, Any]) -> None:
+    """Dispatch an answer to its kind validator against a declared contract."""
+    kind = answer.get("kind")
+    declared_kind = response_contract.get("kind")
+    if kind != declared_kind:
+        raise AnswerValidationError(
+            f"answer kind {kind!r} does not match gate response_contract kind {declared_kind!r}"
+        )
+
+    if kind == "choice":
+        _validate_choice(answer, response_contract)
+    elif kind == "approval":
+        _validate_approval(answer)
+    else:
+        raise AnswerValidationError(f"unsupported answer kind {kind!r}; expected 'choice' or 'approval'")
+
+
 async def validate_hitl_answer(
     session: AsyncSession,
     *,
@@ -55,16 +125,10 @@ async def validate_hitl_answer(
     ``kind: choice`` gate raises. Non-choice gates stay answer-optional.
     """
     if answer is None:
-        if require_answer:
-            config = await resolve_hitl_review_config(
-                session,
-                run_id=run_id,
-                review_id=review_id,
-                org_id=org_id,
-            )
-            rc = config.get("response_contract") if isinstance(config, dict) else None
-            if isinstance(rc, dict) and rc.get("kind") == "choice":
-                raise AnswerValidationError("choice gate requires an answer with a non-empty 'option_id'")
+        if require_answer and await _choice_gate_requires_answer(
+            session, run_id=run_id, review_id=review_id, org_id=org_id
+        ):
+            raise AnswerValidationError("choice gate requires an answer with a non-empty 'option_id'")
         return None
 
     kind = answer.get("kind")
@@ -85,41 +149,8 @@ async def validate_hitl_answer(
     rc = config.get("response_contract")
     if not isinstance(rc, dict):
         # No contract declared: the gate is approval-type.
-        if kind != "approval":
-            raise AnswerValidationError(f"gate has no response_contract; answer kind must be 'approval', got {kind!r}")
-        # Reject option_id on a no-contract (approval) gate.
-        option_id = answer.get("option_id")
-        if isinstance(option_id, str) and option_id:
-            raise AnswerValidationError("option_id is not permitted on an approval gate")
+        _validate_no_contract_answer(answer, kind)
         return answer
 
-    declared_kind = rc.get("kind")
-    if kind != declared_kind:
-        raise AnswerValidationError(
-            f"answer kind {kind!r} does not match gate response_contract kind {declared_kind!r}"
-        )
-
-    if kind == "choice":
-        option_id = answer.get("option_id")
-        if not isinstance(option_id, str) or not option_id:
-            raise AnswerValidationError("answer must have a non-empty 'option_id' string")
-        options = rc.get("options")
-        if not isinstance(options, list):
-            raise AnswerValidationError("gate response_contract has no options")
-        valid_ids: set[str] = {opt["id"] for opt in options if isinstance(opt, dict) and isinstance(opt.get("id"), str)}
-        if option_id not in valid_ids:
-            raise AnswerValidationError(
-                f"option_id {option_id!r} is not a valid option for this gate; valid ids: {sorted(valid_ids)}"
-            )
-    elif kind == "approval":
-        # Reject option_id on an approval gate (belt-and-suspenders with the
-        # answer-kind mismatch check — an attacker sending an arbitrary
-        # option_id on an approval gate would bypass the mismatch check but
-        # must not succeed here).
-        option_id = answer.get("option_id")
-        if isinstance(option_id, str) and option_id:
-            raise AnswerValidationError("option_id is not permitted on an approval gate")
-    else:
-        raise AnswerValidationError(f"unsupported answer kind {kind!r}; expected 'choice' or 'approval'")
-
+    _validate_contract_answer(answer, rc)
     return answer

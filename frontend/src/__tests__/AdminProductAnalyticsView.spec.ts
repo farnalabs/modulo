@@ -3,10 +3,15 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 
+// The view renders the date-only dump watermark via `formatDateShort`. Return
+// the local calendar date (no time component) so the spec proves the watermark
+// renders without a time and is deterministic across the runner's timezone.
 vi.mock('../lib/formatDate', () => ({
-  formatDateShortWithTime: (d: Date) => {
+  formatDateShort: (d: Date) => {
     if (Number.isNaN(d.getTime())) return '—'
-    return `formatted:${d.toISOString()}`
+    const month = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    return `${d.getFullYear()}-${month}-${day}`
   },
 }))
 
@@ -158,11 +163,12 @@ describe('AdminProductAnalyticsView', () => {
   it('renders last dump date and dump count', async () => {
     mockGet.mockResolvedValue({
       data: {
-        last_successful_dump_at: '2026-01-15T10:30:00Z',
+        last_successful_dump_at: '2026-01-15',
         dump_count_total: 42,
         consent_level: 'all',
         instance_enabled: true,
         enforcement_enabled: true,
+        egress_allowed: true,
         warning: null,
       },
       error: undefined,
@@ -184,7 +190,9 @@ describe('AdminProductAnalyticsView', () => {
     await flushPromises()
     await nextTick()
 
-    expect(wrapper.find('[data-testid="last-dump"]').text()).toContain('2026-01-15')
+    const lastDump = wrapper.find('[data-testid="last-dump"]').text()
+    // Date-only watermark: the calendar day renders with NO time component.
+    expect(lastDump).toBe('2026-01-15')
     expect(wrapper.find('[data-testid="dump-count-total"]').text()).toBe('42')
   })
 
@@ -455,6 +463,70 @@ describe('AdminProductAnalyticsView', () => {
     const badge = wrapper.find('[data-testid="enforcement-enabled"]')
     expect(badge.classes()).toContain('badge-status-muted')
     expect(badge.text()).toContain('Inactive')
+  })
+
+  it('renders egress allowed badge when egress_allowed is true', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        last_successful_dump_at: null,
+        dump_count_total: 0,
+        consent_level: 'all',
+        instance_enabled: true,
+        enforcement_enabled: false,
+        egress_allowed: true,
+        warning: null,
+      },
+      error: undefined,
+    })
+
+    const wrapper = mount(AdminProductAnalyticsView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          ErrorAlert: true,
+          SectionCard: { template: '<div><slot /></div>', props: ['title'] },
+          PageHeader: { template: '<div />', props: ['title', 'subtitle'] },
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const badge = wrapper.find('[data-testid="egress-allowed"]')
+    expect(badge.classes()).toContain('badge-status-success')
+    expect(badge.text()).toBe('Allowed')
+  })
+
+  it('renders egress blocked badge when egress_allowed is false', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        last_successful_dump_at: null,
+        dump_count_total: 0,
+        consent_level: 'off',
+        instance_enabled: false,
+        enforcement_enabled: false,
+        egress_allowed: false,
+        warning: null,
+      },
+      error: undefined,
+    })
+
+    const wrapper = mount(AdminProductAnalyticsView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          ErrorAlert: true,
+          SectionCard: { template: '<div><slot /></div>', props: ['title'] },
+          PageHeader: { template: '<div />', props: ['title', 'subtitle'] },
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const badge = wrapper.find('[data-testid="egress-allowed"]')
+    expect(badge.classes()).toContain('badge-status-muted')
+    expect(badge.text()).toBe('Blocked')
   })
 
   it('calls fetchTransparency on mount', async () => {

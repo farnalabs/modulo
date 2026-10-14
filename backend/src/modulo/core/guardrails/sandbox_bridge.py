@@ -216,11 +216,23 @@ def _wrap_command(argv: list[str], client: BridgeClient) -> int:
         _err("error: --wrap requires a command")
         return 2
     shell_cmd = " ".join(argv)
-    # NOSONAR: deliberate — configured agent command (pipeline config, not untrusted
+    return _spawn_and_collect(["/bin/sh", "-c", shell_cmd], client)
+
+
+def _spawn_and_collect(process_args: list[str], client: BridgeClient) -> int:
+    """Launch *process_args* and stream its stdout, forwarding bridge events.
+
+    Launch and collection failures are fail-closed: an ``OSError`` from the
+    launch reports the error and returns 1, and a child started without a
+    stdout stream raises instead of proceeding without event interception.
+    The child's exit code is returned once its stdout is exhausted; a refused
+    ``before`` call kills the child and returns 3.
+    """
+    # Suppression on the Popen call below is deliberate — configured agent command (pipeline config, not untrusted
     # input) needs shell features; already suppressed for bandit (B603) and ruff (S603).
     try:
         proc = subprocess.Popen(  # noqa: S603  # nosec B603 — execs the configured agent command (fixed argv list, shell=False, no user input)  # NOSONAR
-            ["/bin/sh", "-c", shell_cmd],
+            process_args,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             shell=False,
@@ -233,34 +245,53 @@ def _wrap_command(argv: list[str], client: BridgeClient) -> int:
     try:
         for raw_line in proc.stdout:
             line = raw_line.decode("utf-8", "replace").rstrip("\n")
-            if line.startswith(EVENT_MARKER):
-                event_text = line[len(EVENT_MARKER) :].strip()
-                try:
-                    event = json.loads(event_text)
-                except ValueError:
-                    event = {}
-                if isinstance(event, dict):
-                    tool_name = str(event.get("tool_name") or "")
-                    raw_args = event.get("args")
-                    args = raw_args if isinstance(raw_args, dict) else {}
-                    direction = "after" if event.get("direction") == "after" else "before"
-                    result_summary = str(event.get("result_summary") or "")
-                    if direction == "before":
-                        allowed, masked, _ = client.decide_before(tool_name, args)
-                        if not allowed:
-                            proc.kill()
-                            proc.wait()
-                            _out(f"{BLOCKED_MARKER}{tool_name}")
-                            return 3
-                        if masked is not None:
-                            _out(f"MODULO_BRIDGE_REDACTED:{json.dumps(masked)}")
-                    else:
-                        client.notify_after(tool_name, args, result_summary)
+            if not line.startswith(EVENT_MARKER):
+                _out(line)
                 continue
-            _out(line)
+            refused_tool = _forward_event_line(line, client)
+            if refused_tool is not None:
+                proc.kill()
+                proc.wait()
+                _out(f"{BLOCKED_MARKER}{refused_tool}")
+                return 3
     finally:
         proc.stdout.close()
     return proc.wait()
+
+
+def _forward_event_line(line: str, client: BridgeClient) -> str | None:
+    """Forward one ``MODULO_BRIDGE_EVENT`` stdout line to the Modulo side.
+
+    Returns the refused tool name when the Modulo side REFUSES the call (the
+    caller must kill the child and exit non-zero), or ``None`` when the child
+    may continue. A malformed event payload is treated as an empty event and
+    forwarded with an empty tool name — fail-open, never an echo (event lines
+    are never written back to stdout). A redact decision emits the
+    ``MODULO_BRIDGE_REDACTED`` marker; an ``after`` event is reported via
+    ``notify_after``. Best-effort — a bridge failure never refuses
+    (``BridgeClient.decide_before`` fails open).
+    """
+    event_text = line[len(EVENT_MARKER) :].strip()
+    try:
+        event = json.loads(event_text)
+    except ValueError:
+        event = {}
+    if not isinstance(event, dict):
+        return None
+    tool_name = str(event.get("tool_name") or "")
+    raw_args = event.get("args")
+    args = raw_args if isinstance(raw_args, dict) else {}
+    direction = "after" if event.get("direction") == "after" else "before"
+    result_summary = str(event.get("result_summary") or "")
+    if direction == "before":
+        allowed, masked, _ = client.decide_before(tool_name, args)
+        if not allowed:
+            return tool_name
+        if masked is not None:
+            _out(f"MODULO_BRIDGE_REDACTED:{json.dumps(masked)}")
+        return None
+    client.notify_after(tool_name, args, result_summary)
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:

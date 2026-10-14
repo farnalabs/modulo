@@ -14,6 +14,7 @@ code:
   - backend/src/modulo/core/pipeline_engine/executor.py
   - backend/src/modulo/core/pipeline_engine/eval_persist_order.py
   - backend/src/modulo/db/models/policy_gate.py
+  - backend/src/modulo/db/models/policy_gate_decision.py
   - backend/src/modulo/db/migrations/versions/0274_policy_gate_pin_fingerprint_operator_control.py
   - backend/src/modulo/api/routes/feedback.py
   - frontend/src/views/EvalEditorView.vue
@@ -32,6 +33,7 @@ unit-tests:
   - backend/tests/unit/core/pipeline_engine/test_policy_gate_eval_wiring.py
   - backend/tests/unit/core/eval_engine/test_policy_gate_decision_row.py
   - backend/tests/unit/core/evidence/test_author_warnings.py
+  - backend/tests/unit/db/crud/test_policy_gate_decision_purge.py
   - backend/tests/unit/db/test_eval_suite_run.py
   - backend/tests/integration/api/test_policy_gate_acceptance.py
   - backend/tests/integration/test_policy_gate_pin_migration.py
@@ -90,10 +92,15 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
       the run continues when persistence fails) and a purged guardrail eval whose
       decision rows still reference it hard-deletes to 409 (RESTRICT FK mapped
       to 409); org-deletion purges decision rows child-most
-      (`test_policy_gate_decision_row.py`, `test_eval_persist_order_failopen.py`,
-      `test_admin_housekeeping_decision_block.py`)
-- [x] Eval definitions are org-scoped admin CRUD (`POST/GET/PUT/DELETE
-      /api/v1/evals`, `GET /api/v1/evals/{eval_id}`) with pagination and
+      (`db/models/policy_gate_decision.py`, `test_policy_gate_decision_row.py`,
+      `test_eval_persist_order_failopen.py`,
+      `test_policy_gate_decision_purge.py` for the purge-first ordering,
+      `test_policy_gate_acceptance.py` for the FK RESTRICT guard, and
+      `test_admin_housekeeping_decision_block.py` for the housekeeping
+      `blocked_by` surfacing)
+- [x] Eval definitions are org-scoped CRUD — create/update/delete are
+      admin-gated while reads are runner-readable (`POST/GET/PUT/DELETE
+      /api/v1/evals`, `GET /api/v1/evals/{eval_id}`) — with pagination and
       pipeline / eval_type filters, plus `POST /api/v1/evals/from-run` to
       author a definition from run data
 - [x] Policy-gate binding (`POST`/`PUT /api/v1/evals/{eval_id}/policy-gate`)
@@ -133,9 +140,11 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
       comparable side-by-side between two runs (`POST /api/v1/evals/compare`)
 - [x] Leaderboards aggregate pass/fail over a window grouped by pipeline, node,
       or agent (`GET /api/v1/evals/leaderboard`)
-- [x] Coverage-gap analysis produces an eval coverage map for a pipeline
-      (`GET /api/v1/evals/coverage`) and flags uncovered/gapping surfaces using
-      divergence/threshold and minimum-runs parameters (`coverage_gap.py`)
+- [x] Coverage surfaces: an eval coverage map for a pipeline
+      (`GET /api/v1/evals/coverage`, eval definitions counted per graph node) and
+      the eval-suite insufficiency signal (`GET /api/v1/eval-coverage-gap`, scoped
+      to a variant group / batch, using a `min_runs` minimum and a variant
+      divergence `threshold` parameter; `coverage_gap.py`)
 - [x] Suite orchestration resolves an immutable baseline snapshot and a
       deterministic "latest completed same-tuple prior run" baseline, persists
       per-case outcomes into `eval_results` with a `suite_run_id` FK, and
@@ -148,8 +157,11 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
 - [x] Proposal queue: eval-gap feedback records are listed as eval proposals
       (`GET /api/v1/feedback/proposals`) and a proposal can be published into a
       real eval definition (`POST /api/v1/feedback/proposals/{record_id}/
-      publish`) – a non-eval-gap feedback record is refused – while the
-      `/evals/proposals` view supports publish / dismiss
+      publish`, 201; a non-eval-gap record is refused 422 and a record not in
+      `pending`/`routing` is 409). The `/evals/proposals` view lists the queue and
+      offers publish / dismiss actions, but its publish only marks the proposal
+      `resolved` – creating the eval definition is the API/BDD path, not yet wired
+      from the view
 - [x] The `/evals/editor` view authors evals against a pipeline + node with a
       type selector, JSON config editor, and pass threshold, save / edit /
       delete
@@ -163,6 +175,14 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   triggered/run via the suite machinery, not a standalone cron in the eval API.
 
 ## QA History
+- 2026-10-10: **product-map review pass** – reconciled the tracker with the
+  shipped code: split the conflated coverage surface (`GET /api/v1/evals/coverage`
+  vs the `GET /api/v1/eval-coverage-gap` insufficiency signal that owns
+  `min_runs`/`threshold`), corrected the "admin CRUD" permission claim (reads are
+  runner-readable), cited the `PolicyGateDecision` model file + the purge-first
+  test that actually covers org-deletion ordering, and corrected the proposal-queue
+  behaviour so the `/evals/proposals` view's publish is not conflated with the API
+  publish that creates an eval definition.
 - 2026-10-05: **Improve Architecture product-map walk** – tracked the
   FAR-967 chunk 10 policy-gate operator-control + pin-integrity surface that
   shipped without a product-map home: the admin `PATCH .../policy-gate/toggle`

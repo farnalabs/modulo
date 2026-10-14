@@ -25,6 +25,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
+import modulo.core.pipeline_engine.llm_judge as llm_judge
 import modulo.core.pipeline_engine.node_runner as nr
 from modulo.connectors.base import CIRun, CIRunLog, CIRunStatus
 from modulo.core.pipeline_engine.node_runner import (
@@ -910,8 +911,8 @@ def _stub_run_coroutine_sync(content: str) -> Callable[[Any], SimpleNamespace]:
 
 
 def test_llm_judge_non_json_response_falls_back(monkeypatch: pytest.MonkeyPatch):
-    judge = nr._build_llm_judge_callable(MagicMock(), _judge_backend_id())
-    monkeypatch.setattr(nr, "_run_coroutine_sync", _stub_run_coroutine_sync("model said: no"))
+    judge = llm_judge.build_llm_judge_callable(MagicMock(), _judge_backend_id())
+    monkeypatch.setattr(llm_judge, "run_coroutine_sync", _stub_run_coroutine_sync("model said: no"))
     result = judge({"answer": "hello"}, SimpleNamespace(config={"field": "answer"}))
     assert result["passed"] is False
     assert result["score"] == 0.0
@@ -919,10 +920,10 @@ def test_llm_judge_non_json_response_falls_back(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_llm_judge_parses_structured_response(monkeypatch: pytest.MonkeyPatch):
-    judge = nr._build_llm_judge_callable(MagicMock(), _judge_backend_id())
+    judge = llm_judge.build_llm_judge_callable(MagicMock(), _judge_backend_id())
     monkeypatch.setattr(
-        nr,
-        "_run_coroutine_sync",
+        llm_judge,
+        "run_coroutine_sync",
         _stub_run_coroutine_sync('{"passed": true, "score": 0.9, "detail": "good"}'),
     )
     result = judge({"answer": "hello"}, SimpleNamespace(config={"field": "answer"}))
@@ -1095,6 +1096,7 @@ async def test_run_evals_persist_before_decide_reraises_cancellation():
         await eval_persist_order.run_evals_persist_before_decide(
             eval_defs=eval_defs,
             resolve_eval_target=lambda ed: {"text": "pass"},
+            resolve_llm_judge=lambda _ed: None,
             run_id=uuid.uuid4(),
             org_id=_ORG_UUID,
             session_factory=lambda: session,
@@ -1118,6 +1120,7 @@ async def test_run_evals_persist_before_decide_persistence_failure_boundaries():
         results = await eval_persist_order.run_evals_persist_before_decide(
             eval_defs=eval_defs,
             resolve_eval_target=lambda ed: {"text": "pass"},
+            resolve_llm_judge=lambda _ed: None,
             run_id=uuid.uuid4(),
             org_id=_ORG_UUID,
             session_factory=lambda: session,
@@ -1139,6 +1142,7 @@ async def test_run_evals_persist_before_decide_persistence_failure_boundaries():
         await eval_persist_order.run_evals_persist_before_decide(
             eval_defs=block_defs,
             resolve_eval_target=lambda ed: {"text": "pass"},
+            resolve_llm_judge=lambda _ed: None,
             run_id=uuid.uuid4(),
             org_id=_ORG_UUID,
             session_factory=lambda: block_session,
@@ -1166,6 +1170,7 @@ async def test_run_evals_persist_before_decide_skips_without_run_id():
     results = await eval_persist_order.run_evals_persist_before_decide(
         eval_defs=eval_defs,
         resolve_eval_target=lambda ed: {"text": "pass"},
+        resolve_llm_judge=lambda _ed: None,
         run_id=None,
         org_id=_ORG_UUID,
         session_factory=lambda: session,
@@ -1572,6 +1577,7 @@ async def test_dispatch_fire_and_forget_completes_once_without_polling():
     assert output["execution_identity"] == "customer_substrate"
     assert output["declared_external_cost"] is None
     assert output["witnessed_via"] == node_def["connector_binding"]["instance_id"]
+    assert output["provenance"] == "reported"
 
 
 async def test_dispatch_await_completion_polls_until_terminal_then_completes(
@@ -2244,7 +2250,7 @@ async def test_clear_dispatch_marker_unparseable_org_noop():
 
 
 async def test_mint_run_api_key_unparseable_org_returns_none():
-    value = await nr._sandbox_mint_run_api_key_for_sandbox(
+    value = await nr._sandbox_issue_run_credential_for_sandbox(
         session_factory=lambda: _FakeSession(), org_id="bad", run_id=_RUN_UUID_STR, node_id="n1", sandbox_timeout=60
     )
     assert value is None
@@ -2265,10 +2271,12 @@ async def test_mint_run_api_key_falls_back_to_first_admin(monkeypatch: pytest.Mo
     minted = AsyncMock(return_value=(MagicMock(), "raw-key"))
     monkeypatch.setattr("modulo.auth.api_key.mint_run_api_key", minted)
     monkeypatch.setattr("modulo.db.crud.run.get_run_api_key_ttl_seconds", AsyncMock(return_value=900))
-    value = await nr._sandbox_mint_run_api_key_for_sandbox(
+    value = await nr._sandbox_issue_run_credential_for_sandbox(
         session_factory=lambda: session, org_id=_ORG_ID, run_id=_RUN_UUID_STR, node_id="n1", sandbox_timeout=60
     )
-    assert value == "raw-key"
+    assert value is not None
+    assert value.secret == "raw-key"
+    assert value.provenance == "modulo_minted"
     assert minted.await_args.kwargs["account_id"] == admin_id
 
 
@@ -2281,7 +2289,7 @@ async def test_mint_run_api_key_no_account_returns_none(monkeypatch: pytest.Monk
     session = _FakeSession(_route)
     monkeypatch.setattr("modulo.auth.api_key.mint_run_api_key", AsyncMock())
     monkeypatch.setattr("modulo.db.crud.run.get_run_api_key_ttl_seconds", AsyncMock(return_value=900))
-    value = await nr._sandbox_mint_run_api_key_for_sandbox(
+    value = await nr._sandbox_issue_run_credential_for_sandbox(
         session_factory=lambda: session, org_id=_ORG_ID, run_id=_RUN_UUID_STR, node_id="n1", sandbox_timeout=60
     )
     assert value is None
@@ -2292,7 +2300,7 @@ async def test_mint_run_api_key_reraises_cancellation(monkeypatch: pytest.Monkey
         "modulo.db.crud.run.get_run_api_key_ttl_seconds", AsyncMock(side_effect=asyncio.CancelledError())
     )
     with pytest.raises(asyncio.CancelledError):
-        await nr._sandbox_mint_run_api_key_for_sandbox(
+        await nr._sandbox_issue_run_credential_for_sandbox(
             session_factory=lambda: _FakeSession(),
             org_id=_ORG_ID,
             run_id=_RUN_UUID_STR,
@@ -2310,7 +2318,7 @@ async def test_mint_run_api_key_mint_failure_returns_none(monkeypatch: pytest.Mo
     session = _FakeSession(_route)
     monkeypatch.setattr("modulo.auth.api_key.mint_run_api_key", AsyncMock(return_value=None))
     monkeypatch.setattr("modulo.db.crud.run.get_run_api_key_ttl_seconds", AsyncMock(return_value=900))
-    value = await nr._sandbox_mint_run_api_key_for_sandbox(
+    value = await nr._sandbox_issue_run_credential_for_sandbox(
         session_factory=lambda: session, org_id=_ORG_ID, run_id=_RUN_UUID_STR, node_id="n1", sandbox_timeout=60
     )
     assert value is None
@@ -3255,6 +3263,144 @@ async def test_sandbox_cancellation_final_drain_failure_is_isolated(caplog):
     ):
         await fn(_run_state())
     assert any("cancel_retention_drain_failed" in m for m in caplog.messages)
+
+
+async def test_sandbox_cancellation_retains_deadline_triage_marker():
+    """FAR-704: a cancelled sandbox attempt with NO delivery sentinel still
+    retains a triage marker (deadline_triage=True, no_output_reason, redacted
+    log tail + output tail) — the only post-hoc record of a node-deadline
+    watchdog kill, where the dispatch is cancelled before output.json is read
+    and no node envelope reaches the Agent Return Contract columns."""
+    fn = make_sandbox_agent_fn(_sandbox_node_def())
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError)
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=13))
+    sandbox.files.read = AsyncMock(return_value="partial work\n")
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+    captured: dict[str, Any] = {}
+
+    async def _capture(**kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch.object(nr, "_sandbox_cancel_retention_persist", new=AsyncMock(side_effect=_capture)),
+        patch.object(nr, "_read_log_tail_via_provider", new=AsyncMock(return_value="agent.log: e2b endAt reached")),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+    marker = captured.get("marker")
+    assert isinstance(marker, dict)
+    assert marker["deadline_triage"] is True
+    assert marker.get("delivery_done") is not True  # no sentinel drained
+    assert marker["status"] == "failed"
+    assert "agent.log: e2b endAt reached" in marker["sandbox_log_tail"]
+    assert marker["no_output_reason"]
+    assert "partial work" in marker["raw_output"]
+    assert marker["stdout_length"] == len("partial work\n")
+    # The marker rides the dedicated attempt_key-keyed retention store —
+    # NEVER outputs_json / node_telemetry_json (Agent Return Contract).
+    assert "outputs_json" not in marker
+    assert "node_telemetry_json" not in marker
+
+
+async def test_sandbox_cancellation_triage_marker_stamps_delivery_done_for_sentinel():
+    """FAR-704 + FAR-228: when the sentinel WAS drained, the SAME always-written
+    triage marker carries delivery_done=True (monotone merge preserves it)."""
+    fn = make_sandbox_agent_fn(_sandbox_node_def(delivery_sentinel="ALL DONE"))
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError)
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=14))
+    sandbox.files.read = AsyncMock(return_value="work\nALL DONE\n")
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+    captured: dict[str, Any] = {}
+
+    async def _capture(**kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch.object(nr, "_sandbox_cancel_retention_persist", new=AsyncMock(side_effect=_capture)),
+        patch.object(nr, "_read_log_tail_via_provider", new=AsyncMock(return_value="")),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+    marker = captured.get("marker")
+    assert isinstance(marker, dict)
+    assert marker["deadline_triage"] is True
+    assert marker["delivery_done"] is True
+
+
+async def test_sandbox_cancellation_log_tail_fetch_failure_does_not_block_marker(caplog):
+    """FAR-704: a failing log-tail probe degrades to an empty tail — the triage
+    marker is still persisted, then the original cancellation re-raises."""
+    fn = make_sandbox_agent_fn(_sandbox_node_def())
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError)
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=1))
+    sandbox.files.read = AsyncMock(return_value="x")
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+    captured: dict[str, Any] = {}
+
+    async def _capture(**kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch.object(nr, "_sandbox_cancel_retention_persist", new=AsyncMock(side_effect=_capture)),
+        patch.object(nr, "_read_log_tail_via_provider", new=AsyncMock(side_effect=RuntimeError("logs down"))),
+        caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+    assert any("cancel_log_tail_fetch_failed" in m for m in caplog.messages)
+    marker = captured.get("marker")
+    assert isinstance(marker, dict)
+    assert marker["deadline_triage"] is True
+    assert not marker["sandbox_log_tail"]
+
+
+async def test_sandbox_cancellation_log_tail_fetch_cancelled_still_persists_marker():
+    """FAR-704: a nested cancellation during the log-tail probe is swallowed so
+    the triage marker is still persisted, then the original cancellation
+    re-raises — exercising the dedicated ``asyncio.CancelledError`` arm (the
+    sibling test covers the generic ``Exception`` arm)."""
+    fn = make_sandbox_agent_fn(_sandbox_node_def())
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError)
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=5))
+    sandbox.files.read = AsyncMock(return_value="hello")
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+    captured: dict[str, Any] = {}
+
+    async def _capture(**kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch.object(nr, "_sandbox_cancel_retention_persist", new=AsyncMock(side_effect=_capture)),
+        patch.object(nr, "_read_log_tail_via_provider", new=AsyncMock(side_effect=asyncio.CancelledError)),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+    marker = captured.get("marker")
+    assert isinstance(marker, dict)
+    assert marker["deadline_triage"] is True
+    # The cancelled probe degrades to an empty tail, never a fabricated one.
+    assert not marker["sandbox_log_tail"]
+    assert marker["no_output_reason"]
 
 
 async def test_sandbox_success_delivery_marker_persist_reraises_cancellation():

@@ -19,6 +19,11 @@ matching owned by individual read surfaces (``error_codes.py``,
 mask by key rather than by secret value and this leaf module must not pull
 them in.
 
+The canonical trigger-config secret-key VOCABULARY
+(:data:`TRIGGER_CONFIG_SECRET_KEYS`, FAR-1732) also lives here for the same
+cross-contract reason: the API write path, the core rotation service and the
+migration-0305 parity test share one definition instead of three literals.
+
 This module lives in ``modulo.core`` (a leaf with no ``modulo.*`` imports) so
 that core redaction sites can use it without violating the
 ``core-does-not-import-api`` architecture contract. The API-layer
@@ -27,6 +32,7 @@ so callers in the API layer keep importing from the documented location.
 """
 
 import re
+from collections.abc import Sequence
 from typing import Any
 
 # The DOM-safe mask returned for any redacted value.
@@ -165,6 +171,18 @@ def is_sensitive_env_key(key: str) -> bool:
     return key in _SENSITIVE_ENV_KEYS or is_sensitive_key(key)
 
 
+# The trigger-config keys whose VALUES are secrets encrypted at rest
+# (FAR-1732): the write-path helper
+# (``api.routes.triggers._encrypt_trigger_config_secrets``), the Fernet
+# rotation service (``core.fernet_rotation._rotate_triggers``) and the
+# migration-0305 parity test all pin THIS set. It lives in this leaf module
+# (no ``modulo.*`` imports) so the core rotation service can share the exact
+# write-path vocabulary without breaching the ``core-does-not-import-api``
+# contract — a second copy in either layer is exactly how a future third
+# secret key would silently escape rotation or encryption.
+TRIGGER_CONFIG_SECRET_KEYS: frozenset[str] = frozenset({"hmac_secret", "signing_secret"})
+
+
 def mask_secret_values_in_text(text: str) -> str:
     """Mask gitleaks-style secret VALUES embedded in *text*.
 
@@ -216,6 +234,30 @@ def _close_marker_end(text: str, pattern: re.Pattern[str], close_off: int, close
     return close_off + len(close)
 
 
+def _resolve_overlaps(text: str, matches: Sequence[tuple[int, int, str]]) -> str:
+    """Assemble *text* with each candidate mask applied, skipping overlaps.
+
+    *matches* is the ordered ``(start, end, mask)`` candidate list produced by
+    the window scan in :func:`_mask_bounded_pattern`, in discovery order. A
+    candidate that starts before the end of the previously ACCEPTED span is
+    already covered by that span's mask, so it is dropped — never double-masked
+    and never left to leak (the covering span is the wider mask). The gaps
+    between accepted spans and the tail after the last one are copied through
+    verbatim, so non-secret content is preserved in full.
+    """
+    parts: list[str] = []
+    last = 0
+    for start, end, mask in matches:
+        if start < last:
+            # Already covered by a previous replacement; avoid double-masking.
+            continue
+        parts.append(text[last:start])
+        parts.append(mask)
+        last = end
+    parts.append(text[last:])
+    return "".join(parts)
+
+
 def _mask_bounded_pattern(text: str, pattern: re.Pattern[str], replacement: Any) -> str:
     """Mask *pattern* (a nested-quantifier pattern) without ReDoS or truncation.
 
@@ -232,68 +274,54 @@ def _mask_bounded_pattern(text: str, pattern: re.Pattern[str], replacement: Any)
     nested-quantifier regex over an unbounded string. Previously such a secret's
     close fell outside the bounded window and the secret was skipped entirely,
     leaking it unmasked.
+
+    The window scan collects ``(start, end, mask)`` candidates and the final
+    assembly — overlap resolution against earlier spans — happens in
+    :func:`_resolve_overlaps`; every redaction decision (window anchoring,
+    close-delimiter resolution, over-cap span masking) stays here.
     """
     if len(text) <= SECRET_VALUE_REDACT_CHAR_CAP:
         return pattern.sub(replacement, text)
     anchor, close, prefix = _BOUNDED_WINDOW_HINTS[pattern]
-    result: list[str] = []
-    last = 0
+    # The replacement is fixed for this call: either the bare mask (a str) or a
+    # formatter that needs the real match object (the connection-string case).
+    # Resolve the FORM once so the window scan carries no per-match branching.
+    # An over-cap span never runs the regex, so it always takes the bare mask.
+    render = replacement if callable(replacement) else (lambda _match: replacement)
+    span_mask = SENSITIVE_VALUE_MASK if callable(replacement) else replacement
+    matches: list[tuple[int, int, str]] = []
     pos = 0
-    while True:
-        off = text.find(anchor, pos)
-        if off == -1:
-            break
+    while (off := text.find(anchor, pos)) != -1:
         pos = off + 1
         # Include ``prefix`` chars before the anchor so the regex can match the
         # secret's leading context (e.g. the scheme before ``://``).
         window_start = max(0, off - prefix)
-        # Locate the close delimiter in the FULL text (a plain ``str.find``, not
-        # a regex) so a secret longer than the ReDoS cap is still found. If no
-        # close follows the anchor it is not a real secret — leave it untouched.
-        if pattern is CONNECTION_STRING_PATTERN:
-            # The connection-string regex captures ``\S+`` (a contiguous
-            # whitespace-free run) so it masks up to the FINAL ``@`` of that run
-            # (the host separator), not the first. A password may itself contain
-            # ``@`` (e.g. ``pa@ss``), so the bounded window must span to that
-            # final ``@`` — otherwise the password tail leaks. Search the bounded
-            # region for the LAST ``@`` rather than the first.
-            region_end = window_start + SECRET_VALUE_REDACT_CHAR_CAP
-            last_at = text.find(close, off + len(anchor))
-            while True:
-                nxt = text.find(close, last_at + 1)
-                if nxt == -1 or nxt + 1 > region_end:
-                    break
-                last_at = nxt
-            close_off = last_at
-        else:
+        # Locate the close delimiter in the FULL text (plain ``str`` searches,
+        # not a regex) so a secret longer than the ReDoS cap is still found. If
+        # no close follows the anchor it is not a real secret — leave it
+        # untouched. Connection strings close on the FINAL ``@`` of the
+        # password's contiguous whitespace-free run (the host separator — a
+        # password may itself contain ``@``, e.g. ``pa@ss``), so take the last
+        # ``@`` inside the bounded region, falling back to the first ``@`` after
+        # the anchor when none lies inside it; private keys close on the first
+        # ``-----END ``.
+        region_end = window_start + SECRET_VALUE_REDACT_CHAR_CAP
+        close_off = text.rfind(close, off + len(anchor), region_end) if pattern is CONNECTION_STRING_PATTERN else -1
+        if close_off == -1:
             close_off = text.find(close, off + len(anchor))
         if close_off == -1:
             continue
         close_end = _close_marker_end(text, pattern, close_off, close)
-        # Run the precise regex over the secret span only when it fits the ReDoS
-        # cap, preserving formatting (e.g. connection-string scheme/host). When
-        # the secret is longer than the cap, mask the whole span directly: both
-        # delimiters are confirmed present and we never run the nested-quantifier
-        # regex over an unbounded string.
-        if close_end - window_start <= SECRET_VALUE_REDACT_CHAR_CAP:
-            window = text[window_start:close_end]
-            for match in pattern.finditer(window):
-                start = window_start + match.start()
-                end = window_start + match.end()
-                if start < last:
-                    # Already covered by a previous replacement; avoid double-masking.
-                    continue
-                result.append(text[last:start])
-                result.append(replacement(match) if callable(replacement) else replacement)
-                last = end
-        else:
-            if window_start < last:
-                continue
-            result.append(text[last:window_start])
-            # A callable replacement (the connection-string formatter) needs a
-            # real match object; for an over-cap span we use the bare mask so we
-            # never run the unbounded regex. The whole secret span is masked.
-            result.append(SENSITIVE_VALUE_MASK if callable(replacement) else replacement)
-            last = close_end
-    result.append(text[last:])
-    return "".join(result)
+        # Over-cap span: both delimiters are confirmed present, so mask the
+        # whole span directly — never run the nested-quantifier regex over an
+        # unbounded string. Under-cap: run the precise regex over the secret
+        # span only, preserving formatting (e.g. connection-string scheme/host).
+        if close_end - window_start > SECRET_VALUE_REDACT_CHAR_CAP:
+            matches.append((window_start, close_end, span_mask))
+            continue
+        window = text[window_start:close_end]
+        matches.extend(
+            (window_start + match.start(), window_start + match.end(), render(match))
+            for match in pattern.finditer(window)
+        )
+    return _resolve_overlaps(text, matches)

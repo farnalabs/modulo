@@ -43,6 +43,9 @@ _GIT_STATE_ENV = {
 
 _SEMGREP_TIMEOUT = 180  # seconds — scoped scan on a handful of files
 
+#: The backend source tree semgrep scans (rule ``paths:`` filters target it).
+_BACKEND_SRC = "backend/src/"
+
 _SEMGREP_WARN = """\
 ========================================================================
 run_semgrep.py WARNING: semgrep did NOT complete on Windows.
@@ -79,7 +82,7 @@ def _get_changed_py_files() -> tuple[list[str], str | None]:
         ]
         if diff_flag:
             cmd.append(diff_flag)
-        cmd.extend(["--", "backend/src/"])
+        cmd.extend(["--", _BACKEND_SRC])
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -92,7 +95,7 @@ def _get_changed_py_files() -> tuple[list[str], str | None]:
             continue
         for raw_line in result.stdout.splitlines():
             stripped = raw_line.strip()
-            if stripped.endswith(".py") and stripped.startswith("backend/src/"):
+            if stripped.endswith(".py") and stripped.startswith(_BACKEND_SRC):
                 files.add(stripped)
     return sorted(files), git_error
 
@@ -216,7 +219,7 @@ def main() -> int:
         "--timeout",
         "120",
         "--baseline-commit=HEAD",
-        "backend/src/",
+        _BACKEND_SRC,
     ]
     result = subprocess.run(cmd, env=env, check=False)
     return result.returncode

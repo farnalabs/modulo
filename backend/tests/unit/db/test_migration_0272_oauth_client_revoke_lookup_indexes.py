@@ -127,9 +127,19 @@ class TestChain:
         # 0289_pipelines_environment_profile (FAR-1558), then
         # 0290_scheduled_reports_due_scan, then
         # 0291_invitations_lookup_constraints, then
-        # 0292_audit_events_resource_lookup,
-        # now chain onto this migration, so the single head moved up twenty.
-        assert heads == ["0292_audit_events_resource_lookup"], f"expected a single head, got {heads}"
+        # 0292_audit_events_resource_lookup, then
+        # 0293_oauth_clients_team_id, then
+        # 0294_eval_results_org_fk, then
+        # 0295_decision_record_event_identity, then
+        # 0296_benign_run_outcomes, then 0297_autonomy_gating_s1, then
+        # 0298_accounts_kind, then 0299_accounts_service_identity, then
+        # 0300_benign_facts_repair, then 0301_oauth_consent_state_preauth_rls,
+        # then 0302_runs_run_grouping, then 0303_feedback_records_lookup_indexes,
+        # then 0305_guardrail_escalate_action, then 0306_trigger_secret_encryption,
+        # then 0307_runs_guardrail_override_resume_pending, then
+        # 0310_library_cluster_db_hardening now chain onto this migration, so the single head
+        # moved up another revision.
+        assert heads == ["0310_library_cluster_db_hardening"], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0271_org_api_keys_revocation_sweep_indexes(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION

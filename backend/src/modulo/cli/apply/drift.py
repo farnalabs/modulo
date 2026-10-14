@@ -71,6 +71,98 @@ def _diff_graph(
     return detail
 
 
+def _render_drift_value(value: Any) -> str:
+    """Absent side renders as ``(none)`` — never the literal ``None`` (Minor 5)."""
+    return "(none)" if value is None else str(value)
+
+
+def _diff_node_map(
+    desired: dict[str, Any],
+    current: dict[str, Any],
+) -> list[tuple[str, dict[str, Any], dict[str, Any]]]:
+    """Node pairs present in BOTH graphs, matched by id (symmetric keys).
+
+    Only ids present on both sides are compared — the whole-graph hash has
+    already decided the node-level difference, and added/removed nodes are
+    covered by the generic node breakdown (``_diff_graph``). Pairs are
+    returned sorted by node id for a stable report order.
+    """
+    desired_nodes = {str(element.get("id")): element for element in (desired.get("nodes") or [])}
+    current_nodes = {str(element.get("id")): element for element in (current.get("nodes") or [])}
+    return [
+        (node_id, desired_nodes[node_id], current_nodes[node_id])
+        for node_id in sorted(desired_nodes.keys() & current_nodes.keys())
+    ]
+
+
+def _diff_git_scalar_fields(
+    node_id: str,
+    desired_node: dict[str, Any],
+    current_node: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Per-node drift entries for the scalar git-content fields (FAR-220)."""
+    from modulo.core.pipeline_engine.git_content import GIT_CONTENT_SCALAR_FIELDS, is_git_content_ref
+
+    entries: list[dict[str, str]] = []
+    for field in GIT_CONTENT_SCALAR_FIELDS:
+        desired_value = desired_node.get(field)
+        current_value = current_node.get(field)
+        if not (is_git_content_ref(desired_value) or is_git_content_ref(current_value)):
+            continue
+        if desired_value == current_value:
+            continue
+        entries.append(
+            {
+                "node": node_id,
+                "field": field,
+                "desired": _render_drift_value(desired_value),
+                "current": _render_drift_value(current_value),
+            }
+        )
+    return entries
+
+
+def _agent_command_at(commands: list[Any], index: int) -> Any:
+    """Positional item, or None when the list is shorter than ``index``."""
+    return commands[index] if index < len(commands) else None
+
+
+def _diff_agent_command_refs(
+    node_id: str,
+    desired_node: dict[str, Any],
+    current_node: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Per-node drift entries for positional ``agent_commands`` git refs.
+
+    Compares the two command lists index-wise over ``max(len)``; a position
+    present on only one side renders as ``(none)`` on the other. When either
+    side is not a list, no entries are emitted (non-comparable shape).
+    """
+    from modulo.core.pipeline_engine.git_content import is_git_content_ref
+
+    desired_commands = desired_node.get("agent_commands")
+    current_commands = current_node.get("agent_commands")
+    if not (isinstance(desired_commands, list) and isinstance(current_commands, list)):
+        return []
+    entries: list[dict[str, str]] = []
+    for index in range(max(len(desired_commands), len(current_commands))):
+        desired_item = _agent_command_at(desired_commands, index)
+        current_item = _agent_command_at(current_commands, index)
+        if not (is_git_content_ref(desired_item) or is_git_content_ref(current_item)):
+            continue
+        if desired_item == current_item:
+            continue
+        entries.append(
+            {
+                "node": node_id,
+                "field": f"agent_commands[{index}]",
+                "desired": _render_drift_value(desired_item),
+                "current": _render_drift_value(current_item),
+            }
+        )
+    return entries
+
+
 def _diff_git_content(
     desired_graph: dict[str, Any],
     current_graph: dict[str, Any],
@@ -87,55 +179,69 @@ def _diff_git_content(
     Both graphs are the canonical normalised shape (same source as the plan
     hash), so string comparison is the drift decision — identical to the hash.
     """
-    from modulo.core.pipeline_engine.git_content import GIT_CONTENT_SCALAR_FIELDS, is_git_content_ref
-
-    def _pick(graph: dict[str, Any]) -> dict[str, dict[str, Any]]:
-        return {str(element.get("id")): element for element in (graph.get("nodes") or [])}
-
-    def _render(value: Any) -> str:
-        """Absent side renders as ``(none)`` — never the literal ``None`` (Minor 5)."""
-        return "(none)" if value is None else str(value)
-
-    desired_nodes = _pick(desired_graph)
-    current_nodes = _pick(current_graph)
     entries: list[dict[str, str]] = []
-    for node_id in sorted(desired_nodes.keys() & current_nodes.keys()):
-        desired_node = desired_nodes[node_id]
-        current_node = current_nodes[node_id]
-        for field in GIT_CONTENT_SCALAR_FIELDS:
-            desired_value = desired_node.get(field)
-            current_value = current_node.get(field)
-            if not (is_git_content_ref(desired_value) or is_git_content_ref(current_value)):
-                continue
-            if desired_value == current_value:
-                continue
-            entries.append(
+    for node_id, desired_node, current_node in _diff_node_map(desired_graph, current_graph):
+        entries.extend(_diff_git_scalar_fields(node_id, desired_node, current_node))
+        entries.extend(_diff_agent_command_refs(node_id, desired_node, current_node))
+    return entries
+
+
+def policy_gate_changes(
+    desired_graph: dict[str, Any] | None,
+    current_graph: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Node-attached policy-gate add/change/remove breakdown (FAR-1109).
+
+    Nodes are matched by id; each entry names the node, the change class
+    (``added`` / ``changed`` / ``removed``) and the gate's action (plus the
+    previous action on a change) so the apply/drift report can list gate
+    changes as a DISTINCT change class instead of burying them in a generic
+    "graph updated". Absence of a block on a node means no live gate, so a
+    current gate with no desired counterpart is a ``removed`` change.
+
+    The graphs are the canonical normalised shape (same source as the plan
+    hash), so a change here is a real managed-field change. ``policy_gate`` is
+    not credential-bearing, so redaction never touches it — the caller may pass
+    either raw or redacted graphs.
+    """
+    desired_nodes = {str(n.get("id")): n for n in ((desired_graph or {}).get("nodes") or [])}
+    current_nodes = {str(n.get("id")): n for n in ((current_graph or {}).get("nodes") or [])}
+    changes: list[dict[str, Any]] = []
+    for node_id in sorted(desired_nodes.keys() | current_nodes.keys()):
+        desired_gate = desired_nodes.get(node_id, {}).get("policy_gate")
+        current_gate = current_nodes.get(node_id, {}).get("policy_gate")
+        if desired_gate == current_gate:
+            continue
+        if current_gate is None:
+            changes.append(
                 {
+                    "change": "added",
                     "node": node_id,
-                    "field": field,
-                    "desired": _render(desired_value),
-                    "current": _render(current_value),
+                    "action": desired_gate.get("action"),
+                    "eval_id": desired_gate.get("eval_id"),
                 }
             )
-        desired_commands = desired_node.get("agent_commands")
-        current_commands = current_node.get("agent_commands")
-        if isinstance(desired_commands, list) and isinstance(current_commands, list):
-            for index in range(max(len(desired_commands), len(current_commands))):
-                desired_item = desired_commands[index] if index < len(desired_commands) else None
-                current_item = current_commands[index] if index < len(current_commands) else None
-                if not (is_git_content_ref(desired_item) or is_git_content_ref(current_item)):
-                    continue
-                if desired_item == current_item:
-                    continue
-                entries.append(
-                    {
-                        "node": node_id,
-                        "field": f"agent_commands[{index}]",
-                        "desired": _render(desired_item),
-                        "current": _render(current_item),
-                    }
-                )
-    return entries
+        elif desired_gate is None:
+            changes.append(
+                {
+                    "change": "removed",
+                    "node": node_id,
+                    "action": current_gate.get("action"),
+                    "eval_id": current_gate.get("eval_id"),
+                }
+            )
+        else:
+            changes.append(
+                {
+                    "change": "changed",
+                    "node": node_id,
+                    "action": desired_gate.get("action"),
+                    "previous_action": current_gate.get("action"),
+                    "eval_id": desired_gate.get("eval_id"),
+                    "previous_eval_id": current_gate.get("eval_id"),
+                }
+            )
+    return changes
 
 
 def _diff_fields(desired: dict[str, Any], current: dict[str, Any]) -> dict[str, list[str]]:
@@ -231,7 +337,13 @@ def build_drift_detail(
         git_content = _diff_git_content(view["graph"], raw_current_graph)
         if git_content:
             breakdown["git_content"] = git_content
-        if graph_changed or git_content:
+        # FAR-1109: name node-attached policy-gate changes explicitly — the
+        # generic node breakdown flags the node as "modified", but an operator
+        # must be able to tell a gate change from any other node change.
+        gate_changes = policy_gate_changes(view["graph"], current_graph)
+        if gate_changes:
+            breakdown["policy_gates"] = gate_changes
+        if graph_changed or git_content or gate_changes:
             detail[name] = breakdown
 
     # Non-pipeline field breakdown (keyed "<kind>:<name>").
@@ -266,4 +378,4 @@ def has_drift(report: dict[str, Any]) -> bool:
     return bool(report.get("created") or report.get("updated") or report.get("blocked"))
 
 
-__all__ = ["build_drift_detail", "has_drift"]
+__all__ = ["build_drift_detail", "has_drift", "policy_gate_changes"]

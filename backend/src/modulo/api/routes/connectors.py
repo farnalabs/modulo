@@ -36,7 +36,12 @@ from modulo.connectors.github import GitHubConnector, is_fine_grained_pat
 from modulo.connectors.rest import RestConnector
 from modulo.core.audit_coverage import audited
 from modulo.core.connector_hub import ConnectorDecryptError, ConnectorHub
-from modulo.core.secrets_backend import create_secrets_backend
+from modulo.core.secrets_backend import (
+    CredentialReferenceError,
+    create_secrets_backend,
+    is_secret_ref,
+    resolve_credential,
+)
 from modulo.core.team_visibility import (
     ConnectorTeamMismatch,
     connector_team_mismatch,
@@ -317,6 +322,8 @@ def _reconcile_rest_credentials(existing: Any, incoming_credentials: str, settin
 class ConnectorCreate(TeamVisibilityMixin):
     name: str = Field(..., min_length=1, max_length=255)
     connector_type_id: str = Field(..., min_length=1, max_length=128)
+    # Literal credentials, or a ``secretref://<key>`` vault reference the
+    # SERVER resolves at write time (FAR-1640).
     credentials: str = Field(..., min_length=1)
     config_json: dict[str, Any] = Field(default_factory=dict)
     allowed_operations: list[str] = Field(default_factory=list)
@@ -478,7 +485,37 @@ async def _verify_github_credentials(credentials: str) -> None:
         )
 
 
-def _validate_rest_connector_payload(req: ConnectorCreate) -> None:
+async def _resolve_create_credentials(
+    session: AsyncSession,
+    credentials: str,
+    principal: TenantPrincipal,
+    settings: Settings,
+) -> str:
+    """Resolve a create's ``secretref://<key>`` credential source to a literal (FAR-1640).
+
+    A literal credential passes through untouched (no secrets backend
+    constructed), so the historical create path is byte-identical for the
+    common case and never depends on the vault being configured. A
+    ``secretref://`` token is resolved under a short RLS transaction so the
+    vault read is org-scoped; a missing/foreign/empty key is a typed 422 naming
+    only the offending key — never a silent empty credential, never a 500.
+    """
+    if not is_secret_ref(credentials):
+        return credentials
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
+            return await resolve_credential(secrets_backend, credentials)
+    except CredentialReferenceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=exc.validation_detail(["body", "credentials"]),
+        ) from None
+
+
+def _validate_rest_connector_payload(credentials: str, config_json: dict[str, Any]) -> None:
     """Validate a REST connector's credential and config contracts (FAR-466/532).
 
     A REST connector's credentials are ALWAYS a JSON object. Validate the
@@ -486,9 +523,12 @@ def _validate_rest_connector_payload(req: ConnectorCreate) -> None:
     boundary so a direct POST cannot save a broken credential (e.g.
     ``{"auth_mode":"bearer"}`` with no token) that the connector will reject at
     run time. This mirrors the PATCH overlay validation.
+
+    *credentials* is the RESOLVED credential (a vault reference is resolved
+    server-side before this runs, FAR-1640).
     """
     try:
-        rest_creds = json.loads(req.credentials)
+        rest_creds = json.loads(credentials)
     except (ValueError, TypeError):
         rest_creds = None
     if not isinstance(rest_creds, dict):
@@ -507,7 +547,7 @@ def _validate_rest_connector_payload(req: ConnectorCreate) -> None:
     # an invalid on_unknown would otherwise be saved and brick every bound
     # node at run time (RestConnector.__init__ raises).
     try:
-        _validate_rest_config(req.config_json)
+        _validate_rest_config(config_json)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -597,13 +637,18 @@ async def create_connector_endpoint(
     principal: TenantPrincipal = require_permission("connector.create"),
     settings: Settings = Depends(get_settings),
 ) -> ConnectorResponse:
+    # FAR-1640: resolve a secretref:// vault reference under
+    # the caller's org context BEFORE any verification/encryption — the token
+    # verification and REST payload checks run against the RESOLVED credential.
+    resolved_credentials = await _resolve_create_credentials(session, req.credentials, principal, settings)
+
     if req.connector_type_id == "github":
-        await _verify_github_credentials(req.credentials)
+        await _verify_github_credentials(resolved_credentials)
 
     if req.connector_type_id == "rest":
-        _validate_rest_connector_payload(req)
+        _validate_rest_connector_payload(resolved_credentials, req.config_json)
 
-    ciphertext = _encrypt(req.credentials, settings.fernet_key)
+    ciphertext = _encrypt(resolved_credentials, settings.fernet_key)
     ci = await _create_connector(session, req, principal, ciphertext)
     return _to_response(ci)
 
@@ -734,14 +779,21 @@ async def _reject_re_scope_that_breaks_a_bound_pipeline(
     """FAR-1515 MAJOR 5: a visibility/owner re-scope may not strand a binding.
 
     ``validate_team_transition_for_update`` (called first) checks TEAM
-    MEMBERSHIP only. Flipping a connector that pipelines already bind to
-    ``org`` (or handing it to another team) recreates exactly the state the
-    graph-save gate refuses: a team pipeline pinning an org-only connector, or
-    another team's pipeline pinning this team's private connector. The bound
-    pipelines are prefiltered by a text-contains query, then confirmed against
-    the REAL stored bindings, and each confirmed binding is judged with the
-    same predicate the save path uses — so the rejection names the offending
-    pipeline's team via the same 409 ``connector_team_mismatch`` detail.
+    MEMBERSHIP only. NARROWING a connector that pipelines already bind to —
+    flipping it to ``team``, or handing it to a team — strands every bound
+    pipeline outside that team, which is the state the graph-save gate refuses
+    (another team's pipeline, or an org pipeline, pinning a team-private
+    connector). The bound pipelines are prefiltered by a text-contains query,
+    then confirmed against the REAL stored bindings, and each confirmed binding
+    is judged with the same predicate the save path uses — so the rejection
+    names the offending pipeline's team via the same 409
+    ``connector_team_mismatch`` detail.
+
+    WIDENING never blocks: since FAR-1618 an org-visibility connector is
+    shared across the organisation, so flipping a bound connector to ``org``
+    cannot strand anyone (teams are a visibility grouping, not a credential
+    trust boundary; the FAR-1515 reverse direction and the FAR-516 run-gate it
+    mirrored are removed).
 
     A PATCH that does not actually change ``visibility``/``owner_team_id``
     never reaches the query.
@@ -766,7 +818,6 @@ async def _reject_re_scope_that_breaks_a_bound_pipeline(
                 connector_name=connector.name,
                 connector_owner_team_id=new_owner_team_id,
                 pipeline_owner_team_id=pipeline.owner_team_id,
-                connector_visibility=new_visibility,
                 node_id=node_id,
             )
             for node_id in node_ids
@@ -776,6 +827,201 @@ async def _reject_re_scope_that_breaks_a_bound_pipeline(
             status_code=status.HTTP_409_CONFLICT,
             detail=connector_team_mismatch_detail(mismatches),
         )
+
+
+async def _resolve_secretref_credential(
+    new_credentials: str | None,
+    *,
+    settings: Settings,
+    session: AsyncSession,
+) -> str | None:
+    """Resolve a PATCH ``secretref://<key>`` credential to a literal (FAR-1640).
+
+    Runs INSIDE the update transaction (RLS org/user context already set), so
+    the vault read is org-scoped — unlike the create path, which opens its own
+    short transaction. ``None`` (a null ``credentials`` payload) and a literal
+    credential both pass through untouched, so no secrets backend is
+    constructed for the common case. A missing/foreign/empty vault key is a
+    typed 422 naming only the offending field — never a silent empty
+    credential, never a 500.
+    """
+    if new_credentials is None or not is_secret_ref(new_credentials):
+        return new_credentials
+    try:
+        return await resolve_credential(
+            create_secrets_backend(fernet_key=settings.fernet_key, session=session),
+            new_credentials,
+        )
+    except CredentialReferenceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=exc.validation_detail(["body", "credentials"]),
+        ) from None
+
+
+def _merge_config_update(existing: ConnectorInstance, updates: dict[str, Any]) -> None:
+    """Merge a masked ``config_json`` PATCH over the stored config before write.
+
+    A masked placeholder means "unchanged on this instance", so the incoming
+    config is merged over the CURRENT stored config — a client that echoes the
+    mask must not overwrite the real value. No ``config_json`` in the PATCH (or
+    an explicit null) leaves the stored config untouched.
+
+    FAR-532: validate the merged REST config at the boundary — an invalid
+    ``on_unknown`` would otherwise be saved and brick every bound node at run
+    time (``RestConnector.__init__`` raises), so it is rejected here (422)
+    instead of being saved.
+    """
+    if "config_json" not in updates or updates["config_json"] is None:
+        return
+    current_cfg = existing.config_json or {}
+    updates["config_json"] = merge_masked_config_json(current_cfg, updates["config_json"])
+    if existing.connector_type_id != "rest":
+        return
+    try:
+        _validate_rest_config(updates["config_json"])
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Invalid REST config: {exc}",
+        ) from None
+
+
+def _apply_credential_rotation(
+    existing: ConnectorInstance,
+    updates: dict[str, Any],
+    credentials_updated: bool,
+    new_credentials: str | None,
+    settings: Settings,
+) -> bool:
+    """Apply the PATCH credential-rotation branch; return whether a write occurs.
+
+    Behaviour is unchanged from the inlined version:
+
+    * A null ``credentials`` payload (e.g. an empty config textarea posting
+      ``credentials: null``) skips the credential write entirely — never a 500
+      on a null payload — and the caller must then treat the update as NOT
+      rotating credentials (the GitHub scope check is gated on the returned
+      flag).
+    * Fresh credentials clear the degraded marker (FAR-495) — the stored skip
+      error described the OLD credentials, not the new ones.
+    * REST connector: partial-update reconciliation (FAR-466 — overlay the
+      incoming identity onto the stored secret, anti-wipe guarantee).
+      Every other connector: historical FULL-REPLACE (no overlay) — whatever
+      credential payload is supplied replaces the stored credential outright.
+
+    No credential value is ever logged here.
+    """
+    if not credentials_updated or new_credentials is None:
+        return False
+    # Fresh credentials clear the degraded marker (FAR-495).
+    updates["degraded_at"] = None
+    updates["last_skip_error"] = None
+    if existing.connector_type_id == "rest":
+        updates["credentials_ciphertext"] = _reconcile_rest_credentials(  # nosemgrep: credential-not-in-state
+            existing, new_credentials, settings
+        )
+        return True
+    updates["credentials_ciphertext"] = _encrypt(  # nosemgrep: credential-not-in-state
+        new_credentials, settings.fernet_key
+    )
+    return True
+
+
+async def _verify_github_token_for_update(
+    existing: ConnectorInstance,
+    credentials_updated: bool,
+    new_credentials: str | None,
+) -> None:
+    """Verify a GitHub token's scopes when the PATCH rotates credentials.
+
+    Non-GitHub connectors and updates that do not rotate credentials skip
+    entirely. ``new_credentials is None`` here is unreachable in practice — the
+    rotation step above clears the flag when no payload was supplied — but a
+    bare ``assert`` is stripped under ``python -O`` and would then hand ``None``
+    to ``GitHubConnector`` (FAR-532). Fail loudly instead.
+    """
+    if existing.connector_type_id != "github" or not credentials_updated:
+        return
+    if new_credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Credential payload missing during GitHub token verification.",
+        )
+    await _verify_github_credentials(new_credentials)
+
+
+async def _validate_team_scope_update(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    existing: ConnectorInstance,
+    updates: dict[str, Any],
+) -> None:
+    """Guard team-boundary changes on the update path (#1793, FAR-1515).
+
+    #1793: the PATCH endpoint had no team gate at all, so a member could hand
+    the connector to a team they don't belong to (or a foreign-org team).
+    FAR-1515 MAJOR 5: membership validation does NOT check the pipelines that
+    already bind this connector — re-scoping a bound connector must not strand
+    those bindings in the state the graph-save gate refuses. WIDENING never
+    blocks (see ``_reject_re_scope_that_breaks_a_bound_pipeline``).
+    """
+    if "visibility" not in updates and "owner_team_id" not in updates:
+        return
+    await validate_team_transition_for_update(
+        session,
+        principal,
+        current_owner_team_id=existing.owner_team_id,
+        current_visibility=existing.visibility,
+        new_owner_team_id=updates.get("owner_team_id", existing.owner_team_id),
+        new_visibility=updates.get("visibility", existing.visibility),
+    )
+    await _reject_re_scope_that_breaks_a_bound_pipeline(
+        session,
+        org_id=principal.organisation_id,
+        connector=existing,
+        updates=updates,
+    )
+
+
+async def _apply_connector_update(
+    session: AsyncSession,
+    *,
+    updates: dict[str, Any],
+    credentials_updated: bool,
+    new_credentials: str | None,
+    principal: TenantPrincipal,
+    settings: Settings,
+    connector_id: uuid.UUID,
+) -> ConnectorInstance | None:
+    """Apply a PATCH to a connector inside one transaction (S3776 extraction).
+
+    The route-convention error-to-status mapping (501/503/409/500 plus the
+    HTTPException re-raise) stays in ``update_connector_endpoint``'s exception
+    ladder — this helper only performs the work and lets exceptions propagate
+    unchanged through that ladder. Ordering is load-bearing: the secret-ref
+    resolution runs before reconciliation/encryption, config masking merges
+    before the credential rotation, and the GitHub scope check reads the
+    rotation flag AFTER it may have been cleared.
+    """
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        existing = await get_connector_instance(session, connector_id)
+        if existing is None or existing.organisation_id != principal.organisation_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+        # FAR-1640: resolve a ``secretref://`` vault reference under the
+        # caller's org context before the credential is reconciled or
+        # encrypted. A literal skips this entirely (no secrets backend
+        # constructed).
+        new_credentials = await _resolve_secretref_credential(new_credentials, settings=settings, session=session)
+        _merge_config_update(existing, updates)
+        credentials_updated = _apply_credential_rotation(
+            existing, updates, credentials_updated, new_credentials, settings
+        )
+        await _verify_github_token_for_update(existing, credentials_updated, new_credentials)
+        await _validate_team_scope_update(session, principal, existing, updates)
+        return await update_connector_instance(session, connector_id, updates)
 
 
 @router.patch(
@@ -800,99 +1046,15 @@ async def update_connector_endpoint(
         new_credentials = updates.pop("credentials")
 
     try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            existing = await get_connector_instance(session, connector_id)
-            if existing is None or existing.organisation_id != principal.organisation_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-            if existing is not None and "config_json" in updates and updates["config_json"] is not None:
-                current_cfg = existing.config_json or {}
-                updates["config_json"] = merge_masked_config_json(current_cfg, updates["config_json"])
-                if existing.connector_type_id == "rest":
-                    # FAR-532: validate the merged REST config at the boundary —
-                    # an invalid on_unknown would otherwise be saved and brick
-                    # every bound node at run time (RestConnector.__init__ raises).
-                    try:
-                        _validate_rest_config(updates["config_json"])
-                    except ValueError as exc:
-                        raise HTTPException(
-                            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                            detail=f"Invalid REST config: {exc}",
-                        ) from None
-            if credentials_updated and existing is not None:
-                if new_credentials is None:
-                    # No credential change supplied (e.g. an empty config textarea
-                    # posts credentials: null) — skip the credential write. Never
-                    # 500 on a null credentials payload.
-                    credentials_updated = False
-                elif existing.connector_type_id == "rest":
-                    # Fresh credentials clear the degraded marker (FAR-495) — the
-                    # stored skip error described the OLD credentials, not the new ones.
-                    updates["degraded_at"] = None
-                    updates["last_skip_error"] = None
-                    updates["credentials_ciphertext"] = (
-                        _reconcile_rest_credentials(  # nosemgrep: credential-not-in-state
-                            existing, new_credentials, settings
-                        )
-                    )
-                else:
-                    # Fresh credentials clear the degraded marker (FAR-495).
-                    updates["degraded_at"] = None
-                    updates["last_skip_error"] = None
-                    # Non-REST connector: historical FULL-REPLACE (no overlay) —
-                    # whatever credential payload is supplied replaces the stored
-                    # credential outright.
-                    updates["credentials_ciphertext"] = _encrypt(  # nosemgrep: credential-not-in-state
-                        new_credentials, settings.fernet_key
-                    )
-            if existing is not None and existing.connector_type_id == "github" and credentials_updated:
-                if new_credentials is None:
-                    # Defensive: the credential block above clears
-                    # credentials_updated when no payload was supplied, so this
-                    # is unreachable in practice — but a bare `assert` is
-                    # stripped under `python -O` and would then hand None to
-                    # GitHubConnector (FAR-532). Fail loudly instead.
-                    raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail="Credential payload missing during GitHub token verification.",
-                    )
-                temp = GitHubConnector(token=new_credentials)
-                try:
-                    missing = await temp.verify_scopes()
-                except (HTTPStatusError, RequestError, ValueError):
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                        detail="Cannot verify GitHub token — API call failed",
-                    ) from None
-                if missing:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                        detail=_github_missing_scope_detail(new_credentials, missing),
-                    )
-            # #1793: guard team-boundary changes on the update path too — the
-            # PATCH endpoint had no team gate at all, so a member could hand the
-            # connector to a team they don't belong to (or a foreign-org team).
-            if "visibility" in updates or "owner_team_id" in updates:
-                await validate_team_transition_for_update(
-                    session,
-                    principal,
-                    current_owner_team_id=existing.owner_team_id,
-                    current_visibility=existing.visibility,
-                    new_owner_team_id=updates.get("owner_team_id", existing.owner_team_id),
-                    new_visibility=updates.get("visibility", existing.visibility),
-                )
-                # FAR-1515 MAJOR 5: membership validation does NOT check the
-                # pipelines that already bind this connector. Re-scoping a
-                # bound connector must not strand those bindings in the state
-                # the graph-save gate refuses.
-                await _reject_re_scope_that_breaks_a_bound_pipeline(
-                    session,
-                    org_id=principal.organisation_id,
-                    connector=existing,
-                    updates=updates,
-                )
-            ci = await update_connector_instance(session, connector_id, updates)
+        ci = await _apply_connector_update(
+            session,
+            updates=updates,
+            credentials_updated=credentials_updated,
+            new_credentials=new_credentials,
+            principal=principal,
+            settings=settings,
+            connector_id=connector_id,
+        )
     except IntegrityError:
         logger.exception(_CODE_CONNECTORS_UPDATE_CONNECTOR_ENDPOINT)
         raise HTTPException(

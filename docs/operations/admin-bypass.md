@@ -375,7 +375,7 @@ Orphaned blobs and writes accumulate when a run is force-deleted or crashes
 mid-write. They waste space and slow down queries.
 
 ```sql
--- 1. Identify orphans (preview only — do not delete yet)
+-- 1. Identify orphans (preview only - do not delete yet)
 SELECT 'checkpoint_blobs' AS table, count(*)
 FROM checkpoint_blobs cb
 WHERE NOT EXISTS (
@@ -459,7 +459,7 @@ def reencrypt_blob(blob: bytes | None) -> bytes | None:
     try:
         decrypted = fernet_old.decrypt(blob)
     except InvalidToken:
-        # Already under the new key — skip
+        # Already under the new key - skip
         return blob
     return fernet_new.encrypt(decrypted)
 

@@ -88,6 +88,18 @@ const emptyResponse = {
   ],
 }
 
+// A window whose buckets carry a zero-valued (but present) metric: the store
+// counts it as no data (`hasData` requires a positive metric) yet still derives
+// an earliest-available date, so the empty-state description takes the
+// `data_since` branch rather than `no_data_detail`.
+const zeroMetricResponse = {
+  group_by: 'day',
+  dimension: null,
+  date_from: '2026-07-30',
+  date_to: '2026-08-06',
+  buckets: [{ date: '2026-07-30', count: 0, total_cost_usd: 0, total_tokens: 0 }],
+}
+
 function setupMocks(response: unknown = validResponse) {
   mockGet.mockImplementation((url: string) => {
     if (url === '/api/v1/analytics/query') {
@@ -788,12 +800,22 @@ describe('AnalyticsView', () => {
     expect(hour.attributes('disabled')).toBeDefined()
   })
 
-  it('renders the empty state with data-since when there is no data', async () => {
+  it('renders the empty state with the no-data detail when no earliest day is known', async () => {
     setupMocks(emptyResponse)
     const wrapper = mount(AnalyticsView)
     await flushPromises()
     expect(wrapper.find('[data-testid="analytics-empty-state"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('No analytics data yet')
+    expect(wrapper.text()).toContain('Run a pipeline to start collecting analytics.')
+  })
+
+  it('renders the empty state with the data-since description when an earliest day is known', async () => {
+    setupMocks(zeroMetricResponse)
+    const wrapper = mount(AnalyticsView)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="analytics-empty-state"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('No analytics data yet')
+    expect(wrapper.text()).toContain('Data is available since 2026-07-30.')
   })
 
   it('renders the not-enabled card on a 402 flag-off response', async () => {

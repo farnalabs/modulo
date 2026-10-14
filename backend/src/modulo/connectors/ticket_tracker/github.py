@@ -1,10 +1,12 @@
 """GitHub Issues implementation of the TicketTrackerBase ABC."""
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_datetime import safe_datetime as _safe_datetime
 from modulo.connectors.base import (
     ConnectorPayload,
@@ -28,6 +30,9 @@ class GitHubTicketTracker(TicketTrackerBase):
         self._base_url = config.get("base_url", "https://api.github.com")
         self._redactor = CredentialRedactor.from_creds(creds)
 
+    def _credential_values(self) -> Sequence[str]:
+        return self._redactor.secrets
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.GITHUB
@@ -43,8 +48,10 @@ class GitHubTicketTracker(TicketTrackerBase):
         # transport so the validated base_url address is pinned onto the
         # connection (never re-resolved at connect time — closes DNS rebinding).
         # The token is in the Authorization header, so no creds reach the URL.
-        return pinned_async_client_sync(self._base_url)
+        return pinned_async_client_sync(self._base_url, verify=egress_ssl_context(self))
 
+    @redacting
+    # Defence-in-depth: health_check catches internally today; guards against a future escape.
     async def health_check(self) -> HealthResult:
         headers = self._headers()
         try:
@@ -56,7 +63,7 @@ class GitHubTicketTracker(TicketTrackerBase):
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            return health_check_failure(self._redactor.redact_exc(e))
+            return health_check_failure(self._redactor.redact_exc(e), self._redacted_detail)
 
     @redacting
     async def query(self, q: ConnectorQuery) -> ConnectorResult:

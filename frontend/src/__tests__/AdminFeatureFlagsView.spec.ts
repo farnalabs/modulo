@@ -335,4 +335,87 @@ describe('AdminFeatureFlagsView', () => {
     expect(select.text()).not.toContain('Force enabled')
     expect(select.text()).toContain('System default')
   })
+
+  it('preselects Force disabled when the stored org override is false', async () => {
+    const flagsData = {
+      license: { tier: 'community', has_license_key: false, is_valid: true },
+      flags: [
+        { name: 'flag-connectors', description: 'Third-party connector support', tier: 'community', currently_active: true, depends_on: null },
+      ],
+      would_activate: [],
+    }
+    api.GET = vi.fn((path: string) => {
+      if (path.startsWith('/api/v1/admin/feature-flags') && path.includes('org-override')) {
+        return Promise.resolve({ data: { override: false }, error: undefined })
+      }
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({ data: flagsData, error: undefined })
+      }
+      if (path === '/api/v1/admin/license') {
+        return Promise.resolve({ data: mockLicenseData, error: undefined })
+      }
+      if (path === '/api/v1/admin/tiers') {
+        return Promise.resolve({ data: mockTiersData, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    }) as unknown as typeof api.GET
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const wrapper = mount(AdminFeatureFlagsView, {
+      global: {
+        plugins: [pinia],
+        stubs: { FormDialog: { props: ['open'], template: '<div v-if="open"><slot /></div>' } },
+      },
+    })
+    for (let i = 0; i < 10; i++) {
+      await flushPromises()
+    }
+    await wrapper.find('[data-testid="flag-override-flag-connectors"]').trigger('click')
+    await flushPromises()
+    const select = wrapper.find('[data-testid="flag-override-select"]')
+    expect(select.exists()).toBe(true)
+    expect(select.text()).toContain('Force disabled')
+  })
+
+  it('preselects System default when the flag has no stored org override', async () => {
+    const flagsData = {
+      license: { tier: 'community', has_license_key: false, is_valid: true },
+      flags: [
+        { name: 'flag-connectors', description: 'Third-party connector support', tier: 'community', currently_active: true, depends_on: null },
+      ],
+      would_activate: [],
+    }
+    api.GET = vi.fn((path: string) => {
+      if (path.startsWith('/api/v1/admin/feature-flags') && path.includes('org-override')) {
+        return Promise.resolve({ data: { override: null }, error: undefined })
+      }
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({ data: flagsData, error: undefined })
+      }
+      if (path === '/api/v1/admin/license') {
+        return Promise.resolve({ data: mockLicenseData, error: undefined })
+      }
+      if (path === '/api/v1/admin/tiers') {
+        return Promise.resolve({ data: mockTiersData, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    }) as unknown as typeof api.GET
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const wrapper = mount(AdminFeatureFlagsView, {
+      global: {
+        plugins: [pinia],
+        stubs: { FormDialog: { props: ['open'], template: '<div v-if="open"><slot /></div>' } },
+      },
+    })
+    for (let i = 0; i < 10; i++) {
+      await flushPromises()
+    }
+    await wrapper.find('[data-testid="flag-override-flag-connectors"]').trigger('click')
+    await flushPromises()
+    const select = wrapper.find('[data-testid="flag-override-select"]')
+    expect(select.exists()).toBe(true)
+    expect(select.text()).toContain('System default')
+    expect(select.text()).not.toContain('Force disabled')
+  })
 })

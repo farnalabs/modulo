@@ -284,8 +284,15 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
         RunDailyFact.status == _FAILED_STATUS,
         RunDailyFact.status == _STALLED_STATUS,
     )
+    # FAR-707: a BUSINESS-EXPECTED outcome (the run's classification is
+    # ``benign``) is never a failure. Explicit NULL/False rather than
+    # ``IS NOT TRUE`` so the legacy NULL marker (facts written before the
+    # column existed, or before a raw-SQL terminalizer's classification
+    # landed) unambiguously keeps counting — fail-open to the historical rate.
+    not_benign = sa.or_(RunDailyFact.benign.is_(None), RunDailyFact.benign.is_(False))
     capacity_failure_status = sa.and_(
         failure_status,
+        not_benign,
         RunDailyFact.error_code.in_(sa.bindparam("capacity_error_codes", type_=sa.String, expanding=True)),
     )
     select_cols += [
@@ -296,11 +303,16 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
         sa.func.sum(RunDailyFact.total_cost_usd).label("total_cost_usd"),
         sa.func.sum(RunDailyFact.total_tokens).label("total_tokens"),
         sa.func.avg(RunDailyFact.duration_ms).label("avg_duration_ms"),
-        sa.func.count(RunDailyFact.id).filter(failure_status).label("failure_count"),
+        # FAR-707: benign rows are counted SEPARATELY so the rate's denominator
+        # (count - benign) is computable at bucket granularity; ``count`` stays
+        # the RAW run volume (cost/token totals must keep including them).
+        sa.func.count(RunDailyFact.id).filter(RunDailyFact.benign.is_(True)).label("benign_count"),
+        sa.func.count(RunDailyFact.id).filter(sa.and_(failure_status, not_benign)).label("failure_count"),
         sa.func.count(RunDailyFact.id)
         .filter(
             sa.and_(
                 failure_status,
+                not_benign,
                 RunDailyFact.error_code.in_(sa.bindparam("stall_error_codes", type_=sa.String, expanding=True)),
             )
         )
@@ -395,6 +407,15 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
             select_cols.append(sa.func.min(label_col).label("key_label"))
 
     stmt = sa.select(*select_cols).where(RunDailyFact.organisation_id == sa.bindparam("org_id", type_=sa.Uuid))
+
+    if query.dimension == AnalyticsDimension.ERROR_CODE:
+        # FAR-707: an error-code breakdown must not carry a business-expected
+        # outcome as a slice — a benign rebase conflict would otherwise keep
+        # inflating the ``agent.failed`` cluster this dimension exists to
+        # report on. Scope: the breakdown ONLY — an un-dimensioned time series
+        # still shows the run in ``count``/cost/token totals, because those are
+        # volume facts, not failure claims.
+        stmt = stmt.where(not_benign)
 
     if query.date_from is not None:
         params["date_from"] = query.date_from
@@ -805,6 +826,7 @@ def _empty_bucket() -> dict[str, Any]:
     return {
         "count": 0,
         "complete": 0,
+        "benign": 0,
         "cost": None,
         "tokens": None,
         "duration_sum": 0.0,
@@ -848,6 +870,7 @@ def _row_dimension_key(row: Any, dimension: AnalyticsDimension | None) -> Any | 
 def _accumulate_row(bucket: dict[str, Any], row: Any, cnt: int) -> None:
     bucket["count"] += cnt
     bucket["complete"] += int(getattr(row, "complete_count", None) or 0)
+    bucket["benign"] += int(getattr(row, "benign_count", None) or 0)
     bucket["failure"] += int(getattr(row, "failure_count", None) or 0)
     bucket["stall"] += int(getattr(row, "stall_count", None) or 0)
     bucket["capacity_failure"] += int(getattr(row, "capacity_failure_count", None) or 0)
@@ -942,12 +965,18 @@ def _format_iso(tkey: date | datetime) -> str:
 def _emit_bucket_row(b: dict[str, Any] | None, tkey: date | datetime, dkey: Any | None) -> dict[str, Any]:
     count = b["count"] if b else 0
     complete = b["complete"] if b else 0
+    # FAR-707: business-expected outcomes leave the FAILURE RATE entirely —
+    # they are dropped from the denominator as well as never counted as
+    # failures, so a run that was supposed to happen cannot dilute the rate.
+    # ``count`` (volume) and the cost/token totals still include them.
+    benign = b["benign"] if b else 0
+    rate_denominator = count - benign
     cost = float(b["cost"]) if b and b["cost"] is not None else None
     tokens = b["tokens"] if b else None
     avg_dur, avg_capacity_wait, avg_queue_wait, avg_dispatch_latency, avg_final_idle, avg_output_bytes = (
         _bucket_averages(b)
     )
-    success_rate = (complete / count) if count else None
+    success_rate = (complete / rate_denominator) if rate_denominator > 0 else None
     return {
         "date": _format_iso(tkey),
         "key": dkey,

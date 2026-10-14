@@ -1,5 +1,6 @@
 """Unit tests for /api/v1/libraries endpoints."""
 
+import logging
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
@@ -438,3 +439,38 @@ def test_create_pipeline_from_invalid_type(client: TestClient) -> None:
     assert resp.status_code == 400
     assert "pipeline_template" in resp.json()["detail"]
     assert "schema" in resp.json()["detail"]
+
+
+def test_create_pipeline_from_template_strips_declared_policy_gate(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """FAR-1666: a library template declaring a policy_gate block installs with the block stripped.
+
+    The create-pipeline path persists ``graph_nodes_json`` directly and the node
+    conversion does not carry a declared gate through (evals and gates are not
+    cloned), so the block is stripped through the shared helper and a warning is
+    recorded rather than persisting an INERT declaration.
+    """
+    primitive_id = uuid.uuid4()
+    primitive = _make_primitive(pid=primitive_id)
+    primitive.content_json["graph_nodes"][0]["policy_gate"] = {
+        "eval_id": str(uuid.uuid4()),
+        "action": "block",
+    }
+    pipeline = _make_pipeline()
+
+    with (
+        patch("modulo.api.routes.library.get_primitive", return_value=primitive),
+        patch("modulo.api.routes.library.create_pipeline", return_value=pipeline),
+        patch("modulo.api.routes.library.set_rls_org"),
+        patch("modulo.api.routes.library.set_rls_user_context"),
+        caplog.at_level(logging.WARNING, logger="modulo.api.routes.library"),
+    ):
+        resp = client.post(
+            f"/api/v1/libraries/{primitive_id}/create-pipeline",
+            json={},
+        )
+
+    assert resp.status_code == 201
+    assert all("policy_gate" not in node for node in pipeline.graph_nodes_json)
+    assert "policy_gate declaration(s) stripped when installing pipeline template" in caplog.text

@@ -10,10 +10,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from modulo.core.graph_validator import GraphValidator, ValidationResult
-
-
-def _codes(result: ValidationResult) -> set[str]:
-    return {i.code for i in result.issues}
+from tests.unit.graph_validator._helpers import codes_of as _codes
 
 
 def _template(
@@ -96,15 +93,6 @@ async def test_invalid_ref_reports_node():
 # ---------------------------------------------------------------------------
 
 
-async def test_template_not_found_is_error():
-    ref = uuid.uuid4()
-    graph = {"nodes": [_node("n1", composite_ref=str(ref))], "edges": []}
-    session = _session_with_templates([])
-    result = await _run(graph, session)
-    assert "COMPOSITE_TEMPLATE_NOT_FOUND" in _codes(result)
-    assert not result.is_valid
-
-
 async def test_template_not_found_reports_node_and_ref():
     ref = uuid.uuid4()
     graph = {"nodes": [_node("n1", composite_ref=str(ref))], "edges": []}
@@ -113,6 +101,7 @@ async def test_template_not_found_reports_node_and_ref():
     issue = next(i for i in result.issues if i.code == "COMPOSITE_TEMPLATE_NOT_FOUND")
     assert issue.node_id == "n1"
     assert str(ref) in issue.message
+    assert not result.is_valid
 
 
 # ---------------------------------------------------------------------------

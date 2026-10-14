@@ -245,6 +245,19 @@ def error_connector_mismatch(request) -> None:
     assert "connector_team_mismatch" in detail
 
 
+@then("the error does not indicate connector_team_mismatch")
+def error_connector_no_mismatch(request) -> None:
+    """FAR-1618: an org-wide connector must never produce the named refusal.
+
+    Pairs with the blocked cross-team scenario above: the SAME route, the SAME
+    predicate, judged against an ``visibility=org`` row instead of another
+    team's team-private one.
+    """
+    data = request.node._resp.json()
+    detail = data.get("detail", "")
+    assert "connector_team_mismatch" not in detail, detail
+
+
 @then("the response total count does not include team-private pipelines")
 def total_excludes_private(request, ctx) -> None:
     data = request.node._resp.json()

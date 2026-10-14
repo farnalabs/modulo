@@ -8,9 +8,10 @@ command guard) and the streaming/file IO helpers
  :func:`_publish_stream_chunk`, :func:`_consume_stream`,
 :func:`_resolve_stall_timeout`, :func:`_combine_raw_outputs`,
 :func:`_source_contains_sentinel`), plus the FAR-792 per-node stdout/stderr
-retention cap (:func:`_resolve_stdout_cap`), and the FAR-811
-stdout_artifact pointer persistence (over-cap writes to artifact store,
-under-cap stays inline).
+ retention cap (:func:`_resolve_stdout_cap`), the FAR-811
+ stdout_artifact pointer persistence (over-cap writes to artifact store,
+ under-cap stays inline), and the shared teardown guard
+ (:func:`_teardown_one_resource`).
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ from modulo.core.bundled_runner.runner_dispatch import (
     _source_contains_sentinel,
     _write_file_via_exec,
 )
+from modulo.core.credential_issuer import IssuedRunCredential
 from modulo.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError as _RealSandboxNodeFailedError,
 )
@@ -117,7 +119,9 @@ def _patch_node_runner(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
         "_sandbox_acquire_dispatch_marker": AsyncMock(return_value="attempt-key"),
         "_sandbox_clear_dispatch_marker": AsyncMock(),
-        "_sandbox_mint_run_api_key_for_sandbox": AsyncMock(return_value="apikey"),
+        "_sandbox_issue_run_credential_for_sandbox": AsyncMock(
+            return_value=IssuedRunCredential(run_id=uuid.uuid4(), node_id="node-1", secret="apikey")
+        ),
         "_sandbox_resolve_secret_ref": AsyncMock(return_value="secret"),
         "_sandbox_store_dispatch_marker_sandbox": AsyncMock(),
         "_sandbox_store_script_lease": AsyncMock(),
@@ -272,6 +276,32 @@ async def test_run_script_mode_happy_path(patch_node_runner) -> None:
     out = await runner_dispatch.run_bundled_runner_node(_state(), _config(), _route(provider))
     assert out["envelope"] is True
     assert provider.created  # workspace was provisioned
+
+
+async def test_resolve_sandbox_envs_fail_open_when_credential_issuance_returns_none(
+    patch_node_runner, monkeypatch
+) -> None:
+    """FAR-1690 A1: a failed (``None``) issuance leaves the key and provenance absent."""
+    import modulo.core.pipeline_engine.node_runner as nrm
+
+    monkeypatch.setattr(nrm, "_sandbox_issue_run_credential_for_sandbox", AsyncMock(return_value=None))
+    envs, _claimed = await runner_dispatch._resolve_sandbox_envs_with_script_setup(
+        node_def={"node_id": "node-1", "capability_scope": {}},
+        run_id="run-1",
+        pipeline_id="pipe-1",
+        org_id=str(uuid.uuid4()),
+        sandbox_mode="llm",
+        state={},
+        session_factory=lambda: _session_cm(),
+        wallclock_budget_seconds=None,
+        start_time=0.0,
+        attempt_key="attempt-key",
+        sandbox_timeout=60,
+        input_json="{}",
+        provider="runner_docker",
+    )
+    assert "MODULO_API_KEY" not in envs
+    assert "MODULO_CREDENTIAL_PROVENANCE" not in envs
 
 
 async def test_run_llm_mode_happy_path(patch_node_runner) -> None:
@@ -1463,3 +1493,117 @@ async def test_flagged_dispatch_keeps_the_original_cancellation_when_settle_also
         reset_run_pr_guard_claims()
     assert provider.destroyed, "teardown must still run when both harvest and settle are cancelled"
     assert provider.closed, "the provider must still be closed when both harvest and settle are cancelled"
+
+
+# ``_teardown_one_resource`` - the shared best-effort guard behind every
+# ``_teardown_and_clear`` step (S3776 split; behaviour parity with the
+# pre-split inline try/excepts).
+
+
+async def test_teardown_one_resource_awaits_and_returns(caplog) -> None:
+    """A successful step is awaited and logs nothing."""
+    ran = asyncio.Event()
+
+    async def _ok() -> None:
+        ran.set()
+
+    with caplog.at_level(logging.ERROR, logger="modulo.core.bundled_runner.runner_dispatch"):
+        await runner_dispatch._teardown_one_resource(_ok(), log_event="runner_dispatch.test_step")
+    assert ran.is_set()
+    assert not [r for r in caplog.records if "test_step" in r.message]
+
+
+async def test_teardown_one_resource_logs_failure_with_extra(caplog) -> None:
+    """A failing step logs under the given event (with ``extra`` merged) and
+    does not raise — the remaining teardown ladder steps must still run."""
+
+    async def _boom() -> None:
+        raise RuntimeError("teardown boom")
+
+    with caplog.at_level(logging.ERROR, logger="modulo.core.bundled_runner.runner_dispatch"):
+        await runner_dispatch._teardown_one_resource(
+            _boom(),
+            log_event="runner_dispatch.test_step_failed",
+            extra={"ref": "ws-1"},
+        )
+    record = next(r for r in caplog.records if "test_step_failed" in r.message)
+    assert record.ref == "ws-1"
+
+
+async def test_teardown_one_resource_reraises_cancellation() -> None:
+    """A cancellation must propagate — a teardown ladder never swallows one."""
+
+    async def _cancelled() -> None:
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await runner_dispatch._teardown_one_resource(
+            _cancelled(),
+            log_event="runner_dispatch.test_step_failed",
+        )
+
+
+async def test_teardown_one_resource_enforces_timeout(caplog) -> None:
+    """A step that exceeds ``timeout_seconds`` is cancelled by ``wait_for``
+    and logged as a failure (TimeoutError is an Exception)."""
+
+    async def _never() -> None:
+        await asyncio.Event().wait()
+
+    with caplog.at_level(logging.ERROR, logger="modulo.core.bundled_runner.runner_dispatch"):
+        await runner_dispatch._teardown_one_resource(
+            _never(),
+            log_event="runner_dispatch.test_step_timeout",
+            timeout_seconds=0.01,
+        )
+    assert any("test_step_timeout" in m for m in caplog.messages)
+
+
+async def test_teardown_one_resource_unbounded_when_timeout_omitted() -> None:
+    """``timeout_seconds=None`` (the default) awaits without a deadline —
+    the dispatch-marker-clear step's pre-split plain-``await`` parity."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    completed = asyncio.Event()
+
+    async def _slow() -> None:
+        started.set()
+        await release.wait()
+        completed.set()
+
+    task = asyncio.ensure_future(
+        runner_dispatch._teardown_one_resource(_slow(), log_event="runner_dispatch.test_step_unbounded")
+    )
+    await asyncio.wait_for(started.wait(), timeout=10)
+    assert not completed.is_set(), "the step must still be pending while its resource has not finished"
+    release.set()
+    await asyncio.wait_for(task, timeout=10)
+    assert completed.is_set(), "an unbounded step must run to completion once its resource finishes"
+
+
+# ``_teardown_and_clear`` - the loop-intercept bridge-server arm. Pre-split this
+# was an inline ``wait_for(shield(bridge_server.close()), ...)``; the S3776
+# split routes it through the shared guard. This test pins the arm so the
+# added ``_teardown_one_resource`` call site stays covered.
+
+
+async def test_teardown_and_clear_closes_the_loop_intercept_bridge_server() -> None:
+    """A ``_loop_intercept_bridge_server`` parked on ``state`` is closed during
+    teardown — behaviour parity with the pre-split inline
+    ``await asyncio.wait_for(asyncio.shield(bridge_server.close()), ...)``."""
+    closed = asyncio.Event()
+
+    class _BridgeServer:
+        async def close(self) -> None:
+            closed.set()
+
+    await runner_dispatch._teardown_and_clear(
+        route=RunnerDispatchRoute(provider_type="none"),
+        session_factory=None,
+        state={"_loop_intercept_bridge_server": _BridgeServer()},
+        run_id="run-1",
+        org_id="org-1",
+        _attempt_key=None,
+        dispatch_marker_set=False,
+    )
+    assert closed.is_set(), "the loop-intercept bridge server must be closed during teardown"

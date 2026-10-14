@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.settings import get_settings
-from tests.bdd.conftest import make_settings
+from tests.bdd.conftest import _make_mock_pipeline_full, make_settings
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/teams/team_pipeline_visibility.feature")
@@ -70,17 +70,19 @@ def pipeline_owned_by_team(name: str, team_name: str, visibility: str, ctx) -> N
 
 
 @when(parsers.parse('I create a pipeline named "{name}" with visibility "{visibility}" owned by team "{team_name}"'))
-def create_team_pipeline(name: str, visibility: str, team_name: str, request, ctx) -> None:
-    team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
-    mock_pipeline = {
-        "id": str(uuid.uuid4()),
-        "name": name,
-        "visibility": visibility,
-        "owner_team_id": team_id,
-    }
-    request.node._resp = MagicMock()
-    request.node._resp.status_code = 201
-    request.node._resp.json = lambda: mock_pipeline
+def create_team_pipeline(name: str, visibility: str, team_name: str, request, ctx, client) -> None:
+    team_id = uuid.UUID(ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4())))
+    mock_pipeline = _make_mock_pipeline_full(name=name, visibility=visibility, owner_team_id=team_id)
+    with (
+        patch("modulo.api.routes.pipelines.create_pipeline", return_value=mock_pipeline),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.post(
+            "/api/v1/pipelines",
+            json={"name": name, "visibility": visibility, "owner_team_id": str(team_id)},
+        )
+    request.node._resp = resp
 
 
 @when(parsers.parse('user "{username}" requests the pipeline list'))

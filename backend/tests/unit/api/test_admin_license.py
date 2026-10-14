@@ -5,11 +5,14 @@ import json
 import uuid
 from collections.abc import Generator, Mapping
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fakeredis import FakeAsyncRedis, FakeRedis, FakeServer
 from fastapi.testclient import TestClient
 
+import modulo.api.routes.admin_license as admin_license
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
@@ -228,6 +231,25 @@ class TestParseAndVerify:
         assert not result.license_data.expires_at
 
 
+class TestResolveLicenseKey:
+    """``admin_license._resolve_license_key`` delegates to the shared verifier."""
+
+    def test_returns_none_for_empty_key(self) -> None:
+        assert admin_license._resolve_license_key("") is None
+
+    def test_returns_none_for_invalid_key(self) -> None:
+        assert admin_license._resolve_license_key("not-a-valid-key") is None
+
+    def test_returns_status_for_valid_key(self) -> None:
+        key = _sign_license_payload(_make_valid_payload())
+        status = admin_license._resolve_license_key(key)
+        assert status is not None
+        assert status.has_license is True
+        assert status.tier == "team"
+        assert "sso" in status.features
+        assert status.org_id == "test-org"
+
+
 class TestStoreAndGetLicense:
     def test_store_license(self) -> None:
         assert get_license() is None
@@ -440,3 +462,134 @@ class TestIssueLicense:
     def test_invalid_term_months_rejected(self, issue_client: TestClient) -> None:
         resp = issue_client.post(self.URL, json={"org_name": "Acme", "term_months": 0})
         assert resp.status_code == 422
+
+
+class TestLicenseCacheInvalidationSystemChange:
+    """FAR-1719: a system-licence upload busts every ``license:*`` cache entry.
+
+    The admin status cache (``license:{org_id}``, 60s TTL) holds the *resolved*
+    effective licence, which for an org without its own key falls back to the
+    system licence. Uploading a new system licence therefore invalidates every
+    org's cached entry — proven here by driving the real routes over a
+    fakeredis server: a second GET must reflect the new licence, not the stale
+    cache written by the first GET.
+    """
+
+    URL = "/api/v1/admin/license"
+
+    @pytest.fixture
+    def cached_client(self, monkeypatch: pytest.MonkeyPatch) -> Generator[tuple[TestClient, FakeRedis], None, None]:
+        server = FakeServer()
+
+        def _from_url(_url: str, **kwargs: Any) -> FakeAsyncRedis:
+            kwargs.pop("socket_connect_timeout", None)
+            kwargs.pop("socket_timeout", None)
+            return FakeAsyncRedis.from_url(str(_url), server=server, **kwargs)
+
+        fake_redis = MagicMock()
+        fake_redis.from_url = _from_url
+        monkeypatch.setattr(admin_license, "Redis", fake_redis)
+
+        def _settings() -> Settings:
+            return Settings(
+                database_url="postgresql+asyncpg://localhost/test",
+                secret_key=_VALID_32,
+                fernet_key=_VALID_32,
+                modulo_admin_password="testpass",
+                redis_url="redis://localhost:6379/0",
+            )
+
+        app.dependency_overrides[get_settings] = _settings
+        app.dependency_overrides[get_db_session] = _make_mock_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="admin",
+            organisation_id=_TEST_ORG_ID,
+            account_id=_TEST_ACCOUNT_ID,
+            org_role="admin",
+            is_system_admin=True,
+        )
+        mock_plan = MagicMock()
+        mock_plan.feature_enabled.return_value = True
+        app.dependency_overrides[get_plan_context] = lambda: mock_plan
+        # Sync probe over the same FakeServer the app's async client uses.
+        probe = FakeRedis.from_url("redis://localhost:6379/0", server=server, decode_responses=True)
+        yield TestClient(app), probe
+        app.dependency_overrides.clear()
+        probe.flushall()
+
+    def test_system_upload_busts_all_cached_statuses(self, cached_client: tuple[TestClient, FakeRedis]) -> None:
+        client, probe = cached_client
+        org = _mock_org(settings_json={})
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            first = client.get(self.URL)
+        assert first.status_code == 200
+        assert first.json()["tier"] == "community"
+        # The first GET wrote the community resolution into this org's cache...
+        self_key = f"license:{_TEST_ORG_ID}"
+        assert probe.get(self_key) is not None
+        # ...and a second org's entry exists too (multi-org deployment).
+        other_key = "license:00000000-0000-0000-0000-0000000000ff"
+        probe.set(
+            other_key,
+            '{"has_license": false, "tier": "community", "features": [], "expires_at": null, "org_id": null}',
+            ex=60,
+        )
+
+        payload = _make_valid_payload()
+        key = _sign_license_payload(payload)
+        resp = client.post(self.URL, json={"license_key": key})
+        assert resp.status_code == 200
+
+        # Without invalidation the second GET would serve the stale community
+        # cache; with it, the fresh team resolution is returned, re-cached
+        # under this org's key, and the other org's swept entry is gone.
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            second = client.get(self.URL)
+        assert second.status_code == 200
+        assert second.json()["tier"] == "team"
+        fresh = probe.get(self_key)
+        assert fresh is not None
+        assert json.loads(fresh)["tier"] == "team"
+        assert probe.get(other_key) is None
+
+    def test_upload_returns_success_when_invalidation_fails(
+        self, cached_client: tuple[TestClient, FakeRedis], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client, _ = cached_client
+
+        def _raise(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("redis unavailable")
+
+        monkeypatch.setattr(admin_license.Redis, "from_url", _raise)
+        payload = _make_valid_payload()
+        key = _sign_license_payload(payload)
+        resp = client.post(self.URL, json={"license_key": key})
+        # Commit-then-error: the licence mutation already committed in memory,
+        # so a cache-invalidation failure must not turn the request into a 500.
+        assert resp.status_code == 200
+        assert get_license() is not None
+
+    def test_system_upload_sweeps_cache_in_batches(self, cached_client: tuple[TestClient, FakeRedis]) -> None:
+        """FAR-1719: a cache larger than one batch is swept in full.
+
+        The sweep flushes every 500 keys (``len(batch) >= 500``) so a
+        multi-org deployment with hundreds of cached entries is cleared
+        without holding the whole key set in memory. Seeding exactly 500
+        entries exercises the batched delete and leaves the batch empty for
+        the trailing ``if batch:`` check — proving both the flush and the
+        empty-remainder path.
+        """
+        client, probe = cached_client
+        stale = '{"has_license": false, "tier": "community", "features": [], "expires_at": null, "org_id": null}'
+        seeded = [f"license:{uuid.uuid4()}" for _ in range(500)]
+        for key in seeded:
+            probe.set(key, stale, ex=60)
+        assert probe.exists(*seeded) == 500
+
+        payload = _make_valid_payload()
+        key = _sign_license_payload(payload)
+        resp = client.post(self.URL, json={"license_key": key})
+        assert resp.status_code == 200
+        # The batched flush plus the trailing check cleared every seeded entry.
+        assert probe.exists(*seeded) == 0

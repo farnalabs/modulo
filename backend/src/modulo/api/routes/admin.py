@@ -108,10 +108,10 @@ from modulo.db.crud.team import (
 from modulo.db.crud.team import update_team as crud_update_team
 from modulo.db.crud.team_membership import list_team_memberships_for_account, remove_team_member
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
-from modulo.db.models.account import Account
+from modulo.db.models.account import KIND_HUMAN, Account
 from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.connector_instance import ConnectorInstance
-from modulo.db.models.eval_definition import EvalDefinition
+from modulo.db.models.eval import Eval
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.invitation import Invitation
 from modulo.db.models.library_primitive import LibraryPrimitive
@@ -149,6 +149,12 @@ _MSG_DATABASE_ERROR_OCCURRED_PLEASE = "A database error occurred. Please try aga
 _MSG_INVITATION_NOT_FOUND = "Invitation not found"
 _MSG_EMAIL_ALREADY_MEMBER = "A user with this email already exists in this organisation"
 _MSG_INVITE_ALREADY_PENDING = "An active invitation for this email already exists in this organisation"
+
+_CODE_ADMIN_ADMIN_REASSIGN_ALL_TEAM_RESOURCES = "admin.admin_reassign_all_team_resources"
+_CODE_ADMIN_EVAL_DASHBOARD = "admin.eval_dashboard"
+_CODE_ADMIN_EVAL_REGRESSIONS = "admin.eval_regressions"
+_CODE_ADMIN_OKR_PROGRESS = "admin.okr_progress"
+_CODE_ADMIN_ADMIN_MANUAL_PURGE = "admin.admin_manual_purge"
 
 
 logger = logging.getLogger(__name__)
@@ -1142,7 +1148,7 @@ async def _list_org_accounts(
     search: str | None = None,
     role_filter: str | None = None,
 ) -> tuple[list[tuple[Account, OrgMembership]], int]:
-    conditions = [OrgMembership.organisation_id == org_id]
+    conditions = [OrgMembership.organisation_id == org_id, Account.kind == KIND_HUMAN]
     if search:
         conditions.append(Account.email.ilike(f"%{search}%"))
     if role_filter:
@@ -2200,13 +2206,13 @@ async def admin_reassign_all_team_resources(
                 team_id=team_id,
             )
     except IntegrityError:
-        logger.exception("admin.admin_reassign_all_team_resources")
+        logger.exception(_CODE_ADMIN_ADMIN_REASSIGN_ALL_TEAM_RESOURCES)
         _raise_conflict()
     except ProgrammingError:
-        logger.exception("admin.admin_reassign_all_team_resources")
+        logger.exception(_CODE_ADMIN_ADMIN_REASSIGN_ALL_TEAM_RESOURCES)
         _raise_feature_not_available()
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin.admin_reassign_all_team_resources")
+        raise_session_contract_error(exc, _CODE_ADMIN_ADMIN_REASSIGN_ALL_TEAM_RESOURCES)
         logger.exception(
             "admin_reassign_all_team_resources SQLAlchemyError",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
@@ -2916,9 +2922,12 @@ async def _eval_summary(session: AsyncSession) -> EvalDashboardSummary:
     ).where(non_guardrail_eval_results_clause())
     summary_row = (await session.execute(summary_q)).one()
 
-    defs_q = (
-        select(func.count(EvalDefinition.id)).select_from(EvalDefinition).where(EvalDefinition.deleted_at.is_(None))
-    )
+    # FAR-1725: count ``evals`` (the current storage) — the same source the
+    # rest of this response reads (``by_type``, ``coverage_gaps``,
+    # ``recent_results``). The frozen ``eval_definitions`` snapshot stops at the
+    # cutover, so counting it here would disagree with every sibling figure in
+    # the same payload. Org isolation comes from RLS (``set_rls_org``).
+    defs_q = select(func.count(Eval.id)).select_from(Eval).where(Eval.deleted_at.is_(None))
     total_defs = (await session.execute(defs_q)).scalar() or 0
 
     total_results = summary_row.total_results or 0
@@ -2968,24 +2977,27 @@ async def _eval_trend(session: AsyncSession, org_id: uuid.UUID) -> list[TrendBuc
 
 
 async def _eval_by_type(session: AsyncSession, org_id: uuid.UUID) -> list[TypeBreakdown]:
+    # FAR-1725: sourced from ``evals`` (the current storage), not the frozen
+    # ``eval_definitions`` snapshot — otherwise post-cutover definitions never
+    # appear in the breakdown and the guardrail exclusion matches nothing.
     by_type_q = (
         select(
-            EvalDefinition.eval_type,
+            Eval.eval_type,
             func.count(EvalResult.id).label("total"),
             func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
             func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
         )
-        .outerjoin(EvalResult, EvalResult.eval_id == EvalDefinition.id)
+        .outerjoin(EvalResult, EvalResult.eval_id == Eval.id)
         .where(
-            EvalDefinition.organisation_id == org_id,
-            EvalDefinition.eval_type != "guardrail",
-            EvalDefinition.deleted_at.is_(None),
+            Eval.organisation_id == org_id,
+            Eval.eval_type != "guardrail",
+            Eval.deleted_at.is_(None),
         )
         .group_by(
-            EvalDefinition.eval_type,
+            Eval.eval_type,
         )
         .order_by(
-            EvalDefinition.eval_type,
+            Eval.eval_type,
         )
     )
     by_type_rows = (await session.execute(by_type_q)).all()
@@ -3009,11 +3021,15 @@ async def _eval_coverage_gaps(session: AsyncSession, org_id: uuid.UUID) -> list[
     ).all()
 
     covered_pairs: set[tuple[uuid.UUID, str]] = set()
+    # FAR-1725: read live ``evals`` rows, not the frozen ``eval_definitions``
+    # snapshot — otherwise ``by_type`` and ``coverage_gaps`` in the SAME
+    # response disagree: a node whose only eval postdates the cutover is
+    # counted by ``by_type`` yet still reported here as uncovered.
     eval_defs = (
         await session.execute(
-            select(EvalDefinition.pipeline_id, EvalDefinition.node_id).where(
-                EvalDefinition.organisation_id == org_id,
-                EvalDefinition.deleted_at.is_(None),
+            select(Eval.pipeline_id, Eval.node_id).where(
+                Eval.organisation_id == org_id,
+                Eval.deleted_at.is_(None),
             )
         )
     ).all()
@@ -3037,6 +3053,9 @@ async def _eval_coverage_gaps(session: AsyncSession, org_id: uuid.UUID) -> list[
 
 
 async def _eval_recent_results(session: AsyncSession, org_id: uuid.UUID) -> list[RecentEvalResult]:
+    # FAR-1725: join ``evals`` — the source ``eval_results.eval_id`` actually
+    # references. Joining the frozen ``eval_definitions`` snapshot silently
+    # drops every post-cutover result and makes the guardrail exclusion a no-op.
     recent_q = text("""
         SELECT
             er.id,
@@ -3048,8 +3067,9 @@ async def _eval_recent_results(session: AsyncSession, org_id: uuid.UUID) -> list
             er.detail,
             er.evaluated_at
         FROM eval_results er
-        JOIN eval_definitions ed ON ed.id = er.eval_id
+        JOIN evals ed ON ed.id = er.eval_id
         WHERE er.organisation_id = :org_id
+          AND ed.organisation_id = :org_id
           AND ed.eval_type != 'guardrail'
         ORDER BY er.evaluated_at DESC
         LIMIT 50
@@ -3072,7 +3092,7 @@ async def _eval_recent_results(session: AsyncSession, org_id: uuid.UUID) -> list
 
 
 @router.get("/evals/dashboard")
-@handle_db_errors("admin.eval_dashboard")
+@handle_db_errors(_CODE_ADMIN_EVAL_DASHBOARD)
 async def eval_dashboard(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
@@ -3090,13 +3110,13 @@ async def eval_dashboard(
             coverage_gaps = await _eval_coverage_gaps(session, current_user.organisation_id)
             recent_results = await _eval_recent_results(session, current_user.organisation_id)
     except IntegrityError:
-        logger.exception("admin.eval_dashboard")
+        logger.exception(_CODE_ADMIN_EVAL_DASHBOARD)
         _raise_conflict()
     except ProgrammingError:
-        logger.exception("admin.eval_dashboard")
+        logger.exception(_CODE_ADMIN_EVAL_DASHBOARD)
         _raise_feature_not_available()
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin.eval_dashboard")
+        raise_session_contract_error(exc, _CODE_ADMIN_EVAL_DASHBOARD)
         logger.warning("Eval dashboard DB error", exc_info=True)
         _raise_db_unavailable(_MSG_DATABASE_ERROR_PLEASE_TRY)
 
@@ -3133,7 +3153,7 @@ class RegressionAlertsResponse(BaseModel):
 
 
 @router.get("/evals/regressions")
-@handle_db_errors("admin.eval_regressions")
+@handle_db_errors(_CODE_ADMIN_EVAL_REGRESSIONS)
 async def eval_regressions(
     days: int = Query(default=7, ge=1, le=90, description="Lookback period in days"),
     threshold: float = Query(default=0.15, ge=0.0, le=1.0, description="Minimum drop fraction to trigger an alert"),
@@ -3178,10 +3198,10 @@ async def eval_regressions(
                 trend=trend,
             )
     except IntegrityError:
-        logger.exception("admin.eval_regressions")
+        logger.exception(_CODE_ADMIN_EVAL_REGRESSIONS)
         _raise_conflict()
     except ProgrammingError:
-        logger.exception("admin.eval_regressions")
+        logger.exception(_CODE_ADMIN_EVAL_REGRESSIONS)
         logger.warning("Eval regressions unavailable — DB may need migration")
         _raise_feature_not_available()
     except TimeoutError:
@@ -3191,7 +3211,7 @@ async def eval_regressions(
             detail="Query timed out. Please try again or reduce the lookback period.",
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin.eval_regressions")
+        raise_session_contract_error(exc, _CODE_ADMIN_EVAL_REGRESSIONS)
         logger.exception("Eval regressions DB error")
         _raise_db_unavailable(_MSG_DATABASE_ERROR_PLEASE_TRY)
     except Exception:
@@ -3242,7 +3262,7 @@ class OkrProgressResponse(BaseModel):
 
 
 @router.get("/evals/okr-progress/{suite_id}")
-@handle_db_errors("admin.okr_progress")
+@handle_db_errors(_CODE_ADMIN_OKR_PROGRESS)
 async def okr_progress(
     suite_id: str,
     target_date: str | None = Query(
@@ -3272,13 +3292,13 @@ async def okr_progress(
             detail=str(exc),
         ) from exc
     except IntegrityError:
-        logger.exception("admin.okr_progress")
+        logger.exception(_CODE_ADMIN_OKR_PROGRESS)
         _raise_conflict()
     except ProgrammingError:
-        logger.exception("admin.okr_progress")
+        logger.exception(_CODE_ADMIN_OKR_PROGRESS)
         _raise_feature_not_available()
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin.okr_progress")
+        raise_session_contract_error(exc, _CODE_ADMIN_OKR_PROGRESS)
         logger.exception("OKR progress DB error")
         _raise_db_unavailable(_MSG_DATABASE_ERROR_PLEASE_TRY)
     except Exception:
@@ -3676,13 +3696,13 @@ async def admin_manual_purge(
     except asyncio.CancelledError:
         raise
     except IntegrityError:
-        logger.exception("admin.admin_manual_purge")
+        logger.exception(_CODE_ADMIN_ADMIN_MANUAL_PURGE)
         _raise_conflict()
     except ProgrammingError:
-        logger.exception("admin.admin_manual_purge")
+        logger.exception(_CODE_ADMIN_ADMIN_MANUAL_PURGE)
         _raise_feature_not_available()
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin.admin_manual_purge")
+        raise_session_contract_error(exc, _CODE_ADMIN_ADMIN_MANUAL_PURGE)
         logger.exception(_CODE_ROUTES_ADMIN)
 
         _raise_db_error_occurred()
@@ -4741,7 +4761,7 @@ class TelemetryStatusResponse(BaseModel):
     enabled: bool
 
 
-@router.get("/telemetry", response_model=TelemetryStatusResponse)
+@router.get("/telemetry")
 @handle_db_errors("admin.get_telemetry_status")
 async def get_telemetry_status(
     _current_user: Annotated[AuthenticatedPrincipal, require_system_permission("system.config.manage")],
@@ -4755,7 +4775,6 @@ async def get_telemetry_status(
 @router.put(
     "/telemetry",
     dependencies=[Depends(audited("telemetry_status_updated", "organisation", principal_dep=get_current_tenant_user))],
-    response_model=TelemetryStatusResponse,
 )
 @handle_db_errors("admin.set_telemetry_status")
 async def set_telemetry_status(
@@ -4833,7 +4852,7 @@ class SnapshotLockReleaseResponse(BaseModel):
     pids: list[int]
 
 
-@router.get("/pipelines/{pipeline_id}/snapshot-lock", response_model=SnapshotLockStatusResponse)
+@router.get("/pipelines/{pipeline_id}/snapshot-lock")
 @handle_db_errors("admin.snapshot_lock.status")
 async def get_pipeline_snapshot_lock(
     pipeline_id: uuid.UUID,
@@ -4851,7 +4870,7 @@ async def get_pipeline_snapshot_lock(
     return SnapshotLockStatusResponse.model_validate(payload)
 
 
-@router.post("/pipelines/{pipeline_id}/snapshot-lock/release", response_model=SnapshotLockReleaseResponse)
+@router.post("/pipelines/{pipeline_id}/snapshot-lock/release")
 @handle_db_errors("admin.snapshot_lock.release")
 async def release_pipeline_snapshot_lock(
     pipeline_id: uuid.UUID,

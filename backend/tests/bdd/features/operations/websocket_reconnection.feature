@@ -38,7 +38,7 @@ Feature: WebSocket Reconnection and Event Replay
     And seq 1 has been evicted from the buffer
 
   Scenario: Terminal run sends terminal status and closes
-    Given run "test-run-1" has status "completed"
+    Given run "test-run-1" has status "complete"
     When the run_websocket handler processes the connection
     Then it sends a JSON message with status "terminal"
     And the message includes run_status and run_id

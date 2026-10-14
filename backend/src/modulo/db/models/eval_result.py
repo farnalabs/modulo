@@ -2,7 +2,17 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Uuid, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Integer,
+    String,
+    Uuid,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped
@@ -13,6 +23,21 @@ if TYPE_CHECKING:
 
 class EvalResult(OrgScoped):
     __tablename__ = "eval_results"
+    __table_args__ = (
+        # FAR-969: org-scoped composite FK. A plain FK to ``evals.id`` does not
+        # enforce same-org binding: Postgres referential-integrity checks run
+        # with elevated privilege and therefore bypass the ``rls_org_isolation``
+        # policy on ``evals``. Referencing the ``(id, organisation_id)`` pair —
+        # backed by ``uq_evals_id_organisation_id`` — makes a cross-organisation
+        # ``eval_id`` unrepresentable, matching the pattern already used by
+        # ``policy_gates`` and ``policy_gate_decisions``.
+        ForeignKeyConstraint(
+            ["eval_id", "organisation_id"],
+            ["evals.id", "evals.organisation_id"],
+            ondelete="CASCADE",
+            name="fk_eval_results_eval_org",
+        ),
+    )
 
     # ``run_id`` is nullable since FAR-376: a SuiteRun-produced per-case outcome
     # is attributed to a ``suite_run`` (below), not to a pipeline ``Run``. The
@@ -38,9 +63,10 @@ class EvalResult(OrgScoped):
     # never materialise as ``nodes`` rows (see migration 0170's correction), so
     # an enforced FK would reject every legitimate write.
     node_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
-    eval_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("evals.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    # FAR-969: ``eval_id`` is the local half of the composite org-scoped FK
+    # declared in ``__table_args__`` (``fk_eval_results_eval_org``) — it carries
+    # no standalone ``ForeignKey`` so the pair is enforced together.
+    eval_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
     # Eval-definition version snapshot (FAR-382): the integer ``version`` of the
     # eval definition that scored this result, captured at write time so a later
     # version bump (rubric change) never makes an old result look like a

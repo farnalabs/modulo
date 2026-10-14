@@ -3,6 +3,7 @@
 Credentials must NEVER appear in responses — only `has_credentials: true/false`.
 """
 
+import json
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
@@ -1301,3 +1302,123 @@ def test_delete_model_backend_foreign_org_returns_404(client: TestClient) -> Non
     ):
         resp = client.delete(f"/api/v1/model-backends/{_BACKEND_ID}")
     assert resp.status_code == 404
+
+
+class _StubSecretsBackend:
+    """In-memory vault double recording reads/writes (FAR-1640)."""
+
+    def __init__(self, values: dict[str, str]) -> None:
+        self._values = values
+        self.get_calls: list[str] = []
+        self.set_calls: list[tuple[str, str]] = []
+
+    async def get_secret(self, key: str) -> str:
+        self.get_calls.append(key)
+        if key not in self._values:
+            raise KeyError(key)
+        return self._values[key]
+
+    async def set_secret(self, key: str, value: str) -> None:
+        self.set_calls.append((key, value))
+
+    async def delete_secret(self, key: str) -> None:
+        return None
+
+
+def _decrypt(ciphertext: bytes) -> str:
+    return Fernet(_FERNET_KEY.encode()).decrypt(ciphertext).decode()
+
+
+def test_create_model_backend_resolves_secretref_api_key(client: TestClient) -> None:
+    """FAR-1640: a secretref:// api_key is resolved server-side and stored encrypted."""
+    backend = _make_backend()
+    captured: dict[str, object] = {}
+
+    async def fake_create(session: object, **kwargs: object) -> MagicMock:
+        captured["ciphertext"] = kwargs["credentials_ciphertext"]
+        return backend
+
+    stub = _StubSecretsBackend({"vault/openai": "sk-from-vault"})
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend", new=fake_create),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+    ):
+        resp = client.post(
+            "/api/v1/model-backends",
+            json={**_CREATE_BODY, "api_key": "secretref://vault/openai"},
+        )
+    assert resp.status_code == 201
+    ciphertext = captured["ciphertext"]
+    assert isinstance(ciphertext, bytes)
+    assert _decrypt(ciphertext) == "sk-from-vault"
+    assert stub.get_calls == ["vault/openai"]
+    assert stub.set_calls == [(str(_BACKEND_ID), json.dumps({"api_key": "sk-from-vault"}))]
+
+
+def test_create_model_backend_literal_does_not_consult_vault(client: TestClient) -> None:
+    """A literal api_key passes through untouched — the vault is never read."""
+    backend = _make_backend()
+    stub = _StubSecretsBackend({})
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+    ):
+        resp = client.post("/api/v1/model-backends", json=_CREATE_BODY)
+    assert resp.status_code == 201
+    assert not stub.get_calls
+
+
+def test_create_model_backend_missing_vault_key_fails_closed(client: TestClient) -> None:
+    """A missing vault key is a typed 422 naming the key — nothing is written."""
+    stub = _StubSecretsBackend({})
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend") as create_mock,
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+    ):
+        resp = client.post(
+            "/api/v1/model-backends",
+            json={**_CREATE_BODY, "api_key": "secretref://vault/missing"},
+        )
+    assert resp.status_code == 422
+    # The app renders HTTPException details as an RFC7807 problem document
+    # whose ``detail`` is the stringified typed payload — assert on the stable
+    # machine-readable code and the key name it carries.
+    detail = resp.json()["detail"]
+    assert "credential_reference_error" in detail
+    assert "vault/missing" in detail
+    create_mock.assert_not_awaited()
+
+
+def test_update_model_backend_resolves_secretref_api_key(client: TestClient) -> None:
+    """FAR-1640: PATCH secretref:// api_key is resolved and the rotated value stored."""
+    backend = _make_backend()
+    captured: dict[str, object] = {}
+
+    async def fake_update(session: object, backend_id: object, updates: dict[str, object]) -> MagicMock:
+        captured["updates"] = updates
+        return backend
+
+    stub = _StubSecretsBackend({"vault/openai": "sk-rotated"})
+    with (
+        patch("modulo.api.routes.model_backends.update_model_backend", new=fake_update),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+    ):
+        resp = client.patch(
+            f"/api/v1/model-backends/{_BACKEND_ID}",
+            json={"api_key": "secretref://vault/openai"},
+        )
+    assert resp.status_code == 200
+    updates = captured["updates"]
+    assert isinstance(updates, dict)
+    ciphertext = updates["credentials_ciphertext"]
+    assert isinstance(ciphertext, bytes)
+    assert _decrypt(ciphertext) == "sk-rotated"
+    assert stub.set_calls == [(str(_BACKEND_ID), json.dumps({"api_key": "sk-rotated"}))]

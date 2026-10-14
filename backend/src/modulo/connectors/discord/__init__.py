@@ -1,11 +1,13 @@
 """DiscordConnector — async Discord REST API v10 connector."""
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any, cast
 
 import httpx
 
 from modulo._types import _DICT_STR_ANY
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_page import safe_records_list as _safe_records_list
 from modulo.connectors.base import (
     ConnectorBase,
@@ -25,6 +27,9 @@ class DiscordConnector(ConnectorBase):
     def __init__(self, token: str) -> None:
         self._token = token
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.DISCORD
@@ -38,6 +43,7 @@ class DiscordConnector(ConnectorBase):
                 "Accept": "application/json",
             },
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     async def health_check(self) -> HealthResult:
@@ -49,11 +55,13 @@ class DiscordConnector(ConnectorBase):
                     return HealthResult(ok=True, detail=user.get("username", "Discord bot validated"))
                 if resp.status_code == 401:
                     return HealthResult(ok=False, detail="Invalid Discord bot token")
-                return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
+                return HealthResult(
+                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
     def _require_filter(self, q: ConnectorQuery, key: str, message: str) -> str:
         value = q.filters.get(key, "")

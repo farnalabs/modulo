@@ -10,9 +10,7 @@
 
     <LoadingSpinner v-if="loading" />
 
-    <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive text-sm">
-      {{ error }}
-    </div>
+    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadUsers" />
 
     <EmptyState
       v-else-if="users.length === 0"
@@ -356,6 +354,7 @@ import QRCode from 'qrcode'
 import { useApi } from '../composables/useApi'
 import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Button from 'primevue/button'
 import EmptyState from '../components/shared/EmptyState.vue'
 import FormDialog from '../components/shared/FormDialog.vue'

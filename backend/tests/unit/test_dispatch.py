@@ -1372,6 +1372,12 @@ def _f6a_row(status: str, *, stale: bool = True) -> SimpleNamespace:
         heartbeat_at=heartbeat,
         node_token_usage={},
         started_at=datetime.now(UTC) - timedelta(minutes=1),
+        # FAR-1649: the real reconcile SELECT always carries ``dispatch_phase``;
+        # the row belt fails CLOSED on a row source that omits the column (so a
+        # future row source can never re-dispatch a possibly-executed run), so
+        # this fixture must simulate the product's actual row shape — a genuine
+        # pre-node NULL phase, not a missing attribute.
+        dispatch_phase=None,
     )
 
 

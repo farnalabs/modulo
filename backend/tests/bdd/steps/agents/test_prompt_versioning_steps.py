@@ -8,7 +8,7 @@
 
 import uuid
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
@@ -17,17 +17,6 @@ ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 # MOCKED: scenarios() path relative to this file
 scenarios("../../features/agents/prompt_versioning.feature")
-
-
-@pytest.fixture(autouse=True)
-def _prevent_identity_db_check(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Prevent ``_verify_identity`` from connecting to a real database.
-
-    ``get_current_tenant_user`` verifies the account/org against Postgres
-    before returning the principal. Patch it out so BDD scenarios run
-    against the mocked DB session (mirrors test_monitor_config.py).
-    """
-    monkeypatch.setattr("modulo.auth.dependencies._verify_identity", AsyncMock(return_value=None))
 
 
 @pytest.fixture

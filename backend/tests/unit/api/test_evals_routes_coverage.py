@@ -1,7 +1,8 @@
 """Route-level coverage tests for the eval management endpoints (FAR-574).
 
 Complements the existing eval test modules (endpoint contract, compare,
-leaderboard, coverage-gap, dashboard) by covering the admin-gate 403s, the
+leaderboard, coverage-gap, dashboard) by covering the role-gate 403s (operator floor for create/update/from-run,
+admin-only delete — FAR-735), the
 guardrail-request validation 422s, the run-evals listing, the compare
 fallback helpers, the from-run creation, and the route error convention
 (ProgrammingError→501 / IntegrityError→409 / SQLAlchemyError→503 /
@@ -229,14 +230,30 @@ def _create_payload(**overrides: object) -> dict:
     return payload
 
 
-def test_create_eval_non_admin_returns_403() -> None:
+def test_create_eval_operator_succeeds() -> None:
+    """FAR-735: operators may create eval definitions (admin no longer required)."""
     session = _make_session()
     _install_overrides(session, org_role="operator")
     try:
         http = TestClient(app)
+        session.execute = AsyncMock(return_value=_result(scalar_one_or_none=MagicMock()))
+        resp = http.post("/api/v1/evals", json=_create_payload())
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["name"] == "my-eval"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize("org_role", ["runner", "viewer"])
+def test_create_eval_below_operator_returns_403(org_role: str) -> None:
+    """Roles below the registry floor are denied by require_permission."""
+    session = _make_session()
+    _install_overrides(session, org_role=org_role)
+    try:
+        http = TestClient(app)
         resp = http.post("/api/v1/evals", json=_create_payload())
         assert resp.status_code == 403
-        assert "Only admins" in resp.json()["detail"]
+        assert "requires 'operator' role" in resp.json()["detail"]
     finally:
         app.dependency_overrides.clear()
 
@@ -369,34 +386,114 @@ def test_evals_error_mapping_matrix(
 
 
 # ---------------------------------------------------------------------------
-# PUT/DELETE admin gates
+# Role gates: POST/PUT/from-run are operator-floor, DELETE stays admin-only
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("method", "url", "json_body"),
-    [
-        ("PUT", f"/api/v1/evals/{_EVAL_ID}", {"name": "renamed"}),
-        ("DELETE", f"/api/v1/evals/{_EVAL_ID}", None),
-        (
-            "POST",
-            "/api/v1/evals/from-run",
-            {"run_id": str(_RUN_ID), "node_id": str(_NODE_ID), "eval_type": "regex", "name": "n"},
-        ),
-    ],
-    # Explicit ids: without them pytest derives IDs from the param values,
-    # and any randomness there breaks xdist collection parity (see the fixed
-    # UUID note at the top of this module).
-    ids=["put-eval", "delete-eval", "from-run"],
-)
-def test_admin_gates_reject_operators(method: str, url: str, json_body: dict | None) -> None:
+def test_delete_eval_stays_admin_for_operator() -> None:
+    """DELETE is stricter than its registry floor: operators are still 403."""
     session = _make_session()
     _install_overrides(session, org_role="operator")
     try:
         http = TestClient(app)
-        resp = http.request(method, url, json=json_body)
+        resp = http.delete(f"/api/v1/evals/{_EVAL_ID}")
         assert resp.status_code == 403
         assert "Only admins" in resp.json()["detail"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_update_eval_operator_succeeds() -> None:
+    """FAR-735: operators may update eval definitions."""
+    session = _make_session()
+    _install_overrides(session, org_role="operator")
+    try:
+        http = TestClient(app)
+        eval_def = _eval_def_row(_EVAL_ID)
+        _queue_execute(
+            session,
+            [
+                _result(scalar_one_or_none=eval_def),  # eval lookup
+                _result(scalar_one_or_none=None),  # PolicyGate lookup for current failure_behaviour
+                _result(scalar_one_or_none=eval_def),  # create_or_update_eval: existing Eval lookup
+                _result(scalar_one_or_none=None),  # create_or_update_eval: PolicyGate lookup
+                _result(scalar_one_or_none=None),  # create_or_update_eval: flush
+                _result(scalar_one_or_none=None),  # PolicyGate reload for response mapping
+            ],
+        )
+        resp = http.put(f"/api/v1/evals/{_EVAL_ID}", json={"name": "renamed"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["name"] == "renamed"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize("org_role", ["runner", "viewer"])
+def test_update_eval_below_operator_returns_403(org_role: str) -> None:
+    session = _make_session()
+    _install_overrides(session, org_role=org_role)
+    try:
+        http = TestClient(app)
+        resp = http.put(f"/api/v1/evals/{_EVAL_ID}", json={"name": "renamed"})
+        assert resp.status_code == 403
+        assert "requires 'operator' role" in resp.json()["detail"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_from_run_operator_succeeds() -> None:
+    """FAR-735: operators may promote a run output into an eval definition."""
+    session = _make_session()
+    _install_overrides(session, org_role="operator")
+    try:
+        http = TestClient(app)
+        node_id = uuid.uuid4()
+        run = MagicMock()
+        run.pipeline_id = _PIPELINE_ID
+        run.outputs_json = {node_id.hex: "sample output"}
+        run.node_telemetry_json = None
+        pipeline = MagicMock()
+        # FAR-583 read-switch: `session.info` binds the RLS org so read_rls_org
+        # short-circuits without consuming a queue slot; the empty
+        # run_node_outputs row set falls back to the legacy runs row.
+        session.info = {"org_id": _ORG_ID}
+        row = SimpleNamespace(
+            run_id=str(_RUN_ID),
+            node_id=node_id.hex,
+            attempt_key="__final__",
+            organisation_id=_ORG_ID,
+            outputs_json={node_id.hex: "sample output"},
+            node_telemetry_json=None,
+            raw_output_markers=None,
+            outputs_absent=False,
+            telemetry_absent=True,
+            markers_absent=True,
+        )
+        _queue_execute(
+            session,
+            [
+                _result(scalar_one_or_none=run),  # run lookup
+                _result(scalar_one_or_none=pipeline),  # pipeline lookup
+                _result(rows=[row]),  # B2b: the run's __final__ rows page
+                _result(scalar_one_or_none=None),  # PolicyGate upsert lookup (none yet)
+            ],
+        )
+        resp = http.post("/api/v1/evals/from-run", json=_from_run_payload(node_id))
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["eval_type"] == "regex"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize("org_role", ["runner", "viewer"])
+def test_from_run_below_operator_returns_403(org_role: str) -> None:
+    session = _make_session()
+    _install_overrides(session, org_role=org_role)
+    try:
+        http = TestClient(app)
+        resp = http.post("/api/v1/evals/from-run", json=_from_run_payload())
+        assert resp.status_code == 403
+        assert "requires 'operator' role" in resp.json()["detail"]
     finally:
         app.dependency_overrides.clear()
 

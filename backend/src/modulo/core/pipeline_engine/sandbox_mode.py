@@ -25,6 +25,9 @@ from jinja2.sandbox import SandboxedEnvironment as SandboxedEnvironment  # noqa:
 
 _SANDBOX_MODES = frozenset({"llm", "script"})
 _SANDBOX_DEFAULT_MODE = "llm"
+#: Home directory inside the sandbox workspace — relative ``dest`` values
+#: resolve against it and traversal checks reject paths outside it.
+_SANDBOX_HOME = "/home/user"
 _SANDBOX_EGRESS_POLICIES = frozenset({"default", "deny_all", "selected"})
 _SANDBOX_EGRESS_ALLOWLIST_KEYS = frozenset({"host", "port"})
 # FAR-212 PR B: git-credential scope surface. ``scoped`` = the provisioned git
@@ -749,11 +752,11 @@ def _validate_managed_input_dest(dest: Any, index: int, node_id: str) -> None:
     # Canonicalise to absolute POSIX path.
     if not posixpath.isabs(dest):
         # Relative paths are resolved relative to /home/user/.
-        dest = posixpath.join("/home/user", dest)
+        dest = posixpath.join(_SANDBOX_HOME, dest)
     dest = posixpath.normpath(dest)
 
     # Reject "." or "/" or bare "/home/user".
-    if dest in (".", "/", "/home/user"):
+    if dest in (".", "/", _SANDBOX_HOME):
         raise ValueError(
             f"sandbox_agent node '{node_id}' workspace_inputs[{index}] "
             f"'dest' {dest!r} is not a valid target — must be a specific "
@@ -762,7 +765,7 @@ def _validate_managed_input_dest(dest: Any, index: int, node_id: str) -> None:
 
     # Must be under /home/user/.
     home_prefix = "/home/user/"
-    if not dest.startswith(home_prefix) and dest != "/home/user":
+    if not dest.startswith(home_prefix) and dest != _SANDBOX_HOME:
         raise ValueError(
             f"sandbox_agent node '{node_id}' workspace_inputs[{index}] "
             f"'dest' {dest!r} resolves outside /home/user/ — workspace "

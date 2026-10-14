@@ -1,5 +1,6 @@
 """Unit tests for /api/v1/triggers endpoints."""
 
+import base64
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
@@ -9,6 +10,7 @@ from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import get_db_session, get_plan_context
@@ -24,6 +26,26 @@ _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _TRIGGER_ID = uuid.uuid4()
 _PIPELINE_ID = uuid.uuid4()
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
+# FAR-1732: the conftest FERNET_KEY is not a valid Fernet key, so at-rest
+# encryption assertions patch ``modulo.api.routes.triggers.get_settings``
+# with a fake carrying a REAL key through this helper.
+_VALID_FERNET_KEY = base64.urlsafe_b64encode(b"s" * 32).decode()
+
+
+def _override_fernet_settings(client: TestClient) -> None:
+    """FAR-1732: the routes receive ``Settings`` via ``Depends(get_settings)``
+    captured at import time, so the module global cannot be patched — override
+    the dependency instead with a real Settings carrying a valid Fernet key.
+    Restore with the file's standard
+    ``dependency_overrides[get_settings] = app.dependency_overrides[...]``
+    pattern after the assertions.
+    """
+    settings = Settings(fernet_key=_VALID_FERNET_KEY)
+    client.app.dependency_overrides[get_settings] = lambda: settings
+
+
+def _decrypt_rest_stored(value: str) -> str:
+    return Fernet(_VALID_FERNET_KEY.encode()).decrypt(value.encode()).decode()
 
 
 def _make_mock_trigger(**overrides: object) -> MagicMock:
@@ -536,13 +558,18 @@ def test_update_trigger_preserves_secret_when_masked_config_round_tripped(client
             yield session
 
         client.app.dependency_overrides[get_db_session] = override_session
+        _override_fernet_settings(client)
         resp = client.put(
             f"/api/v1/triggers/{_TRIGGER_ID}",
             json={"config_json": {"hmac_secret": SENSITIVE_VALUE_MASK}},
         )
 
     assert resp.status_code == 200
-    assert trigger.config_json["hmac_secret"] == "real-secret"
+    # FAR-1732: the stored secret survives the masked round-trip but is now
+    # persisted under a Fernet token, decryptable to the original.
+    assert trigger.config_json["hmac_secret"].startswith("gAAAA")
+    assert _decrypt_rest_stored(trigger.config_json["hmac_secret"]) == "real-secret"
+    client.app.dependency_overrides[get_settings] = app.dependency_overrides[get_settings]
     client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
 
@@ -559,13 +586,19 @@ def test_update_trigger_updates_secret_with_new_value(client: TestClient) -> Non
             yield session
 
         client.app.dependency_overrides[get_db_session] = override_session
+        # FAR-1732: a plainly-submitted secret is stored as a Fernet token
+        # (never plaintext) and still decrypts to the submitted value.
+        _override_fernet_settings(client)
         resp = client.put(
             f"/api/v1/triggers/{_TRIGGER_ID}",
             json={"config_json": {"hmac_secret": "new-secret"}},
         )
 
     assert resp.status_code == 200
-    assert trigger.config_json["hmac_secret"] == "new-secret"
+    stored = trigger.config_json["hmac_secret"]
+    assert stored.startswith("gAAAA"), f"secret must be encrypted at rest, got {stored!r}"
+    assert _decrypt_rest_stored(stored) == "new-secret"
+    client.app.dependency_overrides[get_settings] = app.dependency_overrides[get_settings]
     client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
 
@@ -610,14 +643,19 @@ def test_update_trigger_merges_masked_secret_but_updates_other_keys(client: Test
             yield session
 
         client.app.dependency_overrides[get_db_session] = override_session
+        _override_fernet_settings(client)
         resp = client.put(
             f"/api/v1/triggers/{_TRIGGER_ID}",
             json={"config_json": {"hmac_secret": SENSITIVE_VALUE_MASK, "work_item_ref_paths": ["backend", "frontend"]}},
         )
 
     assert resp.status_code == 200
-    assert trigger.config_json["hmac_secret"] == "real-secret"
+    # FAR-1732: the stored secret survives the merge but is persisted
+    # encrypted; the other keys merge through untouched.
+    assert trigger.config_json["hmac_secret"].startswith("gAAAA")
+    assert _decrypt_rest_stored(trigger.config_json["hmac_secret"]) == "real-secret"
     assert trigger.config_json["work_item_ref_paths"] == ["backend", "frontend"]
+    client.app.dependency_overrides[get_settings] = app.dependency_overrides[get_settings]
     client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
 
@@ -761,6 +799,42 @@ def test_test_trigger_storage_exhausted_returns_503(client: TestClient) -> None:
 
     assert resp.status_code == 503
     assert resp.json().get("type") == "urn:problem:modulo:storage_exhausted"
+
+
+def test_test_trigger_snapshot_lock_busy_returns_503(client: TestClient) -> None:
+    """FAR-527 parity: losing the per-pipeline snapshot advisory lock race while
+    creating the manual test run's snapshot must surface an honest, retryable
+    503 — never a generic 500 (matches the webhook + MCP trigger paths)."""
+    from modulo.core.exceptions import SnapshotLockNotAvailableError
+
+    trigger = _make_mock_trigger(trigger_type="manual")
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch(
+            "modulo.api.routes.triggers.create_snapshot_from_live_graph",
+            new=AsyncMock(side_effect=SnapshotLockNotAvailableError("busy")),
+        ),
+        patch("modulo.api.routes.triggers.create_run", new_callable=AsyncMock) as create_run_mock,
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/test",
+            json={"payload": {}},
+        )
+        client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+    assert resp.status_code == 503
+    detail = resp.json()["detail"]
+    assert "snapshot lock unavailable" in detail
+    assert "retry" in detail.lower()
+    # No run is created once the snapshot cannot be produced.
+    create_run_mock.assert_not_called()
 
 
 def test_list_pipeline_triggers_returns_200(client: TestClient) -> None:

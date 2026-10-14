@@ -21,6 +21,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from modulo.core.eval_engine.execute_suite_run import (
@@ -39,8 +40,8 @@ from modulo.core.eval_engine.execute_suite_run import (
 )
 from modulo.db.models import Base
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
+from modulo.db.models.eval import Eval
 from modulo.db.models.eval_dataset import EvalCase, EvalDataset
-from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.eval_suite import EvalSuite
 from modulo.db.models.eval_suite_run import SuiteRun, SuiteRunState
@@ -54,7 +55,7 @@ def _tables() -> list[Any]:
         EvalSuite.__table__,
         EvalDataset.__table__,
         EvalCase.__table__,
-        EvalDefinition.__table__,
+        Eval.__table__,
         SuiteRun.__table__,
         EvalResult.__table__,
         ModelBackend.__table__,
@@ -82,7 +83,7 @@ async def _org() -> uuid.UUID:
     return uuid.uuid4()
 
 
-async def seed_suite(session, org_id: uuid.UUID) -> tuple[EvalSuite, EvalDataset, list[EvalDefinition], ModelBackend]:
+async def seed_suite(session, org_id: uuid.UUID) -> tuple[EvalSuite, EvalDataset, list[Eval], ModelBackend]:
     suite = EvalSuite(organisation_id=org_id, name="suite-a", eval_definition_ids=[])
     dataset = EvalDataset(organisation_id=org_id, name="ds-a", version=1)
     backend = ModelBackend(
@@ -97,13 +98,14 @@ async def seed_suite(session, org_id: uuid.UUID) -> tuple[EvalSuite, EvalDataset
     session.add_all([suite, dataset, backend])
     await session.flush()
 
-    regex_def = EvalDefinition(
+    # FAR-1729: definitions live in ``evals`` (the storage source since the
+    # 0254 cutover) — the suite loader reads that table, not the frozen snapshot.
+    regex_def = Eval(
         organisation_id=org_id,
         pipeline_id=uuid.uuid4(),
         name="category-regex",
         eval_type="regex",
         config_json={"pattern": "^billing$", "field": "output.category"},
-        failure_behaviour="warn",
         eval_suite_id=suite.id,
         account_id=org_id,
     )
@@ -199,13 +201,12 @@ async def test_failure_sink_transitions_run_to_failed(session) -> None:
     suite, dataset, _, backend = await seed_suite(session, org)
     await seed_cases(session, org, dataset, [{"category": "billing"}])
     # Add an llm_judge definition with NO judge callable -> execute refuses.
-    llm_def = EvalDefinition(
+    llm_def = Eval(
         organisation_id=org,
         pipeline_id=uuid.uuid4(),
         name="judge",
         eval_type="llm_judge",
         config_json={"field": "output", "prompt": "grade"},
-        failure_behaviour="warn",
         eval_suite_id=suite.id,
         account_id=org,
     )
@@ -220,6 +221,54 @@ async def test_failure_sink_transitions_run_to_failed(session) -> None:
         await execute_suite_run(session, run)
     assert run.state == SuiteRunState.FAILED.value
     assert "llm_judge" in (run.error_detail or "")
+
+
+async def test_execute_suite_run_runs_llm_judge_when_callable_provided(session) -> None:
+    """The counterpart to the refusal test: a wired callable runs the judge.
+
+    Prove-the-fix (FAR-1712): the runner hard-refuses a judge-bearing suite when
+    no callable is provided (the test above). With a callable provided — the
+    state the SAQ job now wires — the runner must score the case, persist the
+    judge's score on the EvalResult, and reach the terminal state.
+    """
+    org = await _org()
+    suite, dataset, _, backend = await seed_suite(session, org)
+    await seed_cases(session, org, dataset, [{"category": "billing"}])
+    llm_def = Eval(
+        organisation_id=org,
+        pipeline_id=uuid.uuid4(),
+        name="judge",
+        eval_type="llm_judge",
+        config_json={"field": "output", "model_backend_id": str(uuid.uuid4())},
+        eval_suite_id=suite.id,
+        account_id=org,
+    )
+    session.add(llm_def)
+    await session.flush()
+
+    calls: list[uuid.UUID] = []
+
+    def _callable(output: dict[str, Any], eval_def: Any) -> dict[str, Any]:
+        calls.append(eval_def.id)
+        return {"passed": True, "score": 0.66, "detail": "stub judge"}
+
+    run = await build_suite_run(
+        session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
+    )
+    stats = await execute_suite_run(session, run, llm_judge_callable=_callable)
+    await session.flush()
+
+    assert stats["state"] == SuiteRunState.COMPLETED.value
+    assert stats["passed_cases"] == 1
+    assert calls == [llm_def.id]
+
+    rows = list((await session.execute(select(EvalResult).where(EvalResult.suite_run_id == run.id))).scalars())
+    # One result per suite definition (the seeded regex def + the judge def).
+    assert len(rows) == 2
+    judge_rows = [r for r in rows if r.eval_id == llm_def.id]
+    assert len(judge_rows) == 1
+    assert judge_rows[0].score == pytest.approx(0.66)
+    assert judge_rows[0].passed is True
 
 
 async def test_failure_sink_ingests_error_event(session, monkeypatch) -> None:
@@ -246,7 +295,7 @@ async def test_failure_sink_ingests_error_event(session, monkeypatch) -> None:
         session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
     )
     # No definitions -> orchestration error -> failure sink.
-    for d in (await session.execute(__import__("sqlalchemy").select(EvalDefinition))).scalars():
+    for d in (await session.execute(__import__("sqlalchemy").select(Eval))).scalars():
         await session.delete(d)
 
     with pytest.raises(SuiteRunExecutionError):
@@ -267,7 +316,7 @@ async def test_execute_suite_run_rejects_no_definitions(session) -> None:
     session.add(case)
     await session.flush()
     # Remove all definitions -> no active definitions.
-    for d in (await session.execute(__import__("sqlalchemy").select(EvalDefinition))).scalars():
+    for d in (await session.execute(__import__("sqlalchemy").select(Eval))).scalars():
         await session.delete(d)
     await session.flush()
 
@@ -582,7 +631,7 @@ async def test_saq_job_persists_orchestration_failure_across_rollback(monkeypatc
         s.add(run)
         await s.flush()
         # Remove every definition so the runner raises "no active definitions".
-        for d in (await s.execute(__import__("sqlalchemy").select(EvalDefinition))).scalars():
+        for d in (await s.execute(__import__("sqlalchemy").select(Eval))).scalars():
             await s.delete(d)
         await s.flush()
         rid, oid = str(run.id), str(org)
@@ -755,3 +804,39 @@ async def test_saq_job_records_lifecycle_audit_events(monkeypatch) -> None:
     assert all(event.account_id is None for event in events)
 
     await engine.dispose()
+
+
+# --------------------------------------------------------------------------- #
+# FAR-1729: source-table pin — the suite loader reads ``evals``               #
+# --------------------------------------------------------------------------- #
+class TestFar1729SuiteLoaderSourcePin:
+    """``load_suite_definitions`` must query ``evals``, never the frozen table.
+
+    ``eval_definitions`` was frozen by the 0254 cutover (no production write
+    path post-cutover); reading it would execute the pre-cutover definition
+    set forever. The pin fails if the source is reverted.
+    """
+
+    def test_loader_compiles_against_evals_table(self) -> None:
+        import asyncio
+
+        from modulo.core.eval_engine.execute_suite_run import load_suite_definitions
+
+        captured: list[str] = []
+
+        class _CaptureResult:
+            def scalars(self):
+                return self
+
+            def __iter__(self):
+                return iter([])
+
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=lambda stmt, *a, **k: captured.append(str(stmt)) or _CaptureResult())
+
+        rows = asyncio.run(load_suite_definitions(session, uuid.uuid4(), uuid.uuid4()))
+        assert rows == []
+        assert captured, "the loader must issue a definition lookup"
+        compiled = captured[0]
+        assert "evals" in compiled, f"loader must read the evals table, got: {compiled}"
+        assert "eval_definitions" not in compiled, f"loader must not read the frozen table, got: {compiled}"

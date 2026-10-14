@@ -321,7 +321,6 @@ def raise_session_contract_error(exc: Exception, log_key: str) -> None:
         # contract violation. ``MissingGreenlet`` is an ``InvalidRequestError``
         # subclass, so it is covered here too.
         _translate_wrapped_exception(exc, log_key)
-    return
 
 
 def session_contract_error_payload(exc: Exception, log_key: str) -> dict[str, str] | None:

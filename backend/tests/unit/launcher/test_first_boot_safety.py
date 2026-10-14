@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-import modulo.settings as settings_module
 from modulo.launcher.env_safety import AmbientEnvironmentError, make_first_boot_guard
 from modulo.settings import Settings, get_settings, pin_env_file, pinned_env_file, set_first_boot_guard
+from tests.unit.launcher.test_launcher_shared import launcher_state_reset
 
 _VALID_32 = "a" * 32
 _FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
@@ -22,12 +22,8 @@ _FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
 @pytest.fixture(autouse=True)
 def _reset_launcher_state() -> Iterator[None]:
-    """Snapshot + restore the module-level pin/guard and the get_settings cache."""
-    get_settings.cache_clear()
-    yield
-    settings_module._pinned_env_file = None
-    settings_module._first_boot_guard = None
-    get_settings.cache_clear()
+    """The shared snapshot/restore body lives in the launcher-test module."""
+    yield from launcher_state_reset()
 
 
 def _settings_kwargs() -> dict[str, object]:

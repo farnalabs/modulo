@@ -48,7 +48,12 @@ async def test_advisory_unlock_runs(lock_service):
 
 
 async def test_advisory_lock_acquire_release_round_trip(lock_service):
-    """Full acquire → release round-trip with the same resource ID."""
+    """Full acquire → release round-trip with the same resource ID.
+
+    The released state is proven behaviourally: after the release, the same
+    service's ``try_acquire`` asks Postgres for the lock again and succeeds —
+    it can only run because the service's held-resource state was cleared.
+    While the state is untouched, ``try_acquire`` short-circuits."""
     session = AsyncMock(spec=AsyncSession)
     acquire_result = MagicMock()
     acquire_result.scalar_one.return_value = True  # Lock acquired
@@ -58,16 +63,25 @@ async def test_advisory_lock_acquire_release_round_trip(lock_service):
     await lock_service.acquire(session, rid)
     # acquire() returns None on success — no exception means success
 
-    session.execute.reset_mock()
-
     await lock_service.release(session, rid)
-    session.execute.assert_called_once()
-    assert lock_service._owner_task_id is None
-    assert lock_service._resource_id is None
+    # Exactly one try-lock statement and one unlock statement reached the DB.
+    assert session.execute.call_count == 2
+    assert "pg_advisory_unlock" in session.execute.call_args_list[1].args[0].text
+
+    # The held state is gone: the SAME service can take the lock again
+    # (try_acquire is refused outright while any state remains held).
+    assert await lock_service.try_acquire(session, rid) is True
+    assert session.execute.call_count == 3
 
 
 async def test_advisory_lock_acquire_contention_then_release(lock_service):
-    """Lock contention raises, then a different call succeeds and releases."""
+    """Lock contention raises, then a different call succeeds and releases.
+
+    "A failed acquire leaves the service holding nothing" is proven through
+    the behavioural gates: after a failed acquire (a) ``try_acquire``
+    contacts PG and takes the lock, and (b) a second ``acquire`` on the same
+    resource raises ConnectorLockError naming the held resource. Both
+    statements are only reachable with no held state left behind."""
     session = AsyncMock(spec=AsyncSession)
 
     # First attempt — contention
@@ -78,9 +92,6 @@ async def test_advisory_lock_acquire_contention_then_release(lock_service):
     rid = uuid.uuid4()
     with pytest.raises(ConnectorLockError, match="Could not acquire"):
         await lock_service.acquire(session, rid)
-    # A failed acquire must not leave the service holding a lock.
-    assert lock_service._owner_task_id is None
-    assert lock_service._resource_id is None
 
     # Second attempt — success
     ok_result = MagicMock()
@@ -88,16 +99,17 @@ async def test_advisory_lock_acquire_contention_then_release(lock_service):
     session.execute = AsyncMock(return_value=ok_result)
 
     await lock_service.acquire(session, rid)
-    # acquire() returns None on success — no exception means success
-    assert lock_service._resource_id == rid
+    assert "pg_try_advisory_lock" in session.execute.call_args_list[0].args[0].text
+
+    # The service now holds a lock on the resource: a further acquire is refused.
+    with pytest.raises(ConnectorLockError, match=f"Already holding a lock on resource {rid}"):
+        await lock_service.acquire(session, rid)
 
     # Release
     await lock_service.release(session, rid)
-    # Two statements on this mock: try-lock (success) then unlock.
+    # Two statements total on this session: try-lock (success) then unlock.
     assert session.execute.call_count == 2
     assert "pg_advisory_unlock" in session.execute.call_args_list[1].args[0].text
-    assert lock_service._owner_task_id is None
-    assert lock_service._resource_id is None
 
 
 def test_uuid_to_lock_keys_round_trip():
@@ -145,7 +157,12 @@ def test_uuid_to_lock_keys_within_int4_range():
 
 
 async def test_acquire_records_owner_state(lock_service):
-    """acquire records the owning task and resource; release clears them."""
+    """acquire's ownership record is observable through the held-state gates.
+
+    While the lock is held, ``try_acquire`` short-circuits to False (it
+    refuses before contacting Postgres, because an owner is recorded); after
+    release it consults the DB and succeeds. Both facts are only reachable
+    with the owner/resource record intact and then cleared."""
     session = AsyncMock(spec=AsyncSession)
     result_mock = MagicMock()
     result_mock.scalar_one.return_value = True
@@ -154,12 +171,10 @@ async def test_acquire_records_owner_state(lock_service):
     rid = uuid.uuid4()
     await lock_service.acquire(session, rid)
 
-    assert lock_service._resource_id == rid
-    assert lock_service._owner_task_id is not None
+    assert await lock_service.try_acquire(session, rid) is False
 
     await lock_service.release(session, rid)
-    assert lock_service._resource_id is None
-    assert lock_service._owner_task_id is None
+    assert await lock_service.try_acquire(session, rid) is True
 
 
 async def test_acquire_while_holding_raises(lock_service):
@@ -265,7 +280,13 @@ async def test_release_different_resource_raises(lock_service):
 
 
 async def test_release_ownership_mismatch_warns(lock_service, caplog):
-    """Releasing from a different task logs an ownership mismatch warning but still releases."""
+    """Releasing from a different task logs an ownership mismatch warning but still releases.
+
+    The mismatch is produced by a REAL different task: acquire runs inside a
+    dedicated asyncio task (which records itself as the owner), then the test
+    task releases. The holder task is kept referenced throughout so its task
+    id cannot be recycled."""
+    import asyncio
     import logging
 
     session = AsyncMock(spec=AsyncSession)
@@ -274,13 +295,18 @@ async def test_release_ownership_mismatch_warns(lock_service, caplog):
     session.execute = AsyncMock(return_value=result_mock)
 
     rid = uuid.uuid4()
-    await lock_service.acquire(session, rid)
-    lock_service._owner_task_id = -1  # simulate ownership by a different task
+    holder_task: asyncio.Task[None] | None = asyncio.create_task(lock_service.acquire(session, rid))
+    await holder_task
 
     with caplog.at_level(logging.WARNING, logger="modulo.core.connector_hub.locking"):
         await lock_service.release(session, rid)
+    # The holder task is only released from our reference after the release has
+    # run, so its task id cannot be recycled mid-test.
+    holder_task = None
 
     assert any("ownership mismatch" in rec.message for rec in caplog.records)
+    # The mismatch is a warning, not a refusal: the unlock statement itself ran.
+    assert "pg_advisory_unlock" in session.execute.call_args_list[-1].args[0].text
 
 
 async def test_release_not_held_warns(lock_service, caplog):

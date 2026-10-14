@@ -98,6 +98,40 @@ class TestRuleFor:
         assert rule.max_requests == 20
 
 
+class TestManualSubmitSurface:
+    """The /manual/{review_id}/submit route is an approve-capability surface
+    budgeted by the SAME aggregate 20/min HITL rule as the /hitl/ review
+    actions (FAR-611 review fix) — a sweep alternating the two surfaces must
+    exhaust ONE bucket."""
+
+    _RUN_ID = "3f2a1b2c-9d4e-4b5c-8a1f-123456789abc"
+    _GATE_ID = "hitl_review_fetch-pr-title_verify-branch"
+
+    def test_manual_submit_path_is_rate_limited(self, middleware):
+        request = make_mock_request(path=f"/api/v1/runs/{self._RUN_ID}/manual/{self._GATE_ID}/submit")
+        assert middleware._should_rate_limit(request) is True
+
+    def test_manual_submit_resolves_to_hitl_rule(self, middleware):
+        request = make_mock_request(path=f"/api/v1/runs/{self._RUN_ID}/manual/{self._GATE_ID}/submit")
+        rule = middleware._rule_for(request)
+        assert rule.path_prefix == "/hitl/"
+        assert rule.max_requests == 20
+
+    def test_manual_submit_shares_hitl_bucket(self, middleware):
+        """Both surfaces must normalize to the SAME placeholder tail."""
+        headers = {"X-Forwarded-For": "198.51.100.7"}
+        hitl = make_mock_request(
+            path=f"/api/v1/runs/{self._RUN_ID}/hitl/{self._GATE_ID}/approve",
+            headers=headers,
+        )
+        manual = make_mock_request(
+            path=f"/api/v1/runs/{self._RUN_ID}/manual/{self._GATE_ID}/submit",
+            headers=headers,
+        )
+        assert middleware._client_key(manual) == middleware._client_key(hitl)
+        assert middleware._client_key(manual) == "ip:198.51.100.7:/api/v1/runs/<run_id>/hitl/<review_id>"
+
+
 class TestSetRules:
     def test_set_rules_overrides_class_defaults(self):
         original = list(RateLimitMiddleware.RULES)

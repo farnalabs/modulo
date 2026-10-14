@@ -174,7 +174,7 @@ def _when_run_websocket_terminal(request: Any) -> None:
     broker = ctx.get("broker")
     assert broker is not None, "No active broker"
 
-    status = ctx.get("run_status", "completed")
+    status = ctx.get("run_status", "complete")
     run_id = ctx["run_id"]
 
     ctx["sent_messages"].append(

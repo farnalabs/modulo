@@ -39,8 +39,6 @@ _MARKER_RE = re.compile(
     re.MULTILINE | re.IGNORECASE,
 )
 
-_VALID_SEVERITIES = frozenset({"critical", "major"})
-
 # Fenced code block pattern: lines between ``` or ~~~ openers and closers.
 # We strip these regions before scanning for the marker so a quoted example
 # like
@@ -63,9 +61,10 @@ def parse_suspension_marker(comment_body: str) -> str | None:
     1. Only the exact HTML-comment form ``<!-- FAST_LANE_SUSPENSION: <sev> -->``
        counts.  A severity word appearing in prose does not match.
     2. The match is case-insensitive on the severity value (``CRITICAL``,
-       ``Major``) but must otherwise be the exact token — whitespace around
-       the severity value is stripped and compared against the canonical
-       lowercase forms.
+       ``Major``) but must otherwise be the exact token.  ``_MARKER_RE``'s
+       capture group enumerates the two accepted values, so it is the single
+       source of truth for what counts as a severity — no second guard is
+       needed, and adding one would only risk drifting out of sync with it.
     3. Markers inside fenced code blocks (```` ``` ```` or ``~~~``) are
        ignored: the entire fenced region is removed before scanning, so a
        quoted example of the format does not trigger a suspension.
@@ -83,11 +82,7 @@ def parse_suspension_marker(comment_body: str) -> str | None:
     if m is None:
         return None
 
-    severity = m.group(1).lower()
-    if severity not in _VALID_SEVERITIES:
-        return None
-
-    return severity
+    return m.group(1).lower()
 
 
 # ---------------------------------------------------------------------------

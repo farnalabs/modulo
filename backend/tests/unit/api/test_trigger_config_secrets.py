@@ -50,3 +50,54 @@ def test_encrypt_trigger_config_secrets_encrypts_both_secret_keys() -> None:
 def test_encrypt_trigger_config_secrets_empty_config_returns_empty() -> None:
     assert not _encrypt_trigger_config_secrets(None, _FERNET_KEY)
     assert not _encrypt_trigger_config_secrets({}, _FERNET_KEY)
+
+
+def test_encrypt_trigger_config_secrets_fails_closed_on_bad_key() -> None:
+    """FAR-1732: an unusable Fernet key must abort the write — re-raise — not
+    silently leave the plaintext secret intact in the returned config."""
+    from modulo.auth.secret_storage import InvalidFernetKeyError
+
+    try:
+        _encrypt_trigger_config_secrets({"hmac_secret": "plaintext"}, "a" * 32)
+    except InvalidFernetKeyError:
+        expected_fail_closed = True
+    else:
+        expected_fail_closed = False
+    assert expected_fail_closed
+
+
+def test_encrypt_trigger_config_secrets_encrypts_gaaaa_prefixed_plaintext() -> None:
+    """FAR-1735: the DECRYPTABILITY probe — not the ``gAAAA`` prefix —
+    classifies ciphertext. A plaintext secret that merely begins with
+    ``gAAAA`` must still be encrypted on write: the old prefix heuristic left
+    such values stored in the clear, and the read path then failed closed on
+    them, permanently breaking the trigger."""
+    tricky_plaintext = "gAAAA-not-actually-a-fernet-token"
+    stored = _encrypt_trigger_config_secrets({"hmac_secret": tricky_plaintext}, _FERNET_KEY)
+    assert stored["hmac_secret"] != tricky_plaintext
+    assert decode_stored_secret(stored["hmac_secret"], _FERNET_KEY) == tricky_plaintext
+
+
+def test_encrypt_trigger_config_secrets_recognises_old_key_ciphertext() -> None:
+    """FAR-1735: ciphertext under the ROTATION-WINDOW previous key
+    (``old_fernet_key``) is recognised as already-encrypted and is never
+    double-encrypted by a concurrent write during rotation."""
+    old_key = Fernet.generate_key().decode()
+    old_ct = Fernet(old_key.encode()).encrypt(b"shared-secret").decode()
+
+    stored = _encrypt_trigger_config_secrets({"hmac_secret": old_ct}, _FERNET_KEY, old_fernet_key=old_key)
+
+    assert stored["hmac_secret"] == old_ct, "old-key ciphertext must pass through untouched"
+    assert decode_stored_secret(old_ct, old_key) == "shared-secret"
+
+
+def test_encrypt_trigger_config_secrets_undecryptable_token_is_double_encrypted_safely() -> None:
+    """A token-shaped value that NEITHER the current NOR the old key
+    decrypts is treated as plaintext by the probe — so a genuinely corrupt
+    stored value gets re-encrypted rather than left to fail closed on read.
+    (The stored-before value is already unreadable either way; the write
+    path never silently persists a NEW plaintext.)"""
+    alien_ct = Fernet(Fernet.generate_key().decode()).encrypt(b"alien").decode()
+    stored = _encrypt_trigger_config_secrets({"hmac_secret": alien_ct}, _FERNET_KEY)
+    assert stored["hmac_secret"] != alien_ct
+    assert decode_stored_secret(stored["hmac_secret"], _FERNET_KEY) == alien_ct

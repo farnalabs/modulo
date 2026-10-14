@@ -280,6 +280,8 @@ import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
+import { useProductAnalytics } from '../composables/useProductAnalytics'
+import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
@@ -297,6 +299,7 @@ import RestConnectorConfigForm, {
 
 const { t } = useI18n()
 const planStore = usePlanStore()
+const { track } = useProductAnalytics()
 
 interface ConnectorItem {
   id: string
@@ -400,11 +403,15 @@ function prefillRestConfig(connector: ConnectorItem) {
   const storedOnUnknown = String(cfg.on_unknown ?? '').trim().toLowerCase()
   restConfig.value.on_unknown = ON_UNKNOWN_OPTIONS.includes(storedOnUnknown) ? storedOnUnknown : 'fail_open'
   restConfig.value.records_path = typeof cfg.records_path === 'string' ? cfg.records_path : ''
-  restConfig.value.allowed_hosts = Array.isArray(cfg.allowed_hosts)
-    ? (cfg.allowed_hosts as unknown[]).join(', ')
-    : typeof cfg.allowed_hosts === 'string'
-      ? cfg.allowed_hosts
-      : ''
+  // Stored allowed_hosts may be a list (canonical) or a legacy string; anything
+  // else pre-fills as empty rather than coerced to "[object Object]".
+  let allowedHosts = ''
+  if (Array.isArray(cfg.allowed_hosts)) {
+    allowedHosts = (cfg.allowed_hosts as unknown[]).join(', ')
+  } else if (typeof cfg.allowed_hosts === 'string') {
+    allowedHosts = cfg.allowed_hosts
+  }
+  restConfig.value.allowed_hosts = allowedHosts
   const advanced: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(cfg)) {
     // Snapshot any stored config key the form does not surface as a first-class
@@ -656,6 +663,7 @@ async function createConnector() {
         enabled: true,
         config_json: data.config_json ?? null,
       })
+      track(ANALYTICS_EVENTS.CONNECTOR_ADDED, { connector_id: data.id })
       closeForm()
     }
   } catch (e: unknown) {

@@ -17,6 +17,7 @@ from modulo.core.product_analytics.consent import (
     is_license_enforcement_enabled,
     is_partner_carve_out_active,
     is_prompt_eligible,
+    kill_switch_disables_enforcement,
     merge_product_analytics_block,
     partner_license_requires_analytics,
     set_level,
@@ -356,3 +357,43 @@ class TestLicenseEnforcementKillSwitch:
         session = AsyncMock()
         with patch.object(consent_module, "get_config", new=AsyncMock(return_value=_Config("no"))):
             assert await is_license_enforcement_enabled(session) is True
+
+    async def test_str_zero_enforces(self) -> None:
+        session = AsyncMock()
+        with patch.object(consent_module, "get_config", new=AsyncMock(return_value=_Config("0"))):
+            assert await is_license_enforcement_enabled(session) is True
+
+
+class TestKillSwitchValueParsing:
+    """The single canonical parser shared by both enforcement helpers (FAR-1636)."""
+
+    @pytest.mark.parametrize(
+        "stored",
+        [True, "true", "TRUE", "1", "yes", "Yes", " yes "],
+        ids=["bool_true", "str_true", "str_TRUE", "str_one", "str_yes", "str_Yes", "str_padded_yes"],
+    )
+    def test_truthy_spellings_disable_enforcement(self, stored: object) -> None:
+        assert kill_switch_disables_enforcement(stored) is True
+
+    @pytest.mark.parametrize(
+        "stored",
+        [False, "false", "FALSE", "0", "no", "No", "", "off"],
+        ids=["bool_false", "str_false", "str_FALSE", "str_zero", "str_no", "str_No", "str_empty", "str_off"],
+    )
+    def test_everything_else_leaves_enforcement_enabled(self, stored: object) -> None:
+        assert kill_switch_disables_enforcement(stored) is False
+
+    @pytest.mark.parametrize(
+        "stored",
+        [0, 1, None, [], {}],
+        ids=["int_zero", "int_one", "none", "empty_list", "empty_dict"],
+    )
+    def test_non_bool_non_str_values_fall_back_to_truthiness(self, stored: object) -> None:
+        """A stored value that is neither bool nor str uses truthiness (never truthy-by-shape).
+
+        The kill-switch column may hold any JSON shape (integer, null, list).
+        Only an explicitly truthy bool or a recognised string turns the switch
+        on, so every other shape must read through ``bool(value)`` — a
+        non-empty list must never be treated as "kill switch on".
+        """
+        assert kill_switch_disables_enforcement(stored) is bool(stored)

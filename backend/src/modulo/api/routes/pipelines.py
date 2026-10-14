@@ -1,8 +1,19 @@
 """Pipeline CRUD REST API.
 
 Alpha: Graph replacement uses row-level locking (SELECT ... FOR UPDATE) in
-replace_pipeline_graph. No advisory lock is deployed; the row lock on the
-pipeline row serialises concurrent graph writes within a serialisable transaction.
+replace_pipeline_graph. No advisory lock is deployed for the graph row itself;
+the row lock on the pipeline row serialises concurrent graph writes within a
+serialisable transaction.
+
+FAR-1109: the graph write ALSO translates each node's declared ``policy_gate``
+block into the ``policy_gates`` row lifecycle. That translation lives in the
+shared write transaction itself
+(``modulo.db.crud.pipeline.replace_pipeline_graph`` ->
+``reconcile_graph_policy_gates``), so EVERY graph writer — these REST routes,
+the MCP ``update_pipeline_graph`` tool, node conversions, snapshot rollback,
+onboarding and the demo seed — translates. The row operations acquire the
+per-eval advisory lock shared with the FAR-1106 authoring routes so the
+declarative and in-product surfaces serialise against each other.
 """
 
 from __future__ import annotations
@@ -93,6 +104,7 @@ from modulo.core.reports.quality_report import (
 from modulo.core.run_context.autonomy import (
     AutonomyLevel,
     autonomy_change_payload,
+    autonomy_level_rank,
     validate_autonomy_ceiling,
 )
 from modulo.core.schema_registry.rendering import SchemaProfile
@@ -132,11 +144,13 @@ from modulo.db.crud.pipeline import (
     replace_pipeline_graph,
     restore_pipeline,
     resume_pipeline,
+    set_earned_autonomy_level,
     soft_delete_pipeline,
     unarchive_pipeline,
     update_pipeline,
 )
 from modulo.db.crud.pipeline_folder import move_pipeline_to_folder
+from modulo.db.crud.pipeline_owner import is_account_in_team
 from modulo.db.crud.pipeline_snapshot import create_snapshot_edit
 from modulo.db.crud.pipeline_snapshot_versioning import (
     delete_snapshot,
@@ -164,6 +178,9 @@ _CODE_PIPELINE_LIST = "pipeline.list"
 _CODE_ROUTES_PIPELINES = "routes.pipelines"
 _CODE_PIPELINE_GRAPH_UPDATE = "pipeline.graph.update"
 _CODE_PIPELINE_UPDATE = "pipeline.update"
+
+_MSG_NOT_TEAM_MEMBER = "Not a member of the team that owns this resource"
+
 # FAR-1184: raising or clearing a pipeline's spend circuit-breaker threshold
 # requires the same org-admin permission as the circuit-breaker reset.
 _CODE_COST_MANAGE = "cost.manage"
@@ -851,6 +868,60 @@ class PipelineUpdate(TeamVisibilityMixin):
             "Set to {} to clear (no pipeline override)."
         ),
     )
+    benign_signatures: list[dict[str, Any]] | None = Field(
+        None,
+        description=(
+            "Explicit BUSINESS-EXPECTED run-outcome signatures (FAR-707). "
+            'Shape: [{"error_code": "<exact runs.error_code>", '
+            '"error_detail_contains": "<case-insensitive substring, optional>"}]. '
+            "A terminal failure whose (error_code, error_detail) matches one is "
+            "classified `benign` — a distinct class excluded from analytics "
+            "failure rates and error-code clusters — instead of counting as a "
+            "failure. Null clears (no signatures = historical behaviour)."
+        ),
+    )
+
+    @field_validator("benign_signatures", mode="before")
+    @classmethod
+    def _validate_benign_signatures(cls, v: Any) -> list[dict[str, Any]] | None:
+        """Strict on the wire, lenient on storage.
+
+        The API REJECTS a malformed entry (422) so a typo cannot silently
+        disable a signature the operator believes is active; the storage reader
+        (``classify.normalize_benign_signatures``) stays lenient so a value
+        written before this validator (or by a direct DB edit) can never break
+        terminalization.
+
+        A key outside the accepted pair (FAR-707 QA) is rejected EXPLICITLY,
+        not only via the length check: ``{"error_code": "agent.failed",
+        "detail_contains": "rebase conflict"}`` would otherwise be stored with
+        its detail constraint silently lost and classify EVERY ``agent.failed``
+        failure as benign.
+        """
+        from modulo.core.pipeline_engine.classify import (
+            BENIGN_SIGNATURE_KEYS,
+            normalize_benign_signatures,
+        )
+
+        if v is None:
+            return None
+        if not isinstance(v, list):
+            raise ValueError("benign_signatures must be a list")
+        for entry in v:
+            if isinstance(entry, dict) and not BENIGN_SIGNATURE_KEYS.issuperset(entry.keys()):
+                raise ValueError(
+                    "benign_signatures entries accept ONLY the keys 'error_code' and "
+                    "'error_detail_contains' — an unknown key would silently widen the "
+                    "signature (an absent 'error_detail_contains' matches any detail)"
+                )
+        normalised = normalize_benign_signatures(v)
+        if len(normalised) != len(v):
+            raise ValueError(
+                "benign_signatures entries must be objects with a non-empty string "
+                "'error_code' and an optional string 'error_detail_contains'"
+            )
+        return normalised
+
     circuit_breaker_threshold: float | None = Field(
         None,
         gt=0,
@@ -965,6 +1036,11 @@ class PipelineResponse(BaseModel):
     default_autonomy_level: str | None = None
     # FAR-1163: nullable ceiling (NULL = effective ceiling is the default).
     max_autonomy_level: str | None = None
+    # FAR-1175 (ADR 043 S1): the runtime earned autonomy level (NULL until a
+    # manual promote/demote sets it) and when it last moved. Read LIVE at every
+    # HITL gate when the ``autonomy_gating`` flag is on.
+    earned_autonomy_level: str | None = None
+    earned_autonomy_updated_at: datetime | None = None
     # Intentionally nullable: legacy rows and rollbacks of pre-migration data
     # can still expose a NULL value until the max_duration pipeline migration
     # has run on all production DBs.
@@ -973,6 +1049,10 @@ class PipelineResponse(BaseModel):
     rate_limit_config: dict[str, Any] | None = None
     retry_policy: dict[str, Any] = Field(default_factory=dict, json_schema_extra={"default": {}})
     stdout_retention_config: dict[str, Any] | None = None
+    # FAR-707: the explicit business-expected-outcome signatures the run
+    # classifier consults at terminalization. Additive + nullable: null = no
+    # signatures (historical behaviour); partial ORM stand-ins serialise null.
+    benign_signatures: list[dict[str, Any]] | None = None
     # FAR-1182: monthly spend circuit breaker. Additive, backward-compatible.
     circuit_breaker_threshold: float | None = Field(None, description=_CIRCUIT_BREAKER_THRESHOLD_DESCRIPTION)
     circuit_breaker_tripped: bool = False
@@ -1018,6 +1098,20 @@ class PipelineResponse(BaseModel):
         # partial ORM objects may expose None — the no-policy default is {}.
         return value if isinstance(value, dict) else {}
 
+    @field_validator("earned_autonomy_level", mode="before")
+    @classmethod
+    def _coerce_earned_autonomy_level(cls, value: Any) -> str | None:
+        # FAR-1175: legacy rows are NULL; partial ORM stand-ins may expose a
+        # non-string — coerce to None (mirrors _coerce_max_autonomy_level).
+        return value if isinstance(value, str) or value is None else None
+
+    @field_validator("earned_autonomy_updated_at", mode="before")
+    @classmethod
+    def _coerce_earned_autonomy_updated_at(cls, value: Any) -> datetime | None:
+        # FAR-1175: legacy rows are NULL; partial ORM stand-ins (MagicMock
+        # test doubles) may expose a non-datetime — coerce to None.
+        return value if isinstance(value, datetime) or value is None else None
+
     @field_validator("max_autonomy_level", mode="before")
     @classmethod
     def _coerce_max_autonomy_level(cls, value: Any) -> str | None:
@@ -1030,6 +1124,15 @@ class PipelineResponse(BaseModel):
     @classmethod
     def _coerce_stdout_retention_config(cls, value: Any) -> dict[str, Any] | None:
         return value if isinstance(value, dict) else None
+
+    @field_validator("benign_signatures", mode="before")
+    @classmethod
+    def _coerce_benign_signatures(cls, value: Any) -> list[dict[str, Any]] | None:
+        # Read side stays LENIENT (unlike the PATCH validator): a stored value
+        # written before this column existed, or by a direct DB edit, must
+        # serialise as-is rather than 500 a pipeline read. The classifier
+        # applies the same tolerance at match time.
+        return value if isinstance(value, list) else None
 
     # The breaker columns are read defensively (like the fields above): partial
     # ORM stand-ins may expose non-column attributes, which serialise as the
@@ -1171,6 +1274,39 @@ class CapabilityScope(BaseModel):
         default=None,
         description="Allowlist of run_context keys the node may read. Absent = UNRESTRICTED (full run_context).",
     )
+
+
+class PipelineGraphPolicyGate(BaseModel):
+    """Node-attached policy-gate configuration (FAR-1109).
+
+    Declared on a :class:`PipelineGraphNode` so a declarative ``modulo apply``
+    config can carry the gate as part of the graph write. ``action`` is the
+    gate's configured action (the ``policy_gates.action`` CHECK vocabulary);
+    ``eval_id`` references the eval bound to this node (the CLI never
+    auto-creates evals, so an unresolved ``eval_id`` blocks the entity at plan
+    time).
+
+    The node model previously had no field for this block, so Pydantic's
+    default ``extra="ignore"`` silently DROPPED it — before the drift hash and
+    before the graph write — leaving declarative gate config permanently inert
+    (the plan always reported "unchanged" and the write never carried the
+    gate). Declaring the field means the validated node dict retains the block
+    and ``replace_pipeline_graph`` persists it verbatim in
+    ``pipeline.graph_nodes_json``, and the read path round-trips it.
+    """
+
+    # NOTE (FAR-1109): retention alone does NOT enforce. This docstring is part
+    # of the generated OpenAPI schema, so the enforcement note lives here as a
+    # plain comment (and in the module docstring above) rather than in the
+    # docstring — keeping frontend/src/lib/api/schema.ts fresh. The runtime
+    # engine resolves gating only from ``policy_gates`` rows joined to evals, so
+    # the shared graph-write transaction ALSO translates each declared block into
+    # the gate-row lifecycle (create / update / soft-delete) via
+    # ``db.crud.pipeline.reconcile_graph_policy_gates`` — a stored block with no
+    # row governs nothing.
+
+    action: Literal["warn", "block"]
+    eval_id: uuid.UUID
 
 
 class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
@@ -1330,6 +1466,16 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         "claim_expiry_min, "
         "human_only, eval_before_interrupt, required_team_id, overdue_threshold_minutes, eval_condition, "
         "condition). Compiles to the existing synthetic-gate path. Required for node_type='hitl'.",
+    )
+    # FAR-1109: node-attached policy-gate configuration (declarative
+    # config-as-code surface). Declared here so the REST + MCP graph contracts
+    # do NOT silently drop the block on save — a dropped declarative field
+    # would create permanent plan drift in ``modulo apply`` and the write would
+    # never carry the gate. Absent = no gate declared on this node.
+    policy_gate: PipelineGraphPolicyGate | None = Field(
+        default=None,
+        description="Node-attached policy gate: {action: 'warn'|'block', eval_id: <uuid>}. "
+        "Absent means no gate is declared on this node.",
     )
     # FAR-402 P3 / FAR-417: scatter (fan-out). A property on an agent /
     # sandbox_agent / composite node (NOT a new node_type). When set, the node
@@ -2389,13 +2535,17 @@ async def _enforce_connector_team_bindings(
 ) -> None:
     """Block graph saves whose connector binding crosses a team boundary.
 
-    PRD §9.3 + FAR-1515: a team-private connector may only bind to a pipeline
-    owned by the same team, and a team pipeline may not pin an org-only
-    connector (every run of that graph would be team-scoped and rejected at
-    the connector gate). Violations raise 409 ``connector_team_mismatch`` at
-    the pipeline-save command layer. A binding the team-blind org-scoped read
-    cannot resolve (``ConnectorBindingMissingError``, FAR-1515 CRITICAL 1) is
-    the same named 409: a binding the gate cannot validate never saves.
+    PRD §9.3 + FAR-1515, model restated by FAR-1618: only the team-PRIVATE
+    direction is refused — a ``visibility: team`` connector may only bind to a
+    pipeline owned by the same team, so another team's pipeline (or an org
+    pipeline with no owner team) is a mismatch. An org-visibility connector is
+    shared across the organisation and binds to ANY pipeline, team-owned or
+    not; FAR-1618 removed the reverse direction FAR-1515 had added and the
+    FAR-516 run-gate it mirrored. Violations raise 409
+    ``connector_team_mismatch`` at the pipeline-save command layer. A binding
+    the team-blind org-scoped read cannot resolve
+    (``ConnectorBindingMissingError``, FAR-1515 CRITICAL 1) is the same named
+    409: a binding the gate cannot validate never saves.
     """
     try:
         mismatches = await find_connector_team_mismatches(
@@ -2632,13 +2782,13 @@ async def _resolve_graph_references(
     the pipeline's team: a team-private model backend pinned by a pipeline owned
     by a different team (or by no team at all) raises 409
     ``model_backend_team_mismatch`` (PRD §9.3), alongside the connector rule
-    enforced just before this. The two predicates are NOT identical: the
-    connector rule also refuses an org-only connector on a team pipeline
-    (FAR-1515), while this one stays team-private-only because ModelBackendHub
-    has no invocation-time visibility gate to mirror — see the parity note on
-    ``model_backend_team_mismatch``. The mismatch rule itself decides whether
-    an org-owned pipeline (``owner_team_id=None``) may pin a team-private
-    backend.
+    enforced just before this. Since FAR-1618 the two predicates say the SAME
+    thing: an org-visibility row — connector or model backend — never
+    mismatches because org-wide resources stay shared across the organisation,
+    and a team-private row mismatches every pipeline outside its owner team
+    (the parity note on ``model_backend_team_mismatch`` records why the two
+    used to differ). The mismatch rule itself decides whether an org-owned
+    pipeline (``owner_team_id=None``) may pin a team-private backend.
     """
     agent_ids = {node.agent_id for node in nodes if node.agent_id is not None}
     agents_by_id = await _load_agents_by_ids(session, org_id, agent_ids)
@@ -3219,7 +3369,7 @@ async def _reapply_team_gate_inside_mutation_txn(
             session,
             account_id=principal.account_id,
             team_id=current.owner_team_id,
-            denial_detail="Not a member of the team that owns this resource",
+            denial_detail=_MSG_NOT_TEAM_MEMBER,
         )
     return current
 
@@ -3336,7 +3486,7 @@ async def _assert_team_transition_allowed(
             session,
             account_id=principal.account_id,
             team_id=current_team_id,
-            denial_detail="Not a member of the team that owns this resource",
+            denial_detail=_MSG_NOT_TEAM_MEMBER,
         )
 
     # New team gate: reassigning to a team requires membership of the NEW team.
@@ -3473,6 +3623,220 @@ def _raise_active_runs_conflict(exc: PipelineHasActiveRunsError) -> None:
     ) from None
 
 
+def _assert_threshold_change_allowed(
+    current: Pipeline,
+    principal: TenantPrincipal,
+    *,
+    threshold_change: bool,
+    new_threshold: Decimal | None,
+) -> None:
+    """FAR-1184: raising or clearing the spend limit requires ``cost.manage``.
+
+    Lowering or setting where none exists keeps ``pipeline.update``. Raised
+    BEFORE any mutation; the denial audits + 403s via the route's
+    ``CircuitBreakerThresholdChangeDenied`` except clause.
+    """
+    if threshold_change and not circuit_breaker_threshold_change_allowed(
+        current.circuit_breaker_threshold,
+        new_threshold,
+        may_manage_cost=_may_manage_cost(principal),
+    ):
+        raise CircuitBreakerThresholdChangeDenied(
+            previous=current.circuit_breaker_threshold,
+            new=new_threshold,
+        )
+
+
+async def _assert_environment_profile_binding_valid(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    locked: Pipeline,
+    updates: dict[str, Any],
+) -> None:
+    """FAR-1558: validate the candidate environment-profile binding fail-closed.
+
+    The candidate is the payload's value, or the STORED one when a scope
+    change could strand it — the same fail-closed re-validation the
+    accountability-owner block in ``crud.pipeline.update_pipeline`` applies.
+    Both run against the EFFECTIVE post-update owner team, computed the same
+    way the ceiling/default merge computes its effective values.
+    """
+    binding_in_payload = "environment_profile_id" in updates
+    scope_changed = "visibility" in updates or "owner_team_id" in updates
+    # Read the STORED binding defensively: a partial stand-in row (test
+    # doubles, MagicMock rows) exposes a non-column attribute child, so
+    # anything that is not a UUID is treated as "unbound" rather than
+    # fed into the profile query — the same treatment
+    # crud.pipeline.update_pipeline gives stored accountability owners.
+    stored = getattr(locked, "environment_profile_id", None)
+    stored_binding = stored if isinstance(stored, uuid.UUID) else None
+    if binding_in_payload:
+        candidate_binding = updates["environment_profile_id"]
+    elif scope_changed:
+        candidate_binding = stored_binding
+    else:
+        candidate_binding = None
+    if candidate_binding is not None:
+        await _assert_environment_profile_bindable(
+            session,
+            org_id=principal.organisation_id,
+            profile_id=candidate_binding,
+            # .get is correct: an explicit owner_team_id=None (clear) is in
+            # the dict, so .get returns it rather than the row's stale team.
+            pipeline_owner_team_id=updates.get("owner_team_id", locked.owner_team_id),
+        )
+
+
+def _assert_autonomy_ceiling_valid(locked: Pipeline, updates: dict[str, Any]) -> None:
+    """FAR-1163: a PATCH may set only one of default/max — validate the MERGED effective values.
+
+    Ceiling NULL = effective ceiling is the default, so it never violates on
+    its own. ``locked`` is the FOR UPDATE row from the in-transaction team
+    gate.
+    """
+    if "default_autonomy_level" in updates or "max_autonomy_level" in updates:
+        merged_default = updates.get("default_autonomy_level", locked.default_autonomy_level)
+        # ``dict.get`` returns the stored value whenever the key is
+        # present (even an explicit null), which is exactly
+        # "updates[k] if k in updates else the row's value".
+        # ``locked`` is the FOR UPDATE row: ``max_autonomy_level``
+        # has existed since migration 0256, so read it directly —
+        # its NULL arm (no ceiling configured) is the only fallback.
+        merged_ceiling = updates.get("max_autonomy_level", locked.max_autonomy_level)
+        try:
+            # Lenient: a stored non-string/unparseable ceiling does not
+            # constrain resolution either (it falls back to default).
+            validate_autonomy_ceiling(merged_default, merged_ceiling, lenient=True)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from None
+
+
+async def _enforce_stored_bindings_on_team_change(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    current: Pipeline,
+    updates: dict[str, Any],
+    *,
+    ownership_changed: bool,
+    graph_replaced: bool,
+) -> None:
+    """FAR-1515 MAJOR 2: gate the STORED connector bindings on a team-boundary change.
+
+    An ownership/visibility-only PATCH used to re-validate MEMBERSHIP only,
+    while the advisory ``connector_rebind_required`` flag (set on the
+    response) was consumed by nothing — so moving a pipeline to a new team
+    re-created the forbidden state (its STORED graph still pinning a
+    connector the new owner team may not use) without ever running the
+    connector-team gate. When the team boundary changes and the payload does
+    NOT also replace the graph (that case is gated by ``_apply_graph_update``
+    against the EFFECTIVE owner), the pipeline's stored bindings are gated
+    here, in the same transaction, against the effective NEW owner team.
+    """
+    visibility_changed = "visibility" in updates and updates["visibility"] != current.visibility
+    if (ownership_changed or visibility_changed) and not graph_replaced:
+        stored_bindings = extract_connector_bindings(list(current.graph_nodes_json or []))
+        if stored_bindings:
+            await _enforce_connector_team_bindings(
+                session,
+                principal.organisation_id,
+                updates.get("owner_team_id", current.owner_team_id),
+                stored_bindings,
+            )
+
+
+async def _apply_pipeline_update_payload(
+    *,
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    pipeline_id: uuid.UUID,
+    req: PipelineUpdate,
+    updates: dict[str, Any],
+    has_graph: bool,
+    threshold_change: bool,
+    new_threshold: Decimal | None,
+) -> tuple[Pipeline | None, bool]:
+    """Apply a PATCH update payload inside one mutation transaction.
+
+    Pre-validators, then the persist ladder: RLS context, unlocked 404 read,
+    threshold permission gate, the FOR UPDATE team gate, transition /
+    environment-profile / autonomy-ceiling validation, the stored-connector
+    binding gate on a team change, optional graph replacement, the crud
+    update, and the in-transaction refresh.
+
+    Returns ``(pipeline, ownership_changed)`` — ``pipeline`` is None when the
+    row is gone mid-flight (the route 404s). Every typed exception raised
+    here propagates AFTER the transaction rolls back; the
+    exception-to-status ladder stays in ``update_pipeline_endpoint``.
+    """
+    async with session.begin():
+        await _set_rls_context(session, principal)
+        current = await _get_pipeline_or_404(session, pipeline_id, organisation_id=principal.organisation_id)
+        _assert_threshold_change_allowed(
+            current,
+            principal,
+            threshold_change=threshold_change,
+            new_threshold=new_threshold,
+        )
+        # FAR-1222: the in-txn team gate SELECTs the row FOR UPDATE inside
+        # THIS transaction — that locked row, not the earlier unlocked read
+        # above, is what the ceiling/default merge below must validate
+        # against. Two concurrent PATCHes each validating against their own
+        # stale unlocked read can otherwise both commit and store
+        # ceiling < default. The helper keeps the 404 (gone row) and 403
+        # (team-private row, non-member) semantics of the unlocked read.
+        # NOTE: the unlocked read above and this locked re-select resolve to
+        # the SAME identity-mapped instance; the helper's
+        # populate_existing=True refreshes its attributes from the locked
+        # row, so both names below read post-lock values.
+        locked = await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+        await _assert_team_transition_allowed(session, principal, current, updates)
+        await _assert_environment_profile_binding_valid(session, principal, locked, updates)
+        _assert_autonomy_ceiling_valid(locked, updates)
+        ownership_changed = "owner_team_id" in updates and updates["owner_team_id"] != current.owner_team_id
+        graph_replaced = has_graph and req.graph_json is not None
+        await _enforce_stored_bindings_on_team_change(
+            session,
+            principal,
+            current,
+            updates,
+            ownership_changed=ownership_changed,
+            graph_replaced=graph_replaced,
+        )
+        await _maybe_audit_autonomy_change(
+            session,
+            principal=principal,
+            pipeline_id=pipeline_id,
+            updates=updates,
+        )
+        if has_graph and req.graph_json is not None:
+            await _apply_graph_update(
+                session,
+                pipeline_id=pipeline_id,
+                org_id=principal.organisation_id,
+                principal=principal,
+                graph_json=req.graph_json,
+                updates=updates,
+            )
+        pipeline = await update_pipeline(
+            session,
+            pipeline_id,
+            updates,
+            org_id=principal.organisation_id,
+            account_id=principal.account_id,
+            request_id=getattr(principal, "request_id", None),
+        )
+        # Refresh the ORM row inside the transaction so the DB-computed
+        # `updated_at` (onupdate=func.current_timestamp()) is loaded while
+        # the transaction is active. Accessing it after commit with
+        # autobegin=False raises InvalidRequestError -> 422 silent-success.
+        if pipeline is not None:
+            await session.refresh(pipeline)
+    return pipeline, ownership_changed
+
+
 @router.patch(
     "/{pipeline_id}",
     dependencies=[Depends(audited("pipeline_updated", "pipeline", principal_dep=get_current_tenant_user_or_api_key))],
@@ -3494,147 +3858,24 @@ async def update_pipeline_endpoint(
     updates.pop("graph_json", None)
     # FAR-1184: normalise FIRST (Pydantic already validated the value; this
     # canonicalises to the column's Decimal scale) so the permission
-    # comparison below never sees an unexpected value type — a bad value
-    # raises here, BEFORE any denial/permission logic, and never reaches
+    # comparison never sees an unexpected value type — a bad value raises
+    # here, BEFORE any denial/permission logic, and never reaches
     # `new <= previous`.
     threshold_change = "circuit_breaker_threshold" in updates
     new_threshold: Decimal | None = (
         normalize_circuit_breaker_threshold(updates["circuit_breaker_threshold"]) if threshold_change else None
     )
     try:
-        async with session.begin():
-            await _set_rls_context(session, principal)
-            current = await _get_pipeline_or_404(session, pipeline_id, organisation_id=principal.organisation_id)
-            # FAR-1184: raising or clearing the spend limit requires
-            # cost.manage (the same permission as the breaker reset). Lowering
-            # or setting where none exists keeps pipeline.update. Raised
-            # BEFORE any mutation; the denial audits + 403s via the except
-            # clause below.
-            if threshold_change and not circuit_breaker_threshold_change_allowed(
-                current.circuit_breaker_threshold,
-                new_threshold,
-                may_manage_cost=_may_manage_cost(principal),
-            ):
-                raise CircuitBreakerThresholdChangeDenied(
-                    previous=current.circuit_breaker_threshold,
-                    new=new_threshold,
-                )
-            # FAR-1222: the in-txn team gate SELECTs the row FOR UPDATE inside
-            # THIS transaction — that locked row, not the earlier unlocked read
-            # above, is what the ceiling/default merge below must validate
-            # against. Two concurrent PATCHes each validating against their own
-            # stale unlocked read can otherwise both commit and store
-            # ceiling < default. The helper keeps the 404 (gone row) and 403
-            # (team-private row, non-member) semantics of the unlocked read.
-            # NOTE: the unlocked read above and this locked re-select resolve to
-            # the SAME identity-mapped instance; the helper's
-            # populate_existing=True refreshes its attributes from the locked
-            # row, so both names below read post-lock values.
-            locked = await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
-            await _assert_team_transition_allowed(session, principal, current, updates)
-            # FAR-1558: environment-profile binding validation (the payload's
-            # value, or the STORED one when a scope change could strand it —
-            # the same fail-closed re-validation the accountability-owner block
-            # in crud.pipeline.update_pipeline applies). Both run against the
-            # EFFECTIVE post-update owner team, computed the same way the
-            # ceiling/default merge below computes its effective values.
-            _binding_in_payload = "environment_profile_id" in updates
-            _scope_changed = "visibility" in updates or "owner_team_id" in updates
-            # Read the STORED binding defensively: a partial stand-in row (test
-            # doubles, MagicMock rows) exposes a non-column attribute child, so
-            # anything that is not a UUID is treated as "unbound" rather than
-            # fed into the profile query — the same treatment
-            # crud.pipeline.update_pipeline gives stored accountability owners.
-            _stored = getattr(locked, "environment_profile_id", None)
-            _stored_binding = _stored if isinstance(_stored, uuid.UUID) else None
-            if _binding_in_payload:
-                _candidate_binding = updates["environment_profile_id"]
-            elif _scope_changed:
-                _candidate_binding = _stored_binding
-            else:
-                _candidate_binding = None
-            if _candidate_binding is not None:
-                await _assert_environment_profile_bindable(
-                    session,
-                    org_id=principal.organisation_id,
-                    profile_id=_candidate_binding,
-                    # .get is correct: an explicit owner_team_id=None (clear) is in
-                    # the dict, so .get returns it rather than the row's stale team.
-                    pipeline_owner_team_id=updates.get("owner_team_id", locked.owner_team_id),
-                )
-            # FAR-1163: a PATCH may set only one of default/max — validate the
-            # MERGED effective values (ceiling NULL = effective ceiling is the
-            # default, so it never violates on its own).
-            if "default_autonomy_level" in updates or "max_autonomy_level" in updates:
-                merged_default = updates.get("default_autonomy_level", locked.default_autonomy_level)
-                # ``dict.get`` returns the stored value whenever the key is
-                # present (even an explicit null), which is exactly
-                # "updates[k] if k in updates else the row's value".
-                # ``locked`` is the FOR UPDATE row: ``max_autonomy_level``
-                # has existed since migration 0256, so read it directly —
-                # its NULL arm (no ceiling configured) is the only fallback.
-                merged_ceiling = updates.get("max_autonomy_level", locked.max_autonomy_level)
-                try:
-                    # Lenient: a stored non-string/unparseable ceiling does not
-                    # constrain resolution either (it falls back to default).
-                    validate_autonomy_ceiling(merged_default, merged_ceiling, lenient=True)
-                except ValueError as exc:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                        detail=str(exc),
-                    ) from None
-            ownership_changed = "owner_team_id" in updates and updates["owner_team_id"] != current.owner_team_id
-            # FAR-1515 MAJOR 2: an ownership/visibility-only PATCH used to
-            # re-validate MEMBERSHIP only, while the advisory
-            # ``connector_rebind_required`` flag (set on the response below)
-            # was consumed by nothing - so moving a pipeline to a new team
-            # re-created the forbidden state (its STORED graph still pinning a
-            # connector the new owner team may not use) without ever running
-            # the connector-team gate. When the team boundary changes and the
-            # payload does NOT also replace the graph (that case is gated by
-            # ``_apply_graph_update`` against the EFFECTIVE owner below), the
-            # pipeline's stored bindings are gated here, in the same
-            # transaction, against the effective NEW owner team.
-            visibility_changed = "visibility" in updates and updates["visibility"] != current.visibility
-            graph_replaced = has_graph and req.graph_json is not None
-            if (ownership_changed or visibility_changed) and not graph_replaced:
-                stored_bindings = extract_connector_bindings(list(current.graph_nodes_json or []))
-                if stored_bindings:
-                    await _enforce_connector_team_bindings(
-                        session,
-                        principal.organisation_id,
-                        updates.get("owner_team_id", current.owner_team_id),
-                        stored_bindings,
-                    )
-            await _maybe_audit_autonomy_change(
-                session,
-                principal=principal,
-                pipeline_id=pipeline_id,
-                updates=updates,
-            )
-            if has_graph and req.graph_json is not None:
-                await _apply_graph_update(
-                    session,
-                    pipeline_id=pipeline_id,
-                    org_id=principal.organisation_id,
-                    principal=principal,
-                    graph_json=req.graph_json,
-                    updates=updates,
-                )
-            pipeline = await update_pipeline(
-                session,
-                pipeline_id,
-                updates,
-                org_id=principal.organisation_id,
-                account_id=principal.account_id,
-                request_id=getattr(principal, "request_id", None),
-            )
-            # Refresh the ORM row inside the transaction so the DB-computed
-            # `updated_at` (onupdate=func.current_timestamp()) is loaded while
-            # the transaction is active. Accessing it after commit with
-            # autobegin=False raises InvalidRequestError -> 422 silent-success.
-            if pipeline is not None:
-                await session.refresh(pipeline)
+        pipeline, ownership_changed = await _apply_pipeline_update_payload(
+            session=session,
+            principal=principal,
+            pipeline_id=pipeline_id,
+            req=req,
+            updates=updates,
+            has_graph=has_graph,
+            threshold_change=threshold_change,
+            new_threshold=new_threshold,
+        )
     except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied) as exc:
         await _handle_graph_write_denials(
             session,
@@ -3662,6 +3903,231 @@ async def update_pipeline_endpoint(
     response = _pipeline_response(pipeline)
     response.connector_rebind_required = ownership_changed
     return response
+
+
+# ── FAR-1175 (ADR 043 S1): manual autonomy demote / promote ──────────────────
+AUTONOMY_DEMOTED_EVENT = "pipeline.autonomy_demoted"
+AUTONOMY_PROMOTION_DECIDED_EVENT = "pipeline.autonomy_promotion_decided"
+
+
+class AutonomyChangeRequest(BaseModel):
+    """Body for a manual autonomy demote/promote."""
+
+    level: str = Field(..., description="Target autonomy level (canonical value).")
+    reason: str | None = Field(
+        None,
+        max_length=2000,
+        description="Why the level is being changed — recorded on the audit event.",
+    )
+
+
+class AutonomyChangeResponse(BaseModel):
+    """Result of a manual autonomy demote/promote."""
+
+    pipeline_id: uuid.UUID
+    previous_level: str
+    earned_autonomy_level: str
+    max_autonomy_level: str | None = None
+    event_type: str
+    updated_at: datetime | None = None
+
+
+def _effective_ceiling(pipeline: Pipeline) -> AutonomyLevel:
+    """Resolve the pipeline's effective autonomy ceiling (NULL = default)."""
+    default = pipeline.default_autonomy_level or AutonomyLevel.default().value
+    ceiling_raw = getattr(pipeline, "max_autonomy_level", None)
+    if isinstance(ceiling_raw, str) and ceiling_raw:
+        try:
+            return AutonomyLevel(ceiling_raw)
+        except ValueError:
+            pass
+    return AutonomyLevel(default)
+
+
+def _current_effective_level(pipeline: Pipeline) -> AutonomyLevel:
+    """The level a demote/promote moves FROM: the earned level, else the default."""
+    earned = getattr(pipeline, "earned_autonomy_level", None)
+    if isinstance(earned, str) and earned:
+        try:
+            return AutonomyLevel(earned)
+        except ValueError:
+            pass
+    return AutonomyLevel(pipeline.default_autonomy_level or AutonomyLevel.default().value)
+
+
+async def _assert_autonomy_admin_or_owner(
+    session: AsyncSession, principal: TenantPrincipal, pipeline: Pipeline
+) -> None:
+    """Admin/owner gate for a manual autonomy change (ADR 043 §1).
+
+    Promotion/demotion is a governance decision: org admins, and members of the
+    pipeline's owner team (the owner), may make it. Everyone else is refused
+    with a 403. Uses the flag-independent numeric hierarchy so enforcement is
+    live even when ``authz.enforce`` is disabled.
+    """
+    if org_role_level(principal.org_role) >= _ADMIN_LEVEL:
+        return
+    owner_team_id = getattr(pipeline, "owner_team_id", None)
+    if owner_team_id is not None and await is_account_in_team(
+        session, account_id=principal.account_id, team_id=owner_team_id
+    ):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Only an organisation admin or the pipeline's owner team may change its autonomy level",
+    )
+
+
+async def _apply_manual_autonomy_change(
+    *,
+    pipeline_id: uuid.UUID,
+    principal: TenantPrincipal,
+    session: AsyncSession,
+    req: AutonomyChangeRequest,
+    promote: bool,
+) -> AutonomyChangeResponse:
+    """Shared body of the manual demote/promote endpoints.
+
+    Validates the target against the direction (demote must strictly lower,
+    promote must strictly raise and never exceed the ceiling), writes
+    ``earned_autonomy_level``, and appends the direction's audit event
+    (``pipeline.autonomy_demoted`` / ``pipeline.autonomy_promotion_decided``)
+    in the SAME transaction — a level change without its evidence event is not
+    possible.
+    """
+    try:
+        target = AutonomyLevel(req.level).value
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Invalid autonomy level: {req.level!r}",
+        ) from None
+    target_level = AutonomyLevel(target)
+
+    async with session.begin():
+        await _set_rls_context(session, principal)
+        pipeline = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
+        if pipeline is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+        await _assert_autonomy_admin_or_owner(session, principal, pipeline)
+
+        current_level = _current_effective_level(pipeline)
+        ceiling = _effective_ceiling(pipeline)
+        if promote:
+            if autonomy_level_rank(target_level) <= autonomy_level_rank(current_level):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=(
+                        f"Promotion must raise autonomy above the current level "
+                        f"({current_level.value}): {target_level.value}"
+                    ),
+                )
+            if autonomy_level_rank(target_level) > autonomy_level_rank(ceiling):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=(
+                        f"Promotion to {target_level.value} exceeds the pipeline's "
+                        f"max_autonomy_level ceiling ({ceiling.value})"
+                    ),
+                )
+        elif autonomy_level_rank(target_level) >= autonomy_level_rank(current_level):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"Demotion must lower autonomy below the current level "
+                    f"({current_level.value}): {target_level.value}"
+                ),
+            )
+
+        updated = await set_earned_autonomy_level(
+            session,
+            org_id=principal.organisation_id,
+            pipeline_id=pipeline_id,
+            level=target,
+        )
+        if updated is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+        event_type = AUTONOMY_PROMOTION_DECIDED_EVENT if promote else AUTONOMY_DEMOTED_EVENT
+        await append_audit_event(
+            session,
+            org_id=principal.organisation_id,
+            event_type=event_type,
+            actor_user_id=principal.account_id,
+            resource_type="pipeline",
+            resource_id=pipeline_id,
+            payload_json={
+                "pipeline_id": str(pipeline_id),
+                "previous_level": current_level.value,
+                "new_level": target,
+                "reason": req.reason,
+                "actor": str(principal.account_id),
+                "ceiling": ceiling.value,
+                "direction": "promote" if promote else "demote",
+            },
+            request_id=getattr(principal, "request_id", None),
+        )
+        return AutonomyChangeResponse(
+            pipeline_id=pipeline_id,
+            previous_level=current_level.value,
+            earned_autonomy_level=target,
+            max_autonomy_level=getattr(updated, "max_autonomy_level", None),
+            event_type=event_type,
+            updated_at=getattr(updated, "earned_autonomy_updated_at", None),
+        )
+
+
+@router.post(
+    "/{pipeline_id}/autonomy/demote",
+    responses={403: {"description": "Not an admin or the pipeline owner"}},
+)
+@handle_db_errors("pipelines.autonomy.demote")
+async def demote_pipeline_autonomy(
+    pipeline_id: uuid.UUID,
+    req: AutonomyChangeRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
+) -> AutonomyChangeResponse:
+    """Manually lower a pipeline's earned autonomy level (FAR-1175, ADR 043 §1).
+
+    Demotion adds human review, so it is always safe: an admin or the pipeline's
+    owner may lower the earned level at any time. Takes effect at the run's next
+    HITL gate (in-flight runs included) when ``autonomy_gating`` is on. Records
+    a ``pipeline.autonomy_demoted`` audit event.
+    """
+    return await _apply_manual_autonomy_change(
+        pipeline_id=pipeline_id,
+        principal=principal,
+        session=session,
+        req=req,
+        promote=False,
+    )
+
+
+@router.post(
+    "/{pipeline_id}/autonomy/promote",
+    responses={403: {"description": "Not an admin or the pipeline owner"}},
+)
+@handle_db_errors("pipelines.autonomy.promote")
+async def promote_pipeline_autonomy(
+    pipeline_id: uuid.UUID,
+    req: AutonomyChangeRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
+) -> AutonomyChangeResponse:
+    """Manually raise a pipeline's earned autonomy level (FAR-1175, ADR 043 §1).
+
+    Promotion is never automatic: an admin or the pipeline's owner approves it,
+    capped at the pipeline's ``max_autonomy_level`` ceiling. It applies only to
+    runs created after the approval — in-flight runs keep the lower level (ADR
+    043 §3). Records a ``pipeline.autonomy_promotion_decided`` audit event.
+    """
+    return await _apply_manual_autonomy_change(
+        pipeline_id=pipeline_id,
+        principal=principal,
+        session=session,
+        req=req,
+        promote=True,
+    )
 
 
 @router.delete(
@@ -4087,7 +4553,7 @@ async def _clone_pipeline_into_org(
             session,
             account_id=account_id,
             team_id=clone_team_id,
-            denial_detail="Not a member of the team that owns this resource",
+            denial_detail=_MSG_NOT_TEAM_MEMBER,
         )
 
     await append_audit_event(
@@ -4773,16 +5239,18 @@ async def rollback_snapshot_endpoint(
             # FAR-1515 MAJOR 3: a rollback replays the target snapshot's graph
             # verbatim, so it must run the same connector-team gate every other
             # graph write path runs — otherwise rolling back to a snapshot that
-            # pins a cross-team (or org-only-on-a-team-pipeline) connector
-            # re-creates state the save paths refuse. The gate runs INSIDE
+            # pins ANOTHER TEAM's team-private connector re-creates state the
+            # save paths refuse (an org-visibility connector is shared across
+            # the organisation and never mismatches, so since FAR-1618 it
+            # never trips this gate). The gate runs INSIDE
             # ``rollback_to_snapshot`` as a post-lock callback (the pipeline row
             # lock is already held there), against the pipeline's CURRENT owner
             # team — the team boundary may have moved since the snapshot was
             # taken — and raises the same named 409 ``connector_team_mismatch``
             # as ``PATCH /graph``. The model-backend gate is deliberately NOT
-            # mirrored here: the FAR-1515 parity note on
-            # ``model_backend_team_mismatch`` (ModelBackendHub has no
-            # invocation-time visibility gate) applies to rollbacks too.
+            # mirrored here: it remains a save-time-only rule (ModelBackendHub
+            # has no invocation-time visibility gate), so rollbacks are judged
+            # on connector bindings only.
 
             async def _connector_team_gate_after_lock(target: PipelineSnapshot, pipeline: Pipeline) -> None:
                 snapshot_nodes = target.graph_json.get("nodes", []) if isinstance(target.graph_json, dict) else []
@@ -5092,8 +5560,9 @@ async def _save_locked_graph(
     ``_apply_graph_update``), in the same order, around the same write:
 
     1. ``_enforce_connector_team_bindings`` - 409 ``connector_team_mismatch``
-       for a team-private connector bound from outside its team, or an
-       org-only connector pinned by a team pipeline (FAR-1515),
+       for a team-private connector bound from outside its owner team (an
+       org-visibility connector is shared across the organisation and is never
+       refused — FAR-1618),
     2. ``_resolve_graph_references`` - the FAR-418 capability-scope widening
        guard (422), unknown agent/schema ids (422) and the model-backend team
        check (409),

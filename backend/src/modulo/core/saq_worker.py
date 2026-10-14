@@ -92,6 +92,10 @@ _CRON_EVERY_MINUTE = "* * * * *"
 _CRON_EVERY_5_MINUTES = "*/5 * * * *"
 _CRON_EVERY_15_MINUTES = "*/15 * * * *"
 _CRON_HOURLY = "0 * * * *"
+#: Once-daily cadence (03:00) — used by the guardrail kill-switch drill
+#: (FAR-1707). Distinct from analytics_facts_maintenance's 01:00 slot so the
+#: two daily crons never contend.
+_CRON_DAILY = "0 3 * * *"
 
 # Scheduled run-retention window (FAR-1549). Pinned explicitly so the purge
 # and its audit record read the SAME cutoff: ``batch_delete_old_terminal_runs``
@@ -919,6 +923,55 @@ async def _enqueue_suite_run_execution(suite_run_id: str, org_id: str) -> str | 
             await redis_client.aclose()
 
 
+async def _maybe_wire_suite_judge(
+    session: Any,
+    run: Any,
+    run_kwargs: dict[str, Any],
+) -> Any:
+    """Wire an org-scoped LLM-judge callable into the run kwargs when needed (FAR-1712).
+
+    Loads the suite's live definition rows from ``evals`` — the SAME source the
+    runner reads (FAR-1729) — scoped unconditionally to ``run.organisation_id``.
+    When the suite has NO ``llm_judge`` definition the kwargs are left untouched
+    and no hub is built. When it HAS one, an org-scoped ``ModelBackendHub`` is
+    built from the org's ACTIVE backends and a per-definition dispatch callable
+    is set on ``run_kwargs``; the hub is returned so the caller tears it down in
+    a ``finally``.
+
+    When the org has no ACTIVE backend, nothing is set and ``None`` is returned
+    — the runner's own loud refusal ("suite contains llm_judge definitions but
+    no judge callable was provided") is then preserved, never a silent pass.
+    """
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from modulo.core.eval_engine.execute_suite_run import (
+        SuiteRunExecutionError,
+        _sql_error_status,
+        load_suite_definitions,
+    )
+    from modulo.core.eval_engine.suite_run_judge import (
+        build_org_model_backend_hub,
+        build_suite_run_llm_judge_callable,
+    )
+
+    try:
+        definitions = await load_suite_definitions(session, run.organisation_id, run.suite_id)
+    except SQLAlchemyError as exc:
+        # A raw DB error here is an orchestration failure, exactly as it is in
+        # the runner. Translate it the same way (status-coded typed error) so the
+        # job's committed-transaction failure path terminalises the run and the
+        # after_process sink sees a typed error — never a bare driver exception.
+        raise SuiteRunExecutionError(f"{_sql_error_status(exc)}: {exc}") from exc
+    if not any(str(getattr(d, "eval_type", "")) == "llm_judge" for d in definitions):
+        return None
+
+    hub = await build_org_model_backend_hub(session, run.organisation_id)
+    if hub is None:
+        return None
+    run_kwargs["llm_judge_callable"] = build_suite_run_llm_judge_callable(hub)
+    return hub
+
+
 async def execute_suite_run(ctx: dict[str, Any], *, suite_run_id: str, org_id: str) -> dict[str, Any]:
     """SAQ ``execute_suite_run`` job — run a scheduled SuiteRun to terminal (FAR-377).
 
@@ -995,9 +1048,28 @@ async def execute_suite_run(ctx: dict[str, Any], *, suite_run_id: str, org_id: s
             # the (already-``None``) value from ``run.extra``.
             if suite_ceiling_raw is not None:
                 run_kwargs["suite_ceiling"] = Decimal(str(suite_ceiling_raw))
-            stats = await _run_exec(session, run, **run_kwargs)
-            run.extra = {**extra, "execution": stats}
-            await session.flush()
+            # FAR-1712: wire the org-scoped LLM-judge callable when the suite has
+            # an llm_judge definition. No judge definition -> kwargs untouched and
+            # no hub built. A judge suite with no ACTIVE backend also leaves the
+            # kwargs untouched, so the runner's loud refusal is preserved (never
+            # a silent pass). The hub is torn down in the finally below so its
+            # transport resources never leak; a teardown failure is logged and
+            # never masks the run result.
+            suite_judge_hub = await _maybe_wire_suite_judge(session, run, run_kwargs)
+            try:
+                stats = await _run_exec(session, run, **run_kwargs)
+                run.extra = {**extra, "execution": stats}
+                await session.flush()
+            finally:
+                if suite_judge_hub is not None:
+                    # Reuse the executor's cancellation-shielded teardown
+                    # (``_teardown_hub``): a cancellation arriving mid-cleanup
+                    # must not abort the hub's ``__aexit__`` (``asyncio.shield``
+                    # keeps it running to completion), and a teardown failure is
+                    # logged there without ever masking the run result.
+                    from modulo.core.pipeline_engine.executor import _teardown_hub
+
+                    await _teardown_hub(suite_judge_hub)
         _log.info(
             "saq.execute_suite_run.done",
             extra={"suite_run_id": str(rid), "state": stats.get("state"), "org": str(oid)},
@@ -1519,6 +1591,19 @@ RUNNER_HEALTH_PROBE_STATS_KEY = "saq:cron:stats:runner_health_probe"
 RUNNER_HEALTH_PROBE_STALE_SECONDS = 3 * 60
 RUNNER_HEALTH_PROBE_STATS_TTL_SECONDS = RUNNER_HEALTH_PROBE_STALE_SECONDS + 60
 
+# Cross-process stats key for the FAR-1108 chunk-8b decision-record
+# reconciliation sweep (same contract as the sibling sweeps: the hourly cron
+# persists its outcome — scanned count + anomaly counts — and /healthz/ready
+# reads it to detect a silently dead sweep or a never-run sweep). The sweep is
+# read-only (it never mutates a decision record), so its liveness is the only
+# signal that the corruption-detection surface is still working.
+DECISION_RECORD_RECONCILE_STATS_KEY = "saq:cron:stats:decision_record_reconcile"
+# The sweep runs hourly; a last_run_at older than 3h means at least two ticks
+# were missed -> report "stale" (advisory).
+DECISION_RECORD_RECONCILE_STALE_SECONDS = 3 * 60 * 60
+# TTL: one sweep past the stale window (same arithmetic as the sibling keys).
+DECISION_RECORD_RECONCILE_STATS_TTL_SECONDS = DECISION_RECORD_RECONCILE_STALE_SECONDS + 60
+
 
 async def _persist_sweep_stats(key: str, stats: dict[str, Any], ttl_seconds: int) -> None:
     """Best-effort persist of a sweep's outcome dict to a Redis liveness key.
@@ -1838,6 +1923,67 @@ async def _touch_probe_cron_liveness() -> None:
         raise
     except Exception:
         _log.warning("saq_worker.runner_health_probe liveness heartbeat write failed", exc_info=True)
+
+
+async def decision_record_reconcile(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — decision-record corruption detection (FAR-1108 chunk 8b).
+
+    Read-only reconciliation of ``policy_gate_decisions``: detects duplicate
+    rows (per event identity), rows missing an ``eval_result_id``, and rows
+    whose referenced ``EvalResult``/``Run`` no longer exist. It NEVER mutates
+    or deletes a decision record — decision records are audit evidence and
+    deletion is a governance action owned by the retention/purge chunk.
+
+    Liveness contract (mirrors the sibling sweeps): the outcome
+    (``last_run_at`` + ``scanned`` + anomaly counts) is persisted to the shared
+    Redis key every tick so /healthz/ready can warn when the sweep is stale or
+    missing. A sweep failure is persisted (with the error) and then RE-RAISED
+    so SAQ's ``retries=2`` engages — a silently dead detection surface must not
+    be invisible.
+
+    Cross-org: uses the system session factory (BYPASSRLS) so a single tick
+    scans every org's decision records.
+    """
+    from modulo.core.eval_engine.decision_reconcile import reconcile_decision_records
+
+    try:
+        async with _make_system_session_factory()() as session, session.begin():
+            report = await reconcile_decision_records(session)
+    except Exception as exc:
+        await _persist_sweep_stats(
+            DECISION_RECORD_RECONCILE_STATS_KEY,
+            {
+                "last_run_at": datetime.now(UTC).isoformat(),
+                "scanned": 0,
+                "total_anomalies": 0,
+                "error": f"sweep_failed ({type(exc).__name__}: {exc})"[:200],
+            },
+            DECISION_RECORD_RECONCILE_STATS_TTL_SECONDS,
+        )
+        raise
+
+    stats: dict[str, Any] = {
+        "last_run_at": datetime.now(UTC).isoformat(),
+        "scanned": report.scanned,
+        "total_anomalies": report.total,
+        **{f"anomaly_{kind}": count for kind, count in report.counts_by_kind().items()},
+    }
+    if report.total:
+        _log.warning(
+            "decision_record.reconcile.anomalies",
+            extra={
+                "scanned": report.scanned,
+                "total_anomalies": report.total,
+                "counts_by_kind": report.counts_by_kind(),
+                "samples": report.to_dict()["samples"],
+            },
+        )
+    await _persist_sweep_stats(
+        DECISION_RECORD_RECONCILE_STATS_KEY,
+        stats,
+        DECISION_RECORD_RECONCILE_STATS_TTL_SECONDS,
+    )
+    return stats
 
 
 async def cost_probe(_ctx: dict[str, Any]) -> dict[str, Any]:
@@ -2261,6 +2407,7 @@ def _system_functions() -> list[Any]:
     """Functions registered on the ``system`` worker (under their ``__qualname__``,
     which is the name SAQ's cron scheduler uses when enqueueing).
     """
+    from modulo.core.guardrails.kill_switch_drill import run_kill_switch_drill
     from modulo.core.worker_memory import memory_monitor_cron
 
     return [
@@ -2282,17 +2429,20 @@ def _system_functions() -> list[Any]:
         cost_probe,
         analytics_facts_maintenance,
         journey_reconcile,
+        decision_record_reconcile,
         check_missed_fire_alerts_cron,
         library_sync,
         metrics_dump,
         connector_health_checks,
         health_readiness_alert,
         memory_monitor_cron,
+        run_kill_switch_drill,
     ]
 
 
 def _system_cron_jobs() -> list[CronJob[Any]]:
     """System cron jobs (plan F1) — all knobs explicit."""
+    from modulo.core.guardrails.kill_switch_drill import run_kill_switch_drill
     from modulo.core.worker_memory import memory_monitor_cron
 
     return [
@@ -2535,6 +2685,22 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
             retries=2,
             ttl=300,
         ),
+        # decision_record_reconcile: hourly (FAR-1108 chunk 8b) — read-only
+        # corruption detection over policy_gate_decisions (duplicate event
+        # rows, NULL eval_result_id rows, orphaned eval-result/run references).
+        # Hourly is ample: the write path is fail-open, so a lost decision
+        # record is rare and the detection is not latency-sensitive. unique=True
+        # so overlapping ticks cannot interleave; failures persist the error
+        # then re-raise (retries=2 engages).
+        CronJob(
+            decision_record_reconcile,
+            cron=_CRON_HOURLY,
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
         # check_missed_fire_alerts: hourly (the probe only targets triggers
         # with a >= 1h cadence, so an hourly tick with its own cooldown is
         # ample). NOTE: must be the 5-field form "0 * * * *" — croniter parses
@@ -2620,6 +2786,21 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
             cron=_CRON_EVERY_5_MINUTES,
             unique=True,
             timeout=60,
+            heartbeat=30,
+            retries=1,
+            ttl=300,
+        ),
+        # kill_switch_drill: daily (FAR-1707) — a non-mutating self-test of the
+        # org guardrail kill-switch's two invariants (downgrade-to-observe, and
+        # fail-closed read), appended as ONE system_audit_events fact. unique=True
+        # so overlapping multi-machine ticks cannot double-record; retries=1
+        # because a *record-write* failure is fail-closed (the ledger append must
+        # not be silently lost, so a transient DB error is retried once).
+        CronJob(
+            run_kill_switch_drill,
+            cron=_CRON_DAILY,
+            unique=True,
+            timeout=120,
             heartbeat=30,
             retries=1,
             ttl=300,

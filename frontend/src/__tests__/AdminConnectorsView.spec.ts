@@ -267,6 +267,35 @@ describe('AdminConnectorsView', () => {
     expect(patchBody()?.config_json.allowed_hosts).toEqual([])
   })
 
+  it('prefills a legacy string allowed_hosts verbatim instead of coercing it to "[object Object]"', async () => {
+    // Older connectors stored the egress allowlist as a comma-joined string
+    // rather than the canonical array. Opening the edit form must surface that
+    // stored string as-is, so an untouched edit-save round-trips it unchanged.
+    mockGet.mockResolvedValue({
+      data: {
+        items: [
+          restConnectorItem('rest-1', 'REST Connector', {
+            base_url: 'https://api.example.com',
+            method: 'GET',
+            timeout_seconds: 30,
+            verify_tls: true,
+            on_unknown: 'fail_open',
+            allowed_hosts: 'legacy.example.com, other.example.com',
+            auth_mode: 'bearer',
+          }),
+        ],
+      },
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    await openEdit(wrapper, 'rest-1')
+    const hostsField = wrapper.find('[data-testid="rest-connector-allowed-hosts"]')
+    expect((hostsField.element as HTMLInputElement).value).toBe('legacy.example.com, other.example.com')
+  })
+
   it('remounts the edit form per target so switching A to B drops the stale baselines', async () => {
     // Without a :key on the edit block, switching Edit from connector A to B
     // reuses the component instance: B's form inherits A's onMounted baselines,

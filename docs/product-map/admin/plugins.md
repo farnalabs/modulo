@@ -47,14 +47,53 @@ API surface ships and is gated by the `plugin_management` feature and the
       and is surfaced unhealthy through `health_check`
 - [x] The routes are gated behind `require_feature("plugin_management")` and
       `require_permission("plugin.list")`
+- [x] The `plugin_management` feature gate FIRES: all three endpoints return 402
+      when the feature is disabled on the plan (negative-path tests — the gate
+      was previously declared but never observed to deny)
+      (`backend/tests/unit/api/test_plugin_registry_bdd.py`)
+- [x] The `/admin/plugins` view is READ-ONLY: it lists plugins and their health
+      and offers no install / enable / disable / uninstall control, because
+      lifecycle management is pip-managed and deliberately has no registry API
+      (`frontend/src/views/AdminPluginsView.vue`,
+      `frontend/src/__tests__/AdminPluginsView.spec.ts`; a toggle once shipped
+      that called a non-existent `PUT /api/v1/plugins/{id}/toggle` and was
+      removed)
 
 ## Known Gaps
 
 - Plugin management (install / uninstall / upgrade) is done via pip and is not
   exposed through this API.
 - The `/admin/plugins` UI is deferred from the MVP nav (private preview).
+- `PluginRegistry._load_entry_point` reads `dist.name` / `dist.metadata.get(…)`
+  *before* the guarded `ep.load()`. The load path now catches every exception
+  (a broken plugin can never abort startup), but a distribution whose `metadata`
+  is `None` would still raise `AttributeError` out of `discover_plugins()`. No
+  repro exists on a normal install (every wheel ships `METADATA`); hardening the
+  metadata read is deferred.
 
 ## QA History
+
+- 2026-10-12: **Improve Architecture product-map walk (index 397)** — three
+  findings fixed. MAJOR (resilience): `PluginRegistry._load_entry_point` caught
+  only `(ImportError, TypeError, AttributeError, SyntaxError)` from `ep.load()`;
+  any other raise (a non-`ImportError` missing dependency, a module-scope config
+  error, an `OSError`, …) escaped `discover_plugins()` on the startup critical
+  path (`api/main.py::_discover_plugins`) and made the whole instance unbootable
+  because of one broken plugin. The catch is now `Exception` (re-raising
+  `asyncio.CancelledError`), so the plugin is surfaced unhealthy under the
+  documented "Failed to load entry point …" detail; regression tests parametrise
+  RuntimeError/ValueError/KeyError/OSError/LookupError and prove sibling plugins
+  still discover (partial-failure isolation). MAJOR (frontend↔backend contract):
+  `AdminPluginsView.vue` rendered an enable/disable toggle that called
+  `PUT /api/v1/plugins/{id}/toggle` — a route that does not exist (the registry
+  API is read-only by design, and the plugin unit test mocked only `api.GET`, so
+  nothing exercised it). The dead control and its `activeStates` / `togglePlugin`
+  machinery are removed; the status pill is now health-driven. MAJOR (coverage):
+  the "[x] routes gated by `require_feature(\"plugin_management\")`" behaviour
+  was declaration-only — added 402 tests for all three endpoints. MINOR
+  (coverage): added the missing 500 fallback tests for the list and health
+  endpoints. 90 plugin backend tests pass (79 → 90); frontend eslint / vue-tsc
+  clean and `AdminPluginsView.spec.ts` passes (4 tests).
 
 - 2026-09-29: **Improve Architecture product-map walk** — reconciled the
   tracker frontmatter `status:` with the manifest `feat-plugins` registry: the

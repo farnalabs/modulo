@@ -294,15 +294,27 @@ export async function pollRunStatus(
   const timeoutMs = opts.timeoutMs ?? 90_000
   const deadline = Date.now() + timeoutMs
   let last = 'unknown'
+  let lastError: unknown
   while (Date.now() < deadline) {
-    const res = await getRun(apiBase, token, runId)
-    if (res.status === 200 && res.body?.status) {
-      last = res.body.status
-      if (predicate(last)) return last
+    try {
+      const res = await getRun(apiBase, token, runId)
+      if (res.status === 200 && res.body?.status) {
+        last = res.body.status
+        if (predicate(last)) return last
+      }
+    } catch (err) {
+      // A saturated staging box can stall a single poll past its per-request
+      // deadline (fetchWithTransientRetry deliberately does not re-issue a
+      // transport error, so the timeout surfaces here). GET /runs/{id} is
+      // idempotent, so one slow request must not abort the whole bounded poll —
+      // keep observing until the caller's deadline instead of failing the
+      // journey on a single stalled request.
+      lastError = err
     }
     await new Promise((resolve) => setTimeout(resolve, RUN_POLL_INTERVAL_MS))
   }
-  throw new Error(`[realstack] run ${runId} never reached the expected status (last: ${last})`)
+  const detail = lastError instanceof Error ? `; last poll error: ${lastError.message}` : ''
+  throw new Error(`[realstack] run ${runId} never reached the expected status (last: ${last}${detail})`)
 }
 
 export async function deletePipeline(apiBase: string, token: string, pipelineId: string): Promise<void> {

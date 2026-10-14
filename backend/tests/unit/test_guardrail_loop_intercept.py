@@ -74,6 +74,31 @@ def _event(tool_name: str = "git push", args: dict | None = None, direction: str
     }
 
 
+# Tests that assert a guardrail ACTION ("block"/"warn"/"redact") or a
+# non-timed-out "pass" drive the real evaluation, which round-trips detection
+# through the event loop's default executor under a per-call latency budget.
+# LoopInterceptConfig's default 250 ms budget is a real-time production guard;
+# on a loaded parallel CI runner (pytest-xdist + coverage instrumentation, 2
+# vCPUs) the executor round trip can exceed it, and interception then FAILS
+# OPEN by design (action "pass", bridge_failed True) — flaking the assertion
+# (observed on main @de473003e: `assert 'pass' == 'block'`). These tests pin the
+# maximum budget so scheduling jitter can never outrun it. The timeout/fail-open
+# contract has its own dedicated test
+# (test_latency_budget_timeout_allows_call_and_audits) that sets a tight budget
+# deliberately.
+_TEST_LATENCY_BUDGET_MS = 5000
+
+
+def _cfg(**overrides) -> LoopInterceptConfig:
+    """LoopInterceptConfig with a wall-clock-independent latency budget.
+
+    Use for any test that asserts a specific evaluation outcome; see
+    ``_TEST_LATENCY_BUDGET_MS``.
+    """
+    overrides.setdefault("latency_budget_ms", _TEST_LATENCY_BUDGET_MS)
+    return LoopInterceptConfig(**overrides)
+
+
 # ---------------------------------------------------------------------------
 # Config validation
 # ---------------------------------------------------------------------------
@@ -168,7 +193,7 @@ def test_serialize_tool_event_non_dict_args():
 
 
 async def test_block_before_refuses_call():
-    cfg = LoopInterceptConfig()
+    cfg = _cfg()
     outcome, audit = await run_loop_interception(EvalEngine(), [_guardrail(name="block-token")], _event(), config=cfg)
     assert outcome.action == "block"
     assert outcome.blocked is True
@@ -178,7 +203,7 @@ async def test_block_before_refuses_call():
 
 
 async def test_block_before_with_block_on_guardrail_false_records_not_refuses():
-    cfg = LoopInterceptConfig(block_on_guardrail=False)
+    cfg = _cfg(block_on_guardrail=False)
     outcome, audit = await run_loop_interception(EvalEngine(), [_guardrail(name="block-token")], _event(), config=cfg)
     assert outcome.action == "block"
     assert outcome.blocked is False
@@ -187,7 +212,7 @@ async def test_block_before_with_block_on_guardrail_false_records_not_refuses():
 
 
 async def test_block_after_records_not_refuses():
-    cfg = LoopInterceptConfig()
+    cfg = _cfg()
     event = _event(direction="after", summary=f"pushed with {_SECRET}")
     outcome, audit = await run_loop_interception(
         EvalEngine(), [_guardrail(name="block-token", field="args.url")], event, config=cfg
@@ -198,7 +223,7 @@ async def test_block_after_records_not_refuses():
 
 
 async def test_warn_records_and_proceeds():
-    cfg = LoopInterceptConfig()
+    cfg = _cfg()
     outcome, audit = await run_loop_interception(
         EvalEngine(), [_guardrail(name="warn-token", action="warn")], _event(), config=cfg
     )
@@ -211,7 +236,7 @@ async def test_warn_records_and_proceeds():
 
 
 async def test_redact_masks_args_before_execution():
-    cfg = LoopInterceptConfig()
+    cfg = _cfg()
     policy = FieldRedactionPolicy(path="args.url", mode=FieldRedactionMode.TRANSFORM)
     gr = _guardrail(name="redact-url", action="redact", redaction=[policy.model_dump()])
     outcome, audit = await run_loop_interception(EvalEngine(), [gr], _event(), config=cfg)
@@ -223,7 +248,7 @@ async def test_redact_masks_args_before_execution():
 
 
 async def test_block_mode_redaction_policy_blocks_before():
-    cfg = LoopInterceptConfig()
+    cfg = _cfg()
     policy = FieldRedactionPolicy(path="args.url", mode=FieldRedactionMode.BLOCK)
     gr = _guardrail(name="redact-block", action="redact", redaction=[policy.model_dump()])
     outcome, audit = await run_loop_interception(EvalEngine(), [gr], _event(), config=cfg)
@@ -309,7 +334,7 @@ async def test_detection_mechanism_error_fails_open(monkeypatch):
 
 
 async def test_audit_payloads_never_carry_raw_values():
-    cfg = LoopInterceptConfig()
+    cfg = _cfg()
     outcome, audit = await run_loop_interception(EvalEngine(), [_guardrail(name="block-token")], _event(), config=cfg)
     assert outcome.action == "block"
     for record in audit:
@@ -325,7 +350,7 @@ async def test_audit_payloads_never_carry_raw_values():
 
 
 async def test_redact_audit_payload_summary_only():
-    cfg = LoopInterceptConfig()
+    cfg = _cfg()
     policy = FieldRedactionPolicy(path="args.url", mode=FieldRedactionMode.TRANSFORM)
     gr = _guardrail(name="redact-url", action="redact", redaction=[policy.model_dump()])
     _, audit = await run_loop_interception(EvalEngine(), [gr], _event(), config=cfg)
@@ -345,7 +370,7 @@ async def test_callback_server_block_round_trip():
     server = li.LoopInterceptCallbackServer(
         EvalEngine(),
         [_guardrail(name="block-token")],
-        LoopInterceptConfig(),
+        _cfg(),
     )
     port = await server.start()
     try:
@@ -369,7 +394,7 @@ async def test_callback_server_redact_round_trip():
     server = li.LoopInterceptCallbackServer(
         EvalEngine(),
         [gr],
-        LoopInterceptConfig(),
+        _cfg(),
     )
     port = await server.start()
     try:
@@ -396,7 +421,7 @@ async def test_callback_server_invokes_audit_sink():
     server = li.LoopInterceptCallbackServer(
         EvalEngine(),
         [_guardrail(name="block-token")],
-        LoopInterceptConfig(),
+        _cfg(),
         audit_sink=_sink,
     )
     port = await server.start()
@@ -674,6 +699,170 @@ def test_wrap_command_downgraded_block_does_not_kill(monkeypatch, capsys):
     assert "MODULO_BRIDGE_BLOCKED" not in out
 
 
+def test_wrap_command_empty_argv_guard_runs_before_launch(monkeypatch, capsys):
+    """An empty argv is refused with exit 2 BEFORE any child is launched —
+    the guard must stay ahead of the spawn path."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    launched = False
+
+    def _recording_popen(*args, **kwargs):
+        nonlocal launched
+        launched = True
+        raise AssertionError("Popen must not be called for an empty argv")
+
+    monkeypatch.setattr(sb.subprocess, "Popen", _recording_popen)
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    code = sb._wrap_command([], client)
+
+    assert code == 2
+    assert launched is False
+    err = capsys.readouterr().err
+    assert "--wrap requires a command" in err
+
+
+def test_wrap_command_launches_exactly_the_shaped_argv(monkeypatch):
+    """The orchestrator shapes argv inline (``/bin/sh -c "<joined argv>"``)
+    and the launcher execs exactly that fixed list — never shell=True."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    captured: dict = {}
+
+    def _recording_popen(args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return _FakeProc([], wait_code=0)
+
+    monkeypatch.setattr(sb.subprocess, "Popen", _recording_popen)
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    code = sb._wrap_command(["git", "push", "--set-upstream", "origin main"], client)
+
+    assert code == 0
+    assert captured["args"] == ["/bin/sh", "-c", "git push --set-upstream origin main"]
+    assert captured["kwargs"]["shell"] is False
+    assert captured["kwargs"]["stdout"] is sb.subprocess.PIPE
+    assert captured["kwargs"]["stderr"] is sb.subprocess.STDOUT
+
+
+def test_spawn_and_collect_launch_failure_is_fail_closed(monkeypatch, capsys):
+    """An OSError from the launch reports the error and returns 1 — the
+    wrapper never proceeds without a child (fail-closed)."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    def _failing_popen(*args, **kwargs):
+        raise OSError("No such file or directory")
+
+    monkeypatch.setattr(sb.subprocess, "Popen", _failing_popen)
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    code = sb._wrap_command(["definitely-missing-command"], client)
+
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "failed to start wrapped command" in err
+
+
+def test_spawn_and_collect_missing_stdout_fails_closed(monkeypatch):
+    """A child started without a stdout stream raises instead of running with
+    no event interception (collection failure is fail-closed)."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    class _NoStdoutProc:
+        stdout = None
+
+    monkeypatch.setattr(sb.subprocess, "Popen", lambda *a, **k: _NoStdoutProc())
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    with pytest.raises(RuntimeError, match="without a stdout stream"):
+        sb._wrap_command(["git", "push"], client)
+
+
+def test_wrap_command_malformed_event_forwards_empty_tool(monkeypatch, capsys):
+    """A malformed event payload (invalid JSON) is treated as an empty event:
+    forwarded with an empty tool name, fail-open, and never echoed to stdout."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    event_line = b"MODULO_BRIDGE_EVENT: {broken json"
+    proc = _FakeProc([event_line], wait_code=0)
+    monkeypatch.setattr(sb.subprocess, "Popen", lambda *a, **k: proc)
+    seen: list[tuple[str, dict]] = []
+
+    def _record_decide(self, tool, args):
+        seen.append((tool, args))
+        return True, None, "pass"
+
+    monkeypatch.setattr(sb.BridgeClient, "decide_before", _record_decide)
+
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    code = sb._wrap_command(["git", "push"], client)
+
+    assert code == 0
+    assert proc.killed is False
+    assert seen == [("", {})]
+    out = capsys.readouterr().out
+    assert "MODULO_BRIDGE_EVENT" not in out
+
+
+def test_wrap_command_after_event_notifies_and_continues(monkeypatch, capsys):
+    """An 'after' event is reported via ``notify_after`` (never ``decide_before``)
+    and the child continues — the event line is never echoed to stdout."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    event_line = (
+        b'MODULO_BRIDGE_EVENT: {"tool_name": "git push", "args": {"url": "x"}, '
+        b'"direction": "after", "result_summary": "pushed ok"}'
+    )
+    proc = _FakeProc([event_line], wait_code=0)
+    monkeypatch.setattr(sb.subprocess, "Popen", lambda *a, **k: proc)
+    decided: list[tuple[str, dict]] = []
+    notified: list[tuple[str, dict, str]] = []
+
+    def _record_decide(self, tool, args):
+        decided.append((tool, args))
+        return True, None, "pass"
+
+    def _record_after(self, tool, args, summary):
+        notified.append((tool, args, summary))
+        return {}
+
+    monkeypatch.setattr(sb.BridgeClient, "decide_before", _record_decide)
+    monkeypatch.setattr(sb.BridgeClient, "notify_after", _record_after)
+
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    code = sb._wrap_command(["git", "push"], client)
+
+    assert code == 0
+    assert proc.killed is False
+    assert decided == []
+    assert notified == [("git push", {"url": "x"}, "pushed ok")]
+    out = capsys.readouterr().out
+    assert "MODULO_BRIDGE_EVENT" not in out
+
+
+def test_wrap_command_non_dict_event_is_ignored(monkeypatch, capsys):
+    """A well-formed JSON event that is not an object (e.g. a list) is treated
+    as no event: nothing is forwarded or echoed, the child continues."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    event_line = b"MODULO_BRIDGE_EVENT: [1, 2, 3]"
+    proc = _FakeProc([event_line], wait_code=0)
+    monkeypatch.setattr(sb.subprocess, "Popen", lambda *a, **k: proc)
+    decided: list[tuple[str, dict]] = []
+
+    def _record_decide(self, tool, args):
+        decided.append((tool, args))
+        return True, None, "pass"
+
+    monkeypatch.setattr(sb.BridgeClient, "decide_before", _record_decide)
+
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    code = sb._wrap_command(["git", "push"], client)
+
+    assert code == 0
+    assert proc.killed is False
+    assert decided == []
+    out = capsys.readouterr().out
+    assert "MODULO_BRIDGE_EVENT" not in out
+
+
 def test_load_config_resolves_patterns(tmp_path, monkeypatch):
     """``_load_config`` resolves intercepted_tool_patterns from the config file
     and falls back to defaults when the field is absent/malformed."""
@@ -700,18 +889,26 @@ def test_load_config_resolves_patterns(tmp_path, monkeypatch):
 
 def test_consume_future_cancelled():
     """Cancelled futures are silently consumed."""
-    f = asyncio.Future()
-    f.cancel()
-    li._consume_future(f)
-    assert f.cancelled()
+    loop = asyncio.new_event_loop()
+    try:
+        f = loop.create_future()
+        f.cancel()
+        li._consume_future(f)
+        assert f.cancelled()
+    finally:
+        loop.close()
 
 
 def test_consume_future_exception():
     """Exception retrieval prevents 'never awaited' warnings."""
-    f = asyncio.Future()
-    f.set_exception(RuntimeError("boom"))
-    li._consume_future(f)
-    assert f.done()
+    loop = asyncio.new_event_loop()
+    try:
+        f = loop.create_future()
+        f.set_exception(RuntimeError("boom"))
+        li._consume_future(f)
+        assert f.done()
+    finally:
+        loop.close()
 
 
 # ---------------------------------------------------------------------------
@@ -773,7 +970,7 @@ async def test_pass_when_no_guardrail_fires():
     """A tool call that matches patterns but no guardrail fires returns pass."""
     # Use a guardrail that won't match the event
     gr = _guardrail(name="non-match", pattern=r"zzz_nomatch")
-    cfg = LoopInterceptConfig()
+    cfg = _cfg()
     outcome, audit = await run_loop_interception(EvalEngine(), [gr], _event(), config=cfg)
     assert outcome.action == "pass"
     assert audit == []

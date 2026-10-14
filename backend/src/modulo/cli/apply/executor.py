@@ -12,9 +12,10 @@ are captured into ``report["failed"]`` instead of aborting the run.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 import httpx
 
@@ -41,6 +42,27 @@ _CONFLICT_HINT = "name already exists; rerun to apply as update"
 # Repeated API paths (S1192).
 _PATH_MODEL_BACKENDS = "/model-backends"
 _PATH_SCHEMAS = "/schemas"
+# FAR-1109: node policy-gate eval_id references resolve against the org's
+# evals (list route filters soft-deleted rows).
+_PATH_EVALS = "/evals"
+
+# The MCP StreamableHTTP endpoint (stateless JSON-RPC) — the org-vault key
+# listing surface (FAR-1216). The server exposes no REST route that reads the
+# vault; ``list_secrets`` is the shipped read-only key-listing tool, so
+# plan-time credential_ref validation uses it rather than inventing a parallel
+# surface.
+_MCP_TOOLS_CALL_PATH = "/mcp/"
+_MCP_LIST_SECRETS_LIMIT = 1000
+_MCP_ACCEPT = "application/json, text/event-stream"
+
+
+class VaultListingError(RuntimeError):
+    """The org vault key listing could not be fetched.
+
+    Raised (never swallowed) so a caller validating a ``credential_ref`` fails
+    CLOSED with a clear reason rather than silently passing a key it could not
+    confirm.
+    """
 
 
 def _entity_reports(config: ApplyConfig) -> dict[str, list[tuple[str, Any]]]:
@@ -60,21 +82,35 @@ def resolve_secret_refs(
     config: ApplyConfig,
     environ: dict[str, str] | None = None,
 ) -> tuple[dict[str, str], list[tuple[str, str, str]]]:
-    """Resolve ``${env:VAR}`` api_key refs client-side.
+    """Resolve ``${env:VAR}`` api_key refs client-side; forward vault refs.
 
-    Returns (resolved_api_key_by_backend_name, blocked) where blocked entries
-    are (kind, name, reason) for backends whose env var is missing/empty, and
-    for secretref:// refs (no server-side resolution exists in this slice, so
-    they would be stored as non-functional literals).
+    Returns (api_key_by_backend_name, blocked) where blocked entries are
+    (kind, name, reason) for backends whose env var is missing/empty.
+
+    A ``secretref://<key>`` api_key — or a ``credential_ref: <key>``, which is
+    normalised to the same token (FAR-1216) — is forwarded to the server
+    UNCHANGED (the ``secretref://...`` string is sent as the request's
+    ``api_key``): the SERVER resolves it against the org vault at write time
+    under the caller's org context (FAR-1640) and fails the entity with a
+    typed, key-naming error if it is missing/foreign. The value never crosses
+    the client boundary, so the CLI cannot and does not resolve it locally.
     """
     env: dict[str, str] = dict(environ if environ is not None else os.environ)
     resolved: dict[str, str] = {}
     blocked: list[tuple[str, str, str]] = []
     for entity in config.entities.model_backends:
+        credential_reference = entity.credential_reference()
+        if credential_reference is not None:
+            # ``credential_ref: <key>`` — forward the normalised token; the
+            # server resolves the vault reference (FAR-1640).
+            resolved[entity.name] = credential_reference
+            continue
         var = entity.env_ref_var()
         if var is None:
-            if entity.api_key.startswith("secretref://"):
-                blocked.append((KIND_BACKEND, entity.name, _SECRETREF_BLOCK_REASON))
+            # Literal or ``secretref://<key>`` — pass through; the server
+            # resolves the vault reference (FAR-1640).
+            assert entity.api_key is not None  # enforced by the model validator
+            resolved[entity.name] = entity.api_key
             continue
         value = env.get(var)
         if value is None:
@@ -86,6 +122,62 @@ def resolve_secret_refs(
         else:
             resolved[entity.name] = value
     return resolved, blocked
+
+
+def _parse_vault_key_listing(envelope: dict[str, Any]) -> set[str]:
+    """Extract the org vault keys from a ``list_secrets`` MCP JSON-RPC response.
+
+    Raises :class:`VaultListingError` for any error/partial response so a
+    caller never mistakes "could not list" for "key absent" (which would block
+    a valid config) or "key present" (a silent pass).
+    """
+    error = envelope.get("error")
+    if error is not None:
+        detail = error.get("message") if isinstance(error, dict) else error
+        raise VaultListingError(f"list_secrets returned an error: {detail!r}")
+    result = envelope.get("result")
+    if not isinstance(result, dict):
+        raise VaultListingError("list_secrets response carried no result")
+    if result.get("isError"):
+        raise VaultListingError("list_secrets reported a tool error")
+    content = result.get("content")
+    if not isinstance(content, list) or not content or not isinstance(content[0], dict):
+        raise VaultListingError("list_secrets response carried no content")
+    text = content[0].get("text")
+    if not isinstance(text, str):
+        raise VaultListingError("list_secrets content was not text")
+    try:
+        data = json.loads(text)
+    except ValueError:
+        raise VaultListingError("list_secrets content was not JSON") from None
+    if not isinstance(data, dict) or not isinstance(data.get("secrets"), list):
+        raise VaultListingError("list_secrets payload carried no secrets list")
+    keys = {item["key"] for item in data["secrets"] if isinstance(item, dict) and isinstance(item.get("key"), str)}
+    total = data.get("total")
+    if isinstance(total, int) and total > len(data["secrets"]):
+        # The page limit truncated the listing: a missing key cannot be
+        # distinguished from a key beyond the page, so refuse to validate.
+        raise VaultListingError(f"vault holds {total} keys but only {len(data['secrets'])} were listed")
+    return keys
+
+
+class _PipelineBundle(NamedTuple):
+    """Pipeline-family slices of ``fetch_current`` (S3776 split).
+
+    Returned by :meth:`ApplyExecutor._fetch_pipeline_bundle`; the
+    orchestrator assembles these into the same ``fetch_current`` result
+    dict the monolith used to build inline.
+    """
+
+    agents: dict[str, str]
+    ambiguous_agent_names: dict[str, int]
+    pipelines: dict[str, dict[str, Any]]
+    ambiguous_pipeline_names: dict[str, int]
+    unreadable_graph_pipelines: dict[str, str]
+    users: dict[str, str]
+    users_error: str | None
+    evals: dict[str, dict[str, Any]]
+    evals_error: str | None
 
 
 class ApplyExecutor:
@@ -123,6 +215,67 @@ class ApplyExecutor:
             self._client.close()
 
     # ------------------------------------------------------------------
+    # Org-vault key listing (FAR-1216 plan-time credential_ref validation)
+    # ------------------------------------------------------------------
+
+    def list_vault_keys(self) -> set[str]:
+        """Return the org vault secret keys via the MCP ``list_secrets`` tool.
+
+        The server ships no REST route that reads the vault; ``list_secrets``
+        (keys only, never values) is the read-only surface. Raises
+        :class:`VaultListingError` on any failure so validation fails CLOSED.
+        """
+        request = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "list_secrets",
+                "arguments": {"limit": _MCP_LIST_SECRETS_LIMIT},
+            },
+        }
+        try:
+            response = self._client.post(
+                f"{self._base_url}{_MCP_TOOLS_CALL_PATH}",
+                json=request,
+                headers={**self._auth_headers, "Accept": _MCP_ACCEPT},
+            )
+        except httpx.HTTPError as exc:
+            raise VaultListingError(f"vault listing request failed ({type(exc).__name__})") from None
+        if not 200 <= response.status_code < 300:
+            raise VaultListingError(f"vault listing returned status {response.status_code}")
+        try:
+            envelope = response.json()
+        except ValueError:
+            raise VaultListingError("vault listing returned invalid JSON") from None
+        if not isinstance(envelope, dict):
+            raise VaultListingError("vault listing returned a non-object response")
+        return _parse_vault_key_listing(envelope)
+
+    def _block_missing_credential_refs(self, config: ApplyConfig) -> list[tuple[str, str, str]]:
+        """Block model backends whose ``credential_ref`` is absent from the vault.
+
+        Runs at PLAN time (before any write). Only entered when the config
+        actually declares a ``credential_ref`` — configs using a literal /
+        ``${env:}`` / ``secretref://`` api_key never incur the listing call.
+        A key that cannot be verified (listing unavailable) blocks too: a plan
+        that cannot confirm the key must not silently pass it.
+        """
+        declared = [(e.name, e.credential_ref) for e in config.entities.model_backends if e.credential_ref is not None]
+        if not declared:
+            return []
+        try:
+            vault_keys = self.list_vault_keys()
+        except VaultListingError as exc:
+            _log.warning("apply.vault_listing_unavailable: %s", exc)
+            return [(KIND_BACKEND, name, f"cannot verify credential_ref {ref!r}: {exc}") for name, ref in declared]
+        return [
+            (KIND_BACKEND, name, f"credential_ref {ref!r} not found in the org vault")
+            for name, ref in declared
+            if ref not in vault_keys
+        ]
+
+    # ------------------------------------------------------------------
     # HTTP helpers
     # ------------------------------------------------------------------
 
@@ -140,7 +293,7 @@ class ApplyExecutor:
                 path=path,
             )
         try:
-            return cast("dict[str, Any]", response.json())
+            return cast(dict[str, Any], response.json())
         except ValueError as exc:
             raise ApplyHttpError(
                 f"GET {path} returned invalid JSON: {exc}",
@@ -160,7 +313,7 @@ class ApplyExecutor:
                 path=path,
             )
         try:
-            return cast("dict[str, Any]", response.json())
+            return cast(dict[str, Any], response.json())
         except ValueError as exc:
             raise ApplyHttpError(
                 f"POST {path} returned invalid JSON: {exc}",
@@ -180,7 +333,7 @@ class ApplyExecutor:
                 path=path,
             )
         try:
-            return cast("dict[str, Any]", response.json())
+            return cast(dict[str, Any], response.json())
         except ValueError as exc:
             raise ApplyHttpError(
                 f"PATCH {path} returned invalid JSON: {exc}",
@@ -200,7 +353,7 @@ class ApplyExecutor:
                 path=path,
             )
         try:
-            return cast("dict[str, Any]", response.json())
+            return cast(dict[str, Any], response.json())
         except ValueError as exc:
             raise ApplyHttpError(
                 f"PUT {path} returned invalid JSON: {exc}",
@@ -266,6 +419,11 @@ class ApplyExecutor:
         ``ambiguous_agent_names`` (name -> match count; ambiguous names are
         EXCLUDED from the maps — name-based upsert cannot pick a row) and
         duplicate live trigger composite keys as ``duplicate_trigger_keys``.
+
+        S3776 split: the pipeline-family lookups/normalisation live in
+        :meth:`_fetch_pipeline_bundle` and the trigger composite-key maps
+        in :meth:`_fetch_trigger_lists`; the per-kind wants/lazy flags are
+        evaluated HERE (never inside the helpers) and passed in.
         """
         schemas_list = self._get_paginated(_PATH_SCHEMAS)
         try:
@@ -297,38 +455,100 @@ class ApplyExecutor:
             ]
             schemas[name]["versions"] = versions
 
-        from modulo.cli.apply import pipeline_apply
-
+        # Per-kind flags: which kinds the config declares (wants_*) and
+        # which lazy per-kind lookups are actually needed (needs_*). All
+        # evaluated here so the helpers stay pure fetch/normalise steps.
         wants_pipelines = bool(config.entities.pipelines)
         wants_triggers = bool(config.entities.triggers)
-        pipelines_list: list[dict[str, Any]] = []
-        agents_list: list[dict[str, Any]] = []
-        triggers_list: list[dict[str, Any]] = []
-        if wants_pipelines or wants_triggers:
-            pipelines_list = self._get_paginated("/pipelines")
-        # /agents is fetched LAZILY: only when a declared pipeline node
-        # actually references an agent (FAR-681 QA — a graph-less or
-        # agent-free config never needs the agents list).
         needs_agents = any(
             entity.graph is not None and any(node.agent is not None for node in entity.graph.nodes)
             for entity in config.entities.pipelines
         )
-        if needs_agents:
-            agents_list = self._get_paginated("/agents")
-        if wants_triggers:
-            triggers_list = self._get_paginated("/triggers")
-        # FAR-1161: owner emails resolve to account ids via the org member
-        # directory (/admin/users). LAZILY fetched only when a declared
-        # pipeline actually names an owner email (configs without owners
-        # never need it). A directory fetch failure (403 for a non-admin
-        # credential, 404, ...) is STORED, not raised: only the pipelines
-        # that declare an owner email are blocked with that specific reason
-        # and the rest of the config still plans (per-entity containment,
-        # mirroring unreadable_graph_pipelines). Network errors propagate
-        # like every other fetch.
         needs_users = any(
             entity.business_owner_email or entity.reliability_owner_email for entity in config.entities.pipelines
         )
+        needs_evals = any(
+            entity.graph is not None and any(node.policy_gate is not None for node in entity.graph.nodes)
+            for entity in config.entities.pipelines
+        )
+        # /pipelines is fetched once here: BOTH helpers need it (graph
+        # normalisation reads pipeline ids, the trigger identity map reads
+        # pipeline id -> name).
+        pipelines_list: list[dict[str, Any]] = []
+        if wants_pipelines or wants_triggers:
+            pipelines_list = self._get_paginated("/pipelines")
+
+        bundle = self._fetch_pipeline_bundle(
+            config,
+            pipelines_list=pipelines_list,
+            wants_pipelines=wants_pipelines,
+            needs_agents=needs_agents,
+            needs_users=needs_users,
+            needs_evals=needs_evals,
+        )
+        triggers, duplicate_trigger_keys = self._fetch_trigger_lists(
+            wants_triggers=wants_triggers,
+            pipelines_list=pipelines_list,
+            ambiguous_pipeline_names=bundle.ambiguous_pipeline_names,
+        )
+        return {
+            KIND_SCHEMA: schemas,
+            KIND_BACKEND: backends,
+            KIND_PIPELINE: bundle.pipelines,
+            KIND_TRIGGER: triggers,
+            "agents": bundle.agents,
+            "users": bundle.users,
+            "users_error": bundle.users_error,
+            "evals": bundle.evals,
+            "evals_error": bundle.evals_error,
+            "ambiguous_agent_names": bundle.ambiguous_agent_names,
+            "ambiguous_pipeline_names": bundle.ambiguous_pipeline_names,
+            "duplicate_trigger_keys": duplicate_trigger_keys,
+            "unreadable_graph_pipelines": bundle.unreadable_graph_pipelines,
+        }
+
+    def _fetch_pipeline_bundle(
+        self,
+        config: ApplyConfig,
+        *,
+        pipelines_list: list[dict[str, Any]],
+        wants_pipelines: bool,
+        needs_agents: bool,
+        needs_users: bool,
+        needs_evals: bool,
+    ) -> _PipelineBundle:
+        """Fetch the pipeline-family lookups and normalise pipeline state.
+
+        ``pipelines_list`` is the shared /pipelines fetch the orchestrator
+        already made; ``wants_pipelines``/``needs_*`` are evaluated by the
+        orchestrator (per-kind flags never re-derived here).
+
+        /agents is fetched LAZILY: only when a declared pipeline node
+        actually references an agent (FAR-681 QA — a graph-less or
+        agent-free config never needs the agents list).
+
+        The owner-email directory (/admin/users, FAR-1161) is fetched
+        LAZILY only when a declared pipeline names an owner email. A
+        directory fetch failure (403 for a non-admin credential, 404, ...)
+        is STORED, not raised: only the pipelines that declare an owner
+        email are blocked with that specific reason and the rest of the
+        config still plans (per-entity containment, mirroring
+        unreadable_graph_pipelines). Network errors propagate like every
+        other fetch.
+
+        FAR-1109: a declared node policy gate references an eval by UUID.
+        The eval map resolves that reference at plan time (a missing eval
+        blocks the entity). Fetched LAZILY — only when some declared
+        pipeline node carries a ``policy_gate`` — and a fetch failure is
+        STORED, not raised: only the gate-declaring pipelines block
+        (per-entity containment, mirroring ``users_error`` /
+        ``unreadable_graph_pipelines``). The /evals list route already
+        filters soft-deleted evals (a soft-deleted eval cannot receive new
+        results, so its gate would always resolve 'undefined').
+        """
+        agents_list: list[dict[str, Any]] = []
+        if needs_agents:
+            agents_list = self._get_paginated("/agents")
         users: dict[str, str] = {}
         users_error: str | None = None
         if needs_users:
@@ -342,6 +562,19 @@ class ApplyExecutor:
             except ApplyHttpError as exc:
                 users_error = str(exc)
                 _log.warning("apply.fetch_users_failed: %s", users_error)
+        evals: dict[str, dict[str, Any]] = {}
+        evals_error: str | None = None
+        if needs_evals:
+            try:
+                evals_list = self._get_paginated(_PATH_EVALS)
+                evals = {
+                    str(item["id"]): item
+                    for item in evals_list
+                    if item.get("id") is not None and item.get("deleted_at") is None
+                }
+            except ApplyHttpError as exc:
+                evals_error = str(exc)
+                _log.warning("apply.fetch_evals_failed: %s", evals_error)
 
         ambiguous_agent_names = _duplicate_name_counts(agents_list)
         agents = {
@@ -355,22 +588,75 @@ class ApplyExecutor:
             for item in pipelines_list
             if item.get("name") is not None and item["name"] not in ambiguous_pipeline_names
         }
+        unreadable_graph_pipelines = self._normalize_pipeline_graphs(
+            config,
+            pipelines,
+            wants_pipelines=wants_pipelines,
+        )
+        return _PipelineBundle(
+            agents=agents,
+            ambiguous_agent_names=ambiguous_agent_names,
+            pipelines=pipelines,
+            ambiguous_pipeline_names=ambiguous_pipeline_names,
+            unreadable_graph_pipelines=unreadable_graph_pipelines,
+            users=users,
+            users_error=users_error,
+            evals=evals,
+            evals_error=evals_error,
+        )
+
+    def _normalize_pipeline_graphs(
+        self,
+        config: ApplyConfig,
+        pipelines: dict[str, dict[str, Any]],
+        *,
+        wants_pipelines: bool,
+    ) -> dict[str, str]:
+        """Fetch and normalise the stored graph for each declared pipeline.
+
+        Only pipelines whose config DECLARES a graph need the fetched graph
+        (a graph-less config does not manage the graph at all); when the
+        config declares no pipelines at all (``wants_pipelines`` false) the
+        whole pass is skipped. A stored graph the models reject (legacy data,
+        version skew) must not abort the whole run: demote this pipeline to
+        blocked ("current graph unreadable") and keep planning the rest of
+        the config. Returns name -> reason for each demoted pipeline.
+        """
+        from modulo.cli.apply import pipeline_apply
+
         unreadable_graph_pipelines: dict[str, str] = {}
-        if wants_pipelines:
-            # Only pipelines whose config DECLARES a graph need the fetched
-            # graph (a graph-less config does not manage the graph at all).
-            for name in {e.name for e in config.entities.pipelines if e.graph is not None} & pipelines.keys():
-                try:
-                    graph_payload = self._get(f"/pipelines/{pipelines[name]['id']}/graph")
-                    pipelines[name]["graph"] = pipeline_apply.normalize_current_graph(graph_payload)
-                except (ApplyHttpError, ValueError, KeyError, TypeError) as exc:
-                    # A stored graph the models reject (legacy data, version
-                    # skew) must not abort the whole run: demote this pipeline
-                    # to blocked ("current graph unreadable") and keep
-                    # planning the rest of the config.
-                    reason = str(exc) or exc.__class__.__name__
-                    _log.warning("apply.fetch_graph_unreadable: %s: %s", name, reason)
-                    unreadable_graph_pipelines[name] = reason
+        if not wants_pipelines:
+            return unreadable_graph_pipelines
+        declared_names = {e.name for e in config.entities.pipelines if e.graph is not None}
+        for name in declared_names & pipelines.keys():
+            try:
+                graph_payload = self._get(f"/pipelines/{pipelines[name]['id']}/graph")
+                pipelines[name]["graph"] = pipeline_apply.normalize_current_graph(graph_payload)
+            except (ApplyHttpError, ValueError, KeyError, TypeError) as exc:
+                reason = str(exc) or exc.__class__.__name__
+                _log.warning("apply.fetch_graph_unreadable: %s: %s", name, reason)
+                unreadable_graph_pipelines[name] = reason
+        return unreadable_graph_pipelines
+
+    def _fetch_trigger_lists(
+        self,
+        *,
+        wants_triggers: bool,
+        pipelines_list: list[dict[str, Any]],
+        ambiguous_pipeline_names: dict[str, int],
+    ) -> tuple[dict[str, dict[str, Any]], set[str]]:
+        """Fetch the trigger list and build the composite-key maps.
+
+        Triggers are keyed by ``pipeline/name`` (pre-name rows and triggers
+        whose pipeline is invisible are unmanaged by apply); duplicate live
+        trigger composite keys are reported as ``duplicate_trigger_keys``.
+        ``pipelines_list``/``ambiguous_pipeline_names`` come from the
+        orchestrator's shared /pipelines fetch; ``wants_triggers`` is its
+        per-kind flag (evaluated there, not here).
+        """
+        triggers_list: list[dict[str, Any]] = []
+        if wants_triggers:
+            triggers_list = self._get_paginated("/triggers")
         # Trigger identity map: pipeline ids -> names. Pipeline ids whose name
         # is ambiguous are EXCLUDED (their composite key would be unreliable).
         pipeline_names_by_id = {
@@ -399,19 +685,7 @@ class ApplyExecutor:
             if key in duplicate_trigger_keys:
                 continue
             triggers[key] = item
-        return {
-            KIND_SCHEMA: schemas,
-            KIND_BACKEND: backends,
-            KIND_PIPELINE: pipelines,
-            KIND_TRIGGER: triggers,
-            "agents": agents,
-            "users": users,
-            "users_error": users_error,
-            "ambiguous_agent_names": ambiguous_agent_names,
-            "ambiguous_pipeline_names": ambiguous_pipeline_names,
-            "duplicate_trigger_keys": duplicate_trigger_keys,
-            "unreadable_graph_pipelines": unreadable_graph_pipelines,
-        }
+        return triggers, duplicate_trigger_keys
 
     # ------------------------------------------------------------------
     # Execution
@@ -605,6 +879,11 @@ class ApplyExecutor:
         from modulo.cli.apply import pipeline_apply, trigger_apply
 
         resolved_api_keys, blocked = resolve_secret_refs(config)
+        # FAR-1216: plan-time validation of ``credential_ref`` keys against the
+        # org vault — a missing (or unverifiable) key blocks the entity before
+        # any write, mirroring the env-ref block. Only declared refs trigger
+        # the vault listing call.
+        blocked = [*blocked, *self._block_missing_credential_refs(config)]
         entities = _entity_reports(config)
         current_entities: dict[str, Any] = self.fetch_current(config) if any(entities.values()) else _empty_current()
         resolved_trigger_configs, trigger_blocked = trigger_apply.resolve_trigger_config_refs(entities)
@@ -680,6 +959,8 @@ def _empty_current() -> dict[str, Any]:
         "agents": {},
         "users": {},
         "users_error": None,
+        "evals": {},
+        "evals_error": None,
         "ambiguous_agent_names": {},
         "ambiguous_pipeline_names": {},
         "duplicate_trigger_keys": set(),
@@ -726,6 +1007,26 @@ def _failure_message(exc: Exception) -> str:
     return message
 
 
+def _format_validation_detail(item: Any) -> str:
+    """Render one FastAPI validation-detail entry, preserving its typed code.
+
+    A credential-reference 422 carries ``{"type": "credential_reference_error",
+    "loc": [...], "msg": "vault key 'x': ..."}`` (FAR-1640). Flattening it to a
+    raw ``repr`` would bury the stable machine-readable ``type`` and the named
+    key; this keeps both so apply surfaces the server's typed error verbatim.
+    """
+    if not isinstance(item, dict):
+        return str(item)
+    code = item.get("type")
+    msg = item.get("msg")
+    loc = item.get("loc")
+    head_parts = [str(part) for part in (code, msg) if part is not None]
+    head = ": ".join(head_parts) if head_parts else str(item)
+    if isinstance(loc, list) and loc:
+        return f"{head} (loc={'.'.join(str(part) for part in loc)})"
+    return head
+
+
 def _extract_detail(response: httpx.Response) -> str:
     try:
         body = response.json()
@@ -737,6 +1038,8 @@ def _extract_detail(response: httpx.Response) -> str:
         if "detail" in body:
             detail = body["detail"]
             if detail is not None:
+                if isinstance(detail, list):
+                    return "; ".join(_format_validation_detail(item) for item in detail)
                 return str(detail)
         return f"status {response.status_code}: {body}"
     return f"status {response.status_code}: {body}"
@@ -757,6 +1060,7 @@ __all__ = [
     "AUTH_HEADER",
     "ApplyExecutor",
     "ApplyHttpError",
+    "VaultListingError",
     "has_blockers",
     "resolve_secret_refs",
 ]

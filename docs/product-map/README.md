@@ -89,6 +89,7 @@ Fresh entries for these features are added to the graph below as behaviour track
 - **feat-library-collections** - Install, uninstall, and manage library collection installs into runnable org entities (flag-gated behind `library_collection`; see FAR-760 / FAR-762 / FAR-764) - routes: `/library/collections/new`, `/library/collections/:id`
 - **feat-runs** - Run execution, history, and detail (Output Diff deferred from the MVP nav – hidden via private_preview; see FAR-542) - routes: `/runs`, `/runs/:id`
 - **feat-lifecycle-maps** - Lifecycle maps and stage workflows - routes: `/lifecycle-maps`, `/lifecycle-maps/:id/editor`, `/lifecycle-maps/:id`
+- **feat-governance-stack** - Read-only governance-hierarchy taxonomy readout over existing list APIs - routes: `/governance`
 
 ### Monitor
 - **feat-observability** - Error dashboard and observability exports (Error Forwarders and Browser Monitoring deferred from the MVP nav – hidden via private_preview; see FAR-547 / FAR-543) - routes: `/settings/observability`, `/admin/errors`, `/admin/errors/:id`
@@ -658,8 +659,10 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > functions directly (request ContextVars hydrated by hand, the `trigger.feature`
 > re-anchor pattern), exercising the real `_parse_hitl_action` claim-token guard
 > (`claim_token_required`), the real `_check_agent_tool_scope` role-hierarchy
-> scope gate (a `runner` is denied `hitl:review` → `insufficient_scope`), the
-> real `_check_human_only_gate` policy hook, the real HITLManager approve/reject
+> scope gate (a `runner` is denied the decision action's registry key — e.g.
+> `hitl.approve` for `approve`; the pre-FAR-1476 `hitl:review` spelling now
+> survives only as an accepted input alias — reported as `insufficient_scope`),
+> the real `_check_human_only_gate` policy hook, the real HITLManager approve/reject
 > decision dispatch (`approved` / `rejected` + `review_id`), and the real
 > pending-gate serialisation with the shared gate description resolver –
 > network-free and DB-free with only the auth re-validation and DB/HITLManager
@@ -1170,6 +1173,20 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > read-time `enforce_polling_team_scope` defence-in-depth on the polling fire
 > path) in both the manifest registry and `triggers/trigger-engine.md`, with the
 > matching code and test citations. `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-10-11):** closed the stale "no production call
+> site" half of `feat-core-evidence-store`'s predicate-language Known Gap
+> (`core/evidence-store.md`), left behind by FAR-1293 (PR #1612) – the
+> evidence store's first production write path. The guardrail/eval persist
+> seam (`db/crud/run.py::_persist_guardrail_eval_results`) appends one
+> `eval_guardrail_<eval_id>` fact per guardrail decision through the single
+> `append_evidence()` write path (`core/eval_engine/evidence_layer.py`) with
+> fail-closed key-namespace authorisation, so the store is no longer
+> write-dormant. Tracked as a ticked behaviour with the `db/crud/run.py` +
+> `test_evidence_first_producer.py` citations; the gap now scopes the
+> deferral to production READS (`fetch()` / `map_run_evidence_to_evidence`)
+> and the parked predicate/`decide` (§4). `_ORPHANED_BDD_FEATURES` stays
+> empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
@@ -1193,6 +1210,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 ### Build
 - [feat-dashboard](build/dashboard.md) => PRD 8.20
 - [feat-runs](build/runs.md) => PRD N/A
+- [feat-governance-stack](governance/governance-stack.md) => PRD N/A
 
 ### Configure
 - [feat-apply](configure/apply.md) => PRD N/A

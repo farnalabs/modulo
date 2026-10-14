@@ -8,10 +8,10 @@ a versioned snapshot directory inside the data dir, verifies the dump is
 non-empty, and prints the snapshot path as its final stdout line.
 
 On ANY dump failure the helper raises :class:`UpgradeError` and the installer
-ABORTS â€” no binary swap happens without a verified snapshot. ``--skip-backup``
+ABORTS — no binary swap happens without a verified snapshot. ``--skip-backup``
 in install.sh is the operator's loud, explicit escape hatch for the SECOND
 installer run (the dump already succeeded; the stack must stay stopped for
-the swap â€” see the install.sh comment block).
+the swap — see the install.sh comment block).
 
 The bundled stack must be REACHABLE while dumping (pg_dump talks to a live
 Postgres): run this BEFORE stopping the launcher. The swap phase in
@@ -35,7 +35,7 @@ import os
 import re
 import shutil
 import signal
-import subprocess  # nosec B404 â€” the only exec is a fully argv-pinned pg_dump invocation below (never shell=True)
+import subprocess  # nosec B404 — the only exec is a fully argv-pinned pg_dump invocation below (never shell=True)
 import sys
 import tarfile
 import tempfile
@@ -147,8 +147,8 @@ def assert_not_held(data_dir: Path) -> None:
 
     Reads the ``<datadir>.lock`` sibling holder record and, on POSIX, checks
     the holder's /proc entry: a LIVE holder refuses (named by PID + mode);
-    a dead holder's record is stale â€” the kernel released the flock when the
-    process died â€” and is only logged. Windows cannot verify flock state
+    a dead holder's record is stale — the kernel released the flock when the
+    process died — and is only logged. Windows cannot verify flock state
     until its P3 seam: refuse loudly instead of proceeding destructively.
 
     NOTE: the DUMP wants the bundled stack running (pg_dump talks to live
@@ -169,7 +169,7 @@ def assert_not_held(data_dir: Path) -> None:
     if _pid_alive(holder.pid):
         raise UpgradeError(
             f"Refusing: data dir {data_dir} is locked by another launcher (holder PID {holder.pid}, "
-            f"mode {holder.mode!r}). Stop that launcher first ('modulo stop'), then re-run â€” "
+            f"mode {holder.mode!r}). Stop that launcher first ('modulo stop'), then re-run — "
             "the snapshot survives; pass --skip-backup on the re-run."
         )
     _log.info("upgrade.stale_lock_record_ignored holder_pid=%s (process is gone)", holder.pid)
@@ -185,7 +185,7 @@ def pre_upgrade_dump(
 
     Produces ``<data-dir>/pre-upgrade-dump-<timestamp>/`` containing the
     pg_dump SQL file plus a versioned manifest JSON. The dump MUST be
-    non-empty: an empty dump is a failure (the snapshot dir is swept) â€” the
+    non-empty: an empty dump is a failure (the snapshot dir is swept) — the
     installer aborts rather than swapping binaries over a zero-byte snapshot.
     """
     import shutil
@@ -194,26 +194,26 @@ def pre_upgrade_dump(
     from modulo.launcher.secrets_file import SecretsFileError, _load_existing
     from modulo.launcher.state import load_state
 
-    # FIRST ACTION â€” the dump must never inherit a launcher-hostile PG*
+    # FIRST ACTION — the dump must never inherit a launcher-hostile PG*
     # variable (a stale PGPASSWORD/PGHOST would silently redirect it to a
     # foreign endpoint: same contract as the native boot, ADR 031 Decision 2).
     scrub_os_environment()
 
     state_path = data_dir / _STATE_FILENAME
     if not state_path.exists():
-        raise UpgradeError(f"No state.json at {state_path} â€” the data dir is not bootstrapped; nothing to upgrade")
+        raise UpgradeError(f"No state.json at {state_path} — the data dir is not bootstrapped; nothing to upgrade")
     pgdata = data_dir / _PGDATA_DIRNAME
     if not (pgdata / _PG_VERSION_FILE).exists():
-        raise UpgradeError(f"No initialised bundled cluster at {pgdata} â€” nothing to dump; upgrade aborted")
+        raise UpgradeError(f"No initialised bundled cluster at {pgdata} — nothing to dump; upgrade aborted")
 
     secrets_path = data_dir / _SECRETS_FILENAME
     if not secrets_path.exists():
         # Load-ONLY: a dump helper that could GENERATE credentials would, on
         # a missing file, silently mint a fresh secrets.json and then fail on
-        # state.json HMAC verification â€” leaving an orphan secrets file that
+        # state.json HMAC verification — leaving an orphan secrets file that
         # bricks the next boot. Refuse with the remedial message instead.
         raise UpgradeError(
-            f"Refusing to dump: the secrets file {secrets_path} is MISSING â€” the pre-upgrade dump "
+            f"Refusing to dump: the secrets file {secrets_path} is MISSING — the pre-upgrade dump "
             "must never generate credentials. If this data dir was restored from an archive, use the "
             "archive's include-secrets bundle; otherwise the data dir is not bootstrapped. "
             "Do NOT create a secrets.json by hand."
@@ -267,13 +267,13 @@ def pre_upgrade_dump(
         # A failed dump never leaves a half-written snapshot masquerading
         # as one, and the installer never sees a directory to trust.
         shutil.rmtree(snapshot_dir, ignore_errors=True)
-        raise UpgradeError(f"pre-upgrade dump FAILED â€” upgrade ABORTED, no binary swap was made: {exc}") from exc
+        raise UpgradeError(f"pre-upgrade dump FAILED — upgrade ABORTED, no binary swap was made: {exc}") from exc
 
     size = dump_path.stat().st_size
     if size <= 0:
         shutil.rmtree(snapshot_dir, ignore_errors=True)
         raise UpgradeError(
-            "pre-upgrade dump produced an EMPTY file â€” upgrade ABORTED; refusing to swap binaries over no snapshot"
+            "pre-upgrade dump produced an EMPTY file — upgrade ABORTED; refusing to swap binaries over no snapshot"
         )
 
     created_at = datetime.now(UTC).isoformat()
@@ -289,7 +289,7 @@ def pre_upgrade_dump(
     _write_restore_manifest(snapshot_dir, created_at=created_at)
     if os.name == "posix":
         # TODO(P3): Windows ACL hardening (chmod is a silent no-op there).
-        # DIRECTORIES get 0700 â€” the e(xecute) bit is the DIRECTORY search
+        # DIRECTORIES get 0700 — the e(xecute) bit is the DIRECTORY search
         # bit: at 0600 the snapshot dir is unsearchable and even the dump
         # (written moments earlier) can no longer be RESOLVED to read it.
         try:
@@ -319,7 +319,7 @@ def _resolve_pg_bin_dir(bin_dir: Path | None) -> Path:
 
 
 def _alembic_heads() -> list[str]:
-    """The OLD runtime's current alembic head(s) (unknown â†- placeholder)."""
+    """The OLD runtime's current alembic head(s) (unknown → placeholder)."""
     try:
         from alembic.config import Config
         from alembic.script import ScriptDirectory
@@ -379,7 +379,7 @@ def _run_dump(argv: list[str], dump_path: Path, *, child_env: dict[str, str] | N
     fd = os.open(str(dump_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _PRIVATE_MODE)
     try:
         with os.fdopen(fd, "wb") as out:
-            completed = subprocess.run(  # nosec B603 â€”â€” pinned argv, trusted synthesized input  # noqa: S603
+            completed = subprocess.run(  # nosec B603 —— pinned argv, trusted synthesized input  # noqa: S603
                 argv,
                 stdout=out,
                 stderr=subprocess.PIPE,
@@ -941,14 +941,14 @@ def stop_running_stack(data_dir: Path, *, unit_file: Path | None = None) -> None
     request_stop(data_dir)
     holder = _read_lock_holder(data_dir.parent / (data_dir.name + ".lock"))
     if holder is not None and _pid_alive(holder.pid):
-        _restart_unit_best_effort(data_dir, why="post-stop abort: restoring the stopped service")
+        _restart_unit_best_effort(why="post-stop abort: restoring the stopped service")
         raise UpgradeError(
             f"Refusing: the data dir {data_dir} is STILL locked by a live launcher (holder PID "
             f"{holder.pid}) - stop it first: modulo stop"
         )
 
 
-def _restart_unit_best_effort(data_dir: Path, *, why: str) -> None:
+def _restart_unit_best_effort(*, why: str) -> None:
     """Best-effort `systemctl --user start` of the FAR-674 unit (+ loud log).
 
     Post-stop aborts otherwise leave the bundled stack DARK: the unit was
@@ -1088,7 +1088,7 @@ def _check_pg_major(components: dict[str, str], data_dir: Path) -> None:
         )
 
 
-def _bundled_boot_argv(install_root: Path, version: str, data_dir: Path) -> list[str]:
+def _bundled_boot_argv(install_root: Path, data_dir: Path) -> list[str]:
     """The NEW bundle's boot argv (the documented migration mechanism).
 
     Mechanism choice: the flow EXECs the NEW bundle's own `launcher start`
@@ -1143,7 +1143,7 @@ def run_boot(
     launcher = Path(boot_argv[0])
     stderr_allowance = 65536
     stderr_file = tempfile.TemporaryFile(prefix="modulo-upgrade-boot-stderr-")  # noqa: SIM115 - the lifetime must span Popen + the poll loop
-    process = subprocess.Popen(  # noqa: S603 - pinned argv, synthesized trusted input
+    process = subprocess.Popen(  # noqa: S603 - pinned argv; synthesized trusted input
         boot_argv,
         cwd=str(launcher.parent),
         stdout=subprocess.DEVNULL,
@@ -1433,7 +1433,7 @@ def perform_upgrade(
             _target_dir, prior_dir = _move_into_place(bundle_dir, install_root, version)
             atomic_symlink_swap(install_root / "current", f"versions/{version}")
         except UpgradeError:
-            _restart_unit_best_effort(data_dir, why="post-stop abort: restoring the stopped service")
+            _restart_unit_best_effort(why="post-stop abort: restoring the stopped service")
             raise
         marker_path = write_upgrade_marker(
             data_dir,
@@ -1446,7 +1446,7 @@ def perform_upgrade(
         boot_runner = boot or run_boot
         prior_link_target = prior_dir.name if prior_dir is not None else None
         try:
-            boot_runner(_bundled_boot_argv(install_root, version, data_dir), api_port=_api_port_of(data_dir))
+            boot_runner(_bundled_boot_argv(install_root, data_dir), api_port=_api_port_of(data_dir))
         except UpgradeError as exc:
             raise UpgradeError(
                 f"{exc}\n\n"
@@ -1458,7 +1458,7 @@ def perform_upgrade(
                     prior_link_target=prior_link_target,
                 )
             ) from exc
-        _restart_unit_best_effort(data_dir, why="healthy post-upgrade boot gate passed: restoring the service")
+        _restart_unit_best_effort(why="healthy post-upgrade boot gate passed: restoring the service")
         pruned = prune_versions(install_root, current_target=reserve_target)
         pruned += sweep_upgrade_caches(install_root)
 

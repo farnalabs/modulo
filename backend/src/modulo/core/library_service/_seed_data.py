@@ -25,6 +25,14 @@ _EPOCH = datetime(2024, 1, 1, tzinfo=UTC)
 # the seeded primitive content and the log-name contract.
 _SYSTEM_PROMPT_LABEL = "System Prompt"
 _EGRESS_GITHUB = "egress:github.com"
+_CHANGELOG_AGENT_NAME = "Changelog Agent"
+_RELEASE_NOTES_AGENT_NAME = "Release Notes Agent"
+_PR_DESCRIPTION_AGENT_NAME = "PR Description Agent"
+_ISSUE_TRIAGE_AGENT_NAME = "Issue Triage Agent"
+_LICENSE_CHECKER_AGENT_NAME = "License Checker Agent"
+_CHANGELOG_GENERATOR_NAME = "Changelog Generator"
+_REVIEW_GATE_LABEL = "Review Gate"
+_REVIEW_DECISION_DESCRIPTION = "Review decision with optional comments."
 
 
 # ---------------------------------------------------------------------------
@@ -858,7 +866,7 @@ _RELEASE_TEMPLATE_AGENTS = [
         "required_environment_capabilities": [_EGRESS_GITHUB],
     },
     {
-        "name": "Changelog Generator",
+        "name": _CHANGELOG_GENERATOR_NAME,
         "description": "Generates a changelog entry from commit messages or release notes.",
         "prompt_template": "Generate a changelog entry from the following commit history:\n\n{{ input }}",
         "connector_type_refs": [],
@@ -952,9 +960,9 @@ _PR_TEMPLATE_NODES = [
     {
         "id": "hitl-gate",
         "node_type": "manual",
-        "label": "Review Gate",
+        "label": _REVIEW_GATE_LABEL,
         "position": {"x": 950, "y": 100},
-        "output_schema_json": {"type": "object", "description": "Review decision with optional comments."},
+        "output_schema_json": {"type": "object", "description": _REVIEW_DECISION_DESCRIPTION},
     },
     {
         "id": "pr-poster",
@@ -1001,7 +1009,7 @@ _RELEASE_TEMPLATE_NODES = [
         "id": "changelog-generator",
         "node_type": "agent",
         "agent_index": 1,
-        "label": "Changelog Generator",
+        "label": _CHANGELOG_GENERATOR_NAME,
         "position": {"x": 350, "y": 100},
     },
     {
@@ -1401,7 +1409,7 @@ _MODULO_PRIMITIVES.extend(
         _make_modulo(
             pid="00000000-0000-0000-0000-0000000000A2",
             primitive_type="agent",
-            name="Changelog Agent",
+            name=_CHANGELOG_AGENT_NAME,
             slug="changelog-agent",
             description=(
                 "Reads merged PRs since a given tag and generates a"
@@ -1439,7 +1447,7 @@ _MODULO_PRIMITIVES.extend(
             content_json={
                 "agents": [
                     {
-                        "name": "Changelog Agent",
+                        "name": _CHANGELOG_AGENT_NAME,
                         "description": "Generates a conventional-commits changelog from merged PRs.",
                         "prompt_template": (
                             "You are a release engineer. Given a list of merged PRs since"
@@ -1460,17 +1468,17 @@ _MODULO_PRIMITIVES.extend(
                         "id": "changelog-agent",
                         "node_type": "agent",
                         "agent_index": 0,
-                        "label": "Changelog Agent",
+                        "label": _CHANGELOG_AGENT_NAME,
                         "position": {"x": 50, "y": 100},
                     },
                     {
                         "id": "hitl-gate",
                         "node_type": "manual",
-                        "label": "Review Gate",
+                        "label": _REVIEW_GATE_LABEL,
                         "position": {"x": 350, "y": 100},
                         "output_schema_json": {
                             "type": "object",
-                            "description": "Review decision with optional comments.",
+                            "description": _REVIEW_DECISION_DESCRIPTION,
                         },
                     },
                 ],
@@ -1496,7 +1504,7 @@ _MODULO_PRIMITIVES.extend(
         _make_modulo(
             pid="00000000-0000-0000-0000-00000000009A",
             primitive_type="library_collection",
-            name="Changelog Generator",
+            name=_CHANGELOG_GENERATOR_NAME,
             slug="changelog-generator",
             description=(
                 "Auto-generate a conventional-commits changelog from merged PRs."
@@ -1524,7 +1532,7 @@ _MODULO_PRIMITIVES.extend(
         _make_modulo(
             pid="00000000-0000-0000-0000-0000000000AA",
             primitive_type="agent",
-            name="Release Notes Agent",
+            name=_RELEASE_NOTES_AGENT_NAME,
             slug="release-notes-agent",
             description=(
                 "Reads merged PRs and closed issues for a milestone and"
@@ -1561,7 +1569,7 @@ _MODULO_PRIMITIVES.extend(
             content_json={
                 "agents": [
                     {
-                        "name": "Release Notes Agent",
+                        "name": _RELEASE_NOTES_AGENT_NAME,
                         "description": "Generates marketing-ready release notes from PRs and issues.",
                         "prompt_template": (
                             "You are a technical writer. Given merged PRs and closed issues"
@@ -1581,17 +1589,17 @@ _MODULO_PRIMITIVES.extend(
                         "id": "release-notes-agent",
                         "node_type": "agent",
                         "agent_index": 0,
-                        "label": "Release Notes Agent",
+                        "label": _RELEASE_NOTES_AGENT_NAME,
                         "position": {"x": 50, "y": 100},
                     },
                     {
                         "id": "hitl-gate",
                         "node_type": "manual",
-                        "label": "Review Gate",
+                        "label": _REVIEW_GATE_LABEL,
                         "position": {"x": 350, "y": 100},
                         "output_schema_json": {
                             "type": "object",
-                            "description": "Review decision with optional comments.",
+                            "description": _REVIEW_DECISION_DESCRIPTION,
                         },
                     },
                 ],
@@ -1646,7 +1654,7 @@ _MODULO_PRIMITIVES.extend(
         _make_modulo(
             pid="00000000-0000-0000-0000-0000000000A6",
             primitive_type="agent",
-            name="PR Description Agent",
+            name=_PR_DESCRIPTION_AGENT_NAME,
             slug="pr-description-agent",
             description=(
                 "Reads a branch diff and writes a structured PR description"
@@ -1685,7 +1693,7 @@ _MODULO_PRIMITIVES.extend(
             content_json={
                 "agents": [
                     {
-                        "name": "PR Description Agent",
+                        "name": _PR_DESCRIPTION_AGENT_NAME,
                         "description": "Writes a structured PR description from a branch diff.",
                         "prompt_template": (
                             "You are a technical writer. Given a branch diff, write a"
@@ -1704,7 +1712,7 @@ _MODULO_PRIMITIVES.extend(
                         "id": "pr-description-agent",
                         "node_type": "agent",
                         "agent_index": 0,
-                        "label": "PR Description Agent",
+                        "label": _PR_DESCRIPTION_AGENT_NAME,
                         "position": {"x": 50, "y": 100},
                     },
                 ],
@@ -1747,7 +1755,7 @@ _MODULO_PRIMITIVES.extend(
         _make_modulo(
             pid="00000000-0000-0000-0000-0000000000A8",
             primitive_type="agent",
-            name="Issue Triage Agent",
+            name=_ISSUE_TRIAGE_AGENT_NAME,
             slug="issue-triage-agent",
             description=(
                 "Reads a new issue and categorizes it (bug/feature/question/docs),"
@@ -1791,7 +1799,7 @@ _MODULO_PRIMITIVES.extend(
             content_json={
                 "agents": [
                     {
-                        "name": "Issue Triage Agent",
+                        "name": _ISSUE_TRIAGE_AGENT_NAME,
                         "description": "Categorizes issues and suggests priority, labels, and acceptance criteria.",
                         "prompt_template": (
                             "You are an issue triage specialist. Read the following new issue"
@@ -1811,7 +1819,7 @@ _MODULO_PRIMITIVES.extend(
                         "id": "issue-triage-agent",
                         "node_type": "agent",
                         "agent_index": 0,
-                        "label": "Issue Triage Agent",
+                        "label": _ISSUE_TRIAGE_AGENT_NAME,
                         "position": {"x": 50, "y": 100},
                     },
                     {
@@ -1821,7 +1829,7 @@ _MODULO_PRIMITIVES.extend(
                         "position": {"x": 350, "y": 100},
                         "output_schema_json": {
                             "type": "object",
-                            "description": "Review decision with optional comments.",
+                            "description": _REVIEW_DECISION_DESCRIPTION,
                         },
                     },
                 ],
@@ -1876,7 +1884,7 @@ _MODULO_PRIMITIVES.extend(
         _make_modulo(
             pid="00000000-0000-0000-0000-0000000000A4",
             primitive_type="agent",
-            name="License Checker Agent",
+            name=_LICENSE_CHECKER_AGENT_NAME,
             slug="license-checker-agent",
             description=(
                 "Scans dependency manifests (build.gradle, package.json,"
@@ -1928,7 +1936,7 @@ _MODULO_PRIMITIVES.extend(
             content_json={
                 "agents": [
                     {
-                        "name": "License Checker Agent",
+                        "name": _LICENSE_CHECKER_AGENT_NAME,
                         "description": "Scans dependency manifests and produces a license compliance report.",
                         "prompt_template": (
                             "You are a software license compliance analyst. Scan the following"
@@ -1950,7 +1958,7 @@ _MODULO_PRIMITIVES.extend(
                         "id": "license-checker-agent",
                         "node_type": "agent",
                         "agent_index": 0,
-                        "label": "License Checker Agent",
+                        "label": _LICENSE_CHECKER_AGENT_NAME,
                         "position": {"x": 50, "y": 100},
                     },
                     {

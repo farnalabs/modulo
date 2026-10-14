@@ -319,10 +319,34 @@ async def test_query_transport_error_detail_redacts_credentials(connector):
 
 
 @respx.mock
-async def test_health_check_transport_error_detail_redacts_credentials(connector):
+async def test_health_check_transport_error_raises_request_error(connector):
+    """FAR-507: a transport error escaping ``health_check`` is a bare ``httpx``
+    error that carries the live ``key``/``token`` in ``exc.request.url`` (the
+    URL is the query string), so the connector redactor is built with
+    ``scrub_url=True`` and the ``@redacting`` wrapper must scrub that URL —
+    assert the leak it guards against is actually plugged.
+    """
     respx.get(f"{_BASE}/members/me").mock(side_effect=httpx.ConnectError("Connection refused"))
-    with pytest.raises(httpx.HTTPError):
+    with pytest.raises(httpx.RequestError) as exc_info:
         await connector.health_check()
+    exc = exc_info.value
+    assert hasattr(exc, "request")
+    assert API_KEY not in str(exc.request.url)
+    assert TOKEN not in str(exc.request.url)
+
+
+@respx.mock
+async def test_health_check_error_detail_redacts_credentials(connector):
+    """FAR-507: the non-200 ``health_check`` path scrubs credentials out of the
+    upstream error body (this path IS redaction-covered)."""
+    respx.get(f"{_BASE}/members/me").mock(
+        return_value=httpx.Response(401, text=f"unauthorized key={API_KEY} token={TOKEN}")
+    )
+    result = await connector.health_check()
+    assert result.ok is False
+    assert API_KEY not in result.detail
+    assert TOKEN not in result.detail
+    assert "***" in result.detail
 
 
 @respx.mock

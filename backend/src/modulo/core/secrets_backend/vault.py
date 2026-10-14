@@ -47,6 +47,12 @@ class VaultSecretsBackend(SecretsBackend):
 
     """
 
+    #: Vault KV resolves a GLOBAL path namespace (``<prefix>/<key>``) — there is
+    #: no per-organisation partition. The credential-reference path refuses such
+    #: a backend in a multi-org deployment rather than risk a cross-org read
+    #: (FAR-1640).
+    organisation_scoped: bool = False
+
     def __init__(self) -> None:
         if not _MODULE_AVAILABLE:
             raise RuntimeError(

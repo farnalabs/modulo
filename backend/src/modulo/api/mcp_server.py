@@ -34,6 +34,15 @@ from urllib.parse import quote, urlencode
 
 from fastapi import HTTPException as FastAPIHTTPException
 from jwt import InvalidTokenError as JWTError
+
+# Ensure pydantic's lazily-loaded `root_model` submodule is resident before
+# `mcp` builds `class JSONRPCMessage(RootModel[...])` at import time. Coverage's
+# single-module source-spec resolution imports-then-rolls-back modules
+# (coverage 7.16.2), which can delete `pydantic.root_model` while leaving a
+# dangling `RootModel` attribute, crashing that specialization. See
+# tests/unit/library_sync/test_coverage_source_import_guard.py.
+import pydantic.root_model  # noqa: F401  # isort: skip
+
 from mcp.server.fastmcp import FastMCP
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
@@ -66,13 +75,14 @@ from modulo.api.middleware.sensitive_mask import (
 from modulo.api.middleware.sensitive_mask import (
     mask_config_json,
     mask_pipeline_graph_node,
-    merge_masked_config,
+    merge_masked_config_json,
     merge_masked_graph_nodes,
 )
 from modulo.api.routes.api_keys import enforce_grants_mint_cap_for
 from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
 from modulo.api.routes.oauth_metadata import protected_resource_metadata_url
 from modulo.api.routes.triggers import (
+    _encrypt_trigger_config_secrets,
     _streak_status_for,
     _validate_connector_instance_team_scope,
     _validate_trigger_config_keys,
@@ -98,6 +108,8 @@ from modulo.auth.oauth import (
     check_oauth_token_family_valid,
     clamp_oauth_role,
     decode_oauth_access_token,
+    get_oauth_client_team_id,
+    oauth_grant_set,
     scopes_required_role,
 )
 from modulo.auth.permissions import _clamp_role, grants_permit, set_authz_enforce
@@ -168,6 +180,12 @@ from modulo.core.pipeline_engine.error_codes import map_legacy_code, present_err
 from modulo.core.rate_limiter import TokenBucketRegistry
 from modulo.core.run_provenance import run_provenance_fields
 from modulo.core.runtime_config.key_bridge import public_url_is_configured
+from modulo.core.secrets_backend import (
+    CredentialReferenceError,
+    create_secrets_backend,
+    is_secret_ref,
+    resolve_credential,
+)
 from modulo.core.trigger_streak import (
     anchor_trigger_streak_epoch,
     clear_trigger_streak_after_reenable,
@@ -421,6 +439,14 @@ _ctx_user_keys_enabled: contextvars.ContextVar[bool] = contextvars.ContextVar("m
 _ctx_node_allowed_tools: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
     "mcp_node_allowed_tools", default=None
 )
+# FAR-696: the principal's ``is_system_admin`` flag, lifted by the auth paths
+# so system-admin-only tools (``list_feature_flags`` — REST
+# ``require_system_permission``) can enforce the SAME strict gate MCP-side.
+# Fail-closed default False: API keys and OAuth tokens never carry the flag
+# (mirroring REST, where API-key principals are constructed with
+# ``is_system_admin=False`` and OAuth claims do not carry it); only a regular
+# JWT whose decoded principal holds the flag sets it True.
+_ctx_is_system_admin: contextvars.ContextVar[bool] = contextvars.ContextVar("mcp_is_system_admin", default=False)
 
 
 def _bind_org_context(
@@ -499,9 +525,11 @@ def _ctx_team_id_val() -> uuid.UUID | None:
     """Get the team boundary of the current request (None when no team boundary).
 
     Set by ``McpAuthMiddleware`` only when the caller authenticated with a
-    team-scoped API key (non-null ``OrgApiKey.team_id``). Org-wide API keys,
-    OAuth access tokens and regular JWTs carry no team boundary and resolve
-    to ``None`` — they are org-role-only, matching the REST layer.
+    team-scoped credential: an API key with a non-null ``OrgApiKey.team_id``
+    or a token minted by an OAuth client bound to a team. Org-wide API keys,
+    org-wide OAuth clients and regular user (Assistant) JWTs carry no team
+    boundary and resolve to ``None`` — they are org-role-only, matching the
+    REST layer.
     """
     return _ctx_team_id.get(None)
 
@@ -514,6 +542,16 @@ def _ctx_node_allowed_tools_val() -> list[str] | None:
     default) preserves pre-scope behaviour; an empty list is deny-by-default.
     """
     return _ctx_node_allowed_tools.get(None)
+
+
+def _ctx_is_system_admin_val() -> bool:
+    """FAR-696: True when the request's principal holds ``is_system_admin``.
+
+    Fail-closed: unset resolves to False (the ContextVar default), so only the
+    auth paths that explicitly lifted the flag can ever pass a system-admin
+    gate — the same strict ``require_system_permission`` posture REST uses.
+    """
+    return bool(_ctx_is_system_admin.get(False))
 
 
 def _check_agent_tool_scope(tool_name: str, action: str | None = None) -> None:
@@ -565,13 +603,14 @@ def _ctx_may_manage_cost() -> bool:
 
 
 def _team_scoped_key_mismatch(owner_team_id: uuid.UUID | None) -> bool:
-    """True when a team-scoped API key must not access a resource owned by *owner_team_id*.
+    """True when a team-scoped credential must not access a resource owned by *owner_team_id*.
 
-    The boundary only applies to team-scoped API keys (non-null
-    ``_ctx_team_id``): org-wide keys and user/OAuth tokens have no team
-    boundary. A resource with no owning team (org-level pipeline) is
-    accessible to any team-scoped key; a resource owned by a different team
-    is blocked.
+    The boundary applies to any credential that carries a team (non-null
+    ``_ctx_team_id``): a team-scoped API key OR a token minted by a
+    team-bound OAuth client. Org-wide keys and plain user (Assistant) tokens
+    carry no team boundary. A resource with no owning team (org-level
+    pipeline) is accessible to any team-scoped credential; a resource owned
+    by a different team is blocked.
     """
     key_team_id = _ctx_team_id.get(None)
     if key_team_id is None:
@@ -580,12 +619,12 @@ def _team_scoped_key_mismatch(owner_team_id: uuid.UUID | None) -> bool:
 
 
 def _team_scope_error(resource_kind: str, resource_id: str) -> dict[str, Any]:
-    """Error dict for a team-boundary violation by a team-scoped API key."""
+    """Error dict for a team-boundary violation by a team-scoped credential (API key or OAuth client)."""
     key_team_id = _ctx_team_id.get(None)
     return {
         "error": "team_boundary_violation",
         "detail": (
-            f"This API key is scoped to team {key_team_id} and cannot access "
+            f"This credential is scoped to team {key_team_id} and cannot access "
             f"{resource_kind} {resource_id} owned by another team"
         ),
     }
@@ -1129,6 +1168,7 @@ async def _validate_oauth_live(token: str) -> bool:
         except JWTError:
             return False
         return await _validate_principal_live(token, principal)
+    client_team_id: uuid.UUID | None = None
     async with _session(claims.organisation_id) as s:
         if not await check_oauth_token_family_valid(
             s,
@@ -1137,6 +1177,11 @@ async def _validate_oauth_live(token: str) -> bool:
             org_id=claims.organisation_id,
         ):
             return False
+        # FAR-1476: resolve the client's team boundary in the SAME round-trip
+        # the family check already makes (the client row is not otherwise loaded
+        # on this leg). A team-bound client re-applies its boundary on every
+        # SSE event; an org-wide client resolves None (no boundary).
+        client_team_id = await get_oauth_client_team_id(s, claims.client_id)
     # ADR 047: re-resolve the account's LIVE role (TTL-bounded per
     # connection) and re-apply the scope→live clamp so a demoted
     # operator loses scope mid-stream too.
@@ -1148,7 +1193,12 @@ async def _validate_oauth_live(token: str) -> bool:
     if live_role is None:
         return False
     _ctx_role.set(clamp_oauth_role(scopes_required_role(claims.scopes), live_role))
-    _ctx_team_id.set(None)  # user tokens carry no team boundary
+    # FAR-1476: re-derive the consented grant-set too — a long-lived
+    # connection must keep evaluating the token's permission set (and the
+    # live non-delegable exclusion inside ``grants_permit``), not a stale
+    # snapshot from auth time.
+    _ctx_key_grants.set(oauth_grant_set(claims.scopes))
+    _ctx_team_id.set(client_team_id)  # FAR-1476: client's team boundary (None = org-wide)
     return True
 
 
@@ -1466,6 +1516,10 @@ async def _authenticate_api_key(
         # rows) on the fail-closed None; real rows always carry a string.
         _ctx_key_scope.set(key.scope if isinstance(key.scope, str) else None)
         _ctx_key_grants.set(key_grants)
+        # FAR-696: an API-key principal is never a system admin — REST
+        # constructs API-key tenants with ``is_system_admin=False`` and the
+        # strict ``require_system_permission`` gates deny them; mirror that.
+        _ctx_is_system_admin.set(False)
         # FAR-436: a run-scoped sandbox key narrows the agent's MCP tool-call
         # loop to the node's capability_scope.allowed_tools (deny-by-default
         # within the scope). Non-run keys / scoped-less nodes resolve to None
@@ -1616,6 +1670,10 @@ async def _authenticate_oauth_jwt(
         _ctx_key_scope.set("user")
         _ctx_key_grants.set(None)
         _ctx_team_id.set(None)  # user tokens carry no team boundary
+        # FAR-696: lift the principal's system-admin flag so system-admin-only
+        # tools can enforce the same strict gate REST's
+        # ``require_system_permission`` applies (fail-closed False elsewhere).
+        _ctx_is_system_admin.set(bool(principal.is_system_admin))
         request.scope["auth_principal"] = {
             "type": "user",
             "org_id": str(principal.organisation_id) if principal.organisation_id else "",
@@ -1713,6 +1771,7 @@ async def _finalize_oauth_principal(
     # failure is attributed instead of dropped (the success-path bind below
     # re-binds the same org together with the account).
     _bind_org_context(request, claims.organisation_id, claims.account_id)
+    client_team_id: uuid.UUID | None = None
     try:
         async with _session(claims.organisation_id) as s:
             live_role = await resolve_role_from_membership(
@@ -1720,6 +1779,11 @@ async def _finalize_oauth_principal(
                 str(claims.account_id),
                 str(claims.organisation_id),
             )
+            # FAR-1476: resolve the client's team boundary in the SAME round-trip
+            # the live-role read already makes (the client row is not otherwise
+            # loaded on this leg). A team-bound client scopes every token it was
+            # issued to that team; an org-wide client resolves None (no boundary).
+            client_team_id = await get_oauth_client_team_id(s, claims.client_id)
     except (SQLAlchemyError, TimeoutError) as exc:
         raise_session_contract_error(exc, "mcp_server._finalize_oauth_principal")
         _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
@@ -1746,8 +1810,20 @@ async def _finalize_oauth_principal(
     # FAR-620: an OAuth token is the user's own identity — caller scope
     # 'user' (identity-bound, eligible for caller-scoped tools).
     _ctx_key_scope.set("user")
-    _ctx_key_grants.set(None)
-    _ctx_team_id.set(None)  # user tokens carry no team boundary
+    # FAR-1476: the consented scope set IS the credential's grant-set, so the
+    # MCP tool-access resolver's grant leg (``resolve_tool_access`` leg 5,
+    # shared with API-key grant-sets) narrows every tool call to
+    # ``consented set INTERSECT bundle(live role)``. Without this the widened
+    # registry vocabulary would be unreachable-as-a-grant: the role leg alone
+    # would let a single-scope token call every tool at or below its role.
+    # ``grants_permit`` re-reads ``is_delegable`` live, so a token minted
+    # before an exclusion tightened is denied at the very next call.
+    _ctx_key_grants.set(oauth_grant_set(claims.scopes))
+    _ctx_team_id.set(client_team_id)  # FAR-1476: client's team boundary (None = org-wide)
+    # FAR-696: OAuth access-token claims do not carry ``is_system_admin`` —
+    # fail closed (False), matching REST where such tokens are not system
+    # admins either.
+    _ctx_is_system_admin.set(False)
     request.scope["auth_principal"] = {
         "type": "user",
         "org_id": str(claims.organisation_id),
@@ -1944,6 +2020,20 @@ def _parse_optional_uuid(
     if value is None:
         return None, None
     return _parse_uuid_param(value, field)
+
+
+def _parse_iso8601_param(value: str | None, field: str) -> tuple[datetime | None, dict[str, Any] | None]:
+    """Parse an OPTIONAL ISO 8601 timestamp param, returning ``(value, None)`` or ``(None, error_dict)``."""
+    if value is None:
+        return None, None
+    try:
+        return datetime.fromisoformat(value), None
+    except ValueError:
+        return None, {
+            "error": "validation_failed",
+            "field": field,
+            "detail": f"Invalid {field} format: {value!r} (expected ISO 8601)",
+        }
 
 
 _TOOL_SHELL_P = ParamSpec("_TOOL_SHELL_P")
@@ -2579,6 +2669,236 @@ async def set_pipeline_circuit_breaker(
         return _tool_exception_error("Failed to set pipeline circuit breaker", exc, "mcp.set_pipeline_circuit_breaker")
 
 
+def _ctx_autonomy_change_allowed(owner_team_id: uuid.UUID | None) -> bool:
+    """FAR-1175: admin or the pipeline's owner team may change autonomy (fail-closed)."""
+    role = _ctx_role_val()
+    if role is not None and org_role_level(role) >= org_role_level("admin"):
+        return True
+    key_team_id = _ctx_team_id.get(None)
+    return owner_team_id is not None and key_team_id == owner_team_id
+
+
+_AUTONOMY_CHANGE_DENIED = "Only an organisation admin or the pipeline's owner team may change its autonomy level"
+
+
+def _mcp_autonomy_levels(pipeline: Any) -> tuple[Any, Any]:
+    """Resolve a pipeline's ``(current earned-or-default, ceiling)`` (FAR-1175).
+
+    ``current`` is the earned level when set and valid, else the pipeline
+    default; ``ceiling`` is ``max_autonomy_level`` when set and valid, else the
+    current level (an absent/invalid ceiling never constrains the change).
+    """
+    from modulo.core.run_context.autonomy import AutonomyLevel
+
+    default = pipeline.default_autonomy_level or AutonomyLevel.default().value
+    earned = getattr(pipeline, "earned_autonomy_level", None)
+    try:
+        current_level = AutonomyLevel(earned) if isinstance(earned, str) and earned else AutonomyLevel(default)
+    except ValueError:
+        current_level = AutonomyLevel(default)
+    ceiling_raw = getattr(pipeline, "max_autonomy_level", None)
+    try:
+        ceiling = AutonomyLevel(ceiling_raw) if isinstance(ceiling_raw, str) and ceiling_raw else current_level
+    except ValueError:
+        ceiling = current_level
+    return current_level, ceiling
+
+
+def _mcp_autonomy_direction_error(
+    promote: bool,
+    target_level: Any,
+    current_level: Any,
+    ceiling: Any,
+) -> dict[str, Any] | None:
+    """Direction-validation error for a changed target, or ``None`` (FAR-1175).
+
+    Promote must strictly raise and never exceed the ceiling; demote must
+    strictly lower. Mirrors the REST ``_apply_manual_autonomy_change`` rules.
+    """
+    from modulo.core.run_context.autonomy import autonomy_level_rank
+
+    target = target_level.value
+    if promote:
+        if autonomy_level_rank(target_level) <= autonomy_level_rank(current_level):
+            return {
+                "error": "validation_failed",
+                "field": "level",
+                "detail": f"Promotion must raise autonomy above {current_level.value}: {target}",
+            }
+        if autonomy_level_rank(target_level) > autonomy_level_rank(ceiling):
+            return {
+                "error": "validation_failed",
+                "field": "level",
+                "detail": f"Promotion to {target} exceeds the max_autonomy_level ceiling ({ceiling.value})",
+            }
+    elif autonomy_level_rank(target_level) >= autonomy_level_rank(current_level):
+        return {
+            "error": "validation_failed",
+            "field": "level",
+            "detail": f"Demotion must lower autonomy below {current_level.value}: {target}",
+        }
+    return None
+
+
+async def _append_mcp_autonomy_audit(
+    session: Any,
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID | None,
+    pipeline_id: uuid.UUID,
+    current_level: Any,
+    target: str,
+    reason: str | None,
+    ceiling: Any,
+    promote: bool,
+    event_type: str,
+) -> None:
+    """Append the promote/demote audit event in the write transaction (FAR-1175)."""
+    from modulo.core.audit_logger import append_audit_event
+
+    await append_audit_event(
+        session,
+        org_id=org_id,
+        event_type=event_type,
+        actor_user_id=account_id,
+        resource_type="pipeline",
+        resource_id=pipeline_id,
+        payload_json={
+            "pipeline_id": str(pipeline_id),
+            "previous_level": current_level.value,
+            "new_level": target,
+            "reason": reason,
+            "actor": str(account_id),
+            "ceiling": ceiling.value,
+            "direction": "promote" if promote else "demote",
+        },
+    )
+
+
+async def _apply_mcp_autonomy_change(
+    pipeline_id: str,
+    level: str,
+    reason: str | None,
+    *,
+    promote: bool,
+    tool_name: str,
+) -> dict[str, Any]:
+    """Shared body of the MCP autonomy demote/promote tools (FAR-1175).
+
+    Mirrors the REST endpoints: admin/owner gated, direction-validated, ceiling
+    capped on promote, and the ``pipeline.autonomy_demoted`` /
+    ``pipeline.autonomy_promotion_decided`` audit event appended in the same
+    transaction as the write.
+    """
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope(tool_name)
+
+        from modulo.core.run_context.autonomy import AutonomyLevel
+        from modulo.db.crud.pipeline import get_pipeline, set_earned_autonomy_level
+
+        pid, pid_err = _parse_uuid_param(pipeline_id, "pipeline_id")
+        if pid_err:
+            return pid_err
+        # _parse_uuid_param returns (None, error) only on failure, already handled
+        # above; cast narrows for mypy without an assert inside the except-Exception
+        # block (SonarCloud S5779).
+        pid = cast(uuid.UUID, pid)
+        try:
+            target_level = AutonomyLevel(level)
+        except ValueError:
+            return {"error": "validation_failed", "field": "level", "detail": f"Invalid autonomy level: {level!r}"}
+        target = target_level.value
+
+        org_id = _ctx_org_id_val()
+        account_id = _ctx_user_id_val()
+        async with _session(org_id) as s:
+            owner_team_id = await _pipeline_owner_team_id(s, pid)
+            if _team_scoped_key_mismatch(owner_team_id):
+                return _team_scope_error("pipeline", pipeline_id)
+            pipeline = await get_pipeline(s, pid, organisation_id=org_id)
+            if pipeline is None:
+                return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+            if not _ctx_autonomy_change_allowed(owner_team_id):
+                return {"error": "permission_denied", "detail": _AUTONOMY_CHANGE_DENIED}
+
+            current_level, ceiling = _mcp_autonomy_levels(pipeline)
+            direction_error = _mcp_autonomy_direction_error(promote, target_level, current_level, ceiling)
+            if direction_error is not None:
+                return direction_error
+
+            updated = await set_earned_autonomy_level(s, org_id=org_id, pipeline_id=pid, level=target)
+            if updated is None:
+                return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+            event_type = "pipeline.autonomy_promotion_decided" if promote else "pipeline.autonomy_demoted"
+            await _append_mcp_autonomy_audit(
+                s,
+                org_id=org_id,
+                account_id=account_id,
+                pipeline_id=pid,
+                current_level=current_level,
+                target=target,
+                reason=reason,
+                ceiling=ceiling,
+                promote=promote,
+                event_type=event_type,
+            )
+            return {
+                "pipeline_id": pipeline_id,
+                "previous_level": current_level.value,
+                "earned_autonomy_level": target,
+                "max_autonomy_level": getattr(updated, "max_autonomy_level", None),
+                "event_type": event_type,
+            }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log_tool_failure(tool_name)
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log_tool_failure(tool_name)
+        return _tool_exception_error("Failed to change pipeline autonomy", exc, f"mcp.{tool_name}")
+
+
+@mcp.tool(
+    description="Lower a pipeline's earned autonomy level (FAR-1175, ADR 043 S1). "
+    "Demotion adds human review so it is always safe: an admin or the pipeline's owner team may "
+    "lower it at any time. Takes effect at the run's next HITL gate (in-flight runs included) when "
+    "the autonomy_gating flag is on. Records a pipeline.autonomy_demoted audit event carrying the "
+    "previous/new level and the reason."
+)
+@mcp_audited("pipeline_autonomy_demoted", "pipeline", fail_closed=False)
+@_RETRY_DB
+async def demote_pipeline_autonomy(
+    pipeline_id: str,
+    level: str,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    return await _apply_mcp_autonomy_change(
+        pipeline_id, level, reason, promote=False, tool_name="demote_pipeline_autonomy"
+    )
+
+
+@mcp.tool(
+    description="Raise a pipeline's earned autonomy level (FAR-1175, ADR 043 S1). "
+    "Promotion is never automatic: an admin or the pipeline's owner team approves it, capped at the "
+    "pipeline's max_autonomy_level ceiling. It applies only to runs created after the approval — "
+    "in-flight runs keep the lower level (ADR 043 §3). Records a pipeline.autonomy_promotion_decided "
+    "audit event."
+)
+@mcp_audited("pipeline_autonomy_promoted", "pipeline", fail_closed=False)
+@_RETRY_DB
+async def promote_pipeline_autonomy(
+    pipeline_id: str,
+    level: str,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    return await _apply_mcp_autonomy_change(
+        pipeline_id, level, reason, promote=True, tool_name="promote_pipeline_autonomy"
+    )
+
+
 @mcp.tool(
     description=(
         "Set BOTH of a pipeline's accountability owners (FAR-1161) in one atomic write. "
@@ -2892,7 +3212,12 @@ def _analytics_deep_link(result: dict[str, Any], params: AnalyticsParams) -> str
     return "/analytics?" + urlencode(parts)
 
 
-async def _require_analytics_feature(org_id: uuid.UUID, settings: Any) -> dict[str, Any] | None:
+async def _require_plan_feature(org_id: uuid.UUID, settings: Any, feature_name: str) -> dict[str, Any] | None:
+    """REST-parity plan-feature gate for an MCP tool (mirrors ``require_feature``).
+
+    Returns the standard ``feature_required`` error dict when the org's plan
+    does not enable ``feature_name``, else ``None``.
+    """
     from modulo.core.feature_flags import resolve_plan_context
     from modulo.db.crud.organisation import get_organisation
 
@@ -2900,9 +3225,16 @@ async def _require_analytics_feature(org_id: uuid.UUID, settings: Any) -> dict[s
         org = await get_organisation(s, org_id)
     async with _session(org_id) as s:
         plan_ctx = await resolve_plan_context(settings, s, org)
-    if not plan_ctx.feature_enabled("analytics_page"):
-        return {"error": "feature_required", "detail": "analytics_page is not available on your plan"}
+    if not plan_ctx.feature_enabled(feature_name):
+        return {
+            "error": "feature_required",
+            "detail": f"{feature_name} is not available on your plan",
+        }
     return None
+
+
+async def _require_analytics_feature(org_id: uuid.UUID, settings: Any) -> dict[str, Any] | None:
+    return await _require_plan_feature(org_id, settings, "analytics_page")
 
 
 def _parse_analytics_enums(
@@ -4031,11 +4363,11 @@ async def bind_connector_to_node(
             )
 
             if connector_team_mismatch(connector.visibility, connector.owner_team_id, pipeline.owner_team_id):
-                # FAR-1515: route through the shared detail builder so this
-                # surface names the same fix as the REST save path - a
-                # team-private connector reaching outside its team, or an
-                # org-only connector pinned by a team pipeline whose every run
-                # would be rejected at the connector gate.
+                # FAR-1515 / FAR-1618: route through the shared detail builder
+                # so this surface names the same fix as the REST save path —
+                # a team-private connector reaching outside its owner team.
+                # (An org-visibility connector is shared across the
+                # organisation and never reaches this branch.)
                 return {
                     "error": CONNECTOR_TEAM_MISMATCH,
                     "detail": connector_team_mismatch_detail(
@@ -4045,7 +4377,6 @@ async def bind_connector_to_node(
                                 connector_name=connector.name,
                                 connector_owner_team_id=connector.owner_team_id,
                                 pipeline_owner_team_id=pipeline.owner_team_id,
-                                connector_visibility=connector.visibility,
                                 node_id=node_id,
                             )
                         ]
@@ -4304,7 +4635,14 @@ def _run_status_base(run: Run) -> dict[str, Any]:
 
 
 def _run_status_detail(run: Run, blobs: RunBlobs) -> dict[str, Any]:
-    from modulo.api.routes.runs import _clamp_node_token_usage_union
+    # FAR-1737: reuse the REST serialisers verbatim — the masked input payload
+    # and the deadline-triage projection must be byte-identical to
+    # ``GET /api/v1/runs/{run_id}``, never a hand-rolled copy of either.
+    from modulo.api.routes.runs import (
+        _clamp_node_token_usage_union,
+        _deadline_triage_from_markers,
+        _mask_output_value,
+    )
 
     token_usage = _clamp_node_token_usage_union(run.node_token_usage or {})
     # FAR-583 read-switch: the blobs reassemble from run_node_outputs
@@ -4321,6 +4659,19 @@ def _run_status_detail(run: Run, blobs: RunBlobs) -> dict[str, Any]:
     result: dict[str, Any] = {"nodes": nodes}
     if run.cost_breakdown is not None:
         result["cost_breakdown"] = _sanitize_cost_breakdown(run.cost_breakdown)
+    # FAR-1737: detail-parity with REST. Without these, a failed sandbox run
+    # was unrecoverable over MCP — ``nodes: []`` carried neither the original
+    # input (prompt) nor the per-attempt sandbox envelopes that explain why
+    # the node produced no output. ``input_payload`` goes through the SAME
+    # masker REST uses; ``deadline_triage`` is projected by the SAME helper
+    # from the markers already reassembled for this detail read. Both are
+    # detail-only: the base response never touches either (matches REST, where
+    # the mask/projection sit behind the detail builder).
+    _raw_input_payload = getattr(run, "input_payload", None)
+    result["input_payload"] = (
+        _mask_output_value(_raw_input_payload) if isinstance(_raw_input_payload, dict) and _raw_input_payload else None
+    )
+    result["deadline_triage"] = _deadline_triage_from_markers(getattr(blobs, "markers", None))
     return result
 
 
@@ -4383,7 +4734,15 @@ async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
     return result
 
 
-@mcp.tool(description="Get current run status. Pass detail=true for per-node breakdown.")
+@mcp.tool(
+    description=(
+        "Get current run status. Pass detail=true for a per-node breakdown, the "
+        "masked run input_payload (the original run input, sensitive fields "
+        "redacted), and deadline_triage[] — the per-attempt sandbox envelopes "
+        "(attempt_key, no_output_reason, sandbox_log_tail, raw_output_tail, "
+        "stdout_length) that explain why a node produced no output."
+    )
+)
 @_RETRY_DB
 async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
     try:
@@ -4620,15 +4979,20 @@ def _assert_pass_threshold(pass_threshold: float | None) -> dict[str, Any] | Non
     return None
 
 
-def _assert_admin_scope(action: str) -> None:
-    """Raise MCPAuthorizationError when the caller is not an org admin.
+def _assert_eval_definition_write_scope(action: str, minimum_role: str) -> None:
+    """Raise MCPAuthorizationError when the caller is below ``minimum_role``.
 
-    Eval-definition management mirrors the REST routes: admin-only. A
-    non-admin (operator/runner/viewer) caller must receive ``insufficient_scope``
-    rather than a silent success.
+    Eval-definition create/update is operator-or-admin (FAR-735): the ADR 047
+    registry already resolves ``eval.definition.create`` / ``eval.definition.update``
+    to ``operator`` for the MCP tool-scope gate, so the tool-level gate here
+    must match or an operator key would pass the scope gate and then be
+    rejected in the tool banner. Delete stays admin-only (mirrors the REST
+    ``DELETE /evals/{eval_id}`` route). A below-floor caller must receive
+    ``insufficient_scope`` rather than a silent success.
     """
-    if ORG_ROLE_HIERARCHY.get(_ctx_role_val() or "", -1) < ORG_ROLE_HIERARCHY["admin"]:
-        raise MCPAuthorizationError(f"Only admins can {action} eval definitions")
+    if ORG_ROLE_HIERARCHY.get(_ctx_role_val() or "", -1) < ORG_ROLE_HIERARCHY[minimum_role]:
+        role_label = "admins" if minimum_role == "admin" else "operators or admins"
+        raise MCPAuthorizationError(f"Only {role_label} can {action} eval definitions")
 
 
 def _parse_eval_ref_ids(
@@ -4718,7 +5082,7 @@ async def _create_eval_definition_impl(
     if (err := _assert_create_eval_definition_params(name, eval_type, pass_threshold)) is not None:
         return err
 
-    _assert_admin_scope("create")
+    _assert_eval_definition_write_scope("create", "operator")
 
     org_id = _ctx_org_id_val()
     account_id = _ctx_user_id_val()
@@ -4779,9 +5143,10 @@ async def _create_eval_definition_impl(
 
 
 @mcp.tool(
-    description="Create a new eval definition (admin only). Persists an "
+    description="Create a new eval definition (operator or admin). Persists an "
     "EvalDefinition row scoped to the caller's org and returns its details. "
-    "Requires an admin caller; non-admins receive an insufficient_scope error.",
+    "Requires an operator or admin caller; lower roles receive an "
+    "insufficient_scope error.",
 )
 @mcp_audited("eval_definition_created", "eval_definition", fail_closed=False)
 @_RETRY_DB
@@ -4883,7 +5248,7 @@ async def _update_eval_definition_impl(
     if val_err is not None:
         return val_err
 
-    _assert_admin_scope("update")
+    _assert_eval_definition_write_scope("update", "operator")
 
     org_id = _ctx_org_id_val()
 
@@ -4956,23 +5321,14 @@ async def _update_eval_definition_impl(
         except PolicyGateBindingViolationError as exc:
             return {"error": "validation_failed", "detail": f"PolicyGate binding violation: {exc}"}
 
-        # Reload the PolicyGate for the response mapping.
-        gate_result = await s.execute(
-            select(PolicyGateModel).where(
-                PolicyGateModel.eval_id == eval_row.id,
-                PolicyGateModel.organisation_id == org_id,
-                PolicyGateModel.deleted_at.is_(None),
-            )
-        )
-        policy_gate = gate_result.scalar_one_or_none()
-
-        return _eval_def_to_dict(eval_row, policy_gate=policy_gate)
+        return _eval_def_to_dict(eval_row)
 
 
 @mcp.tool(
-    description="Update an eval definition (admin only). Bumps the definition "
-    "version and snapshots the pre-edit config, mirroring the REST semantics. "
-    "Requires an admin caller; non-admins receive an insufficient_scope error. "
+    description="Update an eval definition (operator or admin). Bumps the "
+    "definition version and snapshots the pre-edit config, mirroring the REST "
+    "semantics. Requires an operator or admin caller; lower roles receive an "
+    "insufficient_scope error. "
     "NOTE: because None means 'not provided' in the tool signature, nullable "
     "fields (node_id, pass_threshold, suite_id) cannot be cleared to NULL via "
     "this tool - the REST PUT route must be used to unset them.",
@@ -5050,7 +5406,7 @@ async def _delete_eval_definition_impl(eval_id: str, hard: bool) -> dict[str, An
 
     from modulo.api.routes.evals import _MSG_EVAL_DEFINITION_NOT_FOUND
 
-    _assert_admin_scope("delete")
+    _assert_eval_definition_write_scope("delete", "admin")
 
     org_id = _ctx_org_id_val()
     account_id = _ctx_user_id_val()
@@ -5147,6 +5503,7 @@ async def _cancel_run_impl(run_id: str) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     _check_agent_tool_scope("cancel_run")
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
     from modulo.db.crud.run import get_run, request_cancellation
 
     org_id = _ctx_org_id_val()
@@ -5155,6 +5512,15 @@ async def _cancel_run_impl(run_id: str) -> dict[str, Any]:
         return rid_err
     assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
     async with _session(org_id) as s:
+        # FAR-1610: bound the hot ``runs`` row-lock wait BEFORE the first lock.
+        # ``get_run`` is a plain read; ``request_cancellation`` takes the
+        # ``SELECT ... FOR UPDATE``. Issued in the caller's transaction (the
+        # shared CRUD function stays unbounded — FAR-1601), so a contended row
+        # yields a bounded 55P03 mapped to a branchable ``lock_timeout`` result
+        # below (mirroring ``_update_pipeline_graph_impl``) instead of the
+        # ``_RETRY_DB`` retry multiplying the wait and then collapsing into a
+        # generic ``database_unavailable``.
+        await set_mutation_row_lock_timeout(s)
         run = await get_run(s, rid)
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
@@ -5176,14 +5542,32 @@ async def _cancel_run_impl(run_id: str) -> dict[str, Any]:
         # UI. The acting account is read fail-open (absent -> the caller
         # degrades to the ``system`` sentinel instead of failing the tool).
         _actor = _ctx_user_id.get(None)
-        run = await request_cancellation(
-            s,
-            rid,
-            reason=CANCEL_REASON_AGENT_REQUESTED,
-            actor=str(_actor) if _actor is not None else None,
-        )
-        if not was_paused:
-            await finalize_cancelled_run(s, run_id=rid, org_id=org_id)
+        try:
+            run = await request_cancellation(
+                s,
+                rid,
+                reason=CANCEL_REASON_AGENT_REQUESTED,
+                actor=str(_actor) if _actor is not None else None,
+            )
+            if not was_paused:
+                await finalize_cancelled_run(s, run_id=rid, org_id=org_id)
+        except SQLAlchemyError as exc:
+            # FAR-1610: 55P03 from the bounded row-lock wait is a busy-row
+            # conflict, not a DB outage — surface the same branchable
+            # ``lock_timeout`` code the graph-update tool returns (FAR-1361)
+            # and stop ``_RETRY_DB`` from retrying the bounded wait 3x. Any
+            # other SQLAlchemy error re-raises to the tool wrapper's ladder.
+            if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
+                _log.warning("mcp.cancel_run.lock_timeout", extra={"run_id": str(run_id), "org_id": str(org_id)})
+                return {
+                    "error": "lock_timeout",
+                    "run_id": run_id,
+                    "detail": (
+                        "Timed out waiting for a lock on this run; another change is in progress. "
+                        "Re-issue the cancel once the other change completes."
+                    ),
+                }
+            raise
     if run is None:
         return {"error": "run_not_found", "run_id": run_id}
     return {"run_id": run_id, "cancellation_requested": True}
@@ -6729,7 +7113,9 @@ async def get_model_backend(model_backend_id: str) -> dict[str, Any]:
 
 @mcp.tool(
     description="Create a new connector instance (provider configuration). "
-    "Credentials are encrypted at rest. Returns the created connector details."
+    "Credentials are encrypted at rest. Returns the created connector details. "
+    "Pass a literal credential, or a 'secretref://<key>' token to resolve the "
+    "value from the organisation vault server-side at write time."
 )
 @mcp_audited("connector_created", "connector", fail_closed=True)
 @_RETRY_DB
@@ -6753,9 +7139,34 @@ async def create_connector(
         org_id = _ctx_org_id_val()
         account_id = _ctx_user_id_val()
         settings = get_settings()
-        credentials_ciphertext = Fernet(settings.fernet_key.encode()).encrypt(credentials.encode())
 
         async with _session(org_id) as s:
+            # FAR-1640: a ``secretref://<key>`` credential is resolved
+            # SERVER-SIDE under the caller's org RLS context (``_session`` has
+            # already set app.organisation_id) before it is encrypted — the
+            # REST create path resolves identically. A literal passes through
+            # untouched and never constructs a secrets backend (so the
+            # historical path does not depend on the vault being configured). A
+            # missing/foreign/empty key — or an external backend in a multi-org
+            # deployment — fails closed as a typed validation error naming only
+            # the offending key; the reference is never persisted as a literal
+            # credential.
+            if is_secret_ref(credentials):
+                try:
+                    resolved_credentials = await resolve_credential(
+                        create_secrets_backend(fernet_key=settings.fernet_key, session=s),
+                        credentials,
+                    )
+                except CredentialReferenceError as exc:
+                    return {
+                        "error": "validation_error",
+                        "field": "credentials",
+                        "detail": f"vault key {exc.key!r}: {exc.reason}",
+                    }
+            else:
+                resolved_credentials = credentials
+
+            credentials_ciphertext = Fernet(settings.fernet_key.encode()).encrypt(resolved_credentials.encode())
             ci = await create_connector_instance(
                 s,
                 org_id=org_id,
@@ -6849,6 +7260,13 @@ def _build_trigger_record(
 ) -> tuple[Any, dict[str, Any] | None]:
     from modulo.db.models.trigger import Trigger
 
+    # FAR-1732: encrypt webhook/HMAC secrets BEFORE persisting — the same
+    # shared helper REST's create route uses, so MCP-created triggers store
+    # ``hmac_secret``/``signing_secret`` under Fernet tokens identical to the
+    # REST path (read paths decrypt with plaintext fallback, so nothing that
+    # consumed plaintext breaks).
+    _settings = get_settings()
+    encrypted_config = _encrypt_trigger_config_secrets(config_json, _settings.fernet_key, _settings.fernet_key_old)
     trigger = Trigger(
         organisation_id=org_id,
         pipeline_id=pid,
@@ -6856,7 +7274,7 @@ def _build_trigger_record(
         active=active,
         max_concurrent_runs=max_concurrent_runs,
         daily_spend_limit=Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None,
-        config_json=config_json or {},
+        config_json=encrypted_config or {},
         account_id=account_id,
         next_fire_at=next_fire_at,
         # FAR-190: creation anchors the no-delivery streak epoch (the
@@ -6993,7 +7411,16 @@ async def create_trigger(
 
 
 def _trigger_detail_dict(trigger: Any, in_flight: int, streak_status: Any) -> dict[str, Any]:
-    """Serialize a trigger row to the MCP response shape."""
+    """Serialize a trigger row to the MCP response shape.
+
+    FAR-1732: ``config_json`` is MASKED through the same shipped
+    :func:`mask_config_json` the REST serializer uses — an operator-scoped
+    MCP token must never receive a stored webhook secret (plaintext on
+    legacy rows, a recoverable Fernet ciphertext on new ones). The
+    ``input_template`` echo derives from the MASKED config so it cannot
+    bypass the mask either.
+    """
+    config = mask_config_json(trigger.config_json or {})
     return {
         "id": str(trigger.id),
         "pipeline_id": str(trigger.pipeline_id),
@@ -7001,12 +7428,12 @@ def _trigger_detail_dict(trigger: Any, in_flight: int, streak_status: Any) -> di
         "active": trigger.active,
         "max_concurrent_runs": trigger.max_concurrent_runs,
         "daily_spend_limit": float(trigger.daily_spend_limit) if trigger.daily_spend_limit is not None else None,
-        "config_json": trigger.config_json or {},
+        "config_json": config,
         "cron_expression": trigger.cron_expression,
         "cron_timezone": trigger.cron_timezone,
         "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
         "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
-        "input_template": (trigger.config_json or {}).get("input_template"),
+        "input_template": config.get("input_template"),
         "in_flight": in_flight,
         "streak_status": streak_status,
     }
@@ -7197,7 +7624,16 @@ def _merge_trigger_config_json(trigger: Any, config_json: dict[str, Any] | None)
     # MERGE into the existing blob — never wholesale replace.
     # A masked placeholder must never clobber the stored secret
     # (read-modify-write round-trip guard). Keep the existing value.
-    trigger.config_json = merge_masked_config(trigger.config_json, config_json)
+    # FAR-1735: use the RECURSIVE masked merge — the same
+    # ``merge_masked_config_json`` REST's PATCH uses — so a nested masked
+    # secret (e.g. ``input_template.api_key``) round-tripped through MCP is
+    # preserved at every depth, not clobbered by the shallow merge.
+    merged = merge_masked_config_json(trigger.config_json or {}, config_json)
+    # FAR-1732: encrypt webhook/HMAC secrets after the masked merge — the same
+    # shared helper REST's PUT route uses. Idempotent: values already stored
+    # under Fernet tokens (or mask sentinels) pass through untouched.
+    settings = get_settings()
+    trigger.config_json = _encrypt_trigger_config_secrets(merged, settings.fernet_key, settings.fernet_key_old)
 
 
 async def _apply_trigger_field_updates(
@@ -7312,7 +7748,11 @@ async def _update_trigger_txn(
         # return COMMITS — validating after mutation would persist an
         # invalid merged config while reporting a validation error.
         if config_json is not None:
-            merged_config = merge_masked_config(trigger.config_json, config_json)
+            # FAR-1735: validate the SAME recursive masked merge the write
+            # path uses (REST parity) — the shallow merge here previously
+            # judged a different shape than `_merge_trigger_config_json`
+            # persisted.
+            merged_config = merge_masked_config_json(trigger.config_json or {}, config_json)
             try:
                 _validate_trigger_config_keys(merged_config, context="merged config_json")
             except FastAPIHTTPException as exc:
@@ -8788,6 +9228,960 @@ async def get_agent(agent_id: str) -> dict[str, Any]:
     except Exception as exc:
         _log.exception("get_agent failed")
         return _tool_exception_error("Failed to get agent", exc, "mcp.get_agent")
+
+
+# ---------------------------------------------------------------------------
+# FAR-696: governance-entity read/list tools.
+#
+# Read-only MCP surface for entities that previously had REST routes only.
+# Each tool maps to the SAME permission key as its corresponding REST route
+# (registered in ``core/mcp/scope_validator.py``) and mirrors that route's
+# org scoping; no write tools in this block.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="list_teams",
+    description=("List teams in the organisation with page-based pagination (mirrors GET /api/v1/teams)."),
+)
+@_RETRY_DB
+async def list_teams(page: int = 1, page_size: int = 20) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_teams")
+
+        from modulo.db.crud.team import list_teams as db_list_teams
+
+        org_id = _ctx_org_id_val()
+        # REST parity: GET /api/v1/teams is router-gated require_feature("team_rbac").
+        feat_err = await _require_plan_feature(org_id, get_settings(), "team_rbac")
+        if feat_err:
+            return feat_err
+        pg = max(1, page)
+        ps = max(1, min(page_size, 100))
+
+        async with _session(org_id) as s:
+            result = await db_list_teams(s, org_id=org_id, page=pg, page_size=ps)
+
+        return {
+            "data": [
+                {
+                    "id": str(t.id),
+                    "name": t.name,
+                    "description": t.description,
+                    "account_id": str(t.account_id),
+                    "created_at": t.created_at.isoformat() if t.created_at else None,
+                }
+                for t in result.items
+            ],
+            "total": result.total,
+            "page": result.page,
+            "page_size": result.page_size,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_teams failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("list_teams failed")
+        return _tool_exception_error("Failed to list teams", exc, "mcp.list_teams")
+
+
+@mcp.tool(
+    name="list_users",
+    description=(
+        "List organisation members (accounts + org roles) with page-based "
+        "pagination and optional search/role filters (mirrors GET "
+        "/api/v1/admin/users — admin-only)."
+    ),
+)
+@_RETRY_DB
+async def list_users(
+    page: int = 1,
+    page_size: int = 20,
+    search: str | None = None,
+    role: str | None = None,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_users")
+
+        if role is not None and role not in ("admin", "operator", "runner", "viewer"):
+            return {
+                "error": "validation_failed",
+                "detail": f"Invalid role filter: {role!r} (expected admin|operator|runner|viewer)",
+            }
+        if search is not None and not search.strip():
+            return {"error": "validation_failed", "detail": "search must be a non-empty string"}
+
+        from modulo.api.routes.admin import _list_org_accounts, _to_user_list_item
+
+        org_id = _ctx_org_id_val()
+        pg = max(1, page)
+        ps = max(1, min(page_size, 1000))
+
+        async with _session(org_id) as s:
+            accounts_memberships, total = await _list_org_accounts(
+                s,
+                org_id=org_id,
+                page=pg,
+                page_size=ps,
+                search=search,
+                role_filter=role,
+            )
+
+        return {
+            "data": [_to_user_list_item(a, m.role, org_membership=m).model_dump() for a, m in accounts_memberships],
+            "total": total,
+            "page": pg,
+            "page_size": ps,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_users failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("list_users failed")
+        return _tool_exception_error("Failed to list users", exc, "mcp.list_users")
+
+
+@mcp.tool(
+    name="list_feature_flags",
+    description=(
+        "List the instance feature-flag registry with the calling org's "
+        "effective tier and per-flag overrides (mirrors GET "
+        "/api/v1/admin/feature-flags — SYSTEM-ADMIN only)."
+    ),
+)
+@_RETRY_DB
+async def list_feature_flags() -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_feature_flags")
+        # FAR-696: the REST route is ``require_system_permission`` — a STRICT
+        # is_system_admin gate with no org-role fall-through. The scope-map
+        # entry pins the org-role floor; this check is the load-bearing
+        # system-admin gate (API keys and OAuth tokens always fail it).
+        if not _ctx_is_system_admin_val():
+            return {
+                "error": "insufficient_scope",
+                "detail": "list_feature_flags requires system admin role",
+            }
+
+        from modulo.core.feature_flags import FeatureFlagRegistry
+        from modulo.core.license import get_license, verify_license_key
+        from modulo.db.crud.organisation import get_organisation
+
+        settings = get_settings()
+        org_id = _ctx_org_id_val()
+
+        async with _session(org_id) as s:
+            org = await get_organisation(s, org_id)
+            plan_ctx = await resolve_plan_context(settings, s, org)
+            lic = get_license()
+            # FAR-1733: the env-var key is only counted after verification
+            # (never on mere presence); is_valid reports whether any rung of
+            # the licence ladder resolved a VALID licence — in-memory, a
+            # verified env key, or a verified org-level key.
+            env_data = verify_license_key(getattr(settings, "modulo_license_key", "") or "")
+            has_key = env_data is not None or lic is not None
+            org_settings = getattr(org, "settings_json", None)
+            org_key = org_settings.get("license_key") if isinstance(org_settings, dict) else None
+            if not has_key and org_key:
+                has_key = True
+            license_valid = (
+                lic is not None
+                or env_data is not None
+                or (bool(org_key) and verify_license_key(str(org_key)) is not None)
+            )
+            registry = await FeatureFlagRegistry.from_db(s, plan_ctx.tier(), has_license_key=has_key)
+
+            # Best-effort overlay of the org's per-flag overrides (same
+            # semantics as the REST endpoint); a failed read falls back to
+            # the registry defaults rather than failing the request.
+            org_overrides: dict[str, bool] = {}
+            if isinstance(org_settings, dict):
+                raw_overrides = org_settings.get("feature_overrides")
+                if isinstance(raw_overrides, dict):
+                    org_overrides = {k: bool(v) for k, v in raw_overrides.items()}
+
+        return {
+            "license": {
+                "tier": registry.current_tier,
+                "has_license_key": registry.has_license_key,
+                "is_valid": license_valid,
+            },
+            "dev_mode": settings.modulo_dev_mode,
+            "flags": [
+                {
+                    "name": f.name,
+                    "description": f.description,
+                    "tier": f.tier,
+                    "currently_active": org_overrides.get(f.name, f.currently_active),
+                    "depends_on": f.depends_on,
+                }
+                for f in registry.list_flags()
+            ],
+            "would_activate": [
+                {
+                    "name": f.name,
+                    "description": f.description,
+                    "tier": f.tier,
+                    "depends_on": f.depends_on,
+                }
+                for f in registry.tier_gap_flags()
+                if f.name not in org_overrides
+            ],
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_feature_flags failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("list_feature_flags failed")
+        return _tool_exception_error("Failed to list feature flags", exc, "mcp.list_feature_flags")
+
+
+@mcp.tool(
+    name="get_audit_log",
+    description=(
+        "Paged read of the organisation's audit trail with cursor pagination "
+        "and filters (mirrors GET /api/v1/admin/audit)."
+    ),
+)
+@_RETRY_DB
+async def get_audit_log(
+    cursor: str | None = None,
+    limit: int = 50,
+    event_type: str | None = None,
+    actor_user_id: str | None = None,
+    resource_type: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("get_audit_log")
+
+        actor_uid: uuid.UUID | None = None
+        if actor_user_id is not None:
+            actor_uid, actor_err = _parse_uuid_param(actor_user_id, "actor_user_id")
+            if actor_err:
+                return actor_err
+        from_dt: datetime | None = None
+        if from_date is not None:
+            try:
+                from_dt = datetime.fromisoformat(from_date)
+            except ValueError:
+                return {
+                    "error": "validation_failed",
+                    "field": "from_date",
+                    "detail": f"Invalid from_date format: {from_date!r} (expected ISO 8601)",
+                }
+        to_dt: datetime | None = None
+        if to_date is not None:
+            try:
+                to_dt = datetime.fromisoformat(to_date)
+            except ValueError:
+                return {
+                    "error": "validation_failed",
+                    "field": "to_date",
+                    "detail": f"Invalid to_date format: {to_date!r} (expected ISO 8601)",
+                }
+
+        from modulo.core.audit_logger import list_audit_events
+
+        org_id = _ctx_org_id_val()
+        lim = max(1, min(limit, 200))
+
+        async with _session(org_id) as s:
+            return await list_audit_events(
+                s,
+                org_id,
+                cursor=cursor,
+                limit=lim,
+                event_type=event_type,
+                actor_user_id=actor_uid,
+                resource_type=resource_type,
+                from_date=from_dt,
+                to_date=to_dt,
+            )
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_audit_log failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("get_audit_log failed")
+        return _tool_exception_error("Failed to read audit log", exc, "mcp.get_audit_log")
+
+
+def _notification_delivery_filters(
+    *,
+    status: str | None,
+    event_type: str | None,
+    endpoint_uid: uuid.UUID | None,
+    from_dt: datetime | None,
+    to_dt: datetime | None,
+    cursor_dt: datetime | None = None,
+) -> list[Any]:
+    """Build the shared WHERE clauses for the delivery-list and count queries."""
+    from modulo.db.models.notification_delivery import NotificationDeliveryLog
+
+    clauses: list[Any] = []
+    if status:
+        clauses.append(NotificationDeliveryLog.status == status)
+    if event_type:
+        clauses.append(NotificationDeliveryLog.event_type == event_type)
+    if endpoint_uid:
+        clauses.append(NotificationDeliveryLog.endpoint_id == endpoint_uid)
+    if from_dt:
+        clauses.append(NotificationDeliveryLog.created_at >= from_dt)
+    if to_dt:
+        clauses.append(NotificationDeliveryLog.created_at <= to_dt)
+    if cursor_dt:
+        clauses.append(NotificationDeliveryLog.created_at < cursor_dt)
+    return clauses
+
+
+def _notification_delivery_page(rows: list[Any], lim: int) -> tuple[list[Any], str | None]:
+    """Trim the limit+1 probe to the page size and derive the next cursor."""
+    has_more = len(rows) > lim
+    if has_more:
+        rows = rows[:lim]
+    next_cursor: str | None = None
+    if has_more and rows and rows[-1][0].created_at:
+        next_cursor = rows[-1][0].created_at.isoformat()
+    return rows, next_cursor
+
+
+def _notification_delivery_item(row: Any) -> dict[str, Any]:
+    """Serialize one ``(NotificationDeliveryLog, endpoint_url)`` row."""
+    delivery, endpoint_url = row
+    return {
+        "id": str(delivery.id),
+        "event_type": delivery.event_type,
+        "status": delivery.status,
+        "attempt_count": delivery.attempt_count,
+        "response_code": delivery.response_code,
+        "last_error": delivery.last_error,
+        "response_body": delivery.response_body,
+        "endpoint_url": endpoint_url or "",
+        "endpoint_id": str(delivery.endpoint_id) if delivery.endpoint_id else None,
+        "created_at": delivery.created_at.isoformat() if delivery.created_at else "",
+    }
+
+
+@mcp.tool(
+    name="list_notification_deliveries",
+    description=(
+        "List notification delivery-log entries (webhook/in-app delivery "
+        "attempts) with cursor pagination and filters (mirrors GET "
+        "/api/v1/admin/notifications/deliveries)."
+    ),
+)
+@_RETRY_DB
+async def list_notification_deliveries(
+    cursor: str | None = None,
+    limit: int = 25,
+    status: str | None = None,
+    event_type: str | None = None,
+    endpoint_id: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_notification_deliveries")
+
+        endpoint_uid, endpoint_err = _parse_optional_uuid(endpoint_id, "endpoint_id")
+        if endpoint_err:
+            return endpoint_err
+        from_dt, from_err = _parse_iso8601_param(date_from, "date_from")
+        if from_err:
+            return from_err
+        to_dt, to_err = _parse_iso8601_param(date_to, "date_to")
+        if to_err:
+            return to_err
+        cursor_dt, cursor_err = _parse_iso8601_param(cursor, "cursor")
+        if cursor_err:
+            return cursor_err
+
+        from sqlalchemy import func as sa_func
+
+        from modulo.db.models.notification_delivery import NotificationDeliveryLog
+        from modulo.db.models.notification_endpoint import NotificationEndpoint
+
+        org_id = _ctx_org_id_val()
+        lim = max(1, min(limit, 100))
+
+        async with _session(org_id) as s:
+            # Same query shape as the REST route's _list_deliveries: org-
+            # scoped, endpoint URL joined for display, created_at DESC with a
+            # limit+1 probe for the next-cursor decision. Reimplemented here
+            # (rather than importing the route helper) because the MCP
+            # ``_session`` already owns the transaction and the route helper
+            # opens its own ``session.begin()``.
+            query = (
+                select(
+                    NotificationDeliveryLog,
+                    NotificationEndpoint.url,
+                )
+                .outerjoin(
+                    NotificationEndpoint,
+                    NotificationDeliveryLog.endpoint_id == NotificationEndpoint.id,
+                )
+                .where(
+                    NotificationDeliveryLog.organisation_id == org_id,
+                    *_notification_delivery_filters(
+                        status=status,
+                        event_type=event_type,
+                        endpoint_uid=endpoint_uid,
+                        from_dt=from_dt,
+                        to_dt=to_dt,
+                        cursor_dt=cursor_dt,
+                    ),
+                )
+                .order_by(NotificationDeliveryLog.created_at.desc())
+                .limit(lim + 1)
+            )
+
+            rows = list((await s.execute(query)).all())
+
+            count_query = select(sa_func.count(NotificationDeliveryLog.id)).where(
+                NotificationDeliveryLog.organisation_id == org_id,
+                *_notification_delivery_filters(
+                    status=status,
+                    event_type=event_type,
+                    endpoint_uid=endpoint_uid,
+                    from_dt=from_dt,
+                    to_dt=to_dt,
+                ),
+            )
+            total = (await s.execute(count_query)).scalar() or 0
+
+        rows, next_cursor = _notification_delivery_page(rows, lim)
+
+        return {
+            "data": [_notification_delivery_item(d) for d in rows],
+            "total": total,
+            "next_cursor": next_cursor,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_notification_deliveries failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("list_notification_deliveries failed")
+        return _tool_exception_error("Failed to list notification deliveries", exc, "mcp.list_notification_deliveries")
+
+
+@mcp.tool(
+    name="list_lifecycle_maps",
+    description=(
+        "List lifecycle maps in the organisation with page-based pagination (mirrors GET /api/v1/lifecycle-maps)."
+    ),
+)
+@_RETRY_DB
+async def list_lifecycle_maps(
+    page: int = 1,
+    page_size: int = 20,
+    owner_team_id: str | None = None,
+    include_archived: bool = False,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_lifecycle_maps")
+
+        owner_team: uuid.UUID | None = None
+        if owner_team_id is not None:
+            owner_team, owner_err = _parse_uuid_param(owner_team_id, "owner_team_id")
+            if owner_err:
+                return owner_err
+
+        from modulo.core.lifecycle_map.service import list_lifecycle_maps as db_list_lifecycle_maps
+
+        org_id = _ctx_org_id_val()
+        pg = max(1, page)
+        ps = max(1, min(page_size, 100))
+
+        async with _session(org_id) as s:
+            result = await db_list_lifecycle_maps(
+                s,
+                page=pg,
+                page_size=ps,
+                owner_team_id=owner_team,
+                include_archived=include_archived,
+            )
+
+        return {
+            "data": [
+                {
+                    "id": str(m.id),
+                    "name": m.name,
+                    "description": m.description,
+                    "owner_team_id": str(m.owner_team_id) if m.owner_team_id else None,
+                    "visibility": m.visibility,
+                    "version": m.version,
+                    "content_json": m.content_json,
+                    "archived_at": m.archived_at.isoformat() if m.archived_at else None,
+                    "created_at": m.created_at.isoformat() if m.created_at else None,
+                    "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+                }
+                for m in result.items
+            ],
+            "total": result.total,
+            "page": result.page,
+            "page_size": result.page_size,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_lifecycle_maps failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("list_lifecycle_maps failed")
+        return _tool_exception_error("Failed to list lifecycle maps", exc, "mcp.list_lifecycle_maps")
+
+
+@mcp.tool(
+    name="get_lifecycle_map",
+    description=(
+        "Get a single lifecycle map by ID including its content_json "
+        "(mirrors GET /api/v1/lifecycle-maps/{lifecycle_map_id})."
+    ),
+)
+@_RETRY_DB
+async def get_lifecycle_map(lifecycle_map_id: str) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("get_lifecycle_map")
+
+        org_id = _ctx_org_id_val()
+        lmid, lmid_err = _parse_uuid_param(lifecycle_map_id, "lifecycle_map_id")
+        if lmid_err:
+            return lmid_err
+        if lmid is None:
+            return {"error": "invalid_id", "field": "lifecycle_map_id", "detail": _MSG_UUID_PARSE_FAILED}
+
+        from modulo.core.lifecycle_map.service import get_lifecycle_map as db_get_lifecycle_map
+
+        async with _session(org_id) as s:
+            lm = await db_get_lifecycle_map(s, lmid)
+
+        # Belt-and-braces org check (mirrors the REST get route) — RLS already
+        # scopes the row, but a cross-org id must read as not_found even if
+        # RLS were misconfigured.
+        if lm is None or lm.organisation_id != org_id:
+            return {"error": "not_found", "detail": f"Lifecycle map {lifecycle_map_id} not found"}
+        # Team-scoped-key boundary (same pattern as get_pipeline_graph): a
+        # team-A key must not read a map owned by team B.
+        if _team_scoped_key_mismatch(lm.owner_team_id):
+            return _team_scope_error("lifecycle_map", lifecycle_map_id)
+
+        return {
+            "id": str(lm.id),
+            "name": lm.name,
+            "description": lm.description,
+            "owner_team_id": str(lm.owner_team_id) if lm.owner_team_id else None,
+            "visibility": lm.visibility,
+            "version": lm.version,
+            "content_json": lm.content_json,
+            "archived_at": lm.archived_at.isoformat() if lm.archived_at else None,
+            "created_at": lm.created_at.isoformat() if lm.created_at else None,
+            "updated_at": lm.updated_at.isoformat() if lm.updated_at else None,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_lifecycle_map failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("get_lifecycle_map failed")
+        return _tool_exception_error("Failed to get lifecycle map", exc, "mcp.get_lifecycle_map")
+
+
+@mcp.tool(
+    name="list_plugins",
+    description=(
+        "List installed plugins with health status (mirrors GET /api/v1/plugins). Read-only registry metadata."
+    ),
+)
+async def list_plugins() -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_plugins")
+
+        from modulo.core.plugin_registry import get_plugin_registry
+
+        _ctx_org_id_val()  # fail closed when no authenticated org context
+
+        registry = get_plugin_registry()
+        health_results = registry.health_check()
+        plugins = registry.list_plugins()
+        data: list[dict[str, Any]] = []
+        for pid, manifest in plugins.items():
+            health = health_results.get(pid)
+            data.append(
+                {
+                    "id": manifest.PLUGIN_ID,
+                    "display_name": manifest.display_name,
+                    "description": manifest.description,
+                    "version": manifest.version,
+                    "capabilities": sorted(manifest.capabilities),
+                    "health_ok": health.ok if health is not None else False,
+                    "health_detail": health.detail if health is not None else "Unknown",
+                    "health_checked_at": (
+                        health.checked_at.isoformat() if health is not None and health.checked_at else None
+                    ),
+                }
+            )
+        return {"data": data, "total": len(data)}
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except Exception as exc:
+        _log.exception("list_plugins failed")
+        return _tool_exception_error("Failed to list plugins", exc, "mcp.list_plugins")
+
+
+@mcp.tool(
+    name="list_sso_providers",
+    description=(
+        "List the organisation's SSO provider configurations, metadata only — "
+        "client secrets are never returned (mirrors GET "
+        "/api/v1/admin/sso/providers). Read-only; configuration changes stay "
+        "human-only."
+    ),
+)
+@_RETRY_DB
+async def list_sso_providers() -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_sso_providers")
+
+        from modulo.db.crud.sso_provider import list_providers
+
+        org_id = _ctx_org_id_val()
+
+        async with _session(org_id) as s:
+            providers = await list_providers(s, org_id=org_id)
+
+        # Client secrets (and bulky raw SAML metadata XML) are deliberately
+        # omitted — config exposure stays human-only (FAR-696).
+        return {
+            "data": [
+                {
+                    "id": str(p.id),
+                    "provider_type": p.provider_type,
+                    "name": p.name,
+                    "provider_id": p.provider_id,
+                    "client_id": p.client_id,
+                    "enabled": p.enabled,
+                    "auto_provision": p.auto_provision,
+                    "default_role": p.default_role,
+                    "allowed_domains": p.allowed_domains or [],
+                    "preset": p.preset,
+                    "tenant_domain": p.tenant_domain,
+                    "discovery_url": p.discovery_url,
+                    "metadata_url": p.metadata_url,
+                    "entity_id": p.entity_id,
+                    "scopes": p.scopes,
+                    "created_at": p.created_at.isoformat() if p.created_at else None,
+                    "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+                }
+                for p in providers
+            ],
+            "total": len(providers),
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_sso_providers failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("list_sso_providers failed")
+        return _tool_exception_error("Failed to list SSO providers", exc, "mcp.list_sso_providers")
+
+
+@mcp.tool(
+    name="list_eval_suites",
+    description=(
+        "List eval suites in the organisation with page-based pagination (mirrors GET /api/v1/evals/eval-suites)."
+    ),
+)
+@_RETRY_DB
+async def list_eval_suites(page: int = 1, page_size: int = 20) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_eval_suites")
+
+        from sqlalchemy import func as sa_func
+
+        from modulo.db.models.eval_suite import EvalSuite
+
+        org_id = _ctx_org_id_val()
+        pg = max(1, page)
+        ps = max(1, min(page_size, 100))
+
+        async with _session(org_id) as s:
+            total = (
+                await s.execute(select(sa_func.count(EvalSuite.id)).where(EvalSuite.organisation_id == org_id))
+            ).scalar() or 0
+            q = (
+                select(EvalSuite)
+                .where(EvalSuite.organisation_id == org_id)
+                .order_by(EvalSuite.created_at.desc())
+                .offset((pg - 1) * ps)
+                .limit(ps)
+            )
+            rows = list((await s.execute(q)).scalars().all())
+
+        return {
+            "data": [_eval_suite_item(suite) for suite in rows],
+            "total": total,
+            "page": pg,
+            "page_size": ps,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_eval_suites failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("list_eval_suites failed")
+        return _tool_exception_error("Failed to list eval suites", exc, "mcp.list_eval_suites")
+
+
+@mcp.tool(
+    name="get_eval_suite",
+    description=("Get a single eval suite by ID (mirrors GET /api/v1/evals/eval-suites/{suite_id})."),
+)
+@_RETRY_DB
+async def get_eval_suite(suite_id: str) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("get_eval_suite")
+
+        from modulo.db.models.eval_suite import EvalSuite
+
+        org_id = _ctx_org_id_val()
+        sid, sid_err = _parse_uuid_param(suite_id, "suite_id")
+        if sid_err:
+            return sid_err
+        if sid is None:
+            return {"error": "invalid_id", "field": "suite_id", "detail": _MSG_UUID_PARSE_FAILED}
+
+        async with _session(org_id) as s:
+            result = await s.execute(
+                select(EvalSuite).where(
+                    EvalSuite.id == sid,
+                    EvalSuite.organisation_id == org_id,
+                )
+            )
+            suite = result.scalar_one_or_none()
+
+        if suite is None:
+            return {"error": "not_found", "detail": f"Eval suite {suite_id} not found"}
+        # Team-scoped-key boundary (same pattern as get_pipeline_graph).
+        if _team_scoped_key_mismatch(suite.owner_team_id):
+            return _team_scope_error("eval_suite", suite_id)
+
+        return _eval_suite_item(suite)
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_eval_suite failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("get_eval_suite failed")
+        return _tool_exception_error("Failed to get eval suite", exc, "mcp.get_eval_suite")
+
+
+def _eval_suite_item(suite: Any) -> dict[str, Any]:
+    """Serialize one ``EvalSuite`` row (mirrors the REST EvalSuiteResponse)."""
+    return {
+        "id": str(suite.id),
+        "name": suite.name,
+        "description": suite.description,
+        "version": suite.version,
+        "owner_team_id": str(suite.owner_team_id) if suite.owner_team_id else None,
+        "visibility": suite.visibility,
+        "eval_definition_ids": [str(eid) for eid in (suite.eval_definition_ids or [])],
+        "created_at": suite.created_at.isoformat() if suite.created_at else None,
+        "updated_at": suite.updated_at.isoformat() if suite.updated_at else None,
+    }
+
+
+@mcp.tool(
+    name="get_schema_versions",
+    description=("List the version history of a schema (mirrors GET /api/v1/schemas/{schema_id}/versions)."),
+)
+@_RETRY_DB
+async def get_schema_versions(
+    schema_id: str,
+    page: int = 1,
+    page_size: int = 20,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("get_schema_versions")
+
+        from modulo.db.crud.schema import get_schema, list_schema_versions
+
+        org_id = _ctx_org_id_val()
+        schid, schid_err = _parse_uuid_param(schema_id, "schema_id")
+        if schid_err:
+            return schid_err
+        if schid is None:
+            return {"error": "invalid_id", "field": "schema_id", "detail": _MSG_UUID_PARSE_FAILED}
+        pg = max(1, page)
+        ps = max(1, min(page_size, 100))
+
+        async with _session(org_id) as s:
+            schema = await get_schema(s, schid)
+            # Belt-and-braces org check (mirrors the REST route's 404).
+            if schema is None or schema.organisation_id != org_id:
+                return {"error": "not_found", "detail": f"Schema {schema_id} not found"}
+            result = await list_schema_versions(s, schid, page=pg, page_size=ps)
+
+        return {
+            "data": [
+                {
+                    "id": str(sv.id),
+                    "schema_id": str(sv.schema_id),
+                    "version": sv.version,
+                    "version_number": sv.version_number,
+                    "definition_json": sv.definition_json,
+                    "published": sv.published,
+                    "created_by": str(sv.account_id) if sv.account_id else None,
+                    "created_at": sv.created_at.isoformat() if sv.created_at else None,
+                    "updated_at": sv.updated_at.isoformat() if sv.updated_at else None,
+                }
+                for sv in result.items
+            ],
+            "total": result.total,
+            "page": result.page,
+            "page_size": result.page_size,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_schema_versions failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("get_schema_versions failed")
+        return _tool_exception_error("Failed to list schema versions", exc, "mcp.get_schema_versions")
+
+
+def _mask_diff_snapshot_graph(graph: Any) -> Any:
+    """Mask the ``nodes`` of one snapshot graph, leaving a non-dict graph untouched."""
+    if not isinstance(graph, dict):
+        return graph
+    graph_copy = dict(graph)
+    nodes = graph.get("nodes")
+    if isinstance(nodes, list):
+        graph_copy["nodes"] = [mask_pipeline_graph_node(n) if isinstance(n, dict) else n for n in nodes]
+    return graph_copy
+
+
+def _mask_pipeline_diff_payload(result: dict[str, Any]) -> dict[str, Any]:
+    """Mask node credentials across a snapshot-diff payload (REST parity, FAR-1181)."""
+    masked: dict[str, Any] = dict(result)
+    for key in ("snapshot_a", "snapshot_b"):
+        snapshot_payload = masked.get(key)
+        if isinstance(snapshot_payload, dict):
+            masked[key] = {
+                **snapshot_payload,
+                "graph": _mask_diff_snapshot_graph(snapshot_payload.get("graph")),
+            }
+    for key in ("nodes_added", "nodes_removed"):
+        entries = masked.get(key)
+        if isinstance(entries, list):
+            masked[key] = [mask_pipeline_graph_node(n) if isinstance(n, dict) else n for n in entries]
+    return masked
+
+
+@mcp.tool(
+    name="get_pipeline_diff",
+    description=(
+        "Diff two snapshots of a pipeline (mirrors POST "
+        "/api/v1/pipelines/{pipeline_id}/snapshots/diff). Node credentials "
+        "in the snapshot graphs are masked, exactly like the REST surface."
+    ),
+)
+@_RETRY_DB
+async def get_pipeline_diff(
+    pipeline_id: str,
+    snapshot_a_id: str,
+    snapshot_b_id: str,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("get_pipeline_diff")
+
+        org_id = _ctx_org_id_val()
+        # REST parity: POST /pipelines/{id}/snapshots/diff is gated
+        # require_feature("pipeline_diff_rollback").
+        feat_err = await _require_plan_feature(org_id, get_settings(), "pipeline_diff_rollback")
+        if feat_err:
+            return feat_err
+        pid, pid_err = _parse_uuid_param(pipeline_id, "pipeline_id")
+        if pid_err:
+            return pid_err
+        if pid is None:
+            return {"error": "invalid_id", "field": "pipeline_id", "detail": _MSG_UUID_PARSE_FAILED}
+        snap_a, snap_a_err = _parse_uuid_param(snapshot_a_id, "snapshot_a_id")
+        if snap_a_err:
+            return snap_a_err
+        if snap_a is None:
+            return {"error": "invalid_id", "field": "snapshot_a_id", "detail": _MSG_UUID_PARSE_FAILED}
+        snap_b, snap_b_err = _parse_uuid_param(snapshot_b_id, "snapshot_b_id")
+        if snap_b_err:
+            return snap_b_err
+        if snap_b is None:
+            return {"error": "invalid_id", "field": "snapshot_b_id", "detail": _MSG_UUID_PARSE_FAILED}
+
+        from modulo.db.crud.pipeline_snapshot_versioning import diff_snapshots
+
+        async with _session(org_id) as s:
+            # Team-scoped-key boundary (same pattern as get_pipeline_graph).
+            owner_team_id = await _pipeline_owner_team_id(s, pid)
+            if _team_scoped_key_mismatch(owner_team_id):
+                return _team_scope_error("pipeline", pipeline_id)
+            result = await diff_snapshots(s, snap_a, snap_b, pipeline_id=pid)
+
+        if result is None:
+            return {"error": "not_found", "detail": "One or both snapshots not found"}
+
+        # FAR-1181 (echo of the REST parity in routes/pipelines.py): the
+        # diff payload carries raw node dicts copied from the stored
+        # snapshots — mask them exactly like the snapshot-detail graph read.
+        return _mask_pipeline_diff_payload(result)
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_pipeline_diff failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("get_pipeline_diff failed")
+        return _tool_exception_error("Failed to diff pipeline snapshots", exc, "mcp.get_pipeline_diff")
 
 
 _doc_index: DocumentationIndex | None = None
@@ -10600,9 +11994,13 @@ async def resource_run(run_id: str) -> str:
         parts.append(f"Error: {map_legacy_code(run.error_code)}")
     if run.total_cost_usd is not None:
         parts.append(f"Total cost: ${run.total_cost_usd}")
-    parts.append(f"Child runs cost: ${child_cost}")
-    parts.append(f"Child runs count: {child_count}")
-    parts.append(f"Aggregate cost: ${aggregate_cost}")
+    parts.extend(
+        [
+            f"Child runs cost: ${child_cost}",
+            f"Child runs count: {child_count}",
+            f"Aggregate cost: ${aggregate_cost}",
+        ]
+    )
     if run.cost_breakdown is not None:
         breakdown = _sanitize_cost_breakdown(run.cost_breakdown)
         if breakdown:

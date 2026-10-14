@@ -24,7 +24,9 @@ from modulo.api.mcp_server import (
     McpAuthMiddleware,
     _ctx_auth_token,
     _ctx_auth_type,
+    _ctx_key_grants,
     _ctx_key_id,
+    _ctx_key_scope,
     _ctx_org_id,
     _ctx_role,
     _ctx_user_id,
@@ -33,6 +35,7 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.oauth import (
     InvalidGrantError,
+    InvalidScopeError,
     OAuthAccessTokenClaims,
     UnauthorizedClientError,
     compute_pkce_challenge,
@@ -42,6 +45,7 @@ from modulo.auth.oauth import (
     validate_client_scopes,
 )
 from modulo.core.audit_coverage import audit_session
+from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope, resolve_tool_access
 from modulo.core.rate_limiter import RateLimiterRegistry
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
@@ -49,6 +53,7 @@ from tests.unit.api.mock_session import configure_mock_session
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+_TEAM_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 _CODE_VERIFIER = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
 _CODE_CHALLENGE = compute_pkce_challenge(_CODE_VERIFIER)
 
@@ -226,6 +231,27 @@ def viewer_client() -> Generator[TestClient, None, None]:
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def anon_consent_client() -> Generator[tuple[TestClient, AsyncMock], None, None]:
+    """A TestClient wired ONLY for the anonymous pre-auth consent surfaces.
+
+    Deliberately overrides NO auth principal / plan context — the consent
+    context endpoint must answer a not-yet-signed-in browser, so an
+    ``Authorization``-less request must never become a 401 (the 2026-09-16
+    pre-auth lesson: a dependency composing ``get_current_user`` would 401
+    before the handler ran).
+    """
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncMock:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    yield TestClient(app), mock_session
     app.dependency_overrides.clear()
 
 
@@ -583,6 +609,283 @@ class TestApproveConsent:
             resp = admin_client.post(self.ENDPOINT, json={"state": "other-org-state"})
 
         assert resp.status_code == 400
+
+    # --- FAR-1476 slice 3: per-scope deny via granted_scopes ---
+
+    def test_approve_with_granted_subset_mints_narrower_code(self, admin_client: TestClient) -> None:
+        """A strict subset of the stored scopes narrows the minted code."""
+        state_row = _make_mock_consent_state(state="state-xyz", scopes=["run.trigger", "hitl.review"])
+        with (
+            patch("modulo.auth.oauth.consume_consent_state", new=AsyncMock(return_value=state_row)),
+            patch(
+                "modulo.api.routes.mcp_oauth.create_authorization_code",
+                new=AsyncMock(return_value="code-abc"),
+            ) as mock_code,
+            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch(
+                "modulo.api.routes.mcp_oauth.verify_live_role_covers_scopes",
+                new=AsyncMock(return_value="admin"),
+            ) as mock_verify,
+        ):
+            resp = admin_client.post(
+                self.ENDPOINT,
+                json={"state": "state-xyz", "granted_scopes": ["run.trigger"]},
+            )
+
+        assert resp.status_code == 200
+        assert mock_code.call_args.kwargs["scopes"] == "run.trigger"
+        # The live role is re-verified against the GRANTED subset.
+        mock_verify.assert_awaited_once()
+        assert mock_verify.call_args.kwargs["scopes"] == ["run.trigger"]
+
+    def test_approve_scope_outside_stored_set_rejected(self, admin_client: TestClient) -> None:
+        """Fail closed: a granted scope the authorize leg never stored is a 400."""
+        state_row = _make_mock_consent_state(state="state-xyz", scopes=["run.trigger"])
+        with (
+            patch("modulo.auth.oauth.consume_consent_state", new=AsyncMock(return_value=state_row)),
+            patch(
+                "modulo.api.routes.mcp_oauth.create_authorization_code",
+                new=AsyncMock(return_value="code-abc"),
+            ) as mock_code,
+            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+        ):
+            resp = admin_client.post(
+                self.ENDPOINT,
+                json={"state": "state-xyz", "granted_scopes": ["run.trigger", "resource.read_only"]},
+            )
+
+        assert resp.status_code == 400
+        assert "resource.read_only" in resp.json()["detail"]
+        mock_code.assert_not_called()
+
+    def test_approve_unknown_scope_key_rejected(self, admin_client: TestClient) -> None:
+        """An unrecognised scope key fails closed before the subset check."""
+        state_row = _make_mock_consent_state(state="state-xyz", scopes=["run.trigger"])
+        with (
+            patch("modulo.auth.oauth.consume_consent_state", new=AsyncMock(return_value=state_row)),
+            patch(
+                "modulo.api.routes.mcp_oauth.create_authorization_code",
+                new=AsyncMock(return_value="code-abc"),
+            ) as mock_code,
+            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+        ):
+            resp = admin_client.post(
+                self.ENDPOINT,
+                json={"state": "state-xyz", "granted_scopes": ["not-a-real-scope"]},
+            )
+
+        assert resp.status_code == 400
+        assert "not-a-real-scope" in resp.json()["detail"]
+        mock_code.assert_not_called()
+
+    def test_approve_empty_granted_scopes_rejected(self, admin_client: TestClient) -> None:
+        """Granting nothing is a decline, not a zero-scope code — 400, no mint."""
+        state_row = _make_mock_consent_state(state="state-xyz", scopes=["run.trigger"])
+        with (
+            patch("modulo.auth.oauth.consume_consent_state", new=AsyncMock(return_value=state_row)),
+            patch(
+                "modulo.api.routes.mcp_oauth.create_authorization_code",
+                new=AsyncMock(return_value="code-abc"),
+            ) as mock_code,
+            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+        ):
+            resp = admin_client.post(self.ENDPOINT, json={"state": "state-xyz", "granted_scopes": []})
+
+        assert resp.status_code == 400
+        mock_code.assert_not_called()
+
+    def test_approve_omitted_granted_scopes_mints_all_stored(self, admin_client: TestClient) -> None:
+        """Omitted granted_scopes keeps the pre-slice behaviour: all stored scopes."""
+        state_row = _make_mock_consent_state(state="state-xyz", scopes=["run.trigger", "hitl.review"])
+        with (
+            patch("modulo.auth.oauth.consume_consent_state", new=AsyncMock(return_value=state_row)),
+            patch(
+                "modulo.api.routes.mcp_oauth.create_authorization_code",
+                new=AsyncMock(return_value="code-abc"),
+            ) as mock_code,
+            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch(
+                "modulo.api.routes.mcp_oauth.verify_live_role_covers_scopes",
+                new=AsyncMock(return_value="admin"),
+            ) as mock_verify,
+        ):
+            resp = admin_client.post(self.ENDPOINT, json={"state": "state-xyz"})
+
+        assert resp.status_code == 200
+        assert mock_code.call_args.kwargs["scopes"] == "run.trigger hitl.review"
+        # The live-role re-check is the subset path only — the omitted path
+        # behaves exactly as before (the token endpoint still re-checks at
+        # exchange).
+        mock_verify.assert_not_called()
+
+    def test_approve_subset_live_role_denial_is_403(self, admin_client: TestClient) -> None:
+        """A demoted approver is denied before any code is minted (fail closed)."""
+        state_row = _make_mock_consent_state(state="state-xyz", scopes=["run.trigger", "hitl.review"])
+        with (
+            patch("modulo.auth.oauth.consume_consent_state", new=AsyncMock(return_value=state_row)),
+            patch(
+                "modulo.api.routes.mcp_oauth.create_authorization_code",
+                new=AsyncMock(return_value="code-abc"),
+            ) as mock_code,
+            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch(
+                "modulo.api.routes.mcp_oauth.verify_live_role_covers_scopes",
+                new=AsyncMock(side_effect=InvalidGrantError("Account role does not cover the granted scopes")),
+            ),
+        ):
+            resp = admin_client.post(
+                self.ENDPOINT,
+                json={"state": "state-xyz", "granted_scopes": ["hitl.review"]},
+            )
+
+        assert resp.status_code == 403
+        mock_code.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Scenario: Anonymous consent context (FAR-1476 slice 3)
+# ---------------------------------------------------------------------------
+
+
+class TestConsentContext:
+    ENDPOINT = "/api/v1/mcp/oauth/consent/context"
+
+    @staticmethod
+    def _result_for(row: object) -> MagicMock:
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = row
+        return result
+
+    def test_context_unknown_state_is_404_never_401(self, anon_consent_client: tuple[TestClient, AsyncMock]) -> None:
+        """Pre-auth contract: no Authorization header, and the answer for an
+        unknown state is the undifferentiated 404 — NOT a 401 (an auth
+        dependency leaked into the route would produce one)."""
+        client, session = anon_consent_client
+        session.execute = AsyncMock(return_value=self._result_for(None))
+        with patch("modulo.api.routes.mcp_oauth.set_rls_org", new=AsyncMock()):
+            resp = client.get(self.ENDPOINT, params={"state": "unknown-state"})
+
+        assert resp.status_code == 404
+        assert resp.status_code != 401
+        assert resp.json()["detail"] == "Consent request not found"
+
+    def test_context_expired_or_consumed_state_is_404(self, anon_consent_client: tuple[TestClient, AsyncMock]) -> None:
+        """Expired and already-consumed states are excluded by the query
+        predicate (consumed=false AND expires_at > now), so they surface as the
+        same 404 as an unknown state."""
+        client, session = anon_consent_client
+        session.execute = AsyncMock(return_value=self._result_for(None))
+        with patch("modulo.api.routes.mcp_oauth.set_rls_org", new=AsyncMock()):
+            resp = client.get(self.ENDPOINT, params={"state": "expired-state"})
+
+        assert resp.status_code == 404
+
+    def test_context_requires_state_param(self, anon_consent_client: tuple[TestClient, AsyncMock]) -> None:
+        client, _session = anon_consent_client
+        resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 422
+
+    def test_context_returns_client_name_scopes_team_anonymously(
+        self, anon_consent_client: tuple[TestClient, AsyncMock]
+    ) -> None:
+        client, session = anon_consent_client
+        state_row = _make_mock_consent_state(state="state-xyz", scopes=["trigger:run", "hitl:review"])
+        client_row = _make_mock_client(name="My MCP App")
+        client_row.team_id = _TEAM_ID
+        team_row = MagicMock()
+        team_row.id = _TEAM_ID
+        team_row.name = "Platform"
+        session.execute = AsyncMock(
+            side_effect=[
+                self._result_for(state_row),
+                self._result_for(client_row),
+                self._result_for(team_row),
+            ]
+        )
+        with patch("modulo.api.routes.mcp_oauth.set_rls_org", new=AsyncMock()) as mock_rls:
+            resp = client.get(self.ENDPOINT, params={"state": "state-xyz"})
+
+        assert resp.status_code == 200
+        # Exact-body assert: nothing beyond the display context leaks (no
+        # redirect_uri, no secrets, no org internals).
+        assert resp.json() == {
+            "client_name": "My MCP App",
+            "scopes": ["trigger:run", "hitl:review"],
+            "team": {"id": str(_TEAM_ID), "name": "Platform"},
+        }
+        # The session org is bound from the pending row BEFORE the client/team reads.
+        mock_rls.assert_awaited_once()
+
+    def test_context_org_wide_client_has_null_team(self, anon_consent_client: tuple[TestClient, AsyncMock]) -> None:
+        client, session = anon_consent_client
+        state_row = _make_mock_consent_state(state="state-xyz", scopes=["trigger:run"])
+        client_row = _make_mock_client(name="Org-wide App")
+        client_row.team_id = None
+        session.execute = AsyncMock(
+            side_effect=[
+                self._result_for(state_row),
+                self._result_for(client_row),
+            ]
+        )
+        with patch("modulo.api.routes.mcp_oauth.set_rls_org", new=AsyncMock()):
+            resp = client.get(self.ENDPOINT, params={"state": "state-xyz"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["client_name"] == "Org-wide App"
+        assert body["team"] is None
+
+    def test_context_bound_team_missing_has_null_team(self, anon_consent_client: tuple[TestClient, AsyncMock]) -> None:
+        """The client carries a team_id but its team row is gone: the team line
+        is simply omitted (no crash, no partial context)."""
+        client, session = anon_consent_client
+        state_row = _make_mock_consent_state(state="state-xyz", scopes=["trigger:run"])
+        client_row = _make_mock_client(name="Bound App")
+        client_row.team_id = _TEAM_ID
+        session.execute = AsyncMock(
+            side_effect=[
+                self._result_for(state_row),
+                self._result_for(client_row),
+                self._result_for(None),
+            ]
+        )
+        with patch("modulo.api.routes.mcp_oauth.set_rls_org", new=AsyncMock()):
+            resp = client.get(self.ENDPOINT, params={"state": "state-xyz"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["client_name"] == "Bound App"
+        assert body["team"] is None
+
+    def test_context_deleted_client_is_404(self, anon_consent_client: tuple[TestClient, AsyncMock]) -> None:
+        """Client deleted between authorize and consent — same undifferentiated 404."""
+        client, session = anon_consent_client
+        state_row = _make_mock_consent_state(state="state-xyz")
+        session.execute = AsyncMock(
+            side_effect=[
+                self._result_for(state_row),
+                self._result_for(None),
+            ]
+        )
+        with patch("modulo.api.routes.mcp_oauth.set_rls_org", new=AsyncMock()):
+            resp = client.get(self.ENDPOINT, params={"state": "state-xyz"})
+
+        assert resp.status_code == 404
+
+    def test_context_mcp_server_flag_off_returns_402(self, anon_consent_client: tuple[TestClient, AsyncMock]) -> None:
+        """The pre-auth kill-switch leg: org resolved from the pending row."""
+        client, session = anon_consent_client
+        state_row = _make_mock_consent_state(state="state-xyz")
+        session.execute = AsyncMock(side_effect=[self._result_for(state_row)])
+        with (
+            patch("modulo.api.routes.mcp_oauth.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.mcp_server._mcp_server_flag_enabled", new=AsyncMock(return_value=False)),
+        ):
+            resp = client.get(self.ENDPOINT, params={"state": "state-xyz"})
+
+        assert resp.status_code == 402
+        assert resp.json()["error"] == "feature_required"
 
 
 # ---------------------------------------------------------------------------
@@ -1200,8 +1503,20 @@ class TestScopeEnforcement:
     def test_scope_outside_allowed_set_is_rejected(self) -> None:
         client = _make_mock_client(client_id="limited_client", scopes="trigger:run")
         with pytest.raises(UnauthorizedClientError) as exc:
-            validate_client_scopes(client, ["hitl:review"])
+            validate_client_scopes(client, ["pipeline.create"])
         assert "unauthorized_client" in str(exc.value).lower() or "None of the requested scopes" in str(exc.value)
+
+    def test_ceiling_caps_a_wider_request(self) -> None:
+        client = _make_mock_client(client_id="limited_client", scopes="trigger:run")
+        assert validate_client_scopes(client, ["trigger:run", "pipeline.create"]) == ["run.trigger"]
+
+    def test_excluded_scope_is_rejected_not_widened(self) -> None:
+        # FAR-1476: the registry's non-delegable exclusions (human_only HITL,
+        # credential lifecycle, system.*, org.delete, break-glass) are never
+        # grantable, even when the client's ceiling still lists one.
+        client = _make_mock_client(client_id="old_client", scopes="trigger:run api_key.create")
+        with pytest.raises(InvalidScopeError, match=r"api_key\.create"):
+            validate_client_scopes(client, ["api_key.create"])
 
 
 # ---------------------------------------------------------------------------
@@ -1277,6 +1592,16 @@ class TestOAuthMiddlewareAccountBinding:
             patch(
                 "modulo.api.mcp_server.check_oauth_token_family_valid",
                 new=family_check,
+            ),
+            # FAR-1476: both OAuth principal legs now also resolve the client's
+            # team boundary (``get_oauth_client_team_id``). These account-binding
+            # tests are not about the team boundary, so stub it to None
+            # (org-wide) — the boundary itself is covered by
+            # test_mcp_oauth_team_scope.py. Without this the strict mock session
+            # raises on the unexpected ``oauth_clients`` SELECT.
+            patch(
+                "modulo.api.mcp_server.get_oauth_client_team_id",
+                new=AsyncMock(return_value=None),
             ),
         ):
             middleware = McpAuthMiddleware(app=MagicMock())
@@ -1383,6 +1708,138 @@ class TestOAuthMiddlewareAccountBinding:
         assert response.status_code == 503
         body = json_module.loads(response.body)
         assert body["error"] == "temporarily_unavailable"
+
+
+# ---------------------------------------------------------------------------
+# MCP leg (FAR-1476): the widened consented set IS the credential's grant-set.
+# ---------------------------------------------------------------------------
+
+
+class TestOAuthWidenedGrantEvaluation:
+    """The MCP bearer middleware evaluates an OAuth token's consented permission
+    set through the SAME grant leg as API-key grant-sets (``resolve_tool_access``
+    leg 5), so effective access = consented set INTERSECT bundle(live role).
+    Every check runs the REAL production chokepoint against the contextvars the
+    middleware just hydrated.
+    """
+
+    _CTX_VARS = (
+        _ctx_user_id,
+        _ctx_role,
+        _ctx_org_id,
+        _ctx_auth_type,
+        _ctx_auth_token,
+        _ctx_key_id,
+        _ctx_key_scope,
+        _ctx_key_grants,
+    )
+
+    def _save_ctx(self) -> list[Any]:
+        saved = []
+        for var in self._CTX_VARS:
+            if var in (_ctx_user_id, _ctx_org_id, _ctx_key_id):
+                sentinel: Any = uuid.UUID(int=0)
+            elif var is _ctx_key_grants:
+                sentinel = None
+            else:
+                sentinel = ""
+            saved.append(var.set(sentinel))
+        return saved
+
+    def _restore_ctx(self, saved: list[Any]) -> None:
+        for var, token in zip(self._CTX_VARS, saved, strict=True):
+            var.reset(token)
+
+    async def _dispatch(self, scopes: list[str], live_role: str) -> None:
+        response, _request = await TestOAuthMiddlewareAccountBinding()._dispatch(
+            scopes=scopes,
+            live_role=live_role,
+        )
+        assert response.status_code == 200
+
+    def _check(self, tool: str) -> None:
+        """Run the production tool-dispatch chokepoint with the request context."""
+        check_tool_scope(
+            _ctx_role.get(),
+            tool,
+            key_scope=_ctx_key_scope.get(None),
+            auth_type=_ctx_auth_type.get(None),
+            grants=_ctx_key_grants.get(None),
+        )
+
+    @pytest.mark.asyncio
+    async def test_widened_token_carries_its_registry_key_grants(self) -> None:
+        saved = self._save_ctx()
+        try:
+            await self._dispatch(["pipeline.create", "run.trigger"], "operator")
+            assert _ctx_key_grants.get(None) == frozenset({"pipeline.create", "run.trigger"})
+            # The scope-derived operator role, clamped against a live operator.
+            assert _ctx_role.get() == "operator"
+        finally:
+            self._restore_ctx(saved)
+
+    @pytest.mark.asyncio
+    async def test_legacy_alias_scopes_canonicalise_into_the_grant_set(self) -> None:
+        saved = self._save_ctx()
+        try:
+            await self._dispatch(["trigger:run", "library:browse"], "admin")
+            assert _ctx_key_grants.get(None) == frozenset({"run.trigger", "resource.read_only"})
+        finally:
+            self._restore_ctx(saved)
+
+    @pytest.mark.asyncio
+    async def test_tool_allowed_by_the_granted_set_is_reachable(self) -> None:
+        saved = self._save_ctx()
+        try:
+            await self._dispatch(["run.trigger", "resource.read_only"], "admin")
+            # Both a mapped tool and a read-only-pinned tool are reachable.
+            assert self._check("trigger_pipeline") is None
+            assert self._check("search_library") is None
+        finally:
+            self._restore_ctx(saved)
+
+    @pytest.mark.asyncio
+    async def test_tool_outside_the_granted_set_is_denied(self) -> None:
+        saved = self._save_ctx()
+        try:
+            await self._dispatch(["run.trigger"], "admin")
+            # Discriminating evidence: the role leg ALONE — the pre-FAR-1476
+            # state, grants=None — permits cancel_run at role runner. Only the
+            # grant leg can be denying it below, so the denial proves the
+            # middleware evaluated the widened set.
+            allowed_without_grants, _key = resolve_tool_access(
+                tool="cancel_run",
+                action=None,
+                role="runner",
+                key_scope="user",
+                auth_type="oauth",
+                allowed_tools=None,
+                kill_switch=True,
+                grants=None,
+            )
+            assert allowed_without_grants is True
+            with pytest.raises(MCPAuthorizationError, match=r"run\.cancel"):
+                self._check("cancel_run")
+            # The in-set tool stays reachable under the very same role.
+            assert self._check("trigger_pipeline") is None
+        finally:
+            self._restore_ctx(saved)
+
+    @pytest.mark.asyncio
+    async def test_live_role_demotion_degrades_the_widened_grant(self) -> None:
+        saved = self._save_ctx()
+        try:
+            # Operator-scoped grant, account since demoted to runner: the
+            # operator-level tool dies while the runner-level tool in the SAME
+            # grant set survives (ADR 047 live clamp, FAR-1476 grant leg).
+            await self._dispatch(["pipeline.create", "run.trigger"], "runner")
+            assert _ctx_role.get() == "runner"
+            assert _ctx_key_grants.get(None) == frozenset({"pipeline.create", "run.trigger"})
+            with pytest.raises(MCPAuthorizationError, match="Insufficient scope"):
+                self._check("create_pipeline")
+            assert self._check("trigger_pipeline") is None
+        finally:
+            self._restore_ctx(saved)
 
 
 # ---------------------------------------------------------------------------

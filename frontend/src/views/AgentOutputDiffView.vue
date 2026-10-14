@@ -1,6 +1,6 @@
 <template>
   <div class="page-wide">
-    <ErrorAlert v-if="error" :message="error" />
+    <ErrorAlert v-if="error" :message="error" :on-retry="handleCompare" />
     <template v-else>
       <PageHeader :title="$t('views.AgentOutputDiffView.agent_output_diff')" :subtitle="$t('views.AgentOutputDiffView.subtitle')" />
 

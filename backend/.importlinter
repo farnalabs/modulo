@@ -121,7 +121,23 @@ ignore_imports =
     # thin DTO conversion (to_engine_definition); all guardrail logic stays in
     # core.
     modulo.db.crud.run -> modulo.core.guardrails
+    # FAR-209 Track B — output-side interception: db.crud.run's guardrail
+    # selection seams ALSO invoke the output-point exclusion helper
+    # (exclude_output_interception_definitions) so the input pass never sees
+    # an output-point def. Same narrow cross-boundary category as the FAR-208
+    # exemption above: db.crud.run only invokes the filter helper; all
+    # guardrail logic stays in core.
+    modulo.db.crud.run -> modulo.core.guardrails.output_intercept
     modulo.db.crud.run -> modulo.core.eval_engine
+    # FAR-1293 — the evidence store's first production producer: the guardrail
+    # persist seam (db.crud.run._persist_guardrail_eval_results) appends one
+    # Evidence fact per guardrail eval decision via
+    # core.eval_engine.evidence_layer.append_evidence, the store's single
+    # write path (it enforces the key-namespace ownership check before any
+    # row is added). Same narrow cross-boundary category as the FAR-208
+    # guardrail seam above: db.crud.run only invokes the write helper; all
+    # evidence-layer semantics stay in core.
+    modulo.db.crud.run -> modulo.core.eval_engine.evidence_layer
     # FAR-967 chunk 10 — run-start verification loads policy-gate pins from
     # the snapshot, recomputes the fingerprint, and applies the operator
     # control (enabled/disabled re-check); same cross-boundary category as
@@ -274,6 +290,12 @@ ignore_imports =
     modulo.connectors.shortcut -> modulo.core.ssrf
     modulo.connectors.snyk -> modulo.core.ssrf
     modulo.connectors.trello -> modulo.core.ssrf
+    # FAR-1650: the shared egress TLS-context factory (connectors/_egress.py)
+    # resolves its cached context's trust_env through core.ssrf's
+    # default_trust_env (the single SSRF_TRUST_PROXY read). Same narrow
+    # shared-security-primitive category as every entry above: no other core
+    # logic flows into the connectors layer.
+    modulo.connectors._egress -> modulo.core.ssrf
 
 [importlinter:contract:no-concrete-runtime-provider-imports]
 name = Concrete runtime providers are only imported inside core/runtime_provider (FAR-587)

@@ -28,6 +28,7 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.eval_engine.okr import _INFO_QUERY, _TREND_QUERY
 from modulo.core.eval_engine.suite_run import (
     aggregate_eval_leaderboard,
     bucket_eval_timeseries,
@@ -149,7 +150,8 @@ def _install_execute(
             return _make_result(all_rows=pipeline_rows or [])
         if "COUNT(*) FILTER" in s:
             return _make_result(all_rows=leaderboard_rows or [])
-        if "eval_definitions" in s:
+        # FAR-1729: the exists/name lookup reads the live ``evals`` table.
+        if "FROM evals" in s:
             return _make_result(scalar_one_or_none=eval_def)
         return _make_result(all_rows=[])
 
@@ -314,6 +316,42 @@ class TestBuildTimeseriesQuery:
         statement, params = build_eval_pipelines_query(org_id=_ORG_ID_2, eval_id=_EVAL_1)
         assert "er.organisation_id = :org_id" in statement
         assert params["org_id"] == _ORG_ID_2
+
+
+# --------------------------------------------------------------------------- #
+# FAR-1725 — table-source pins: every read-model query reads ``evals``         #
+# --------------------------------------------------------------------------- #
+class TestEvalSourceTablePins:
+    """Each query must read ``evals``, never the frozen ``eval_definitions`` snapshot.
+
+    ``eval_definitions`` is a pre-cutover snapshot no write path touches, so a
+    revert silently drops every post-cutover eval — the guardrail exclusion
+    above matches nothing and the whole read-model reports zeros. Each pin
+    fails if the query it guards names ``eval_definitions`` again.
+    """
+
+    def test_leaderboard_query_joins_evals_not_eval_definitions(self) -> None:
+        statement, _ = build_eval_leaderboard_query(org_id=_ORG_ID, group_by="pipeline")
+        assert "JOIN evals ed ON ed.id = er.eval_id" in statement
+        assert "eval_definitions" not in statement
+
+    def test_timeseries_query_joins_evals_not_eval_definitions(self) -> None:
+        statement, _ = build_eval_timeseries_query(org_id=_ORG_ID, eval_id=_EVAL_1)
+        assert "JOIN evals ed ON ed.id = er.eval_id" in statement
+        assert "eval_definitions" not in statement
+
+    def test_pipelines_query_joins_evals_not_eval_definitions(self) -> None:
+        statement, _ = build_eval_pipelines_query(org_id=_ORG_ID, eval_id=_EVAL_1)
+        assert "JOIN evals ed ON ed.id = er.eval_id" in statement
+        assert "eval_definitions" not in statement
+
+    def test_okr_info_query_reads_evals_not_eval_definitions(self) -> None:
+        assert "FROM evals" in _INFO_QUERY.text
+        assert "eval_definitions" not in _INFO_QUERY.text
+
+    def test_okr_trend_query_reads_evals_not_eval_definitions(self) -> None:
+        assert "SELECT id FROM evals" in _TREND_QUERY.text
+        assert "eval_definitions" not in _TREND_QUERY.text
 
 
 # --------------------------------------------------------------------------- #
