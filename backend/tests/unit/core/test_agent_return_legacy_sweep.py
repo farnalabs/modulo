@@ -5,11 +5,17 @@ Covers:
 * ``count_legacy_agent_return_rows`` against a real (SQLite) ``run_node_outputs``
   table — a seeded legacy-shaped row is counted and sampled, a pure row (and the
   metadata / marker row kinds) are not;
+* the reserved ``__``-prefixed sentinel namespace is excluded: a workspace-input
+  audit row (``__mwi_audit__``) — which always carries an outputs side and no
+  telemetry side — must NOT be counted, or the healthy zero is unreachable;
 * the shared ``stored_row_is_legacy`` predicate pinned against the sweep's SQL
   form so the two cannot drift;
 * the ``legacy_agent_return_sweep`` cron wrapper's fail-loud contract: a loud
-  structured warning on findings, a clean INFO line on zero, and a re-raise on a
-  scan failure (never a silent zero).
+  structured ERROR on findings, a clean INFO line on zero, and a re-raise on a
+  scan failure (never a silent zero);
+* the ``saq_worker.legacy_agent_return_sweep`` wrapper's durable-liveness
+  contract: it persists ``last_run_at`` + ``legacy_count`` to the shared stats
+  key every tick, and persists an ``error`` blob before re-raising on failure.
 """
 
 from __future__ import annotations
@@ -28,7 +34,12 @@ from modulo.core.agent_return_legacy import (
     count_legacy_agent_return_rows,
 )
 from modulo.core.node_output_split import stored_row_is_legacy
-from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, META_NODE_ID, RunNodeOutput
+from modulo.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
+from modulo.db.models.run_node_outputs import (
+    FINAL_ATTEMPT_KEY,
+    META_NODE_ID,
+    RunNodeOutput,
+)
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 _RUN = uuid.UUID("00000000-0000-0000-0000-0000000000bb")
@@ -131,6 +142,33 @@ async def test_pure_rows_report_zero(
 
 
 @pytest.mark.asyncio
+async def test_sentinel_rows_are_not_counted(
+    engine: AsyncEngine,
+) -> None:
+    """CRITICAL regression (FAR-132): reserved sentinel rows are not stragglers.
+
+    A workspace-input audit row (``__mwi_audit__``) is written with an outputs
+    side and NO telemetry side by construction, as is the run-metadata row
+    (``__run_meta__``). Counting either would pin the "healthy zero" permanently
+    above zero and make the strip gate unreachable — so both must be excluded
+    while a genuine legacy row alongside them is still counted.
+    """
+    maker = _maker(engine)
+    await _seed(
+        maker,
+        _row(AUDIT_NODE_ID, outputs={"workspace_inputs": [], "status": "resolved"}),
+        _row(META_NODE_ID, outputs={"empty_outputs": True, "empty_telemetry": True}),
+        _row("legacy", outputs={"output": {"answer": 1}}),
+    )
+    async with maker() as session:
+        report = await count_legacy_agent_return_rows(session)
+
+    assert report.legacy_count == 1
+    assert report.sample == ((str(_RUN), "legacy"),)
+    assert report.sample_truncated is False
+
+
+@pytest.mark.asyncio
 async def test_sample_is_bounded_and_marked_truncated(
     engine: AsyncEngine,
 ) -> None:
@@ -216,12 +254,17 @@ async def test_cron_warns_loudly_when_legacy_rows_remain(caplog: pytest.LogCaptu
             "modulo.core.agent_return_legacy.count_legacy_agent_return_rows",
             new=AsyncMock(return_value=report),
         ),
-        caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"),
+        caplog.at_level(logging.ERROR, logger="modulo.core.cron_helpers"),
     ):
         stats = await ch.legacy_agent_return_sweep()
 
     assert stats["legacy_count"] == 3
     assert "agent_return.legacy_straggler_detected" in caplog.text
+    # ERROR (not WARNING) so the detection reaches ErrorTrackingLogHandler ->
+    # error_events / notifications.
+    detected = [r for r in caplog.records if r.message == "agent_return.legacy_straggler_detected"]
+    assert detected, "straggler detection record missing"
+    assert detected[0].levelno == logging.ERROR
 
 
 @pytest.mark.asyncio
@@ -257,3 +300,56 @@ async def test_cron_reraises_a_failed_scan_never_a_silent_zero() -> None:
         pytest.raises(RuntimeError, match="db down"),
     ):
         await ch.legacy_agent_return_sweep()
+
+
+# ---------------------------------------------------------------------------
+# saq_worker wrapper — durable liveness (stats key + re-raise)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_saq_wrapper_persists_clean_stats() -> None:
+    """A successful tick persists last_run_at + legacy_count to the stats key."""
+    from modulo.core import saq_worker as sw
+
+    with (
+        patch(
+            "modulo.core.cron_helpers.legacy_agent_return_sweep",
+            new=AsyncMock(return_value={"legacy_count": 2, "sample_truncated": False}),
+        ),
+        patch("modulo.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
+    ):
+        result = await sw.legacy_agent_return_sweep({})
+
+    mock_persist.assert_called_once()
+    key, stats_blob, ttl = mock_persist.call_args[0]
+    assert key == sw.LEGACY_AGENT_RETURN_SWEEP_STATS_KEY
+    assert stats_blob["legacy_count"] == 2
+    assert "last_run_at" in stats_blob
+    assert "error" not in stats_blob
+    assert ttl == sw.LEGACY_AGENT_RETURN_SWEEP_STATS_TTL_SECONDS
+    assert result["legacy_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_saq_wrapper_persists_error_and_reraises() -> None:
+    """A failed scan persists an error blob AND re-raises (never a silent zero)."""
+    from modulo.core import saq_worker as sw
+
+    with (
+        patch(
+            "modulo.core.cron_helpers.legacy_agent_return_sweep",
+            new=AsyncMock(side_effect=RuntimeError("db down")),
+        ),
+        patch("modulo.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
+        pytest.raises(RuntimeError, match="db down"),
+    ):
+        await sw.legacy_agent_return_sweep({})
+
+    mock_persist.assert_called_once()
+    key, stats_blob, _ttl = mock_persist.call_args[0]
+    assert key == sw.LEGACY_AGENT_RETURN_SWEEP_STATS_KEY
+    assert "last_run_at" in stats_blob
+    error_str = stats_blob["error"]
+    assert "sweep_failed" in error_str
+    assert "RuntimeError" in error_str

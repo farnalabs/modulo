@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from modulo.core.cost_controller.finalize import _node_output_dict
+from modulo.core.cost_controller.finalize import _node_output_dict, _store_split_result
 from modulo.core.node_output_split import (
     DISPATCH_PROVENANCE_FIELDS,
     NODE_TYPE_GATE,
@@ -811,13 +811,14 @@ def test_split_node_output_never_yields_a_legacy_row_for_splittable_types() -> N
     """INVARIANT (FAR-132): a row written by the current writer for a splittable
     node type NEVER matches the legacy predicate.
 
-    ``finalize._store_split_result`` writes a telemetry entry for every split
-    result (even an empty ``{}``), so ``split_node_output`` returning a non-None
-    telemetry dict means the stored row always carries a telemetry side — and
-    ``stored_row_is_legacy`` is therefore always False for a new row. Prove it
-    per splittable node type with representative envelopes; the writer's own
-    row-construction (``replace_run_node_outputs``) writes the telemetry side
-    whenever this dict is non-None.
+    ``finalize._store_split_result`` is the single place that decides which of
+    the two LOCKSTEP columns gets a key, so this test derives the row's
+    presence flags from THAT writer's output rather than hardcoding them.
+    ``split_node_output`` returning a non-None telemetry dict means the writer
+    stores a telemetry side, and ``stored_row_is_legacy`` is therefore False for
+    a new row. If a writer regression ever stopped storing the telemetry side,
+    the derived ``telemetry_present`` would be False and this test would fail
+    (hardcoding True made the old form tautological).
     """
     from modulo.core.node_output_split import SPLITTABLE_NODE_TYPES
 
@@ -833,8 +834,16 @@ def test_split_node_output_never_yields_a_legacy_row_for_splittable_types() -> N
 
     for node_type, envelope in envelopes.items():
         ret, telemetry = split_node_output(envelope, node_type, None, run_id="r", node_id="n")
-        # The writer stores a telemetry entry (a dict, possibly empty) for every
-        # split result -> the row's telemetry side is PRESENT.
-        assert isinstance(telemetry, dict), node_type
-        outputs_present = ret is not None
-        assert stored_row_is_legacy(outputs_present=outputs_present, telemetry_present=True) is False, node_type
+        # The splitter MUST yield a telemetry dict for a splittable type (the
+        # writer stores a side only when it is non-None).
+        assert telemetry is not None, node_type
+        # Drive the WRITER's column assignment, then read the presence flags
+        # back off its output.
+        merged_outputs: dict[str, Any] = {}
+        merged_telemetry: dict[str, Any] = {}
+        _store_split_result(merged_outputs, merged_telemetry, "n", ret, telemetry)
+        outputs_present = "n" in merged_outputs
+        telemetry_present = "n" in merged_telemetry
+        assert telemetry_present is True, f"writer dropped the telemetry side for {node_type}"
+        is_legacy = stored_row_is_legacy(outputs_present=outputs_present, telemetry_present=telemetry_present)
+        assert is_legacy is False, node_type

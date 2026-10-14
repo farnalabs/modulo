@@ -235,8 +235,9 @@ INVENTORY: dict[str, PathRecord] = {
     # mutates a decision record.
     "decision_record_reconcile": _exempt("read_only_detection"),
     # FAR-132: read-only scan of run_node_outputs for rows still reaching the
-    # Agent-Return-split legacy fallback — reports through a structured log and
-    # mutates no row.
+    # Agent-Return-split legacy fallback. Reports through a structured ERROR log,
+    # a persisted counter (legacy_count) and the saq:cron:stats:* liveness key
+    # surfaced by the /healthz/ready advisory — mutates no row.
     "legacy_agent_return_sweep": _exempt("read_only_detection"),
     "check_missed_fire_alerts_cron": _exempt("notification_only"),
     "library_sync": _exempt("derived_state"),

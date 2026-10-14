@@ -176,6 +176,10 @@ REAL_FAILURE_ADVISORY_CHECKS: frozenset[str] = frozenset(
         # the corruption-detection surface over policy_gate_decisions has
         # silently stopped — real breakage worth an in-app alert.
         "decision_record_reconcile",
+        # FAR-132: a dead legacy-shape straggler sweep means the invariant
+        # gating the Agent-Return-split strip has silently stopped being
+        # evaluated — worth an in-app alert.
+        "legacy_agent_return_sweep",
     }
 )
 

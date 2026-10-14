@@ -9339,10 +9339,17 @@ async def legacy_agent_return_sweep() -> dict[str, Any]:
     The periodic invariant that gates the FAR-132 Agent-Return-split strip: it
     counts rows in ``run_node_outputs`` that still reach the legacy fallback
     (``core.node_output_split.stored_row_is_legacy`` — outputs side present,
-    telemetry side absent) and logs a LOUD structured warning with the count
-    when any remain. Zero is the healthy result once the P5 verify-backfill has
-    run; the tolerance in ``core.node_output_split`` may only be stripped after
-    this sweep has reported zero across a soak window.
+    telemetry side absent) and logs a LOUD structured ERROR with the count when
+    any remain. Zero is the healthy result once the P5 verify-backfill has run;
+    the tolerance in ``core.node_output_split`` may only be stripped after this
+    sweep has reported zero across a soak window.
+
+    The detection log is ERROR, not WARNING: WARNING does not reach the
+    ``ErrorTrackingLogHandler`` (registered at ERROR) so it would never appear in
+    ``error_events`` / notifications. The durable liveness record (the
+    ``saq:cron:stats:*`` key the readiness advisory reads) is persisted by the
+    ``saq_worker.legacy_agent_return_sweep`` wrapper, mirroring the sibling
+    detection crons.
 
     Cross-org: the system session factory (modulo_system role, BYPASSRLS). Any
     failure is logged and RE-RAISED so SAQ's ``retries`` engage — a scan that
@@ -9365,7 +9372,7 @@ async def legacy_agent_return_sweep() -> dict[str, Any]:
         "sample_truncated": report.sample_truncated,
     }
     if report.legacy_count:
-        _log.warning(
+        _log.error(
             "agent_return.legacy_straggler_detected",
             extra={
                 "legacy_count": report.legacy_count,

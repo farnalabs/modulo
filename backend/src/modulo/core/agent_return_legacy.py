@@ -14,14 +14,37 @@ present, telemetry side absent) so a post-flip writer that re-introduced the
 legacy shape cannot go unnoticed. Zero is the expected, healthy result once the
 P5 verify-backfill has run; a non-zero count blocks the strip.
 
-Read-only: it NEVER mutates a row. The count is over the whole
-``run_node_outputs`` table (cross-org, system role) — the predicate is
-selective (telemetry-absent rows only), so it stays cheap once the backfill is
-complete.
+Only GENUINE node-return rows are counted. The reserved ``__``-prefixed
+sentinel namespace (``__run_meta__``, ``__unknown__``, ``__mwi_audit__`` and
+future sentinels — see :data:`~modulo.db.models.run_node_outputs.
+SENTINEL_NODE_ID_PREFIX`) is excluded: those rows are bookkeeping and are
+written with an outputs side and NO telemetry side by construction, so counting
+them would pin the healthy zero permanently above zero and make the strip gate
+unreachable.
+
+Query cost
+----------
+
+The sweep is a FULL-TABLE sequential scan with NO supporting index today:
+``run_node_outputs``'s primary key is ``(run_id, node_id, attempt_key)`` and
+``attempt_key`` is its trailing column, so a predicate on ``attempt_key`` alone
+cannot use that index. The predicate is therefore NOT selective in the sense of
+touching few pages — it reads the whole table every run. That is acceptable at
+current table size, but a PARTIAL INDEX matching the sweep predicate
+(``ON run_node_outputs (attempt_key) WHERE attempt_key = '__final__' AND
+substr(node_id, 1, 2) <> '__' AND outputs_json IS NOT NULL AND
+node_telemetry_json IS NULL``, mirroring the ``0251``
+``ix_run_node_outputs_enforcement_pending`` precedent) is REQUIRED before the
+table grows. It is deliberately NOT added here — a second concurrent migration
+would collide with another in-flight branch's ``0311`` — and is tracked as a
+follow-up.
+
+Read-only: it NEVER mutates a row.
 """
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -30,7 +53,13 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.node_output_split import stored_row_is_legacy
-from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, META_NODE_ID, RunNodeOutput
+from modulo.db.models.run_node_outputs import (
+    FINAL_ATTEMPT_KEY,
+    SENTINEL_NODE_ID_PREFIX,
+    RunNodeOutput,
+)
+
+_log = logging.getLogger(__name__)
 
 __all__ = [
     "LegacyAgentReturnReport",
@@ -49,8 +78,8 @@ class LegacyAgentReturnReport:
     #: Exact number of ``__final__`` node rows that still reach the legacy
     #: fallback (``stored_row_is_legacy``).
     legacy_count: int
-    #: ``(run_id, node_id)`` pairs, oldest-first by (run_id, node_id), capped at
-    #: the scan's sample limit.
+    #: ``(run_id, node_id)`` pairs, oldest-first by
+    #: ``(created_at, run_id, node_id)``, capped at the scan's sample limit.
     sample: tuple[tuple[str, str], ...] = ()
     #: True when *legacy_count* exceeds the sampled rows.
     sample_truncated: bool = False
@@ -59,16 +88,23 @@ class LegacyAgentReturnReport:
 def _legacy_predicate() -> Any:
     """The set-based twin of :func:`stored_row_is_legacy`.
 
-    Selects stored ``__final__`` node rows (not the run-metadata row) whose
-    outputs side is PRESENT (``outputs_json IS NOT NULL`` — SQL NULL means
-    absent; a stored jsonb ``null`` is present) and whose telemetry side is
-    ABSENT (``node_telemetry_json IS NULL``). A unit test pins this expression
-    against ``stored_row_is_legacy`` on seeded rows so the two forms cannot
-    drift.
+    Selects stored ``__final__`` node rows whose node id is NOT in the reserved
+    ``__``-prefixed sentinel namespace, whose outputs side is PRESENT
+    (``outputs_json IS NOT NULL`` — SQL NULL means absent; a stored jsonb
+    ``null`` is present) and whose telemetry side is ABSENT
+    (``node_telemetry_json IS NULL``). The sentinel exclusion uses the shared
+    :data:`SENTINEL_NODE_ID_PREFIX` so ``__run_meta__`` (and every future
+    sentinel, e.g. ``__mwi_audit__``) is covered from one definition. A unit
+    test pins this expression against ``stored_row_is_legacy`` on seeded rows so
+    the two forms cannot drift.
     """
     return and_(
         RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY,
-        RunNodeOutput.node_id != META_NODE_ID,
+        # Reserved sentinel namespace: run metadata / audit rows carry an
+        # outputs side and no telemetry side by construction, so they must never
+        # be counted as stragglers. ``substr`` (portable across Postgres and
+        # SQLite) avoids LIKE's ``_`` wildcard, which would match any 2 chars.
+        func.substr(RunNodeOutput.node_id, 1, len(SENTINEL_NODE_ID_PREFIX)) != SENTINEL_NODE_ID_PREFIX,
         RunNodeOutput.outputs_json.is_not(None),
         RunNodeOutput.node_telemetry_json.is_(None),
     )
@@ -105,22 +141,29 @@ async def count_legacy_agent_return_rows(
                     RunNodeOutput.node_telemetry_json.is_(None).label("telemetry_absent"),
                 )
                 .where(predicate)
-                .order_by(RunNodeOutput.run_id, RunNodeOutput.node_id)
+                .order_by(RunNodeOutput.created_at, RunNodeOutput.run_id, RunNodeOutput.node_id)
                 .limit(sample_limit)
             )
         ).all()
+        dropped = 0
         for row in rows:
             run_id, node_id = row[0], row[1]
             # Re-confirm through the shared per-row predicate (the SQL filter is
-            # its documented twin). A row that fails the check is a filter-drift
-            # bug — surface it by excluding it from the sample rather than
-            # silently trusting the SQL.
+            # its documented twin). A row that fails the check means the SQL
+            # filter and the shared predicate have drifted; count it and log so
+            # the drift is surfaced rather than silently dropped.
             if not stored_row_is_legacy(
                 outputs_present=not row.outputs_absent,
                 telemetry_present=not row.telemetry_absent,
             ):
+                dropped += 1
                 continue
             sample.append((_as_str(run_id), str(node_id)))
+        if dropped:
+            _log.error(
+                "agent_return.sample_predicate_drift",
+                extra={"dropped_rows": dropped, "legacy_count": legacy_count},
+            )
 
     return LegacyAgentReturnReport(
         legacy_count=legacy_count,

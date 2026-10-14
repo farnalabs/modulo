@@ -283,12 +283,25 @@ def has_telemetry_entry(telemetry_json: Any, node_id: str) -> bool:
 def stored_row_is_legacy(*, outputs_present: bool, telemetry_present: bool) -> bool:
     """True when a stored single-node ``run_node_outputs`` row is LEGACY-shaped.
 
-    The row-scope twin of :func:`has_telemetry_entry`. A ``__final__`` row
-    holds ONE node's value per side, so the reassembled per-run telemetry dict
-    has an entry for that node iff the row's telemetry side is PRESENT. A row
-    therefore reaches :func:`node_telemetry`'s legacy fallback exactly when its
-    outputs side is PRESENT and its telemetry side is ABSENT — the condition
-    this predicate names.
+    The row-scope twin of :func:`has_telemetry_entry`, used to filter
+    ``__final__`` rows — the only row kind :func:`node_telemetry` reads. A
+    ``__final__`` row holds ONE node's value per side, so under the writers'
+    one-entry-per-side encoding the reassembled per-run telemetry dict has an
+    entry for that node iff the row's telemetry side is PRESENT. The flag form
+    therefore reports what :func:`node_telemetry` dispatches on for a
+    ``__final__`` row: outputs side PRESENT and telemetry side ABSENT.
+
+    Two scopes are deliberately NOT claimed:
+
+    * This predicate reads ONLY the two presence flags. It says nothing about
+      the rows :func:`node_telemetry` never reads — ``__``-prefixed sentinel
+      rows (``__run_meta__`` / ``__mwi_audit__``) and marker rows — which can
+      carry outputs-present/telemetry-absent flags without being a node return;
+      the FAR-132 sweep filters those out before applying it.
+    * It assumes the writer's encoding (a present telemetry side carries the
+      node's entry). A hand-written row whose telemetry side is present but
+      empty would not be flagged here even though the reassembled dict has no
+      entry for the node.
 
     *outputs_present* / *telemetry_present* mirror
     ``crud.run_node_outputs._ROW_COLUMNS``' ``outputs_absent`` /
