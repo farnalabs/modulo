@@ -102,8 +102,10 @@ class TrelloTicketTracker(TicketTrackerBase):
     async def health_check(self) -> HealthResult:
         """Probe the configured board, returning the board name as the detail.
 
-        Never raises: any transport or status failure is folded into a
-        credential-redacted :class:`HealthResult` via ``health_check_failure``.
+        Any transport or status failure is folded into a credential-redacted
+        :class:`HealthResult` via ``health_check_failure`` rather than raised.
+        :class:`asyncio.CancelledError` is the exception: it is re-raised so
+        task cancellation still propagates.
         """
         try:
             async with self._client() as client:
@@ -123,8 +125,11 @@ class TrelloTicketTracker(TicketTrackerBase):
         """Read one ticket by id, or list tickets matching the query filters.
 
         A ``ticket_id`` filter short-circuits to a single-card fetch (the raw
-        Trello card dict is returned as the sole record); every other filter
-        (status/labels/search/limit/offset) is applied by :meth:`list_tickets`.
+        Trello card dict is returned as the sole record); every other filter is
+        forwarded to :meth:`list_tickets`, where ``status``/``search``/``limit``/
+        ``offset`` are applied. A ``labels`` filter is forwarded but has no
+        effect — :meth:`list_tickets` does not read ``TicketFilter.labels``, so
+        it is silently ignored.
         """
         filters = q.filters or {}
         if "ticket_id" in filters:
