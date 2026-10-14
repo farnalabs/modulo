@@ -157,7 +157,7 @@ async def _seed_run(
     heartbeat_at: datetime | None = None,
     dispatched_at: datetime | None = None,
 ) -> uuid.UUID:
-    from sqlalchemy import insert
+    from sqlalchemy import column, insert, inspect, table
 
     from modulo.db.models.run import Run
 
@@ -186,9 +186,23 @@ async def _seed_run(
             if value is not None
         }
     )
+    # The test_migration_* suites seed a private database stalled at their own
+    # alembic revision, so the INSERT must name only columns the LIVE table
+    # actually has. An ORM ``insert(Run)`` also emits every later-migration
+    # column (and Python-side default): FAR-1728's 0307
+    # ``runs.guardrail_override_resume_pending``, absent at 0274/0297, broke
+    # those suites this way. Reflect the live column set — the synchronous
+    # Inspector must run inside ``run_sync`` to be safe on the async engine —
+    # and insert the intersection with the values we set.
+    async with db_engine.connect() as conn:
+        existing_columns = await conn.run_sync(
+            lambda sync_conn: {col["name"] for col in inspect(sync_conn).get_columns("runs")}
+        )
+    columns = [name for name in values if name in existing_columns]
+    runs_table = table("runs", *(column(name, Run.__table__.c[name].type) for name in columns))
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
-        await session.execute(insert(Run).values(**values))
+        await session.execute(insert(runs_table).values({name: values[name] for name in columns}))
     return run_id
 
 
