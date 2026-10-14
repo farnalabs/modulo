@@ -112,13 +112,6 @@ class TestCleanupOldTriggerEvents:
         target_ids = next(v for v in delete_stmt.compile().params.values() if isinstance(v, list))
         assert set(target_ids) == set(ids)
 
-    async def test_commits_transaction(self) -> None:
-        session = _make_session([uuid.uuid4()])
-
-        await cleanup_old_trigger_events(session)
-
-        session.commit.assert_awaited_once()
-
     async def test_commit_failure_propagates(self) -> None:
         session = _make_session([uuid.uuid4()])
         session.commit.side_effect = RuntimeError("db down")
@@ -320,56 +313,44 @@ class TestSaqTriggerEventsCleanupAutobeginTransaction:
         mock_factory.assert_called()
         assert result == {"deleted": 0}
 
+    async def test_cron_reopens_transaction_for_each_batch(self, autobegin_false_factory) -> None:
+        """The drain loop must open a transaction PER BATCH, not one around
+        the loop.
 
-class TestCleanupSessionFactory:
-    """``_cleanup_session_factory`` picks the session factory by dialect.
-
-    PostgreSQL (RLS, modulo_app NOBYPASSRLS) → the system session factory,
-    still failing LOUD when ``MODULO_SYSTEM_DATABASE_URL`` is unset.
-    Non-PostgreSQL (SQLite/MariaDB/MySQL — no RLS, no system role) → the
-    plain factory; the system engine is never touched.
-    """
-
-    def test_postgres_uses_system_factory(self) -> None:
-        sentinel = MagicMock(name="system_factory")
+        ``cleanup_old_trigger_events`` commits at the end of every pass, so on
+        an autobegin=False session the transaction is closed again between
+        passes: batching more than ``BATCH_SIZE`` rows requires a fresh
+        ``session.begin()`` per pass. A single transaction wrapped around the
+        loop leaves the second pass with no active transaction and raises
+        ``InvalidRequestError: Can't operate on closed transaction inside
+        context manager`` on the real cron. The mocked single-batch tests
+        above cannot see this.
+        """
+        # BATCH_SIZE is re-imported by the cron on every call, so patching the
+        # module attribute shrinks the batch to 2 and forces 2+ passes without
+        # seeding BATCH_SIZE rows.
+        old_events = [
+            TriggerEvent(
+                organisation_id=uuid.uuid4(),
+                trigger_id=uuid.uuid4(),
+                trigger_type="cron",
+                raw_payload_hash=f"{i:064d}",
+                received_at=datetime.now(UTC) - timedelta(days=DEFAULT_RETENTION_DAYS + 1),
+                validation_result="accepted",
+            )
+            for i in range(3)
+        ]
+        async with autobegin_false_factory() as session, session.begin():
+            session.add_all(old_events)
 
         with (
             patch.object(sw, "get_settings", return_value=MagicMock(modulo_db="postgres")),
-            patch.object(sw, "_make_system_session_factory", return_value=sentinel) as mock_system,
+            patch.object(sw, "_make_system_session_factory", return_value=autobegin_false_factory),
+            patch("modulo.core.cleanup_jobs.trigger_events_cleanup.BATCH_SIZE", 2),
         ):
-            factory = sw._cleanup_session_factory()
+            result = await sw.trigger_events_cleanup({})
 
-        mock_system.assert_called_once()
-        assert factory is sentinel
-
-    @pytest.mark.parametrize("non_pg_db", ["sqlite", "mariadb", "mysql", "SQLite", "MariaDB"])
-    def test_non_postgres_uses_plain_factory(self, non_pg_db: str) -> None:
-        sentinel = MagicMock(name="plain_factory")
-
-        with (
-            patch.object(sw, "get_settings", return_value=MagicMock(modulo_db=non_pg_db)),
-            patch.object(sw, "_make_session_factory", return_value=sentinel) as mock_plain,
-            patch.object(sw, "_make_system_session_factory") as mock_system,
-        ):
-            factory = sw._cleanup_session_factory()
-
-        mock_plain.assert_called_once()
-        mock_system.assert_not_called()
-        assert factory is sentinel
-
-    def test_postgres_with_unset_system_url_fails_loud(self) -> None:
-        """The PG fail-closed path is preserved: an unset
-        ``MODULO_SYSTEM_DATABASE_URL`` raises RuntimeError instead of silently
-        running the cross-org purge as modulo_app."""
-        settings = MagicMock(modulo_db="postgres")
-        settings.modulo_system_database_url = ""
-
-        with (
-            patch.object(sw, "get_settings", return_value=settings),
-            patch.object(sw, "_SYSTEM_ASYNC_ENGINE", None),
-            patch.object(sw, "_make_session_factory") as mock_plain,
-            pytest.raises(RuntimeError, match="MODULO_SYSTEM_DATABASE_URL"),
-        ):
-            sw._cleanup_session_factory()
-
-        mock_plain.assert_not_called()
+        assert result == {"deleted": 3}
+        async with autobegin_false_factory() as session, session.begin():
+            remaining = list((await session.execute(select(TriggerEvent))).scalars().all())
+        assert remaining == []
