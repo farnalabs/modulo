@@ -350,6 +350,20 @@ async def create_pipeline(
     )
     session.add(pipeline)
     await session.flush()
+    # FAR-1593: materialise the org's APPLIED guardrail config onto this
+    # pipeline in the same transaction. The enforcement seams load guardrail
+    # rows BY PIPELINE, and the apply/import fan-out only covers pipelines
+    # that exist at that moment — without this, a pipeline created after the
+    # last apply ran unguarded while the drift surface reported clean.
+    # Lazy import, the db.crud.run house shape (see .importlinter FAR-208).
+    from modulo.core.guardrails.materialise import seed_org_guardrail_rows_for_pipeline
+
+    await seed_org_guardrail_rows_for_pipeline(
+        session,
+        org_id=org_id,
+        pipeline_id=pipeline.id,
+        account_id=account_id,
+    )
     if threshold is not None:
         await audit_circuit_breaker_threshold_change(
             session,
@@ -1023,6 +1037,17 @@ async def _clone_pipeline_config(
     )
     session.add(cloned)
     await session.flush()
+    # FAR-1593: a clone carries no eval rows (FAR-1666 — evals are not
+    # cloned), so it must materialise the org's applied guardrail config
+    # exactly like a fresh create, in the same transaction.
+    from modulo.core.guardrails.materialise import seed_org_guardrail_rows_for_pipeline
+
+    await seed_org_guardrail_rows_for_pipeline(
+        session,
+        org_id=org_id,
+        pipeline_id=cloned.id,
+        account_id=account_id,
+    )
     _log.info("Pipeline config copied: new id=%s", cloned.id)
     return cloned
 

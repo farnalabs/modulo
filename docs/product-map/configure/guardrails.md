@@ -86,6 +86,24 @@ compensation, and single-node self-correction. Built on the eval engine
       payloads only (never raw config content); GET /drift is side-effect
       free so viewer-scoped callers cannot mutate the pin or generate audit
       rows by polling
+- [x] Creation-time materialisation (FAR-1593): a pipeline created AFTER an
+      apply/import inherits the applied org config in the SAME transaction —
+      `db/crud/pipeline.py::create_pipeline` (the single ORM chokepoint every
+      creation path funnels through: REST, MCP, templates, onboarding, library
+      install, workflow import, pipeline clone) invokes
+      `core/guardrails/materialise.py::seed_org_guardrail_rows_for_pipeline`
+      right after the new row flushes, so the by-pipeline enforcement seams
+      (the run-creation ingestion-edge pass and the webhook pre-trigger pass)
+      bind the org default from the first run. Before FAR-1593 the fan-out ran
+      only at apply/import time over the pipelines existing at that moment, so
+      a post-apply pipeline carried no org-level rows while
+      `GET /api/v1/guardrails/config/drift` still read `clean` (the drift hash
+      deduplicates org-level rows by name across pipelines, so one covered
+      pipeline masks an uncovered one). Pipelines created before the fix need
+      one config re-apply to backfill; a raw SQL `INSERT INTO pipelines`
+      bypasses the ORM seam by design (there is no `pipelines` DB trigger) and
+      is not a production creation path
+      (`backend/tests/integration/test_guardrail_pipeline_creation_freshness.py`)
 - [x] Kill switch: an org-level guardrail kill switch disables enforcement and
       is surfaced as a banner in the `/settings/guardrails` view
 - [x] Agent-loop interior interception (FAR-211 T3): a Modulo-hosted bridge

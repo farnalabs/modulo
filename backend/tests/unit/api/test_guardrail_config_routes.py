@@ -612,7 +612,12 @@ async def test_load_pipeline_guardrail_rows_by_name_reads_evals() -> None:
 
 async def test_apply_guardrail_upserts_updates_existing_config_row() -> None:
     """An existing org-level (node_id IS NULL) row is updated through the
-    shared helper with ``existing_eval_id`` so version stamping is not skipped."""
+    shared helper with ``existing_eval_id`` so version stamping is not skipped.
+
+    The upsert implementation moved to ``core.guardrails.materialise`` (FAR-1593
+    — the pipeline-creation seed shares it), so the collaborators are patched
+    there; the route entry point keeps its historical name and signature.
+    """
     from modulo.api.routes.guardrail_config import _apply_guardrail_upserts
     from modulo.core.guardrails.config import GuardrailConfigSet
 
@@ -625,9 +630,9 @@ async def test_apply_guardrail_upserts_updates_existing_config_row() -> None:
     pipeline.id = uuid.uuid4()
 
     with (
-        patch("modulo.api.routes.guardrail_config.to_eval_config", return_value={"action": "block"}),
+        patch("modulo.core.guardrails.materialise.to_eval_config", return_value={"action": "block"}),
         patch(
-            "modulo.api.routes.guardrail_config.create_or_update_eval",
+            "modulo.core.guardrails.materialise.create_or_update_eval",
             new_callable=AsyncMock,
         ) as mock_upsert,
     ):
