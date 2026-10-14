@@ -1292,3 +1292,27 @@ def test_parse_bridge_escalation_marker_takes_the_last_marker():
     parsed = li.parse_bridge_escalation_marker(f"{first}\n{second}\n")
     assert parsed is not None
     assert parsed.tool_name == "second"
+
+
+def test_bridge_escalation_describe_omits_empty_optional_fields():
+    """``describe`` omits guardrail/direction/reason when they are empty.
+
+    A bare escalation (all three optional fields blank) still yields a usable
+    summary string, exercising the false arm of each of the three guards.
+    """
+    bare = li.BridgeEscalation(tool_name="git push", direction="", guardrail="", reason="", args_sha256="h")
+    assert bare.describe() == "tool='git push'"
+
+
+def test_args_sha256_falls_back_to_empty_on_unserialisable_args():
+    """The args fingerprint is best-effort: an unserialisable (circular) args
+    dict hashes the empty string rather than raising (FAR-1694 S2)."""
+    import hashlib
+
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    circular: dict = {}
+    circular["self"] = circular
+    # ``json.dumps`` raises ValueError ("Circular reference detected") for the
+    # cycle, so the helper falls back to hashing the empty string.
+    assert sb._args_sha256(circular) == hashlib.sha256(b"").hexdigest()
