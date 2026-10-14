@@ -65,7 +65,13 @@ jobs:
             echo "::error::shellcheck is not on PATH - actionlint would silently skip every shellcheck rule, so this gate cannot honestly pass. Install shellcheck on the runner image rather than shipping a blind gate."
             exit 1
           fi
-          curl -fsSL --retry 3 -o /tmp/actionlint.tgz \
+          # --proto/--proto-redir pin both the initial request AND any redirect
+          # hop to HTTPS, so a compromised/misconfigured download host cannot
+          # silently downgrade the transfer to plain http (SonarCloud
+          # githubactions:S6506, CWE-319). Same flags the repo's other pinned
+          # release-tarball downloads use (ci.yml sonar-scanner-cli,
+          # k8s-conformance.yml helm/kind/kubectl).
+          curl -fsSL --proto '=https' --proto-redir '=https' --retry 3 -o /tmp/actionlint.tgz \
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tgz" | sha256sum -c -
           tar -xzf /tmp/actionlint.tgz -C /tmp actionlint
