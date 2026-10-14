@@ -125,7 +125,7 @@ from modulo.db.crud.rating import (
     submit_rating,
     update_primitive_ratings_aggregate,
 )
-from modulo.db.models.collection_install import CollectionInstall
+from modulo.db.models.collection_install import CollectionInstall, CollectionInstallEntity
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.team import Team
@@ -2476,6 +2476,26 @@ async def _update_info(session: AsyncSession, install: CollectionInstall) -> tup
     return True, newer.version
 
 
+async def _load_installed_entities(
+    session: AsyncSession,
+    install_id: uuid.UUID,
+) -> list[dict[str, Any]]:
+    """Derive an install's entity list from the ``collection_install_entity`` child rows.
+
+    FAR-1754: the child table is the SINGLE source of truth for "what this
+    install wrote" — the same fact is no longer duplicated into a parent JSON
+    column, so the API response can never diverge from what uninstall acts on.
+    Ordered by the child table's primary key for a deterministic response.
+    """
+    stmt = (
+        select(CollectionInstallEntity)
+        .where(CollectionInstallEntity.install_id == install_id)
+        .order_by(CollectionInstallEntity.entity_type, CollectionInstallEntity.entity_id)
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+    return [{"entity_type": row.entity_type, "entity_id": str(row.entity_id)} for row in rows]
+
+
 async def _install_response(session: AsyncSession, install: CollectionInstall) -> CollectionInstallResponse:
     """Build the standard install response (runnability + update surfacing)."""
     runnable = await compute_runnable(session, install.install_id)
@@ -2490,7 +2510,7 @@ async def _install_response(session: AsyncSession, install: CollectionInstall) -
         agents_granted=install.agents_granted,
         resolved_manifest=install.resolved_manifest,
         connector_checklist=install.connector_checklist,
-        installed_entities=install.installed_entities,
+        installed_entities=await _load_installed_entities(session, install.install_id),
         runnable=runnable,
         update_available=update_available,
         available_version=available_version,

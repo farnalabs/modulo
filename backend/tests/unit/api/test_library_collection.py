@@ -751,7 +751,6 @@ def _make_install_record(
     rec.status = status
     rec.resolved_manifest = {"schemas": {}, "agents": {}}
     rec.connector_checklist = []
-    rec.installed_entities = []
     rec.created_at = _NOW
     # Explicit None: a bare MagicMock auto-creates deleted_at as a truthy mock,
     # which the endpoint's retired-install (soft-delete) guard would 404.
@@ -1323,7 +1322,62 @@ class TestInstallCollectionService:
             "entity_fingerprints": {},
         }
         assert not install.connector_checklist
-        assert not install.installed_entities
+        # FAR-1754: the duplicate JSON copy is gone — install never writes it
+        # (the collection_install_entity child rows are the sole record).
+        assert not hasattr(install, "installed_entities")
+
+
+class TestInstalledEntitiesSingleSourceOfTruth:
+    """FAR-1754: ``collection_install_entity`` is the single source of truth.
+
+    The install API response's ``installed_entities`` list must be derived
+    from the child rows — the parent JSON column that used to duplicate the
+    same fact no longer exists — so what the API reports can never diverge
+    from what uninstall acts on.
+    """
+
+    def test_collection_install_model_has_no_installed_entities_column(self) -> None:
+        from modulo.db.models.collection_install import CollectionInstall
+
+        assert "installed_entities" not in CollectionInstall.__table__.columns
+
+    def test_install_response_derives_entities_from_child_rows(self) -> None:
+        from modulo.api.routes.library import _install_response
+
+        install = _make_install_record()
+        # A stale JSON copy on the record: if the response ever reads one
+        # again (a revert to the dropped column), it reports THIS instead of
+        # the child rows and the assertion below fails.
+        install.installed_entities = [{"entity_type": "pipeline", "entity_id": str(uuid.uuid4())}]
+
+        schema_id = uuid.uuid4()
+        agent_id = uuid.uuid4()
+        child_rows = []
+        for entity_type, entity_id in (("schema", schema_id), ("agent", agent_id)):
+            row = MagicMock()
+            row.entity_type = entity_type
+            row.entity_id = entity_id
+            child_rows.append(row)
+
+        child_result = MagicMock()
+        child_result.scalars.return_value.all.return_value = child_rows
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=child_result)
+
+        with (
+            patch(
+                "modulo.api.routes.library.compute_runnable",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            _patch_no_newer_version(),
+        ):
+            resp = asyncio.run(_install_response(session, install))
+
+        assert resp.installed_entities == [
+            {"entity_type": "schema", "entity_id": str(schema_id)},
+            {"entity_type": "agent", "entity_id": str(agent_id)},
+        ]
 
 
 class TestUninstallCollectionService:

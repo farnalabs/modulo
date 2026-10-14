@@ -15,9 +15,10 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select, text
+from sqlalchemy import inspect, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from modulo.api.routes.library import _install_response
 from modulo.core.library_service._seed_data import MODULO_ORG_ID
 from modulo.core.library_service.grant import grant_collection_agents
 from modulo.core.library_service.install import CollectionInstallError, install_collection
@@ -29,7 +30,7 @@ from modulo.core.library_service.upgrade import (
     detect_collection_update,
     upgrade_collection,
 )
-from modulo.db.models.collection_install import CollectionInstall
+from modulo.db.models.collection_install import CollectionInstall, CollectionInstallEntity
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.organisation import Organisation
 from modulo.db.rls import set_rls_org
@@ -447,6 +448,59 @@ async def test_full_install_verify_uninstall_round_trip(
             {"id": str(pipeline_id)},
         )
         assert row.first() is None
+
+
+# ---------------------------------------------------------------------------
+# Test 1b: FAR-1754 — the install API entity list matches the child rows
+# ---------------------------------------------------------------------------
+
+
+async def test_install_response_entity_list_matches_child_rows(
+    db_engine: AsyncEngine,
+    db_session: AsyncSession,
+    org: uuid.UUID,
+    user: uuid.UUID,
+    schemas: list[uuid.UUID],
+    agent_prim: uuid.UUID,
+    model_backend: uuid.UUID,
+) -> None:
+    """FAR-1754: ``collection_install_entity`` is the single source of truth.
+
+    The install API response's ``installed_entities`` list must equal the
+    child rows exactly — the duplicate parent JSON column is dropped, so the
+    API can never disagree with what uninstall acts on. The migrated schema
+    must no longer carry the column either (migration 0311).
+    """
+    pins = [
+        {"slug": "input-schema", "version": "1.0"},
+        {"slug": "output-schema", "version": "1.0"},
+        {"slug": "test-agent", "version": "1.0"},
+    ]
+    collection_id = await _seed_collection(db_engine, org, pins)
+
+    install = await install_collection(db_session, org, user, collection_id)
+    await db_session.commit()
+
+    response = await _install_response(db_session, install)
+
+    child_result = await db_session.execute(
+        select(CollectionInstallEntity).where(CollectionInstallEntity.install_id == install.install_id)
+    )
+    child_rows = child_result.scalars().all()
+    # 2 schemas + 1 agent + 1 materialised pipeline, each stamped by
+    # ``_stamp_install_id`` (proven by the round-trip test above) — a
+    # non-empty expectation keeps this comparison from passing vacuously.
+    assert len(child_rows) == 4
+
+    expected = sorted((row.entity_type, str(row.entity_id)) for row in child_rows)
+    reported = sorted((entry["entity_type"], entry["entity_id"]) for entry in response.installed_entities or [])
+    assert reported == expected
+
+    # Migration 0311 dropped the duplicate JSON column from the migrated schema.
+    async with db_engine.connect() as conn:
+        columns = await conn.run_sync(lambda sync_conn: inspect(sync_conn).get_columns("collection_install"))
+    column_names = [column["name"] for column in columns]
+    assert "installed_entities" not in column_names
 
 
 # ---------------------------------------------------------------------------
