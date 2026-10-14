@@ -659,9 +659,9 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > functions directly (request ContextVars hydrated by hand, the `trigger.feature`
 > re-anchor pattern), exercising the real `_parse_hitl_action` claim-token guard
 > (`claim_token_required`), the real `_check_agent_tool_scope` role-hierarchy
-> scope gate (a `runner` is denied the decision action's registry key — e.g.
+> scope gate (a `runner` is denied the decision action's registry key - e.g.
 > `hitl.approve` for `approve`; the pre-FAR-1476 `hitl:review` spelling now
-> survives only as an accepted input alias — reported as `insufficient_scope`),
+> survives only as an accepted input alias - reported as `insufficient_scope`),
 > the real `_check_human_only_gate` policy hook, the real HITLManager approve/reject
 > decision dispatch (`approved` / `rejected` + `review_id`), and the real
 > pending-gate serialisation with the shared gate description resolver –
@@ -1142,7 +1142,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `MODULO_SCIM_TOKEN` auth, the `scim` plan gate, record-preserving
 > last-admin-safe deprovisioning, and fail-closed mutation audits) shipped with
 > executing BDD (`scim_provisioning.feature`) and five unit suites but was
-> described by NEITHER product-map layer — invisible to the feature graph and
+> described by NEITHER product-map layer - invisible to the feature graph and
 > to Assistant's `search_documentation` indexer. Corrected the stale `feat-sso`
 > deferral that still claimed "SCIM deprovisioning [is] not implemented yet"
 > (it is: `DELETE /scim/v2/Users/{id}` and `PATCH active=false` tombstone the
@@ -1189,6 +1189,27 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > deferral to production READS (`fetch()` / `map_run_evidence_to_evidence`)
 > and the parked predicate/`decide` (§4). `_ORPHANED_BDD_FEATURES` stays
 > empty.
+>
+> **Closed this walk (2026-10-14):** closed the feature-graph gap left by
+> FAR-759 (PR #1613) – the library collection version-upgrade /
+> update-available flow shipped with no product-map home in either layer (the
+> PR registered only the three `CollectionDetailView` testids in the manifest
+> `elements:` inventory). The `POST .../collections/{id}/versions`
+> author-version endpoint, the `GET .../installs/{install_id}/update` delta
+> surface, the `POST .../upgrade` reconcile endpoint (reconciled / preserved
+> / reported + warnings, operator-modified entities never clobbered, added
+> pins reported not materialised, removed pins reported not deleted,
+> structural pipeline-graph changes reported `manual`) and the detail-view
+> update-badge + Upgrade-button panel are now tracked in the manifest
+> `feat-library-collections` registry and in
+> `library/library-collections.md` (with the
+> `core/library_service/upgrade.py` + `test_collection_upgrade*.py` /
+> `test_install_snapshot.py` citations). Also reconciled `feat-audit`
+> (`audit/audit-trail.md`) with FAR-1697 (PR #1761): the offline-verifiable
+> evidence pack shipped a manifest-registry line but no tracker home – the
+> `evidence-pack` / `verification-key` endpoints, `core/evidence_pack/`, the
+> `modulo evidence verify` CLI and the `hashing.py` extraction now have one.
+> `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

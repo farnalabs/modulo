@@ -232,7 +232,7 @@ Accepts manual, webhook, cron, polling, and agent_signal trigger types. Creates 
 
 ### Audit Logger (`modulo/core/audit_logger/`)
 
-Immutable event recording for all state-changing actions. Written in alpha; viewer/export is team-gated. All events carry `organisation_id`, `actor_id`, `action`, `resource_type`, `resource_id`, and `timestamp`. An export can be emitted as **offline-verifiable evidence**: an Ed25519-signed canonical manifest over the exported files and the re-derived chain result, publishable with the org's verification key and checkable with only the artefact + key — see [`docs/offline-verifiable-evidence.md`](offline-verifiable-evidence.md).
+Immutable event recording for all state-changing actions. Written in alpha; viewer/export is team-gated. All events carry `organisation_id`, `actor_id`, `action`, `resource_type`, `resource_id`, and `timestamp`. An export can be emitted as **offline-verifiable evidence**: an Ed25519-signed canonical manifest over the exported files and the re-derived chain result, publishable with the org's verification key and checkable with only the artefact + key - see [`docs/offline-verifiable-evidence.md`](offline-verifiable-evidence.md).
 
 ### Notification System (`modulo/core/notifier/`)
 

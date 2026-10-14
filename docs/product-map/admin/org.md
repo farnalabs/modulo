@@ -53,7 +53,7 @@ kill-switch, authorization enforcement).
 - [x] Frontend renders org settings at `/admin/org` with org delete confirmation
       and product-analytics toggle (`frontend/src/manifest.yaml` testids)
 - [x] Self-service org profile (`GET`/`PUT /api/v1/admin/org` in
-      `api/routes/admin.py`): admins read and rename the org (slug immutable —
+      `api/routes/admin.py`): admins read and rename the org (slug immutable -
       `test_update_org_ignores_slug_changes`), delete it immediately, and
       regenerate the org API key (`POST /org/regenerate-api-key`); every
       endpoint is admin-gated (operator/viewer → 403,
@@ -73,7 +73,7 @@ kill-switch, authorization enforcement).
 None acknowledged: the org-management flows ship on the real REST surfaces cited
 above. The stale `ui/org_settings.feature` UI-journey drafts (view page, rename,
 invite, revoke, viewer-denial) were archived in the 2026-09-28 Improve
-Architecture walk — none of the eleven `data-testid`s they referenced
+Architecture walk - none of the eleven `data-testid`s they referenced
 (`org-name-input`, `member-list`, `add-member-button`, `invite-member-form`,
 `api-key-row`, `revoke-api-key`, `api-key-status`, etc.) exists anywhere in the
 frontend, so the scenarios described a page that never shipped and could never
@@ -81,10 +81,10 @@ execute (they stayed pinned `@awaiting-implementation`). Each flow's real
 behaviour is covered by the citations above.
 
 ## QA History
-- 2026-09-28: **Improve Architecture product-map walk** —
+- 2026-09-28: **Improve Architecture product-map walk** -
   closed the lingering `ui/org_settings.feature` gap. Archived the five
   never-executing UI-journey drafts (verified: 0/11 referenced testids exist in
-  `frontend/src`; `/admin/org` ships a different surface — org profile, data
+  `frontend/src`; `/admin/org` ships a different surface - org profile, data
   export, product-analytics + community-objects toggles, delete confirmation)
   and re-anchored `feat-org` to the real org-management coverage: self-service
   org profile read/rename/delete + admin role gate (unit, `test_admin.py`),
@@ -95,7 +95,7 @@ behaviour is covered by the citations above.
   `PINNED_AWAITING_IMPLEMENTATION` and the manifest deferral. The manifest
   `feat-org` registry now has no deferral; the tracker's previous claim that the
   drafts were "exercised by component (vitest) and E2E suites" was stale.
-- 2026-09-27: **Improve Architecture product-map walk** —
+- 2026-09-27: **Improve Architecture product-map walk** -
   reconciled the stale "org settings UI not yet built" Known Gap: the
   `/admin/org` UI ships (`AdminOrgSettingsView.vue`, org delete confirmation +
   product-analytics / community-objects toggles + the product-analytics error
@@ -104,7 +104,7 @@ behaviour is covered by the citations above.
   describe frontend flows covered by component + E2E suites rather than backend
   BDD. Manifest `feat-org` gained the shipped UI behaviour line and the scoped
   deferral.
-- 2026-09-25: **Improve Architecture product-map walk** —
+- 2026-09-25: **Improve Architecture product-map walk** -
   closed the feat-org "governance and audit partially wired" gap: the admin
   feature-flag endpoints (`PUT /{flag}` toggle, `PUT`/`DELETE /{flag}/org-override`)
   now emit `feature_flag_override_set` / `feature_flag_override_cleared` events on
@@ -115,7 +115,7 @@ behaviour is covered by the citations above.
   `TestOrgFlagOverrideAudit` in `test_admin_feature_flags.py` pin the events and the
   fail-open contract.
 
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass** - registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/feature-flags`, `/admin/org`
   and wired the two components into the reverse testid-coverage guard
@@ -123,7 +123,7 @@ behaviour is covered by the citations above.
   surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass** - extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/admin/org`: the whole-page view(s) `AdminOrgSettingsView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -131,14 +131,14 @@ behaviour is covered by the citations above.
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-11: **product-map review pass** — registered the shared
+- 2026-09-11: **product-map review pass** - registered the shared
   search-bar surface (`components/shared/FilterBar.vue` static testids
   `filter-bar-search` / `filter-bar-search-wrapper`) in the `/admin/feature-flags` manifest
   `elements:` inventory and wired the component into the reverse testid-coverage
   guard, so the feature-flag search control the page ships stays visible to Assistant's
   docs indexer and `/api/v1/manifest`.
 
-- 2026-09-07: **product-map review pass** — added this
+- 2026-09-07: **product-map review pass** - added this
   behaviour-tracker for `feat-org`, which previously had no `docs/product-map/`
   entry. Behaviours verified against `routes/org_settings.py`,
   `routes/admin_orgs.py`, and the admin org unit tests. Status: covered.

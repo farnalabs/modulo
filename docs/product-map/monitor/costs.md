@@ -70,7 +70,7 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
 - [x] Pipeline cost circuit breaker (§8.10): a pipeline crossing its monthly spend
       threshold trips the breaker and permanently pauses triggers until an admin
       re-enables it via `POST /circuit-breaker/{pipeline_id}/reset`. Since FAR-1530 the
-      trip also FOLDS INTO the unified per-pipeline Paused execution state — it sets
+      trip also FOLDS INTO the unified per-pipeline Paused execution state - it sets
       `run_enabled=false, run_disabled_reason='circuit_breaker', run_disabled_at` only
       when the pipeline is not already disabled (a first-cause operator pause keeps
       its `'operator'` reason), while `circuit_breaker_tripped(_at)` stays the
@@ -92,7 +92,7 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
       behind the org-admin `cost.manage` permission. Threshold changes follow the
       FAR-1184 rule: lowering the threshold or setting one where none existed
       needs only `pipeline.update`, while raising it or clearing an existing one
-      requires `cost.manage` — a refused change returns 403 (REST; the MCP tools
+      requires `cost.manage` - a refused change returns 403 (REST; the MCP tools
       return a `permission_denied` result instead) and writes a
       `pipeline.circuit_breaker_threshold_change_denied` audit event. Every
       accepted change is audited as `pipeline.circuit_breaker_threshold_changed`
@@ -103,7 +103,7 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
       cost-control toggle is a separate, org-scope control (FAR-1183): when it is
       on and a run crosses the org DAILY spend limit (org-scope refusal) or the
       org spend ceiling, the org-wide trigger pause engages automatically on that
-      run — in-flight runs finish, a per-run-ceiling or team-scope-only refusal
+      run - in-flight runs finish, a per-run-ceiling or team-scope-only refusal
       never pauses, an `org.triggers_auto_paused` audit event (reason
       `daily_spend_limit` | `spend_ceiling`, the spend + limit cents, run id) is
       written plus an `org_triggers_auto_paused` admin notification, the pause is
@@ -117,7 +117,7 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
       (`cost_controller/_cost_export_by_pipeline`), and `model` aggregates the
       runs' `cost_breakdown` per `self_reported` cost component (the model/LLM
       spend sources; `cost_controller/_cost_export_by_model`). The pre-2026-09
-      explicit-422 refusal for `pipeline`/`model` is retired — the enum values
+      explicit-422 refusal for `pipeline`/`model` is retired - the enum values
       now stream real rows.
 - [x] Scheduled cost reports: `POST/GET/DELETE /reports` manage org-owned
       daily/weekly/monthly, team/org, csv/json, one-time/recurring reports with
@@ -138,7 +138,7 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
 ## Known Gaps
 
 - **`model` export granularity is per cost-component, not per model-backend
-  identifier** — the runs table records spend via `cost_breakdown` components
+  identifier** - the runs table records spend via `cost_breakdown` components
   (the org's named spend contributors), so `group_by=model` aggregates per
   `self_reported` component (the model/LLM spend sources). A truly per-model
   split requires the producer to record a stable model identifier per run,
@@ -155,7 +155,7 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
   409s while the witness holds. Manifest `feat-costs` registry + this tracker
   updated, citing `core/cost_controller/__init__.py` and
   `test_circuit_breaker.py`.
-- 2026-09-20: **product-map review pass** — closed the "No BDD for
+- 2026-09-20: **product-map review pass** - closed the "No BDD for
   the ceiling / scheduled-report / anomaly / cost-component surfaces" gap.
   `cost_controls.feature` gained executing scenarios for the FAR-391 `/ceiling`
   surface (GET remaining-budget arithmetic, PUT set/clear semantics with explicit
@@ -168,7 +168,7 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
   cost-component CRUD (create 201 / duplicate 409 / self_reported-with-formula 422 /
   list / delete 204). Steps drive the real routes/controllers with mocked DB reads
   (`test_cost_controls.py`).
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass** - registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/costs`, `/admin/costs/components`, `/admin/costs/controls`,
   `/admin/costs/limits`
@@ -177,7 +177,7 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
   surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass** - extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/admin/costs, /admin/costs/components, /admin/costs/controls`: the whole-page view(s) `AdminCostBreakdownView.vue, CostComponentsView.vue, AdminCostControlsView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -185,23 +185,23 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-28: **product-map review pass** — added this behaviour-tracker
+- 2026-08-28: **product-map review pass** - added this behaviour-tracker
   for the registered manifest feature `feat-costs`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/costs.py`,
   `api/routes/cost_components.py`, `core/cost_controller/*` and the costs unit/BDD
   suites. Status: covered.
-- 2026-09-08: **product-map review pass** — closed the anomaly
+- 2026-09-08: **product-map review pass** - closed the anomaly
   persistence gap: freshly detected anomalies are now written on first sight
   (`record_or_get_anomaly`) and uniqueness per detected org-day is enforced
   (`uq_spend_anomalies_org_date`, migration 0201_spend_anomaly_unique_org_date), so every returned anomaly has a
   stable id that `POST /anomalies/dismiss/{id}` can target and dismissal state
   survives repeat detection. Endpoint + CRUD unit suites updated.
-- 2026-09-09: **product-map review pass** — closed the export
+- 2026-09-09: **product-map review pass** - closed the export
   façade gap: `GET /export` no longer silently maps `model` -> team nor crashes
   (`500`) on `pipeline`; unimplemented granularities now fail with an explicit
   422 naming `team` as the supported export grouping. `api/routes/costs.py` +
   `test_costs.py` / `test_costs_routes_coverage.py` updated.
-- 2026-09-10: **product-map review pass** — closed the export
+- 2026-09-10: **product-map review pass** - closed the export
   granularity gap: `GET /export` now implements `pipeline` (per-pipeline
   `Σ runs.total_cost_usd` aggregation over the window) and `model` (per
   `self_reported` cost-component aggregation over the runs' `cost_breakdown`)

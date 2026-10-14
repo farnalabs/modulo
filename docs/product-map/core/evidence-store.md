@@ -37,7 +37,7 @@ keys (FAR-957). Evidence rows are key/value facts scoped to a subject
 (`{subject_type, subject_id}`) inside an organisation; run nodes, guardrail
 policy gates and evals reference evidence keys at pipeline runtime, so this
 store is the shared substrate the `feat-evals` / `feat-guardrails` surfaces
-build on. Infra-only surface — no UI route, so it is tracked here rather than in
+build on. Infra-only surface - no UI route, so it is tracked here rather than in
 the manifest registry.
 
 ## Behaviours
@@ -50,7 +50,7 @@ the manifest registry.
       (`db/models/evidence.py`)
 - [x] RLS org-isolation is enforced by migration `0263_evidence_layer`; the ORM
       exposes no `update()` / `delete()`, and DELETE from the table is forbidden
-      except through the sanctioned retention sweep — the E1 append-only gate is
+      except through the sanctioned retention sweep - the E1 append-only gate is
       pinned by `tests/architecture/test_evidence_deletion_carveout.py`
 - [x] The evidence layer fetches subject-scoped evidence (`fetch()` returns the
       most recent row per distinct key with `DISTINCT ON` for cross-key snapshot
@@ -60,7 +60,7 @@ the manifest registry.
       (`core/eval_engine/evidence_layer.py`)
 - [x] First production write path (FAR-1293): `append_evidence()` in
       `core/eval_engine/evidence_layer.py` is the store's single production
-      write seam — every producer routes through it, so
+      write seam - every producer routes through it, so
       `assert_write_authorisation` runs before any row is added to the session
       and an unowned namespace fails closed with
       `EvidenceWriteAuthorisationError` (no partial write; the row is added to
@@ -84,7 +84,7 @@ the manifest registry.
       optional `max_rows` cap (`core/evidence_retention.py`)
 - [x] Admin REST surface, org-scoped: `GET` + `PUT /api/v1/admin/evidence-retention`
       read/update the policy (GET also returns the live `current_row_count`) and
-      `POST /api/v1/admin/evidence-retention/purge` triggers a manual purge —
+      `POST /api/v1/admin/evidence-retention/purge` triggers a manual purge -
       all gated on `require_system_or_org_admin("evidence_retention.manage")`;
       org admins are bound to their own org (a mismatched `organisation_id` 403s),
       a system admin must name the target org (missing → 422), and the standard
@@ -97,7 +97,7 @@ the manifest registry.
 - [x] The sweep purges oldest rows older than `max_age_days` in batched
       SAVEPOINTs, then (when `max_rows` is set) purges the oldest excess over
       the count limit; it never commits mid-sweep, so the transaction-local
-      `app.organisation_id` RLS scope survives every batch — the unscoped
+      `app.organisation_id` RLS scope survives every batch - the unscoped
       batches-2..N failure a mid-sweep COMMIT caused is pinned at the unit tier
       (`tests/unit/core/evidence/test_retention.py`)
 - [x] Deletion observability: every batch emits a structured log event and the
@@ -108,20 +108,20 @@ the manifest registry.
       (`POST`/`PUT /api/v1/evals/{eval_id}/policy-gate`) runs
       `check_author_warnings` for the eval's `evidence_key` and the
       `PolicyGateResponse` carries advisory (never blocking) `warnings` for three
-      conditions — `no_producer` (no guaranteed producer in eval definitions /
+      conditions - `no_producer` (no guaranteed producer in eval definitions /
       evidence-producing node config / system-state patterns),
       `temporal_ordering` (producer node runs downstream of the gate's binding
       node, or the binding position is indeterminate) and `recent_undefined` (the
       key produced undefined in recent runs); failure falls back to warnings (the
       safe direction) and a warning never prevents binding
-      (`core/eval_engine/author_warnings.py`, wired from `api/routes/evals.py` —
+      (`core/eval_engine/author_warnings.py`, wired from `api/routes/evals.py` -
       also tracked under `feat-evals`)
 
 ## Known Gaps
 
 - **The predicate language and `decide` function are deferred.** The evidence
   layer's predicate evaluation and the compatibility adapter (§4) remain parked
-  — the store now has a production WRITE call site (the FAR-1293 guardrail
+  - the store now has a production WRITE call site (the FAR-1293 guardrail
   persist seam above), but the subject-scoped `fetch()` and
   `map_run_evidence_to_evidence` seam still have no production READ call site:
   the only live read of accumulated facts today is the author-warning check's
@@ -132,9 +132,9 @@ the manifest registry.
 
 ## QA History
 
-- 2026-10-11: **Improve Architecture product-map walk** — closed the stale
+- 2026-10-11: **Improve Architecture product-map walk** - closed the stale
   "no production call site" half of the predicate-language Known Gap left by
-  FAR-1293 (PR #1612): the store is no longer write-dormant — the
+  FAR-1293 (PR #1612): the store is no longer write-dormant - the
   guardrail/eval persist seam appends one `eval_guardrail_<eval_id>` fact per
   decision through the single `append_evidence()` write path with fail-closed
   namespace authorisation. Added the ticked behaviour plus the
@@ -143,17 +143,17 @@ the manifest registry.
   `map_run_evidence_to_evidence`) and the parked predicate/`decide` (§4).
   Status: covered.
 
-- 2026-10-10: **qa-iterate product-map pass** — added the missing citations for
+- 2026-10-10: **qa-iterate product-map pass** - added the missing citations for
   the author-warning surface: `api/routes/evals.py` (the `policy-gate` routes and
   `PolicyGateResponse.warnings`) and
   `tests/unit/core/evidence/test_author_warnings.py`. Clarified in Known Gaps
   that `fetch()` / `map_run_evidence_to_evidence` have no production call site yet
   (the live read is the author-warning query). Status: covered.
 
-- 2026-09-30: **Improve Architecture product-map walk** — new behaviour tracker
+- 2026-09-30: **Improve Architecture product-map walk** - new behaviour tracker
   closing the feature-graph gap left by chunk 9a (FAR-961 / FAR-957): the
   append-only evidence store, the retention policy + purge sweep and the
-  advisory author warnings shipped in `e64ddac0e` without a product-map home —
+  advisory author warnings shipped in `e64ddac0e` without a product-map home -
   invisible to Assistant's `search_documentation` indexer and the feature graph.
   Behaviours verified against `db/models/evidence.py`, migration 0263,
   `core/eval_engine/evidence_layer.py`, `core/eval_engine/author_warnings.py`,

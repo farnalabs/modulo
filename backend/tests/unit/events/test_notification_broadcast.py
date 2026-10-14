@@ -210,14 +210,44 @@ def test_isoformat_none_datetime_and_string_passthrough() -> None:
 
 
 def test_notification_event_fields_falls_back_to_now_when_created_at_missing() -> None:
-    """A target whose created_at is not yet populated falls back to now()."""
+    """A target whose created_at is not yet populated falls back to now().
+
+    The fallback must be a real UTC timestamp — ``is not None`` alone would
+    pass for any junk value the helper could return.
+    """
     from modulo.core.events.notification_events import notification_event_fields
 
     target = MagicMock()
     target.created_at = None
     target.category = "run_failed"
 
+    before = datetime.now(UTC)
+    fields = notification_event_fields(target, "n-1")
+    after = datetime.now(UTC)
+
+    fallback = datetime.fromisoformat(str(fields["created_at"]))
+    assert fallback.tzinfo is not None, "fallback created_at must be timezone-aware"
+    assert before <= fallback <= after
+    assert fields["category"] == "run_failed"
+    assert fields["notification_id"] == "n-1"
+    assert fields["event_id"] == "notification:n-1:created"
+
+
+def test_notification_event_fields_keeps_populated_created_at() -> None:
+    """The committed created_at (INSERT..RETURNING) is passed through unchanged.
+
+    This is the production path — the fallback branch only fires when the
+    server default has not been fetched back yet, so the populated case must
+    NOT be re-stamped with "now".
+    """
+    from modulo.core.events.notification_events import notification_event_fields
+
+    committed = datetime(2026, 9, 23, 12, 0, 0, tzinfo=UTC)
+    target = MagicMock()
+    target.created_at = committed
+    target.category = "run_failed"
+
     fields = notification_event_fields(target, "n-1")
 
-    assert fields["created_at"] is not None
-    assert fields["category"] == "run_failed"
+    assert fields["created_at"] == committed.isoformat()
+    assert fields["event_id"] == "notification:n-1:created"

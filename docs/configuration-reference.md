@@ -81,6 +81,23 @@ See [`docs/product-map/configure/apply.md`](./product-map/configure/apply.md).
 
 ---
 
+## Evidence Signing
+
+Signs the offline-verifiable evidence export: an Ed25519 signature over the
+canonical manifest, so a third party holding only the artefact and the
+pre-published public key can verify authorship and re-derive the embedded
+audit chain without contacting Modulo. See
+[`docs/offline-verifiable-evidence.md`](./offline-verifiable-evidence.md).
+Signing is disabled by default and fails closed: an instance that has not
+configured a signing key cannot emit signed evidence.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_EVIDENCE_SIGNING_KEY` | For signed evidence | – | PEM-encoded Ed25519 private key that signs the evidence manifest. Set it to enable signing; the matching public key is derived and published automatically via the admin verification-key endpoint. Empty disables signed evidence. |
+| `MODULO_EVIDENCE_EXPORTER_IDENTITY` | No | `modulo` | Human-readable identity stamped into the signed manifest as the exporter. Never a credential. |
+
+---
+
 ## Stripe (Purchase Fulfilment)
 
 The `POST /api/v1/webhooks/stripe` webhook verifies the `Stripe-Signature`
