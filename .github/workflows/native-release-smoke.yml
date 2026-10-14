@@ -163,7 +163,7 @@ jobs:
           set -euo pipefail
           export PATH="${HOME}/.local/bin:${PATH}"
           modulo start --detach
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             state_ready="$(python3 -c "import json, pathlib; p = pathlib.Path.home() / '.local' / 'share' / 'modulo' / 'data' / 'state.json'; print(json.loads(p.read_text()).get('api_port', '') if p.is_file() else '')")"
             if [ -n "${state_ready}" ]; then
               echo "BASE=http://127.0.0.1:${state_ready}" >> "$GITHUB_ENV"
@@ -522,7 +522,7 @@ jobs:
           set -euo pipefail
           export PATH="${HOME}/.local/bin:${PATH}"
           modulo start --detach
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             state_ready="$(python3 -c "import json, pathlib; p = pathlib.Path.home() / '.local' / 'share' / 'modulo' / 'data' / 'state.json'; print(json.loads(p.read_text()).get('api_port', '') if p.is_file() else '')")"
             if [ -n "${state_ready}" ]; then
               echo "BASE=http://127.0.0.1:${state_ready}" >> "$GITHUB_ENV"

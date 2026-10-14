@@ -268,6 +268,9 @@ jobs:
           # (the app-leg merge queue's checks_pass polls for all check runs
           # completed and would fail-close on it forever). The trap never
           # masks the original exit status.
+          # Invoked indirectly via `trap on_exit EXIT` - shellcheck has no
+          # call-site for a trap handler, so it reports the body unreachable.
+          # shellcheck disable=SC2317
           on_exit() {
             rc=$?
             if [ "$rc" -ne 0 ] && [ "$COMPLETED" != "true" ] && [ -n "$CREATED_IDS" ]; then
@@ -550,6 +553,9 @@ jobs:
             local file="$1" glob
             while IFS= read -r glob; do
               [ -z "$glob" ] && continue
+              # $glob is a REGISTRY GLOB on purpose - quoting it would turn
+              # pattern matching into a literal string compare (see above).
+              # shellcheck disable=SC2254
               case "$file" in
                 $glob) return 0 ;;
               esac

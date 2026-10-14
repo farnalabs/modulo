@@ -1,0 +1,85 @@
+# workflow-lint - run actionlint over .github/workflows/** on every PR that
+# touches a workflow, and on every push to main that does.
+#
+# Why this gate exists (FAR-1746): nothing enforced actionlint in CI before
+# it, so the tree accumulated 101 findings - unused loop variables, unquoted
+# expansions, ungrouped output redirects, and one real defect (unescaped
+# backticks inside a heredoc that made bash eat text out of a flyctl drift
+# issue body and print "command not found"). Every finding was cleared in the
+# change that added this workflow, so the gate starts green: any NEW finding
+# fails the PR.
+#
+# actionlint is installed from its release tarball with the sha256 pinned
+# below (taken from the release's own actionlint_<version>_checksums.txt),
+# exactly like the repo's verified-install convention for flyctl - no
+# third-party marketplace action sits between the runner and the linter.
+name: "Workflow lint (actionlint)"
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - ".github/actionlint.yaml"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/**"
+      - ".github/actionlint.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workflow-lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 10
+    env:
+      # Bump deliberately: update ACTIONLINT_VERSION and ACTIONLINT_SHA256
+      # together from the upstream release's checksums file.
+      ACTIONLINT_VERSION: "1.7.12"
+      ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install actionlint (pinned, sha256-verified)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The shellcheck binary is the engine behind every SC* finding
+          # actionlint reports inside `run:` blocks. If it is absent,
+          # actionlint skips those rules SILENTLY and still exits 0 - a green
+          # check that checked nothing. Refuse to run blind instead: the runner
+          # image (built from actions/runner-images' Ubuntu 24.04 template)
+          # ships shellcheck, so a missing binary means the image changed and
+          # this gate needs a look.
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            echo "::error::shellcheck is not on PATH - actionlint would silently skip every shellcheck rule, so this gate cannot honestly pass. Install shellcheck on the runner image rather than shipping a blind gate."
+            exit 1
+          fi
+          curl -fsSL --retry 3 -o /tmp/actionlint.tgz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tgz" | sha256sum -c -
+          tar -xzf /tmp/actionlint.tgz -C /tmp actionlint
+          mkdir -p "${HOME}/.local/bin"
+          install -m 0755 /tmp/actionlint "${HOME}/.local/bin/actionlint"
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+          "${HOME}/.local/bin/actionlint" --version
+
+      - name: Run actionlint on .github/workflows/**
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Run from the repo root: actionlint discovers .github/workflows and
+          # loads .github/actionlint.yaml (self-hosted runner labels) itself.
+          # No -ignore list is passed, so actionlint's own exit code is the
+          # gate: any finding fails this job.
+          actionlint
