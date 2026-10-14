@@ -519,9 +519,14 @@ async def saml_acs_provider(
     Resolves the provider by its globally unique ``provider_id`` slug. The
     response is validated against THIS provider's SP entity ID and ACS URL.
 
+    Because the IdP navigates the BROWSER here, a handled callback failure —
+    including an unknown, disabled or non-SAML ``provider_id`` — is rendered
+    as a 303 redirect to the login page carrying a whitelisted ``sso_error``
+    code (FAR-1791), never the uniform JSON 404 the non-ACS routes keep.
+
     RelayState verification (FAR-1003, defense-in-depth):
     - valid signed RelayState for THIS provider → proceed
-    - tampered / wrong provider / expired → reject (401)
+    - tampered / wrong provider / expired → reject (303 to the login page)
     - absent → do NOT fail; proceed on URL path (IdP-initiated SSO)
 
     Security reasoning: with routing by URL path, a forged RelayState
@@ -541,6 +546,19 @@ async def saml_acs_provider(
         # ``_SAML_NOT_FOUND`` above and map to the SAME code here, so nothing
         # new is disclosed.
         raise SsoCallbackError(SSO_ERROR_AUTH_FAILED) from exc
+    except ProgrammingError as exc:
+        # FAR-1791: a DB fault during provider resolution is the same outage
+        # the process-response arms below already map to ``provider_unavailable``
+        # — the browser must get the 303, not ``handle_db_errors``' raw 501 JSON.
+        _log.warning("SAML ACS provider resolution failed — DB table missing: %s", exc, exc_info=True)
+        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
+    except SQLAlchemyError as exc:
+        # Specific arms stay ahead of their bases: ``ProgrammingError`` above is
+        # a ``SQLAlchemyError``, and a session-contract violation is delegated to
+        # the shared classifier (500) exactly as the process-response arm does.
+        raise_session_contract_error(exc, "sso.saml_acs_provider_resolution")
+        _log.warning("SAML ACS provider resolution DB error: %s", exc, exc_info=True)
+        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
     # FAR-1516: the provider names its org — record the ACS attempt there (an
     # unknown slug redirects above and keeps the sentinel).
     bind_audit_org(request, provider.organisation_id)
@@ -758,8 +776,19 @@ async def saml_acs(
     # attribute the attempt to the provider's org. Env-only config has no row,
     # so the sentinel published above stays.
     if system_session is not None and not system_session.in_transaction():
-        async with system_session.begin():
-            legacy_provider = await get_enabled_saml_provider(system_session)
+        try:
+            async with system_session.begin():
+                legacy_provider = await get_enabled_saml_provider(system_session)
+        except ProgrammingError as exc:
+            # FAR-1791: resolve-provider DB faults are browser-facing here too —
+            # map them to the login-page 303, never ``handle_db_errors``' raw
+            # 501/503 JSON. Specific arm ahead of its base (MRO).
+            _log.warning("SAML ACS provider resolution failed — DB table missing: %s", exc, exc_info=True)
+            raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
+        except SQLAlchemyError as exc:
+            raise_session_contract_error(exc, "sso.saml_acs_resolution")
+            _log.warning("SAML ACS provider resolution DB error: %s", exc, exc_info=True)
+            raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
         if legacy_provider is not None:
             bind_audit_org(request, legacy_provider.organisation_id)
     form = await request.form()

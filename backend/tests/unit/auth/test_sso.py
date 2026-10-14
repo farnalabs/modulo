@@ -3286,6 +3286,34 @@ class TestPerProviderSamlRouteErrorPaths:
         assert resp.status_code == 303
         assert resp.headers["location"].endswith("/login?sso_error=provider_unavailable")
 
+    def test_acs_resolution_programming_error_redirects_provider_unavailable(self, client: TestClient) -> None:
+        """FAR-1791: a DB fault during provider RESOLUTION 303s, not 501 JSON.
+
+        The resolution call has its own mapping block: a ``ProgrammingError``
+        raised there must reach the browser as the login-page redirect, exactly
+        like the identical fault inside ``saml_process_response`` — never
+        ``handle_db_errors``' raw 501 JSON page.
+        """
+        from sqlalchemy.exc import ProgrammingError
+
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
+        with patch("modulo.api.routes.sso._read_system_saml_provider_by_slug", new_callable=AsyncMock) as mock_read:
+            mock_read.side_effect = ProgrammingError("select 1", {}, Exception("missing table"))
+            resp = self._post_acs(client)
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=provider_unavailable")
+
+    def test_acs_resolution_sqlalchemy_error_redirects_provider_unavailable(self, client: TestClient) -> None:
+        """FAR-1791: a generic DB error during provider RESOLUTION 303s, not 503 JSON."""
+        from sqlalchemy.exc import SQLAlchemyError
+
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
+        with patch("modulo.api.routes.sso._read_system_saml_provider_by_slug", new_callable=AsyncMock) as mock_read:
+            mock_read.side_effect = SQLAlchemyError("db down")
+            resp = self._post_acs(client)
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=provider_unavailable")
+
     def test_login_value_error_returns_400(self, client: TestClient) -> None:
         _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
         with (
@@ -3660,6 +3688,61 @@ class TestSamlRelayStateRouteIntegration:
 
         assert resp.status_code == 307, resp.text
         mock_provider.assert_awaited_once()
+
+    def test_legacy_acs_resolution_programming_error_redirects_provider_unavailable(self, client: TestClient) -> None:
+        """FAR-1791: a DB fault resolving the legacy provider 303s, not 501 JSON.
+
+        The legacy route reads the enabled provider on the SYSTEM session to bind
+        the audit org; a fault there is browser-facing, so it must map to the
+        login-page redirect rather than ``handle_db_errors``' raw JSON page.
+        """
+        from sqlalchemy.exc import ProgrammingError
+
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
+        system_session = self._free_system_session()
+
+        async def override_system() -> AsyncGenerator[AsyncMock, None]:
+            yield system_session
+
+        _app.dependency_overrides[get_system_db_session] = override_system
+        try:
+            with patch("modulo.api.routes.sso.get_enabled_saml_provider", new_callable=AsyncMock) as mock_provider:
+                mock_provider.side_effect = ProgrammingError("select 1", {}, Exception("missing table"))
+                resp = client.post(
+                    "/api/v1/auth/saml/acs",
+                    data={"SAMLResponse": base64.b64encode(b"<saml/>").decode()},
+                    follow_redirects=False,
+                )
+        finally:
+            _app.dependency_overrides.pop(get_system_db_session, None)
+
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=provider_unavailable")
+
+    def test_legacy_acs_resolution_sqlalchemy_error_redirects_provider_unavailable(self, client: TestClient) -> None:
+        """FAR-1791: a generic DB error resolving the legacy provider 303s, not 503 JSON."""
+        from sqlalchemy.exc import SQLAlchemyError
+
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
+        system_session = self._free_system_session()
+
+        async def override_system() -> AsyncGenerator[AsyncMock, None]:
+            yield system_session
+
+        _app.dependency_overrides[get_system_db_session] = override_system
+        try:
+            with patch("modulo.api.routes.sso.get_enabled_saml_provider", new_callable=AsyncMock) as mock_provider:
+                mock_provider.side_effect = SQLAlchemyError("db down")
+                resp = client.post(
+                    "/api/v1/auth/saml/acs",
+                    data={"SAMLResponse": base64.b64encode(b"<saml/>").decode()},
+                    follow_redirects=False,
+                )
+        finally:
+            _app.dependency_overrides.pop(get_system_db_session, None)
+
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=provider_unavailable")
 
 
 # ---------------------------------------------------------------------------
