@@ -659,9 +659,9 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > functions directly (request ContextVars hydrated by hand, the `trigger.feature`
 > re-anchor pattern), exercising the real `_parse_hitl_action` claim-token guard
 > (`claim_token_required`), the real `_check_agent_tool_scope` role-hierarchy
-> scope gate (a `runner` is denied the decision action's registry key — e.g.
+> scope gate (a `runner` is denied the decision action's registry key - e.g.
 > `hitl.approve` for `approve`; the pre-FAR-1476 `hitl:review` spelling now
-> survives only as an accepted input alias — reported as `insufficient_scope`),
+> survives only as an accepted input alias - reported as `insufficient_scope`),
 > the real `_check_human_only_gate` policy hook, the real HITLManager approve/reject
 > decision dispatch (`approved` / `rejected` + `review_id`), and the real
 > pending-gate serialisation with the shared gate description resolver –
@@ -1140,7 +1140,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `MODULO_SCIM_TOKEN` auth, the `scim` plan gate, record-preserving
 > last-admin-safe deprovisioning, and fail-closed mutation audits) shipped with
 > executing BDD (`scim_provisioning.feature`) and five unit suites but was
-> described by NEITHER product-map layer — invisible to the feature graph and
+> described by NEITHER product-map layer - invisible to the feature graph and
 > to Assistant's `search_documentation` indexer. Corrected the stale `feat-sso`
 > deferral that still claimed "SCIM deprovisioning [is] not implemented yet"
 > (it is: `DELETE /scim/v2/Users/{id}` and `PATCH active=false` tombstone the
