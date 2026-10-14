@@ -443,6 +443,27 @@ def _to_response(ci: Any) -> ConnectorResponse:
     )
 
 
+async def _response_in_tx(session: AsyncSession, ci: ConnectorInstance) -> ConnectorResponse:
+    """Serialize *ci* to its response model while its transaction is OPEN (FAR-1792).
+
+    MUST be awaited from inside the route's ``async with session.begin():``
+    block, before the block exits — never after it commits. The UPDATE flush
+    expires the server-populated ``updated_at`` column
+    (``onupdate=func.current_timestamp()``); reading that attribute after the
+    commit — on the ``expire_on_commit=False, autobegin=False`` DI session,
+    which cannot begin an implicit transaction for the refresh SELECT — raises
+    ``InvalidRequestError: Autobegin is disabled on this Session`` and
+    ``handle_db_errors`` maps it to a 500 even though the write applied.
+
+    The refresh is explicitly awaited (greenlet-side) because a sync attribute
+    read of an expired column from a plain async context would attempt IO
+    outside ``greenlet_spawn``; after it, every attribute ``_to_response``
+    touches is in memory, so the serialization itself performs no IO.
+    """
+    await session.refresh(ci)
+    return _to_response(ci)
+
+
 @router.get("", responses={401: {"description": "Unauthorized"}})
 @handle_db_errors(_CODE_CONNECTORS_LIST_CONNECTORS_ENDPOINT)
 async def list_connectors_endpoint(
@@ -663,13 +684,17 @@ async def _create_connector_tx(
     req: ConnectorCreate,
     principal: TenantPrincipal,
     ciphertext: bytes,
-) -> ConnectorInstance:
-    """Create the connector instance in one transaction with RLS context."""
+) -> ConnectorResponse:
+    """Create the connector instance in one transaction with RLS context.
+
+    Returns the response model built inside the transaction (FAR-1792): a
+    mutation response is never serialized from a just-committed ORM object.
+    """
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.account_id, principal.org_role)
         await validate_owner_team_for_create(session, principal, req.owner_team_id)
-        return await create_connector_instance(
+        ci = await create_connector_instance(
             session,
             org_id=principal.organisation_id,
             name=req.name,
@@ -682,6 +707,7 @@ async def _create_connector_tx(
             owner_team_id=req.owner_team_id,
             tier=req.tier,
         )
+        return await _response_in_tx(session, ci)
 
 
 async def _create_connector(
@@ -689,7 +715,7 @@ async def _create_connector(
     req: ConnectorCreate,
     principal: TenantPrincipal,
     ciphertext: bytes,
-) -> ConnectorInstance:
+) -> ConnectorResponse:
     """Create the connector, mapping DB errors to the route's HTTP error contract."""
     try:
         return await _create_connector_tx(session, req, principal, ciphertext)
@@ -758,9 +784,9 @@ async def create_connector_endpoint(
         _validate_rest_connector_payload(resolved_credentials, req.config_json)
 
     ciphertext = _encrypt(resolved_credentials, settings.fernet_key)
-    ci = await _create_connector(session, req, principal, ciphertext)
+    payload = await _create_connector(session, req, principal, ciphertext)
     _set_verification_warning_header(response, verification_warning)
-    return _to_response(ci)
+    return payload
 
 
 @router.get("/{connector_id}")
@@ -1115,13 +1141,18 @@ async def _apply_connector_update(
     principal: TenantPrincipal,
     settings: Settings,
     connector_id: uuid.UUID,
-) -> tuple[ConnectorInstance | None, str | None]:
+) -> tuple[ConnectorResponse | None, str | None]:
     """Apply a PATCH to a connector inside one transaction (S3776 extraction).
 
-    Returns ``(updated_row, verification_warning)`` — the warning is the
+    Returns ``(response, verification_warning)``. The response model is built
+    INSIDE the transaction (FAR-1792): the UPDATE flush expires the
+    server-populated ``updated_at``, so serializing after the block commits
+    would reload it outside any transaction on the ``autobegin=False`` DI
+    session and 500 a write that had already applied. The warning is the
     non-fatal "GitHub instance unreachable, token NOT verified" signal from
     FAR-1762 (``None`` when verification passed or did not apply); the caller
-    surfaces it on the response header.
+    surfaces it on the response header. A ``None`` response means the row was
+    gone at write time (the route maps it to 404).
 
     The route-convention error-to-status mapping (501/503/409/500 plus the
     HTTPException re-raise) stays in ``update_connector_endpoint``'s exception
@@ -1158,8 +1189,10 @@ async def _apply_connector_update(
             base_url=_github_base_url(effective_config),
         )
         await _validate_team_scope_update(session, principal, existing, updates)
-        ci = await update_connector_instance(session, connector_id, updates)
-        return ci, verification_warning
+        updated = await update_connector_instance(session, connector_id, updates)
+        if updated is None:
+            return None, verification_warning
+        return await _response_in_tx(session, updated), verification_warning
 
 
 @router.patch(
@@ -1185,7 +1218,7 @@ async def update_connector_endpoint(
         new_credentials = updates.pop("credentials")
 
     try:
-        ci, verification_warning = await _apply_connector_update(
+        payload, verification_warning = await _apply_connector_update(
             session,
             updates=updates,
             credentials_updated=credentials_updated,
@@ -1224,10 +1257,10 @@ async def update_connector_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while updating connector.",
         ) from None
-    if ci is None or ci.organisation_id != principal.organisation_id:
+    if payload is None or payload.organisation_id != principal.organisation_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_CONNECTOR_NOT_FOUND)
     _set_verification_warning_header(response, verification_warning)
-    return _to_response(ci)
+    return payload
 
 
 @router.delete(

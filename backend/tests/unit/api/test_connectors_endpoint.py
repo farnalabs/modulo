@@ -19,7 +19,10 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
 
 import modulo.api.routes.connectors as connectors_module
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
@@ -30,6 +33,11 @@ from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.connectors.base import ConnectorACL, HealthResult
 from modulo.connectors.ci_runner import GitHubActionsCIRunner
 from modulo.connectors.github import GitHubNetworkError
+from modulo.db.crud.connector_instance import get_connector_instance as _real_get_connector_instance
+from modulo.db.models.account import Account
+from modulo.db.models.base import Base
+from modulo.db.models.connector_instance import ConnectorInstance
+from modulo.db.models.organisation import Organisation
 from modulo.settings import Settings, get_settings
 
 _FERNET_KEY = Fernet.generate_key().decode()
@@ -2463,3 +2471,78 @@ def test_update_connector_missing_vault_key_fails_closed(client: TestClient) -> 
     assert "credential_reference_error" in detail
     assert "vault/missing" in detail
     update_mock.assert_not_awaited()
+
+
+async def test_patch_connector_returns_2xx_persists_row_and_get_reflects_change(client: TestClient) -> None:
+    """FAR-1792 regression: a successful PATCH must answer 2xx, not 500.
+
+    The CRUD ``update_connector_instance`` flush expires the server-populated
+    ``updated_at`` column (``onupdate=func.current_timestamp()``). Building
+    the response AFTER the ``session.begin()`` block has committed — on the
+    ``expire_on_commit=False, autobegin=False`` DI session — reloaded that
+    expired attribute outside any transaction and raised
+    ``InvalidRequestError: Autobegin is disabled on this Session``, which
+    ``handle_db_errors`` maps to a 500 even though the write had already
+    committed: the caller saw "update failed" for a change that took effect.
+
+    Asserts the full contract the bug violated, not just the write: the 2xx
+    status, the persisted row read back in a fresh session, and a subsequent
+    GET reflecting the change. A write-only assertion would have passed both
+    before and after the fix.
+    """
+    engine = create_async_engine(
+        "sqlite+aiosqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+    connector_id = uuid.uuid4()
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda sync_conn: Base.metadata.create_all(
+                    sync_conn,
+                    tables=[Organisation.__table__, Account.__table__, ConnectorInstance.__table__],
+                )
+            )
+        async with factory() as session, session.begin():
+            session.add(Organisation(id=_ORG_ID, name="FAR-1792 Test Org", slug="far1792-test-org"))
+            session.add(
+                ConnectorInstance(
+                    id=connector_id,
+                    organisation_id=_ORG_ID,
+                    name="Original Name",
+                    connector_type_id="filesystem",
+                    account_id=_USER_ID,
+                    credentials_ciphertext=b"encrypted",
+                    config_json={},
+                    allowed_operations=[],
+                )
+            )
+
+        async def override_session() -> AsyncGenerator[AsyncSession, None]:
+            async with factory() as session:
+                yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+
+        # The module-level autouse fixture stubs this CRUD read with a
+        # MagicMock; the real-DB route under test needs the real function.
+        with patch("modulo.api.routes.connectors.get_connector_instance", _real_get_connector_instance):
+            resp = client.patch(f"/api/v1/connectors/{connector_id}", json={"name": "Renamed"})
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["name"] == "Renamed"
+
+        async with factory() as verify_session, verify_session.begin():
+            stored = (
+                await verify_session.execute(select(ConnectorInstance).where(ConnectorInstance.id == connector_id))
+            ).scalar_one()
+        assert stored.name == "Renamed"
+
+        with patch("modulo.api.routes.connectors.get_connector_instance", _real_get_connector_instance):
+            got = client.get(f"/api/v1/connectors/{connector_id}")
+        assert got.status_code == 200, got.text
+        assert got.json()["name"] == "Renamed"
+    finally:
+        await engine.dispose()
