@@ -234,6 +234,10 @@ INVENTORY: dict[str, PathRecord] = {
     # FAR-1108 chunk 8b: read-only decision-record reconciliation — never
     # mutates a decision record.
     "decision_record_reconcile": _exempt("read_only_detection"),
+    # FAR-132: read-only scan of run_node_outputs for rows still reaching the
+    # Agent-Return-split legacy fallback — reports through a structured log and
+    # mutates no row.
+    "legacy_agent_return_sweep": _exempt("read_only_detection"),
     "check_missed_fire_alerts_cron": _exempt("notification_only"),
     "library_sync": _exempt("derived_state"),
     "metrics_dump": _exempt("telemetry_watermark"),

@@ -9331,3 +9331,48 @@ def func_now_minus(seconds: int) -> Any:
     from sqlalchemy import text as _text
 
     return _text("now() - :seconds * interval '1 second'").bindparams(seconds=seconds)
+
+
+async def legacy_agent_return_sweep() -> dict[str, Any]:
+    """System cron — detect ``run_node_outputs`` rows still carrying the legacy shape (FAR-132).
+
+    The periodic invariant that gates the FAR-132 Agent-Return-split strip: it
+    counts rows in ``run_node_outputs`` that still reach the legacy fallback
+    (``core.node_output_split.stored_row_is_legacy`` — outputs side present,
+    telemetry side absent) and logs a LOUD structured warning with the count
+    when any remain. Zero is the healthy result once the P5 verify-backfill has
+    run; the tolerance in ``core.node_output_split`` may only be stripped after
+    this sweep has reported zero across a soak window.
+
+    Cross-org: the system session factory (modulo_system role, BYPASSRLS). Any
+    failure is logged and RE-RAISED so SAQ's ``retries`` engage — a scan that
+    cannot run must never be mistaken for a clean zero (fail-loud, never
+    silently pass).
+    """
+    from modulo.core.agent_return_legacy import count_legacy_agent_return_rows
+
+    try:
+        async with _open_system_factory()() as session, session.begin():
+            report = await count_legacy_agent_return_rows(session)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("cron_helpers.legacy_agent_return_sweep_failed")
+        raise
+
+    stats: dict[str, Any] = {
+        "legacy_count": report.legacy_count,
+        "sample_truncated": report.sample_truncated,
+    }
+    if report.legacy_count:
+        _log.warning(
+            "agent_return.legacy_straggler_detected",
+            extra={
+                "legacy_count": report.legacy_count,
+                "sample": list(report.sample),
+                "sample_truncated": report.sample_truncated,
+            },
+        )
+    else:
+        _log.info("agent_return.legacy_sweep_clean", extra={"legacy_count": 0})
+    return stats
