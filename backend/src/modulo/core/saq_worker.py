@@ -451,9 +451,10 @@ async def execute_run(
         return {"status": "not_claimed"}
 
     # FAR-1627: scope this claim's ownership for the shutdown handoff. The
-    # entry is dropped on EVERY normal/failed exit and KEPT on cancellation
-    # (SAQ shutdown), so _shutdown_handoff_hook releases exactly the runs
-    # this process abandoned.
+    # entry is dropped on EVERY normal/failed exit; on cancellation (SAQ
+    # shutdown) it is KEPT and marked cancellation-observed, so
+    # _shutdown_handoff_hook releases exactly the runs this process abandoned
+    # AND whose task provably unwound (never a run whose task is stuck).
     from modulo.core.worker_handoff import track_inflight_run
 
     async with track_inflight_run(run_id=rid, org_id=oid, claim_token=str(claim_token)):
@@ -2189,8 +2190,11 @@ def _base_worker_settings(queue_name: str, functions: list[Any]) -> dict[str, An
         # FAR-1627: on worker shutdown (SIGTERM drain -> cancel -> stop), hand
         # every still-in-flight run back for re-dispatch instead of letting it
         # wait out the 30-minute heartbeat TTL. Runs AFTER job cancellation by
-        # SAQ design (Worker.stop calls shutdown callbacks post-drain), so the
-        # predecessor executor is definitively dead at handback time.
+        # SAQ design (Worker.stop calls shutdown callbacks post-drain) — but
+        # NOT unconditionally after the tasks are DEAD: SAQ invokes the
+        # callbacks even when cancellation timed out. The hook therefore only
+        # releases runs whose task actually observed the cancellation (see
+        # worker_handoff's cancellation-observation gate).
         "shutdown": _shutdown_handoff_hook,
         # Instance identity for worker metadata shared with the health gate —
         # platform-neutral resolver at call time (ADR 043 / FAR-1194).
@@ -2283,13 +2287,21 @@ async def _shutdown_handoff_hook(_ctx: dict[str, Any]) -> None:
     """SAQ ``shutdown`` hook — hand every abandoned run back for re-dispatch (FAR-1627).
 
     SAQ's ``Worker.stop()`` runs this AFTER the shutdown grace period and the
-    cancellation hard deadline — i.e. after this process's in-flight
-    ``execute_run``/``resume_run`` job tasks are dead — so every run still in
-    the in-flight registry has definitively lost its executor. The hook
-    promptly releases those claims (reset to ``pending`` with the truthful
-    ``harness.worker_lost`` code) so ``dispatcher_reconcile`` re-dispatches
-    them on its next 60s tick, instead of the runs waiting out the 30-minute
-    heartbeat TTL and surfacing with a misleading dispatch-path code.
+    cancellation hard deadline — but that does NOT mean every job task is
+    dead: ``cancel_tasks`` only returns ``all(task.done())``, and on timeout
+    ``stop()`` logs "Some tasks did not finish cancellation in time, they may
+    be stuck or blocked" and runs the shutdown callbacks anyway. The hook
+    therefore does not assume a dead predecessor. It hands back only the runs
+    whose task actually OBSERVED the cancellation (the executor body has
+    unwound — ``worker_handoff``'s cancellation-observation gate), releasing
+    the claim (reset to ``pending`` with the truthful ``harness.worker_lost``
+    code) so ``dispatcher_reconcile`` re-dispatches them on its next 60s tick;
+    a run whose re-run is not safe (non-idempotent node-started graph, or a
+    never-retry decision) is terminal-failed in place with the same code
+    instead of being put on the un-gated re-dispatch leg. A run whose task is
+    stuck and never observed the cancellation is left untouched and falls back
+    to the 30-minute heartbeat TTL, instead of being re-dispatched against a
+    still-live executor.
 
     Fail-open with a LOUD log: a failed handback must never fail the worker's
     shutdown (the heartbeat-TTL sweeps remain the backstop, and an exception
@@ -2305,11 +2317,12 @@ async def _shutdown_handoff_hook(_ctx: dict[str, Any]) -> None:
     except Exception:
         _log.exception("saq_worker.shutdown_handoff_failed (runs fall back to the heartbeat-TTL sweeps)")
         return
-    if result.get("handed_back"):
+    if result.get("handed_back") or result.get("terminalised"):
         _log.warning(
-            "saq_worker.shutdown_handoff handed_back=%d skipped=%d "
-            "(in-flight runs released for re-dispatch on worker shutdown)",
+            "saq_worker.shutdown_handoff handed_back=%d terminalised=%d skipped=%d "
+            "(in-flight runs released for re-dispatch — or truthfully failed in place — on worker shutdown)",
             result["handed_back"],
+            result.get("terminalised", 0),
             result.get("skipped", 0),
         )
 

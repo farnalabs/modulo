@@ -3,10 +3,15 @@
 Locks the pieces that do not need a real database:
 
 * the process-local in-flight registry semantics (register / re-register
-  replaces / discard / snapshot / clear),
+  replaces / claim-token-fenced discard / claim-token-fenced cancellation
+  observation / snapshot / clear),
 * the ``track_inflight_run`` cancellation contract — a normal or failed exit
-  deregisters, ``asyncio.CancelledError`` (SAQ shutdown) KEEPS the entry so
-  the shutdown hook can release it,
+  deregisters, ``asyncio.CancelledError`` (SAQ shutdown) KEEPS the entry AND
+  marks it cancellation-observed so the shutdown hook can release it, while an
+  entry whose task never observed the cancellation is never handed back,
+* the requeue gate (M1): a non-idempotent node-started run is never put on the
+  un-gated re-dispatch leg, a never-retry ``retry_policy`` forbids the requeue,
+  and a pre-node run keeps the sibling ``_should_redispatch_nodeless`` decision,
 * the SAQ settings wiring — ``_base_worker_settings`` installs
   ``_shutdown_handoff_hook`` as the worker ``shutdown`` lifecycle callback,
 * the error-code registration — ``harness.worker_lost`` is a registered
@@ -19,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -35,6 +41,7 @@ from modulo.core.worker_handoff import (
     WORKER_LOST_ERROR_CODE,
     InFlightRunRegistry,
     get_inflight_registry,
+    handback_inflight_runs,
     track_inflight_run,
 )
 
@@ -50,11 +57,14 @@ def test_registry_register_discard_snapshot() -> None:
     assert {e.run_id for e in snap} == {run_a, run_b}
     assert all(e.org_id == org for e in snap)
 
-    reg.discard(run_a)
+    reg.discard(run_a, "tok-a")
     assert len(reg) == 1
     assert reg.snapshot()[0].run_id == run_b
+    # Discarding with the WRONG token is a silent no-op (M2 fence).
+    reg.discard(run_b, "tok-not-b")
+    assert len(reg) == 1
     # Discarding an unknown id is a silent no-op (idempotency).
-    reg.discard(run_a)
+    reg.discard(run_a, "tok-a")
     assert len(reg) == 1
 
     reg.clear()
@@ -76,6 +86,76 @@ def test_registry_reregister_replaces_claim_token() -> None:
     reg.register(run_id=run_id, org_id=org, claim_token="tok-2")
     assert len(reg) == 1
     assert reg.snapshot()[0].claim_token == "tok-2"
+    # A fresh claim starts UNOBSERVED — cancellation observation is per-attempt.
+    assert reg.snapshot()[0].cancellation_observed is False
+
+
+async def test_overlapping_attempt_discard_cannot_delete_newer_entry() -> None:
+    """M2: an older attempt's exit must NOT delete the newer attempt's entry.
+
+    SAQ's cancellation branch can re-enqueue a run even when ``cancel_tasks``
+    reports the previous task not done, so two attempts for one run can
+    overlap in one process. Without the claim-token fence the older attempt's
+    exit popped the newer attempt's entry, and a later shutdown had NO entry
+    for that run — it waited out the 30-minute heartbeat TTL (the exact
+    failure FAR-1627 removes).
+    """
+    reg = InFlightRunRegistry()
+    run_id = uuid.uuid4()
+    org = uuid.uuid4()
+    entered_1 = asyncio.Event()
+    entered_2 = asyncio.Event()
+    release_1 = asyncio.Event()
+    release_2 = asyncio.Event()
+
+    async def attempt(token: str, entered: asyncio.Event, release: asyncio.Event) -> None:
+        async with track_inflight_run(run_id=run_id, org_id=org, claim_token=token, registry=reg):
+            entered.set()
+            await release.wait()
+
+    task_1 = asyncio.create_task(attempt("tok-1", entered_1, release_1))
+    await entered_1.wait()
+    # The newer attempt re-claims (registers) the SAME run while attempt 1 is
+    # still inside its scope — SAQ's cancellation branch re-enqueues even when
+    # `cancel_tasks` reports the previous task not done.
+    task_2 = asyncio.create_task(attempt("tok-2", entered_2, release_2))
+    await entered_2.wait()
+    assert len(reg) == 1
+    assert reg.snapshot()[0].claim_token == "tok-2"
+
+    # The OLDER attempt exits first — it must not delete the newer entry.
+    release_1.set()
+    await task_1
+    assert len(reg) == 1
+    assert reg.snapshot()[0].claim_token == "tok-2"
+
+    release_2.set()
+    await task_2
+    assert len(reg) == 0
+
+
+def test_mark_cancellation_observed_is_claim_token_fenced() -> None:
+    """A superseded attempt's cancellation must not mark the successor observed.
+
+    Otherwise a live successor's entry would read as ``cancellation_observed``
+    and the shutdown handback would release a run whose task is still running
+    (the M3 guarantee, broken from the other side).
+    """
+    reg = InFlightRunRegistry()
+    run_id = uuid.uuid4()
+    org = uuid.uuid4()
+    reg.register(run_id=run_id, org_id=org, claim_token="tok-old")
+    reg.register(run_id=run_id, org_id=org, claim_token="tok-new")
+
+    reg.mark_cancellation_observed(run_id, "tok-old")  # superseded attempt
+    assert reg.snapshot()[0].cancellation_observed is False
+
+    reg.mark_cancellation_observed(run_id, "tok-new")
+    assert reg.snapshot()[0].cancellation_observed is True
+
+    # Unknown run id: silent no-op.
+    reg.mark_cancellation_observed(uuid.uuid4(), "tok-new")
+    assert len(reg) == 1
 
 
 async def test_track_inflight_run_discards_on_normal_exit() -> None:
@@ -104,6 +184,9 @@ async def test_track_inflight_run_keeps_entry_on_cancellation() -> None:
     ``Worker.stop()`` cancels the in-flight job task, so
     ``asyncio.CancelledError`` tears through ``execute_run`` — the run has
     lost its executor and is exactly what the shutdown hook must release.
+    The entry is additionally marked CANCELLATION-OBSERVED (M3): observing the
+    exception is what proves the executor body unwound, and only observed
+    entries are handed back.
     """
     reg = InFlightRunRegistry()
     run_id = uuid.uuid4()
@@ -115,6 +198,129 @@ async def test_track_inflight_run_keeps_entry_on_cancellation() -> None:
     entry = reg.snapshot()[0]
     assert entry.run_id == run_id
     assert entry.claim_token == "tok"
+    assert entry.cancellation_observed is True
+
+
+async def test_handback_never_touches_unobserved_entries() -> None:
+    """M3: an entry whose task never observed the cancellation is NOT handed back.
+
+    SAQ runs the shutdown callbacks even when cancellation timed out, so a
+    stuck task can still be alive at hook time. Its entry stays
+    ``cancellation_observed=False``; the handback must not touch the database
+    for it at all — the run falls back to the heartbeat-TTL sweeps rather than
+    being re-dispatched against a live predecessor.
+    """
+    reg = InFlightRunRegistry()
+    reg.register(run_id=uuid.uuid4(), org_id=uuid.uuid4(), claim_token="tok")
+    engine = MagicMock()
+
+    result = await handback_inflight_runs(engine, registry=reg)
+
+    engine.connect.assert_not_called()
+    assert result["handed_back"] == 0
+    assert result["terminalised"] == 0
+    assert result["skipped"] == 1
+    # The registry is still drained: the process is shutting down.
+    assert len(reg) == 0
+
+
+# ---------------------------------------------------------------------------
+# M1 — the requeue gate (idempotency + retry policy)
+# ---------------------------------------------------------------------------
+
+
+def _row(**overrides: object) -> SimpleNamespace:
+    """A row-like object carrying every attribute the gate's readers consume."""
+    defaults: dict[str, object] = {
+        "status": "running",
+        "dispatch_phase": "first_node_dispatched",
+        "claim_count": 1,
+        "node_attempt_count": 1,
+        "node_token_usage": None,
+        "started_at": datetime.now(UTC) - timedelta(seconds=10),
+        "dispatched_at": datetime.now(UTC) - timedelta(seconds=10),
+        "sandbox_dispatch_state": None,
+        "retry_policy": {},
+        "outputs_absent": True,
+        "checkpoints_absent": True,
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+def test_gate_refuses_non_idempotent_node_started_run() -> None:
+    """A node-started run on a non-idempotent graph is NEVER re-queued.
+
+    The reset's only recovery is dispatcher_reconcile's capacity-deferred leg,
+    which re-dispatches as ``execute_run`` — a re-EXECUTION with no
+    idempotency gate of its own (executor._fenced_pending_reset's contract).
+    """
+    from modulo.core.worker_handoff import _handback_decision
+
+    decision = _handback_decision(_row(), {"nodes": [{"id": "n1", "idempotent": False}]})
+    assert decision.may_requeue is False
+    assert "non-idempotent" in decision.reason
+
+
+def test_gate_requeues_idempotent_node_started_run() -> None:
+    """The ticket's sanctioned outcome: an idempotent node-started run re-runs."""
+    from modulo.core.worker_handoff import _handback_decision
+
+    decision = _handback_decision(_row(), {"nodes": [{"id": "n1"}]})
+    assert decision.may_requeue is True
+
+
+def test_gate_requeues_zero_node_run_even_on_non_idempotent_graph() -> None:
+    """Zero executed nodes => nothing to double-execute (the sibling premise)."""
+    from modulo.core.worker_handoff import _handback_decision
+
+    decision = _handback_decision(_row(dispatch_phase="claimed"), {"nodes": [{"id": "n1", "idempotent": False}]})
+    assert decision.may_requeue is True
+
+
+def test_gate_honours_never_retry_policy_on_node_started_run() -> None:
+    """A policy covering neither failure nor stall forbids the requeue (M1)."""
+    from modulo.core.worker_handoff import _handback_decision
+
+    policy = {"on": ["eval_failed"], "max_retries": 3}
+    decision = _handback_decision(_row(retry_policy=policy), {"nodes": [{"id": "n1"}]})
+    assert decision.may_requeue is False
+    assert "retry policy" in decision.reason
+
+
+def test_gate_honours_never_retry_policy_on_pre_node_run() -> None:
+    """The pre-node class keeps the sibling ``_should_redispatch_nodeless`` call."""
+    from modulo.core.worker_handoff import _handback_decision
+
+    policy = {"on": ["eval_failed"], "max_retries": 3}
+    decision = _handback_decision(_row(dispatch_phase="claimed", retry_policy=policy), {})
+    assert decision.may_requeue is False
+
+
+def test_gate_honours_retry_budget_on_pre_node_run() -> None:
+    """An exhausted stall-covered budget terminal-fails, as the sibling does."""
+    from modulo.core.worker_handoff import _handback_decision
+
+    policy = {"on": ["stall"], "max_retries": 2}
+    decision = _handback_decision(_row(dispatch_phase="claimed", retry_policy=policy, claim_count=5), {})
+    assert decision.may_requeue is False
+
+
+def test_gate_treats_checkpointed_row_as_node_started() -> None:
+    """A legacy NULL/absent phase with a checkpoint is NOT zero-node (FAR-1088)."""
+    from modulo.core.worker_handoff import _handback_decision
+
+    decision = _handback_decision(
+        _row(dispatch_phase=None, checkpoints_absent=False),
+        {"nodes": [{"id": "n1"}]},
+    )
+    assert decision.may_requeue is True  # idempotent graph, so requeue is still safe
+    # ... but with a non-idempotent graph the same row must be refused:
+    refused = _handback_decision(
+        _row(dispatch_phase=None, checkpoints_absent=False),
+        {"nodes": [{"id": "n1", "idempotent": False}]},
+    )
+    assert refused.may_requeue is False
 
 
 def test_process_registry_is_module_wide_singleton() -> None:
@@ -196,10 +402,11 @@ async def test_shutdown_handoff_hook_logs_handed_back_count(
     import logging
 
     async def _ok(_engine: object) -> dict[str, int]:
-        return {"handed_back": 3, "skipped": 1}
+        return {"handed_back": 3, "terminalised": 2, "skipped": 1}
 
     monkeypatch.setattr(sw, "_get_async_engine", lambda: MagicMock())
     monkeypatch.setattr("modulo.core.worker_handoff.handback_inflight_runs", _ok)
     with caplog.at_level(logging.WARNING):
         await sw._shutdown_handoff_hook({})
     assert any("handed_back=3" in r.message for r in caplog.records)
+    assert any("terminalised=2" in r.message for r in caplog.records)

@@ -9,12 +9,14 @@ force-released the row 30-35 min later with a misleading dispatch-path code
 
 These tests run against a REAL Postgres and drive the REAL shutdown sequence
 at the component level: the runs are registered in the process in-flight
-registry exactly as ``execute_run``/``resume_run`` do after a claim, then a
-REAL ``saq.Worker`` carrying the production ``shutdown`` hook
-(``saq_worker._shutdown_handoff_hook`` — the object ``_base_worker_settings``
-installs) is ``stop()``-ed. That is precisely what SAQ does after SIGTERM:
-``Worker.start`` sets the stop event, ``stop()`` drains/cancels the job
-tasks, then awaits the ``shutdown`` lifecycle callbacks.
+registry exactly as ``execute_run``/``resume_run`` do after a claim AND
+abandoned exactly as SAQ's shutdown cancellation abandons them (a real task
+running the real ``track_inflight_run`` scope, then cancelled — see
+:func:`_register_abandoned`), then a REAL ``saq.Worker`` carrying the
+production ``shutdown`` hook (``saq_worker._shutdown_handoff_hook`` — the
+object ``_base_worker_settings`` installs) is ``stop()``-ed. That is precisely
+what SAQ does after SIGTERM: ``Worker.start`` sets the stop event, ``stop()``
+drains/cancels the job tasks, then awaits the ``shutdown`` lifecycle callbacks.
 
 The runs are seeded with a FRESH heartbeat (seconds old): every TTL-based
 sweep (slot reconciliation, reconcile stale legs, the legacy worker_lost
@@ -23,6 +25,14 @@ CANNOT release these rows. Only the shutdown handback can — which is what
 makes these tests prove PROMPTNESS (seconds, inside the worker's own shutdown)
 rather than merely eventual recovery.
 
+The requeue GATE (M1) is proven here end to end as well: a node-started run
+whose graph is non-idempotent — or whose pipeline ``retry_policy`` forbids the
+re-run — must end up FAILED IN PLACE with the truthful worker-loss code and
+must NOT be admitted by the real ``dispatcher_reconcile`` re-dispatch
+predicate (that leg re-dispatches as ``execute_run``, a re-EXECUTION with no
+idempotency gate of its own). The M3 gate is proven in the other direction: an
+entry whose task never observed the cancellation is never touched at all.
+
 A mocked or SQLite double cannot catch this class of defect: the handback is
 a fenced UPDATE against the real ``runs`` row shape, and the re-dispatch
 admission is the real ``dispatcher_reconcile`` predicate.
@@ -30,6 +40,8 @@ admission is the real ``dispatcher_reconcile`` predicate.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
@@ -50,6 +62,7 @@ from modulo.core.worker_handoff import (
     InFlightRunRegistry,
     get_inflight_registry,
     handback_inflight_runs,
+    track_inflight_run,
 )
 from modulo.db.models.run import Run
 
@@ -246,6 +259,36 @@ async def _stop_worker_with_shutdown_hook(db_engine: AsyncEngine) -> None:
         await worker.stop()
 
 
+async def _register_abandoned(
+    registry: InFlightRunRegistry,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    claim_token: str,
+) -> None:
+    """Register a run the way ``execute_run`` does, then abandon it like SAQ.
+
+    Drives the REAL ``track_inflight_run`` contract instead of poking the
+    registry: a task enters the claim scope, then is CANCELLED (what
+    ``Worker.stop()`` does after the shutdown grace period), so the entry
+    survives AND carries the cancellation observation the handback's M3 gate
+    requires. A bare ``registry.register()`` would leave the entry
+    un-observed — a still-running predecessor the handback must NOT release
+    (see ``test_handoff_leaves_unobserved_run_to_the_backstop``).
+    """
+    entered = asyncio.Event()
+
+    async def _body() -> None:
+        async with track_inflight_run(run_id=run_id, org_id=org_id, claim_token=claim_token, registry=registry):
+            entered.set()
+            await asyncio.Event().wait()  # run until SAQ's shutdown cancellation
+
+    task = asyncio.create_task(_body())
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
 async def test_shutdown_releases_inflight_runs_promptly_with_truthful_code(
     db_engine: AsyncEngine,
     far1627_env: _Env,
@@ -272,8 +315,8 @@ async def test_shutdown_releases_inflight_runs_promptly_with_truthful_code(
     )
 
     registry = clean_registry
-    registry.register(run_id=zero_node, org_id=far1627_env.org_id, claim_token="tok-zero-node")
-    registry.register(run_id=node_started, org_id=far1627_env.org_id, claim_token="tok-node-started")
+    await _register_abandoned(registry, zero_node, far1627_env.org_id, "tok-zero-node")
+    await _register_abandoned(registry, node_started, far1627_env.org_id, "tok-node-started")
 
     await _stop_worker_with_shutdown_hook(db_engine)
 
@@ -303,7 +346,7 @@ async def test_shutdown_releases_inflight_runs_promptly_with_truthful_code(
     # The registry is drained: a second shutdown handback is a no-op.
     assert len(registry) == 0
     second = await handback_inflight_runs(db_engine)
-    assert second == {"handed_back": 0, "skipped": 0}
+    assert second == {"handed_back": 0, "terminalised": 0, "skipped": 0}
 
 
 async def test_handoff_fences_rotated_claim_terminal_and_cancelled_runs(
@@ -344,9 +387,9 @@ async def test_handoff_fences_rotated_claim_terminal_and_cancelled_runs(
 
     registry = clean_registry
     # Registered with the PRE-rotation tokens — the fence must hold.
-    registry.register(run_id=rotated, org_id=far1627_env.org_id, claim_token="tok-old")
-    registry.register(run_id=completed, org_id=far1627_env.org_id, claim_token="tok-complete")
-    registry.register(run_id=cancelling, org_id=far1627_env.org_id, claim_token="tok-cancel")
+    await _register_abandoned(registry, rotated, far1627_env.org_id, "tok-old")
+    await _register_abandoned(registry, completed, far1627_env.org_id, "tok-complete")
+    await _register_abandoned(registry, cancelling, far1627_env.org_id, "tok-cancel")
 
     await _stop_worker_with_shutdown_hook(db_engine)
 
@@ -383,7 +426,7 @@ async def test_handoff_is_org_scoped(
         run_b = await _seed_running_run(db_engine, org_b, run_number=1, claim_token="tok-b", dispatch_phase="claimed")
 
         registry = clean_registry
-        registry.register(run_id=run_a, org_id=far1627_env.org_id, claim_token="tok-a")
+        await _register_abandoned(registry, run_a, far1627_env.org_id, "tok-a")
 
         await _stop_worker_with_shutdown_hook(db_engine)
 
@@ -399,7 +442,130 @@ async def test_handoff_is_org_scoped(
         await _teardown_env(db_engine, org_b)
 
 
+async def test_non_idempotent_node_started_run_is_failed_in_place_not_requeued(
+    db_engine: AsyncEngine,
+    far1627_env: _Env,
+    clean_registry: InFlightRunRegistry,
+) -> None:
+    """M1: a non-idempotent NODE-STARTED run must never reach the re-dispatch leg.
+
+    The handback's reset feeds ``dispatcher_reconcile``'s capacity-deferred leg
+    (``pending`` + ``dispatched_at IS NULL``), which re-dispatches as
+    ``execute_run`` — a RE-EXECUTION with no idempotency gate of its own (the
+    ``executor._fenced_pending_reset`` contract: a new producer MUST keep the
+    ``_graph_is_idempotent`` gate). So the gate lives in the handback: this run
+    is terminal-failed in place with the truthful worker-loss code and is NOT
+    admitted by the real re-dispatch predicate.
+    """
+    run_id = await _seed_running_run(
+        db_engine,
+        far1627_env,
+        run_number=1,
+        claim_token="tok-non-idempotent",
+        dispatch_phase="first_node_dispatched",
+    )
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE pipeline_snapshots SET graph_json = CAST(:g AS json) WHERE id = :sid"),
+            {
+                "g": json.dumps({"nodes": [{"id": "n1", "node_type": "sandbox_agent", "idempotent": False}]}),
+                "sid": str(far1627_env.snapshot_id),
+            },
+        )
+    await _register_abandoned(clean_registry, run_id, far1627_env.org_id, "tok-non-idempotent")
+
+    await _stop_worker_with_shutdown_hook(db_engine)
+
+    after = await _fetch_run(db_engine, run_id)
+    # Failed IN PLACE with the truthful code — not reset to pending, not left
+    # running, not carrying a dispatch-path misattribution.
+    assert after["status"] == "failed"
+    assert after["error_code"] == WORKER_LOST_ERROR_CODE
+    assert map_legacy_code(str(after["error_code"])) == "harness.worker_lost"
+    assert after["completed_at"] is not None
+    assert "non-idempotent" in str(after["error_detail"])
+    # THE M1 assertion: the real re-dispatch predicate must NOT admit it.
+    assert not await _run_matches_re_dispatch_predicate(db_engine, run_id)
+    # And it cannot simply be re-claimed — the claim path only takes
+    # pending/running rows.
+    reclaimed = await claim_run_async(db_engine, str(run_id), str(far1627_env.org_id))
+    assert reclaimed is None
+
+
+async def test_handoff_terminalises_node_started_run_when_retry_policy_forbids_requeue(
+    db_engine: AsyncEngine,
+    far1627_env: _Env,
+    clean_registry: InFlightRunRegistry,
+) -> None:
+    """M1: a never-retry ``retry_policy`` forbids the requeue, as in sibling legs.
+
+    A policy whose ``on`` covers neither the failure nor the stall class is an
+    explicit "never re-run this automatically" decision; the handback honours
+    it instead of requeueing anyway (unit-level coverage of the same gate is in
+    ``tests/unit/core/test_worker_handoff.py``).
+    """
+    run_id = await _seed_running_run(
+        db_engine,
+        far1627_env,
+        run_number=1,
+        claim_token="tok-policy",
+        dispatch_phase="first_node_dispatched",
+    )
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE pipelines SET retry_policy = CAST(:p AS json) WHERE id = :pid"),
+            {"p": json.dumps({"on": ["eval_failed"], "max_retries": 3}), "pid": str(far1627_env.pipeline_id)},
+        )
+    await _register_abandoned(clean_registry, run_id, far1627_env.org_id, "tok-policy")
+
+    await _stop_worker_with_shutdown_hook(db_engine)
+
+    after = await _fetch_run(db_engine, run_id)
+    assert after["status"] == "failed"
+    assert after["error_code"] == WORKER_LOST_ERROR_CODE
+    assert "retry policy" in str(after["error_detail"])
+    assert not await _run_matches_re_dispatch_predicate(db_engine, run_id)
+
+
+async def test_handoff_leaves_unobserved_run_to_the_backstop(
+    db_engine: AsyncEngine,
+    far1627_env: _Env,
+    clean_registry: InFlightRunRegistry,
+) -> None:
+    """M3: an entry whose task never observed the cancellation is NOT handed back.
+
+    SAQ runs the ``shutdown`` callbacks even when ``cancel_tasks`` timed out,
+    so a stuck task can still be alive at hook time. Releasing its run would
+    re-dispatch against a LIVE predecessor whose external side effects (E2B
+    sandbox, connector writes) are not DB-token-fenced — exactly the guarantee
+    the old docstring asserted but never established. The run must stay
+    untouched and fall back to the heartbeat-TTL sweeps instead.
+    """
+    run_id = await _seed_running_run(
+        db_engine,
+        far1627_env,
+        run_number=1,
+        claim_token="tok-stuck",
+        dispatch_phase="first_node_dispatched",
+    )
+    # A bare register(): no task entered/cancelled through track_inflight_run,
+    # so nothing ever observed a cancellation for this entry.
+    clean_registry.register(run_id=run_id, org_id=far1627_env.org_id, claim_token="tok-stuck")
+
+    await _stop_worker_with_shutdown_hook(db_engine)
+
+    after = await _fetch_run(db_engine, run_id)
+    assert after["status"] == "running"
+    assert after["error_code"] is None
+    assert after["heartbeat_at"] is not None
+    assert after["claim_token"] == "tok-stuck"
+    # Not on the re-dispatch leg either — the backstop owns it now.
+    assert not await _run_matches_re_dispatch_predicate(db_engine, run_id)
+    # The registry is still drained (the process is shutting down).
+    assert len(clean_registry) == 0
+
+
 async def test_empty_registry_handback_is_a_silent_noop(db_engine: AsyncEngine) -> None:
     """A worker with no in-flight runs (e.g. the system worker) hands back nothing."""
     result = await handback_inflight_runs(db_engine)
-    assert result == {"handed_back": 0, "skipped": 0}
+    assert result == {"handed_back": 0, "terminalised": 0, "skipped": 0}

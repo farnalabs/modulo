@@ -362,16 +362,27 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   worker while agent runs are mid-execution. Instead of leaving those runs
   `running` until the 30-minute heartbeat TTL above detects the loss (and
   misattributes it to the dispatch path), the worker's SAQ `shutdown` hook
-  releases every run it still owns the moment shutdown begins: the claim is
-  freed (row reset to `pending`, `dispatched_at`/`dispatcher`/`heartbeat_at`
-  cleared) and the run is stamped with the truthful `harness.worker_lost`
-  code plus a detail naming the shutdown. `dispatcher_reconcile` re-dispatches
-  the run on its next 60s tick, so an in-flight run at a release is handed
-  back within ~1 minute of the new worker becoming ready — never 30-35
-  minutes. The handback is claim-token-fenced (a successor's re-claim is never
-  clobbered) and cancellation-requested runs belong to the cancel path. The
-  heartbeat TTL remains the backstop for a hard crash (SIGKILL / OOM), where
-  no shutdown hook runs.
+  processes every run it still owns the moment shutdown begins, and each run
+  takes one of two paths. If a re-run is safe — a pre-node run (zero nodes
+  executed, so nothing can double-execute) within its retry budget, or a
+  node-started run whose graph is idempotent and whose `retry_policy` permits
+  the re-run — the claim is freed (row reset to `pending`,
+  `dispatched_at`/`dispatcher`/`heartbeat_at` cleared) and stamped with the
+  truthful `harness.worker_lost` code plus a detail naming the shutdown;
+  `dispatcher_reconcile` re-dispatches it on its next 60s tick, so an
+  in-flight run at a release is handed back within ~1 minute of the new worker
+  becoming ready — never 30-35 minutes. If a re-run is NOT safe — a
+  non-idempotent node-started graph, or a `retry_policy` that forbids it — the
+  run is failed in place with the same `harness.worker_lost` code and a detail
+  naming why, rather than being put on the un-gated re-dispatch leg (which
+  would re-EXECUTE a side-effecting node). Both writes are claim-token-fenced
+  (a successor's re-claim is never clobbered) and cancellation-requested runs
+  belong to the cancel path. The hook only hands back runs whose task actually
+  observed SAQ's cancellation: SAQ runs the shutdown callbacks even when
+  cancellation timed out, so a stuck, still-live predecessor's run is left
+  untouched rather than re-dispatched against it. The heartbeat TTL remains
+  the backstop for a hard crash (SIGKILL / OOM), where no shutdown hook runs,
+  and for any run the observation gate skips.
 - **HITL review-window terminaliser (FAR-648, FAR-1257):** a sweep wired into
   `dispatcher_reconcile` (every 60s) cancels an `awaiting_human` run whose open
   gate is still UNCLAIMED and UNDECIDED past the resolved review window:
