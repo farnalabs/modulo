@@ -95,7 +95,17 @@ rate-limited by the `TriggerEngine`.
 - [x] Ongoing triggers top the pipeline up toward a target in-flight count,
       respecting `max_concurrent_runs` and the org daily spend limit
 - [x] Agent-signal triggers fire a child pipeline when a watched node
-      completes (`trigger_type agent_signal`), respecting the concurrency limit
+      completes (`trigger_type agent_signal`), respecting the concurrency limit.
+      The child's `node_output` is the watched node's **PURE RETURN** — never the
+      legacy mixed envelope — for any splittable type (`sandbox_agent`, `agent`,
+      `connector`, `dispatch`, `manual`, `gate`), whatever the return's shape
+      (dict, scalar, list, or absent), resolved through the SAME
+      `split_node_output` the write-side splitter uses. The node-type map is
+      EXTENDED from the snapshot edges, so an edge-synthesized HITL gate node
+      (absent from `graph_json.nodes`) resolves to `gate`. An unknown/unsplittable
+      type — or a caller that supplies no type — keeps the value verbatim
+      (pre-split legacy behaviour), and a splittable type with no contract output
+      OMITS the `node_output` key (never a bare `None`) (FAR-131)
 - [x] Org-wide pause kill-switch (`PUT /api/v1/admin/orgs/{org}/triggers/pause`):
       webhooks delivered to a paused org are dropped with a paused response and
       create no runs
@@ -207,6 +217,17 @@ rate-limited by the `TriggerEngine`.
   operation (audited), not per-trigger.
 
 ## QA History
+- 2026-10-14: **FAR-131 fix** – recorded the decided agent-signal child
+  contract: the child run receives the watched node's PURE RETURN (not the
+  legacy mixed envelope) for any splittable type, resolved via
+  `split_node_output`; the node-type map is extended from the snapshot edges so
+  an edge-synthesized HITL gate resolves as `gate`; unknown/unsplittable types
+  keep the value verbatim and a splittable type with no contract output omits
+  the key. A multi-lens review had found the child still received the full
+  envelope when a splittable node's pure return was a scalar/list/None, and that
+  the executor→`fire_agent_signal` wiring was untested. Both are now pinned by
+  `test_agent_signal.py` (non-dict pure-return + gate) and
+  `test_executor.py` (executor-level child-payload + extended-map threading).
 - 2026-10-09: **Improve Architecture product-map walk** – closed the untracked
   FAR-1595 sub-surface (polling connector team-scope gate, merged in PR #1451):
   the middle of the connector team-scope rule — a polling trigger naming a

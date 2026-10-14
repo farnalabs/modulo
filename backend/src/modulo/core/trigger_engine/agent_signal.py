@@ -22,7 +22,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
-from modulo.core.node_output_split import resolve_node_contract_output
+from modulo.core.node_output_split import SPLITTABLE_NODE_TYPES, split_node_output
 from modulo.core.trigger_engine import is_guardrail_blocked_run, record_dependent_suppressed
 from modulo.db.crud.run import create_run
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
@@ -38,21 +38,37 @@ _ACTIVE_STATUSES = ACTIVE_RUN_STATUSES
 def _resolve_child_node_output(
     node_output: Any,
     node_type: str | None,
+    *,
+    node_id: str | None = None,
 ) -> Any:
     """Resolve the value a child pipeline receives under ``node_output`` (FAR-131).
 
-    After the Agent Return split, a child pipeline must receive the completed
-    node's PURE RETURN rather than the legacy mixed envelope. For a node whose
-    resolved type has a dedicated splitter (``resolve_node_contract_output``
-    reports ``found``) the pure return is embedded; for an unknown/unsplittable
-    type -- or when the caller supplied no node type at all (a caller that
-    cannot resolve it) -- the value is returned VERBATIM, preserving the
-    pre-split legacy behaviour. A non-dict value is never split.
+    A child pipeline receives the completed node's PURE RETURN rather than the
+    legacy mixed envelope. The pure return is derived with the SAME
+    ``split_node_output`` the write-side splitter uses, for ANY splittable node
+    type (``SPLITTABLE_NODE_TYPES``) -- so a splittable node whose pure return is
+    a scalar, a list, or ``None`` still yields that pure value; the envelope is
+    never handed to the child.
+
+    For an unknown/unsplittable type -- or when the caller supplied no node type
+    at all (a caller that cannot resolve it) -- the value is returned VERBATIM,
+    preserving the pre-split legacy behaviour.
+
+    Returns ``None`` when a splittable type yields no contract output (never the
+    envelope); the caller OMITS the ``node_output`` key in that case rather than
+    embedding ``None``.
     """
-    if node_type is None or not isinstance(node_output, dict):
+    if node_type is None or node_type not in SPLITTABLE_NODE_TYPES:
         return node_output
-    found, contract_output = resolve_node_contract_output(node_output, node_type)
-    return contract_output if found else node_output
+    pure_return, _telemetry = split_node_output(node_output, node_type, None)
+    if pure_return is None:
+        # Mirror ``_resolve_post_node_eval_target``: a splittable type with no
+        # contract output is surfaced, never passed through silently.
+        _log.debug(
+            "agent_signal.missing_contract_output",
+            extra={"node_id": node_id, "node_type": node_type},
+        )
+    return pure_return
 
 
 async def fire_agent_signal(
@@ -72,10 +88,12 @@ async def fire_agent_signal(
     completed pipeline + node. Creates a child pipeline run for each match.
 
     ``node_output`` is the completed node's RAW legacy envelope; ``node_type``
-    is the node's resolved type. When the type has a dedicated splitter the
-    child run's ``input_payload["node_output"]`` carries the node's PURE RETURN
-    (FAR-131) -- never the legacy mixed envelope. When ``node_type`` is omitted
-    or unknown/unsplittable the value is embedded verbatim.
+    is the node's resolved type. For a SPLITTABLE type the child run's
+    ``input_payload["node_output"]`` carries the node's PURE RETURN (FAR-131) --
+    never the legacy mixed envelope -- whatever the return's shape (a scalar, a
+    list, a dict, or absent). For an unknown/unsplittable type, or when
+    ``node_type`` is omitted, the value is embedded VERBATIM (pre-split legacy
+    behaviour).
 
     Returns a list of ``{trigger_id, run_id, status}`` dicts describing each
     attempted fire.
@@ -210,16 +228,24 @@ async def _process_trigger(
         ]
 
     # Build input payload from node output. FAR-131: embed the node's PURE
-    # RETURN (not the legacy mixed envelope) when its type is splittable, so
-    # the child pipeline's /io never surfaces runtime telemetry; unknown or
-    # unsplittable types keep the value verbatim.
+    # RETURN (not the legacy mixed envelope) for a SPLITTABLE node type,
+    # regardless of the return's shape; unknown/unsplittable types (or a caller
+    # that supplied no type) keep the value verbatim. A splittable type that
+    # yields no contract output OMITS the key (never embeds None) so the child
+    # pipeline's /io never surfaces runtime telemetry.
     input_payload: dict[str, Any] = {
         "source_run_id": str(source_run_id),
         "source_pipeline_id": str_source_pipeline_id,
         "source_node_id": completed_node_id,
     }
     if node_output is not None:
-        input_payload["node_output"] = _resolve_child_node_output(node_output, node_type)
+        resolved_node_output = _resolve_child_node_output(
+            node_output,
+            node_type,
+            node_id=completed_node_id,
+        )
+        if resolved_node_output is not None:
+            input_payload["node_output"] = resolved_node_output
 
     # Resolve snapshot ID from trigger config (pinned, or latest on pipeline).
     snapshot_id, snapshot_skip = await _resolve_snapshot_id(session, trigger, org_id)

@@ -71,6 +71,7 @@ from modulo.core.model_backend_hub import ModelBackendHub
 from modulo.core.node_output_split import (
     DEFAULT_NODE_TYPE,
     SPLITTABLE_NODE_TYPES,
+    extend_node_type_map_from_edges,
     node_telemetry,
     resolve_node_contract_output,
 )
@@ -5070,6 +5071,12 @@ class PipelineExecutor:
         # ``_run_post_stream_and_teardown`` — the teardown runs in a finally so
         # it fires even when the tail re-raises (e.g. CancelledError), matching
         # the original inline block.
+        #
+        # FAR-131: the signal map is EXTENDED from the snapshot edges so an
+        # edge-synthesized HITL gate node (absent from graph_json.nodes)
+        # resolves to "gate" and its child pipeline receives the gate's pure
+        # return. The base map stays unextended for every other consumer.
+        signal_node_type_map = extend_node_type_map_from_edges(node_type_map, graph_json)
         final_status, error_code, error_detail = await self._run_post_stream_and_teardown(
             run_id=run_id,
             org_id=org_id,
@@ -5078,7 +5085,7 @@ class PipelineExecutor:
             error_code=error_code,
             error_detail=error_detail,
             completed_node_outputs=completed_node_outputs,
-            node_type_map=node_type_map,
+            node_type_map=signal_node_type_map,
             model_backend_hub=model_backend_hub,
             connector_hub=connector_hub,
         )
@@ -6280,9 +6287,11 @@ class PipelineExecutor:
 
         FAR-131: each node's resolved type is passed through so
         ``fire_agent_signal`` embeds the node's PURE RETURN (not the legacy
-        mixed envelope) in the child run's input payload. A node absent from
-        the map (e.g. an edge-synthesized HITL gate) resolves to ``None`` and
-        keeps the legacy verbatim behaviour.
+        mixed envelope) in the child run's input payload for a SPLITTABLE type
+        — whatever the return's shape. The map is EXTENDED from the snapshot
+        edges by the caller, so an edge-synthesized HITL gate resolves to
+        ``"gate"``. A node absent from the map resolves to ``None`` and keeps
+        the legacy verbatim behaviour.
         """
         for node_id, node_output in completed_node_outputs.items():
             if _node_output_has_idempotency_gate(node_output):
