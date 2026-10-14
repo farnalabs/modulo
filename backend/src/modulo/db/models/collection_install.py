@@ -12,7 +12,7 @@ conformance test (``tests/unit/db/test_migration_0207_collection_install_trackin
 pins those invariants so model/migration drift cannot silently pass the mocked
 unit tests.
 
-Migration ``0309_library_cluster_db_hardening`` then extended the table with the
+Migration ``0310_library_cluster_db_hardening`` then extended the table with the
 two columns a provenance row was missing: ``deleted_at`` (soft delete — an
 uninstall marks the row instead of destroying the audit trail, and the
 ``SoftDeleteMixin`` global filter hides it from reads) and ``created_by`` (the
