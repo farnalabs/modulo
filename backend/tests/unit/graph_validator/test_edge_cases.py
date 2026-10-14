@@ -15,7 +15,15 @@ from modulo.core import graph_validator as _gv_module
 from modulo.core.graph_validator import GraphValidator, ValidationResult
 from modulo.core.graph_validator._types import try_parse_uuids
 from modulo.core.graph_validator.category_validator import validate_node_category
-from tests.unit.graph_validator._helpers import codes_of as _codes
+from tests.unit.graph_validator._helpers import (
+    codes_of as _codes,
+)
+from tests.unit.graph_validator._helpers import (
+    schema_version_row as _schema_row,
+)
+from tests.unit.graph_validator._helpers import (
+    schema_version_session as _schema_version_session,
+)
 
 _PHASE_1_CUTOVER = _gv_module._PHASE_1_CUTOVER
 
@@ -497,14 +505,21 @@ async def test_deep_schema_skipped_edge_type_not_checked():
 # ---------------------------------------------------------------------------
 
 
-async def test_deep_schema_missing_definition_skipped():
-    """Edges whose schema definition could not be resolved are skipped."""
+async def test_deep_schema_definition_json_none_skipped():
+    """A resolved row whose ``definition_json`` is NULL behaves as no definition.
+
+    Exercises the ``if sv.definition_json else {}`` fallback in
+    ``_resolve_schema_definitions``: the row EXISTS (unlike the missing-row
+    case below), but its definition is null, so the edge is skipped instead
+    of compared against an empty dict. Discriminating: removing the fallback
+    makes ``dict(None)`` raise inside the checker.
+    """
     out_id = uuid.uuid4()
     in_id = uuid.uuid4()
     session = _schema_version_session(
         [
             _schema_row(out_id, {"type": "object", "properties": {"x": {"type": "string"}}}),
-            _schema_row(in_id, {"type": "object", "properties": {"x": {"type": "string"}}}),
+            _schema_row(in_id, None),
         ]
     )
     result = ValidationResult()
@@ -790,31 +805,3 @@ async def test_validate_node_category_found():
     session.execute = AsyncMock(return_value=exc)
     result = await validate_node_category({"id": "n1"}, str(cat_id), session)
     assert result.is_valid
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _schema_row(schema_id: uuid.UUID, definition_json: dict[str, Any]) -> MagicMock:
-    sv = MagicMock()
-    sv.schema_id = schema_id
-    sv.version = "1.0"
-    sv.definition_json = definition_json
-    return sv
-
-
-def _schema_version_session(rows: list[MagicMock]) -> AsyncMock:
-    session = AsyncMock()
-    _rows = list(rows)
-
-    def _exec(*_a, **_kw):
-        r = MagicMock()
-        row = _rows.pop(0) if _rows else None
-        r.scalar_one_or_none.return_value = row
-        r.scalar_one.return_value = row
-        return r
-
-    session.execute = AsyncMock(side_effect=_exec)
-    return session

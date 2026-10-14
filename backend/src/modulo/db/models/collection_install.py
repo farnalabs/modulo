@@ -8,7 +8,7 @@ FAR-1754: ``CollectionInstallEntity`` is the SINGLE source of truth for
 "what this install wrote" — uninstall (``core/library_service/uninstall.py``)
 acts on it and the install API response derives its ``installed_entities``
 list from it. The parent's duplicate ``installed_entities`` JSON column was
-dropped (migration ``0311_collection_install_drop_installed_entities``): the
+dropped (migration ``0312_collection_install_drop_installed_entities``): the
 same fact was persisted twice with nothing keeping the copies in sync, so any
 divergence silently misreported what uninstall would act on.
 
@@ -156,6 +156,10 @@ class CollectionInstallEntity(Base):
 
     __tablename__ = "collection_install_entity"
 
+    # NOTE: no ``index=True`` here — the PK below LEADS with ``install_id``, so
+    # a single-column index on it was pure duplication. Migration 0311 drops the
+    # redundant ``ix_collection_install_entity_install_id`` the ORM never
+    # declared (0207 created it in the DB only).
     install_id: Mapped[UUID] = mapped_column(Uuid(), nullable=False)
     entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
     entity_id: Mapped[UUID] = mapped_column(Uuid(), nullable=False)

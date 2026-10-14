@@ -39,7 +39,7 @@ and org-scoped tenant context injection that is backend-aware.
       repositories
 - [x] `GenericRepository` works across backends (explicit `WHERE organisation_id`
       via `apply_tenant_filter`); `PostgresRepository` overrides only
-      `apply_tenant_filter` (returns the statement unchanged — RLS does the
+      `apply_tenant_filter` (returns the statement unchanged - RLS does the
       filtering), while the shared `BaseRepository.set_org_context` →
       `db/rls.set_rls_org` writes `set_config('app.organisation_id', …, true)` on
       Postgres for transaction-local tenant isolation
@@ -55,7 +55,7 @@ and org-scoped tenant context injection that is backend-aware.
 
 ## Known Gaps
 
-- **SQLite/MariaDB are conformance-only** — Postgres is the supported primary;
+- **SQLite/MariaDB are conformance-only** - Postgres is the supported primary;
       dialect-specific features (e.g. `SET LOCAL` RLS) are not available on
       non-Postgres, which instead records the org in `session.info` and relies on
       the `do_orm_execute` listener to inject `WHERE organisation_id = :oid`
@@ -64,15 +64,15 @@ and org-scoped tenant context injection that is backend-aware.
 
 ## QA History
 
-- 2026-10-10: **qa-iterate product-map pass** — corrected drifted claims. Added
+- 2026-10-10: **qa-iterate product-map pass** - corrected drifted claims. Added
   `db/rls.py` (the real `set_rls_org` / tenant-filter listener implementation) to
-  `code:` — the entry previously attributed the org-context write to
+  `code:` - the entry previously attributed the org-context write to
   `PostgresRepository`, which only overrides `apply_tenant_filter`. Fixed the
   non-existent `RepositoryBase` name to `BaseRepository` and its described role.
-  Corrected the Known Gaps wording (non-Postgres is not "stubbed" — it uses
+  Corrected the Known Gaps wording (non-Postgres is not "stubbed" - it uses
   `session.info` + the `do_orm_execute` WHERE injection). Status: covered.
 
-- 2026-08-25: **product-map review pass** — entry added to close the
+- 2026-08-25: **product-map review pass** - entry added to close the
   dangling `depends-on: feat-core-db-abstraction-core` edge in `teams/org-entity.md`.
   Behaviours re-verified against `db/repositories/*`, `db/session.py`, and the
   multi-backend unit/BDD suites. Status: covered.

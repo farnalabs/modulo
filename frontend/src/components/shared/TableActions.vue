@@ -6,6 +6,7 @@
       type="button"
       @click="action.onClick"
       :disabled="action.disabled"
+      :data-testid="action.testid ?? `table-action-${action.key}`"
       class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
       :class="action.danger ? 'text-destructive hover:bg-destructive/10' : 'text-muted-foreground'"
     >
@@ -25,6 +26,7 @@ interface Action {
   onClick: () => void
   disabled?: boolean
   danger?: boolean
+  testid?: string
 }
 
 defineProps<{ actions: Action[] }>()

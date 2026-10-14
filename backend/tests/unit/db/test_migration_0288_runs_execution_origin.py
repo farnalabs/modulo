@@ -23,8 +23,8 @@ database, plus ORM parity for both new columns:
    0306_trigger_secret_encryption chains onto 0305_guardrail_escalate_action, and
    0307_runs_guardrail_override_resume_pending chains onto 0306_trigger_secret_encryption, and
    0308_runs_dispatch_phase_history chains onto 0307_runs_guardrail_override_resume_pending, and
-   0311_collection_install_drop_installed_entities chains onto
-   0310_library_cluster_db_hardening as the single linear head;
+   0312_collection_install_drop_installed_entities chains onto
+   0311_library_cluster_schema_hygiene as the single linear head;
 2. the upgrade adds EXACTLY two nullable ``varchar(20)`` columns with NO
    server default and NO backfill (metadata-only on the hot ``runs`` table);
 3. the downgrade drops exactly those two columns;
@@ -55,7 +55,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0288_runs_execution_origin"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0287_team_rls_lifecycle_evals"
-_CHAIN_HEAD_MIGRATION = "0311_collection_install_drop_installed_entities"
+_CHAIN_HEAD_MIGRATION = "0312_collection_install_drop_installed_entities"
 
 #: (table, column) pairs the upgrade must add — the two read surfaces ADR-042
 #: needs: the run row itself and the self-contained analytics fact.

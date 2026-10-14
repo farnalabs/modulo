@@ -108,7 +108,7 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
       `max_concurrent_runs` cap is enforced at dispatch (an over-capacity run parks
       with the `pipeline_capacity` marker rather than 429 at trigger time)
 - [x] Per-pipeline Paused execution state (FAR-1530): a pipeline can be PRESENT and
-      VISIBLE but NON-EXECUTING — deliberately distinct from `archived_at` (hidden) and
+      VISIBLE but NON-EXECUTING - deliberately distinct from `archived_at` (hidden) and
       the ORG-level `triggers_paused` kill-switch. `run_enabled` (default true) is the
       unified state; `run_disabled_reason` (closed vocabulary `operator` /
       `circuit_breaker`) and `run_disabled_at` name the first cause, carried on every
