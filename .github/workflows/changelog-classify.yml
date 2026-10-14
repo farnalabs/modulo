@@ -1,8 +1,10 @@
 # Changelog classification check (FAR-1155)
 #
-# Fails a PR that changes user-facing paths (backend/src/**, frontend/src/**)
-# without carrying a label that starts with "changelog:". The failure message
-# names all four labels so the fix is one click. PRs touching none of those
+# Enforces a "changelog:" label on PRs that change user-facing paths
+# (backend/src/**, frontend/src/**). The verdict is published as a SYNTHETIC
+# check run named "changelog-classified" on the PR's head SHA: success =
+# classified (or no user-facing paths), failure = missing label (the message
+# names all four labels so the fix is one click). PRs touching none of those
 # paths pass with a ::notice::.
 #
 # Label state is read LIVE from the issue labels endpoint, with the event
@@ -33,6 +35,57 @@
 # fast-lane check run; the check-run step keeps its original
 # `if: always()` (a failed checkout/setup leaves rc empty → `*` → failure,
 # exactly the standalone workflow's behaviour).
+#
+# FAR-1738: opening a PR fires `opened` and the auto-applied `agent-generated`
+# label fires a near-simultaneous `labeled`, so TWO runs of this workflow
+# execute per head SHA (a third event — the changelog:* label landing, or
+# `unlabeled` — adds more). Historically each run's job check run carried its
+# own gate verdict, so one SHA accumulated 2-3 "Changelog classification"
+# check runs and a single genuine violation was reported 2-3 times over; the
+# paired failures were the single largest GitHub failure source in the week
+# before this change. Run-level dedupe is NOT possible without endangering
+# the fast-lane contract (see the concurrency note below), so the gate is
+# deduplicated at the VERDICT level instead:
+#
+#   * Every run still executes the gate, but the verdict is UPSERTED into a
+#     single synthetic check run ("changelog-classified") keyed on the head
+#     SHA — never POSTed as a new row per run. The step claims the slot early
+#     (POSTs an in_progress row when none exists, so a near-simultaneous
+#     duplicate converges on the same row) and completes it at the end by
+#     RE-LISTING every row with that name on the SHA and PATCHing each one
+#     to the computed conclusion — the re-list is taken at publish time (not
+#     at claim time), so even a true-simultaneity double-POST (two runs that
+#     both saw an empty claim-time list) converges within the same run
+#     rather than waiting for a later same-SHA event.
+#   * Last-writer-wins is a FEATURE: a later run that sees the changelog:*
+#     label overwrites an earlier failure with success on the SAME row, so a
+#     superseded verdict can no longer block a PR (the #1285 false-red class
+#     self-heals without a re-run).
+#   * The job's own check run ("Changelog classification") is no longer the
+#     gate verdict — the job stays green when the gate fails so duplicates
+#     cannot pile up red job check runs. The red lives solely on the
+#     changelog-classified row. If the row cannot be created/completed (API
+#     error), the step fails the job: a gate that cannot publish its verdict
+#     fails CLOSED, never silently open.
+#   * Label sync now also runs after a gate violation (previously a red gate
+#     step stopped the job first); it is an idempotent reconciliation and is
+#     unaffected by duplicates (it already tolerates concurrent runs).
+#
+# NO workflow-level or job-level concurrency (deliberate; carried over from
+# BOTH former workflows, and re-verified under FAR-1738). Cancel-based dedupe
+# is unsafe here: cancelling a run/job completes its check runs with
+# conclusion `cancelled`, which the PR Reviewer counts as FAILED (only
+# success/skipped/neutral pass) and the app-leg merge queue's checks_pass
+# (success-only) also fails — a CANCELLED "Changelog classification" row
+# therefore blocks an otherwise-green PR and dispatches a Branch Fixer run
+# for a non-failure (observed 2026-10-04 on PR #1253). Job/workflow-level
+# `cancel-in-progress: false` does not dedupe either: it only serialises, and
+# a third same-SHA event displaces the single pending slot with a
+# cancellation (the pending-displacement behaviour documented in
+# merge-queue-watchdog.yml). And a blanket cancel across THIS workflow would
+# sometimes cancel the only publisher of the fast-lane check run. The
+# verdict-upsert above gives one gate verdict per head SHA with no
+# cancellation and no risk to the fast-lane publisher.
 
 name: "Check: Changelog classification"
 
@@ -54,26 +107,20 @@ permissions:
   # pull-request-scoped label write GitHub resolves through that scope.
   issues: write
   pull-requests: write
-  # The fast-lane classifier publishes its result as a SYNTHETIC check run
-  # ("fast-lane-eligible") via POST /repos/{repo}/check-runs; the merge queue
-  # reads it by name. This permission is load-bearing (FAR-1099).
+  # Both synthetic check runs are published via POST / PATCH
+  # /repos/{owner}/{repo}/check-runs: the fast-lane classifier's
+  # "fast-lane-eligible" (read by the merge queue BY NAME) and the changelog
+  # gate's "changelog-classified" (FAR-1738 verdict upsert). This permission
+  # is load-bearing (FAR-1099 / FAR-1738).
   checks: write
-
-# NO workflow-level concurrency (deliberate; carried over from BOTH former
-# workflows). Opening a PR fires `opened`, and the auto-applied
-# `agent-generated` label fires a near-simultaneous `labeled`, so two runs
-# enter this workflow at once. With `cancel-in-progress: true` the newer run
-# cancelled the earlier one, leaving a CANCELLED check-run on the head SHA.
-# That superseded duplicate is counted as a failure by both the PR Reviewer
-# (pr-reviewer-agent-prompt.md: every non-success/non-skip/non-neutral
-# conclusion is FAILED) and the merge queue (`checks_pass`: every check-run
-# must be `success`), so a fully green PR was blocked and a Branch Fixer run
-# was dispatched for a non-failure (observed 2026-10-04 on PR #1253). Letting
-# every run complete keeps each check-run `success`; this classifier takes
-# seconds, so the extra run is cheap.
 
 jobs:
   changelog-classify:
+    # FAR-1738: this job's own check run ("Changelog classification") is NOT
+    # the gate verdict — the verdict is the synthetic "changelog-classified"
+    # check run upserted per head SHA (see the header). The job stays green
+    # on a gate violation; a red job row now means an infrastructure failure
+    # (verdict row could not be created/completed, or label sync failed).
     name: Changelog classification
     if: github.event_name == 'pull_request'
     runs-on: ubicloud-standard-2
@@ -184,16 +231,94 @@ jobs:
             --jq '.id'
           echo "fast-lane check run created: conclusion=$CONCLUSION on $HEAD_SHA"
 
-      # --- changelog gate (FAR-1155, logic unchanged) ---
+      # --- changelog gate (FAR-1155 evaluation; FAR-1738 verdict upsert) ---
+      #
+      # The evaluation logic below is unchanged from FAR-1155; what changed is
+      # HOW the verdict is published (see the header's FAR-1738 section). The
+      # step claims a single per-head-SHA check run ("changelog-classified")
+      # early, evaluates, then PATCHes the verdict onto that row. The job's
+      # own check run is NOT the gate verdict: this step exits 0 even when the
+      # gate fails, so a duplicate run cannot pile up a second red job check
+      # run, and a later run's success PATCHES OVER an earlier failure on the
+      # same row (last-writer-wins self-healing). The verdict is published by
+      # re-listing every "changelog-classified" row on the SHA at publish
+      # time and PATCHing each one, so a double-POST race converges within
+      # the same run. A failure to create or complete the verdict row fails
+      # the JOB (fail-closed) — a gate that cannot publish its verdict never
+      # passes silently.
       - name: Require a changelog:* label on user-facing changes
+        id: changelog-gate
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           EVENT_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
           set -euo pipefail
+
+          CHECK_NAME="changelog-classified"
+          CREATED_IDS=""
+          COMPLETED="false"
+
+          # If this step dies AFTER creating the in_progress slot and BEFORE
+          # the final PATCH below, complete the rows it created as `failure`
+          # so the head SHA is never left with a stuck in_progress gate row
+          # (the app-leg merge queue's checks_pass polls for all check runs
+          # completed and would fail-close on it forever). The trap never
+          # masks the original exit status.
+          on_exit() {
+            rc=$?
+            if [ "$rc" -ne 0 ] && [ "$COMPLETED" != "true" ] && [ -n "$CREATED_IDS" ]; then
+              while IFS= read -r id; do
+                [ -n "$id" ] || continue
+                BODY=$(jq -n '{
+                  status: "completed",
+                  conclusion: "failure",
+                  output: {
+                    title: "Changelog gate internal error",
+                    summary: "The changelog gate crashed before publishing its verdict; treated as failure (fail-closed). Re-run this workflow or push a commit to re-evaluate."
+                  }}')
+                gh api "repos/${GITHUB_REPOSITORY}/check-runs/${id}" \
+                  --method PATCH --input - <<< "$BODY" >/dev/null \
+                  || echo "::warning::changelog-gate: could not complete check run ${id} after a step error"
+              done <<< "$CREATED_IDS"
+            fi
+            exit "$rc"
+          }
+          trap on_exit EXIT
+
+          # FAR-1738: claim the verdict slot EARLY. Every duplicate run of
+          # this workflow for the same head SHA converges on the SAME
+          # "changelog-classified" check run: if any row with that name
+          # already exists on the SHA (completed, in_progress, or an
+          # in_progress row left by a concurrent duplicate / crashed earlier
+          # run), reuse its id(s); otherwise create an in_progress row now.
+          # The verdict PATCH at the end updates that row instead of POSTing
+          # a new duplicate per run — so N runs produce ONE gate verdict.
+          rc=0
+          EXISTING_IDS="$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100&filter=all&check_name=${CHECK_NAME}" \
+            --jq '.check_runs[] | select(.name == "'"${CHECK_NAME}"'") | .id')" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::changelog-gate: could not list existing '${CHECK_NAME}' check runs on ${HEAD_SHA} (rc=${rc}); failing closed rather than evaluating without a verdict slot."
+            exit 1
+          fi
+          if [ -z "$EXISTING_IDS" ]; then
+            BODY=$(jq -n \
+              --arg name "$CHECK_NAME" \
+              --arg sha "$HEAD_SHA" \
+              '{name: $name, head_sha: $sha, status: "in_progress"}')
+            rc=0
+            NEW_ID="$(gh api "repos/${GITHUB_REPOSITORY}/check-runs" \
+              --method POST --input - <<< "$BODY" --jq '.id')" || rc=$?
+            if [ "$rc" -ne 0 ] || [ -z "$NEW_ID" ]; then
+              echo "::error::changelog-gate: could not create the '${CHECK_NAME}' check run (rc=${rc}); failing closed."
+              exit 1
+            fi
+            CREATED_IDS="$NEW_ID"
+          fi
 
           # Resolve the diff base the same way ci.yml's integration-changed
           # job does: actions/checkout checks out the PR merge commit, whose
@@ -208,56 +333,117 @@ jobs:
 
           if [ -z "$CHANGED" ]; then
             echo "::notice::PR #${PR_NUMBER} touches no user-facing paths (backend/src, frontend/src) — no changelog label required."
-            exit 0
+            VERDICT="success"
+            TITLE="Changelog classification satisfied"
+            SUMMARY="PR #${PR_NUMBER} touches no user-facing paths (backend/src, frontend/src); no changelog:* label required."
+          else
+            # Prefer the CURRENT label set over the event snapshot (see the
+            # header comment). A changelog label applied moments after the
+            # triggering event may not be live yet, so re-check with a short
+            # bounded grace window before declaring the gate violated.
+            #
+            # A successful labels API call is authoritative even when it returns
+            # an empty set: that is how the gate notices a REMOVED changelog
+            # label. The event payload is the fallback only while every API call
+            # fails, so distinguish success from failure by exit status rather
+            # than treating an empty response as an empty label set.
+            #
+            # --paginate: a changelog:* label beyond the first page (the labels
+            # endpoint returns 30 per page) must still be seen. gh applies --jq
+            # per page, so collect the names as newline-separated text and
+            # rebuild a single JSON array locally; --slurp is not available on
+            # this runner's gh. On API failure the event payload stays as the
+            # LABELS_JSON fallback.
+            LABELS_JSON="$EVENT_LABELS_JSON"
+            HAS_LABEL="false"
+            for attempt in 1 2 3; do
+              if LIVE_LABELS="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" --jq '.[].name' 2>/dev/null)"; then
+                LABELS_JSON="$(printf '%s\n' "$LIVE_LABELS" | jq -Rsc 'split("\n") | map(select(length>0))')"
+              fi
+              # Any label starting with "changelog:" satisfies the gate.
+              # Labels arrive as a JSON array (toJSON / the labels endpoint)
+              # so no separator character can split or merge a label name.
+              if jq -e 'any(.[]; startswith("changelog:"))' >/dev/null 2>&1 <<< "$LABELS_JSON"; then
+                HAS_LABEL="true"
+                break
+              fi
+              [ "$attempt" = "3" ] || sleep 4
+            done
+
+            if [ "$HAS_LABEL" = "true" ]; then
+              echo "PR #${PR_NUMBER} changes user-facing paths and carries a changelog:* label."
+              printf 'Changed user-facing paths:\n%s\n' "$CHANGED"
+              VERDICT="success"
+              TITLE="Changelog classification satisfied"
+              SUMMARY="PR #${PR_NUMBER} changes user-facing paths and carries a changelog:* label.
+          Changed user-facing paths:
+          ${CHANGED}"
+            else
+              echo "Changed user-facing paths:"
+              printf '%s\n' "$CHANGED"
+              VERDICT="failure"
+              TITLE="Changelog classification missing"
+              SUMMARY="PR #${PR_NUMBER} changes user-facing paths (backend/src/**, frontend/src/**) but has no changelog classification label. Apply exactly one of: 'changelog: breaking' (Breaking Changes), 'changelog: feature' (Features), 'changelog: fix' (Fixes), 'changelog: none' (no entry — the correct, honest label for internal/refactor/test/docs/infra work).
+          Changed user-facing paths:
+          ${CHANGED}"
+            fi
           fi
 
-          # Prefer the CURRENT label set over the event snapshot (see the
-          # header comment). A changelog label applied moments after the
-          # triggering event may not be live yet, so re-check with a short
-          # Prefer the CURRENT label set over the event snapshot (see the
-          # header comment). A changelog label applied moments after the
-          # triggering event may not be live yet, so re-check with a short
-          # bounded grace window before declaring the gate violated.
-          #
-          # A successful labels API call is authoritative even when it returns
-          # an empty set: that is how the gate notices a REMOVED changelog
-          # label. The event payload is the fallback only while every API call
-          # fails, so distinguish success from failure by exit status rather
-          # than treating an empty response as an empty label set.
-          #
-          # --paginate: a changelog:* label beyond the first page (the labels
-          # endpoint returns 30 per page) must still be seen. gh applies --jq
-          # per page, so collect the names as newline-separated text and
-          # rebuild a single JSON array locally; --slurp is not available on
-          # this runner's gh. On API failure the event payload stays as the
-          # LABELS_JSON fallback.
-          LABELS_JSON="$EVENT_LABELS_JSON"
-          HAS_LABEL="false"
-          for attempt in 1 2 3; do
-            if LIVE_LABELS="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" --jq '.[].name' 2>/dev/null)"; then
-              LABELS_JSON="$(printf '%s\n' "$LIVE_LABELS" | jq -Rsc 'split("\n") | map(select(length>0))')"
-            fi
-            # Exactly one of the four labels (any label starting with
-            # "changelog:") satisfies the gate. Labels arrive as a JSON array
-            # (toJSON / the labels endpoint) so no separator character can
-            # split or merge a label name.
-            if jq -e 'any(.[]; startswith("changelog:"))' >/dev/null 2>&1 <<< "$LABELS_JSON"; then
-              HAS_LABEL="true"
-              break
-            fi
-            [ "$attempt" = "3" ] || sleep 4
-          done
-
-          if [ "$HAS_LABEL" = "true" ]; then
-            echo "PR #${PR_NUMBER} changes user-facing paths and carries a changelog:* label."
-            printf 'Changed user-facing paths:\n%s\n' "$CHANGED"
-            exit 0
+          # FAR-1738: publish the verdict by UPSERT — RE-LIST every
+          # "changelog-classified" row on the head SHA at publish time and
+          # PATCH each one to the computed conclusion. Re-listing here (not
+          # reusing the claim-time EXISTING_IDS) closes the double-POST
+          # race: two near-simultaneous runs that both saw an empty
+          # claim-time list each POST their own row, so each run's
+          # claim-time view holds only its own id — the publish-time
+          # re-list sees BOTH rows and converges them to the same verdict
+          # within the same run. Without it, diverging rows sit on the SHA
+          # until a later same-SHA event reconciles them, and if no event
+          # comes one red row can block the PR. Last-writer-wins still
+          # holds across runs: a later run that sees a freshly-applied
+          # changelog:* label overwrites an earlier failure — a superseded
+          # verdict can no longer block a PR.
+          rc=0
+          VERDICT_IDS="$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100&filter=all&check_name=${CHECK_NAME}" \
+            --jq '.check_runs[] | select(.name == "'"${CHECK_NAME}"'") | .id')" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::changelog-gate: could not re-list '${CHECK_NAME}' check runs on ${HEAD_SHA} at publish time (rc=${rc}); failing closed."
+            exit 1
           fi
+          # Belt-and-braces: a row this run just POSTed must never be
+          # dropped by a stale re-list response; union it back in.
+          if [ -n "${CREATED_IDS:-}" ]; then
+            VERDICT_IDS="$(printf '%s\n%s\n' "$VERDICT_IDS" "$CREATED_IDS" | sort -u)"
+          fi
+          if [ -z "$VERDICT_IDS" ]; then
+            echo "::error::changelog-gate: no '${CHECK_NAME}' check run found on ${HEAD_SHA} to publish the verdict onto; failing closed."
+            exit 1
+          fi
+          BODY=$(jq -n \
+            --arg conclusion "$VERDICT" \
+            --arg title "$TITLE" \
+            --arg summary "$SUMMARY" \
+            '{status: "completed", conclusion: $conclusion, output: {title: $title, summary: $summary}}')
+          while IFS= read -r id; do
+            [ -n "$id" ] || continue
+            if ! gh api "repos/${GITHUB_REPOSITORY}/check-runs/${id}" \
+                --method PATCH --input - <<< "$BODY" >/dev/null; then
+              echo "::error::changelog-gate: could not publish verdict '${VERDICT}' to check run ${id}; failing closed."
+              exit 1
+            fi
+            echo "changelog-classified check run ${id} -> ${VERDICT}"
+          done <<< "$VERDICT_IDS"
+          COMPLETED="true"
 
-          echo "Changed user-facing paths:"
-          printf '%s\n' "$CHANGED"
-          echo "::error::PR #${PR_NUMBER} changes user-facing paths (backend/src/**, frontend/src/**) but has no changelog classification label. Apply exactly one of: 'changelog: breaking' (Breaking Changes), 'changelog: feature' (Features), 'changelog: fix' (Fixes), 'changelog: none' (no entry — the correct, honest label for internal/refactor/test/docs/infra work)."
-          exit 1
+          if [ "$VERDICT" = "failure" ]; then
+            # The annotation keeps the human-visible log signal; enforcement
+            # is the red changelog-classified check run, NOT the job
+            # conclusion (the job stays green on a gate violation so
+            # duplicate runs cannot stack red job check runs — FAR-1738).
+            echo "::error::PR #${PR_NUMBER} changes user-facing paths (backend/src/**, frontend/src/**) but has no changelog classification label. Apply exactly one of: 'changelog: breaking' (Breaking Changes), 'changelog: feature' (Features), 'changelog: fix' (Fixes), 'changelog: none' (no entry — the correct, honest label for internal/refactor/test/docs/infra work)."
+          fi
+          exit 0
 
       # --- path-derived label sync (FAR-1527) ---
       #
