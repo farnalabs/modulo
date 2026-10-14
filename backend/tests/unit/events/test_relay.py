@@ -439,6 +439,22 @@ class _AcloseRaisesPubSub:
         raise RuntimeError("aclose boom")
 
 
+class _AcloseCancelledPubSub:
+    async def unsubscribe(self) -> None:
+        return None
+
+    async def aclose(self) -> None:
+        raise asyncio.CancelledError
+
+
+class _CloseCancelledPubSub:
+    async def unsubscribe(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        raise asyncio.CancelledError
+
+
 class _NoClosePubSub:
     async def unsubscribe(self) -> None:
         return None
@@ -500,6 +516,23 @@ async def test_close_pubsub_aclose_exception_swallowed(caplog: pytest.LogCapture
     with caplog.at_level("DEBUG", logger="modulo.core.events.relay"):
         await relay_mod._close_pubsub(_AcloseRaisesPubSub())
     assert "event_relay.pubsub_close_failed" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "pubsub",
+    [
+        pytest.param(_AcloseCancelledPubSub(), id="cancel-from-aclose"),
+        pytest.param(_CloseCancelledPubSub(), id="cancel-from-close-fallback"),
+    ],
+)
+async def test_close_pubsub_close_cancellation_propagates(pubsub: object) -> None:
+    """A cancellation raised while CLOSING must never be swallowed as a debug log.
+
+    Mirrors the unsubscribe-leg contract: swallowing it would leave the task
+    running after its caller was cancelled.
+    """
+    with pytest.raises(asyncio.CancelledError):
+        await relay_mod._close_pubsub(pubsub)
 
 
 async def test_close_pubsub_without_aclose_or_close_is_noop() -> None:
