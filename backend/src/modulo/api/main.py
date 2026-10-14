@@ -85,6 +85,7 @@ from modulo.api.routes.error_notification_rules import router as error_notificat
 from modulo.api.routes.errors import router as errors_router
 from modulo.api.routes.evals import router as evals_router
 from modulo.api.routes.events import router as events_router
+from modulo.api.routes.evidence import router as evidence_router
 from modulo.api.routes.feedback import router as feedback_router
 from modulo.api.routes.guardrail_config import router as guardrail_config_router
 from modulo.api.routes.health import router as health_router
@@ -1314,6 +1315,7 @@ app.include_router(error_forwarder_config_router)
 app.include_router(error_notification_rules_router)
 app.include_router(errors_router)
 app.include_router(events_router)
+app.include_router(evidence_router)
 app.include_router(assistant_router)
 app.include_router(manifest_router)
 app.include_router(metrics_router)

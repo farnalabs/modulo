@@ -1,0 +1,314 @@
+"""Router-level unit tests for the evidence surface (FAR-944, §2.5).
+
+The evidence routes are exercised in isolation with a mocked session and the
+module-level DB helpers patched, the same way the rest of this package stubs
+them. The redaction *logic* is covered in
+``tests/unit/core/evidence/test_evidence_redaction.py``; these tests pin the
+ROUTE-level contract: redaction is applied before serialisation per the
+caller's role, permitted fields survive, the admin rules surface is
+admin-gated, and the error arms map to the documented status codes.
+"""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import AsyncGenerator, Generator
+from contextlib import contextmanager
+from datetime import UTC, datetime
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
+from modulo.api.main import app
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.core.evidence_redaction import REDACTED_SENTINEL
+from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
+
+_VALID_32 = "a" * 32
+_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+_RUN_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
+_EVIDENCE_ID = uuid.UUID("00000000-0000-0000-0000-0000000000bb")
+_NOW = datetime(2026, 1, 1, tzinfo=UTC)
+
+_ROUTES = "modulo.api.routes.evidence"
+
+
+def _make_settings() -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key=_VALID_32,
+        fernet_key=_VALID_32,
+        modulo_admin_password="testpass",
+    )
+
+
+def _make_mock_session() -> AsyncMock:
+    session = configure_mock_session(AsyncMock())
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    return session
+
+
+def _fake_evidence(**overrides: Any) -> MagicMock:
+    row = MagicMock()
+    row.id = overrides.get("id", _EVIDENCE_ID)
+    row.organisation_id = overrides.get("organisation_id", _ORG_ID)
+    row.key = overrides.get("key", "eval_guardrail_abc")
+    row.subject_type = overrides.get("subject_type", "run")
+    row.subject_id = overrides.get("subject_id", str(_RUN_ID))
+    row.value = overrides.get("value", {"raw_output": "secret", "status": "complete"})
+    row.observed_at = overrides.get("observed_at", _NOW)
+    row.producer_type = overrides.get("producer_type", "eval")
+    row.producer_id = overrides.get("producer_id")
+    row.created_at = overrides.get("created_at", _NOW)
+    row.updated_at = overrides.get("updated_at", _NOW)
+    return row
+
+
+def _fake_rule(**overrides: Any) -> MagicMock:
+    rule = MagicMock()
+    rule.id = overrides.get("id", _EVIDENCE_ID)
+    rule.key_pattern = overrides.get("key_pattern", "llm_judge.*")
+    rule.role = overrides.get("role", "viewer")
+    rule.redacted_fields = overrides.get("redacted_fields", ["sensitive_output"])
+    rule.created_at = overrides.get("created_at", _NOW)
+    rule.updated_at = overrides.get("updated_at", _NOW)
+    return rule
+
+
+@contextmanager
+def _client(org_role: str) -> Generator[TestClient, None, None]:
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="tester",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role=org_role,
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="tester",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role=org_role,
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def _viewer_resolve(role: str) -> Any:
+    """A patched resolver: viewers see sensitive_output redacted, others not."""
+
+    async def _resolve(session: Any, organisation_id: Any, role_arg: str, key: str) -> frozenset[str]:
+        if role_arg == "viewer":
+            return frozenset({"sensitive_output"})
+        return frozenset()
+
+    return _resolve
+
+
+_LIST_URL = f"/api/v1/evidence?run_id={_RUN_ID}"
+
+
+class TestListEvidenceRedaction:
+    def test_list_redacts_sensitive_fields_for_viewer(self) -> None:
+        row = _fake_evidence()
+        with (
+            _client("viewer") as client,
+            patch(f"{_ROUTES}._load_evidence_rows", new=AsyncMock(return_value=[row])),
+            patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
+            patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
+            patch(f"{_ROUTES}.resolve_redaction_classes", new=_viewer_resolve("viewer")),
+        ):
+            resp = client.get(_LIST_URL)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["value"]["raw_output"] == REDACTED_SENTINEL
+        # Permitted fields survive alongside the sentinel (no over-redaction).
+        assert data[0]["value"]["status"] == "complete"
+        assert data[0]["key"] == "eval_guardrail_abc"
+        assert data[0]["subject_id"] == str(_RUN_ID)
+
+    def test_list_does_not_redact_for_admin(self) -> None:
+        row = _fake_evidence()
+        with (
+            _client("admin") as client,
+            patch(f"{_ROUTES}._load_evidence_rows", new=AsyncMock(return_value=[row])),
+            patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
+            patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
+            patch(f"{_ROUTES}.resolve_redaction_classes", new=_viewer_resolve("admin")),
+        ):
+            resp = client.get(_LIST_URL)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data[0]["value"]["raw_output"] == "secret"
+
+    def test_list_empty_returns_no_rows(self) -> None:
+        with (
+            _client("viewer") as client,
+            patch(f"{_ROUTES}._load_evidence_rows", new=AsyncMock(return_value=[])),
+            patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
+            patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
+            patch(f"{_ROUTES}.resolve_redaction_classes", new=_viewer_resolve("viewer")),
+        ):
+            resp = client.get(_LIST_URL)
+
+        assert resp.status_code == 200
+        assert not resp.json()
+
+
+class TestListEvidenceErrorArms:
+    def _get(self, side_effect: Exception) -> Any:
+        with (
+            _client("viewer") as client,
+            patch(f"{_ROUTES}._load_evidence_rows", new=AsyncMock(side_effect=side_effect)),
+            patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
+            patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
+            patch(f"{_ROUTES}.resolve_redaction_classes", new=_viewer_resolve("viewer")),
+        ):
+            return client.get(_LIST_URL)
+
+    def test_integrity_error_returns_409(self) -> None:
+        resp = self._get(IntegrityError("stmt", "params", "orig"))
+        assert resp.status_code == 409
+
+    def test_programming_error_returns_501(self) -> None:
+        resp = self._get(ProgrammingError("stmt", "params", "orig"))
+        assert resp.status_code == 501
+
+    def test_sqlalchemy_error_returns_503(self) -> None:
+        resp = self._get(SQLAlchemyError("db down"))
+        assert resp.status_code == 503
+
+    def test_unexpected_error_returns_500(self) -> None:
+        resp = self._get(RuntimeError("boom"))
+        assert resp.status_code == 500
+
+
+class TestGetEvidence:
+    URL = f"/api/v1/evidence/{_EVIDENCE_ID}"
+
+    def test_get_redacts_for_viewer(self) -> None:
+        row = _fake_evidence()
+        with (
+            _client("viewer") as client,
+            patch(f"{_ROUTES}._load_evidence_row", new=AsyncMock(return_value=row)),
+            patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
+            patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
+            patch(f"{_ROUTES}.resolve_redaction_classes", new=_viewer_resolve("viewer")),
+        ):
+            resp = client.get(self.URL)
+
+        assert resp.status_code == 200
+        assert resp.json()["value"]["raw_output"] == REDACTED_SENTINEL
+
+    def test_get_missing_row_returns_404(self) -> None:
+        with (
+            _client("viewer") as client,
+            patch(f"{_ROUTES}._load_evidence_row", new=AsyncMock(return_value=None)),
+            patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
+            patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = client.get(self.URL)
+
+        assert resp.status_code == 404
+
+
+class TestRedactionRulesAdminSurface:
+    RULES_URL = "/api/v1/evidence/redaction-rules"
+
+    def test_list_rules_returns_org_rules_for_admin(self) -> None:
+        rule = _fake_rule()
+        with (
+            _client("admin") as client,
+            patch(f"{_ROUTES}._load_redaction_rules", new=AsyncMock(return_value=[rule])),
+            patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
+            patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = client.get(self.RULES_URL)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["key_pattern"] == "llm_judge.*"
+        assert data[0]["role"] == "viewer"
+
+    def test_list_rules_forbidden_for_viewer(self) -> None:
+        with _client("viewer") as client:
+            resp = client.get(self.RULES_URL)
+
+        assert resp.status_code == 403
+
+    def test_upsert_rule_returns_stored_rule_for_admin(self) -> None:
+        stored = _fake_rule(key_pattern="risk.*", role="operator", redacted_fields=["internal_metadata"])
+        with (
+            _client("admin") as client,
+            patch(f"{_ROUTES}._upsert_redaction_rule", new=AsyncMock(return_value=stored)),
+            patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
+            patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = client.put(
+                self.RULES_URL,
+                json={"key_pattern": "risk.*", "role": "operator", "redacted_fields": ["internal_metadata"]},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["key_pattern"] == "risk.*"
+        assert resp.json()["role"] == "operator"
+
+    def test_upsert_rule_forbidden_for_viewer(self) -> None:
+        with _client("viewer") as client:
+            resp = client.put(
+                self.RULES_URL,
+                json={"key_pattern": "risk.*", "role": "viewer", "redacted_fields": ["sensitive_output"]},
+            )
+
+        assert resp.status_code == 403
+
+    def test_upsert_rule_rejects_unknown_redaction_class(self) -> None:
+        with _client("admin") as client:
+            resp = client.put(
+                self.RULES_URL,
+                json={"key_pattern": "risk.*", "role": "viewer", "redacted_fields": ["not_a_class"]},
+            )
+
+        assert resp.status_code == 422
+
+    def test_upsert_rule_integrity_error_returns_409(self) -> None:
+        with (
+            _client("admin") as client,
+            patch(
+                f"{_ROUTES}._upsert_redaction_rule",
+                new=AsyncMock(side_effect=IntegrityError("stmt", "params", "orig")),
+            ),
+            patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
+            patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = client.put(
+                self.RULES_URL,
+                json={"key_pattern": "risk.*", "role": "viewer", "redacted_fields": ["sensitive_output"]},
+            )
+
+        assert resp.status_code == 409

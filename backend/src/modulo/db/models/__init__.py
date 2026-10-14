@@ -43,6 +43,7 @@ from modulo.db.models.eval_suite_run import (
     transition_state,
 )
 from modulo.db.models.evidence import Evidence
+from modulo.db.models.evidence_redaction_rule import EvidenceRedactionRule
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.invitation import Invitation
@@ -133,6 +134,7 @@ __all__ = [
     "EvalResult",
     "EvalSuite",
     "Evidence",
+    "EvidenceRedactionRule",
     "FeatureFlagCatalog",
     "FeedbackRecord",
     "HitlClaim",

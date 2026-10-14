@@ -55,6 +55,28 @@ export default {
     }
   },
   "views": {
+    "EvidenceView": {
+      "title": "Evidence",
+      "subtitle": "Inspect the evidence recorded for a run. Fields are filtered on the server for your role before this view receives them.",
+      "run_id": "Run ID",
+      "run_id_placeholder": "Paste a run ID",
+      "node_id": "Node ID (optional)",
+      "key": "Evidence key (optional)",
+      "load": "Load evidence",
+      "loading": "Loading evidence...",
+      "run_id_required": "Enter a run ID to load its evidence.",
+      "load_failed": "Could not load evidence (HTTP {status}).",
+      "prompt_title": "Choose a run",
+      "prompt_description": "Enter a run ID above and select Load evidence to view that run's recorded evidence.",
+      "empty_title": "No evidence",
+      "empty_description": "No evidence rows were recorded for this run.",
+      "row_count": "{count} row | {count} rows",
+      "redaction_note": "Redacted fields are shown as [REDACTED] by the server for your role; the values below are exactly what the server returned.",
+      "col_key": "Key",
+      "col_subject": "Subject",
+      "col_observed": "Observed at",
+      "col_value": "Value"
+    },
     "OAuthConsentView": {
       "authorize_access": "Authorize access",
       "consent_description": "Approve this application to access your organisation's MCP tools.",
@@ -4490,6 +4512,7 @@ export default {
   },
   "nav": {
     "analytics": "Analytics",
+    "evidence": "Evidence",
     "environment-profiles": "Environment Profiles",
     "parameter-schemas": "Parameter Schemas",
     "eval_proposals": "Proposals",

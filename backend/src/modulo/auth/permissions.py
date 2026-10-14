@@ -199,6 +199,10 @@ PERMISSIONS: dict[str, str] = {
     "housekeeping.manage": "admin",
     "run_retention.manage": "admin",
     "evidence_retention.manage": "admin",
+    # Evidence read surface + server-side redaction boundary (FAR-944).
+    # Reads are viewer-floor; managing the redaction rules is admin-only.
+    "evidence.read": "viewer",
+    "evidence.redaction.manage": "admin",
     "admin.trigger_events": "admin",
     "admin.queue_metrics": "admin",
     "admin.notification.manage": "admin",
