@@ -1204,7 +1204,7 @@ def test_unreadable_distribution_metadata_is_surfaced_unhealthy():
     broken = _entry_point(_ExplodingNameDistribution(), "broken_type")
 
     with _entry_points_returning([broken]):
-        assert registry.discover_plugins() == []
+        assert not registry.discover_plugins()
 
     listed = registry.list_plugins()
     assert "broken_type" in listed
