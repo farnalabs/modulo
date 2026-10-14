@@ -8,6 +8,9 @@ code:
   - backend/src/modulo/core/audit_logger/__init__.py
   - backend/src/modulo/core/audit_logger/append_only.py
   - backend/src/modulo/core/audit_logger/background.py
+  - backend/src/modulo/core/audit_logger/hashing.py
+  - backend/src/modulo/core/evidence_pack
+  - backend/src/modulo/cli/evidence.py
   - backend/src/modulo/core/audit_coverage.py
   - backend/src/modulo/core/cron_helpers.py
   - backend/src/modulo/core/eval_engine/execute_suite_run.py
@@ -32,6 +35,8 @@ unit-tests:
   - backend/tests/unit/audit_logger/test_background_audit.py
   - backend/tests/architecture/test_background_audit_coverage.py
   - backend/tests/unit/api/test_audit.py
+  - backend/tests/unit/api/test_audit_evidence_pack_route.py
+  - backend/tests/unit/core/evidence_pack/test_evidence_pack.py
   - backend/tests/unit/api/test_audit_bdd.py
   - backend/tests/unit/api/test_audit_gating.py
   - backend/tests/unit/api/test_audit_coverage.py
@@ -224,6 +229,29 @@ guarded against tampering at both the ORM and the database layer.
       `test_background_audit_wiring.py`, `test_background_audit_coverage.py`,
       `test_seed_users.py`, `test_execute_suite_run.py`,
       `test_users_cli.py`)
+- [x] An audit export can be emitted as offline-verifiable evidence
+      (FAR-1697): `GET /api/v1/admin/audit/evidence-pack` (`audit_viewer` +
+      `audit.manage`) returns a self-contained pack — the audit events as
+      `audit-events.ndjson`, a canonical manifest (organisation id, exporter
+      identity, `created_at`, run ids, per-file SHA-256 + size, and the
+      re-derived chain summary
+      `valid`/`event_count`/`head_hash`/`first_gap_index`/`first_tampered_id`/`truncated`),
+      an Ed25519 signature over the canonical manifest, and the PEM
+      verification key as an artefact — while
+      `GET /api/v1/admin/audit/verification-key` publishes the org's public
+      key + `key_id` fingerprint. A party holding ONLY the artefact + the
+      pre-published key verifies authorship, re-derives every file digest and
+      re-derives the embedded audit chain with no Modulo service and no login
+      (the `modulo evidence verify` CLI); any tampered file, mutated event,
+      falsified chain claim or swapped key fails as `valid=false`. The event
+      hash lives in `core/audit_logger/hashing.py` so the offline verifier
+      re-derives it without the DB layer (byte-identical, format unchanged);
+      signing key / exporter identity come from `MODULO_EVIDENCE_SIGNING_KEY`
+      / `MODULO_EVIDENCE_EXPORTER_IDENTITY`
+      (`core/evidence_pack/`, `api/routes/audit.py` `evidence_pack_endpoint`
+      + `verification_key_endpoint`, `cli/evidence.py`,
+      `docs/offline-verifiable-evidence.md`,
+      `test_evidence_pack.py`, `test_audit_evidence_pack_route.py`)
 - [x] The durable org-lifecycle ledger has a system-admin read surface
       (FAR-1538): `GET /api/v1/admin/system-audit` lists the org-independent
       `system_audit_events` records read-only with offset pagination and
@@ -248,6 +276,15 @@ guarded against tampering at both the ORM and the database layer.
   durable, filterable evidence storage, not a verifiable cross-org trail.
 
 ## QA History
+- 2026-10-14: **Improve Architecture product-map walk** — reconciled the
+  tracker with the manifest `feat-audit` registry, which carried the FAR-1697
+  offline-verifiable evidence surface while this entry lagged behind (shipped
+  behaviour a reader of the graph — or Assistant's docs indexer — could not
+  find). Added the checked behaviour line plus the `core/evidence_pack/`,
+  `core/audit_logger/hashing.py`, `cli/evidence.py` code citations and the
+  `test_evidence_pack.py` / `test_audit_evidence_pack_route.py` unit-test
+  citations. No behaviour change — graph accuracy only.
+  `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-08: **Audit-cleanup reconciliation (FAR-1561)** — three cleanups out
   of the FAR-1472/1549/1561/1574 audit work. (1) Deleted `run_scheduled_suite`
   from `core/eval_engine/execute_suite_run.py`: an unwired public
