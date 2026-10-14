@@ -20,13 +20,19 @@ Feature: Swappable Connector Binding
     Then the graph is rejected with error code "CONNECTOR_NOT_FOUND"
 
   Scenario: A binding whose connector lacks a required operation is rejected
-    Given a pipeline graph with a node "analyze" bound to connector instance "github-prod"
+    Given a pipeline graph with a node "analyze" bound to connector instance "github-prod" for operation "write"
     And connector instance "github-prod" allows only "read"
-    When I validate the graph with required operations "write"
+    When I validate the graph with its connector bindings
     Then the graph is rejected with error code "CONNECTOR_MISSING_OPERATIONS"
 
   Scenario: A valid active binding is accepted
-    Given a pipeline graph with a node "analyze" bound to connector instance "github-prod"
+    Given a pipeline graph with a node "analyze" bound to connector instance "github-prod" for operation "query"
     And connector instance "github-prod" allows "read" and "write"
-    When I validate the graph with required operations "read"
+    When I validate the graph with its connector bindings
     Then the graph is valid
+
+  Scenario: A dispatch binding whose connector lacks the required operation is rejected
+    Given a pipeline graph with a node "analyze" bound to connector instance "github-prod" for operation "dispatch"
+    And connector instance "github-prod" allows only "read"
+    When I validate the graph with its connector bindings
+    Then the graph is rejected with error code "CONNECTOR_MISSING_OPERATIONS"

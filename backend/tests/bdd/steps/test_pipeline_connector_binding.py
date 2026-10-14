@@ -11,9 +11,10 @@ binding surfaces the pipeline save path uses:
 - ``modulo.core.graph_validator.GraphValidator.validate_definition`` — the
   save-time connector-capability check (``_check_connector_bindings``) that
   rejects a binding to a missing instance (``CONNECTOR_NOT_FOUND``) or one
-  whose allowed operations do not cover the node's required operations
-  (``CONNECTOR_MISSING_OPERATIONS``), and accepts an active binding that
-  covers them.
+  whose allowed operations do not cover the ACL operation the node's routed
+  connector verb requires (``CONNECTOR_MISSING_OPERATIONS``, derived from
+  ``connector_binding.operation``), and accepts an active binding that covers
+  them.
 
 The session is a mocked sqlalchemy ``AsyncSession`` returning the connector
 instance rows — the same DB-free pattern ``backend/tests/unit/graph_validator/``
@@ -48,12 +49,14 @@ def _connector_instance(
     instance_id: uuid.UUID,
     *,
     allowed_operations: list[str] | None = None,
+    connector_type_id: str = "filesystem",
 ) -> MagicMock:
     instance = MagicMock()
     instance.id = instance_id
     instance.name = f"conn-{str(instance_id)[:8]}"
     instance.status = "active"
     instance.allowed_operations = allowed_operations or []
+    instance.connector_type_id = connector_type_id
     instance.config_json = {}
     return instance
 
@@ -75,21 +78,29 @@ def _extract_bindings(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return extract_connector_bindings(nodes)
 
 
-def _run_validation(ctx: dict, *, required_operations: list[str] | None) -> None:
+def _run_validation(ctx: dict) -> None:
     from modulo.core.graph_validator import GraphValidator
 
     name = ctx["instance_name"]
     instance_ids = [str(_instance_uuid(name))]
     rows = (
-        [_connector_instance(_instance_uuid(name), allowed_operations=ctx.get("allowed_operations"))]
+        [
+            _connector_instance(
+                _instance_uuid(name),
+                allowed_operations=ctx.get("allowed_operations"),
+                connector_type_id=ctx.get("connector_type_id", "filesystem"),
+            )
+        ]
         if ctx.get("allowed_operations") is not None
         else []
     )
+    # FAR-1667: the required ACL operation is DERIVED from the node's routed
+    # connector_binding.operation on the graph, not injected here — the binding
+    # rows carry the instance id alone.
     bindings = [
         {
             "node_id": ctx["node_id"],
             "connector_instance_id": instance_ids[0],
-            "required_operations": required_operations or [],
         }
     ]
     graph = {"nodes": ctx["nodes"], "edges": []}
@@ -108,7 +119,26 @@ def _graph_bound(ctx: dict, node: str, instance: str) -> None:
     ctx["node_id"] = node
     ctx["instance_name"] = instance
     ctx["allowed_operations"] = None
+    ctx["connector_type_id"] = "filesystem"
     binding = {"instance_id": str(_instance_uuid(instance))}
+    ctx["nodes"] = [{"id": node, "node_type": "agent", "connector_binding": binding}]
+
+
+@given(
+    parsers.parse(
+        'a pipeline graph with a node "{node}" bound to connector instance "{instance}" for operation "{operation}"'
+    )
+)
+def _graph_bound_for_operation(ctx: dict, node: str, instance: str, operation: str) -> None:
+    ctx["node_id"] = node
+    ctx["instance_name"] = instance
+    ctx["allowed_operations"] = None
+    # A dispatch binding must target a CI-runner type or the validator adds a
+    # CONNECTOR_DISPATCH_UNSUPPORTED issue alongside the intended one.
+    ctx["connector_type_id"] = "github_actions_ci" if operation == "dispatch" else "filesystem"
+    binding: dict[str, Any] = {"instance_id": str(_instance_uuid(instance)), "operation": operation}
+    if operation == "dispatch":
+        binding["dispatch_action"] = "trigger_run"
     ctx["nodes"] = [{"id": node, "node_type": "agent", "connector_binding": binding}]
 
 
@@ -117,6 +147,7 @@ def _graph_unbound(ctx: dict, node: str) -> None:
     ctx["node_id"] = node
     ctx["instance_name"] = None
     ctx["allowed_operations"] = None
+    ctx["connector_type_id"] = "filesystem"
     ctx["nodes"] = [{"id": node, "node_type": "agent"}]
 
 
@@ -135,7 +166,7 @@ def _extract_bindings_step(ctx: dict) -> None:
 
 @when("I validate the graph with its connector bindings")
 def _validate_with_bindings(ctx: dict) -> None:
-    _run_validation(ctx, required_operations=[])
+    _run_validation(ctx)
 
 
 @given(parsers.parse('connector instance "{instance}" allows only "{op}"'))
@@ -146,11 +177,6 @@ def _instance_allows_only(ctx: dict, instance: str, op: str) -> None:
 @given(parsers.parse('connector instance "{instance}" allows "{a}" and "{b}"'))
 def _instance_allows_both(ctx: dict, instance: str, a: str, b: str) -> None:
     ctx["allowed_operations"] = [a, b]
-
-
-@when(parsers.parse('I validate the graph with required operations "{ops}"'))
-def _validate_with_required_ops(ctx: dict, ops: str) -> None:
-    _run_validation(ctx, required_operations=[ops])
 
 
 @then(parsers.parse('the graph carries exactly one connector binding pointing at "{instance}"'))

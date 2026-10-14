@@ -201,13 +201,27 @@ and per-destination rate limiting.
       creating a list item (`sharepoint.feature`,
       `steps/test_sharepoint_connector.py`)
 - [x] Connector bindings on pipeline nodes are swappable and validated at graph
-      save time: swapping a node's binding swaps the extracted snapshot binding
-      without touching the topology, an unbound node extracts no binding, a
-      binding to a missing instance is rejected (`CONNECTOR_NOT_FOUND`), a
-      binding whose instance lacks a required operation is rejected
-      (`CONNECTOR_MISSING_OPERATIONS`), and an active instance covering the
-      required operations passes – BDD-exercised against the real
-      `extract_connector_bindings` + `GraphValidator.validate_definition`
+      save time against the SAME helper the runtime hub gates with: swapping a
+      node's binding swaps the extracted snapshot binding without touching the
+      topology, an unbound node extracts no binding, a binding to a missing
+      instance is rejected (`CONNECTOR_NOT_FOUND`), and a binding to an inactive
+      instance is rejected (`CONNECTOR_INACTIVE`). For a binding the engine
+      routes to a connector, the required ACL operation is DERIVED from the
+      node's routed connector verb — `query` requires `read`, `write` requires
+      `write`, and `dispatch` requires `write` (there is no `dispatch` ACL
+      capability: `trigger_run` mutates the remote system), plus `read` when the
+      binding sets `await_completion` (the wait loop polls status/logs); the
+      other dispatch actions (`get_run_status` / `get_run_logs` / `list_runs`)
+      require `read`, per `dispatch_action`. The derived operation is checked
+      against the bound instance's `allowed_operations` through the real
+      `ConnectorACL` — the same enforcement the hub applies — so an instance
+      that does not allow it is rejected (`CONNECTOR_MISSING_OPERATIONS`); an
+      unset/empty allowlist is UNRESTRICTED (FAR-1564) and a malformed allowlist
+      fails CLOSED. A `dispatch` binding is additionally checked for CI-runner
+      type support (`CONNECTOR_DISPATCH_UNSUPPORTED`); a node shape the engine
+      never routes to a connector (an `agent` node with an `agent_id`, a
+      `sandbox_agent`) is never operation-checked. BDD-exercised against the
+      real `extract_connector_bindings` + `GraphValidator.validate_definition`
       surfaces (`swappable_binding.feature`,
       `steps/test_pipeline_connector_binding.py`)
 - [x] The connector instance CRUD lifecycle is BDD-exercised against the real
@@ -325,6 +339,17 @@ and per-destination rate limiting.
   deduplicate/classify layer is not modelled).
 
 ## QA History
+- 2026-10-11: **FAR-1667** – the preceding "swappable connector binding" clause
+  was an OVER-CLAIM. The save-time check read a `required_operations` key on the
+  binding, but NO producer ever populated one, so the check was UNREACHABLE: a
+  binding whose instance lacked the operation saved cleanly with no
+  `CONNECTOR_MISSING_OPERATIONS`. Fixed by DERIVING the required ACL operations
+  from the node's routed connector verb (`query`→`read`, `write`→`write`,
+  `dispatch`→`write` plus `read` when `await_completion`) and validating through
+  the shared `ConnectorACL`. The graph validator now consumes the
+  `unrestricted_allowed_operations` predicate THROUGH the ACL (single
+  enforcement) rather than re-implementing allowlist matching, so save-time
+  validation and the runtime hub can never disagree.
 - 2026-10-09: **Improve Architecture product-map walk** – closed the untracked
   FAR-1582 / FAR-1594 sub-surface (one canonical connector capability vocabulary
   shared by the ACL and the guardrail conformance reader, merged in PR #1451):

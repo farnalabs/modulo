@@ -82,6 +82,25 @@ _SIMPLE_GRAPH: dict[str, Any] = {
 _SINGLE_NODE: dict[str, Any] = {"nodes": [{"id": _UUID_A}], "edges": []}
 
 
+def _routed_single_node(
+    node_id: str = "a",
+    *,
+    operation: str = "query",
+    instance_id: str | None = None,
+) -> dict[str, Any]:
+    """A one-node graph whose node carries a ROUTED ``connector_binding``.
+
+    FAR-1667: the capability check DERIVES the required operations from the
+    node's routed verb, so the graph node looked up by the binding's ``node_id``
+    must exist and carry a non-empty ``connector_binding``. An ``agent`` node
+    without an ``agent_id`` routes to the connector.
+    """
+    binding: dict[str, Any] = {"operation": operation}
+    if instance_id is not None:
+        binding["instance_id"] = instance_id
+    return {"nodes": [{"id": node_id, "node_type": "agent", "connector_binding": binding}], "edges": []}
+
+
 # ---------------------------------------------------------------------------
 # Topology — happy path
 # ---------------------------------------------------------------------------
@@ -299,14 +318,8 @@ async def test_connector_binding_active_is_valid():
     cid = uuid.uuid4()
     instance = _connector_instance(cid, status="active", allowed_operations=["read"])
     snap = _snapshot(
-        graph_json=_SINGLE_NODE,
-        connector_bindings=[
-            {
-                "node_id": "a",
-                "connector_instance_id": str(cid),
-                "required_operations": ["read"],
-            }
-        ],
+        graph_json=_routed_single_node("a", operation="query", instance_id=str(cid)),
+        connector_bindings=[{"node_id": "a", "connector_instance_id": str(cid)}],
     )
     session = _session_returning([instance])
     result = await GraphValidator().validate(snap, session)
@@ -316,8 +329,8 @@ async def test_connector_binding_active_is_valid():
 async def test_connector_not_found_is_error():
     cid = uuid.uuid4()
     snap = _snapshot(
-        graph_json=_SINGLE_NODE,
-        connector_bindings=[{"node_id": "a", "connector_instance_id": str(cid), "required_operations": []}],
+        graph_json=_routed_single_node("a", instance_id=str(cid)),
+        connector_bindings=[{"node_id": "a", "connector_instance_id": str(cid)}],
     )
     session = _session_returning([])  # no rows returned
     result = await GraphValidator().validate(snap, session)
@@ -329,8 +342,8 @@ async def test_connector_inactive_is_error():
     cid = uuid.uuid4()
     instance = _connector_instance(cid, status="disabled")
     snap = _snapshot(
-        graph_json=_SINGLE_NODE,
-        connector_bindings=[{"node_id": "a", "connector_instance_id": str(cid), "required_operations": []}],
+        graph_json=_routed_single_node("a", instance_id=str(cid)),
+        connector_bindings=[{"node_id": "a", "connector_instance_id": str(cid)}],
     )
     session = _session_returning([instance])
     result = await GraphValidator().validate(snap, session)
@@ -342,14 +355,8 @@ async def test_connector_missing_operations_is_error():
     cid = uuid.uuid4()
     instance = _connector_instance(cid, status="active", allowed_operations=["read"])
     snap = _snapshot(
-        graph_json=_SINGLE_NODE,
-        connector_bindings=[
-            {
-                "node_id": "a",
-                "connector_instance_id": str(cid),
-                "required_operations": ["read", "write"],
-            }
-        ],
+        graph_json=_routed_single_node("a", operation="write", instance_id=str(cid)),
+        connector_bindings=[{"node_id": "a", "connector_instance_id": str(cid)}],
     )
     session = _session_returning([instance])
     result = await GraphValidator().validate(snap, session)
@@ -374,14 +381,8 @@ async def test_connector_legacy_same_type_qualified_entry_grants():
         connector_type_id="github",
     )
     snap = _snapshot(
-        graph_json=_SINGLE_NODE,
-        connector_bindings=[
-            {
-                "node_id": "a",
-                "connector_instance_id": str(cid),
-                "required_operations": ["read"],
-            }
-        ],
+        graph_json=_routed_single_node("a", operation="query", instance_id=str(cid)),
+        connector_bindings=[{"node_id": "a", "connector_instance_id": str(cid)}],
     )
     session = _session_returning([instance])
     result = await GraphValidator().validate(snap, session)
@@ -404,14 +405,8 @@ async def test_connector_mis_typed_qualified_entry_fails_closed():
         connector_type_id="github",
     )
     snap = _snapshot(
-        graph_json=_SINGLE_NODE,
-        connector_bindings=[
-            {
-                "node_id": "a",
-                "connector_instance_id": str(cid),
-                "required_operations": ["read"],
-            }
-        ],
+        graph_json=_routed_single_node("a", operation="query", instance_id=str(cid)),
+        connector_bindings=[{"node_id": "a", "connector_instance_id": str(cid)}],
     )
     session = _session_returning([instance])
     result = await GraphValidator().validate(snap, session)
@@ -432,14 +427,8 @@ async def test_connector_unverifiable_type_rejects_qualified_entry():
         connector_type_id="",
     )
     snap = _snapshot(
-        graph_json=_SINGLE_NODE,
-        connector_bindings=[
-            {
-                "node_id": "a",
-                "connector_instance_id": str(cid),
-                "required_operations": ["read"],
-            }
-        ],
+        graph_json=_routed_single_node("a", operation="query", instance_id=str(cid)),
+        connector_bindings=[{"node_id": "a", "connector_instance_id": str(cid)}],
     )
     session = _session_returning([instance])
     result = await GraphValidator().validate(snap, session)
@@ -448,19 +437,13 @@ async def test_connector_unverifiable_type_rejects_qualified_entry():
 
 
 async def test_connector_empty_allowlist_is_unrestricted():
-    """FAR-1564: an unset (``[]``) allowlist means unrestricted, so a binding
-    with required operations must NOT raise CONNECTOR_MISSING_OPERATIONS."""
+    """FAR-1564: an unset (``[]``) allowlist means unrestricted, so a routed
+    ``write`` binding must NOT raise CONNECTOR_MISSING_OPERATIONS."""
     cid = uuid.uuid4()
     instance = _connector_instance(cid, status="active", allowed_operations=[])
     snap = _snapshot(
-        graph_json=_SINGLE_NODE,
-        connector_bindings=[
-            {
-                "node_id": "a",
-                "connector_instance_id": str(cid),
-                "required_operations": ["read", "write"],
-            }
-        ],
+        graph_json=_routed_single_node("a", operation="write", instance_id=str(cid)),
+        connector_bindings=[{"node_id": "a", "connector_instance_id": str(cid)}],
     )
     session = _session_returning([instance])
     result = await GraphValidator().validate(snap, session)
@@ -474,14 +457,8 @@ async def test_connector_none_allowlist_is_unrestricted():
     instance = _connector_instance(cid, status="active")
     instance.allowed_operations = None
     snap = _snapshot(
-        graph_json=_SINGLE_NODE,
-        connector_bindings=[
-            {
-                "node_id": "a",
-                "connector_instance_id": str(cid),
-                "required_operations": ["read", "write"],
-            }
-        ],
+        graph_json=_routed_single_node("a", operation="write", instance_id=str(cid)),
+        connector_bindings=[{"node_id": "a", "connector_instance_id": str(cid)}],
     )
     session = _session_returning([instance])
     result = await GraphValidator().validate(snap, session)
@@ -503,20 +480,14 @@ async def test_connector_malformed_allowlist_fails_closed():
     []``, so a malformed dict was truthy and membership was tested against its
     KEYS — a malformed value could pass a binding whose required operation
     happens to be a key, while ``ConnectorACL`` read the same value
-    restrictively. Fail closed instead: every required op reads as missing.
+    restrictively. Fail closed instead: the derived op reads as missing.
     """
     cid = uuid.uuid4()
     instance = _connector_instance(cid, status="active", allowed_operations=["read"])
     instance.allowed_operations = {"read": 1}  # malformed: dict, not a list
     snap = _snapshot(
-        graph_json=_SINGLE_NODE,
-        connector_bindings=[
-            {
-                "node_id": "a",
-                "connector_instance_id": str(cid),
-                "required_operations": ["read"],
-            }
-        ],
+        graph_json=_routed_single_node("a", operation="query", instance_id=str(cid)),
+        connector_bindings=[{"node_id": "a", "connector_instance_id": str(cid)}],
     )
     session = _session_returning([instance])
     result = await GraphValidator().validate(snap, session)

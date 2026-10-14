@@ -654,6 +654,7 @@ async def test_connector_binding_mixed_valid_and_invalid():
     conn.id = good_id
     conn.name = "conn"
     conn.status = "active"
+    conn.connector_type_id = "filesystem"
     conn.allowed_operations = []
     session = AsyncMock()
     scalars = MagicMock()
@@ -662,14 +663,25 @@ async def test_connector_binding_mixed_valid_and_invalid():
     exc.scalars.return_value = scalars
     session.execute = AsyncMock(return_value=exc)
 
+    graph_json = {
+        "nodes": [
+            {
+                "id": "a",
+                "node_type": "agent",
+                "connector_binding": {"instance_id": str(good_id), "operation": "query"},
+            }
+        ],
+        "edges": [],
+    }
     result = ValidationResult()
     await GraphValidator()._check_connector_bindings(
         [
-            {"node_id": "a", "connector_instance_id": str(good_id), "required_operations": []},
-            {"node_id": "b", "connector_instance_id": "not-a-uuid", "required_operations": []},
+            {"node_id": "a", "connector_instance_id": str(good_id)},
+            {"node_id": "b", "connector_instance_id": "not-a-uuid"},
         ],
         session,
         result,
+        graph_json=graph_json,
     )
     assert result.is_valid
 
