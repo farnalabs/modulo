@@ -70,7 +70,7 @@ _JSONB_DB_TO_JSON_ORM: dict[str, frozenset[str]] = {
     "chat_messages": frozenset({"tool_calls_json", "tool_results_json"}),
     # collection_install / composite_templates / library_primitives /
     # library_sync_state: their JSON columns were converted to
-    # JSON().with_variant(JSONB(), "postgresql") in the ORM (migration 0309),
+    # JSON().with_variant(JSONB(), "postgresql") in the ORM (migration 0310),
     # so the ORM now maps the SAME variant the DB has. Their ignore entries
     # were removed WITH the conversion — leaving them would silently mask a
     # future accidental revert to plain JSON.
@@ -169,7 +169,7 @@ _MIGRATION_OWNED_CHECKS: dict[str, frozenset[str]] = {
     "eval_suites": frozenset({"ck_eval_suites_minimum_delta"}),
     "journeys": frozenset({"ck_journey_run_count"}),
     # library_primitives: the two 0165 CHECK names (download_count /
-    # review_count) were REMOVED from this map when migration 0309 dropped
+    # review_count) were REMOVED from this map when migration 0310 dropped
     # those constraints — 0151's equivalent pair (ck_library_primitives_dl_count
     # / ck_library_primitives_review_count) is ORM-declared and present in the
     # DB, so no migration-owned CHECK remains for this table. Stale entries

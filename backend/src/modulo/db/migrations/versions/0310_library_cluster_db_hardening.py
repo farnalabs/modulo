@@ -1,8 +1,13 @@
 """Library / community-catalogue cluster DB hardening.
 
-Revision ID: 0309_library_cluster_db_hardening
-Revises: 0308_runs_dispatch_phase_history
+Revision ID: 0310_library_cluster_db_hardening
+Revises: 0309_hitl_claims_decision_sweep
 Create Date: 2026-10-13
+
+Renumbered from ``0309_library_cluster_db_hardening`` to ``0310`` when a
+concurrent main-branch migration claimed the ``0309`` prefix
+(``0309_hitl_claims_decision_sweep``); it now chains onto that head so the
+migration graph keeps a single head.
 
 Consolidates the MAJOR/CRITICAL findings of an 8-lens schema review of the
 library-primitive / collection-install cluster. Plain-English rationale:
@@ -60,8 +65,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0309_library_cluster_db_hardening"
-down_revision: str | None = "0308_runs_dispatch_phase_history"
+revision: str = "0310_library_cluster_db_hardening"
+down_revision: str | None = "0309_hitl_claims_decision_sweep"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

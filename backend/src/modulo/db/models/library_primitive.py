@@ -27,6 +27,11 @@ from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 # multi-backend convention).
 _JSONB_COL = JSON().with_variant(JSONB(), "postgresql")
 
+# Repeated partial-index predicate (S1192): the live-row predicate shared by the
+# two partial indexes below. Kept as one constant so the three declarations
+# cannot drift apart.
+_DELETED_AT_WHERE = text("deleted_at IS NULL")
+
 
 class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
     __tablename__ = "library_primitives"
@@ -93,7 +98,7 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
             "slug",
             "version",
             unique=True,
-            postgresql_where=text("deleted_at IS NULL"),
+            postgresql_where=_DELETED_AT_WHERE,
         ),
         # Slug lookup: get_primitive_by_slug filters primitive_type + slug and is
         # called once per manifest pin on collection install/upgrade. The partial
@@ -111,8 +116,8 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
             "ix_library_primitives_visibility_contribution",
             "visibility",
             "contribution_status",
-            postgresql_where=text("deleted_at IS NULL"),
-            sqlite_where=text("deleted_at IS NULL"),
+            postgresql_where=_DELETED_AT_WHERE,
+            sqlite_where=_DELETED_AT_WHERE,
         ),
     )
 

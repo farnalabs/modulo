@@ -1,10 +1,10 @@
-"""Unit tests for migration 0309_library_cluster_db_hardening.
+"""Unit tests for migration 0310_library_cluster_db_hardening.
 
 Structural contract (no Postgres needed):
 
-* **Revision chain** - 0309 revises ``0308_runs_dispatch_phase_history``; the
+* **Revision chain** - 0310 revises ``0309_hitl_claims_decision_sweep``; the
   migrations directory has exactly one head
-  (``0309_library_cluster_db_hardening``, pinned by all sibling chain tests),
+  (``0310_library_cluster_db_hardening``, pinned by all sibling chain tests),
   the revision id matches the filename, and neither ``branch_labels`` nor
   ``depends_on`` is set (the pre-commit check-migration-heads hook and every
   ``test_single_head_*`` pin depend on that shape).
@@ -38,9 +38,9 @@ from modulo.db.models.collection_install import CollectionInstall
 from modulo.db.models.composite_template import CompositeTemplate
 from modulo.db.models.library_primitive import LibraryPrimitive
 
-_MIGRATION_REVISION = "0309_library_cluster_db_hardening"
-_MIGRATION_DOWN_REVISION = "0308_runs_dispatch_phase_history"
-_HEAD_MIGRATION = "0309_library_cluster_db_hardening"
+_MIGRATION_REVISION = "0310_library_cluster_db_hardening"
+_MIGRATION_DOWN_REVISION = "0309_hitl_claims_decision_sweep"
+_HEAD_MIGRATION = "0310_library_cluster_db_hardening"
 
 _INSTALL_UNIQUE_INDEX = "uq_collection_install_org_collection"
 _COMPOSITE_UNIQUE_INDEX = "uq_composite_templates_org_name"
@@ -48,7 +48,7 @@ _VISIBILITY_INDEX = "ix_library_primitives_visibility_contribution"
 _CREATED_BY_FK = "fk_collection_install_created_by"
 _CREATED_BY_INDEX = "ix_collection_install_created_by"
 _0165_CHECKS = ("ck_library_primitive_download_count", "ck_library_primitive_review_count")
-# The four library_primitives JSON columns 0309 aligned to the jsonb variant.
+# The four library_primitives JSON columns 0310 aligned to the jsonb variant.
 _LIBRARY_PRIMITIVE_JSON_COLUMNS = ("tags", "content_json", "manifest_pins", "trust_header")
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
@@ -120,11 +120,11 @@ def _joined(rec: _Recorder) -> str:
 
 
 class TestChain:
-    def test_single_head_is_0309_library_cluster_db_hardening(self) -> None:
+    def test_single_head_is_0310_library_cluster_db_hardening(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
-    def test_down_revision_is_0307_runs_guardrail_override_resume_pending(self) -> None:
+    def test_down_revision_is_0309_hitl_claims_decision_sweep(self) -> None:
         assert _load_migration().down_revision == _MIGRATION_DOWN_REVISION
 
     def test_revision_id_matches_filename(self) -> None:
@@ -256,7 +256,7 @@ class TestDowngrade:
 
 class TestMigrationSource:
     def test_never_edits_shipped_revisions(self) -> None:
-        # 0165 / 0207 / 0156 are shipped; 0309 changes their effects via NEW
+        # 0165 / 0207 / 0156 are shipped; 0310 changes their effects via NEW
         # DDL, never by editing their files.
         source = _source()
         assert "0165_add_check_constraints.py" not in source
@@ -308,7 +308,7 @@ class TestModelParity:
         assert "deleted_at IS NULL" in str(sqlite_where)
 
     def test_created_by_fk_is_named_and_targets_accounts(self) -> None:
-        """The model FK carries the SAME name migration 0309's DDL uses, so
+        """The model FK carries the SAME name migration 0310's DDL uses, so
         create_all and the migrated DB agree."""
         fks = list(CollectionInstall.__table__.c.created_by.foreign_keys)
         assert len(fks) == 1, f"expected one FK on created_by, got {fks}"
