@@ -19,7 +19,6 @@ taken from the principal, never from client input.
 
 from __future__ import annotations
 
-import logging
 import uuid
 from datetime import datetime
 from typing import Any
@@ -28,11 +27,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import status as http_status  # nosemgrep: loopvar-shadows-import
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import and_, or_, select
-from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_UNEXPECTED_ERROR
-from modulo.api.db_error_handling import raise_session_contract_error
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
     get_db_session,
     require_permission,
@@ -44,14 +41,13 @@ from modulo.core.audit_coverage import audited
 from modulo.core.evidence_redaction import (
     REDACTION_CLASS_FIELDS,
     apply_redaction,
-    resolve_redaction_classes,
+    load_redaction_rules,
+    resolve_redaction_classes_from,
 )
 from modulo.db.models.evidence import Evidence
 from modulo.db.models.evidence_redaction_rule import EvidenceRedactionRule
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.soft_delete import include_soft_deleted
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["evidence"])
 
@@ -62,10 +58,12 @@ _CODE_UPSERT_REDACTION_RULE = "evidence.upsert_redaction_rule"
 _CODE_LIST_EVIDENCE = "evidence.list"
 _CODE_GET_EVIDENCE = "evidence.get"
 
-_MSG_MIGRATIONS_REQUIRED = "Evidence is not available. Run database migrations to enable it."
-_MSG_DB_UNAVAILABLE = "Evidence is temporarily unavailable."
 _MSG_EVIDENCE_NOT_FOUND = "Evidence row not found"
-_MSG_RULE_CONFLICT = "A redaction rule for this key pattern and role already exists."
+
+#: Hard cap on rows returned by the list endpoint, so a run with a very large
+#: evidence history cannot force one unbounded response. Ordered by
+#: ``created_at`` then ``id`` (stable), so the cap truncates a deterministic tail.
+_EVIDENCE_LIST_LIMIT = 500
 
 
 # ── Request / response models ────────────────────────────────────────────
@@ -129,12 +127,20 @@ async def _load_evidence_rows(
 ) -> list[Evidence]:
     """Load the run's evidence rows, optionally narrowed to a node / key.
 
-    With no ``node_id`` this selects the run-level rows (``subject_id`` == the
-    run id). With a ``node_id`` it additionally includes the composite
-    ``node_execution`` rows for that node (``subject_id`` == ``"{run_id}:{node_id}"``).
+    With no ``node_id`` this selects the run-level rows (``subject_type`` ==
+    ``"run"`` AND ``subject_id`` == the run id). The explicit ``subject_type``
+    guard matters: without it a future non-run subject whose ``subject_id``
+    happened to equal the run id would be returned here. With a ``node_id`` it
+    additionally includes the composite ``node_execution`` rows for that node
+    (``subject_id`` == ``"{run_id}:{node_id}"``).
+
+    Capped at :data:`_EVIDENCE_LIST_LIMIT` rows.
     """
     if node_id is None:
-        subject_predicate = Evidence.subject_id == str(run_id)
+        subject_predicate = and_(
+            Evidence.subject_type == "run",
+            Evidence.subject_id == str(run_id),
+        )
     else:
         subject_predicate = or_(
             and_(Evidence.subject_type == "run", Evidence.subject_id == str(run_id)),
@@ -151,7 +157,7 @@ async def _load_evidence_rows(
     if key is not None:
         stmt = stmt.where(Evidence.key == key)
 
-    stmt = stmt.order_by(Evidence.created_at.asc(), Evidence.id.asc())
+    stmt = stmt.order_by(Evidence.created_at.asc(), Evidence.id.asc()).limit(_EVIDENCE_LIST_LIMIT)
     result = await session.execute(stmt)
     return list(result.scalars().all())
 
@@ -228,21 +234,25 @@ async def _upsert_redaction_rule(
     return rule
 
 
-async def _redacted_row(
-    session: AsyncSession,
+def _redacted_row(
     row: Evidence,
-    organisation_id: uuid.UUID,
     role: str,
+    rules: list[EvidenceRedactionRule],
 ) -> EvidenceRowResponse:
-    """Serialise one evidence row with its ``value`` redacted for *role*."""
-    classes = await resolve_redaction_classes(session, organisation_id, role, row.key)
+    """Serialise one evidence row, resolving its classes from pre-loaded *rules*.
+
+    Pure/synchronous: the caller loads the org's rules ONCE per request
+    (:func:`load_redaction_rules`) and resolves every row from that in-memory
+    list, so a page of N rows costs one rule query, not N.
+    """
+    classes = resolve_redaction_classes_from(rules, role, row.key)
     return EvidenceRowResponse(
         id=row.id,
         organisation_id=row.organisation_id,
         key=row.key,
         subject_type=row.subject_type,
         subject_id=row.subject_id,
-        value=apply_redaction(row.value, role, classes),
+        value=apply_redaction(row.value, classes),
         observed_at=row.observed_at,
         producer_type=row.producer_type,
         producer_id=row.producer_id,
@@ -255,45 +265,22 @@ async def _redacted_row(
 
 
 @router.get("/evidence/redaction-rules")
+@handle_db_errors(_CODE_READ_REDACTION_RULES)
 async def list_redaction_rules_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_system_or_org_admin(_CODE_EVIDENCE_REDACTION_MANAGE),
 ) -> list[RedactionRuleResponse]:
-    """List the caller org's redaction rules (admin only)."""
+    """List the caller org's redaction rules (admin only).
+
+    DB failures are translated by ``@handle_db_errors``; a read cannot produce a
+    rule conflict, so no local ``IntegrityError`` arm re-labels one as such.
+    """
     org_id = principal.organisation_id
 
-    try:
-        async with session.begin():
-            await set_rls_org(session, org_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            rules = await _load_redaction_rules(session, org_id)
-    except IntegrityError:
-        logger.exception(_CODE_READ_REDACTION_RULES)
-        raise HTTPException(
-            status_code=http_status.HTTP_409_CONFLICT,
-            detail=_MSG_RULE_CONFLICT,
-        ) from None
-    except ProgrammingError:
-        logger.exception(_CODE_READ_REDACTION_RULES)
-        raise HTTPException(
-            status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_MIGRATIONS_REQUIRED,
-        ) from None
-    except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "evidence.list_redaction_rules_endpoint")
-        logger.exception(_CODE_READ_REDACTION_RULES)
-        raise HTTPException(
-            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DB_UNAVAILABLE,
-        ) from None
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception(_CODE_READ_REDACTION_RULES)
-        raise HTTPException(
-            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR,
-        ) from None
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        rules = await _load_redaction_rules(session, org_id)
 
     return [RedactionRuleResponse.model_validate(rule) for rule in rules]
 
@@ -311,52 +298,31 @@ async def list_redaction_rules_endpoint(
     ],
     status_code=http_status.HTTP_200_OK,
 )
+@handle_db_errors(_CODE_UPSERT_REDACTION_RULE)
 async def upsert_redaction_rule_endpoint(
     req: RedactionRuleUpsert,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_system_or_org_admin(_CODE_EVIDENCE_REDACTION_MANAGE),
 ) -> RedactionRuleResponse:
-    """Create or update one redaction rule for the caller org (admin only)."""
+    """Create or update one redaction rule for the caller org (admin only).
+
+    DB failures (including the unique-constraint ``IntegrityError`` that a
+    concurrent upsert of the same ``(key_pattern, role)`` can raise) are
+    translated to their status codes by ``@handle_db_errors`` — one shared
+    mapping instead of a duplicated per-route chain.
+    """
     org_id = principal.organisation_id
 
-    try:
-        async with session.begin():
-            await set_rls_org(session, org_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            rule = await _upsert_redaction_rule(
-                session,
-                org_id,
-                req.key_pattern,
-                req.role,
-                req.redacted_fields,
-            )
-    except IntegrityError:
-        logger.exception(_CODE_UPSERT_REDACTION_RULE)
-        raise HTTPException(
-            status_code=http_status.HTTP_409_CONFLICT,
-            detail=_MSG_RULE_CONFLICT,
-        ) from None
-    except ProgrammingError:
-        logger.exception(_CODE_UPSERT_REDACTION_RULE)
-        raise HTTPException(
-            status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_MIGRATIONS_REQUIRED,
-        ) from None
-    except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "evidence.upsert_redaction_rule_endpoint")
-        logger.exception(_CODE_UPSERT_REDACTION_RULE)
-        raise HTTPException(
-            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DB_UNAVAILABLE,
-        ) from None
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception(_CODE_UPSERT_REDACTION_RULE)
-        raise HTTPException(
-            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR,
-        ) from None
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        rule = await _upsert_redaction_rule(
+            session,
+            org_id,
+            req.key_pattern,
+            req.role,
+            req.redacted_fields,
+        )
 
     return RedactionRuleResponse.model_validate(rule)
 
@@ -365,57 +331,34 @@ async def upsert_redaction_rule_endpoint(
 
 
 @router.get("/evidence/{evidence_id}")
+@handle_db_errors(_CODE_GET_EVIDENCE)
 async def get_evidence_endpoint(
     evidence_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_EVIDENCE_READ),
 ) -> EvidenceRowResponse:
-    """Return one evidence row for the caller org, redacted for their role."""
+    """Return one evidence row for the caller org, redacted for their role.
+
+    The 404 for a missing row is raised inside the body and passed through
+    untouched by ``@handle_db_errors``; DB failures use the shared mapping.
+    """
     org_id = principal.organisation_id
 
-    try:
-        async with session.begin():
-            await set_rls_org(session, org_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            row = await _load_evidence_row(session, org_id, evidence_id)
-            if row is None:
-                raise HTTPException(
-                    status_code=http_status.HTTP_404_NOT_FOUND,
-                    detail=_MSG_EVIDENCE_NOT_FOUND,
-                )
-            response = await _redacted_row(session, row, org_id, principal.org_role)
-    except IntegrityError:
-        logger.exception(_CODE_GET_EVIDENCE)
-        raise HTTPException(
-            status_code=http_status.HTTP_409_CONFLICT,
-            detail=_MSG_RULE_CONFLICT,
-        ) from None
-    except ProgrammingError:
-        logger.exception(_CODE_GET_EVIDENCE)
-        raise HTTPException(
-            status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_MIGRATIONS_REQUIRED,
-        ) from None
-    except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "evidence.get_evidence_endpoint")
-        logger.exception(_CODE_GET_EVIDENCE)
-        raise HTTPException(
-            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DB_UNAVAILABLE,
-        ) from None
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception(_CODE_GET_EVIDENCE)
-        raise HTTPException(
-            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR,
-        ) from None
-
-    return response
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        row = await _load_evidence_row(session, org_id, evidence_id)
+        if row is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail=_MSG_EVIDENCE_NOT_FOUND,
+            )
+        rules = await load_redaction_rules(session, org_id)
+        return _redacted_row(row, principal.org_role, rules)
 
 
 @router.get("/evidence")
+@handle_db_errors(_CODE_LIST_EVIDENCE)
 async def list_evidence_endpoint(
     run_id: uuid.UUID = Query(..., description="Run id whose evidence rows to list"),
     node_id: str | None = Query(default=None, description="Optional node id to include node-level evidence"),
@@ -423,41 +366,20 @@ async def list_evidence_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_EVIDENCE_READ),
 ) -> list[EvidenceRowResponse]:
-    """List a run's evidence rows for the caller org, redacted for their role."""
+    """List a run's evidence rows for the caller org, redacted for their role.
+
+    At most :data:`_EVIDENCE_LIST_LIMIT` rows are returned.
+
+    The org's redaction rules are loaded ONCE per request and each row resolved
+    in memory from that list — never one rule query per row. DB failures use the
+    shared ``@handle_db_errors`` mapping; a read cannot produce a rule conflict.
+    """
     org_id = principal.organisation_id
 
-    try:
-        async with session.begin():
-            await set_rls_org(session, org_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            rows = await _load_evidence_rows(session, org_id, run_id, node_id, key)
-            responses = [await _redacted_row(session, row, org_id, principal.org_role) for row in rows]
-    except IntegrityError:
-        logger.exception(_CODE_LIST_EVIDENCE)
-        raise HTTPException(
-            status_code=http_status.HTTP_409_CONFLICT,
-            detail=_MSG_RULE_CONFLICT,
-        ) from None
-    except ProgrammingError:
-        logger.exception(_CODE_LIST_EVIDENCE)
-        raise HTTPException(
-            status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_MIGRATIONS_REQUIRED,
-        ) from None
-    except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "evidence.list_evidence_endpoint")
-        logger.exception(_CODE_LIST_EVIDENCE)
-        raise HTTPException(
-            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DB_UNAVAILABLE,
-        ) from None
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception(_CODE_LIST_EVIDENCE)
-        raise HTTPException(
-            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR,
-        ) from None
-
-    return responses
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        rows = await _load_evidence_rows(session, org_id, run_id, node_id, key)
+        # Load the org's rules ONCE, then resolve each row in memory (N+1 fix).
+        rules = await load_redaction_rules(session, org_id)
+        return [_redacted_row(row, principal.org_role, rules) for row in rows]

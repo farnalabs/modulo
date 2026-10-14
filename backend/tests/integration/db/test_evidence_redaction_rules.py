@@ -29,7 +29,8 @@ from modulo.api.routes.evidence import _upsert_redaction_rule
 from modulo.core.evidence_redaction import (
     REDACTED_SENTINEL,
     apply_redaction,
-    resolve_redaction_classes,
+    load_redaction_rules,
+    resolve_redaction_classes_from,
 )
 from modulo.db.models.evidence_redaction_rule import EvidenceRedactionRule
 
@@ -66,6 +67,17 @@ def _load_migration() -> Any:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+async def _resolve_classes(
+    db_session: AsyncSession,
+    org_id: uuid.UUID,
+    role: str,
+    key: str,
+) -> frozenset[str]:
+    """Load the org's rules, then resolve one ``(role, key)`` from them."""
+    rules = await load_redaction_rules(db_session, org_id)
+    return resolve_redaction_classes_from(rules, role, key)
 
 
 async def _insert_rule(
@@ -120,21 +132,29 @@ async def test_catch_all_seed_redacts_unclassified_key_for_viewer(
     assert set(seeded[0].redacted_fields) == set(_BOTH_CLASSES)
 
     # An unclassified key resolves to BOTH classes via the catch-all.
-    classes = await resolve_redaction_classes(db_session, org_id, "viewer", "brand.new.unclassified.key")
+    classes = await _resolve_classes(db_session, org_id, "viewer", "brand.new.unclassified.key")
     assert classes == _BOTH_CLASSES
 
-    redacted = apply_redaction({"raw_output": "secret", "config": {"a": 1}, "status": "complete"}, "viewer", classes)
+    redacted = apply_redaction({"raw_output": "secret", "config": {"a": 1}, "status": "complete"}, classes)
     assert redacted is not None
     assert redacted["raw_output"] == REDACTED_SENTINEL
     assert redacted["config"] == REDACTED_SENTINEL
     assert redacted["status"] == "complete"
 
-    # An admin request for the same unclassified key is not redacted.
-    admin_classes = await resolve_redaction_classes(db_session, org_id, "admin", "brand.new.unclassified.key")
+    # An admin request for the same unclassified key is not redacted (admin is
+    # a TRUSTED role, so the no-rule default is fail-open for it).
+    admin_classes = await _resolve_classes(db_session, org_id, "admin", "brand.new.unclassified.key")
     assert not admin_classes
-    admin_view = apply_redaction({"raw_output": "secret"}, "admin", admin_classes)
+    admin_view = apply_redaction({"raw_output": "secret"}, admin_classes)
     assert admin_view is not None
     assert admin_view["raw_output"] == "secret"
+
+    # Regression (FAR-944 review): runner has no rule and is NOT trusted, so it
+    # fails CLOSED — both classes redacted, unlike the trusted admin above.
+    runner_classes = await _resolve_classes(db_session, org_id, "runner", "brand.new.unclassified.key")
+    assert runner_classes == _BOTH_CLASSES
+    runner_view = apply_redaction({"raw_output": "secret"}, runner_classes)
+    assert runner_view["raw_output"] == REDACTED_SENTINEL
 
 
 # ---------------------------------------------------------------------------
@@ -148,25 +168,25 @@ async def test_upsert_then_resolve_reflects_rule(db_engine: AsyncEngine, db_sess
     await _upsert_redaction_rule(db_session, org_id, "llm_judge.*", "viewer", ["sensitive_output"])
     await db_session.commit()
 
-    matched = await resolve_redaction_classes(db_session, org_id, "viewer", "llm_judge.grade")
+    matched = await _resolve_classes(db_session, org_id, "viewer", "llm_judge.grade")
     assert matched == frozenset({"sensitive_output"})
 
     # Upserting the same (key_pattern, role) updates in place.
     await _upsert_redaction_rule(db_session, org_id, "llm_judge.*", "viewer", ["internal_metadata"])
     await db_session.commit()
 
-    updated = await resolve_redaction_classes(db_session, org_id, "viewer", "llm_judge.grade")
+    updated = await _resolve_classes(db_session, org_id, "viewer", "llm_judge.grade")
     assert updated == frozenset({"internal_metadata"})
 
     # A more specific pattern wins over the broader one.
     await _upsert_redaction_rule(db_session, org_id, "llm_judge.grade", "viewer", ["sensitive_output"])
     await db_session.commit()
 
-    specific = await resolve_redaction_classes(db_session, org_id, "viewer", "llm_judge.grade")
+    specific = await _resolve_classes(db_session, org_id, "viewer", "llm_judge.grade")
     assert specific == frozenset({"sensitive_output"})
 
     # A different key under the broader pattern still uses the broader rule.
-    broader = await resolve_redaction_classes(db_session, org_id, "viewer", "llm_judge.raw")
+    broader = await _resolve_classes(db_session, org_id, "viewer", "llm_judge.raw")
     assert broader == frozenset({"internal_metadata"})
 
 

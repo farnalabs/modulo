@@ -10,15 +10,23 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from modulo.db.crud.organisation import (
     _SENTINEL_ORG_IDS,
+    _seed_evidence_redaction_catch_all,
+    create_organisation,
     get_login_active_org_by_slug,
     is_login_active_org,
     list_login_active_orgs,
+)
+from modulo.db.models.evidence_redaction_rule import (
+    CATCH_ALL_REDACTED_FIELDS,
+    EVIDENCE_REDACTION_CATCH_ALL_PATTERN,
+    EVIDENCE_REDACTION_CATCH_ALL_ROLE,
+    EvidenceRedactionRule,
 )
 from modulo.db.models.organisation import MODULO_REGISTRY_ORG_ID, SYSTEM_ORG_ID
 
@@ -127,3 +135,52 @@ class TestGetLoginActiveOrgBySlug:
 
         found = await get_login_active_org_by_slug(session, "nonexistent")
         assert found is None
+
+
+class TestSeedEvidenceRedactionCatchAll:
+    """New orgs must be seeded with the mandatory §2.4 catch-all rule (FAR-944)."""
+
+    @pytest.mark.asyncio
+    async def test_seeds_catch_all_row_when_absent(self) -> None:
+        session = AsyncMock()
+        session.add = MagicMock()  # sync call — not awaitable
+        result = MagicMock()
+        result.first.return_value = None
+        session.execute = AsyncMock(return_value=result)
+        org_id = uuid.uuid4()
+
+        await _seed_evidence_redaction_catch_all(session, org_id)
+
+        session.add.assert_called_once()
+        added = session.add.call_args.args[0]
+        assert isinstance(added, EvidenceRedactionRule)
+        assert added.organisation_id == org_id
+        assert added.key_pattern == EVIDENCE_REDACTION_CATCH_ALL_PATTERN
+        assert added.role == EVIDENCE_REDACTION_CATCH_ALL_ROLE
+        assert tuple(added.redacted_fields) == CATCH_ALL_REDACTED_FIELDS
+        session.flush.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_is_idempotent_when_catch_all_row_already_present(self) -> None:
+        session = AsyncMock()
+        result = MagicMock()
+        result.first.return_value = (uuid.uuid4(),)
+        session.execute = AsyncMock(return_value=result)
+
+        await _seed_evidence_redaction_catch_all(session, uuid.uuid4())
+
+        session.add.assert_not_called()
+        session.flush.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_create_organisation_invokes_the_catch_all_seed(self) -> None:
+        session = AsyncMock()
+        session.add = MagicMock()  # sync call — not awaitable
+
+        with patch(
+            "modulo.db.crud.organisation._seed_evidence_redaction_catch_all",
+            new=AsyncMock(),
+        ) as seed:
+            await create_organisation(session, name="Fresh Org", slug="fresh-org")
+
+        seed.assert_awaited_once()

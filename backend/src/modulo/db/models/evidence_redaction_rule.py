@@ -30,6 +30,17 @@ from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 #: widens the CHECK.
 REDACTION_RULE_ROLES: Final[frozenset[str]] = frozenset({"admin", "operator", "viewer"})
 
+#: The match-everything key pattern of the mandatory §2.4 catch-all seed rule.
+#: Shared with the redaction service and the org-creation seed so the pattern
+#: cannot drift between the migration, the seeder and the resolver.
+EVIDENCE_REDACTION_CATCH_ALL_PATTERN: Final[str] = "*"
+
+#: The role the mandatory catch-all seed rule targets (§2.4).
+EVIDENCE_REDACTION_CATCH_ALL_ROLE: Final[str] = "viewer"
+
+#: The redaction classes the mandatory catch-all seed rule applies (§2.4).
+CATCH_ALL_REDACTED_FIELDS: Final[tuple[str, ...]] = ("sensitive_output", "internal_metadata")
+
 
 class EvidenceRedactionRule(SoftDeleteMixin, OrgScoped):
     """A redaction declaration for one ``(organisation, key_pattern, role)``.

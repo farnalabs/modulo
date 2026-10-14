@@ -11,6 +11,7 @@ admin-gated, and the error arms map to the documented status codes.
 
 from __future__ import annotations
 
+import types
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from contextlib import contextmanager
@@ -23,6 +24,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes import evidence as evidence_routes
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.evidence_redaction import REDACTED_SENTINEL
@@ -115,15 +117,9 @@ def _client(org_role: str) -> Generator[TestClient, None, None]:
         app.dependency_overrides.clear()
 
 
-def _viewer_resolve(role: str) -> Any:
-    """A patched resolver: viewers see sensitive_output redacted, others not."""
-
-    async def _resolve(session: Any, organisation_id: Any, role_arg: str, key: str) -> frozenset[str]:
-        if role_arg == "viewer":
-            return frozenset({"sensitive_output"})
-        return frozenset()
-
-    return _resolve
+def _viewer_catch_all_rule() -> MagicMock:
+    """A stored viewer catch-all rule redacting ``sensitive_output``."""
+    return _fake_rule(key_pattern="*", role="viewer", redacted_fields=["sensitive_output"])
 
 
 _LIST_URL = f"/api/v1/evidence?run_id={_RUN_ID}"
@@ -137,7 +133,7 @@ class TestListEvidenceRedaction:
             patch(f"{_ROUTES}._load_evidence_rows", new=AsyncMock(return_value=[row])),
             patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
             patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
-            patch(f"{_ROUTES}.resolve_redaction_classes", new=_viewer_resolve("viewer")),
+            patch(f"{_ROUTES}.load_redaction_rules", new=AsyncMock(return_value=[_viewer_catch_all_rule()])),
         ):
             resp = client.get(_LIST_URL)
 
@@ -157,7 +153,7 @@ class TestListEvidenceRedaction:
             patch(f"{_ROUTES}._load_evidence_rows", new=AsyncMock(return_value=[row])),
             patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
             patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
-            patch(f"{_ROUTES}.resolve_redaction_classes", new=_viewer_resolve("admin")),
+            patch(f"{_ROUTES}.load_redaction_rules", new=AsyncMock(return_value=[])),
         ):
             resp = client.get(_LIST_URL)
 
@@ -165,13 +161,32 @@ class TestListEvidenceRedaction:
         data = resp.json()
         assert data[0]["value"]["raw_output"] == "secret"
 
+    def test_list_redacts_for_runner_when_no_rule_targets_it(self) -> None:
+        # Regression (FAR-944 review): runner is the default org role and a
+        # valid evidence.read principal. With no rule for runner it must still
+        # fail CLOSED and redact both classes.
+        row = _fake_evidence()
+        with (
+            _client("runner") as client,
+            patch(f"{_ROUTES}._load_evidence_rows", new=AsyncMock(return_value=[row])),
+            patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
+            patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
+            patch(f"{_ROUTES}.load_redaction_rules", new=AsyncMock(return_value=[])),
+        ):
+            resp = client.get(_LIST_URL)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data[0]["value"]["raw_output"] == REDACTED_SENTINEL
+        assert data[0]["value"]["status"] == "complete"
+
     def test_list_empty_returns_no_rows(self) -> None:
         with (
             _client("viewer") as client,
             patch(f"{_ROUTES}._load_evidence_rows", new=AsyncMock(return_value=[])),
             patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
             patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
-            patch(f"{_ROUTES}.resolve_redaction_classes", new=_viewer_resolve("viewer")),
+            patch(f"{_ROUTES}.load_redaction_rules", new=AsyncMock(return_value=[])),
         ):
             resp = client.get(_LIST_URL)
 
@@ -186,7 +201,7 @@ class TestListEvidenceErrorArms:
             patch(f"{_ROUTES}._load_evidence_rows", new=AsyncMock(side_effect=side_effect)),
             patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
             patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
-            patch(f"{_ROUTES}.resolve_redaction_classes", new=_viewer_resolve("viewer")),
+            patch(f"{_ROUTES}.load_redaction_rules", new=AsyncMock(return_value=[])),
         ):
             return client.get(_LIST_URL)
 
@@ -217,7 +232,7 @@ class TestGetEvidence:
             patch(f"{_ROUTES}._load_evidence_row", new=AsyncMock(return_value=row)),
             patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
             patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
-            patch(f"{_ROUTES}.resolve_redaction_classes", new=_viewer_resolve("viewer")),
+            patch(f"{_ROUTES}.load_redaction_rules", new=AsyncMock(return_value=[_viewer_catch_all_rule()])),
         ):
             resp = client.get(self.URL)
 
@@ -312,3 +327,43 @@ class TestRedactionRulesAdminSurface:
             )
 
         assert resp.status_code == 409
+
+
+class TestListEvidenceQueryShape:
+    """The list query is bounded and run-scoped (FAR-944 review)."""
+
+    async def _capture_stmt(self, node_id: str | None) -> Any:
+        captured: dict[str, Any] = {}
+
+        class _ScalarResult:
+            def all(self) -> list[Any]:
+                return []
+
+        class _Result:
+            def scalars(self) -> _ScalarResult:
+                return _ScalarResult()
+
+        async def _execute(statement: Any) -> _Result:
+            captured["stmt"] = statement
+            return _Result()
+
+        session = types.SimpleNamespace(execute=_execute)
+        await evidence_routes._load_evidence_rows(session, _ORG_ID, _RUN_ID, node_id, None)
+        return captured["stmt"]
+
+    async def test_run_level_query_has_limit_and_subject_type_guard(self) -> None:
+        stmt = await self._capture_stmt(None)
+        compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+
+        assert "LIMIT" in compiled
+        assert str(evidence_routes._EVIDENCE_LIST_LIMIT) in compiled
+        # The run branch is guarded on subject_type so a future non-run subject
+        # whose subject_id equals the run id is not returned.
+        assert "subject_type" in compiled
+
+    async def test_node_level_query_keeps_node_execution_branch(self) -> None:
+        stmt = await self._capture_stmt("node-1")
+        compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+
+        assert "node_execution" in compiled
+        assert "LIMIT" in compiled

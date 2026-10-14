@@ -10,17 +10,23 @@ Upgrade:
 2. Seed the MANDATORY catch-all row for every existing organisation:
    ``key_pattern='*'``, ``role='viewer'``, ``redacted_fields='{sensitive_output, internal_metadata}'``.
    This ensures a newly-added evidence key carrying sensitive content is
-   redacted for viewers before an admin explicitly classifies it. The seed runs
-   BEFORE RLS is enabled (the migration role would otherwise be subject to the
-   FORCE-RLS policy).
+   redacted for viewers before an admin explicitly classifies it. Redaction is
+   name-based: a class covers a fixed set of JSON key NAMES, so the catch-all
+   only hides keys whose names are in a class — it is not a default-deny
+   allowlist. The seed runs BEFORE RLS is enabled (the migration role would
+   otherwise be subject to the FORCE-RLS policy).
 3. Apply the mandatory four-step RLS pattern (ownership transfer to
    modulo_migrate, ENABLE, FORCE, rls_org_isolation policy) mirrored from
    ``0263_evidence_layer``.
 
-Orgs created AFTER this migration have no catch-all row; the redaction service
-(``modulo.core.evidence_redaction.resolve_redaction_classes``) falls back to its
-built-in viewer default (both classes) when an org has no matching rule at all,
-so the safety property holds either way.
+Orgs created AFTER this migration are seeded with the same catch-all row by the
+org-creation path (``modulo.db.crud.organisation.create_organisation`` →
+``_seed_evidence_redaction_catch_all``). If a rule is nevertheless absent, the
+redaction service (``modulo.core.evidence_redaction.resolve_redaction_classes_from``)
+fails CLOSED: a trusted role (``admin``/``operator``) with no matching rule is
+unredacted, and EVERY other role — including the default org role ``runner`` —
+falls back to BOTH classes. (This deliberately narrows acceptance criterion 3's
+"no matching rule -> no redaction" to trusted roles only.)
 
 Revision ID: 0311_evidence_redaction_rules
 Revises: 0310_library_cluster_db_hardening
