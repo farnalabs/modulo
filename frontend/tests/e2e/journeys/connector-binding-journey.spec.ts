@@ -80,14 +80,15 @@ test.describe('Real-stack journeys: connector binding', { tag: '@regression' }, 
       await page.goto('/admin/connectors')
 
       // Create through the real admin form: name -> Filesystem type ->
-      // description -> the config textarea (the non-REST connector's
-      // credential payload on this form) -> submit.
+      // description -> credentials (FAR-1763 split the old single box into
+      // operational config + credentials) -> submit. Operational config is left
+      // blank: this journey only needs a persisted, credentialled connector.
       await page.getByTestId('admin-connectors-add').click()
       await page.getByTestId('admin-connectors-name-input').fill(connectorName)
       await page.getByTestId('admin-connectors-type-select').click()
       await page.locator('[data-value="filesystem"]').click()
       await page.getByTestId('admin-connectors-description-input').fill('Created by the FAR-1242 real-stack e2e journey')
-      await page.getByTestId('admin-connectors-config-input').fill('e2e-journey-noop-credentials')
+      await page.locator('#adminconnectors-credentials-input').fill('e2e-journey-noop-credentials')
       await page.getByTestId('admin-connectors-submit').click()
 
       // Observable effect: the row renders in the connector list...

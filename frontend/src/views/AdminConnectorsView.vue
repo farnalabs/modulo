@@ -67,16 +67,33 @@
               />
             </div>
             <div v-else>
-              <label for="adminconnectorsview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.configuration_json') }}</label>
-              <textarea id="adminconnectorsview-field-4"
-                v-model="formData.config_json"
-                rows="6"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-                placeholder='{ "host": "localhost", "port": 5432 }'
-                data-testid="admin-connectors-config-input"
-              ></textarea>
+              <div>
+                <label for="adminconnectorsview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.operational_config') }}</label>
+                <textarea id="adminconnectorsview-field-4"
+                  v-model="formData.config_json"
+                  rows="6"
+                  class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
+                  placeholder='{ "base_url": "https://gitlab.example.com" }'
+                  data-testid="admin-connectors-config-input"
+                  :aria-invalid="invalidField === 'config'"
+                  :aria-describedby="invalidField === 'config' ? 'adminconnectors-add-form-error' : undefined"
+                ></textarea>
+                <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.AdminConnectorsView.operational_config_help') }}</p>
+              </div>
+              <div class="mt-4">
+                <label for="adminconnectors-credentials-input" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.credentials_json') }}</label>
+                <textarea id="adminconnectors-credentials-input"
+                  v-model="formData.credentials"
+                  rows="4"
+                  class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
+                  placeholder='{ "token": "ghp_..." }'
+                  :aria-invalid="invalidField === 'credentials'"
+                  :aria-describedby="invalidField === 'credentials' ? 'adminconnectors-add-form-error' : undefined"
+                ></textarea>
+                <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.AdminConnectorsView.credentials_help') }}</p>
+              </div>
             </div>
-            <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
+            <div v-if="formError" id="adminconnectors-add-form-error" role="alert" class="text-sm text-destructive">{{ formError }}</div>
             <div class="flex items-center gap-2">
               <Button :disabled="saving || !formData.name.trim()" type="submit" data-testid="admin-connectors-submit">
                 {{ saving ? $t('views.AdminConnectorsView.creating') : $t('views.AdminConnectorsView.create') }}
@@ -224,15 +241,31 @@
               />
             </div>
             <div v-else>
-              <label for="adminconnectorsview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.configuration_json') }}</label>
-              <textarea id="adminconnectorsview-field-1"
-                v-model="formData.config_json"
-                rows="6"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-                data-testid="admin-connectors-edit-config"
-              ></textarea>
+              <div>
+                <label for="adminconnectorsview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.operational_config') }}</label>
+                <textarea id="adminconnectorsview-field-1"
+                  v-model="formData.config_json"
+                  rows="6"
+                  class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
+                  data-testid="admin-connectors-edit-config"
+                  :aria-invalid="invalidField === 'config'"
+                  :aria-describedby="invalidField === 'config' ? 'adminconnectors-edit-form-error' : 'adminconnectors-edit-config-help'"
+                ></textarea>
+                <p id="adminconnectors-edit-config-help" class="mt-1 text-xs text-muted-foreground">{{ $t('views.AdminConnectorsView.operational_config_help') }}</p>
+              </div>
+              <div class="mt-4">
+                <label for="adminconnectors-edit-credentials-input" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.credentials_json') }}</label>
+                <textarea id="adminconnectors-edit-credentials-input"
+                  v-model="formData.credentials"
+                  rows="4"
+                  class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
+                  :aria-invalid="invalidField === 'credentials'"
+                  :aria-describedby="invalidField === 'credentials' ? 'adminconnectors-edit-form-error' : 'adminconnectors-edit-credentials-help'"
+                ></textarea>
+                <p id="adminconnectors-edit-credentials-help" class="mt-1 text-xs text-muted-foreground">{{ $t('views.AdminConnectorsView.credentials_help') }}</p>
+              </div>
             </div>
-            <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
+            <div v-if="formError" id="adminconnectors-edit-form-error" role="alert" class="text-sm text-destructive">{{ formError }}</div>
             <div class="flex items-center gap-2">
               <Button :disabled="saving || !formData.name.trim()" type="submit" data-testid="admin-connectors-save">
                 {{ saving ? $t('views.AdminConnectorsView.saving') : $t('views.AdminConnectorsView.save') }}
@@ -315,7 +348,14 @@ interface ConnectorFormState {
   name: string
   connector_type: string
   description: string
+  // Non-REST connectors only (FAR-1763). Two SEPARATE JSON surfaces:
+  // `config_json` is the operational config the connector hub reads at run
+  // time (base_url, project, channel, ...); `credentials` is the secret the
+  // API stores encrypted and never echoes back. They were conflated into one
+  // free-text box that was sent entirely as credentials, so a self-hosted
+  // base_url was unsettable from the UI and an edit wiped stored config.
   config_json: string
+  credentials: string
 }
 
 function emptyForm(): ConnectorFormState {
@@ -324,7 +364,59 @@ function emptyForm(): ConnectorFormState {
     connector_type: '',
     description: '',
     config_json: '',
+    credentials: '',
   }
+}
+
+// Non-REST JSON validation is field-keyed: `config_json` must be a JSON object
+// (or empty); `credentials` is only checked for JSON well-formedness when the
+// operator typed something (a bare token is also accepted — see
+// validateCredentialsJson).
+const invalidField = ref<'config' | 'credentials' | null>(null)
+
+function parseConfigJsonField(raw: string): { ok: true; value: Record<string, unknown> } | { ok: false } {
+  const text = raw.trim()
+  if (!text) return { ok: true, value: {} }
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return { ok: false }
+    return { ok: true, value: parsed as Record<string, unknown> }
+  } catch {
+    return { ok: false }
+  }
+}
+
+// Credentials may be a JSON object ({ "token": "..." }) or a bare token string
+// (github, gitlab, linear, slack all read a single key and the hub heals a
+// bare scalar under that key — FAR-496). So: blank is fine, a bare token is
+// fine, and anything starting with '{' or '[' must be valid JSON.
+function validateCredentialsJson(raw: string): boolean {
+  const text = raw.trim()
+  if (!text) return true
+  const looksLikeJson = text.startsWith('{') || text.startsWith('[')
+  if (!looksLikeJson) return true
+  try {
+    JSON.parse(text)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function validateNonRestJson(): boolean {
+  invalidField.value = null
+  const config = parseConfigJsonField(formData.config_json)
+  if (!config.ok) {
+    invalidField.value = 'config'
+    formError.value = t('views.AdminConnectorsView.invalid_operational_config_json')
+    return false
+  }
+  if (!validateCredentialsJson(formData.credentials)) {
+    invalidField.value = 'credentials'
+    formError.value = t('views.AdminConnectorsView.invalid_credentials_json')
+    return false
+  }
+  return true
 }
 
 // REST connector (Generic REST) structured form state. Operational config is
@@ -377,6 +469,37 @@ const credsIdentityDirty = ref(false)
 const restLegacyAuthEcho = ref(false)
 const restFormRef = ref<InstanceType<typeof RestConnectorConfigForm> | null>(null)
 const isRestConnector = computed(() => formData.connector_type === 'rest')
+// Non-REST credentials are write-only in the API (has_credentials boolean
+// only), so the edit form starts blank. Mirror of the REST credsDirty gate:
+// only a real edit of the credentials textarea re-sends the payload, so an
+// untouched edit can never wipe the stored secret (FAR-1763). Comparison is on
+// the trimmed value so a whitespace-only keystroke is not a dirty edit.
+const nonRestCredsBaseline = ref('')
+const nonRestCredsDirty = computed(() => formData.credentials.trim() !== nonRestCredsBaseline.value)
+
+function resetNonRestForm() {
+  nonRestCredsBaseline.value = ''
+  invalidField.value = null
+}
+
+// Prefill the operational-config editor from the stored config_json, EXCLUDING
+// the description echo — description is a first-class control with its own
+// input (same invariant the REST path enforces, FAR-466 QA fix 2). An empty
+// result leaves the textarea blank rather than "{}" so an untouched edit reads
+// as untouched.
+function prefillNonRestConfig(connector: ConnectorItem) {
+  const cfg = connector.config_json ?? {}
+  const operational: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(cfg)) {
+    if (key === 'description') continue
+    operational[key] = value
+  }
+  formData.config_json = Object.keys(operational).length ? JSON.stringify(operational, null, 2) : ''
+  // Credentials are never echoed back, so the field starts blank on every edit.
+  formData.credentials = ''
+  nonRestCredsBaseline.value = ''
+  invalidField.value = null
+}
 
 function resetRestForm() {
   Object.assign(restConfig.value, defaultRestConfig())
@@ -557,6 +680,7 @@ function openAddForm() {
   deleteConfirmConnectorId.value = null
   formError.value = null
   resetRestForm()
+  resetNonRestForm()
 }
 
 function openEditForm(connector: ConnectorItem) {
@@ -569,11 +693,14 @@ function openEditForm(connector: ConnectorItem) {
     connector_type: connector.connector_type,
     description: connector.description ?? '',
     config_json: '',
+    credentials: '',
   })
   if (connector.connector_type === 'rest') {
     prefillRestConfig(connector)
+    resetNonRestForm()
   } else {
     resetRestForm()
+    prefillNonRestConfig(connector)
   }
 }
 
@@ -582,6 +709,7 @@ function closeForm() {
   Object.assign(formData, emptyForm())
   formError.value = null
   resetRestForm()
+  resetNonRestForm()
 }
 
 function closeEditForm() {
@@ -589,6 +717,17 @@ function closeEditForm() {
   Object.assign(formData, emptyForm())
   formError.value = null
   resetRestForm()
+  resetNonRestForm()
+}
+
+function buildNonRestConfigJson(): Record<string, unknown> {
+  // Merge the parsed operational config with the description control. The
+  // description is applied LAST so a stray "description" key inside the
+  // operational JSON can never clobber the first-class field (same ordering
+  // invariant the REST path enforces, FAR-466 QA fix 3).
+  const parsed = parseConfigJsonField(formData.config_json)
+  const operational: Record<string, unknown> = parsed.ok ? parsed.value : {}
+  return { ...operational, description: formData.description.trim() }
 }
 
 function buildCreateBody() {
@@ -606,8 +745,11 @@ function buildCreateBody() {
   return {
     name: formData.name.trim(),
     connector_type_id: formData.connector_type,
-    credentials: formData.config_json,
-    config_json: { description: formData.description.trim() },
+    // The API requires a non-empty credential string (min_length=1); a
+    // connector that genuinely needs none gets an empty JSON object, which
+    // every token-keyed connector type reads as "no credentials yet".
+    credentials: formData.credentials.trim() || '{}',
+    config_json: buildNonRestConfigJson(),
     allowed_operations: [],
     visibility: 'org',
     tier: 'native' as const,
@@ -630,11 +772,19 @@ function buildUpdateBody() {
     if (credsDirty.value || credsIdentityDirty.value) body.credentials = buildRestCredentials()
     return body
   }
-  return {
+  const body: Record<string, unknown> = {
     name: formData.name.trim() || null,
-    credentials: formData.config_json.trim() || null,
-    config_json: { description: formData.description.trim() },
+    // Send the FULL parsed operational config plus description — never a
+    // description-only stub. The backend deep-merges this over the stored
+    // config, so base_url and any other stored key survives an edit, and an
+    // operator can now set or change base_url from the UI at all (FAR-1763).
+    config_json: buildNonRestConfigJson(),
   }
+  // Credentials are write-only. Only re-send when the operator actually typed
+  // into the credentials box; otherwise omit the key entirely so the stored
+  // encrypted credential is preserved rather than wiped (FAR-1763).
+  if (nonRestCredsDirty.value) body.credentials = formData.credentials.trim() || '{}'
+  return body
 }
 
 async function createConnector() {
@@ -645,6 +795,8 @@ async function createConnector() {
       formError.value = t('views.AdminConnectorsView.please_fix')
       return
     }
+  } else if (!validateNonRestJson()) {
+    return
   }
   saving.value = true
   formError.value = null
@@ -681,6 +833,8 @@ async function updateConnector() {
       formError.value = t('views.AdminConnectorsView.please_fix')
       return
     }
+  } else if (!validateNonRestJson()) {
+    return
   }
   saving.value = true
   formError.value = null
