@@ -678,7 +678,7 @@ def _make_rating() -> MagicMock:
     r = MagicMock()
     r.id = uuid.uuid4()
     r.primitive_id = uuid.uuid4()
-    r.user_id = _USER_ID
+    r.account_id = _USER_ID
     r.thumbs_up = True
     r.comment = "Great"
     r.created_at = _NOW
@@ -784,7 +784,7 @@ def test_submit_abuse_report_returns_201(client: TestClient) -> None:
     report.id = uuid.uuid4()
     report.primitive_id = uuid.uuid4()
     report.rating_id = None
-    report.reporter_user_id = _USER_ID
+    report.reporter_account_id = _USER_ID
     report.reason = "Inappropriate content here"
     report.status = "open"
     report.created_at = _NOW
@@ -803,6 +803,61 @@ def test_submit_abuse_report_returns_201(client: TestClient) -> None:
 def test_submit_abuse_report_short_reason_rejected(client: TestClient) -> None:
     resp = client.post(f"/api/v1/libraries/{uuid.uuid4()}/ratings/abuse", json={"reason": "short"})
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Response-model serialization against REAL ORM rows (regression)
+#
+# The route tests above mock the crud and hand back a MagicMock, which happily
+# carries any attribute name the response model asks for — that is how a
+# response field with no ORM counterpart (``reporter_user_id`` / ``user_id``)
+# survived green CI while every real row failed ``model_validate``: the raise
+# is translated to 422 by ``handle_db_errors``, so filing a report persisted
+# the row and answered 422 instead of 201. These two build the actual ORM
+# classes, so they fail if a response field ever drifts from its column again.
+# ---------------------------------------------------------------------------
+
+
+def test_abuse_report_response_validates_a_real_orm_row() -> None:
+    from modulo.api.routes.library import AbuseReportResponse
+    from modulo.db.models.primitive_abuse_report import PrimitiveAbuseReport
+
+    report = PrimitiveAbuseReport(
+        organisation_id=_ORG_ID,
+        primitive_id=uuid.uuid4(),
+        rating_id=None,
+        reporter_account_id=_USER_ID,
+        reason="Inappropriate content here",
+        status="pending",
+    )
+    # A row read back from the DB carries its flushed id + server-default timestamp.
+    report.id = uuid.uuid4()
+    report.created_at = _NOW
+
+    validated = AbuseReportResponse.model_validate(report)
+
+    assert validated.reporter_account_id == _USER_ID
+    assert validated.status == "pending"
+
+
+def test_rating_response_validates_a_real_orm_row() -> None:
+    from modulo.api.routes.library import RatingResponse
+    from modulo.db.models.primitive_rating import PrimitiveRating
+
+    rating = PrimitiveRating(
+        organisation_id=_ORG_ID,
+        primitive_id=uuid.uuid4(),
+        account_id=_USER_ID,
+        thumbs_up=True,
+        comment="Great",
+    )
+    rating.id = uuid.uuid4()
+    rating.created_at = _NOW
+
+    validated = RatingResponse.model_validate(rating)
+
+    assert validated.account_id == _USER_ID
+    assert validated.thumbs_up is True
 
 
 # ---------------------------------------------------------------------------

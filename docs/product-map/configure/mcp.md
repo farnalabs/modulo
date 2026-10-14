@@ -109,8 +109,8 @@ applications. Built on the auth + model-backend core.
       `http://`/`https://` URI – localhost and 127.0.0.1 stay valid for local
       development, duplicates de-duplicated, invalid entries named in an
       inline error) and at least one grantable scope (the backend's widened
-      vocabulary: every delegable key of the `PERMISSIONS` registry — the
-      accepted scope IS the permission key, ~158 today — with the three
+      vocabulary: every delegable key of the `PERMISSIONS` registry - the
+      accepted scope IS the permission key, ~158 today - with the three
       pre-FAR-1476 spellings `trigger:run` / `hitl:review` / `library:browse`
       still accepted as INPUT aliases through `auth.oauth.SCOPE_ALIASES` and
       canonicalised to `run.trigger` / `hitl.review` / `resource.read_only`
@@ -120,7 +120,7 @@ applications. Built on the auth + model-backend core.
       `GET /api/v1/mcp/oauth/scopes` (the delegable keys + their role floors,
       filtered to the caller's own role so a scope above the caller's floor is
       never offered as a dead control), renders them grouped by namespace and
-      filterable through a search box, and hardcodes no vocabulary — a newly
+      filterable through a search box, and hardcodes no vocabulary - a newly
       added registry key is reachable without a frontend change. Success opens a one-time
       dialog showing the client id and client secret: only the create
       response ever carries the raw secret (the row stores
@@ -222,7 +222,7 @@ applications. Built on the auth + model-backend core.
       REQUIRES a keyword-only `code` (no default), so no call site can fall back
       to the disallowed generic `internal_error`; the shared `_tool_exception_error`
       classifier maps every escaped exception type to a code the consuming agent
-      can branch on — `insufficient_scope` (`MCPAuthorizationError`),
+      can branch on - `insufficient_scope` (`MCPAuthorizationError`),
       `validation_failed` (4xx `StarletteHTTPException`) / `server_error` (5xx),
       `session_contract_error` (`InvalidRequestError` / `MissingGreenlet`) via the
       shared `db_error_handling` classifier, `conflict` (`IntegrityError`),
@@ -239,7 +239,7 @@ applications. Built on the auth + model-backend core.
       generic `internal_error`), and the `SQLAlchemyError` arm runs through the
       SAME shared session-contract classifier so a programming bug gets the
       specific `session_contract_error` frame instead of a retry-inviting outage
-      frame — no consumer of the old keys exists outside the backend
+      frame - no consumer of the old keys exists outside the backend
       (`backend/src/modulo/api/routes/run_ws.py`; `test_run_ws.py`);
       `backend/tests/architecture/test_mcp_error_codes.py` structurally forbids
       the `internal_error` payload in both sources and keeps `_tool_error`'s
@@ -281,19 +281,19 @@ applications. Built on the auth + model-backend core.
       route `/oauth/authorize` is a real grant-review page, not a placeholder.
       An anonymous pre-auth context endpoint
       (`GET /api/v1/mcp/oauth/consent/context?state=...`,
-      `api/routes/mcp_oauth.py` — deliberately NO `require_feature` /
+      `api/routes/mcp_oauth.py` - deliberately NO `require_feature` /
       `get_current_user`, whose plan resolution would 401 a not-yet-signed-in
       browser; the org is resolved from the pending `oauth_consent_states` row
       and the `mcp_server` kill switch is enforced against it, the
       `_oauth_authorize` pattern) returns the client's display name, the
       canonical grant set stored by the authorize leg, and the client's team
       boundary (`team: {id, name}` when `team_id` is set, so a team-bounded
-      client can say so) — and NOTHING else (no redirect_uri, no secrets, no
+      client can say so) - and NOTHING else (no redirect_uri, no secrets, no
       org internals; unknown/expired/consumed states are one undifferentiated
       404). Migration 0300 widened the table's RLS policy with the
       NULL-context arm (the same contract `oauth_clients` already has) so the
       pre-auth read is visible to the runtime `modulo_app` role. The view
-      renders each scope's raw canonical key verbatim — the same single
+      renders each scope's raw canonical key verbatim - the same single
       labelling scheme the registration picker uses, since the grantable
       vocabulary is the whole delegable `PERMISSIONS` registry and there is no
       fixed per-scope description set any more (one scheme, not two),
@@ -303,10 +303,10 @@ applications. Built on the auth + model-backend core.
       (now accepting optional `granted_scopes`) fails CLOSED: the keys are
       canonicalised, must be a non-empty subset of the stored set (anything
       outside → 400, never widens), and the live-role check re-runs against
-      the granted subset (403 on denial, no code minted) — omitted
+      the granted subset (403 on denial, no code minted) - omitted
       `granted_scopes` keeps the pre-slice all-stored-scopes behaviour. The
       client-name bug (showing the logged-in user's username) is gone: the
-      name comes from the context endpoint, display-only — the code is still
+      name comes from the context endpoint, display-only - the code is still
       minted from the stored state row only. Decline renders a clear "you
       declined" state rather than an OAuth error redirect, because the
       context endpoint deliberately does not expose `redirect_uri` (a
@@ -318,19 +318,19 @@ applications. Built on the auth + model-backend core.
       migration `0301_oauth_consent_state_preauth_rls`)
 - [x] Widened OAuth scope vocabulary + delegated HITL decisions (2026-10-10,
       FAR-1476): the grantable scope set is the delegable `PERMISSIONS`
-      registry — every key `auth.permissions.is_delegable` accepts (~158
+      registry - every key `auth.permissions.is_delegable` accepts (~158
       today), re-read LIVE on every enforcement leg so tightening an exclusion
-      revokes already-minted grants — not a fixed three-scope list, and the
+      revokes already-minted grants - not a fixed three-scope list, and the
       three pre-FAR-1476 spellings survive only as input aliases
       (`SCOPE_ALIASES`: `trigger:run` → `run.trigger`, `hitl:review` →
       `hitl.review`, `library:browse` → `resource.read_only`). The five
       `hitl.*` decision keys were removed from `NON_DELEGABLE_PERMISSIONS` on
       the 2026-10-09 decision record: a human-linked credential (a human's
       OAuth connection) may hold them, and the boundary is the gate's runtime
-      `human_only` policy — the MCP surface (`_check_human_only_gate`) denies
+      `human_only` policy - the MCP surface (`_check_human_only_gate`) denies
       a `human_only` gate outright regardless of credential class and REST
       (`routes/hitl._enforce_human_only_gate`) denies a non-browser
-      credential — so a token holding `hitl.*` CAN decide an explicitly
+      credential - so a token holding `hitl.*` CAN decide an explicitly
       opted-out gate and is denied on a `human_only` one with the RUNTIME
       `human_only_gate` error rather than `insufficient_scope`. The
       registration picker is backend-driven: `GET /api/v1/mcp/oauth/scopes`
@@ -388,7 +388,7 @@ applications. Built on the auth + model-backend core.
   trigger-dispatch behaviours are tracker-only), and neither the feature
   description nor any route `product_map` ref changes for a pre-auth endpoint
   with no UI surface.
-- 2026-10-06: **Improve Architecture product-map walk** — closed the untracked
+- 2026-10-06: **Improve Architecture product-map walk** - closed the untracked
   FAR-1502 surface: the MCP tool-error vocabulary that the consuming agent
   branches on shipped (specific, branchable codes via the required-keyword
   `_tool_error` + the shared `_tool_exception_error` classifier) and the run

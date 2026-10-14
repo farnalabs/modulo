@@ -60,6 +60,11 @@ _TABLE_NAMES = {
     "audit_chain_heads",
     "evals",
     "policy_gates",
+    # FAR-1593: the clone seeds the org's applied guardrail config in the
+    # caller's transaction, which reads organisations.guardrail_pins_json — the
+    # table must exist for the real CRUD to run (an empty table seeds nothing,
+    # which is exactly this module's case: no applied guardrail config).
+    "organisations",
 }
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-00000000000a")

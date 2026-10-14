@@ -52,7 +52,7 @@ Lenses:
     0306_trigger_secret_encryption chains onto 0305_guardrail_escalate_action, and
     0307_runs_guardrail_override_resume_pending chains onto 0306_trigger_secret_encryption, and
     0308_runs_dispatch_phase_history chains onto 0307_runs_guardrail_override_resume_pending, and
-    0311_external_agents_mcp_servers chains onto 0308_runs_dispatch_phase_history as the
+    0312_external_agents_mcp_servers chains onto 0308_runs_dispatch_phase_history as the
     single linear head (0259's test documents the run-up through 0288).
 * **Structure (mocked ``op``)** - upgrade emits THREE statements IN ORDER: the
   existence-gated ``ADD ... NOT VALID`` FIRST (so its ACCESS EXCLUSIVE is taken
@@ -88,7 +88,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0264_pipelines_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0263_evidence_layer"
-_HEAD_MIGRATION = "0311_external_agents_mcp_servers"
+_HEAD_MIGRATION = "0312_external_agents_mcp_servers"
 _CONSTRAINT = "ck_pipelines_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - a

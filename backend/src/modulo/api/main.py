@@ -824,6 +824,17 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # the validator raises and the process exits before accepting requests.
     settings = get_settings()
 
+    # FAR-1771: event-loop stall attribution on THIS process's loop (the
+    # readiness probe that logs "event-loop stall detected" runs here).
+    # Opt-in via MODULO_SLOW_CALLBACK_WARN_MS; unset/0 is a pure no-op.
+    # Fail-open: observability must never block boot.
+    try:
+        from modulo.core.health_alerts import install_event_loop_stall_attribution
+
+        install_event_loop_stall_attribution(settings)
+    except Exception:
+        logger.exception("startup.event_loop_stall_attribution_install_failed")
+
     _configure_license_and_otel(settings)
     _discover_plugins(settings)
 

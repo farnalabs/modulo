@@ -39,7 +39,7 @@ org. Every mutation runs under org RLS and is audited fail-closed (ADR 047).
       invalid token is 401 `Invalid SCIM token`, an unconfigured instance
       (`MODULO_SCIM_TOKEN` unset) is 501 `SCIM is not configured`, a malformed
       `MODULO_SCIM_DEFAULT_ORG_ID` is 500, and the whole surface is gated behind
-      the `scim` plan feature — a plan without it gets 402
+      the `scim` plan feature - a plan without it gets 402
       `scim is not available on your plan`
       (`backend/src/modulo/auth/scim_auth.py`; `test_scim_auth.py`,
       `scim_provisioning.feature`)
@@ -63,8 +63,8 @@ org. Every mutation runs under org RLS and is audited fail-closed (ADR 047).
       404 for an unknown id; `PUT` replaces attributes; `PATCH` applies
       add/replace/remove operations; a `PATCH active=false` (or a `PUT`/`PATCH`
       that clears `active`) DEPROVISIONS via the caller-bound
-      `deactivate_break_glass` SECURITY DEFINER — the membership is tombstoned
-      and record-preserving, never hard-deleted — and `DELETE` applies the same
+      `deactivate_break_glass` SECURITY DEFINER - the membership is tombstoned
+      and record-preserving, never hard-deleted - and `DELETE` applies the same
       tombstone (`scim_provisioning.feature` "Delete ... deactivates",
       "Deprovisioning ... preserves the record")
 - [x] Deprovisioning fails closed around the last-admin invariant: SCIM
@@ -85,11 +85,11 @@ org. Every mutation runs under org RLS and is audited fail-closed (ADR 047).
 - [x] Every user/group mutation is audited fail-closed
       (`scim_user_created` / `scim_user_updated` / `scim_user_deleted` and the
       group equivalents; FAR-1472), attributed to that same resolved admin
-      authority — a provisioning change that lands without an audit event fails
+      authority - a provisioning change that lands without an audit event fails
       the response rather than mutating membership unattributably
 - [x] Database failures on the mutating routes map to honest SCIM status codes
       instead of a generic 500: `ProgrammingError` (missing migration) → 501,
-      `IntegrityError` → 409 and other `SQLAlchemyError` → 503 — except a
+      `IntegrityError` → 409 and other `SQLAlchemyError` → 503 - except a
       session-contract violation (`InvalidRequestError` / `MissingGreenlet`),
       which `raise_session_contract_error` classifies to 500 rather than a
       retry-inviting 503. The `GET` list routes are the exception: their CRUD
@@ -99,11 +99,11 @@ org. Every mutation runs under org RLS and is audited fail-closed (ADR 047).
 
 ## Known Gaps
 
-- **No `PATCH` role-update path** — ADR 047 phase 1 leaves the SCIM user
+- **No `PATCH` role-update path** - ADR 047 phase 1 leaves the SCIM user
   role-update intentionally unwired: a SCIM user defaults to the `runner`
   grant and an IdP-driven role change is not propagated. Wiring it needs an
   ADR 047 follow-up.
-- **Group membership is org-scoped, not team-scoped** — a SCIM group syncs to
+- **Group membership is org-scoped, not team-scoped** - a SCIM group syncs to
   the caller's org team; there is no per-IdP-group → multiple-team fan-out.
 
 ## QA History
@@ -114,7 +114,7 @@ org. Every mutation runs under org RLS and is audited fail-closed (ADR 047).
   CRUD, the shared-secret `MODULO_SCIM_TOKEN` auth, the `scim` plan gate, the
   last-admin-safe deprovisioning and the fail-closed mutation audits) shipped
   with executing BDD (`scim_provisioning.feature`) and unit coverage but had NO
-  home in either product-map layer — it was invisible to the feature graph and
+  home in either product-map layer - it was invisible to the feature graph and
   to Assistant's `search_documentation` indexer. Corrected the stale
   `feat-sso` deferral that still claimed "SCIM deprovisioning [is] not
   implemented yet": SCIM user deprovisioning (`DELETE /scim/v2/Users/{id}` and
