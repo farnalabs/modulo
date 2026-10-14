@@ -3251,12 +3251,17 @@ class TestFireSuiteRunTriggerPersists:
         assert captured[0].extra["suite_ceiling"] is None
 
     @pytest.mark.asyncio
-    async def test_llm_judge_suite_is_rejected_at_fire_boundary(self) -> None:
+    async def test_llm_judge_suite_reaches_build_at_fire_boundary(self) -> None:
         """A ``run_kind='suite_run'`` trigger whose suite contains an ``llm_judge``
-        definition must be skipped at the fire boundary (never built into a doomed
-        ``pending`` run that hard-fails at execution). The scheduled path does not
-        wire a judge callable, so such config must not promise a run it cannot
-        deliver (FAR-377 reviewer finding).
+        definition must NOT be refused at the fire boundary (FAR-1742).
+
+        FAR-1712 wired an org-scoped judge callable into the SAQ
+        ``execute_suite_run`` job, but the former fire-time guard
+        (``_suite_run_llm_judge_guard`` -> ``llm_judge_unsupported``) refused such a
+        fire before the run was ever built, so the scheduled path never reached
+        that wired job. The fire must now proceed to ``build_suite_run`` and
+        report ``fired``. The runner's own loud refusal for a genuinely
+        unconfigurable judge (no ACTIVE backend) is a separate, preserved check.
         """
 
         org_id = ORG
@@ -3264,6 +3269,7 @@ class TestFireSuiteRunTriggerPersists:
         suite_id = uuid.uuid4()
         dataset_id = uuid.uuid4()
         model_backend_id = uuid.uuid4()
+        run_id = uuid.uuid4()
 
         trigger = MagicMock()
         trigger.id = trigger_id
@@ -3279,17 +3285,19 @@ class TestFireSuiteRunTriggerPersists:
             "model_backend_id": str(model_backend_id),
         }
 
+        # EvalDefinitionRow-shaped double carrying an ``llm_judge`` eval_type.
+        llm_judge_def = MagicMock()
+        llm_judge_def.eval_type = "llm_judge"
+
+        built_run = MagicMock()
+        built_run.id = run_id
+
         advisory = MagicMock()
         advisory.scalar_one.return_value = True
         trigger_res = MagicMock()
         trigger_res.scalar_one_or_none.return_value = trigger
         count_res = _mock_result(scalar_one=0)
         update_res = MagicMock()
-
-        # EvalDefinitionRow-shaped double carrying an ``llm_judge`` eval_type.
-        llm_judge_def = MagicMock()
-        llm_judge_def.eval_type = "llm_judge"
-
         session = _MockSession([advisory, trigger_res, count_res, update_res])
         factory = MagicMock(return_value=session)
 
@@ -3303,6 +3311,7 @@ class TestFireSuiteRunTriggerPersists:
             ) as load_defs,
             patch(
                 "modulo.core.eval_engine.execute_suite_run.build_suite_run",
+                return_value=built_run,
             ) as build_suite_run,
         ):
             result = await ch.fire_suite_run_trigger(
@@ -3311,12 +3320,13 @@ class TestFireSuiteRunTriggerPersists:
                 pipeline_id=None,
             )
 
-        assert result["status"] == "skipped"
-        assert result["reason"] == "llm_judge_unsupported"
-        assert result["suite_id"] == str(suite_id)
-        # The run must NOT be built — the fire is rejected before build.
-        load_defs.assert_awaited_once()
-        build_suite_run.assert_not_called()
+        # The judge suite is no longer refused: the fire builds the run and
+        # reports ``fired``, reaching the wired ``execute_suite_run`` job.
+        assert result["status"] == "fired"
+        assert result["suite_run_id"] == str(run_id)
+        # The fire boundary no longer inspects suite definitions to refuse them.
+        load_defs.assert_not_awaited()
+        build_suite_run.assert_awaited_once()
 
 
 class TestFireSuiteRunTriggerSpendPool:

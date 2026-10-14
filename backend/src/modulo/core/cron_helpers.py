@@ -2895,39 +2895,6 @@ async def _suite_run_fire_gates(
     return None
 
 
-async def _suite_run_llm_judge_guard(
-    session: AsyncSession,
-    org_id: uuid.UUID,
-    eval_suite_id: uuid.UUID,
-) -> dict[str, Any] | None:
-    """Reject an ``llm_judge`` suite_run fire up front; ``skip`` when unsupported.
-
-    ``llm_judge`` suites are not yet supported on the scheduled path: the SAQ
-    ``execute_suite_run`` job does not wire a judge callable, so any
-    ``llm_judge`` definition would hard-fail the run at execution time
-    (``suite contains llm_judge definitions but no judge callable was
-    provided``). Reject the fire up front (a clear, observable skip) rather
-    than letting the run build and then fail — config must not promise a run it
-    cannot deliver. This is the fire-boundary guard that mirrors "reject
-    llm_judge suite_run triggers" (FAR-377 reviewer finding).
-    """
-    from modulo.core.eval_engine.execute_suite_run import load_suite_definitions
-
-    suite_defs = await load_suite_definitions(session, org_id, eval_suite_id)
-    if any(str(getattr(d, "eval_type", "")) == "llm_judge" for d in suite_defs):
-        _log.warning(
-            "fire_suite_run_trigger: suite %s contains llm_judge definitions which are not "
-            "supported on the scheduled path; skipping fire (run would hard-fail at execution)",
-            eval_suite_id,
-        )
-        return {
-            "status": "skipped",
-            "reason": "llm_judge_unsupported",
-            "suite_id": str(eval_suite_id),
-        }
-    return None
-
-
 async def _build_suite_run_or_skip(
     session: AsyncSession,
     trigger: Any,
@@ -3051,10 +3018,6 @@ async def fire_suite_run_trigger(
         assert model_backend_id is not None  # nosec B101
 
         skip = await _suite_run_fire_gates(session, trigger, org_id, trigger_id, dataset_id)
-        if skip is not None:
-            return skip
-
-        skip = await _suite_run_llm_judge_guard(session, org_id, trigger.eval_suite_id)
         if skip is not None:
             return skip
 

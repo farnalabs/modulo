@@ -859,7 +859,6 @@ async def test_suite_run_trigger_build_skip_propagates():
         patch.object(ch, "_open_factory", return_value=_factory_for(session)),
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
         patch.object(ch, "_suite_run_fire_gates", new_callable=AsyncMock, return_value=None),
-        patch.object(ch, "_suite_run_llm_judge_guard", new_callable=AsyncMock, return_value=None),
         patch.object(ch, "_build_suite_run_or_skip", new_callable=AsyncMock, return_value=(None, skip)),
     ):
         outcome = await ch.fire_suite_run_trigger(trigger_id=TRIGGER_A, org_id=ORG, pipeline_id=PIPELINE)
