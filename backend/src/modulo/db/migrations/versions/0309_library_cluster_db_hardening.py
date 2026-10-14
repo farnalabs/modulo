@@ -76,8 +76,16 @@ _UPGRADE_INDEXES: tuple[str, ...] = (
     ("CREATE INDEX IF NOT EXISTS ix_library_primitives_version_group_id ON library_primitives (version_group_id)"),
     ("CREATE INDEX IF NOT EXISTS ix_library_primitives_type_slug ON library_primitives (primitive_type, slug)"),
     (
+        # M3 - community-catalogue listing. LEADS with (visibility,
+        # contribution_status): that is what
+        # ``_fetch_published_community_from_db`` constrains in SQL. It does NOT
+        # filter organisation_id (it pops the tenant context and relies on the
+        # cross-org community view), and a B-tree cannot skip-scan an
+        # unconstrained leading column - so organisation_id would have made this
+        # index dead weight for its only motivating query. Org-scoped reads of
+        # this table keep their own ``ix_library_primitives_organisation_id``.
         "CREATE INDEX IF NOT EXISTS ix_library_primitives_visibility_contribution "
-        "ON library_primitives (organisation_id, visibility, contribution_status) "
+        "ON library_primitives (visibility, contribution_status) "
         "WHERE deleted_at IS NULL"
     ),
 )

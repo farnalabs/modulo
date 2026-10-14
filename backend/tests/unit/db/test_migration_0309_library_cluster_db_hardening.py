@@ -44,6 +44,7 @@ _HEAD_MIGRATION = "0309_library_cluster_db_hardening"
 
 _INSTALL_UNIQUE_INDEX = "uq_collection_install_org_collection"
 _COMPOSITE_UNIQUE_INDEX = "uq_composite_templates_org_name"
+_VISIBILITY_INDEX = "ix_library_primitives_visibility_contribution"
 _CREATED_BY_FK = "fk_collection_install_created_by"
 _CREATED_BY_INDEX = "ix_collection_install_created_by"
 _0165_CHECKS = ("ck_library_primitive_download_count", "ck_library_primitive_review_count")
@@ -147,6 +148,16 @@ class TestUpgrade:
         matching = [ddl for ddl in rec.sql if "ix_library_primitives_visibility_contribution" in ddl]
         assert len(matching) == 1, f"expected exactly one visibility index statement, got {matching}"
         assert "WHERE deleted_at IS NULL" in matching[0]
+
+    def test_community_listing_index_leads_with_the_constrained_columns(self) -> None:
+        """``_fetch_published_community_from_db`` constrains visibility +
+        contribution_status but NOT organisation_id (it pops the tenant
+        context), so the index must LEAD with those two columns - a B-tree
+        cannot skip-scan an unconstrained leading column."""
+        rec = _run("upgrade")
+        ddl = next(d for d in rec.sql if "ix_library_primitives_visibility_contribution" in d)
+        assert "(visibility, contribution_status)" in ddl
+        assert "organisation_id" not in ddl
 
     def test_adds_deleted_at_and_created_by_when_absent(self) -> None:
         rec = _run("upgrade", columns_exist=False)
@@ -321,6 +332,20 @@ class TestModelParity:
         names = {i.name for i in LibraryPrimitive.__table__.indexes}
         assert "ix_library_primitives_type_slug" in names
         assert "ix_library_primitives_visibility_contribution" in names
+
+    def test_community_listing_index_model_matches_the_migration(self) -> None:
+        """The model declaration must match the migration DDL exactly (same
+        leading columns, same partial predicate) so autogenerate yields no
+        drift - and must NOT lead with organisation_id (see the migration
+        test above for why)."""
+        index = next(i for i in LibraryPrimitive.__table__.indexes if i.name == _VISIBILITY_INDEX)
+        assert [c.name for c in index.columns] == ["visibility", "contribution_status"]
+        pg_where = index.dialect_options["postgresql"].get("where")
+        sqlite_where = index.dialect_options["sqlite"].get("where")
+        assert pg_where is not None
+        assert "deleted_at IS NULL" in str(pg_where)
+        assert sqlite_where is not None
+        assert "deleted_at IS NULL" in str(sqlite_where)
 
     def test_library_primitive_version_group_id_is_indexed(self) -> None:
         column = LibraryPrimitive.__table__.columns["version_group_id"]

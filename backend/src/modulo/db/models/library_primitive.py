@@ -100,13 +100,19 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
         # unique above cannot serve it (wrong leading column).
         Index("ix_library_primitives_type_slug", "primitive_type", "slug"),
         # Community catalogue listing: _fetch_published_community_from_db filters
-        # published + community visibility and orders by created_at.
+        # contribution_status + visibility in SQL and orders by created_at.
+        # LEADS with those two constrained columns on purpose: the query does
+        # NOT constrain organisation_id (it pops the tenant context to read the
+        # cross-org community view), and a B-tree cannot skip-scan an
+        # unconstrained leading column, so organisation_id would make the index
+        # unusable for its only motivating query. Org-scoped reads of this table
+        # keep their own ``ix_library_primitives_organisation_id``.
         Index(
             "ix_library_primitives_visibility_contribution",
-            "organisation_id",
             "visibility",
             "contribution_status",
             postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
         ),
     )
 
