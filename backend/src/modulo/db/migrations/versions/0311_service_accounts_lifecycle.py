@@ -1,8 +1,8 @@
-"""FAR-1478: service-account lifecycle column + structural admin-role ceiling.
+"""FAR-1478: service-account lifecycle column + structural admin-role ceiling + immutable kind.
 
 Slice 2 of ADR 056 / ADR 058 makes a service principal usable: it is created
 with its own name, granted team/org roles (ceiling ``operator``) and mints its
-own ``mk_`` keys. Two invariants in that flow need DB-level structure, not
+own ``mk_`` keys. Three invariants in that flow need DB-level structure, not
 only application checks:
 
 1. ``accounts.decommissioned_at`` — the EXPLICIT retirement marker for a
@@ -31,7 +31,18 @@ only application checks:
    grant ``admin`` to a service account. The application surfaces reject the
    grant with a 422 first; the trigger is the structural backstop.
 
-The trigger function is SECURITY INVOKER (the runtime role already SELECTs
+3. ``trg_accounts_kind_immutable`` — ``accounts.kind`` is a CREATE-time
+   discriminator (ADR 056/058: a principal is BORN human or service), never
+   mutated after insert. The role ceiling above (2) reads the CURRENT
+   ``accounts.kind``, so without this trigger a raw-SQL
+   ``UPDATE accounts SET kind='service'`` on a human holding an ``admin``
+   org membership would leave that membership intact — the exact state ADR
+   056/058 declare structurally impossible — and no application path writes
+   the column post-insert (provisioning stamps it at INSERT). A BEFORE
+   UPDATE OF kind trigger refuses ANY kind transition with ERRCODE 23514,
+   making the flip structurally impossible for every writer.
+
+The trigger functions are SECURITY INVOKER (the runtime role already SELECTs
 ``accounts`` for every identity lookup, and a definer-rights escalation on an
 authorization guard would be the wrong shape). Deploy ordering (ADR 030):
 migrate FIRST, then roll code — old code never writes ``decommissioned_at``.
@@ -91,6 +102,37 @@ _TRIGGER_DDL = (
     "FOR EACH ROW EXECUTE FUNCTION public.enforce_service_role_ceiling(); END IF; END $$;"
 )
 
+# ADR 056/058: ``kind`` is a CREATE-time discriminator — a principal is BORN
+# human or service and never converted. Without this trigger a raw-SQL kind
+# flip (human -> service) on an account holding an ``admin`` org membership
+# would leave that membership intact (the role ceiling above fires only on
+# membership writes, and ``accounts`` has no RLS), producing the exact state
+# ADR 056/058 declare structurally impossible. No application path writes
+# ``accounts.kind`` post-insert (provisioning stamps it at INSERT), so
+# immutability costs nothing and closes the hole for every future writer.
+_KIND_IMMUTABLE_FUNCTION_DDL = """
+CREATE OR REPLACE FUNCTION public.enforce_account_kind_immutable() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path TO 'pg_catalog', 'public'
+AS $_$
+BEGIN
+    IF NEW.kind IS DISTINCT FROM OLD.kind THEN
+        RAISE EXCEPTION 'account kind is immutable'
+            USING ERRCODE = '23514',
+                  DETAIL = 'ADR 056/058: an account''s kind is fixed at creation.',
+                  HINT = 'Provision a new service account instead of converting an existing row.';
+    END IF;
+    RETURN NEW;
+END;
+$_$;
+"""
+
+_KIND_IMMUTABLE_TRIGGER_DDL = (
+    "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_accounts_kind_immutable') "
+    "THEN CREATE TRIGGER trg_accounts_kind_immutable BEFORE UPDATE OF kind ON public.accounts "
+    "FOR EACH ROW EXECUTE FUNCTION public.enforce_account_kind_immutable(); END IF; END $$;"
+)
+
 
 def upgrade() -> None:
     op.add_column(
@@ -100,9 +142,13 @@ def upgrade() -> None:
     op.create_check_constraint(_DECOMMISSIONED_CHECK, _ACCOUNTS, _DECOMMISSIONED_PREDICATE)
     op.execute(_FUNCTION_DDL)
     op.execute(_TRIGGER_DDL)
+    op.execute(_KIND_IMMUTABLE_FUNCTION_DDL)
+    op.execute(_KIND_IMMUTABLE_TRIGGER_DDL)
 
 
 def downgrade() -> None:
+    op.execute("DROP TRIGGER IF EXISTS trg_accounts_kind_immutable ON public.accounts;")
+    op.execute("DROP FUNCTION IF EXISTS public.enforce_account_kind_immutable();")
     op.execute("DROP TRIGGER IF EXISTS trg_org_memberships_service_role_ceiling ON public.org_memberships;")
     op.execute("DROP FUNCTION IF EXISTS public.enforce_service_role_ceiling();")
     op.drop_constraint(_DECOMMISSIONED_CHECK, _ACCOUNTS, type_="check")

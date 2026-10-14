@@ -623,8 +623,11 @@ surfaces with `auth_type` / `key_scope` / masked-prefix payload stamps.
 **Service accounts (FAR-1478, ADR 056 / 058).** A service principal is a
 first-class `accounts` row (`kind='service'`, carrying no email, password or
 SSO identity — structurally unreachable by every login/invite/SSO/SCIM path,
-FAR-1385 slice 1). Org admins provision, read, list, rename and decommission
-them at `/api/v1/service-accounts`; an `admin` org-role grant on a service
+FAR-1385 slice 1; `accounts.kind` itself is immutable after insert, enforced
+by the `trg_accounts_kind_immutable` DB trigger, so a human row can never be
+flipped into a service row — or vice versa — by any writer). Org admins
+provision, read, list, rename and decommission them at
+`/api/v1/service-accounts`; an `admin` org-role grant on a service
 principal is rejected with 422 at the surface and structurally refused by a
 DB trigger (`trg_org_memberships_service_role_ceiling`, migration 0311) — the
 role ceiling is `operator`, never admin. Service accounts hold team
@@ -636,12 +639,16 @@ mints its own with its own `mk_` credential (MCP `create_api_key`, or the same
 endpoint acting as the principal itself — a key may only mint keys for its own
 principal). Service-owned keys are capped at **365 days** (ADR 058's tiered
 TTL — the service half of the 365d-service / 90d-user-scoped resolution),
-enforced at the `create_api_key` choke point so every surface refuses the
-same way. Decommission is explicit and one-way: it stamps
+enforced at the `create_api_key` AND `update_api_key` choke points so every
+surface — mint and extension alike — refuses the same way (a mint-only cap
+would let any runner/operator extend a service-owned key arbitrarily via
+`PUT /api/v1/api-keys/{id}`). Decommission is explicit and one-way: it stamps
 `accounts.decommissioned_at` (CHECK-restricted to service rows), tombstones
 the org membership, flips `active` off and bulk-revokes every live key — a
 service account survives human offboarding and is retired only by that
-deliberate act; the human user-admin surface refuses service targets outright.
+deliberate act; the human user-admin surface refuses service targets that are
+members of the caller's org (non-members surface as 404 first, so the
+rejection never discloses a cross-org service account).
 
 **Grant-sets on API keys (FAR-1477, ADR 058; flag `api_key_grants`, default OFF).**
 `org_api_keys.grants` is a nullable, space-joined list of `PERMISSIONS` keys,

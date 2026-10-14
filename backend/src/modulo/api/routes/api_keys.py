@@ -704,6 +704,14 @@ async def _apply_key_update(
     """Apply the key update, mapping DB errors to the route's HTTP error contract."""
     try:
         return await _apply_key_update_tx(session, key_id, principal, role, name, team_id, expires_at)
+    except ApiKeyTtlError as exc:
+        # FAR-1478: a >365d expiry on a service-owned key is a client error on
+        # the payload — same 422 contract as the create path, never a silent
+        # clamp and never applied.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from None
     except IntegrityError:
         logger.exception(_CODE_API_KEYS_UPDATE_API)
         raise HTTPException(

@@ -11,9 +11,13 @@ Against REAL Postgres (testcontainers, private database per test — the
     for the service account (SQLSTATE 23514, the check_violation the
     application surfaces mirror as 422) on BOTH insert and update, while an
     ``operator`` grant and an ``admin`` grant for the HUMAN account still pass;
+  - ``trg_accounts_kind_immutable`` REFUSES a raw-SQL ``kind`` flip
+    (human->service AND service->human) with SQLSTATE 23514 — including the
+    exact hole the QA pass found: flipping a human holding an ``admin``
+    membership to ``kind='service'`` while leaving the membership intact;
   - ``ck_accounts_decommissioned_service`` refuses a decommissioned HUMAN row
     and accepts one on the service row;
-  - a downgrade drops the trigger, the function, the CHECK and the column.
+  - a downgrade drops both triggers, both functions, the CHECK and the column.
 """
 
 from __future__ import annotations
@@ -107,12 +111,23 @@ async def upgraded_db_url(db_url: str) -> AsyncGenerator[str, None]:
 
 
 async def _seed(engine: AsyncEngine) -> dict[str, uuid.UUID]:
-    """Seed at PREV_REV: one human admin + one service operator, same org."""
+    """Seed at PREV_REV: one human admin + one service operator + one
+    identity-NULL human admin, same org.
+
+    The identity-NULL human is the exact QA hole: a human row whose
+    ``email``/``password_hash``/``sso_subject`` are all NULL satisfies
+    ``ck_accounts_service_identity`` in BOTH kind states, so pre-0311's
+    kind trigger a raw ``kind='service'`` flip on it succeeded and left
+    its ADMIN membership intact — the state ADR 056/058 declare
+    structurally impossible.
+    """
     ids = {
         "human": uuid.uuid4(),
+        "nullhuman": uuid.uuid4(),
         "service": uuid.uuid4(),
         "org": uuid.uuid4(),
         "human_membership": uuid.uuid4(),
+        "nullhuman_membership": uuid.uuid4(),
         "service_membership": uuid.uuid4(),
     }
     async with engine.begin() as conn:
@@ -129,6 +144,16 @@ async def _seed(engine: AsyncEngine) -> dict[str, uuid.UUID]:
             ),
             {"id": str(ids["human"])},
         )
+        # The QA hole: a human-shaped row with NO identity columns — the
+        # identity CHECK does not discriminate its kind, so only the kind
+        # IMMUTABILITY trigger can refuse the flip.
+        await conn.execute(
+            text(
+                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
+                "VALUES (:id, NULL, 'm0311-nullhuman', NULL, NULL, true)"
+            ),
+            {"id": str(ids["nullhuman"])},
+        )
         # The FAR-1385 shape: a service row carries NO human-shaped identity.
         await conn.execute(
             text(
@@ -142,6 +167,12 @@ async def _seed(engine: AsyncEngine) -> dict[str, uuid.UUID]:
                 "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"
             ),
             {"mid": str(ids["human_membership"]), "aid": str(ids["human"]), "oid": str(ids["org"])},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"
+            ),
+            {"mid": str(ids["nullhuman_membership"]), "aid": str(ids["nullhuman"]), "oid": str(ids["org"])},
         )
         await conn.execute(
             text(
@@ -291,6 +322,100 @@ async def _seed_one_human(engine: AsyncEngine) -> dict[str, uuid.UUID]:
     return ids
 
 
+class TestAccountKindImmutableTrigger:
+    """``accounts.kind`` is a CREATE-time discriminator — no flip is legal (ADR 056/058)."""
+
+    async def test_human_to_service_flip_is_refused(self, upgraded_db_url: str) -> None:
+        """The exact QA hole: flip an identity-NULL human holding an ADMIN membership.
+
+        A normal human (email/password set) is already refused by
+        ``ck_accounts_service_identity`` when flipped to service; the identity-
+        NULL human satisfies that CHECK in both kind states, so pre-fix the
+        raw UPDATE succeeded and left the admin membership intact — the state
+        ADR 056/058 declare structurally impossible (the role-ceiling trigger
+        only fires on membership writes and reads the CURRENT kind).
+        """
+        engine = create_async_engine(upgraded_db_url, poolclass=NullPool)
+        try:
+            err = await _expect_check_violation(
+                engine,
+                "UPDATE accounts SET kind = 'service' WHERE display_name = 'm0311-nullhuman'",
+                {},
+            )
+            assert _pgcode(err) == "23514"
+            # The admin membership is untouched AND the kind did not flip.
+            async with engine.connect() as conn:
+                kind = (
+                    await conn.execute(text("SELECT kind FROM accounts WHERE display_name = 'm0311-nullhuman'"))
+                ).scalar_one()
+                role = (
+                    await conn.execute(
+                        text(
+                            "SELECT om.role FROM org_memberships om "
+                            "JOIN accounts a ON a.id = om.account_id "
+                            "WHERE a.display_name = 'm0311-nullhuman'"
+                        )
+                    )
+                ).scalar_one()
+            assert kind == "human"
+            assert role == "admin"
+        finally:
+            await engine.dispose()
+
+    async def test_human_with_identity_flip_is_also_refused(self, upgraded_db_url: str) -> None:
+        """An identity-bearing human flip stays refused (identity CHECK + kind trigger)."""
+        engine = create_async_engine(upgraded_db_url, poolclass=NullPool)
+        try:
+            err = await _expect_check_violation(
+                engine,
+                "UPDATE accounts SET kind = 'service' WHERE email = 'm0311-human@example.com'",
+                {},
+            )
+            assert _pgcode(err) == "23514"
+        finally:
+            await engine.dispose()
+
+    async def test_service_to_human_flip_is_refused(self, upgraded_db_url: str) -> None:
+        engine = create_async_engine(upgraded_db_url, poolclass=NullPool)
+        try:
+            err = await _expect_check_violation(
+                engine,
+                "UPDATE accounts SET kind = 'human' WHERE display_name = 'm0311-svc'",
+                {},
+            )
+            assert _pgcode(err) == "23514"
+        finally:
+            await engine.dispose()
+
+    async def test_non_kind_account_update_still_passes(self, upgraded_db_url: str) -> None:
+        """The trigger is UPDATE OF kind — unrelated column updates are unaffected."""
+        engine = create_async_engine(upgraded_db_url, poolclass=NullPool)
+        try:
+            async with engine.begin() as conn:
+                result = await conn.execute(
+                    text(
+                        "UPDATE accounts SET display_name = 'm0311-human-renamed' "
+                        "WHERE email = 'm0311-human@example.com' RETURNING display_name"
+                    )
+                )
+                assert result.scalar_one() == "m0311-human-renamed"
+        finally:
+            await engine.dispose()
+
+    async def test_kind_trigger_exists_after_upgrade(self, upgraded_db_url: str) -> None:
+        engine = create_async_engine(upgraded_db_url, poolclass=NullPool)
+        try:
+            async with engine.connect() as conn:
+                trigger = (
+                    await conn.execute(
+                        text("SELECT COUNT(*) FROM pg_trigger WHERE tgname = 'trg_accounts_kind_immutable'")
+                    )
+                ).scalar_one()
+                assert trigger == 1
+        finally:
+            await engine.dispose()
+
+
 class TestDecommissionedCheck:
     async def test_decommissioned_human_row_is_refused(self, upgraded_db_url: str) -> None:
         engine = create_async_engine(upgraded_db_url, poolclass=NullPool)
@@ -364,5 +489,11 @@ class TestDecommissionedCheck:
                     )
                 ).scalar_one()
                 assert trigger == 0
+                kind_trigger = (
+                    await conn.execute(
+                        text("SELECT COUNT(*) FROM pg_trigger WHERE tgname = 'trg_accounts_kind_immutable'")
+                    )
+                ).scalar_one()
+                assert kind_trigger == 0
         finally:
             await engine.dispose()

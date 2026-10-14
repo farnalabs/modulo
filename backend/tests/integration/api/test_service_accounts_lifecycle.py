@@ -23,6 +23,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
+from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
@@ -32,6 +33,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.routes.admin import UpdateUserRequest, admin_update_user
+from modulo.api.routes.api_keys import ApiKeyUpdate, update_api_key_endpoint
 from modulo.api.routes.service_accounts import (
     ServiceAccountCreate,
     ServiceAccountKeyCreate,
@@ -153,6 +155,30 @@ class TestServiceAccountLifecycle:
         assert exc.value.status_code == 422
         assert "365" in str(exc.value.detail)
 
+        # --- QA M1 regression: the SAME ceiling holds on UPDATE (PUT) -------
+        # Pre-fix, update_api_key set expires_at unconditionally, so any
+        # runner/operator could extend this ≤365d key arbitrarily.
+        with pytest.raises(HTTPException) as put_exc:
+            await update_api_key_endpoint(
+                key_id=minted.id,
+                req=ApiKeyUpdate(expires_at=too_long.isoformat()),
+                session=app_session,
+                principal=principal,
+                settings=MagicMock(),
+            )
+        assert put_exc.value.status_code == 422
+        assert "365" in str(put_exc.value.detail)
+        # The key's stored expiry is untouched (fail-closed, never clamped).
+        async with db_engine.connect() as conn:
+            stored = (
+                await conn.execute(
+                    text("SELECT expires_at FROM org_api_keys WHERE id = :id"),
+                    {"id": str(minted.id)},
+                )
+            ).scalar_one()
+        assert stored is not None
+        assert (stored - datetime.now(UTC)).days <= 365
+
         # --- rename ---------------------------------------------------------
         updated = await update_service_account_endpoint(
             service_account_id=sa_id,
@@ -262,6 +288,61 @@ class TestServiceAccountLifecycle:
             )
         assert exc.value.status_code == 422
         assert "service-accounts" in str(exc.value.detail)
+
+    async def test_cross_org_service_target_is_404_not_422(
+        self,
+        app_session: AsyncSession,
+        db_engine: AsyncEngine,
+        test_org: uuid.UUID,
+        test_user: uuid.UUID,
+    ) -> None:
+        """QA M2 regression (real Postgres): a service account OUTSIDE the
+        caller's org surfaces as 404 on the user-admin surface — never a 422
+        that names it a service account (cross-tenant disclosure).
+
+        Pre-fix, ``_reject_service_account_target`` ran BEFORE the
+        org-membership check on deactivate/reactivate/reset, so a foreign
+        service account returned 422 while a foreign human returned 404.
+        """
+        from modulo.api.routes.admin import admin_deactivate_user, admin_reactivate_user, admin_reset_password
+
+        principal = _admin_principal(test_org, test_user)
+        created = await create_service_account_endpoint(
+            req=ServiceAccountCreate(name="foreign-bot"),
+            session=app_session,
+            principal=principal,
+        )
+        sa_id = uuid.UUID(created.id)
+
+        # A DIFFERENT org's admin attacks the service account: the target has
+        # no membership in the caller's (test_org) — must be 404.
+        attacker = _admin_principal(uuid.uuid4(), uuid.uuid4())
+
+        for route in (admin_deactivate_user, admin_reactivate_user, admin_reset_password):
+            with pytest.raises(HTTPException) as exc:
+                await route(
+                    user_id=sa_id,
+                    current_user=attacker,
+                    session=app_session,
+                )
+            assert exc.value.status_code == 404, route.__name__
+            assert "service-accounts" not in str(exc.value.detail), route.__name__
+
+        # The account is untouched: still active, not decommissioned, no password.
+        async with db_engine.connect() as conn:
+            row = (
+                (
+                    await conn.execute(
+                        text("SELECT active, decommissioned_at, password_hash FROM accounts WHERE id = :id"),
+                        {"id": str(sa_id)},
+                    )
+                )
+                .mappings()
+                .one()
+            )
+        assert row["active"] is True
+        assert row["decommissioned_at"] is None
+        assert row["password_hash"] is None
 
     async def test_service_account_holds_a_team_membership(
         self,

@@ -399,9 +399,15 @@ class TestServiceAccountTargetRejectedOnUserAdminSurface:
         assert "service-accounts" in resp.json()["detail"]
 
     def test_deactivate_rejects_service_target(self, admin_rls_client: TestClient) -> None:
-        with patch(
-            "modulo.api.routes.admin.get_account_by_id",
-            AsyncMock(return_value=self._service_target()),
+        with (
+            patch(
+                "modulo.api.routes.admin.get_account_by_id",
+                AsyncMock(return_value=self._service_target()),
+            ),
+            patch(
+                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                AsyncMock(return_value=MagicMock()),
+            ),
         ):
             resp = admin_rls_client.post(f"{self.URL}/{_OTHER_USER_ID}/deactivate")
 
@@ -409,9 +415,15 @@ class TestServiceAccountTargetRejectedOnUserAdminSurface:
         assert "service-accounts" in resp.json()["detail"]
 
     def test_reactivate_rejects_service_target(self, admin_rls_client: TestClient) -> None:
-        with patch(
-            "modulo.api.routes.admin.get_account_by_id",
-            AsyncMock(return_value=self._service_target()),
+        with (
+            patch(
+                "modulo.api.routes.admin.get_account_by_id",
+                AsyncMock(return_value=self._service_target()),
+            ),
+            patch(
+                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                AsyncMock(return_value=MagicMock()),
+            ),
         ):
             resp = admin_rls_client.post(f"{self.URL}/{_OTHER_USER_ID}/reactivate")
 
@@ -419,14 +431,74 @@ class TestServiceAccountTargetRejectedOnUserAdminSurface:
         assert "service-accounts" in resp.json()["detail"]
 
     def test_reset_password_rejects_service_target(self, admin_rls_client: TestClient) -> None:
-        with patch(
-            "modulo.api.routes.admin.get_account_by_id",
-            AsyncMock(return_value=self._service_target()),
+        with (
+            patch(
+                "modulo.api.routes.admin.get_account_by_id",
+                AsyncMock(return_value=self._service_target()),
+            ),
+            patch(
+                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                AsyncMock(return_value=MagicMock()),
+            ),
         ):
             resp = admin_rls_client.post(f"{self.URL}/{_OTHER_USER_ID}/reset-password")
 
         assert resp.status_code == 422
         assert "service-accounts" in resp.json()["detail"]
+
+
+class TestServiceAccountCrossOrgTargetIsNotFound:
+    """QA M2 regression: the service-target rejection runs AFTER the membership check.
+
+    A service account that is NOT a member of the caller's org must surface
+    exactly like any other non-member — 404 ``_MSG_USER_NOT_FOUND_IN_ORGANISATION``
+    — never a 422 that names it a service account (cross-tenant disclosure:
+    the caller learns the account exists AND its kind). Pre-fix,
+    ``_reject_service_account_target`` ran before
+    ``get_membership_by_account_and_org`` on deactivate/reactivate/reset,
+    producing 422-for-service vs 404-for-human on the same non-membership.
+    """
+
+    URL = "/api/v1/admin/users"
+
+    @staticmethod
+    def _cross_org_patches() -> ExitStack:
+        """A service account EXISTS (kind=service) but has NO membership in the caller's org."""
+        account = MagicMock()
+        account.id = _OTHER_USER_ID
+        account.kind = KIND_SERVICE
+        account.email = None
+        account.display_name = "foreign-bot"
+        account.is_break_glass = False
+        account.active = True
+        account.decommissioned_at = None
+        stack = ExitStack()
+        stack.enter_context(patch("modulo.api.routes.admin.get_account_by_id", AsyncMock(return_value=account)))
+        stack.enter_context(
+            patch("modulo.api.routes.admin.get_membership_by_account_and_org", AsyncMock(return_value=None))
+        )
+        return stack
+
+    def _assert_not_found_without_disclosure(self, resp: Any) -> None:
+        assert resp.status_code == 404
+        detail = resp.json()["detail"]
+        assert "service-accounts" not in detail
+        assert "service" not in detail.lower()
+
+    def test_deactivate_cross_org_service_account_is_404(self, admin_rls_client: TestClient) -> None:
+        with self._cross_org_patches():
+            resp = admin_rls_client.post(f"{self.URL}/{_OTHER_USER_ID}/deactivate")
+        self._assert_not_found_without_disclosure(resp)
+
+    def test_reactivate_cross_org_service_account_is_404(self, admin_rls_client: TestClient) -> None:
+        with self._cross_org_patches():
+            resp = admin_rls_client.post(f"{self.URL}/{_OTHER_USER_ID}/reactivate")
+        self._assert_not_found_without_disclosure(resp)
+
+    def test_reset_password_cross_org_service_account_is_404(self, admin_rls_client: TestClient) -> None:
+        with self._cross_org_patches():
+            resp = admin_rls_client.post(f"{self.URL}/{_OTHER_USER_ID}/reset-password")
+        self._assert_not_found_without_disclosure(resp)
 
 
 class TestUpdateUserDeactivationRevocation:

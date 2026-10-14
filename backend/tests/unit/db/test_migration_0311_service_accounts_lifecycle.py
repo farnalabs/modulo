@@ -12,8 +12,11 @@ the real trigger + DDL are exercised against real Postgres in
   ``ck_accounts_decommissioned_service`` CHECK, creates the
   ``enforce_service_role_ceiling`` trigger function (plpgsql, SECURITY INVOKER,
   ERRCODE 23514) and the idempotent ``trg_org_memberships_service_role_ceiling``
-  BEFORE INSERT OR UPDATE OF role trigger; the downgrade drops all four in
-  reverse.
+  BEFORE INSERT OR UPDATE OF role trigger, plus the
+  ``enforce_account_kind_immutable`` function + idempotent
+  ``trg_accounts_kind_immutable`` BEFORE UPDATE OF kind trigger (accounts.kind
+  is a CREATE-time discriminator — no kind transition, human->service or
+  service->human, is ever legal); the downgrade drops all six in reverse.
 * **Model parity** — ``Account`` declares the same column and CHECK name +
   expression, so ``create_all``'d schemas and migrated ones agree (the
   database.md rule: a migration must update the model in the SAME change).
@@ -39,6 +42,8 @@ _CHECK_NAME = "ck_accounts_decommissioned_service"
 _CHECK_PREDICATE = "decommissioned_at IS NULL OR kind = 'service'"
 _TRIGGER_FUNCTION = "enforce_service_role_ceiling"
 _TRIGGER_NAME = "trg_org_memberships_service_role_ceiling"
+_KIND_IMMUTABLE_FUNCTION = "enforce_account_kind_immutable"
+_KIND_IMMUTABLE_TRIGGER = "trg_accounts_kind_immutable"
 
 
 def _load_migration() -> ModuleType:
@@ -97,6 +102,47 @@ class TestSourceShape:
         assert "FOR EACH ROW EXECUTE FUNCTION public." in source
         assert "); END IF; END $$;" in source
 
+    def test_upgrade_creates_kind_immutability_trigger(self) -> None:
+        """accounts.kind is a CREATE-time discriminator — no kind flip is legal.
+
+        The role-ceiling trigger reads the CURRENT accounts.kind, so without
+        this trigger a raw-SQL human->service flip on an admin-membership
+        holder would leave the admin membership intact (ADR 056/058's
+        structurally-impossible state). The BEFORE UPDATE OF kind trigger
+        refuses ANY kind transition with ERRCODE 23514.
+        """
+        source = _source()
+        assert _KIND_IMMUTABLE_FUNCTION in source
+        assert _KIND_IMMUTABLE_TRIGGER in source
+        assert "BEFORE UPDATE OF kind ON public.accounts" in source
+        assert "account kind is immutable" in source
+        assert "ERRCODE = '23514'" in source
+        assert "NEW.kind IS DISTINCT FROM OLD.kind" in source
+        assert "SECURITY DEFINER" not in source
+
+    def test_upgrade_installs_both_triggers(self) -> None:
+        calls: list[str] = []
+
+        class _OpRecorder:
+            def execute(self, sql: str) -> None:
+                calls.append(str(sql))
+
+            def add_column(self, *args: object, **kwargs: object) -> None:
+                calls.append("add_column")
+
+            def create_check_constraint(self, *args: object, **kwargs: object) -> None:
+                calls.append("create_check_constraint")
+
+        import unittest.mock as mock
+
+        module = _load_migration()
+        with mock.patch.object(module, "op", _OpRecorder()):
+            module.upgrade()
+        joined = " | ".join(calls)
+        assert _TRIGGER_NAME in joined
+        assert _KIND_IMMUTABLE_TRIGGER in joined
+        assert _KIND_IMMUTABLE_FUNCTION in joined
+
     def test_downgrade_drops_trigger_function_check_and_column(self) -> None:
         module = _load_migration()
         calls: list[str] = []
@@ -119,6 +165,8 @@ class TestSourceShape:
         joined = " | ".join(calls)
         assert _TRIGGER_NAME in joined
         assert _TRIGGER_FUNCTION in joined
+        assert _KIND_IMMUTABLE_TRIGGER in joined
+        assert _KIND_IMMUTABLE_FUNCTION in joined
         assert f"drop_constraint:{_CHECK_NAME}:accounts" in joined
         assert "drop_column:accounts:decommissioned_at" in joined
 

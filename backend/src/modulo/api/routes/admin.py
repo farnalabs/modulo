@@ -1443,7 +1443,6 @@ async def admin_deactivate_user(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Break-glass accounts cannot be deactivated via the admin API",
                 )
-            _reject_service_account_target(account)
 
             membership = await get_membership_by_account_and_org(session, user_id, current_user.organisation_id)
             if membership is None:
@@ -1451,6 +1450,11 @@ async def admin_deactivate_user(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=_MSG_USER_NOT_FOUND_IN_ORGANISATION,
                 )
+            # SECURITY (#1188): the service-target rejection runs AFTER the
+            # org-membership check (matching admin_update_user) — a service
+            # account in ANOTHER org must surface as 404, not as a 422 that
+            # discloses its existence and kind.
+            _reject_service_account_target(account)
 
             await assert_not_last_admin(
                 session,
@@ -1563,7 +1567,6 @@ async def admin_reactivate_user(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=_MSG_BREAK_GLASS_ACCOUNTS_CANNOT,
                 )
-            _reject_service_account_target(account)
 
             # SECURITY (#1188): verify the target has membership in the caller's org
             # before reactivating — prevents cross-tenant account interference.
@@ -1573,6 +1576,10 @@ async def admin_reactivate_user(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=_MSG_USER_NOT_FOUND_IN_ORGANISATION,
                 )
+            # The service-target rejection runs AFTER the org-membership check
+            # (matching admin_update_user): a service account in ANOTHER org
+            # surfaces as 404, never a kind-disclosing 422.
+            _reject_service_account_target(account)
 
             # FAR-533 (gh-1794): reactivation is PER-ORG — clear the
             # deactivated_at tombstone on the CALLER'S-ORG membership only and
@@ -1665,7 +1672,6 @@ async def admin_reset_password(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=_MSG_BREAK_GLASS_ACCOUNTS_CANNOT,
                 )
-            _reject_service_account_target(account)
 
             # SECURITY (#1186): verify the target is a member of the caller's org
             # before resetting password — prevents cross-tenant credential takeover.
@@ -1675,6 +1681,10 @@ async def admin_reset_password(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=_MSG_USER_NOT_FOUND_IN_ORGANISATION,
                 )
+            # The service-target rejection runs AFTER the org-membership check
+            # (matching admin_update_user): a service account in ANOTHER org
+            # surfaces as 404, never a kind-disclosing 422.
+            _reject_service_account_target(account)
 
             temporary_password = secrets.token_urlsafe(18)[:24]
             account.password_hash = hash_password(temporary_password)
