@@ -42,7 +42,7 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.auth.secret_storage import decode_stored_secret_scoped
+from modulo.auth.secret_storage import SecretStorageError
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.exceptions import RateLimitConflictError
 from modulo.core.trigger_engine import (
@@ -233,18 +233,34 @@ def _trigger_failure_hash(trigger_id: uuid.UUID) -> str:
 async def _resolve_signing_secret(
     session: AsyncSession, trigger_id: uuid.UUID, cfg: dict[str, Any], org_id: uuid.UUID
 ) -> str:
-    """Decode the trigger's Slack signing secret, falling back to the raw
-    value if decryption fails."""
+    """Decode the trigger's Slack signing secret (FAR-1735 shared resolver).
+
+    A decryptable value is decrypted via the scope-bound helper and a
+    structurally complete token that cannot be decrypted FAILS CLOSED
+    (:class:`SlackSignatureError`) — ciphertext is never used as the signing
+    secret. A NON-decryptable, NON-token value is legacy pre-0306 plaintext,
+    accepted with a loud dated warning (the shared resolver's warn-only
+    shim), so pre-migration deployments keep delivering.
+    """
     signing_secret_raw = cfg.get("signing_secret")
     if not signing_secret_raw:
         raise SlackSignatureError("Slack signing secret is not configured for this trigger")
-    try:
-        from modulo.settings import get_settings as _get_settings
+    from modulo.core.trigger_secrets import resolve_trigger_secret_scoped
+    from modulo.settings import get_settings as _get_settings
 
-        return await decode_stored_secret_scoped(session, signing_secret_raw, _get_settings().fernet_key, org_id=org_id)
-    except Exception:
+    try:
+        return await resolve_trigger_secret_scoped(
+            session,
+            stored_raw=signing_secret_raw,
+            fernet_key=_get_settings().fernet_key,
+            org_id=org_id,
+            trigger_id=trigger_id,
+            config_key="signing_secret",
+            context="slack_engine",
+        )
+    except SecretStorageError:
         _log.exception("slack_app_mention.signing_secret_decrypt_failed trigger=%s", trigger_id)
-        return str(signing_secret_raw)
+        raise SlackSignatureError("Slack signing secret decryption failed") from None
 
 
 async def _parse_mention(

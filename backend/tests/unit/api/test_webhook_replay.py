@@ -818,34 +818,78 @@ def test_replay_webhook_paused_org_missing_event_returns_404(client: TestClient)
     m.assert_not_called()
 
 
-def test_replay_webhook_hmac_secret_decrypt_failure_falls_back_to_raw_secret(
+def test_replay_webhook_legacy_plaintext_secret_accepted_with_dated_warning(
     client: TestClient, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """HMAC-secret decrypt failure on the unauthenticated replay path falls back
-    to the RAW stored secret with the exception LOGGED (never silent) — the
-    stored value may itself be the plaintext secret, so a replay signed against
-    it must still verify (mirrors the receive_webhook fallback)."""
+    """FAR-1735 bounded shim on the unauthenticated replay path: a NON-token
+    stored hmac_secret is legacy pre-0306 plaintext — accepted so a replay
+    signed against it still verifies (mirrors receive_webhook), but ONLY with
+    a loud dated ``trigger_secret.legacy_plaintext`` warning. No decode mock:
+    the REAL resolver accepts the non-token value and never raises."""
     import logging as _logging
 
     event_id = uuid.uuid4()
     run_mock = _make_mock_run()
     with (
-        patch(
-            "modulo.api.routes.webhooks.decode_stored_secret_scoped",
-            new=AsyncMock(side_effect=ValueError("fernet decode failed")),
-        ),
         patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
         patch("modulo.api.routes.webhooks.dispatch_run"),
         patch("modulo.api.routes.webhooks.set_rls_org"),
         patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+        caplog.at_level(_logging.WARNING, logger="modulo.core.trigger_secrets"),
     ):
         m.return_value = (run_mock, None, {})
-        with caplog.at_level(_logging.ERROR, logger="modulo.api.routes.webhooks"):
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
+            headers=_hmac_headers(),
+        )
+
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["run_id"] == str(_RUN_ID)
+    assert "trigger_secret.legacy_plaintext" in caplog.text
+    assert "hmac_secret" in caplog.text
+
+
+def test_replay_webhook_undecryptable_token_secret_fails_closed(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """FAR-1735 fail-closed on the unauthenticated replay path: a token-shaped
+    hmac_secret that CANNOT be decrypted under the configured key is refused
+    (500) — the ciphertext is NEVER used as the HMAC key. The REAL decode
+    helper raises ``DecryptionError``; the settings patch targets
+    ``modulo.api.routes.webhooks.get_settings``, the name the route binds."""
+    import base64
+    import logging as _logging
+
+    from cryptography.fernet import Fernet
+
+    valid_key = base64.urlsafe_b64encode(b"s" * 32).decode()
+    other_key = base64.urlsafe_b64encode(b"x" * 32).decode()
+    stored_token = Fernet(other_key.encode()).encrypt(b"secret-that-cannot-decrypt").decode()
+    event_id = uuid.uuid4()
+
+    system_mock = make_system_session_mock(trigger_config={"hmac_secret": stored_token})
+
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield system_mock
+
+    app.dependency_overrides[get_system_db_session] = override_system_session
+    fake_settings = MagicMock()
+    fake_settings.fernet_key = valid_key
+    try:
+        with (
+            patch("modulo.api.routes.webhooks.get_settings", return_value=fake_settings),
+            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+            patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+            caplog.at_level(_logging.ERROR, logger="modulo.api.routes.webhooks"),
+        ):
             resp = client.post(
                 f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
                 headers=_hmac_headers(),
             )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
 
-    assert resp.status_code == 202, resp.text
-    assert resp.json()["run_id"] == str(_RUN_ID)
-    assert "webhooks.hmac_secret_decrypt_failed" in caplog.text
+    assert resp.status_code == 500, resp.text
+    m.assert_not_called()
+    assert "webhooks.hmac_secret_undecryptable" in caplog.text
