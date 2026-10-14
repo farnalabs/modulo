@@ -1323,6 +1323,9 @@ elements:
       - testid: cost-components-delete-cancel
         type: button
         dynamic_testid: false
+      - testid: cost-components-loading
+        type: element
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
