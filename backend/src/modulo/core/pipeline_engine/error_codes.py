@@ -51,6 +51,16 @@ _CODE_HARNESS_DISPATCH_FAILED = "harness.dispatch_failed"
 # analytics can tell "never dispatched" from "dispatched, then the heartbeat
 # went silent and the slot was force-released".
 _CODE_HARNESS_HEARTBEAT_STALE = "harness.heartbeat_stale"
+# FAR-1627: the graceful worker-shutdown handoff (core.worker_handoff) releases
+# an in-flight run the instant its executing worker is shut down (deploy /
+# restart) and stamps THIS code — a distinct class from both
+# ``harness.dispatch_failed`` ("never dispatched") and
+# ``harness.heartbeat_stale`` (30-min TTL sweep). The raw legacy spelling
+# ``worker_lost`` keeps its historical ``harness.dispatch_failed`` alias (the
+# pre-FAR-1627 sweeps wrote it for a different class); the handback writes the
+# dotted registry key directly so it never resolves through that alias and
+# never resurrects the misattribution this ticket removes.
+_CODE_HARNESS_WORKER_LOST = "harness.worker_lost"
 _CODE_NODE_TIMEOUT = "node.timeout"
 _CODE_NODE_RUNAWAY = "node.runaway"
 # FAR-1141: a ``dispatch`` node's ``await_completion`` window expired before the
@@ -316,6 +326,21 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         retryable=True,
         alert_severity="warning",
         guidance="Heartbeat stale past threshold; concurrency slot force-released by reconciliation.",
+    ),
+    # FAR-1627: registered so the shutdown handoff's dotted spelling passes
+    # through unchanged (never ``harness.unknown``) and analytics bucket it as
+    # its own class — "worker shut down mid-run; claim released for
+    # re-dispatch". Transient like the sibling harness codes (the run is
+    # reset to pending for re-dispatch, not terminal-failed); warning-level
+    # because every deploy that kills an in-flight run should be visible.
+    _CODE_HARNESS_WORKER_LOST: ErrorCodeSpec(
+        error_class="harness",
+        retryable=True,
+        alert_severity="warning",
+        guidance=(
+            "Worker executing the run was shut down (deploy or restart); "
+            "claim released and run handed back for re-dispatch."
+        ),
     ),
     "harness.worker_failed": ErrorCodeSpec(
         error_class="harness",

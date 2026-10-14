@@ -358,6 +358,20 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   (default 30 min) with the `worker_lost` error code, force-releasing the
   pipeline slots a crashed worker leaked. Journeys and daily facts advance for
   each released run.
+- **Worker-shutdown handoff (FAR-1627):** a deploy SIGTERMs the SAQ runs
+  worker while agent runs are mid-execution. Instead of leaving those runs
+  `running` until the 30-minute heartbeat TTL above detects the loss (and
+  misattributes it to the dispatch path), the worker's SAQ `shutdown` hook
+  releases every run it still owns the moment shutdown begins: the claim is
+  freed (row reset to `pending`, `dispatched_at`/`dispatcher`/`heartbeat_at`
+  cleared) and the run is stamped with the truthful `harness.worker_lost`
+  code plus a detail naming the shutdown. `dispatcher_reconcile` re-dispatches
+  the run on its next 60s tick, so an in-flight run at a release is handed
+  back within ~1 minute of the new worker becoming ready — never 30-35
+  minutes. The handback is claim-token-fenced (a successor's re-claim is never
+  clobbered) and cancellation-requested runs belong to the cancel path. The
+  heartbeat TTL remains the backstop for a hard crash (SIGKILL / OOM), where
+  no shutdown hook runs.
 - **HITL review-window terminaliser (FAR-648, FAR-1257):** a sweep wired into
   `dispatcher_reconcile` (every 60s) cancels an `awaiting_human` run whose open
   gate is still UNCLAIMED and UNDECIDED past the resolved review window:
