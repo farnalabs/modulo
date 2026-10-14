@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import threading
 import time
 from collections.abc import Generator
@@ -1515,10 +1516,88 @@ class TestEventLoopStallGuard:
         assert stalled.status_code == 200
         report.assert_called_once()
         kwargs = report.call_args.kwargs
-        # The window spans the freeze: scheduled wake -> actual wake, and the
-        # measured lag is what the helper is asked to attribute.
+        # The window spans the freeze: scheduled wake -> actual wake (the
+        # helper only reads the sample ring — the measured lag rides on the
+        # stall warning's log ``extra``).
         assert kwargs["window_end"] > kwargs["window_start"]
-        assert kwargs["lag_ms"] >= _LOOP_LAG_DEGRADED_MS
+
+    @pytest.mark.parametrize(
+        ("report_result", "expect_attribution"),
+        [
+            pytest.param("src/core/blocking.py:42 in sync_call", True, id="attribution"),
+            pytest.param(RuntimeError("attribution exploded"), False, id="report-raises"),
+        ],
+    )
+    def test_a_detected_stall_logs_exactly_one_warning_and_readiness_stays_up(
+        self,
+        client: TestClient,
+        caplog: pytest.LogCaptureFixture,
+        report_result: str | Exception,
+        expect_attribution: bool,
+    ) -> None:
+        """FAR-1771 review m4 + m5, both halves of the stall WARNING.
+
+        m4 — ONE warning per detected stall: this line is the single
+        WARNING, carrying the attribution when there is one (the attribution
+        helper itself deliberately never logs, so the old duplicate
+        ``event_loop_stall.attribution`` warning cannot come back).
+
+        m5 — the attribution call is FAIL-OPEN on this Fly/service-health-
+        gated endpoint: a raise is logged and swallowed, readiness still
+        answers 200, and the stall warning still fires WITHOUT an
+        attribution (the pre-FAR-1771 line) instead of erroring the probe.
+        """
+        if isinstance(report_result, Exception):
+            report_patch = patch(
+                "modulo.api.routes.health.report_event_loop_stall_attribution",
+                side_effect=report_result,
+            )
+        else:
+            report_patch = patch(
+                "modulo.api.routes.health.report_event_loop_stall_attribution",
+                return_value=report_result,
+            )
+        with (
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("modulo.api.routes.health._check_redis", new=_stalling_redis_check),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
+            patch(
+                "modulo.api.routes.health._check_decision_record_reconcile",
+                AsyncMock(return_value=_ok_check("decision_record_reconcile")),
+            ),
+            report_patch,
+            caplog.at_level(logging.WARNING),
+        ):
+            resp = client.get("/healthz/ready")
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+        stall_logs = [
+            record
+            for record in caplog.records
+            if record.levelno >= logging.WARNING
+            and ("event-loop stall" in record.getMessage() or "event_loop_stall" in record.getMessage())
+        ]
+        assert len(stall_logs) == 1, [record.getMessage() for record in stall_logs]
+        message = stall_logs[0].getMessage()
+        assert "event-loop stall detected" in message
+        assert stall_logs[0].worst_lag_ms >= _LOOP_LAG_DEGRADED_MS
+        if expect_attribution:
+            assert f"blocking_callback={report_result}" in message
+        else:
+            # m5: fail-open — the raise is logged, the probe still answered,
+            # and the stall warning falls back to the no-attribution line.
+            assert "blocking_callback=" not in message
+            failure_logs = [record for record in caplog.records if "stall_attribution_failed" in record.getMessage()]
+            assert len(failure_logs) == 1
 
     def test_empty_heads_are_not_cached_so_the_parse_is_retried(self) -> None:
         """A parse yielding no heads must return empty and stay UNcached.

@@ -1572,16 +1572,29 @@ async def evaluate_readiness() -> ReadinessResponse:
     if lag_degraded:
         # FAR-1771: name the blocking callback (file:line) when stall
         # attribution is installed (MODULO_SLOW_CALLBACK_WARN_MS). Returns
-        # None when the knob is off or no sample covers the window — the log
-        # then reads exactly as it did before FAR-1771.
-        attribution = report_event_loop_stall_attribution(
-            window_start=lag_state["worst_start"],
-            window_end=lag_state["worst_end"],
-            lag_ms=worst_lag_ms,
-        )
+        # None when the knob is off, no sample covers the window, or the
+        # window holds nothing of ours to blame (an idle/parked loop) — the
+        # log then reads exactly as it did before FAR-1771.
+        #
+        # FAIL-OPEN (FAR-1771 review m5): this sits on the Fly/service-
+        # health-gated /healthz/ready path, so an attribution failure must
+        # never break the readiness probe — log and continue without an
+        # attribution (the same contract as the two install sites).
+        try:
+            attribution = report_event_loop_stall_attribution(
+                window_start=lag_state["worst_start"],
+                window_end=lag_state["worst_end"],
+            )
+        except Exception:
+            _log.exception("health.readiness.stall_attribution_failed")
+            attribution = None
         stall_message = "health.readiness event-loop stall detected (FAR-1439)"
         if attribution is not None:
             stall_message = stall_message + " blocking_callback=" + attribution
+        # The ONE warning per detected stall (FAR-1771 review m4):
+        # report_event_loop_stall_attribution deliberately does not log, so
+        # this line — carrying the attribution when there is one — is the
+        # single WARNING for the event (the lag magnitude rides in `extra`).
         _log.warning(
             stall_message,
             extra={"worst_lag_ms": worst_lag_ms, "blocking_callback": attribution},

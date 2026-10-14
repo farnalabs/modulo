@@ -14,12 +14,16 @@ Covers the four contract requirements:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import json
 import logging
 import re
+import sys
+import threading
 import time
 from collections.abc import Callable
+from types import FrameType
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -806,18 +810,23 @@ def _blocking_callback_window() -> tuple[float, float]:
     return started, time.monotonic()
 
 
-def test_stall_attribution_logs_the_blocking_callback_when_enabled(caplog: pytest.LogCaptureFixture) -> None:
+def test_stall_attribution_names_the_blocking_callback_when_enabled(caplog: pytest.LogCaptureFixture) -> None:
     """Knob ON: install starts the sampler, a real sync block is captured,
-    and the report helper LOGS the blocking callback with file:line."""
+    and the report helper NAMES the blocking callback with file:line.
+
+    It must NOT log it (FAR-1771 review m4): the readiness path emits the
+    ONE ``event-loop stall detected`` WARNING per stall, carrying this
+    attribution — a second warning from the helper would be duplicate noise
+    for the same event.
+    """
     settings = _make_settings(modulo_slow_callback_warn_ms=100)
     assert ha.install_event_loop_stall_attribution(settings) is True
     try:
-        with caplog.at_level(logging.WARNING, logger=ha.__name__):
+        with caplog.at_level(logging.WARNING):
             window_start, window_end = _blocking_callback_window()
             attributed = ha.report_event_loop_stall_attribution(
                 window_start=window_start,
                 window_end=window_end,
-                lag_ms=300.0,
             )
     finally:
         ha.uninstall_event_loop_stall_attribution()
@@ -825,16 +834,13 @@ def test_stall_attribution_logs_the_blocking_callback_when_enabled(caplog: pytes
     assert attributed is not None
     # Names the source: this file, a real line, and the blocking function.
     assert re.search(r"test_health_alerts\.py:\d+ in _blocking_callback_window", attributed) is not None
-    # The REPORT (the WARNING that names the stall), not any install notice.
+    # m4: the helper logs NOTHING — no stall/attribution warning from any logger.
     attribution_logs = [
         record
         for record in caplog.records
-        if "event_loop_stall.attribution" in record.getMessage() and record.levelno >= logging.WARNING
+        if "event_loop_stall" in record.getMessage() or "event-loop stall" in record.getMessage()
     ]
-    assert len(attribution_logs) == 1
-    message = attribution_logs[0].getMessage()
-    assert attributed in message
-    assert "lag_ms=300" in message
+    assert not attribution_logs, [record.getMessage() for record in attribution_logs]
 
 
 def test_stall_attribution_is_a_noop_when_the_knob_is_off(caplog: pytest.LogCaptureFixture) -> None:
@@ -848,13 +854,191 @@ def test_stall_attribution_is_a_noop_when_the_knob_is_off(caplog: pytest.LogCapt
         attributed = ha.report_event_loop_stall_attribution(
             window_start=0.0,
             window_end=10.0,
-            lag_ms=1500.0,
         )
 
     assert installed is False
     assert ha._stall_sampler is None
     assert attributed is None
     assert not [record for record in caplog.records if "attribution" in record.getMessage()]
+
+
+# ---------------------------------------------------------------------------
+# FAR-1771 review (m1) — an IDLE/parked loop must attribute None. This is
+# the test that would have caught the mis-attribution Major: before the fix,
+# the walk returned the first non-stdlib frame anywhere on the stack, which
+# on a PARKED loop is the loop RUNNER (the frame that merely called
+# run_forever) — so an oversleep no Python callback caused was blamed, with
+# a sample count, on code that only started the loop.
+# ---------------------------------------------------------------------------
+
+#: Backstop: how long the probe thread keeps its idle loop parked before its
+#: OWN stop timer fires. The test stops the loop promptly instead; this only
+#: bounds a wedged probe — and its generous length is the margin that lets
+#: the TEST thread be descheduled without the probe leaving run_forever
+#: inside the observation window.
+_IDLE_PARK_SECONDS = 5.0
+#: Poll interval while waiting for the probe thread to reach ``run_forever``.
+_PARK_OBSERVE_POLL_SECONDS = 0.005
+#: Bound on the parked-observation wait — a probe that never parks fails the
+#: test with a clear message instead of hanging the suite.
+_PARK_OBSERVE_TIMEOUT_SECONDS = 5.0
+#: How long the observation window stays open once the probe is confirmed
+#: inside ``run_forever`` — far shorter than ``_IDLE_PARK_SECONDS``, so the
+#: loop cannot leave ``run_forever`` mid-window (~12 samples at the 25ms
+#: tick the warn threshold selects, so the non-vacuity check is not luck).
+_PARK_WINDOW_SECONDS = 0.3
+#: Bound on the probe join in the cleanup path (the prompt stop normally
+#: returns in milliseconds; this only matters if that stop failed).
+_PROBE_JOIN_TIMEOUT_SECONDS = 10.0
+
+
+def _stack_is_inside_loop_driver(frame: FrameType | None) -> bool:
+    """True when *frame*'s stack includes asyncio's own loop-driver frames.
+
+    The test's parkedness precondition, deliberately INDEPENDENT of
+    ``ha._attributed_frame`` (the assertion must not lean on the very
+    function under test): once ``_run_once``/``run_forever`` is on the
+    thread's stack, every frame inner to it is asyncio/stdlib — the parked
+    selector — so no callback of ours is running.
+    """
+    while frame is not None:
+        if frame.f_code.co_filename.startswith(ha._ASYNCIO_INTERNAL_ROOT):
+            return True
+        frame = frame.f_back
+    return False
+
+
+def _idle_loop_probe(
+    loop_box: dict[str, Any],
+    ready: threading.Event,
+    finished: threading.Event,
+) -> None:
+    """Run a genuinely IDLE event loop on THIS thread (the m1 repro).
+
+    Installs stall attribution for this thread exactly as production does
+    (install targets the calling thread's ident), then parks the loop in
+    its selector with NOTHING scheduled but the safety-net stop timer: no
+    callback, no task, no frame of ours executing. Any oversleep measured
+    across that window was caused by the machine (CPU steal, GC
+    stop-the-world, a VM pause), never by a Python callback — so attribution
+    must answer ``None``.
+    """
+    loop_box["installed"] = ha.install_event_loop_stall_attribution(_make_settings(modulo_slow_callback_warn_ms=100))
+    loop = asyncio.new_event_loop()
+    loop_box["loop"] = loop
+    try:
+        loop.call_later(_IDLE_PARK_SECONDS, loop.stop)
+        ready.set()
+        loop.run_forever()
+    finally:
+        ha.uninstall_event_loop_stall_attribution()
+        loop.close()
+        finished.set()
+
+
+def _observe_idle_park_window(target_thread_id: int) -> tuple[float, float] | None:
+    """``(window_start, window_end)`` spanning a stretch the target thread
+    spent INSIDE ``run_forever`` — or ``None`` if it never got there.
+
+    The window opens once the stack shows the loop driver and closes
+    ``_PARK_WINDOW_SECONDS`` later; the probe's own stop timer is
+    ``_IDLE_PARK_SECONDS``, so the loop cannot leave ``run_forever`` inside
+    the window.
+    """
+    deadline = time.monotonic() + _PARK_OBSERVE_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if _stack_is_inside_loop_driver(sys._current_frames().get(target_thread_id)):
+            window_start = time.monotonic()
+            time.sleep(_PARK_WINDOW_SECONDS)
+            return window_start, time.monotonic()
+        time.sleep(_PARK_OBSERVE_POLL_SECONDS)
+    return None
+
+
+def test_stall_attribution_is_none_for_an_idle_parked_loop(caplog: pytest.LogCaptureFixture) -> None:
+    """m1: an idle loop parked in its selector has nothing of ours to blame.
+
+    The regression the FAR-1771 review caught: the walk used to return the
+    first non-stdlib frame anywhere on the stack, and on a parked loop that
+    is the loop RUNNER (the thread function / uvicorn ``Server.run`` that
+    called ``run_forever``). An oversleep caused by the machine rather than
+    by a callback was then confidently attributed to the runner, with a
+    sample count — the exact misdirection this feature exists to prevent. A
+    parked window must attribute ``None`` and log nothing.
+    """
+    loop_box: dict[str, Any] = {}
+    ready = threading.Event()
+    finished = threading.Event()
+    probe = threading.Thread(
+        target=_idle_loop_probe,
+        args=(loop_box, ready, finished),
+        name="idle-loop-probe",
+        daemon=True,
+    )
+    probe.start()
+    try:
+        assert ready.wait(_PARK_OBSERVE_TIMEOUT_SECONDS), "the probe thread never started its loop"
+        assert loop_box["installed"] is True
+        observed = _observe_idle_park_window(probe.ident)
+        assert observed is not None, "the probe loop never reached run_forever"
+        window_start, window_end = observed
+
+        with caplog.at_level(logging.WARNING):
+            attributed = ha.report_event_loop_stall_attribution(
+                window_start=window_start,
+                window_end=window_end,
+            )
+
+        # Non-vacuity: the sampler really did sample this window — a report
+        # that found no samples at all would prove nothing about the fix.
+        sampler = ha._stall_sampler
+        assert sampler is not None, "the sampler was uninstalled before the report"
+        with sampler._samples_lock:
+            window_samples = [
+                sampled_at for sampled_at, _frame in sampler._samples if window_start <= sampled_at <= window_end
+            ]
+        assert len(window_samples) >= 1, "no samples landed inside the parked window"
+
+        assert attributed is None
+        stall_logs = [
+            record
+            for record in caplog.records
+            if "event_loop_stall" in record.getMessage() or "event-loop stall" in record.getMessage()
+        ]
+        assert not stall_logs, [record.getMessage() for record in stall_logs]
+    finally:
+        loop = loop_box.get("loop")
+        if loop is not None and not finished.is_set():
+            # Stop the probe promptly instead of waiting out the safety net.
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(loop.stop)
+        probe.join(timeout=_PROBE_JOIN_TIMEOUT_SECONDS)
+        ha.uninstall_event_loop_stall_attribution()
+
+
+def test_sampler_thread_logs_and_exits_when_it_raises(caplog: pytest.LogCaptureFixture) -> None:
+    """m2: a raise inside the sampler loop must not kill the daemon thread
+    SILENTLY — it is logged (the log line IS the diagnostic) and the thread
+    exits, so later stall windows report "no attribution" instead of the
+    ring going permanently empty with no trace of why."""
+    sampler = ha._LoopThreadSampler(target_thread_id=-1, warn_ms=100)
+    try:
+        with (
+            caplog.at_level(logging.ERROR, logger=ha.__name__),
+            patch("modulo.core.health_alerts._attributed_frame", side_effect=RuntimeError("sampler boom")),
+        ):
+            sampler.start()
+            for _ in range(200):
+                if not sampler._thread.is_alive():
+                    break
+                time.sleep(0.01)
+            assert sampler._thread is not None
+            assert not sampler._thread.is_alive(), "the sampler thread did not exit after its internal failure"
+    finally:
+        sampler.stop()
+
+    failure_logs = [record for record in caplog.records if "event_loop_stall.sampler_failed" in record.getMessage()]
+    assert len(failure_logs) == 1
 
 
 async def test_install_arms_the_running_loop_slow_callback_threshold() -> None:

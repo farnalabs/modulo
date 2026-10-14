@@ -97,8 +97,13 @@ inventing a mechanism):
   ``MODULO_SLOW_CALLBACK_WARN_MS`` is set, :func:`install_event_loop_stall_attribution`
   arms asyncio's slow-callback warning on the running loop AND starts a
   low-frequency sampler thread that records the loop thread's stack;
-  :func:`report_event_loop_stall_attribution` then names the blocking
-  callback (``file:line``) for a detected stall window. The knob is off by
+  :func:`report_event_loop_stall_attribution` then returns the blocking
+  callback (``file:line``) for a detected stall window — or ``None`` when
+  the window holds nothing of OURS to blame (an idle/parked loop, or an
+  oversleep from CPU steal / GC / a VM pause). It does not log: the caller
+  (``api.routes.health``) emits the ONE ``event-loop stall detected``
+  WARNING for the event, carrying the attribution when there is one, so a
+  detected stall never produces two warning lines. The knob is off by
   default: no thread, no loop debug flags, zero per-tick cost.
 * **Send-then-commit.** The notification state advances only after the sender
   reports success, so a failed SMTP send is retried on the next confirmed
@@ -331,8 +336,15 @@ def _severe_event_loop_stall(check: SubCheck) -> bool:
 # loop itself (it is the thing that is blocked): a daemon sampler thread
 # walks the LOOP THREAD's stack every few milliseconds into a bounded ring,
 # and ``report_event_loop_stall_attribution`` reads back the samples that
-# fall inside the detected stall window. The innermost non-stdlib frame is
-# the caller's site, so the log names ``file:line`` of the synchronous call.
+# fall inside the detected stall window. The attributed sample names
+# ``file:line`` of the synchronous call — but ONLY when a callback of ours
+# was genuinely running: the walk stops at asyncio's own loop-driver frames
+# (``_run_once`` / ``run_forever`` / the runner), so a loop parked in its
+# selector — or an oversleep with no Python frame of ours at all (CPU
+# steal, noisy neighbour, GC stop-the-world, VM pause) — attributes
+# ``None`` instead of blaming the loop runner that merely called
+# ``asyncio.run``/``run_forever`` (uvicorn ``Server.run``, the SAQ worker,
+# a thread function). See :func:`_attributed_frame`.
 #
 # Gated entirely on ``MODULO_SLOW_CALLBACK_WARN_MS`` (Settings): off (the
 # default) means no thread, no samples, no loop debug flags, and the report
@@ -347,8 +359,12 @@ def _severe_event_loop_stall(check: SubCheck) -> bool:
 # :func:`install_event_loop_stall_attribution`.
 # ---------------------------------------------------------------------------
 
-#: Ring capacity: enough history to cover any plausible stall window (the
-#: worst observed was ~2.4s; this holds ~45s of samples at the fastest tick).
+#: Ring capacity: enough history to cover any plausible stall window. 1024
+#: samples is ~5.1s at the fastest tick (5ms) and ~51s at the slowest
+#: (50ms) — comfortably past the worst observed stall (~2.4s). The ring
+#: holds LIVE frame references (each sample keeps the frame — and through
+#: it the rest of that stack — alive until it is evicted), so this is also
+#: the memory bound: at most 1024 stacks are pinned at any moment.
 _STALL_SAMPLE_RING_CAPACITY = 1024
 #: Sampler tick bounds — a quarter of the warn threshold, clamped so a huge
 #: threshold does not starve attribution and a tiny one does not busy-spin.
@@ -358,6 +374,12 @@ _STALL_SAMPLE_MAX_INTERVAL = 0.05
 #: when attributing: the interesting frame is the CALLER of the stdlib
 #: function that blocked, not the stdlib function itself).
 _STDLIB_ROOT = str(Path(os.__file__).parent)
+#: Root of the running interpreter's asyncio package: frames under it are
+#: the LOOP MACHINERY itself (``_run_once``/``run_forever``/the runner/
+#: handle dispatch), never a callback executing on the loop. The attribution
+#: walk STOPS here (see :func:`_attributed_frame`) — anything beyond this
+#: boundary is the code that drives the loop, not the code that blocked it.
+_ASYNCIO_INTERNAL_ROOT = str(Path(asyncio.__file__).parent) + os.sep
 
 #: The installed sampler for THIS process; None = attribution off.
 _stall_sampler: _LoopThreadSampler | None = None
@@ -373,16 +395,35 @@ def _short_source_path(filename: str) -> str:
 
 
 def _attributed_frame(frame: FrameType | None) -> FrameType | None:
-    """Innermost non-stdlib frame of *frame*'s stack — the blocking call site.
+    """Innermost non-stdlib frame of a CALLBACK running on the loop.
 
     Walks leaf -> outermost and returns the first frame whose source file is
-    outside the interpreter's stdlib (our code, site-packages, or a test).
-    ``None`` when the whole stack is stdlib — that is the loop sitting idle
-    in its selector, where there is nothing of ours to blame — or when the
+    outside the interpreter's stdlib (our code, site-packages, or a test) —
+    but only while the walk is still INNER to asyncio's loop-driver frames.
+    The walk stops at the first frame under :data:`_ASYNCIO_INTERNAL_ROOT`
+    (``_run_once`` / ``run_forever`` / the runner / handle dispatch), which
+    gives the real rule:
+
+    * a genuine synchronous call inside a callback IS attributed — its
+      frames sit inside ``Handle._run`` -> ``_run_once``, so they are met
+      before the boundary (the "our app frame wins" behaviour);
+    * a loop PARKED in its selector, or an oversleep that no Python frame
+      of ours caused (CPU steal, noisy neighbour, GC stop-the-world, VM
+      pause), returns ``None``: on such a stack the only non-stdlib frames
+      are OUTSIDE the loop driver (uvicorn's ``Server.run``, the SAQ
+      worker's run loop, the thread function that called ``asyncio.run``)
+      — code that merely STARTED the loop, never the code that blocked it,
+      so there is nothing of ours to blame.
+
+    ``None`` is also returned when the whole stack is stdlib or when the
     frame is synthetic (``<string>`` and friends carry no source location).
     """
     while frame is not None:
         filename = frame.f_code.co_filename
+        if filename.startswith(_ASYNCIO_INTERNAL_ROOT):
+            # The loop driver itself: everything past here is loop-runner
+            # code (or a parked selector), not a callback of ours.
+            return None
         if not filename.startswith("<") and not filename.startswith(_STDLIB_ROOT + os.sep):
             return frame
         frame = frame.f_back
@@ -421,18 +462,37 @@ class _LoopThreadSampler:
         self._thread = None
 
     def _run(self) -> None:
-        while not self._stop.is_set():
-            leaf = sys._current_frames().get(self._target_thread_id)
-            with self._samples_lock:
-                self._samples.append((time.monotonic(), _attributed_frame(leaf)))
-            self._stop.wait(self._interval)
+        """Sample the target thread until stopped — and die LOUDLY, never silently.
+
+        Any raise inside the loop would otherwise kill this daemon thread
+        with no trace, leaving attribution permanently empty while the knob
+        still reads "installed": an observability helper that fails without
+        a log is exactly the silent-failure path this feature exists to
+        avoid. So the body is wrapped: a failure is logged (the log line IS
+        the diagnostic) and the thread exits — the stall report then simply
+        returns ``None`` for later windows instead of pretending an idle
+        loop was to blame.
+        """
+        try:
+            while not self._stop.is_set():
+                leaf = sys._current_frames().get(self._target_thread_id)
+                with self._samples_lock:
+                    self._samples.append((time.monotonic(), _attributed_frame(leaf)))
+                self._stop.wait(self._interval)
+        except Exception:
+            _log.exception(
+                "event_loop_stall.sampler_failed — the attribution sampler thread exited; "
+                "later stall windows will report no blocking callback"
+            )
 
     def attribute(self, window_start: float, window_end: float) -> str | None:
         """Most common blocking call site for samples inside the window.
 
         Returns ``"src/path.py:LINE in func (n/m samples)"``, or ``None``
         when no attributed sample covers the window (attribution unavailable
-        — never a guess).
+        — never a guess). An idle/parked loop yields samples whose
+        attribution is ``None`` (:func:`_attributed_frame`), so a window
+        that only ever saw a parked loop answers ``None`` too.
         """
         with self._samples_lock:
             in_window = [
@@ -498,21 +558,30 @@ def uninstall_event_loop_stall_attribution() -> None:
         _stall_sampler = None
 
 
-def report_event_loop_stall_attribution(*, window_start: float, window_end: float, lag_ms: float) -> str | None:
-    """Log the blocking callback (file:line) for a detected stall window.
+def report_event_loop_stall_attribution(*, window_start: float, window_end: float) -> str | None:
+    """Blocking callback (file:line) for a detected stall window — or ``None``.
 
     Returns the attribution string when one was found, ``None`` when
-    attribution is not installed (knob off) or no sample covers the window.
-    The off path logs NOTHING — this is the no-op the knob's default buys.
+    attribution is not installed (knob off), no sample covers the window, or
+    the window holds nothing of ours to blame (an idle/parked loop — see
+    :func:`_attributed_frame`). The off path does NOTHING — this is the
+    no-op the knob's default buys.
+
+    Takes no lag magnitude: this helper only READS the sample ring. The
+    measured lag rides on the caller's own stall warning (``worst_lag_ms``
+    in its log ``extra``).
+
+    Deliberately logs NOTHING (FAR-1771 review m4): the caller — the
+    readiness path in ``api.routes.health`` — emits the ONE ``event-loop
+    stall detected`` WARNING per detected stall, carrying this attribution
+    when it is not ``None``. Logging here as well would emit two warnings
+    for the same event, and a second one without the ``FAR-1439`` context
+    the operator greps for.
     """
     sampler = _stall_sampler
     if sampler is None:
         return None
-    attribution = sampler.attribute(window_start, window_end)
-    if attribution is None:
-        return None
-    _log.warning("event_loop_stall.attribution lag_ms=%.0f blocking_callback=%s", lag_ms, attribution)
-    return attribution
+    return sampler.attribute(window_start, window_end)
 
 
 @dataclass
