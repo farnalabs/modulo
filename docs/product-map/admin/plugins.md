@@ -42,13 +42,13 @@ API surface ships and is gated by the `plugin_management` feature and the
       and 404s with `Plugin not found` for an unknown id
 - [x] An entry point referencing a package with no installed metadata
       (`dist is None`) is surfaced as an unhealthy plugin with a descriptive
-      detail — broken entry points are never silently dropped from the registry
+      detail - broken entry points are never silently dropped from the registry
 - [x] An entry point whose `load()` raises records `Failed to load entry point …`
       and is surfaced unhealthy through `health_check`
 - [x] The routes are gated behind `require_feature("plugin_management")` and
       `require_permission("plugin.list")`
 - [x] The `plugin_management` feature gate FIRES: all three endpoints return 402
-      when the feature is disabled on the plan (negative-path tests — the gate
+      when the feature is disabled on the plan (negative-path tests - the gate
       was previously declared but never observed to deny)
       (`backend/tests/unit/api/test_plugin_registry_bdd.py`)
 - [x] The `/admin/plugins` view is READ-ONLY: it lists plugins and their health
@@ -73,7 +73,7 @@ API surface ships and is gated by the `plugin_management` feature and the
 
 ## QA History
 
-- 2026-10-12: **Improve Architecture product-map walk (index 397)** — three
+- 2026-10-12: **Improve Architecture product-map walk (index 397)** - three
   findings fixed. MAJOR (resilience): `PluginRegistry._load_entry_point` caught
   only `(ImportError, TypeError, AttributeError, SyntaxError)` from `ep.load()`;
   any other raise (a non-`ImportError` missing dependency, a module-scope config
@@ -85,33 +85,33 @@ API surface ships and is gated by the `plugin_management` feature and the
   RuntimeError/ValueError/KeyError/OSError/LookupError and prove sibling plugins
   still discover (partial-failure isolation). MAJOR (frontend↔backend contract):
   `AdminPluginsView.vue` rendered an enable/disable toggle that called
-  `PUT /api/v1/plugins/{id}/toggle` — a route that does not exist (the registry
+  `PUT /api/v1/plugins/{id}/toggle` - a route that does not exist (the registry
   API is read-only by design, and the plugin unit test mocked only `api.GET`, so
   nothing exercised it). The dead control and its `activeStates` / `togglePlugin`
   machinery are removed; the status pill is now health-driven. MAJOR (coverage):
   the "[x] routes gated by `require_feature(\"plugin_management\")`" behaviour
-  was declaration-only — added 402 tests for all three endpoints. MINOR
+  was declaration-only - added 402 tests for all three endpoints. MINOR
   (coverage): added the missing 500 fallback tests for the list and health
   endpoints. 90 plugin backend tests pass (79 → 90); frontend eslint / vue-tsc
   clean and `AdminPluginsView.spec.ts` passes (4 tests).
 
-- 2026-09-29: **Improve Architecture product-map walk** — reconciled the
+- 2026-09-29: **Improve Architecture product-map walk** - reconciled the
   tracker frontmatter `status:` with the manifest `feat-plugins` registry: the
   entry now reads `status: partial` (matching the manifest's unchecked
   "lifecycle management is not exposed through the registry API" deferral)
   instead of `covered`. The two layers previously disagreed on the same
-  feature's coverage — a reader of the graph got the opposite answer from the
+  feature's coverage - a reader of the graph got the opposite answer from the
   machine layer Assistant reads from the manifest.
 
-- 2026-09-26: **Improve Architecture product-map walk** — sharpened the manifest
+- 2026-09-26: **Improve Architecture product-map walk** - sharpened the manifest
   `feat-plugins` registry entry: the unchecked "lifecycle management is partially
-  wired" gap now states exactly what remains — install / enable / disable / uninstall
+  wired" gap now states exactly what remains - install / enable / disable / uninstall
   are NOT exposed through the registry API; the registry is read-only
   (importlib.metadata discovery at startup) and plugin installation/removal/upgrade
   is deliberately left to pip. The `/admin/plugins` UI remains a private_preview
   surface (FAR-544). Status stays `partial`.
 
-- 2026-09-18: **product-map review pass** — closed the four
+- 2026-09-18: **product-map review pass** - closed the four
   `plugin_registry.feature` scenarios that were pinned `@awaiting-implementation`:
   added the missing `GET /api/v1/plugins/{plugin_id}` detail endpoint, changed
   the registry so an entry point with no package metadata is surfaced as an
@@ -119,7 +119,7 @@ API surface ships and is gated by the `plugin_management` feature and the
   unwired step modules. The four scenarios now execute in CI
   (`PINNED_AWAITING_IMPLEMENTATION` no longer lists plugin_registry.feature).
 
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass** - registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/plugins`
   and wired the two components into the reverse testid-coverage guard
@@ -127,7 +127,7 @@ API surface ships and is gated by the `plugin_management` feature and the
   surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass** - extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/admin/plugins`: the whole-page view(s) `AdminPluginsView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet

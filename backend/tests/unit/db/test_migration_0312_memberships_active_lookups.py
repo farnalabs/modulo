@@ -1,9 +1,9 @@
-"""Unit tests for migration 0311_memberships_active_lookups.
+"""Unit tests for migration 0312_memberships_active_lookups.
 
 Structural contract (no Postgres needed):
 
-* **Revision chain** — 0311 revises ``0310_library_cluster_db_hardening``; the
-  migrations directory has exactly one head (``0311_memberships_active_lookups``,
+* **Revision chain** — 0312 revises ``0311_library_cluster_schema_hygiene``; the
+  migrations directory has exactly one head (``0312_memberships_active_lookups``,
   pinned by all sibling chain tests), the revision id matches the filename, and
   neither ``branch_labels`` nor ``depends_on`` is set (the pre-commit
   check-migration-heads hook and every ``test_single_head_*`` pin depend on
@@ -36,9 +36,9 @@ from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.team_membership import TeamMembership
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_REVISION = "0311_memberships_active_lookups"
-_MIGRATION_DOWN_REVISION = "0310_library_cluster_db_hardening"
-_CHAIN_HEAD_MIGRATION = "0311_memberships_active_lookups"
+_MIGRATION_REVISION = "0312_memberships_active_lookups"
+_MIGRATION_DOWN_REVISION = "0311_library_cluster_schema_hygiene"
+_CHAIN_HEAD_MIGRATION = "0312_memberships_active_lookups"
 
 _INDEX_NAME = "ix_org_memberships_org_role_active"
 _INDEX_TABLE = "org_memberships"
@@ -94,11 +94,11 @@ def _only(calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]], name: str) -
 
 
 class TestChain:
-    def test_single_head_is_0311_memberships_active_lookups(self) -> None:
+    def test_single_head_is_0312_memberships_active_lookups(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
-    def test_down_revision_is_0310_library_cluster_db_hardening(self) -> None:
+    def test_down_revision_is_0311_library_cluster_schema_hygiene(self) -> None:
         assert _load_migration().down_revision == _MIGRATION_DOWN_REVISION
 
     def test_revision_id_matches_filename(self) -> None:
@@ -173,7 +173,7 @@ class TestDowngrade:
 
 class TestMigrationSource:
     def test_never_edits_shipped_revisions(self) -> None:
-        # The membership tables are shipped; 0311 changes their effects via NEW
+        # The membership tables are shipped; 0312 changes their effects via NEW
         # DDL, never by editing an earlier revision file.
         source = _source()
         assert "0001_v2_identity_org.py" not in source
@@ -189,7 +189,7 @@ class TestModelParity:
         ]
         assert matches, (
             f"OrgMembership must declare {_INDEX_NAME}{_INDEX_COLUMNS} to stay in parity with "
-            "migration 0311 — a migration/model index drift is a review block"
+            "migration 0312 — a migration/model index drift is a review block"
         )
 
     def test_index_predicates_match_the_migration(self) -> None:
@@ -210,7 +210,7 @@ class TestModelParity:
         column = TeamMembership.__table__.columns[_TEAM_ROLE_COLUMN]
         assert column.server_default is not None, (
             "TeamMembership.role must carry server_default='viewer' to stay in parity with "
-            "migration 0311's ALTER COLUMN ... SET DEFAULT"
+            "migration 0312's ALTER COLUMN ... SET DEFAULT"
         )
         assert str(column.server_default.arg) == _ROLE_SERVER_DEFAULT
         assert column.nullable is False

@@ -99,11 +99,12 @@ async def _seed_map(
     map_id: uuid.UUID = _MAP,
     visibility: str = "org",
     owner_team_id: uuid.UUID | None = None,
+    name: str = "SDLC",
 ) -> LifecycleMap:
     lm = LifecycleMap(
         id=map_id,
         organisation_id=_ORG,
-        name="SDLC",
+        name=name,
         account_id=_ACCOUNT,
         owner_team_id=owner_team_id,
         visibility=visibility,
@@ -229,7 +230,10 @@ class TestListMapJourneys:
         orphan_journey = await _seed_journey(session, kind="linear", ref="FAR-1", map_id=None)
         await _seed_run(session, kind="linear", ref="FAR-1")
         # Journey on a DIFFERENT map must not appear.
-        await _seed_map(session, map_id=_MAP2)
+        # Distinct org-scoped name: 0156's partial unique (organisation_id, name)
+        # WHERE deleted_at IS NULL is declared on the ORM model, so SQLite
+        # create_all enforces it — two live maps cannot share a name.
+        await _seed_map(session, map_id=_MAP2, name="SDLC-2")
         await _seed_stage(session, map_id=_MAP2, pipeline_id=_OTHER_PIPELINE)
         other_journey = await _seed_journey(session, kind="jira", ref="JIRA-1", map_id=_MAP2)
         # Journey with no stage identity and no matching run must not appear.

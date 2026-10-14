@@ -35,8 +35,8 @@ model's ``__table_args__`` (``sqlite_where``) via ``create_all`` (the
 
 Downgrade: drops the index and the column default.
 
-Revision ID: 0311_memberships_active_lookups
-Revises: 0310_library_cluster_db_hardening
+Revision ID: 0312_memberships_active_lookups
+Revises: 0311_library_cluster_schema_hygiene
 Create Date: 2026-10-14
 """
 
@@ -45,8 +45,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0311_memberships_active_lookups"
-down_revision: str | None = "0310_library_cluster_db_hardening"
+revision: str = "0312_memberships_active_lookups"
+down_revision: str | None = "0311_library_cluster_schema_hygiene"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
