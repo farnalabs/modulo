@@ -18,7 +18,8 @@ import pytest_asyncio
 from sqlalchemy import inspect, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.routes.library import _install_response, _load_installed_entities
+from modulo.api.routes.library import _install_response, _load_installed_entities, get_collection_install_endpoint
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.library_service._seed_data import MODULO_ORG_ID
 from modulo.core.library_service.grant import grant_collection_agents
 from modulo.core.library_service.install import CollectionInstallError, install_collection
@@ -475,8 +476,11 @@ async def test_install_response_entity_list_matches_child_rows(
     transaction-scoped ``app.organisation_id`` GUC is unset, so the load is
     exercised on the real ``modulo_app`` (NOBYPASSRLS) role here: visible
     with the owning org's context set (the fix), hidden without it (proof the
-    policy is genuinely enforced on this connection). The migrated schema must
-    also no longer carry the duplicate JSON column (migration 0311).
+    policy is genuinely enforced on this connection). The GET endpoint
+    function is then driven DIRECTLY on that role so the endpoint's own
+    in-transaction load + threading is pinned, not just the helpers. The
+    migrated schema must also no longer carry the duplicate JSON column
+    (migration 0311).
     """
     pins = [
         {"slug": "input-schema", "version": "1.0"},
@@ -519,6 +523,31 @@ async def test_install_response_entity_list_matches_child_rows(
 
     reported_scoped = sorted((entry["entity_type"], entry["entity_id"]) for entry in scoped)
     assert reported_scoped == expected
+
+    # Drive the REAL endpoint function (not the helpers) on the RLS-enforced
+    # role: ``get_collection_install_endpoint`` sets the org context itself,
+    # loads the child rows INSIDE its ``session.begin()`` block (the fix),
+    # and threads them into the response. A revert that moves the load
+    # outside the transaction would see zero rows here — the unscoped leg
+    # above proves that failure mode is live on this connection.
+    principal = TenantPrincipal(
+        username="testuser",
+        organisation_id=org,
+        account_id=user,
+        org_role="admin",
+    )
+    async with app_factory() as endpoint_session:
+        endpoint_response = await get_collection_install_endpoint(
+            primitive_id=collection_id,
+            install_id=install_id,
+            session=endpoint_session,
+            principal=principal,
+        )
+    endpoint_reported = sorted(
+        (entry["entity_type"], entry["entity_id"]) for entry in endpoint_response.installed_entities or []
+    )
+    assert endpoint_reported
+    assert endpoint_reported == expected
 
     # The API response carries exactly that list (threaded by the endpoint
     # from the in-transaction load).
