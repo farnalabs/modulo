@@ -26,6 +26,9 @@ class CompositeTemplate(SoftDeleteMixin, OrgScoped):
             "name",
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
+            # sqlite_where as well: postgresql_where is ignored on SQLite, so
+            # create_all'd schemas would otherwise build a FULL unique index.
+            sqlite_where=text("deleted_at IS NULL"),
         ),
     )
 

@@ -46,8 +46,10 @@ migration that only asserts the index exists. This is the same caveat
 documented in ``0128_add_fk_lookup_indexes.py``.
 
 ``IF NOT EXISTS`` / ``DROP CONSTRAINT IF EXISTS`` keep the upgrade idempotent
-and re-runnable, and the two ``op.add_column`` calls are guarded by an
-inspector existence check for the same reason. The DDL is Postgres-flavoured
+and re-runnable; the two ``op.add_column`` calls, the ``created_by`` FK and its
+index are each guarded by an inspector existence check of their OWN (column, FK
+and index are independent — a column-present-but-constraint-absent schema is
+repaired rather than skipped). The DDL is Postgres-flavoured
 (the CHECK DROP / partial-index WHERE clause); the chain has been
 Postgres-only in practice since ``0165`` (its bare ``ALTER TABLE ... ADD
 CONSTRAINT`` cannot run on SQLite).
@@ -81,10 +83,12 @@ _UPGRADE_INDEXES: tuple[str, ...] = (
 )
 
 _DOWNGRADE_INDEX_DROPS: tuple[str, ...] = (
+    # NOTE: ``ix_collection_install_created_by`` is deliberately NOT listed
+    # here — downgrade() drops it explicitly (right before dropping the
+    # column), and listing it twice would make the reversal order ambiguous.
     "DROP INDEX IF EXISTS ix_library_primitives_visibility_contribution",
     "DROP INDEX IF EXISTS ix_library_primitives_type_slug",
     "DROP INDEX IF EXISTS ix_library_primitives_version_group_id",
-    "DROP INDEX IF EXISTS ix_collection_install_created_by",
 )
 
 # M8: drop the redundant 0165 duplicates; the 0151 pair (same predicates,
@@ -132,6 +136,19 @@ def _column_exists(table: str, column: str) -> bool:
     return column in {col["name"] for col in inspector.get_columns(table)}
 
 
+def _foreign_key_exists(table: str, name: str) -> bool:
+    """Inspector existence check for a named FK (Postgres has no
+    ``ADD CONSTRAINT IF NOT EXISTS``)."""
+    inspector = sa.inspect(op.get_bind())
+    return name in {fk["name"] for fk in inspector.get_foreign_keys(table)}
+
+
+def _index_exists(table: str, name: str) -> bool:
+    """Inspector existence check so the index DDL stays re-runnable."""
+    inspector = sa.inspect(op.get_bind())
+    return name in {ix["name"] for ix in inspector.get_indexes(table)}
+
+
 def upgrade() -> None:
     # M1 / M2 / M3 — plain CREATE INDEX IF NOT EXISTS (see the docstring's
     # table-locking caveat).
@@ -154,12 +171,18 @@ def upgrade() -> None:
     op.execute(sa.text(_CREATE_INSTALL_PARTIAL_UNIQUE_INDEX))
 
     # M4 — actor provenance: nullable created_by FK + its lookup index.
+    # Column, FK and index are each gated on their OWN existence: a schema
+    # where the column already landed but the constraint/index did not (a
+    # partially-applied earlier run) is REPAIRED, never silently skipped —
+    # nesting all three under the column check would leave it incomplete.
     if not _column_exists("collection_install", "created_by"):
         op.add_column(
             "collection_install",
             sa.Column("created_by", sa.Uuid(), nullable=True),
         )
+    if not _foreign_key_exists("collection_install", "fk_collection_install_created_by"):
         op.execute(sa.text(_CREATE_CREATED_BY_FK))
+    if not _index_exists("collection_install", "ix_collection_install_created_by"):
         op.execute(
             sa.text("CREATE INDEX IF NOT EXISTS ix_collection_install_created_by ON collection_install (created_by)")
         )

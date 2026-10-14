@@ -49,18 +49,21 @@ async def _load_install(
 ) -> CollectionInstall:
     """Load and validate the install record.
 
-    Raises ``InstallNotFoundError`` if the record is absent or belongs to a
-    different organisation.
+    Raises ``InstallNotFoundError`` if the record is absent, belongs to a
+    different organisation, or is already retired (soft-deleted).
     """
     install = await session.get(CollectionInstall, install_id)
     if install is None or install.organisation_id != org_id:
         raise InstallNotFoundError(f"Install {install_id} not found for organisation {org_id}")
-    # ``session.get`` is NOT covered by the global soft-delete filter (the
-    # ``do_orm_execute`` listener injects ``deleted_at IS NULL`` into ORM
-    # SELECTs, but a get-by-PK can also resolve from the identity map), so an
-    # already-uninstalled row must be rejected explicitly — otherwise a second
-    # uninstall would "succeed" against a row the rest of the product treats as
-    # gone, and would re-run entity deletion for a retired provenance record.
+    # A FRESH ``session.get`` fetch IS covered by the global soft-delete
+    # filter: the ``do_orm_execute`` listener injects ``deleted_at IS NULL``
+    # into the get-by-PK SELECT (asserted by
+    # ``tests/integration/db/test_soft_delete_filter.py``). What bypasses it is
+    # a row already in the session IDENTITY MAP, which is returned without a
+    # query — so an already-uninstalled row must be rejected explicitly here.
+    # Otherwise a second uninstall would "succeed" against a row the rest of
+    # the product treats as gone, and would re-run entity deletion for a
+    # retired provenance record.
     if install.deleted_at is not None:
         raise InstallNotFoundError(f"Install {install_id} not found for organisation {org_id}")
     return install

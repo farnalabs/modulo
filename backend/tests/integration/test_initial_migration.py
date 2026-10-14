@@ -68,14 +68,12 @@ _JSONB_DB_TO_JSON_ORM: dict[str, frozenset[str]] = {
     ),
     "audit_events": frozenset({"payload_json"}),
     "chat_messages": frozenset({"tool_calls_json", "tool_results_json"}),
-    "collection_install": frozenset(
-        {
-            "resolved_manifest",
-            "connector_checklist",
-            "installed_entities",
-        }
-    ),
-    "composite_templates": frozenset({"sub_pipeline_graph_json", "parameter_ports_json"}),
+    # collection_install / composite_templates / library_primitives /
+    # library_sync_state: their JSON columns were converted to
+    # JSON().with_variant(JSONB(), "postgresql") in the ORM (migration 0308),
+    # so the ORM now maps the SAME variant the DB has. Their ignore entries
+    # were removed WITH the conversion — leaving them would silently mask a
+    # future accidental revert to plain JSON.
     "connector_instances": frozenset({"config_json", "allowed_operations"}),
     "environment_profiles": frozenset({"capabilities_json", "config_json", "secret_refs_json"}),
     "error_events": frozenset({"context_json"}),
@@ -94,8 +92,6 @@ _JSONB_DB_TO_JSON_ORM: dict[str, frozenset[str]] = {
     # (0195, FAR-634): jsonb in the migration; generic JSON in the ORM for
     # SQLite/MariaDB parity — the same pattern as decision_payload below.
     "hitl_claims": frozenset({"decision_payload", "context_json", "gate_config_json"}),
-    "library_primitives": frozenset({"tags", "content_json", "manifest_pins", "trust_header"}),
-    "library_sync_state": frozenset({"manifest_json", "catalog_json"}),
     "lifecycle_maps": frozenset({"content_json"}),
     "metrics_staging": frozenset({"payload"}),
     "model_backends": frozenset({"default_params", "fallback_backend_ids"}),
@@ -172,7 +168,12 @@ _MIGRATION_OWNED_CHECKS: dict[str, frozenset[str]] = {
     "eval_results": frozenset({"ck_eval_results_run_xor_suite"}),
     "eval_suites": frozenset({"ck_eval_suites_minimum_delta"}),
     "journeys": frozenset({"ck_journey_run_count"}),
-    "library_primitives": frozenset({"ck_library_primitive_download_count", "ck_library_primitive_review_count"}),
+    # library_primitives: the two 0165 CHECK names (download_count /
+    # review_count) were REMOVED from this map when migration 0308 dropped
+    # those constraints — 0151's equivalent pair (ck_library_primitives_dl_count
+    # / ck_library_primitives_review_count) is ORM-declared and present in the
+    # DB, so no migration-owned CHECK remains for this table. Stale entries
+    # here would mask a future accidental re-add.
     "notification_delivery_log": frozenset({"ck_notification_delivery_attempt_count"}),
     "notification_endpoints": frozenset({"ck_notification_endpoint_dead_letter"}),
     "org_daily_run_counts": frozenset({"ck_daily_run_count_run_count"}),

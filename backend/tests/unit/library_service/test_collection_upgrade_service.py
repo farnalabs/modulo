@@ -138,6 +138,7 @@ def _install(
     org_id: uuid.UUID | None = None,
     version: str | None = "1.0",
     manifest: dict | None = None,
+    deleted_at=None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         install_id=install_id or uuid.uuid4(),
@@ -145,6 +146,9 @@ def _install(
         organisation_id=org_id or uuid.uuid4(),
         collection_version=version,
         resolved_manifest=manifest if manifest is not None else {},
+        # Explicit None: upgrade._load_install's soft-delete guard rejects a
+        # truthy deleted_at (a retired install is never upgradeable).
+        deleted_at=deleted_at,
     )
 
 
@@ -370,6 +374,14 @@ class TestLoadInstall:
         inst = _install()
         session = _session(get_map={(CollectionInstall, inst.install_id): inst})
         assert await _load_install(session, inst.organisation_id, inst.install_id, inst.collection_id) is inst
+
+    async def test_soft_deleted_install_is_not_found(self) -> None:
+        """A retired (uninstalled) install is history, never live — the same
+        guard ``uninstall._load_install`` applies (0308 soft-delete)."""
+        inst = _install(deleted_at="2026-10-13T00:00:00+00:00")
+        session = _session(get_map={(CollectionInstall, inst.install_id): inst})
+        with pytest.raises(UpgradeInstallNotFoundError):
+            await _load_install(session, inst.organisation_id, inst.install_id, inst.collection_id)
 
 
 # ---------------------------------------------------------------------------

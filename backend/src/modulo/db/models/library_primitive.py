@@ -20,9 +20,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 # Repeated column type (S1192): JSON with PostgreSQL JSONB variant. Every JSON
-# column on this table is jsonb in the DB (migration 0147 standardised them);
-# the PG variant keeps the ORM honest against the migrated schema while the
-# generic JSON keeps SQLite parity (the repo-wide multi-backend convention).
+# column on this table is jsonb in the DB — 0147 standardised ``tags`` /
+# ``content_json``, and 0205 created ``manifest_pins`` / ``trust_header``
+# directly as JSONB; the PG variant keeps the ORM honest against the migrated
+# schema while the generic JSON keeps SQLite parity (the repo-wide
+# multi-backend convention).
 _JSONB_COL = JSON().with_variant(JSONB(), "postgresql")
 
 

@@ -98,7 +98,9 @@ class CollectionInstall(SoftDeleteMixin, Base):
     installed_entities: Mapped[list[dict[str, Any]] | None] = mapped_column(_JSONB_COL, nullable=True)
     created_by: Mapped[UUID | None] = mapped_column(
         Uuid(),
-        ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL),
+        # Named to match migration 0308's explicit DDL so create_all and the
+        # migrated DB agree (the sibling FKs on this table are named too).
+        ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL, name="fk_collection_install_created_by"),
         nullable=True,
         index=True,
     )
@@ -120,7 +122,7 @@ class CollectionInstall(SoftDeleteMixin, Base):
             "status IN ('installed', 'failed')",
             name="ck_collection_install_status",
         ),
-        # Partial unique (0306): one LIVE install per (org, collection); a
+        # Partial unique (0308): one LIVE install per (org, collection); a
         # soft-deleted (uninstalled) row no longer blocks a reinstall.
         Index(
             "uq_collection_install_org_collection",
@@ -128,6 +130,9 @@ class CollectionInstall(SoftDeleteMixin, Base):
             "collection_id",
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
+            # sqlite_where as well: postgresql_where is ignored on SQLite, so
+            # create_all'd schemas would otherwise build a FULL unique index.
+            sqlite_where=text("deleted_at IS NULL"),
         ),
     )
 

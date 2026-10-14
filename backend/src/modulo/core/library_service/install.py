@@ -946,7 +946,7 @@ async def install_collection(
     bundle = _build_bundle_from_pins(resolved_pins)
 
     # 4. Refuse if the collection is already installed in this organisation.
-    # No manual ``deleted_at IS NULL`` predicate: since 0306
+    # No manual ``deleted_at IS NULL`` predicate: since 0308
     # ``CollectionInstall`` inherits ``SoftDeleteMixin``, so the global
     # ``do_orm_execute`` filter already hides soft-deleted (uninstalled) rows —
     # a reinstall after uninstall passes this check, and the partial unique

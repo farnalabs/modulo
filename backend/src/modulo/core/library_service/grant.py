@@ -48,10 +48,18 @@ async def grant_collection_agents(
 
     Sets ``agents_granted=True`` on the install record.  Idempotent if already
     granted.  Raises ``NotCommunitySourcedError`` for non-community installs,
-    ``InstallNotFoundError`` when the record is absent or org-mismatched.
+    ``InstallNotFoundError`` when the record is absent, org-mismatched, or
+    already retired (soft-deleted by an uninstall).
     """
     install = await session.get(CollectionInstall, install_id)
     if install is None or install.organisation_id != org_id:
+        raise InstallNotFoundError(f"Install {install_id} not found")
+    # Soft-deleted (uninstalled) installs are retired history — granting tool
+    # access to a retired provenance row would flip a flag nobody reads while
+    # looking like a live grant. ``session.get`` can resolve such a row from
+    # the session identity map, bypassing the global ``deleted_at IS NULL``
+    # filter, so the guard is explicit (same rule as ``uninstall._load_install``).
+    if install.deleted_at is not None:
         raise InstallNotFoundError(f"Install {install_id} not found")
 
     if not install.community_sourced:

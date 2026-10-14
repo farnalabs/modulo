@@ -30,7 +30,9 @@ from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 from alembic.script import ScriptDirectory
-from sqlalchemy import Index
+from sqlalchemy import DateTime, Index, Uuid
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects.postgresql import JSONB
 
 from modulo.db.models.collection_install import CollectionInstall
 from modulo.db.models.composite_template import CompositeTemplate
@@ -41,8 +43,12 @@ _MIGRATION_DOWN_REVISION = "0307_runs_guardrail_override_resume_pending"
 _HEAD_MIGRATION = "0308_library_cluster_db_hardening"
 
 _INSTALL_UNIQUE_INDEX = "uq_collection_install_org_collection"
+_COMPOSITE_UNIQUE_INDEX = "uq_composite_templates_org_name"
 _CREATED_BY_FK = "fk_collection_install_created_by"
+_CREATED_BY_INDEX = "ix_collection_install_created_by"
 _0165_CHECKS = ("ck_library_primitive_download_count", "ck_library_primitive_review_count")
+# The four library_primitives JSON columns 0308 aligned to the jsonb variant.
+_LIBRARY_PRIMITIVE_JSON_COLUMNS = ("tags", "content_json", "manifest_pins", "trust_header")
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_REVISION}.py"
@@ -68,6 +74,7 @@ class _Recorder:
     def __init__(self) -> None:
         self.sql: list[str] = []
         self.added: list[tuple[str, str]] = []
+        self.added_columns: list[tuple[str, object]] = []
         self.dropped: list[tuple[str, str]] = []
 
     def execute(self, stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
@@ -76,18 +83,32 @@ class _Recorder:
 
     def add_column(self, table_name: str, column: object, *_args: object, **_kwargs: object) -> None:
         self.added.append((table_name, getattr(column, "name", str(column))))
+        self.added_columns.append((table_name, column))
 
     def drop_column(self, table_name: str, column_name: str, *_args: object, **_kwargs: object) -> None:
         self.dropped.append((table_name, column_name))
 
 
-def _run(what: str, *, columns_exist: bool = False) -> _Recorder:
-    """Run *what* with a mocked ``op`` and a stubbed inspector column check."""
+def _run(
+    what: str,
+    *,
+    columns_exist: bool = False,
+    fk_exists: bool | None = None,
+    index_exists: bool | None = None,
+) -> _Recorder:
+    """Run *what* with a mocked ``op`` and stubbed inspector checks.
+
+    ``fk_exists`` / ``index_exists`` default to ``columns_exist`` (the common
+    "everything landed" / "nothing landed" shape); pass them explicitly to
+    model a PARTIALLY-applied schema (column present, constraint absent).
+    """
     module = _load_migration()
     rec = _Recorder()
     with (
         patch.object(module, "op", rec),
         patch.object(module, "_column_exists", return_value=columns_exist),
+        patch.object(module, "_foreign_key_exists", return_value=columns_exist if fk_exists is None else fk_exists),
+        patch.object(module, "_index_exists", return_value=columns_exist if index_exists is None else index_exists),
     ):
         getattr(module, what)()
     return rec
@@ -146,7 +167,39 @@ class TestUpgrade:
     def test_adds_created_by_fk_and_index(self) -> None:
         joined = _joined(_run("upgrade", columns_exist=False))
         assert f"ALTER TABLE collection_install ADD CONSTRAINT {_CREATED_BY_FK}" in joined
-        assert "CREATE INDEX IF NOT EXISTS ix_collection_install_created_by" in joined
+        assert f"CREATE INDEX IF NOT EXISTS {_CREATED_BY_INDEX}" in joined
+
+    def test_column_shape_of_deleted_at_and_created_by(self) -> None:
+        """deleted_at is a nullable timezone-aware DateTime; created_by is a
+        nullable Uuid — mirroring the 0307 column-shape contract."""
+        rec = _run("upgrade", columns_exist=False)
+        by_name = {getattr(col, "name", None): col for _table, col in rec.added_columns}
+
+        deleted_at = by_name.get("deleted_at")
+        assert deleted_at is not None
+        assert isinstance(deleted_at.type, DateTime)
+        assert deleted_at.type.timezone is True
+        assert deleted_at.nullable is True
+
+        created_by = by_name.get("created_by")
+        assert created_by is not None
+        assert isinstance(created_by.type, Uuid)
+        assert created_by.nullable is True
+
+    def test_created_by_fk_and_index_gated_on_their_own_existence(self) -> None:
+        """A column-present-but-constraint-absent schema is REPAIRED: the FK
+        and index DDL must fire even when the column already exists."""
+        rec = _run("upgrade", columns_exist=True, fk_exists=False, index_exists=False)
+        joined = _joined(rec)
+        assert f"ALTER TABLE collection_install ADD CONSTRAINT {_CREATED_BY_FK}" in joined
+        assert f"CREATE INDEX IF NOT EXISTS {_CREATED_BY_INDEX}" in joined
+        assert not rec.added, f"expected no add_column when the column exists, got {rec.added}"
+
+    def test_created_by_fk_and_index_skipped_when_already_present(self) -> None:
+        rec = _run("upgrade", columns_exist=True, fk_exists=True, index_exists=True)
+        joined = _joined(rec)
+        assert f"ALTER TABLE collection_install ADD CONSTRAINT {_CREATED_BY_FK}" not in joined
+        assert f"CREATE INDEX IF NOT EXISTS {_CREATED_BY_INDEX}" not in joined
 
     def test_drops_the_redundant_0165_checks(self) -> None:
         joined = _joined(_run("upgrade"))
@@ -224,6 +277,45 @@ class TestModelParity:
         assert "deleted_at IS NULL" in str(pg_where)
         constraints = [c.name for c in CollectionInstall.__table__.constraints]
         assert _INSTALL_UNIQUE_INDEX not in constraints
+
+    def test_partial_unique_indexes_carry_both_where_predicates(self) -> None:
+        """``postgresql_where`` alone is ignored on SQLite, so both new
+        partial uniques must declare ``sqlite_where`` too (house pattern:
+        api_key / invitation / run)."""
+        install_index = next(i for i in CollectionInstall.__table__.indexes if i.name == _INSTALL_UNIQUE_INDEX)
+        pg_where = install_index.dialect_options["postgresql"].get("where")
+        sqlite_where = install_index.dialect_options["sqlite"].get("where")
+        assert pg_where is not None
+        assert sqlite_where is not None
+        assert "deleted_at IS NULL" in str(sqlite_where)
+
+        composite_index = next(i for i in CompositeTemplate.__table__.indexes if i.name == _COMPOSITE_UNIQUE_INDEX)
+        pg_where = composite_index.dialect_options["postgresql"].get("where")
+        sqlite_where = composite_index.dialect_options["sqlite"].get("where")
+        assert pg_where is not None
+        assert sqlite_where is not None
+        assert "deleted_at IS NULL" in str(sqlite_where)
+
+    def test_created_by_fk_is_named_and_targets_accounts(self) -> None:
+        """The model FK carries the SAME name migration 0308's DDL uses, so
+        create_all and the migrated DB agree."""
+        fks = list(CollectionInstall.__table__.c.created_by.foreign_keys)
+        assert len(fks) == 1, f"expected one FK on created_by, got {fks}"
+        assert fks[0].name == _CREATED_BY_FK
+        assert fks[0].target_fullname == "accounts.id"
+        assert fks[0].ondelete == "SET NULL"
+
+    def test_created_by_lookup_index_is_declared(self) -> None:
+        names = {i.name for i in CollectionInstall.__table__.indexes}
+        assert _CREATED_BY_INDEX in names
+
+    def test_library_primitive_json_columns_resolve_to_jsonb(self) -> None:
+        """A silent revert of any of the four columns to plain ``JSON`` must
+        fail: on the postgresql dialect each must resolve to the JSONB impl."""
+        for column_name in _LIBRARY_PRIMITIVE_JSON_COLUMNS:
+            column = LibraryPrimitive.__table__.columns[column_name]
+            impl = column.type.dialect_impl(postgresql.dialect())
+            assert isinstance(impl, JSONB), f"{column_name} resolved to {type(impl)!r}, expected JSONB"
 
     def test_library_primitive_declares_the_new_indexes(self) -> None:
         names = {i.name for i in LibraryPrimitive.__table__.indexes}

@@ -2762,7 +2762,16 @@ async def get_collection_install_endpoint(
             from modulo.db.models.collection_install import CollectionInstall
 
             install = await session.get(CollectionInstall, install_id)
-            if install is None or install.collection_id != primitive_id or install.organisation_id != org_id:
+            # A soft-deleted (uninstalled) install is retired history: treat it
+            # exactly like an absent row. ``session.get`` can resolve it from
+            # the session identity map, bypassing the global ``deleted_at IS
+            # NULL`` filter, so the guard is explicit.
+            if (
+                install is None
+                or install.deleted_at is not None
+                or install.collection_id != primitive_id
+                or install.organisation_id != org_id
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Install {install_id} not found for collection {primitive_id}",

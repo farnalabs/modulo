@@ -243,6 +243,12 @@ async def _load_install(
     install = await session.get(CollectionInstall, install_id)
     if install is None or install.organisation_id != org_id:
         raise UpgradeInstallNotFoundError(f"Install {install_id} not found for organisation {org_id}")
+    # Soft-deleted (uninstalled) installs are retired history, never live.
+    # ``session.get`` can resolve an already-uninstalled row from the session
+    # identity map, bypassing the global ``deleted_at IS NULL`` filter, so the
+    # guard is explicit — the same rule ``uninstall._load_install`` applies.
+    if install.deleted_at is not None:
+        raise UpgradeInstallNotFoundError(f"Install {install_id} not found for organisation {org_id}")
     if install.collection_id != collection_id:
         raise UpgradeInstallNotFoundError(f"Install {install_id} does not belong to collection {collection_id}")
     return install
