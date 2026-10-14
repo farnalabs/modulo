@@ -1,10 +1,10 @@
 <template>
   <div data-theme="agent" class="page-wide">
     <PageTabs :tabs="[
-      { label: 'Overview', to: '/admin/costs' },
-      { label: 'Spend Limits', to: '/admin/costs/limits' },
-      { label: 'Cost Components', to: '/admin/costs/components' },
-      { label: 'Cost Controls', to: '/admin/costs/controls' },
+      { label: $t('views.CostComponentsView.tab_overview'), to: '/admin/costs' },
+      { label: $t('views.CostComponentsView.tab_spend_limits'), to: '/admin/costs/limits' },
+      { label: $t('views.CostComponentsView.tab_cost_components'), to: '/admin/costs/components' },
+      { label: $t('views.CostComponentsView.tab_cost_controls'), to: '/admin/costs/controls' },
     ]" />
     <div class="flex items-center justify-between">
       <PageHeader :title="$t('views.CostComponentsView.cost_components')" :subtitle="$t('views.CostComponentsView.configure_the_named_cost_components_that_make_up_a_runs_cost')" />
@@ -15,7 +15,11 @@
 
     <FeatureGate feature-name="admin_cost_breakdown" required-tier="team" show-disabled>
 
-      <LoadingSpinner v-if="loading" />
+      <TableSkeleton
+        v-if="loading"
+        :columns="7"
+        :aria-label="$t('views.CostComponentsView.loading_components')"
+      />
 
       <ErrorAlert v-else-if="error" :message="error" :on-retry="loadComponents" />
 
@@ -75,7 +79,7 @@
                     :checked="(row as any).enabled"
                     @change="toggleEnabled(row as any)"
                   />
-                  <div class="peer h-6 w-11 rounded-full bg-muted-foreground/30 after:absolute after:start-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-muted after:bg-background after:transition-all peer-checked:bg-primary peer-checked:after:translate-x-full" />
+                  <div class="peer h-6 w-11 rounded-full bg-muted-foreground/30 after:absolute after:start-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-muted after:bg-background after:transition-all peer-checked:bg-primary peer-checked:after:translate-x-full peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-2" />
                 </label>
               </template>
               <template #cell-actions="{ row }">
@@ -103,11 +107,11 @@
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
                 <label for="costcomponents-name" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.CostComponentsView.name') }}</label>
-                <InputText id="costcomponents-name" v-model="form.name" data-testid="cost-components-name" class="font-mono" placeholder="e.g. sandbox_infra" :disabled="editing" />
+                <InputText id="costcomponents-name" v-model="form.name" data-testid="cost-components-name" class="font-mono" :placeholder="$t('views.CostComponentsView.name_placeholder')" :disabled="editing" />
               </div>
               <div>
                 <label for="costcomponents-display-name" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.CostComponentsView.display_name') }}</label>
-                <InputText id="costcomponents-display-name" v-model="form.display_name" data-testid="cost-components-display-name" placeholder="Sandbox Infra" />
+                <InputText id="costcomponents-display-name" v-model="form.display_name" data-testid="cost-components-display-name" :placeholder="$t('views.CostComponentsView.display_name_placeholder')" />
               </div>
             </div>
 
@@ -163,9 +167,9 @@
 
             <div v-if="form.kind === 'calculated'">
               <label for="costcomponents-formula" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.CostComponentsView.formula') }}</label>
-              <InputText id="costcomponents-formula" v-model="form.formula" data-testid="cost-components-formula" class="font-mono" :placeholder="'wall_clock_hours * rate'" />
+              <InputText id="costcomponents-formula" v-model="form.formula" data-testid="cost-components-formula" class="font-mono" :placeholder="$t('views.CostComponentsView.formula_placeholder')" />
               <details class="mt-2 rounded-lg border bg-muted/30 p-3">
-                <summary class="cursor-pointer text-xs font-medium text-muted-foreground">{{ $t('views.CostComponentsView.available_params') }}</summary>
+                <summary data-testid="cost-components-params-toggle" class="cursor-pointer rounded text-xs font-medium text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">{{ $t('views.CostComponentsView.available_params') }}</summary>
                 <table class="mt-2 w-full text-xs">
                   <thead>
                     <tr class="border-b text-left text-muted-foreground">
@@ -187,7 +191,7 @@
 
             <div v-if="form.kind === 'self_reported'">
               <label for="costcomponents-report-key" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.CostComponentsView.report_key') }}</label>
-              <InputText id="costcomponents-report-key" v-model="form.report_key" data-testid="cost-components-report-key" class="font-mono" placeholder="model_cost_usd" />
+              <InputText id="costcomponents-report-key" v-model="form.report_key" data-testid="cost-components-report-key" class="font-mono" :placeholder="$t('views.CostComponentsView.report_key_placeholder')" />
               <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.CostComponentsView.a_dead_report_key_wastes_a_cap_slot') }}</p>
             </div>
 
@@ -228,7 +232,7 @@ import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import TableSkeleton from '../components/shared/TableSkeleton.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
@@ -290,7 +294,7 @@ interface ComponentForm {
 }
 
 const { data, loading, error, load: loadComponents } = useDataFetch(
-  () => (api as any).GET('/api/v1/admin/costs/components'),
+  () => api.GET('/api/v1/admin/costs/components'),
   { initialValue: [] as CostComponent[] },
 )
 
@@ -381,7 +385,7 @@ async function saveComponent() {
   saving.value = true
   formError.value = null
   formSuccess.value = null
-  const payload: Record<string, unknown> = {
+  const payload = {
     name: form.value.name,
     display_name: form.value.display_name,
     kind: form.value.kind,
@@ -390,18 +394,22 @@ async function saveComponent() {
     formula: form.value.kind === 'calculated' ? form.value.formula : null,
     report_key: form.value.kind === 'self_reported' ? form.value.report_key : null,
     enabled: form.value.enabled,
+    sort_order: 0,
   }
   try {
     let err: unknown
     if (editing.value && editingId.value) {
-      const resp = await (api as any).PUT(`/api/v1/admin/costs/components/${editingId.value}`, { body: payload })
+      const resp = await api.PUT('/api/v1/admin/costs/components/{component_id}', {
+        params: { path: { component_id: editingId.value } },
+        body: payload,
+      })
       err = resp.error
     } else {
-      const resp = await (api as any).POST('/api/v1/admin/costs/components', { body: payload })
+      const resp = await api.POST('/api/v1/admin/costs/components', { body: payload })
       err = resp.error
     }
     if (err) {
-      formError.value = `Failed to save: ${formatApiError(err)}`
+      formError.value = t('views.CostComponentsView.failed_to_save', { detail: formatApiError(err) })
     } else {
       formSuccess.value = editing.value
         ? t('views.CostComponentsView.component_updated')
@@ -410,7 +418,7 @@ async function saveComponent() {
       await loadComponents()
     }
   } catch (e: unknown) {
-    formError.value = `Failed to save: ${formatApiError(e)}`
+    formError.value = t('views.CostComponentsView.failed_to_save', { detail: formatApiError(e) })
   } finally {
     saving.value = false
   }
@@ -418,15 +426,16 @@ async function saveComponent() {
 
 async function toggleEnabled(component: CostComponent) {
   try {
-    const { error: err } = await (api as any).PUT(`/api/v1/admin/costs/components/${component.id}`, {
+    const { error: err } = await api.PUT('/api/v1/admin/costs/components/{component_id}', {
+      params: { path: { component_id: component.id } },
       body: { enabled: !component.enabled },
     })
     if (err) {
-      formError.value = `Failed to toggle: ${formatApiError(err)}`
+      formError.value = t('views.CostComponentsView.failed_to_toggle', { detail: formatApiError(err) })
     }
     await loadComponents()
   } catch (e: unknown) {
-    formError.value = `Failed to toggle: ${formatApiError(e)}`
+    formError.value = t('views.CostComponentsView.failed_to_toggle', { detail: formatApiError(e) })
   }
 }
 
@@ -440,16 +449,18 @@ async function confirmDelete() {
   deleting.value = true
   formError.value = null
   try {
-    const { error: err, response } = await (api as any).DELETE(`/api/v1/admin/costs/components/${deleteTarget.value.id}`)
+    const { error: err, response } = await api.DELETE('/api/v1/admin/costs/components/{component_id}', {
+      params: { path: { component_id: deleteTarget.value.id } },
+    })
     if (err) {
-      formError.value = `Failed to delete: ${formatApiError(err)}`
+      formError.value = t('views.CostComponentsView.failed_to_delete', { detail: formatApiError(err) })
     } else if (response.status === 204 || response.ok) {
       formSuccess.value = t('views.CostComponentsView.component_deleted')
       deleteTarget.value = null
       await loadComponents()
     }
   } catch (e: unknown) {
-    formError.value = `Failed to delete: ${formatApiError(e)}`
+    formError.value = t('views.CostComponentsView.failed_to_delete', { detail: formatApiError(e) })
   } finally {
     deleting.value = false
   }

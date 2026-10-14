@@ -2240,7 +2240,19 @@ export default {
       "delete_self_reported_warning": "Soft-deleting the last enabled self_reported component means the org loses self-report routing until a component with this report_key is recreated.",
       "component_created": "Component created.",
       "component_updated": "Component updated.",
-      "component_deleted": "Component deleted."
+      "component_deleted": "Component deleted.",
+      "loading_components": "Loading cost components",
+      "tab_overview": "Overview",
+      "tab_spend_limits": "Spend Limits",
+      "tab_cost_components": "Cost Components",
+      "tab_cost_controls": "Cost Controls",
+      "failed_to_save": "Failed to save: {detail}",
+      "failed_to_toggle": "Failed to toggle: {detail}",
+      "failed_to_delete": "Failed to delete: {detail}",
+      "name_placeholder": "e.g. sandbox_infra",
+      "display_name_placeholder": "Sandbox Infra",
+      "formula_placeholder": "wall_clock_hours * rate",
+      "report_key_placeholder": "model_cost_usd"
     },
     "AdminNotificationDeliveryLogView": {
       "retry_all_request_failed": "Retry all request failed:",
