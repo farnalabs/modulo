@@ -57,6 +57,7 @@ from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import get_or_create_engine
 from modulo.core.bundled_runner.runner_reconciler import docker_endpoint_skip_reason
 from modulo.core.cron_helpers import DISPATCHER_RECONCILE_TICK_SECONDS, read_dispatcher_reconcile_stats
+from modulo.core.health_alerts import report_event_loop_stall_attribution
 from modulo.db.migration_guard import DivergenceCheckResult, check_migration_divergence
 from modulo.settings import Settings, break_glass_boot_findings, get_settings, resolve_instance_identity
 from modulo.version import get_version
@@ -1279,7 +1280,12 @@ async def _check_runner_workspace_reconcile() -> CheckResult:
     take the unchanged stats path, so configured-but-unreachable engines
     keep reporting degraded.
     """
-    skip_reason = docker_endpoint_skip_reason()
+    # FAR-1771 audit: docker_endpoint_skip_reason() does SYNCHRONOUS
+    # filesystem work (docker-context config.json read + json parse,
+    # Path.is_socket() stats) — the FAR-1439 class. It runs on every probe,
+    # so it must not run ON the loop; asyncio.to_thread moves it off-thread
+    # (behaviour identical, just no longer a stall source).
+    skip_reason = await asyncio.to_thread(docker_endpoint_skip_reason)
     return await _check_sweep_stats_advisory(
         _RUNNER_WORKSPACE_RECONCILE_STATS_KEY,
         _RUNNER_WORKSPACE_RECONCILE_STALE_SECONDS,
@@ -1445,10 +1451,22 @@ async def _check_system_crons() -> CheckResult:
 # worst scheduling delay (oversleep) it observes; the result is surfaced as
 # the advisory ``event_loop_lag`` check so a regression is visible directly
 # in the readiness payload.
+#
+# FAR-1771: when an oversleep wins the "worst" race, the sampler also
+# records the stall WINDOW (scheduled-wake -> actual-wake, monotonic), and
+# the degraded branch below hands that window to
+# ``core.health_alerts.report_event_loop_stall_attribution`` so the log line
+# names the blocking callback (file:line) — the attribution sampler it reads
+# from is opt-in via MODULO_SLOW_CALLBACK_WARN_MS and absent otherwise, in
+# which case the log is exactly the pre-FAR-1771 line.
 _LOOP_LAG_TICK_SECONDS = 0.01
 #: A tick that overslept by at least this much is a STALLED loop, not
 #: scheduling jitter: a healthy loop oversleeps a 10ms tick by single-digit
-#: milliseconds, while the FAR-1439 stall measured ~2400ms.
+#: milliseconds, while the FAR-1439 stall measured ~2400ms. This is the
+#: sub-second/ok boundary of the FAR-1771 three-band contract; the severe
+#: (alert-triggering) band starts at
+#: ``core.health_alerts.SEVERE_EVENT_LOOP_STALL_MS`` (1000ms) on the
+#: same ``latency_ms`` value.
 _LOOP_LAG_DEGRADED_MS = 250.0
 
 
@@ -1460,12 +1478,21 @@ async def _track_event_loop_lag(state: dict[str, float], stop: asyncio.Event) ->
     the task; a synchronous call anywhere on the loop shows up as one
     oversized tick.  ``state`` is shared with the caller so the recorded
     worst value survives task completion and can be read after the fact.
+
+    FAR-1771: the state also carries the WINDOW of the worst oversleep
+    (``worst_start``/``worst_end``, monotonic seconds — scheduled wake ->
+    actual wake) so attribution can read the stack samples covering exactly
+    that span.
     """
     while not stop.is_set():
         started = time.monotonic()
         await asyncio.sleep(_LOOP_LAG_TICK_SECONDS)
-        lag_ms = (time.monotonic() - started - _LOOP_LAG_TICK_SECONDS) * 1000.0
-        state["worst_ms"] = max(state["worst_ms"], lag_ms)
+        finished = time.monotonic()
+        lag_ms = (finished - started - _LOOP_LAG_TICK_SECONDS) * 1000.0
+        if lag_ms > state["worst_ms"]:
+            state["worst_ms"] = lag_ms
+            state["worst_start"] = started + _LOOP_LAG_TICK_SECONDS
+            state["worst_end"] = finished
 
 
 @router.get("/healthz")
@@ -1493,7 +1520,7 @@ async def evaluate_readiness() -> ReadinessResponse:
     a plain await — never a cancel — so a tick that became due DURING a
     stall still runs and records it before the handler reads the state.
     """
-    lag_state: dict[str, float] = {"worst_ms": 0.0}
+    lag_state: dict[str, float] = {"worst_ms": 0.0, "worst_start": 0.0, "worst_end": 0.0}
     lag_stop = asyncio.Event()
     lag_task = asyncio.create_task(_track_event_loop_lag(lag_state, lag_stop))
     try:
@@ -1543,9 +1570,21 @@ async def evaluate_readiness() -> ReadinessResponse:
     worst_lag_ms = lag_state["worst_ms"]
     lag_degraded = worst_lag_ms >= _LOOP_LAG_DEGRADED_MS
     if lag_degraded:
+        # FAR-1771: name the blocking callback (file:line) when stall
+        # attribution is installed (MODULO_SLOW_CALLBACK_WARN_MS). Returns
+        # None when the knob is off or no sample covers the window — the log
+        # then reads exactly as it did before FAR-1771.
+        attribution = report_event_loop_stall_attribution(
+            window_start=lag_state["worst_start"],
+            window_end=lag_state["worst_end"],
+            lag_ms=worst_lag_ms,
+        )
+        stall_message = "health.readiness event-loop stall detected (FAR-1439)"
+        if attribution is not None:
+            stall_message = stall_message + " blocking_callback=" + attribution
         _log.warning(
-            "health.readiness event-loop stall detected (FAR-1439)",
-            extra={"worst_lag_ms": worst_lag_ms},
+            stall_message,
+            extra={"worst_lag_ms": worst_lag_ms, "blocking_callback": attribution},
         )
     lag_check = CheckResult(
         status="degraded" if lag_degraded else "ok",
@@ -1583,8 +1622,11 @@ async def evaluate_readiness() -> ReadinessResponse:
         # FAR-1439 ADVISORY only — excluded from the aggregate (never gates
         # readiness): the worst event-loop scheduling delay seen during this
         # probe.  A value >= _LOOP_LAG_DEGRADED_MS means a synchronous call
-        # blocked the loop mid-probe; it alerts here without blocking a
-        # deploy.
+        # blocked the loop mid-probe; it surfaces here without blocking a
+        # deploy.  FAR-1771 three bands via this check's latency_ms:
+        # <250ms ok (quiet), 250ms-1s degraded (visible here, does NOT page),
+        # >=1s degraded AND alert-triggering (core.health_alerts'
+        # SEVERE_EVENT_LOOP_STALL_MS magnitude gate).
         "event_loop_lag": lag_check,
         # FAR-199: dispatcher_reconcile gates readiness at its "unavailable"
         # tier only (see the aggregation below); its "degraded" tier stays

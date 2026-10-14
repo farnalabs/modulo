@@ -87,6 +87,19 @@ inventing a mechanism):
   ``observed_state``, so naming them as the reason an alert fired is
   alarm-fatigue (staging bodies listed ``break_glass`` on every page).
   Everything else, ``db_hygiene`` included, is still reported.
+  FAR-1771 carves ONE severity exception into that rule: a SEVERE
+  ``event_loop_lag`` reading (``latency_ms`` at/above
+  :data:`SEVERE_EVENT_LOOP_STALL_MS`) both flips ``observed_state`` and is
+  listed as a failing check, while a sub-severe stall (250ms to 1s) stays
+  visible only in the readiness payload and never pages — see
+  :func:`_severe_event_loop_stall` for the three-band contract.
+* **FAR-1771 stall attribution (the alerting half's companion).** When
+  ``MODULO_SLOW_CALLBACK_WARN_MS`` is set, :func:`install_event_loop_stall_attribution`
+  arms asyncio's slow-callback warning on the running loop AND starts a
+  low-frequency sampler thread that records the loop thread's stack;
+  :func:`report_event_loop_stall_attribution` then names the blocking
+  callback (``file:line``) for a detected stall window. The knob is off by
+  default: no thread, no loop debug flags, zero per-tick cost.
 * **Send-then-commit.** The notification state advances only after the sender
   reports success, so a failed SMTP send is retried on the next confirmed
   tick instead of being swallowed. ``unique=True`` on the SAQ cron entry means
@@ -102,11 +115,17 @@ import contextlib
 import html
 import json
 import logging
+import os
+import sys
+import threading
 import time
+from collections import Counter, deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from pathlib import Path
+from types import FrameType
+from typing import Any, Final
 
 import redis.asyncio as aioredis
 
@@ -145,9 +164,14 @@ _MAX_PERSISTED_CONDITIONS = 50
 #: These are exactly the advisory sweep/probe checks from the readiness
 #: ``checks`` dict (``api.routes.health`` is the taxonomy). Deliberately
 #: EXCLUDED as benign/other-channel:
-#:   * ``event_loop_lag`` — transient stall diagnostic (must not page on its
-#:     own, and never listed as a failing check — see
-#:     ``BENIGN_NON_TRIGGERING_CHECKS``),
+#:   * ``event_loop_lag`` — transient stall diagnostic; sub-severe readings
+#:     (250ms to 1s) must not page on their own, and are never listed as a
+#:     failing check — see ``BENIGN_NON_TRIGGERING_CHECKS``. FAR-1771 gives
+#:     it its OWN magnitude-gated alert path instead of membership here:
+#:     a SEVERE stall (``latency_ms`` >= :data:`SEVERE_EVENT_LOOP_STALL_MS`)
+#:     flips ``observed_state`` on its own (see :func:`_severe_event_loop_stall`),
+#:     so it is excluded from this set but is no longer silent at the severe
+#:     tier.
 #:   * ``break_glass`` — expected config posture (also never listed as a
 #:     failing check — see ``BENIGN_NON_TRIGGERING_CHECKS``),
 #:   * ``db_hygiene`` — a GRADED failure already gates the aggregate (so it
@@ -191,7 +215,13 @@ REAL_FAILURE_ADVISORY_CHECKS: frozenset[str] = frozenset(
 #:     excluded from alerting; its non-``ok`` reading is the feature armed,
 #:     not a fault (every staging alert body used to list it).
 #:   * ``event_loop_lag`` — a transient stall diagnostic that must never
-#:     page; it stays visible on ``/healthz/ready`` for whoever looks there.
+#:     page below the severe tier; it stays visible on ``/healthz/ready``
+#:     for whoever looks there. FAR-1771 exception: at/above
+#:     :data:`SEVERE_EVENT_LOOP_STALL_MS` it IS reported and DOES flip
+#:     ``observed_state`` (see :func:`_severe_event_loop_stall`) — a
+#:     sub-second stall must stay quiet, a ≥1s stall is the saturation
+#:     signal that must reach the operator again (PR #1468 removed the
+#:     always-on noise; this restores only the severe tier).
 #:
 #: ``db_hygiene`` is deliberately NOT in this set: a graded dead-tuple
 #: failure there gates the aggregate and is a genuine gating failure, so it
@@ -199,6 +229,18 @@ REAL_FAILURE_ADVISORY_CHECKS: frozenset[str] = frozenset(
 #: (the reported bullets) — ``non_ok_names()`` still sees these checks so
 #: the recovery split never claims a still-degraded advisory cleared.
 BENIGN_NON_TRIGGERING_CHECKS: frozenset[str] = frozenset({"break_glass", "event_loop_lag"})
+
+#: FAR-1771 severity threshold for ``event_loop_lag``: at/above this much
+#: worst-loop-lag (milliseconds) on a non-``ok`` reading the stall is
+#: SEVERE — it flips ``observed_state`` (reaching the alert stream) and is
+#: listed among failing checks. Below it the check stays benign: visible in
+#: the readiness payload, never a page. The bands:
+#:
+#: * < 250ms (``api.routes.health``'s ``_LOOP_LAG_DEGRADED_MS``): check
+#:   status ``ok`` — quiet everywhere.
+#: * 250ms to 1s: status ``degraded`` — visible in the payload, benign here.
+#: * >= 1s: status ``degraded`` + alert-triggering (this constant).
+SEVERE_EVENT_LOOP_STALL_MS: Final[float] = 1000.0
 
 
 #: ``settings.alert_email_to`` split into recipients (mirrors the watchdog's
@@ -252,10 +294,225 @@ def _log_disabled_once(now: float, *, environment_excluded: bool = False) -> Non
 
 @dataclass
 class SubCheck:
-    """One readiness sub-check's outcome (status + optional detail)."""
+    """One readiness sub-check's outcome (status + optional detail).
+
+    ``latency_ms`` mirrors ``CheckResult.latency_ms`` from the readiness
+    payload (FAR-1771): for ``event_loop_lag`` it carries the WORST loop lag
+    observed during the probe, which is what the severity gate keys on —
+    status alone cannot tell a 250ms jitter from a 2.4s freeze.
+    """
 
     status: str
     detail: str | None = None
+    latency_ms: float | None = None
+
+
+def _severe_event_loop_stall(check: SubCheck) -> bool:
+    """FAR-1771: is this ``event_loop_lag`` reading a SEVERE stall?
+
+    Severe = non-``ok`` AND ``latency_ms`` at/above
+    :data:`SEVERE_EVENT_LOOP_STALL_MS` (the value ``evaluate_readiness``
+    already records via ``CheckResult.latency_ms``). A missing ``latency_ms``
+    (a check constructed without one, or a pre-FAR-1771 consumer) counts as
+    NOT severe — conservative: the alert path never fires on unknown
+    magnitude, so the #1468 noise cannot come back through a gap in the
+    carrier.
+    """
+    return check.status != "ok" and check.latency_ms is not None and check.latency_ms >= SEVERE_EVENT_LOOP_STALL_MS
+
+
+# ---------------------------------------------------------------------------
+# FAR-1771 — event-loop stall ATTRIBUTION (opt-in).
+#
+# The readiness lag tracker can say "the loop froze for 1.4s" but not WHO
+# froze it — the synchronous call has already returned by the time the
+# oversleep is measured, so the blocking stack is gone. Closing that gap
+# needs a sample taken WHILE the loop is blocked, which cannot come from the
+# loop itself (it is the thing that is blocked): a daemon sampler thread
+# walks the LOOP THREAD's stack every few milliseconds into a bounded ring,
+# and ``report_event_loop_stall_attribution`` reads back the samples that
+# fall inside the detected stall window. The innermost non-stdlib frame is
+# the caller's site, so the log names ``file:line`` of the synchronous call.
+#
+# Gated entirely on ``MODULO_SLOW_CALLBACK_WARN_MS`` (Settings): off (the
+# default) means no thread, no samples, no loop debug flags, and the report
+# helper returns None without logging — zero cost. On, the same knob also
+# arms asyncio's own slow-callback warning (``loop.set_debug`` +
+# ``loop.slow_callback_duration``), which independently logs every callback
+# over the threshold with its task/cora and source location.
+#
+# Installed at process startup by the worker bootstrap
+# (``core.saq_worker._startup_event_bus_hook``) and the app lifespan
+# (``api.main._lifespan``) — both call
+# :func:`install_event_loop_stall_attribution`.
+# ---------------------------------------------------------------------------
+
+#: Ring capacity: enough history to cover any plausible stall window (the
+#: worst observed was ~2.4s; this holds ~45s of samples at the fastest tick).
+_STALL_SAMPLE_RING_CAPACITY = 1024
+#: Sampler tick bounds — a quarter of the warn threshold, clamped so a huge
+#: threshold does not starve attribution and a tiny one does not busy-spin.
+_STALL_SAMPLE_MIN_INTERVAL = 0.005
+_STALL_SAMPLE_MAX_INTERVAL = 0.05
+#: Root of the running interpreter's stdlib (frames under it are skipped
+#: when attributing: the interesting frame is the CALLER of the stdlib
+#: function that blocked, not the stdlib function itself).
+_STDLIB_ROOT = str(Path(os.__file__).parent)
+
+#: The installed sampler for THIS process; None = attribution off.
+_stall_sampler: _LoopThreadSampler | None = None
+
+
+def _short_source_path(filename: str) -> str:
+    """Log-friendly path: strip everything before ``src/`` or ``backend/``."""
+    for marker in (f"{os.sep}src{os.sep}", f"{os.sep}backend{os.sep}"):
+        index = filename.find(marker)
+        if index != -1:
+            return filename[index + len(marker) :]
+    return filename
+
+
+def _attributed_frame(frame: FrameType | None) -> FrameType | None:
+    """Innermost non-stdlib frame of *frame*'s stack — the blocking call site.
+
+    Walks leaf -> outermost and returns the first frame whose source file is
+    outside the interpreter's stdlib (our code, site-packages, or a test).
+    ``None`` when the whole stack is stdlib — that is the loop sitting idle
+    in its selector, where there is nothing of ours to blame — or when the
+    frame is synthetic (``<string>`` and friends carry no source location).
+    """
+    while frame is not None:
+        filename = frame.f_code.co_filename
+        if not filename.startswith("<") and not filename.startswith(_STDLIB_ROOT + os.sep):
+            return frame
+        frame = frame.f_back
+    return None
+
+
+class _LoopThreadSampler:
+    """Samples one target thread's attributed stack into a bounded ring.
+
+    The target is the event-loop thread; the sampler runs on its OWN daemon
+    thread, so it keeps sampling while the loop thread is blocked in a
+    synchronous call — exactly the window the loop itself can never observe.
+    """
+
+    def __init__(self, target_thread_id: int, warn_ms: int) -> None:
+        self._target_thread_id = target_thread_id
+        self._interval = min(_STALL_SAMPLE_MAX_INTERVAL, max(_STALL_SAMPLE_MIN_INTERVAL, warn_ms / 4000.0))
+        self._samples: deque[tuple[float, FrameType | None]] = deque(maxlen=_STALL_SAMPLE_RING_CAPACITY)
+        self._samples_lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._thread = threading.Thread(
+            target=self._run,
+            name="event-loop-stall-sampler",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=1.0)
+        self._thread = None
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            leaf = sys._current_frames().get(self._target_thread_id)
+            with self._samples_lock:
+                self._samples.append((time.monotonic(), _attributed_frame(leaf)))
+            self._stop.wait(self._interval)
+
+    def attribute(self, window_start: float, window_end: float) -> str | None:
+        """Most common blocking call site for samples inside the window.
+
+        Returns ``"src/path.py:LINE in func (n/m samples)"``, or ``None``
+        when no attributed sample covers the window (attribution unavailable
+        — never a guess).
+        """
+        with self._samples_lock:
+            in_window = [
+                frame
+                for sampled_at, frame in self._samples
+                if window_start <= sampled_at <= window_end and frame is not None
+            ]
+        if not in_window:
+            return None
+        counts = Counter((frame.f_code.co_filename, frame.f_lineno, frame.f_code.co_name) for frame in in_window)
+        (filename, lineno, func_name), hits = counts.most_common(1)[0]
+        return f"{_short_source_path(filename)}:{lineno} in {func_name} ({hits}/{len(in_window)} samples)"
+
+
+def install_event_loop_stall_attribution(settings: Settings | None = None) -> bool:
+    """Install stall attribution on the CALLING thread's loop (FAR-1771).
+
+    Returns ``True`` when installed, ``False`` when the knob is off — the
+    off path is a pure no-op (no thread, no loop mutation, no log), so
+    production defaults pay nothing.
+
+    Must be called from the event-loop thread (process startup does: the
+    worker ``startup`` hook and the app lifespan both run on their loop).
+    The sampler targets ``threading.get_ident()``; the loop debug flags arm
+    asyncio's own slow-callback warning at the same threshold. Idempotent:
+    a previous sampler (test re-install) is stopped first.
+    """
+    settings = settings or get_settings()
+    warn_ms = settings.modulo_slow_callback_warn_ms
+    if warn_ms <= 0:
+        return False
+    uninstall_event_loop_stall_attribution()
+    sampler = _LoopThreadSampler(threading.get_ident(), warn_ms)
+    sampler.start()
+    global _stall_sampler
+    _stall_sampler = sampler
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop is not None:
+        loop.set_debug(True)
+        loop.slow_callback_duration = warn_ms / 1000.0
+        # Read the armed threshold back for the log: an operator grep for
+        # this line sees EXACTLY what duration the slow-callback warning
+        # will fire at on this loop.
+        _log.info(
+            "event_loop_stall.attribution_installed warn_ms=%d slow_callback_duration_s=%.3f",
+            warn_ms,
+            loop.slow_callback_duration,
+        )
+    else:
+        _log.info("event_loop_stall.attribution_installed warn_ms=%d (no running loop; async flags skipped)", warn_ms)
+    return True
+
+
+def uninstall_event_loop_stall_attribution() -> None:
+    """Stop and clear the installed sampler (idempotent; loop flags untouched)."""
+    global _stall_sampler
+    sampler = _stall_sampler
+    if sampler is not None:
+        sampler.stop()
+        _stall_sampler = None
+
+
+def report_event_loop_stall_attribution(*, window_start: float, window_end: float, lag_ms: float) -> str | None:
+    """Log the blocking callback (file:line) for a detected stall window.
+
+    Returns the attribution string when one was found, ``None`` when
+    attribution is not installed (knob off) or no sample covers the window.
+    The off path logs NOTHING — this is the no-op the knob's default buys.
+    """
+    sampler = _stall_sampler
+    if sampler is None:
+        return None
+    attribution = sampler.attribute(window_start, window_end)
+    if attribution is None:
+        return None
+    _log.warning("event_loop_stall.attribution lag_ms=%.0f blocking_callback=%s", lag_ms, attribution)
+    return attribution
 
 
 @dataclass
@@ -272,7 +529,7 @@ class HealthObservation:
 
     @property
     def observed_state(self) -> str:
-        """``healthy`` only when the aggregate is ``ok`` AND no real-failure
+        """``healthy`` only when the aggregate is ``ok`` AND no alerting
         advisory check is failing.
 
         Degraded AND unavailable are unhealthy (both mean an operator should
@@ -280,13 +537,20 @@ class HealthObservation:
         (FAR-1571), a dead/erroring sweep in
         ``REAL_FAILURE_ADVISORY_CHECKS`` is unhealthy too even while the
         aggregate still reads ``ok`` — the FAR-1156 blind spot this closes.
-        Benign advisories (``event_loop_lag``, ``break_glass``,
+        Benign advisories (a sub-severe ``event_loop_lag``, ``break_glass``,
         ``db_hygiene``'s not-measured probe) are not in that set, so they
         never flip the state and never page.
+        FAR-1771: a SEVERE ``event_loop_lag`` stall (``latency_ms`` >=
+        :data:`SEVERE_EVENT_LOOP_STALL_MS`) flips the state on its own —
+        it is the magnitude-gated replacement for the silence PR #1468
+        introduced; sub-severe stalls stay quiet.
         """
         if self.status != "ok":
             return "unhealthy"
         if any(self.checks[name].status != "ok" for name in REAL_FAILURE_ADVISORY_CHECKS if name in self.checks):
+            return "unhealthy"
+        lag_check = self.checks.get("event_loop_lag")
+        if lag_check is not None and _severe_event_loop_stall(lag_check):
             return "unhealthy"
         return "healthy"
 
@@ -296,8 +560,9 @@ class HealthObservation:
 
         ``unavailable`` when the aggregate is unavailable; otherwise
         ``degraded`` when the observation is alerting (the aggregate is ``ok``
-        but a real-failure advisory check is broken — the subject must NOT
-        read ``[Modulo] Readiness ok``); otherwise ``ok`` (no alert fires).
+        but a real-failure advisory check, or a SEVERE event-loop stall, is
+        broken — the subject must NOT read ``[Modulo] Readiness ok``);
+        otherwise ``ok`` (no alert fires).
         """
         if self.status == "unavailable":
             return "unavailable"
@@ -310,8 +575,11 @@ class HealthObservation:
         ``event_loop_lag``): those never contribute to ``observed_state``, so
         listing them as "Failing checks" would blame the alert on something
         that cannot page — pure alarm fatigue (every staging alert used to
-        list ``break_glass``). Every other non-``ok`` check is reported,
-        ``db_hygiene`` included (a graded failure there is genuine).
+        list ``break_glass``). FAR-1771 exception: a SEVERE
+        ``event_loop_lag`` stall DOES contribute to ``observed_state``, so it
+        IS listed (it is often the whole reason the email fired). Every other
+        non-``ok`` check is reported, ``db_hygiene`` included (a graded
+        failure there is genuine).
         ``non_ok_names()`` is deliberately unfiltered so the recovery split
         never claims a still-degraded benign advisory as cleared.
         """
@@ -320,7 +588,12 @@ class HealthObservation:
             check = self.checks[name]
             if check.status == "ok":
                 continue
-            if name in BENIGN_NON_TRIGGERING_CHECKS:
+            # FAR-1771: reportable only at the severe tier — the very rule
+            # that keeps a sub-second stall off the alert stream while a
+            # >=1s stall names itself in the body.
+            if name in BENIGN_NON_TRIGGERING_CHECKS and not (
+                name == "event_loop_lag" and _severe_event_loop_stall(check)
+            ):
                 continue
             bullet = f"{name}: {check.status}"
             if check.detail:
@@ -349,7 +622,13 @@ async def _observe_readiness() -> HealthObservation:
     response = await evaluate_readiness()
     return HealthObservation(
         status=response.status,
-        checks={name: SubCheck(status=check.status, detail=check.detail) for name, check in response.checks.items()},
+        checks={
+            # FAR-1771: latency_ms rides along — event_loop_lag's severity
+            # gate keys on the worst lag the probe measured (status alone
+            # cannot tell a 250ms jitter from a 2.4s freeze).
+            name: SubCheck(status=check.status, detail=check.detail, latency_ms=check.latency_ms)
+            for name, check in response.checks.items()
+        },
     )
 
 

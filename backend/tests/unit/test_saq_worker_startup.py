@@ -195,6 +195,47 @@ class TestStartupHook:
 
         assert "saq_worker.event_subscription_spawn_failed" in caplog.text
 
+    async def test_installs_event_loop_stall_attribution(self) -> None:
+        """FAR-1771: the shared startup hook is the worker-side install
+        point for stall attribution (both worker flavours flow through it)."""
+        with (
+            patch("modulo.core.events.register_listeners"),
+            patch("modulo.core.events.configure_event_bus", new_callable=AsyncMock),
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch("modulo.core.events.worker_subscription.spawn_worker_event_subscription"),
+            patch(
+                "modulo.core.health_alerts.install_event_loop_stall_attribution",
+                return_value=True,
+            ) as install,
+        ):
+            await sw._startup_event_bus_hook({})
+
+        install.assert_called_once_with()
+
+    async def test_attribution_install_failure_is_fail_open(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Attribution is observability, never a boot requirement: an
+        install failure logs and the worker still wires its event pipeline."""
+        with (
+            patch("modulo.core.events.register_listeners") as reg,
+            patch(
+                "modulo.core.health_alerts.install_event_loop_stall_attribution",
+                side_effect=RuntimeError("sampler boom"),
+            ),
+            patch("modulo.core.events.configure_event_bus", new_callable=AsyncMock) as cfg,
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch("modulo.core.events.worker_subscription.spawn_worker_event_subscription") as spawn,
+            caplog.at_level("WARNING", logger="modulo.core.saq_worker"),
+        ):
+            await sw._startup_event_bus_hook({})  # must not raise
+
+        reg.assert_called_once()
+        cfg.assert_awaited_once()
+        spawn.assert_called_once()
+        assert "saq_worker.event_loop_stall_attribution_install_failed" in caplog.text
+
 
 class _BlockingPubSub:
     """Pattern subscription that confirms, then holds open until cancelled."""

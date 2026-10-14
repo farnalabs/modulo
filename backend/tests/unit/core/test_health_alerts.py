@@ -18,6 +18,7 @@ import inspect
 import json
 import logging
 import re
+import time
 from collections.abc import Callable
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -597,7 +598,13 @@ async def test_single_tick_real_advisory_blip_sends_nothing() -> None:
 async def test_benign_event_loop_lag_advisory_never_alerts() -> None:
     """A benign advisory (``event_loop_lag: degraded``, aggregate ``ok``)
     sustained across the hysteresis window must NOT page — it is a transient
-    stall diagnostic, visible in the readiness body only (no FAR-1512 noise)."""
+    stall diagnostic, visible in the readiness body only (no FAR-1512 noise).
+
+    FAR-1771 band B (250ms to 1s): the reading carries ``latency_ms`` in the
+    sub-second range, so the severity gate keeps it benign — visible in the
+    observation, never listed, never emailed. Band A (<250ms, status ``ok``)
+    and band C (>=1s, alert-triggering) have their own tests below.
+    """
     settings = _make_settings()
     observer = _FakeObserver()
     sender = _FakeSender()
@@ -608,9 +615,19 @@ async def test_benign_event_loop_lag_advisory_never_alerts() -> None:
         status="ok",
         checks={
             "database": ha.SubCheck(status="ok", detail="connected"),
-            "event_loop_lag": ha.SubCheck(status="degraded", detail="EVENT-LOOP STALL: loop delayed up to 2400ms"),
+            "event_loop_lag": ha.SubCheck(
+                status="degraded",
+                detail="EVENT-LOOP STALL: loop delayed up to 640ms during this probe",
+                latency_ms=640.0,
+            ),
         },
     )
+    # Visible in the payload-shaped observation...
+    assert observer.observation.checks["event_loop_lag"].status == "degraded"
+    assert observer.observation.checks["event_loop_lag"].latency_ms == 640.0
+    # ...but benign: does not flip the state, is not listed, never pages.
+    assert observer.observation.observed_state == "healthy"
+    assert not observer.observation.conditions()
 
     results: list[dict[str, Any]] = []
     for _ in range(4):  # well past CONFIRM_TICKS
@@ -624,6 +641,240 @@ async def test_benign_event_loop_lag_advisory_never_alerts() -> None:
     # advisory contributes nothing to observed_state, so naming it as the
     # reason an alert fired is pure alarm fatigue (BENIGN_NON_TRIGGERING_CHECKS).
     assert not observer.observation.conditions()
+
+
+async def test_event_loop_lag_band_ok_stays_quiet() -> None:
+    """FAR-1771 band A (<250ms): health reports status ``ok`` — the
+    observation stays healthy, lists nothing, and never emails across the
+    hysteresis window."""
+    settings = _make_settings()
+    observer = _FakeObserver()
+    sender = _FakeSender()
+    store = _FakeRedis()
+    clock = {"now": 1_000_000.0}
+
+    observer.observation = ha.HealthObservation(
+        status="ok",
+        checks={
+            "database": ha.SubCheck(status="ok", detail="connected"),
+            "event_loop_lag": ha.SubCheck(
+                status="ok",
+                detail="event loop responsive (worst scheduling delay 40ms during probe)",
+                latency_ms=40.0,
+            ),
+        },
+    )
+    assert observer.observation.observed_state == "healthy"
+    assert not observer.observation.conditions()
+
+    for _ in range(4):
+        result = await _tick(observer, sender, store, settings, clock)
+        clock["now"] += 300.0
+
+    assert not sender.sent
+    assert result["action"] == "none"
+    assert result["status"] == "healthy"
+
+
+def test_severe_event_loop_stall_threshold_boundary() -> None:
+    """The magnitude gate pins EXACTLY at SEVERE_EVENT_LOOP_STALL_MS:
+    sub-threshold quiet, at-threshold severe, unknown magnitude quiet
+    (a missing carrier must never page — that is how #1468's noise
+    could sneak back in), and an ``ok`` status never pages at any latency."""
+    just_below = ha.SubCheck(status="degraded", latency_ms=ha.SEVERE_EVENT_LOOP_STALL_MS - 0.1)
+    at_threshold = ha.SubCheck(status="degraded", latency_ms=ha.SEVERE_EVENT_LOOP_STALL_MS)
+    unknown_magnitude = ha.SubCheck(status="degraded", detail="stall")
+    ok_status = ha.SubCheck(status="ok", latency_ms=2400.0)
+
+    assert not ha._severe_event_loop_stall(just_below)
+    assert ha._severe_event_loop_stall(at_threshold)
+    assert not ha._severe_event_loop_stall(unknown_magnitude)
+    assert not ha._severe_event_loop_stall(ok_status)
+
+
+async def test_severe_event_loop_lag_stall_alerts_and_names_itself_then_recovers() -> None:
+    """FAR-1771 band C (>=1s): a SEVERE stall on an ``ok`` aggregate is the
+    alert path PR #1468 silenced — it flips ``observed_state`` on its own,
+    is listed among the failing checks, emails EXACTLY ONE alert across the
+    hysteresis window, and closes with one recovery naming what cleared."""
+    settings = _make_settings()
+    observer = _FakeObserver()
+    sender = _FakeSender()
+    store = _FakeRedis()
+    clock = {"now": 1_000_000.0}
+
+    severe_detail = "EVENT-LOOP STALL: loop delayed up to 1400ms during this probe"
+    severe_bullet = f"event_loop_lag: degraded ({severe_detail})"
+    observer.observation = ha.HealthObservation(
+        status="ok",
+        checks={
+            "database": ha.SubCheck(status="ok", detail="connected"),
+            "event_loop_lag": ha.SubCheck(status="degraded", detail=severe_detail, latency_ms=1400.0),
+        },
+    )
+
+    # The severity gate: unhealthy observation, degraded reported status,
+    # and the stall IS the named failing check (it is why the alert fires).
+    assert observer.observation.observed_state == "unhealthy"
+    assert observer.observation.reported_status == "degraded"
+    assert observer.observation.conditions() == [severe_bullet]
+
+    # First unhealthy tick: under confirmation — still silent.
+    first = await _tick(observer, sender, store, settings, clock)
+    assert first["action"] == "none"
+    assert first["status"] == "unhealthy"
+    assert not sender.sent
+
+    # Second consecutive tick: confirmed -> one alert naming the stall.
+    second = await _tick(observer, sender, store, settings, clock)
+    assert second["action"] == "alert"
+    assert len(sender.sent) == 1
+    alert = sender.sent[0]
+    assert alert["subject"] == "[Modulo] Readiness degraded"
+    assert severe_bullet in alert["html"]
+    assert severe_bullet in alert["text"]
+
+    # Sustained: dedup keeps it at one email.
+    for _ in range(3):
+        await _tick(observer, sender, store, settings, clock)
+    assert len(sender.sent) == 1
+
+    # The stall clears: one healthy tick under confirmation, then one
+    # recovery email naming the stall as cleared.
+    observer.observation = _healthy()
+    await _tick(observer, sender, store, settings, clock)
+    recovery_tick = await _tick(observer, sender, store, settings, clock)
+    assert recovery_tick["action"] == "recovery"
+    assert len(sender.sent) == 2
+    recovery = sender.sent[1]
+    assert "recovered" in recovery["subject"].lower()
+    assert "event_loop_lag" in recovery["html"]
+
+    for _ in range(3):
+        await _tick(observer, sender, store, settings, clock)
+    assert len(sender.sent) == 2
+
+
+async def test_observe_readiness_carries_check_latency_into_the_observation() -> None:
+    """The two halves of FAR-1771 meet at ``latency_ms``: the readiness
+    payload's ``CheckResult.latency_ms`` (worst lag measured by the probe)
+    must ride into the alert observation's ``SubCheck`` — without it the
+    severity gate can never see a magnitude and would never fire."""
+    from modulo.api.routes.health import CheckResult, ReadinessResponse
+
+    lag_detail = "EVENT-LOOP STALL: loop delayed up to 1400ms during this probe"
+    response = ReadinessResponse(
+        status="ok",
+        version="test",
+        uptime_seconds=3.0,
+        checks={
+            "database": CheckResult(status="ok", detail="database reachable"),
+            "event_loop_lag": CheckResult(status="degraded", latency_ms=1400.0, detail=lag_detail),
+        },
+    )
+    with patch("modulo.api.routes.health.evaluate_readiness", new=AsyncMock(return_value=response)):
+        observation = await ha._observe_readiness()
+
+    assert observation.checks["event_loop_lag"].latency_ms == 1400.0
+    # End to end: payload -> observation -> severity gate -> named condition.
+    assert observation.observed_state == "unhealthy"
+    assert observation.conditions() == [f"event_loop_lag: degraded ({lag_detail})"]
+
+
+# ---------------------------------------------------------------------------
+# FAR-1771 (a) — stall ATTRIBUTION: the helper names the blocking callback
+# (file:line) when the knob is ON, and is a pure no-op when it is off.
+# ---------------------------------------------------------------------------
+
+#: Duration of the simulated sync block the attribution test expects to be
+#: named. Module-level constant (not computed in-line) so the test-suite
+#: wall-clock-sleep rule stays satisfied.
+_ATTRIBUTION_BLOCK_SECONDS = 0.3
+
+
+def _blocking_callback_window() -> tuple[float, float]:
+    """Block THIS thread and return the (monotonic) window of the block.
+
+    Deliberately a plain module-level function: the test-suite scanner
+    flags ``time.sleep`` inside an ``async def`` body, and the attribution
+    under test must capture THIS frame as the blocking call site — the
+    leaf Python frame during ``time.sleep`` (a builtin) is exactly the
+    caller's ``file:line``.
+    """
+    started = time.monotonic()
+    time.sleep(_ATTRIBUTION_BLOCK_SECONDS)
+    return started, time.monotonic()
+
+
+def test_stall_attribution_logs_the_blocking_callback_when_enabled(caplog: pytest.LogCaptureFixture) -> None:
+    """Knob ON: install starts the sampler, a real sync block is captured,
+    and the report helper LOGS the blocking callback with file:line."""
+    settings = _make_settings(modulo_slow_callback_warn_ms=100)
+    assert ha.install_event_loop_stall_attribution(settings) is True
+    try:
+        with caplog.at_level(logging.WARNING, logger=ha.__name__):
+            window_start, window_end = _blocking_callback_window()
+            attributed = ha.report_event_loop_stall_attribution(
+                window_start=window_start,
+                window_end=window_end,
+                lag_ms=300.0,
+            )
+    finally:
+        ha.uninstall_event_loop_stall_attribution()
+
+    assert attributed is not None
+    # Names the source: this file, a real line, and the blocking function.
+    assert re.search(r"test_health_alerts\.py:\d+ in _blocking_callback_window", attributed) is not None
+    # The REPORT (the WARNING that names the stall), not any install notice.
+    attribution_logs = [
+        record
+        for record in caplog.records
+        if "event_loop_stall.attribution" in record.getMessage() and record.levelno >= logging.WARNING
+    ]
+    assert len(attribution_logs) == 1
+    message = attribution_logs[0].getMessage()
+    assert attributed in message
+    assert "lag_ms=300" in message
+
+
+def test_stall_attribution_is_a_noop_when_the_knob_is_off(caplog: pytest.LogCaptureFixture) -> None:
+    """Knob OFF (the default): install starts nothing, the report helper
+    returns None and logs NOTHING — the zero-cost contract."""
+    ha.uninstall_event_loop_stall_attribution()
+    settings = _make_settings()  # modulo_slow_callback_warn_ms defaults to 0
+
+    with caplog.at_level(logging.WARNING, logger=ha.__name__):
+        installed = ha.install_event_loop_stall_attribution(settings)
+        attributed = ha.report_event_loop_stall_attribution(
+            window_start=0.0,
+            window_end=10.0,
+            lag_ms=1500.0,
+        )
+
+    assert installed is False
+    assert ha._stall_sampler is None
+    assert attributed is None
+    assert not [record for record in caplog.records if "attribution" in record.getMessage()]
+
+
+async def test_install_arms_the_running_loop_slow_callback_threshold() -> None:
+    """The knob also drives asyncio's own slow-callback warning: debug mode
+    on and ``slow_callback_duration`` at the configured threshold — the
+    independent per-callback signal alongside the stack sampler."""
+    # The test must run inside a live loop (install reads the RUNNING loop);
+    # the explicit suspension also keeps this a genuinely async test.
+    await asyncio.sleep(0)
+    loop = asyncio.get_running_loop()
+    assert loop.get_debug() is False
+    settings = _make_settings(modulo_slow_callback_warn_ms=250)
+    try:
+        assert ha.install_event_loop_stall_attribution(settings) is True
+        assert loop.get_debug() is True
+        assert loop.slow_callback_duration == pytest.approx(0.25)
+    finally:
+        ha.uninstall_event_loop_stall_attribution()
+        loop.set_debug(False)
+        loop.slow_callback_duration = 0.1
 
 
 async def test_gating_check_degraded_still_alerts() -> None:

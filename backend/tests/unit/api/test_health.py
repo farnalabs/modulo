@@ -31,6 +31,7 @@ from modulo.api.routes.health import (
     _per_check_timeout,
     evaluate_readiness,
 )
+from modulo.core.health_alerts import SEVERE_EVENT_LOOP_STALL_MS
 from modulo.db.migration_guard import DivergenceCheckResult
 from modulo.settings import Settings, get_settings
 from modulo.version import get_version
@@ -97,6 +98,10 @@ def _recorded_get_heads() -> set[str]:
 #: Duration of the simulated sync block in ``_stall_event_loop``.
 _STALL_SECONDS = 0.4
 
+#: Duration of the SEVERE (FAR-1771 band C) simulated block — must clear the
+#: 1000ms alert threshold with margin for tick granularity.
+_LONG_STALL_SECONDS = 1.1
+
 
 def _stall_event_loop() -> None:
     """Simulate the FAR-1439 bug class: a synchronous call that blocks the
@@ -104,9 +109,21 @@ def _stall_event_loop() -> None:
     time.sleep(_STALL_SECONDS)
 
 
+def _long_stall_event_loop() -> None:
+    """Simulate a SEVERE stall — a sync call blocking the loop past the
+    FAR-1771 1000ms alert threshold (band C)."""
+    time.sleep(_LONG_STALL_SECONDS)
+
+
 async def _stalling_redis_check() -> CheckResult:
     """Redis-check double that blocks the loop before answering."""
     _stall_event_loop()
+    return _ok_check("redis")
+
+
+async def _long_stalling_redis_check() -> CheckResult:
+    """Redis-check double that blocks the loop SEVERE-long before answering."""
+    _long_stall_event_loop()
     return _ok_check("redis")
 
 
@@ -1414,6 +1431,94 @@ class TestEventLoopStallGuard:
         # Advisory only: the stall must not flip overall readiness or gate.
         assert resp.status_code == 200
         assert body["status"] == "ok"
+
+    def test_readiness_severe_stall_reaches_the_payload_above_the_alert_threshold(self, client: TestClient) -> None:
+        """FAR-1771 band C: a >=1s stall must surface with ``latency_ms`` at/
+        above ``SEVERE_EVENT_LOOP_STALL_MS`` — that number IS the alert-side
+        severity gate's trigger, so it has to survive the payload — while the
+        endpoint stays HTTP 200 (advisory; still never gates readiness)."""
+        with (
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("modulo.api.routes.health._check_redis", new=_long_stalling_redis_check),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
+            patch(
+                "modulo.api.routes.health._check_decision_record_reconcile",
+                AsyncMock(return_value=_ok_check("decision_record_reconcile")),
+            ),
+        ):
+            resp = client.get("/healthz/ready")
+        body = resp.json()
+        lag = body["checks"]["event_loop_lag"]
+        assert lag["status"] == "degraded"
+        assert lag["latency_ms"] is not None
+        assert lag["latency_ms"] >= SEVERE_EVENT_LOOP_STALL_MS
+        assert "STALL" in lag["detail"]
+        # Advisory still: a severe stall surfaces, it never 503s readiness.
+        assert resp.status_code == 200
+        assert body["status"] == "ok"
+
+    def test_stall_detection_consults_the_attribution_helper_with_the_worst_window(self, client: TestClient) -> None:
+        """FAR-1771 wiring: a detected stall hands the attribution helper the
+        WINDOW of the worst oversleep (so it can read the stack samples that
+        cover exactly the freeze), and a stall-free probe never consults it."""
+        with (
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
+            patch(
+                "modulo.api.routes.health._check_decision_record_reconcile",
+                AsyncMock(return_value=_ok_check("decision_record_reconcile")),
+            ),
+            patch("modulo.api.routes.health.report_event_loop_stall_attribution") as report,
+        ):
+            healthy = client.get("/healthz/ready")
+            report.assert_not_called()
+
+        assert healthy.status_code == 200
+
+        with (
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("modulo.api.routes.health._check_redis", new=_stalling_redis_check),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
+            patch(
+                "modulo.api.routes.health._check_decision_record_reconcile",
+                AsyncMock(return_value=_ok_check("decision_record_reconcile")),
+            ),
+            patch("modulo.api.routes.health.report_event_loop_stall_attribution") as report,
+        ):
+            stalled = client.get("/healthz/ready")
+
+        assert stalled.status_code == 200
+        report.assert_called_once()
+        kwargs = report.call_args.kwargs
+        # The window spans the freeze: scheduled wake -> actual wake, and the
+        # measured lag is what the helper is asked to attribute.
+        assert kwargs["window_end"] > kwargs["window_start"]
+        assert kwargs["lag_ms"] >= _LOOP_LAG_DEGRADED_MS
 
     def test_empty_heads_are_not_cached_so_the_parse_is_retried(self) -> None:
         """A parse yielding no heads must return empty and stay UNcached.
