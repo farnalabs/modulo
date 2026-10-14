@@ -356,38 +356,64 @@ async function loadCommands(): Promise<Outcome> {
 }
 
 /**
- * `earned_autonomy_level` and `earned_autonomy_updated_at` are on the backend
- * `PipelineResponse` (api/routes/pipelines.py) but not yet in the committed
- * generated `schema.ts`; read them at this one boundary with a local shape so
- * the fallback to `default_autonomy_level` is explicit.
+ * The rung distribution has to describe EVERY pipeline, not just the first
+ * page. `page_size` is capped at 100 server-side while the level's count comes
+ * from `total`, so a single-page read made the ladder disagree with the count
+ * it sits under (150 pipelines above a distribution that sums to 100). Walk
+ * the keyset cursor the list endpoint already returns, bounded so a very large
+ * org cannot turn a readout into an unbounded crawl; when the bound truncates
+ * the walk, the detail says it is describing a prefix rather than presenting a
+ * partial tally as the whole ladder.
  */
-interface PipelineAutonomyFields {
-  earned_autonomy_level?: string | null
-  default_autonomy_level?: string | null
-}
+const AUTONOMY_PAGE_SIZE = 100
+const AUTONOMY_MAX_PAGES = 20
 
 async function loadAutonomy(): Promise<Outcome> {
-  const resp = await api.GET('/api/v1/pipelines', { params: { query: { page_size: 100 } } }).catch(rejected)
-  if (isRestricted(resp)) return { kind: 'restricted' }
-  if (resp.error) return { kind: 'error', message: formatApiError(resp.error) }
-  const items = (resp.data?.items ?? []) as unknown as PipelineAutonomyFields[]
-  const total = resp.data?.total ?? items.length
   let manual = 0
   let notify = 0
   let autonomous = 0
-  for (const pipeline of items) {
-    // The earned level is NULL until a runtime promote/demote sets it; the
-    // pinned default is the effective rung until then.
-    const level = pipeline.earned_autonomy_level ?? pipeline.default_autonomy_level ?? 'manual_approval'
-    if (level === 'notify_on_complete') notify += 1
-    else if (level === 'fully_autonomous') autonomous += 1
-    else manual += 1
+  let total = 0
+  let sampled = 0
+  let truncated = false
+  let walked = false
+  let cursor: string | undefined
+  for (let page = 1; page <= AUTONOMY_MAX_PAGES; page += 1) {
+    const query = cursor ? { page_size: AUTONOMY_PAGE_SIZE, cursor } : { page_size: AUTONOMY_PAGE_SIZE }
+    const resp = await api.GET('/api/v1/pipelines', { params: { query } }).catch(rejected)
+    if (isRestricted(resp)) return { kind: 'restricted' }
+    if (resp.error) return { kind: 'error', message: formatApiError(resp.error) }
+    const data = resp.data
+    total = data?.total ?? total
+    for (const pipeline of data?.items ?? []) {
+      // The earned level is NULL until a runtime promote/demote sets it; the
+      // pinned default is the effective rung until then.
+      const level = pipeline.earned_autonomy_level ?? pipeline.default_autonomy_level ?? 'manual_approval'
+      if (level === 'notify_on_complete') notify += 1
+      else if (level === 'fully_autonomous') autonomous += 1
+      else manual += 1
+      sampled += 1
+    }
+    const next = data?.next_cursor
+    if (!data?.has_more || !next) {
+      // `has_more` with no cursor is a continuation we cannot follow; say so
+      // rather than reporting the prefix as the whole ladder.
+      truncated = Boolean(data?.has_more)
+      walked = true
+      break
+    }
+    cursor = next
   }
+  // Exhausting the page budget with pages still available is the other way to
+  // hold a prefix; both mean the ladder is not the whole story.
+  if (!walked) truncated = true
+  const rungs = { manual, notify, autonomous }
   return {
     kind: 'ready',
     count: total,
     configured: total > 0,
-    detail: t('views.GovernanceStackView.autonomy_detail', { manual, notify, autonomous }),
+    detail: truncated
+      ? t('views.GovernanceStackView.autonomy_detail_partial', { ...rungs, sampled, total })
+      : t('views.GovernanceStackView.autonomy_detail', rungs),
   }
 }
 
