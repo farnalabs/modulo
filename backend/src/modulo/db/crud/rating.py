@@ -286,11 +286,23 @@ async def review_abuse_report(
     session: AsyncSession,
     report_id: uuid.UUID,
     *,
+    org_id: uuid.UUID,
     new_status: str,
     reviewer_account_id: uuid.UUID | None = None,
 ) -> PrimitiveAbuseReport | None:
-    """Update the status of an abuse report (admin)."""
-    stmt = select(PrimitiveAbuseReport).where(PrimitiveAbuseReport.id == report_id)
+    """Update the status of an abuse report (admin).
+
+    Org-scoped: the lookup carries an explicit ``organisation_id`` predicate
+    (the ``crud/publisher.py`` pattern), so a report belonging to another
+    organisation is not found even on a connection that bypasses RLS — the
+    caller gets ``None`` and answers 404 rather than leaking existence or
+    reviewing across tenants. Recording a decision never touches the rating
+    the report points at.
+    """
+    stmt = select(PrimitiveAbuseReport).where(
+        PrimitiveAbuseReport.id == report_id,
+        PrimitiveAbuseReport.organisation_id == org_id,
+    )
     result = await session.execute(stmt)
     report = result.scalar_one_or_none()
     if report is not None:

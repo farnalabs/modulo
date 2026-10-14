@@ -212,13 +212,13 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
 - [x] Node-deadline watchdog firings are recorded distinctly from terminal
       failures (FAR-1463): `pipeline_execution._fail_overdue_node` durably
       increments `runs.node_deadline_watchdog_fired_count` on its OWN
-      connection BEFORE the shared retry consult, so BOTH outcomes count — the
+      connection BEFORE the shared retry consult, so BOTH outcomes count - the
       re-dispatch (which otherwise leaves ZERO analytics fingerprint, because
       the fenced pending-reset nulls `error_code`) and the terminal fail. The
       marker deliberately survives the re-dispatch (neither the atomic claim
       nor the pending-reset names the column), so a run that never dispatched a
       node reads 0 while `error_code` separates a genuine terminal failure from
-      a firing. Internal/analytics-only — never projected onto `RunResponse` or
+      a firing. Internal/analytics-only - never projected onto `RunResponse` or
       the MCP run payloads; migration 0280 adds the column NOT NULL DEFAULT 0
       and it is copied onto `run_daily_facts` at finalize so the analytics read
       path never joins `runs` (ADR 020) and the marker outlives the run purge
@@ -227,12 +227,12 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       `test_pipeline_execution_watchdog_retry.py`)
 - [x] A run is refused for a pipeline that may not run (FAR-1528, extended by
       FAR-1530): `create_run` raises `PipelineNotRunnableError` when the
-      pipeline is archived, soft-deleted OR paused (`run_enabled=false` — the
+      pipeline is archived, soft-deleted OR paused (`run_enabled=false` - the
       FAR-1530 Paused execution state), and every REST entry point that can
       reach it (manual trigger, rerun, test trigger, webhook, replay, slack,
       variant runs, feedback correction) maps the refusal to 409 Conflict
       through the shared `pipeline_not_runnable_http` helper naming the pipeline
-      id and state — never a generic 500 — while the cron/polling/ongoing fire
+      id and state - never a generic 500 - while the cron/polling/ongoing fire
       jobs handle the same refusal without crashing. The archived / soft-deleted
       / paused precedence is resolved by the shared state classifier (deleted
       outranks archived outranks paused) and the state gate reads org-scoped and
@@ -245,32 +245,32 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
 - [x] Every run carries WHERE its work was executed (FAR-1141, ADR-042):
       `runs.execution_origin` (migration `0288_runs_execution_origin`)
       is stamped `dispatched` by `create_run` when the run's frozen snapshot
-      graph contains at least one `dispatch` node — part of the work ran
+      graph contains at least one `dispatch` node - part of the work ran
       OUTSIDE Modulo and was only witnessed/triggered by it (`db/models/run.py`
       single-sources the closed `EXECUTION_ORIGIN_DISPATCHED` vocabulary);
       `NULL` means Modulo-executed or legacy (never backfilled). The provenance
-      rides every run-rendering surface — RunResponse, the `/api/v1/viewmodel`
+      rides every run-rendering surface - RunResponse, the `/api/v1/viewmodel`
       runs, the dashboard and lifecycle-map rows, the runs-list detail, and the
       analytics `execution_origin` dimension whose label utility keeps the raw
-      key out of the table/chart — and the run-detail page renders a
+      key out of the table/chart - and the run-detail page renders a
       "Dispatched" badge (`frontend/src/utils/runUtils.ts`,
       `frontend/src/lib/api/runs.ts`, `api/routes/{runs,viewmodel,dashboard,
       lifecycle_maps,analytics}.py`)
 - [x] The governed-run provenance VOCABULARY is ONE taxonomy (FAR-1693,
       ADR-042 unified 2026-10-12): `core/provenance.py` single-sources the
-      closed four-class set — `observed` (Modulo observed it through a
+      closed four-class set - `observed` (Modulo observed it through a
       credential it holds), `derived` (Modulo computed it from observed facts),
       `reported` (arrived from ANY external surface, incl. a dispatched runtime,
       stamped `witnessed_via: <connector/channel>`), `attested` (governance
       events Modulo records natively). The dispatch arm's `witnessed_via` is the
       CHANNEL STAMP of a `reported` datum, not a class of its own: a dispatch
       node's folded-back data is stamped `provenance: reported` (NEVER
-      `attested` — the binding foreclosure is that substrate data stays the
+      `attested` - the binding foreclosure is that substrate data stays the
       substrate's report, and no governed badge implies anything about a
       customer's CI internals). Every claim-ready run payload composes the
       `provenance` class alongside `execution_origin` from the ONE serializer
       (`core/run_provenance.py`), engine-derived (`reported` for a dispatched
-      run, `NULL` for an executed/legacy run — never a guessed `observed`); the
+      run, `NULL` for an executed/legacy run - never a guessed `observed`); the
       class is engine-assigned, never self-asserted, so a prompt-injected
       substrate result cannot claim a stronger provenance
       (`core/provenance.py`, `core/run_provenance.py`,

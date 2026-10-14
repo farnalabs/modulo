@@ -1326,6 +1326,9 @@ elements:
       - testid: cost-components-delete-cancel
         type: button
         dynamic_testid: false
+      - testid: cost-components-loading
+        type: element
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -5942,6 +5945,9 @@ features:
             - "[x] Non-community-sourced collections (source=local) are not subject to the grant gate and agents are immediately usable"
             # Connector checklist
             - "[x] Each unique connector_type_id referenced by any agent in the collection gets a checklist entry with status=pending; the runnability check verifies all entries are configured+bound"
+            # Version upgrade (FAR-759)
+            - "[x] Collection authors cut a new version via POST /libraries/collections/{id}/versions (201 draft copying pins through version_group_id; 400 non-collection/foreign/non-published, 409 existing draft sibling); publishing the draft back-propagates update_available_version_id to installed orgs via notify_importers_of_update (backend/src/modulo/api/routes/library.py create_collection_version_endpoint, backend/src/modulo/core/library_service/__init__.py notify_importers_of_update)"
+            - "[x] Installed orgs preview and apply the upgrade, operator-initiated only with no auto-updates: GET /libraries/collections/{id}/installs/{install_id}/update reports update_available plus current/available versions and the per-entity added/changed/unchanged/removed delta with operator-modified flags (404 unknown install), and POST .../upgrade reconciles in place returning the reconciled/preserved/reported split plus warnings — operator-modified entities (cleared collection_install_id or content drifted from the install-time entity_fingerprints snapshot) are never clobbered, added pins are reported not materialised, removed pins reported not deleted, structural pipeline-graph changes reported manual, and the install record re-points at the new version row (404 unknown install, 409 no update available); the detail view surfaces the update badge and Upgrade button (collection-update-available, collection-upgrade, collection-upgrade-error) (backend/src/modulo/api/routes/library.py get_collection_update_endpoint + upgrade_collection_endpoint, backend/src/modulo/core/library_service/upgrade.py detect_collection_update + upgrade_collection, frontend/src/views/CollectionDetailView.vue, docs/product-map/library/library-collections.md)"
     feat-license:
         description: Feature licensing and plan tiers
         status: partial

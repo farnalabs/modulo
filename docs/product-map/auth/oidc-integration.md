@@ -36,23 +36,23 @@ the SSO callback flow (`feat-sso`).
 
 ## Known Gaps
 
-- **JWKS cache is in-memory per process** — no shared/distributed cache across
+- **JWKS cache is in-memory per process** - no shared/distributed cache across
   workers; a rotated key set resolves within one TTL per worker.
 
 ## QA History
 
-- 2026-09-21: **product-map review pass** — added
+- 2026-09-21: **product-map review pass** - added
   `backend/tests/integration/auth/test_oidc_rls_resolution.py` (real-Postgres
   multi-org RLS regression for the per-provider OIDC surface, closing the
   `feat-sso` deferral). Proves the system leg resolves an OIDC provider owned by
   a non-first org via the real `modulo_system` role, unknown slugs fail closed
   all-None (never RuntimeError→500), the app fallback resolves only the first
-  org's provider inside a scoped transaction (FAR-1058 parity — the resolver now
+  org's provider inside a scoped transaction (FAR-1058 parity - the resolver now
   opens its own `session.begin()` when the caller has none), an unbound app
   session sees zero OIDC providers, and `GET /oidc/{provider}/login`
   307-redirects cross-org while an unknown slug is a 400 not a 500.
 
-- 2026-08-25: **product-map review pass** — entry added to close the
+- 2026-08-25: **product-map review pass** - entry added to close the
   dangling `depends-on: feat-core-oidc-integration` edge in `auth/sso-provider-ui.md`.
   Behaviours re-verified against `auth/oidc_verify.py`, `sso_oidc.feature`, and unit
   tests. Status: covered.

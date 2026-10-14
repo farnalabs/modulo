@@ -36,14 +36,14 @@ signature verification, wired into the SSO ACS flow (`feat-sso`).
 - [x] An assertion that parses but fails validation (bad signature, expired
       conditions, missing assertion) surfaces a typed `SamlAuthError`; input that
       cannot even be base64-decoded or parsed as XML fails earlier inside
-      python3-saml and never reaches the typed error — an undecodable response
+      python3-saml and never reaches the typed error - an undecodable response
       (`binascii.Error`, a `ValueError` subclass) is mapped to 401 by the ACS
       route, while a non-XML document (`lxml.etree.XMLSyntaxError`) falls through
       to the generic 500
 - [x] Cross-org assertion reuse fails closed (FAR-1010): an assertion minted
       for one provider's entity ID, replayed at another provider's ACS, is
-      rejected 401 ("SAML response validation failed" — python3-saml's own
-      strict-mode audience check rejects the replayed assertion first) — on top of
+      rejected 401 ("SAML response validation failed" - python3-saml's own
+      strict-mode audience check rejects the replayed assertion first) - on top of
       python3-saml's conditional audience/destination/recipient checks,
       `ModuloSamlAuth._enforce_audience_restriction` enforces audience
       containment itself (fail closed), and the Destination/Recipient
@@ -59,7 +59,7 @@ signature verification, wired into the SSO ACS flow (`feat-sso`).
 
 ## Known Gaps
 
-- **python3-saml is a PyPI dependency, not vendored** — declared as
+- **python3-saml is a PyPI dependency, not vendored** - declared as
   `python3-saml>=1.16.0` in `backend/pyproject.toml` and locked to 1.16.0 in
   `backend/uv.lock`; behaviour is verified against that locked version in the
   BDD suite.
@@ -73,14 +73,14 @@ signature verification, wired into the SSO ACS flow (`feat-sso`).
   the shipped "replayed to org B's ACS is rejected" behaviour, but the
   human-readable graph entry for the implementing surface
   (`auth/saml_handler.py`) had no behaviour line and cited only the
-  datetime-parser unit suite. Added the checked behaviours — the fail-closed
+  datetime-parser unit suite. Added the checked behaviours - the fail-closed
   `_enforce_audience_restriction` containment on top of python3-saml's
   conditional checks, the real-ACS-URL Destination/Recipient pinning, and the
-  per-provider ACS isolation — plus the `test_saml_audience_containment.py`,
+  per-provider ACS isolation - plus the `test_saml_audience_containment.py`,
   `test_saml_per_org_regression.py` and `test_sso.py` citations.
   `_ORPHANED_BDD_FEATURES` stays empty.
 
-- 2026-08-25: **product-map review pass** — entry added to close the
+- 2026-08-25: **product-map review pass** - entry added to close the
   dangling `depends-on: feat-core-saml-integration` edge in `auth/sso-provider-ui.md`.
   Behaviours re-verified against `auth/saml_handler.py`, `sso_saml.feature`, and unit
   tests. Status: covered.

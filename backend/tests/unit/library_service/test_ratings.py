@@ -381,6 +381,7 @@ class TestListAbuseReports:
 class TestReviewAbuseReport:
     async def test_review_dismisses(self, mock_session):
         report_id = uuid.uuid4()
+        org_id = uuid.uuid4()
         report = MagicMock(spec=PrimitiveAbuseReport)
         report.status = "pending"
         report.reviewer_account_id = None
@@ -391,7 +392,11 @@ class TestReviewAbuseReport:
         _given_execute(mock_session, result)
 
         result = await review_abuse_report(
-            mock_session, report_id, new_status="dismissed", reviewer_account_id=uuid.uuid4()
+            mock_session,
+            report_id,
+            org_id=org_id,
+            new_status="dismissed",
+            reviewer_account_id=uuid.uuid4(),
         )
         assert result is not None
         assert result.status == "dismissed"
@@ -399,5 +404,5 @@ class TestReviewAbuseReport:
     async def test_review_missing_report(self, mock_session):
         _given_execute(mock_session, None)
 
-        result = await review_abuse_report(mock_session, uuid.uuid4(), new_status="dismissed")
+        result = await review_abuse_report(mock_session, uuid.uuid4(), org_id=uuid.uuid4(), new_status="dismissed")
         assert result is None

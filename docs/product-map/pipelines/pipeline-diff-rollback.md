@@ -53,14 +53,14 @@ product-map entry touched during centralized authorization cleanup.
 - [x] Rollback reconciles declared `policy_gate` blocks against the pre-rollback
       graph in the same transaction through the shared
       `reconcile_graph_policy_gates` (FAR-1666): a gate the rollback reintroduces
-      gets its row, one it drops is soft-deleted — without this the restored
+      gets its row, one it drops is soft-deleted - without this the restored
       graph would carry a block with no governing row
       (`backend/src/modulo/db/crud/pipeline_snapshot_versioning.py`,
       `backend/tests/unit/db/crud/test_far1666_policy_gate_graph_writers.py`)
 - [x] Rollback runs the connector-team gate under the same row lock via the
       `post_lock_gate` hook (FAR-1515 MAJOR 3): the target snapshot's bindings
       are judged against the pipeline's CURRENT owner team and a mismatch raises
-      the shared named 409 `connector_team_mismatch` — the team boundary may
+      the shared named 409 `connector_team_mismatch` - the team boundary may
       have moved since the snapshot was taken (shared rule tracked under
       `feat-connectors`)
       (`backend/src/modulo/api/routes/pipelines.py::rollback_snapshot_endpoint`)
@@ -90,7 +90,7 @@ product-map entry touched during centralized authorization cleanup.
 - The FAR-402 P6 release-channel follow-ups stay out of scope by design
   (`backend/src/modulo/core/release_channels.py` contract): the channel metrics
   pipeline, the promotion/rollback dashboard, and the channel-promotion reducer
-  do not exist — snapshots can be tagged per channel and triggers resolve to
+  do not exist - snapshots can be tagged per channel and triggers resolve to
   the latest channel snapshot, but nothing promotes a channel or auto-rolls one
   back on error-rate signal (`should_rollback` is a pure, unit-tested oracle
   with no caller yet).
@@ -99,7 +99,7 @@ product-map entry touched during centralized authorization cleanup.
   schemaless historic nodes via `node.get("id")`. Judged not actionable: the
   graph validator rejects id-less nodes on every write path
   (`TOPOLOGY_NODE_MISSING_ID`), so no stored snapshot reachable through a
-  validated write can trigger it — hardening the diff would mask corruption
+  validated write can trigger it - hardening the diff would mask corruption
   rather than fix a reachable crash. Revisit if an unvalidated graph writer
   ever ships.
 
@@ -108,7 +108,7 @@ product-map entry touched during centralized authorization cleanup.
 - 2026-10-12: **Improve Architecture product-map walk (index 400)** – closed
   five untracked sub-surfaces shipped since the 2026-08-29 pass: (1) FAR-1666
   policy-gate reconciliation on rollback (same-txn `reconcile_graph_policy_gates`,
-  tested but undescribed — added checked behaviour + `test_far1666_*` citation);
+  tested but undescribed - added checked behaviour + `test_far1666_*` citation);
   (2) FAR-1515 MAJOR 3 connector-team `post_lock_gate` on rollback (added checked
   behaviour cross-referencing `feat-connectors`); (3) FAR-1471
   `pipeline.graph_updated` audit on rollback (added checked behaviour +
@@ -117,7 +117,7 @@ product-map entry touched during centralized authorization cleanup.
   + `test_snapshot_path_scoping_and_residual_gates.py` citation); (5) FAR-402 P6
   semantic diff layer (added checked behaviour + `TestDiffSnapshotsSemantic`
   citation). MAJOR coverage fix: `resolve_snapshot_for_channel` (CRUD) and
-  `TriggerEngine.resolve_snapshot_id_for_trigger` (hook) had ZERO tests — added
+  `TriggerEngine.resolve_snapshot_id_for_trigger` (hook) had ZERO tests - added
   `TestResolveSnapshotForChannel` (5 tests: passthrough, None, compiled-statement
   pipeline/channel/draft-exclusion/version-ordering/limit scoping, org-scope
   present/absent) + `TestResolveSnapshotIdForTrigger` (5 tests: none/unbound/
@@ -126,21 +126,21 @@ product-map entry touched during centralized authorization cleanup.
   Recorded two Known Gaps: release-channel promotion/metrics/dashboard follow-ups
   (`should_rollback` verified caller-less), and the evaluated-not-actionable
   id-less-node diff asymmetry. Status stays `covered`.
-- 2026-08-29: **product-map review pass** — closed the "no
+- 2026-08-29: **product-map review pass** - closed the "no
   dedicated standalone snapshot BDD feature file" gap: the snapshot/rollback/diff
   scenarios (create-at-run-start, list/pagination, get, tag, rollback + HITL-gate
   weakening denial, delete + latest refusal, diff, missing-pipeline 404,
   empty-graph) were extracted from the higher-level ``crud.feature`` into
   ``tests/bdd/features/pipelines/snapshot_versioning.feature`` and registered in
   ``tests/bdd/steps/test_pipelines.py``. ``bdd:`` now names the dedicated file.
-- 2026-08-26: **product-map review pass** — fixed a stale
+- 2026-08-26: **product-map review pass** - fixed a stale
   coverage claim: the entry was parked at ``status: partial`` with ``bdd: []``
   while ``tests/bdd/features/pipelines/crud.feature`` already exercised
   create-at-run-start, list/pagination, get, tag, rollback (incl. HITL-gate
   weakening denial), delete (+latest refusal), diff, and missing-pipeline 404
   via ``tests/bdd/steps/test_pipelines.py``. Recorded the real BDD references and
   moved the entry to ``status: covered``.
-- 2026-08-25: **product-map review pass** — restored this entry as part of
+- 2026-08-25: **product-map review pass** - restored this entry as part of
   rebuilding the `docs/product-map/` feature graph. The entry is referenced by ADR 047/018
   (centralized-authorization cleanup). Re-verified endpoints and CRUD modules against the
   current tree. Status: partial (no BDD coverage).

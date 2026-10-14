@@ -62,10 +62,15 @@ class GitHubActionsCIRunner(CIRunnerBase):
     """GitHub Actions CI runner using the Check Runs, Workflow Runs, and Actions APIs.
 
     Requires a GitHub API token with ``repo`` scope.
+
+    ``base_url`` defaults to github.com; a GHES instance passes its own API
+    base (``https://<host>/api/v3``), which the connector-hub threads through
+    from ``config_json.base_url`` (FAR-1762).
     """
 
-    def __init__(self, token: str) -> None:
+    def __init__(self, token: str, base_url: str = _GITHUB_API) -> None:
         self._token = token
+        self._base_url = base_url
 
     def _credential_values(self) -> Sequence[str]:
         return (self._token,)
@@ -79,11 +84,17 @@ class GitHubActionsCIRunner(CIRunnerBase):
 
     def _client(self) -> httpx.AsyncClient:
         # PINNED TRANSPORT (FAR-526B): build the client through the pinned
-        # transport so the hardcoded api.github.com address is pinned onto the
-        # connection (never re-resolved at connect time — closes DNS rebinding).
-        # The token is in the Authorization header, so no creds reach the URL.
+        # transport so the configured api base (github.com by default, a GHES
+        # ``https://<host>/api/v3`` when configured — FAR-1762) is pinned onto
+        # the connection (never re-resolved at connect time — closes DNS
+        # rebinding). The token is in the Authorization header, so no creds
+        # reach the URL.
         return pinned_async_client_sync(
-            _GITHUB_API, base_url=_GITHUB_API, headers=self._headers(), timeout=30, verify=egress_ssl_context(self)
+            self._base_url,
+            base_url=self._base_url,
+            headers=self._headers(),
+            timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     @staticmethod
@@ -406,6 +417,7 @@ class _GitHubActionsTestDouble(CITestDoubleMixin, GitHubActionsCIRunner):
         import uuid as _uuid
 
         self._token = "ghp_test"  # nosec - test double, not a real credential
+        self._base_url = _GITHUB_API
         self._uuid = _uuid
         self._status: CIRunStatus = CIRunStatus.QUEUED
         self._run_logs: list[str] = []
