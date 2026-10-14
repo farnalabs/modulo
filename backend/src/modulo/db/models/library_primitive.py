@@ -32,6 +32,15 @@ _JSONB_COL = JSON().with_variant(JSONB(), "postgresql")
 # cannot drift apart.
 _DELETED_AT_WHERE = text("deleted_at IS NULL")
 
+# Repeated self-FK target (S1192): every self-referential FK on this table points
+# at ``library_primitives.id``. Kept as one constant so the three declarations
+# cannot drift apart.
+_LIBRARY_PRIMITIVES_ID = "library_primitives.id"
+
+# Repeated FK action (S1192): ``SET NULL`` on the three nullable FK columns so a
+# deleted target row never cascades into destroying the referencing row.
+_SET_NULL = "SET NULL"
+
 
 class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
     __tablename__ = "library_primitives"
@@ -132,7 +141,7 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
     content_json: Mapped[dict[str, Any]] = mapped_column(_JSONB_COL, nullable=False)
     source_url: Mapped[str | None] = mapped_column(String(2000))
     forked_from: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("library_primitives.id", ondelete="RESTRICT"), index=True
+        Uuid(), ForeignKey(_LIBRARY_PRIMITIVES_ID, ondelete="RESTRICT"), index=True
     )
     checksum: Mapped[str | None] = mapped_column(String(128))
     ed25519_signature: Mapped[str | None] = mapped_column(String(256))
@@ -148,7 +157,7 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
     contribution_status: Mapped[str | None] = mapped_column(String(20))
     auto_update: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     account_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
+        Uuid(), ForeignKey("accounts.id", ondelete=_SET_NULL), index=True
     )
     version_group_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
@@ -159,12 +168,12 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
         # never destroys its siblings' rows; migration 0311 adds the same
         # ``enforce_same_organisation`` tenant trigger the siblings carry, so a
         # cross-org (or dangling) value fails loudly instead of being skipped.
-        ForeignKey("library_primitives.id", ondelete="SET NULL"),
+        ForeignKey(_LIBRARY_PRIMITIVES_ID, ondelete=_SET_NULL),
         nullable=True,
         index=True,
     )
     update_available_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("library_primitives.id", ondelete="SET NULL"), nullable=True, index=True
+        Uuid(), ForeignKey(_LIBRARY_PRIMITIVES_ID, ondelete=_SET_NULL), nullable=True, index=True
     )
     tier: Mapped[str] = mapped_column(String(20), nullable=False, server_default="native")
     # Collection authoring lifecycle fields (FAR-760).
