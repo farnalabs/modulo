@@ -18,7 +18,7 @@ import pytest_asyncio
 from sqlalchemy import inspect, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.routes.library import _install_response
+from modulo.api.routes.library import _install_response, _load_installed_entities
 from modulo.core.library_service._seed_data import MODULO_ORG_ID
 from modulo.core.library_service.grant import grant_collection_agents
 from modulo.core.library_service.install import CollectionInstallError, install_collection
@@ -458,6 +458,7 @@ async def test_full_install_verify_uninstall_round_trip(
 async def test_install_response_entity_list_matches_child_rows(
     db_engine: AsyncEngine,
     db_session: AsyncSession,
+    modulo_app_engine: AsyncEngine,
     org: uuid.UUID,
     user: uuid.UUID,
     schemas: list[uuid.UUID],
@@ -466,10 +467,16 @@ async def test_install_response_entity_list_matches_child_rows(
 ) -> None:
     """FAR-1754: ``collection_install_entity`` is the single source of truth.
 
-    The install API response's ``installed_entities`` list must equal the
-    child rows exactly — the duplicate parent JSON column is dropped, so the
-    API can never disagree with what uninstall acts on. The migrated schema
-    must no longer carry the column either (migration 0311).
+    The install API entity list is loaded inside the org-RLS transaction and
+    threaded into the response, so it must equal the child rows exactly — and
+    it must do so under ENFORCED row-level security. The suite's normal
+    ``db_engine`` runs as the testcontainer SUPERUSER (BYPASSRLS), which
+    cannot catch a derivation that silently returns zero rows when the
+    transaction-scoped ``app.organisation_id`` GUC is unset, so the load is
+    exercised on the real ``modulo_app`` (NOBYPASSRLS) role here: visible
+    with the owning org's context set (the fix), hidden without it (proof the
+    policy is genuinely enforced on this connection). The migrated schema must
+    also no longer carry the duplicate JSON column (migration 0311).
     """
     pins = [
         {"slug": "input-schema", "version": "1.0"},
@@ -480,19 +487,42 @@ async def test_install_response_entity_list_matches_child_rows(
 
     install = await install_collection(db_session, org, user, collection_id)
     await db_session.commit()
+    install_id = install.install_id
 
-    response = await _install_response(db_session, install)
-
+    # Ground truth: the child rows as read by the BYPASSRLS superuser.
     child_result = await db_session.execute(
-        select(CollectionInstallEntity).where(CollectionInstallEntity.install_id == install.install_id)
+        select(CollectionInstallEntity).where(CollectionInstallEntity.install_id == install_id)
     )
     child_rows = child_result.scalars().all()
     # 2 schemas + 1 agent + 1 materialised pipeline, each stamped by
     # ``_stamp_install_id`` (proven by the round-trip test above) — a
-    # non-empty expectation keeps this comparison from passing vacuously.
+    # non-empty expectation keeps every comparison below from passing
+    # vacuously.
     assert len(child_rows) == 4
-
     expected = sorted((row.entity_type, str(row.entity_id)) for row in child_rows)
+
+    app_factory = async_sessionmaker(modulo_app_engine, expire_on_commit=False)
+
+    # Negative control: NO org context on the RLS-enforced role — the
+    # parent-derived policy fails closed and hides every child row. This is
+    # exactly what a post-transaction (context-expired) load would see, and
+    # proves the policy is genuinely enforced on this connection.
+    async with app_factory() as unscoped_session, unscoped_session.begin():
+        unscoped = await _load_installed_entities(unscoped_session, install_id)
+    assert not unscoped
+
+    # The fix: with the owning org's RLS context live inside the transaction,
+    # the derivation returns every child row.
+    async with app_factory() as app_session, app_session.begin():
+        await set_rls_org(app_session, org)
+        scoped = await _load_installed_entities(app_session, install_id)
+
+    reported_scoped = sorted((entry["entity_type"], entry["entity_id"]) for entry in scoped)
+    assert reported_scoped == expected
+
+    # The API response carries exactly that list (threaded by the endpoint
+    # from the in-transaction load).
+    response = await _install_response(db_session, install, scoped)
     reported = sorted((entry["entity_type"], entry["entity_id"]) for entry in response.installed_entities or [])
     assert reported == expected
 

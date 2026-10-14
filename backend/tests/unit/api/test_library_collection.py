@@ -1330,10 +1330,12 @@ class TestInstallCollectionService:
 class TestInstalledEntitiesSingleSourceOfTruth:
     """FAR-1754: ``collection_install_entity`` is the single source of truth.
 
-    The install API response's ``installed_entities`` list must be derived
-    from the child rows — the parent JSON column that used to duplicate the
-    same fact no longer exists — so what the API reports can never diverge
-    from what uninstall acts on.
+    The install API response's ``installed_entities`` list is loaded from the
+    child rows by the endpoint INSIDE its org-RLS transaction (the child
+    table's FORCE-RLS policy fails closed outside it) and threaded into the
+    response builder — the parent JSON column that used to duplicate the same
+    fact no longer exists, so what the API reports can never diverge from what
+    uninstall acts on.
     """
 
     def test_collection_install_model_has_no_installed_entities_column(self) -> None:
@@ -1341,15 +1343,10 @@ class TestInstalledEntitiesSingleSourceOfTruth:
 
         assert "installed_entities" not in CollectionInstall.__table__.columns
 
-    def test_install_response_derives_entities_from_child_rows(self) -> None:
-        from modulo.api.routes.library import _install_response
+    def test_load_installed_entities_reads_the_child_rows(self) -> None:
+        from modulo.api.routes.library import _load_installed_entities
 
-        install = _make_install_record()
-        # A stale JSON copy on the record: if the response ever reads one
-        # again (a revert to the dropped column), it reports THIS instead of
-        # the child rows and the assertion below fails.
-        install.installed_entities = [{"entity_type": "pipeline", "entity_id": str(uuid.uuid4())}]
-
+        install_id = uuid.uuid4()
         schema_id = uuid.uuid4()
         agent_id = uuid.uuid4()
         child_rows = []
@@ -1364,6 +1361,29 @@ class TestInstalledEntitiesSingleSourceOfTruth:
         session = AsyncMock()
         session.execute = AsyncMock(return_value=child_result)
 
+        loaded = asyncio.run(_load_installed_entities(session, install_id))
+
+        assert loaded == [
+            {"entity_type": "schema", "entity_id": str(schema_id)},
+            {"entity_type": "agent", "entity_id": str(agent_id)},
+        ]
+
+    def test_install_response_carries_the_caller_preloaded_entity_list(self) -> None:
+        from modulo.api.routes.library import _install_response
+
+        install = _make_install_record()
+        # A stale JSON copy on the record: the response must carry the list
+        # the CALLER loaded inside the RLS transaction, never anything read
+        # off the record (the JSON column no longer exists). A revert that
+        # re-reads the record reports THIS instead and fails the assertion.
+        install.installed_entities = [{"entity_type": "pipeline", "entity_id": str(uuid.uuid4())}]
+
+        preloaded = [
+            {"entity_type": "schema", "entity_id": str(uuid.uuid4())},
+            {"entity_type": "agent", "entity_id": str(uuid.uuid4())},
+        ]
+
+        session = AsyncMock()
         with (
             patch(
                 "modulo.api.routes.library.compute_runnable",
@@ -1372,12 +1392,9 @@ class TestInstalledEntitiesSingleSourceOfTruth:
             ),
             _patch_no_newer_version(),
         ):
-            resp = asyncio.run(_install_response(session, install))
+            resp = asyncio.run(_install_response(session, install, preloaded))
 
-        assert resp.installed_entities == [
-            {"entity_type": "schema", "entity_id": str(schema_id)},
-            {"entity_type": "agent", "entity_id": str(agent_id)},
-        ]
+        assert resp.installed_entities == preloaded
 
 
 class TestUninstallCollectionService:
