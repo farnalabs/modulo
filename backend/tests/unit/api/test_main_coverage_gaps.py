@@ -519,6 +519,27 @@ async def test_lifespan_seeds_demo_orgs_when_enabled(monkeypatch: pytest.MonkeyP
     assert seed_demo_orgs.await_count == 1
 
 
+@pytest.mark.anyio
+async def test_lifespan_is_fail_open_when_stall_attribution_install_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-1771: stall attribution is observability, never a boot requirement.
+    An install failure is logged and the app still finishes booting instead of
+    the exception propagating out of the lifespan."""
+    settings = _make_settings()
+    _patch_lifespan_seams(monkeypatch, settings)
+    monkeypatch.setattr(
+        "modulo.core.health_alerts.install_event_loop_stall_attribution",
+        MagicMock(side_effect=RuntimeError("install boom")),
+    )
+    with caplog.at_level(logging.ERROR, logger="modulo.api.main"):
+        async with main._lifespan(main.app):
+            pass
+
+    assert "startup.event_loop_stall_attribution_install_failed" in caplog.text
+
+
 _VALID_32 = "a" * 32
 _FERNET_KEY = Fernet.generate_key().decode()
 

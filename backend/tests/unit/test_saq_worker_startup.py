@@ -236,6 +236,23 @@ class TestStartupHook:
         spawn.assert_called_once()
         assert "saq_worker.event_loop_stall_attribution_install_failed" in caplog.text
 
+    async def test_attribution_install_cancellation_propagates(self) -> None:
+        """Cancellation is NOT a fail-open install failure: a CancelledError
+        from the install must re-raise (the worker's own cancellation
+        contract) so shutdown still propagates, rather than being logged and
+        swallowed as an observability failure."""
+        with (
+            patch(
+                "modulo.core.health_alerts.install_event_loop_stall_attribution",
+                side_effect=asyncio.CancelledError,
+            ),
+            patch("modulo.core.events.register_listeners") as reg,
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await sw._startup_event_bus_hook({})
+
+        reg.assert_not_called()
+
 
 class _BlockingPubSub:
     """Pattern subscription that confirms, then holds open until cancelled."""

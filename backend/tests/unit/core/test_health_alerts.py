@@ -1051,6 +1051,30 @@ def test_sampler_thread_logs_and_exits_when_it_raises(caplog: pytest.LogCaptureF
     assert len(failure_logs) == 1
 
 
+def test_short_source_path_keeps_the_path_when_no_marker_matches() -> None:
+    """A path carrying neither ``src/`` nor ``backend/`` (an installed wheel
+    under site-packages) is returned unchanged rather than truncated — the
+    fallback after the marker loop finds nothing."""
+    installed = "/opt/venv/lib/python3.12/site-packages/modulo/health_alerts.py"
+    assert ha._short_source_path(installed) == installed
+
+
+def test_attributed_frame_returns_none_without_a_frame() -> None:
+    """The sampler can observe a thread with no live Python frame (``None``
+    from ``sys._current_frames()``): attribution must answer ``None`` without
+    walking anything, never raise on the empty stack."""
+    assert ha._attributed_frame(None) is None
+
+
+def test_sampler_stop_before_start_is_a_safe_noop() -> None:
+    """``stop()`` on a sampler that never started (``_thread is None``) must
+    not try to join — a safe no-op, and idempotent on a second call."""
+    sampler = ha._LoopThreadSampler(target_thread_id=1, warn_ms=100)
+    sampler.stop()
+    sampler.stop()
+    assert sampler._thread is None
+
+
 async def test_install_arms_the_running_loop_slow_callback_threshold() -> None:
     """The knob also drives asyncio's own slow-callback warning: debug mode
     on and ``slow_callback_duration`` at the configured threshold — the
