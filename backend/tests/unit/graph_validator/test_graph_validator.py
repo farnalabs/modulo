@@ -8,6 +8,21 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from modulo.core.graph_validator import GraphValidator, ValidationResult
+from tests.unit.graph_validator._helpers import (
+    UUID_A as _UUID_A,
+)
+from tests.unit.graph_validator._helpers import (
+    UUID_B as _UUID_B,
+)
+from tests.unit.graph_validator._helpers import (
+    schema_version_row as _schema_version_row,
+)
+from tests.unit.graph_validator._helpers import (
+    schema_version_session as _session_returning_schema_versions,
+)
+from tests.unit.graph_validator._helpers import (
+    session_returning as _session_returning,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -25,18 +40,10 @@ def _snapshot(
     snap.schema_pins_json = schema_pins or []
     snap.connector_bindings_json = connector_bindings or []
     snap.model_backend_pins_json = model_backend_pins or []
+    # Explicit so an unset profile is genuinely absent (a bare MagicMock would
+    # be truthy and spuriously arm the environment-capability check).
+    snap.environment_profile_id = None
     return snap
-
-
-def _session_returning(rows: list[Any]) -> AsyncMock:
-    """Mock session whose execute() returns the given rows via .scalars().all()."""
-    session = AsyncMock()
-    scalars_result = MagicMock()
-    scalars_result.all.return_value = rows
-    execute_result = MagicMock()
-    execute_result.scalars.return_value = scalars_result
-    session.execute = AsyncMock(return_value=execute_result)
-    return session
 
 
 def _connector_instance(
@@ -70,9 +77,6 @@ def _model_backend(
     m.last_health_check_error = last_health_check_error
     return m
 
-
-_UUID_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-_UUID_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 
 _SIMPLE_GRAPH: dict[str, Any] = {
     "nodes": [{"id": _UUID_A}, {"id": _UUID_B}],
@@ -814,60 +818,6 @@ async def test_kickback_edge_excluded_from_schema_check():
 # ---------------------------------------------------------------------------
 # Deep schema compatibility (field presence + type)
 # ---------------------------------------------------------------------------
-
-
-def _schema_version_row(
-    schema_id: uuid.UUID,
-    definition_json: dict[str, Any],
-    *,
-    version_number: int = 1,
-    published: bool = True,
-) -> MagicMock:
-    sv = MagicMock()
-    sv.schema_id = schema_id
-    sv.version_number = version_number
-    sv.definition_json = definition_json
-    sv.published = published
-    sv.version = "1.0"
-    return sv
-
-
-def _session_returning_schema_versions(rows: list[MagicMock]) -> AsyncMock:
-    """Mock session whose execute returns SchemaVersion-like rows via scalars().all()
-    AND scalar_one_or_none() (both used by different code paths)."""
-    session = AsyncMock()
-    if not rows:
-        exc_result = MagicMock()
-        scalars_result = MagicMock()
-        scalars_result.all.return_value = []
-        exc_result.scalars.return_value = scalars_result
-        exc_result.scalar_one_or_none.return_value = None
-        exc_result.scalar_one.return_value = None
-        session.execute = AsyncMock(return_value=exc_result)
-        return session
-    if len(rows) == 1:
-        exc_result = MagicMock()
-        scalars_result = MagicMock()
-        scalars_result.all.return_value = rows
-        exc_result.scalars.return_value = scalars_result
-        exc_result.scalar_one_or_none.return_value = rows[0]
-        exc_result.scalar_one.return_value = rows[0]
-        session.execute = AsyncMock(return_value=exc_result)
-    else:
-        _rows = list(rows)
-
-        def _execute_side(*_a, **_kw):
-            r = MagicMock()
-            row = _rows.pop(0) if _rows else None
-            r.scalar_one_or_none.return_value = row
-            r.scalar_one.return_value = row
-            s = MagicMock()
-            s.all.return_value = [row] if row else []
-            r.scalars.return_value = s
-            return r
-
-        session.execute = AsyncMock(side_effect=_execute_side)
-    return session
 
 
 async def test_schema_field_presence_valid():

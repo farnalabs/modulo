@@ -6,6 +6,7 @@ connector type means adding one row to ``_BUILD_CASES`` — the factory is
 then regression-tested automatically.
 """
 
+import asyncio
 from typing import Any
 from unittest.mock import patch
 
@@ -186,6 +187,84 @@ def test_build_gitlab_self_hosted_base_url() -> None:
     assert isinstance(connector, GitLabConnector)
     assert connector.connector_type == ConnectorType.GITLAB
     assert connector._base_url == "https://gitlab.example.com/api/v4"
+
+
+# ── GHES base_url pass-through (FAR-1762) ─────────────────────────────────
+
+
+def test_build_github_ghes_base_url() -> None:
+    """A configured GHES base reaches the connector instead of github.com."""
+    connector = _build_connector("github", {"base_url": "https://ghe.example.com/api/v3"}, {"token": "gh_token"})
+    assert isinstance(connector, GitHubConnector)
+    assert connector._base_url == "https://ghe.example.com/api/v3"
+
+
+def test_build_github_default_base_url() -> None:
+    """No config keeps the github.com default."""
+    connector = _build_connector("github", {}, {"token": "gh_token"})
+    assert isinstance(connector, GitHubConnector)
+    assert connector._base_url == "https://api.github.com"
+
+
+def test_build_github_blank_base_url_falls_back_to_default() -> None:
+    """A present-but-blank ``base_url`` is 'no instance configured' — the
+    github.com default applies, it is never passed through as an empty URL."""
+    connector = _build_connector("github", {"base_url": "   "}, {"token": "gh_token"})
+    assert isinstance(connector, GitHubConnector)
+    assert connector._base_url == "https://api.github.com"
+
+
+@pytest.mark.parametrize("type_id", ["github", "github_actions_ci"])
+def test_build_github_family_null_base_url_falls_back_to_default(type_id: str) -> None:
+    """An explicit ``base_url: null`` is 'no instance configured' too — the
+    github.com default applies (the ``value is None`` arm of
+    ``_optional_base_url``), never a ``None`` passed through as the URL."""
+    connector = _build_connector(type_id, {"base_url": None}, {"token": "tok"})
+    assert connector._base_url == "https://api.github.com"
+
+
+def test_build_github_non_string_base_url_raises() -> None:
+    """A mis-typed ``base_url`` fails loudly at build time, not at request time."""
+    with pytest.raises(TypeError, match="base_url' must be a string"):
+        _build_connector("github", {"base_url": 123}, {"token": "gh_token"})
+
+
+def test_build_github_actions_ci_ghes_base_url() -> None:
+    """FAR-1762: the CI runner takes the same GHES pass-through."""
+    connector = _build_connector(
+        "github_actions_ci",
+        {"base_url": "https://ghe.example.com/api/v3"},
+        {"token": "gha_token"},
+    )
+    assert isinstance(connector, GitHubActionsCIRunner)
+    assert connector._base_url == "https://ghe.example.com/api/v3"
+
+
+def test_build_github_actions_ci_default_base_url() -> None:
+    connector = _build_connector("github_actions_ci", {}, {"token": "gha_token"})
+    assert isinstance(connector, GitHubActionsCIRunner)
+    assert connector._base_url == "https://api.github.com"
+
+
+@pytest.mark.parametrize("type_id", ["github", "github_actions_ci"])
+def test_github_family_client_targets_the_configured_ghes_base(monkeypatch: pytest.MonkeyPatch, type_id: str) -> None:
+    """The configured base is what the pinned transport actually addresses.
+
+    ``_client()`` builds the pinned client from ``self._base_url`` — assert on
+    the built client (its ``base_url``), not just the attribute, so a
+    re-hardcoded ``api.github.com`` inside ``_client`` fails here. The SSRF
+    resolver is stubbed so no real DNS lookup happens.
+    """
+    from modulo.core import ssrf
+
+    monkeypatch.setattr(ssrf, "_resolve_all_sync", lambda host: ["93.184.216.34"])
+    connector = _build_connector(type_id, {"base_url": "https://ghe.example.com/api/v3"}, {"token": "tok"})
+    assert isinstance(connector, (GitHubConnector, GitHubActionsCIRunner))
+    client = connector._client()
+    try:
+        assert str(client.base_url).rstrip("/") == "https://ghe.example.com/api/v3"
+    finally:
+        asyncio.run(client.aclose())
 
 
 # ── ticket-tracker provider dispatch ───────────────────────────────────────

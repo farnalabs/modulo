@@ -9,7 +9,7 @@ code:
   - backend/src/modulo/core/audit_logger/append_only.py
   - backend/src/modulo/core/audit_logger/background.py
   - backend/src/modulo/core/audit_logger/hashing.py
-  - backend/src/modulo/core/evidence_pack
+  - backend/src/modulo/core/evidence_pack/
   - backend/src/modulo/cli/evidence.py
   - backend/src/modulo/core/audit_coverage.py
   - backend/src/modulo/core/cron_helpers.py
@@ -276,14 +276,17 @@ guarded against tampering at both the ORM and the database layer.
   durable, filterable evidence storage, not a verifiable cross-org trail.
 
 ## QA History
-- 2026-10-14: **Improve Architecture product-map walk** — reconciled the
-  tracker with the manifest `feat-audit` registry, which carried the FAR-1697
-  offline-verifiable evidence surface while this entry lagged behind (shipped
-  behaviour a reader of the graph — or Assistant's docs indexer — could not
-  find). Added the checked behaviour line plus the `core/evidence_pack/`,
-  `core/audit_logger/hashing.py`, `cli/evidence.py` code citations and the
-  `test_evidence_pack.py` / `test_audit_evidence_pack_route.py` unit-test
-  citations. No behaviour change — graph accuracy only.
+- 2026-10-14: **Improve Architecture product-map walk** — reconciled this
+  tracker with FAR-1697 (PR #1761): the offline-verifiable evidence pack
+  shipped with a manifest-registry behaviour line but no human-readable
+  tracker home, so a reader of the graph (or Assistant's docs indexer) could
+  not find the `evidence-pack` / `verification-key` endpoints, the
+  `core/evidence_pack/` module, the `modulo evidence verify` CLI, or the
+  `hashing.py` extraction. Added the checked behaviour line plus the
+  `core/evidence_pack/`, `core/audit_logger/hashing.py`, `cli/evidence.py`
+  code citations and the `test_evidence_pack.py` /
+  `test_audit_evidence_pack_route.py` unit-test citations; the manifest
+  line is unchanged. No behaviour change — graph accuracy only.
   `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-08: **Audit-cleanup reconciliation (FAR-1561)** — three cleanups out
   of the FAR-1472/1549/1561/1574 audit work. (1) Deleted `run_scheduled_suite`
