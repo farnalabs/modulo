@@ -137,7 +137,12 @@ async def seed_org_guardrail_rows_for_pipeline(
     unguarded pipeline is never committed while an applied pin exists: silently
     degrading to zero rows here reproduces exactly the gap FAR-1593 closes
     (runs unguarded while ``GET /guardrails/config/drift`` reads ``clean``),
-    and the standing principle is that security paths fail closed. The error
+    and the standing principle is that security paths fail closed. This
+    fail-closed rule covers the snapshot only: a stored pin that is not a JSON
+    object degrades to a warning-and-no-op (0 rows; the pipeline commits,
+    unguarded) rather than raising, because the app writes only dict pins via
+    ``set_guardrail_pin`` — a non-dict value is reachable only by out-of-band DB
+    corruption and cannot be a pin the app produced. The fail-closed error
     surfaces as HTTP 422 out of ``create_pipeline`` / ``_clone_pipeline_config``
     — the same seam and status the adjacent ``create_or_update_eval`` →
     ``validate_guardrail_request`` guardrail validation uses — and MCP's
