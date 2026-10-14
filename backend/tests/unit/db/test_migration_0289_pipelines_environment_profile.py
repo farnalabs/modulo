@@ -24,7 +24,9 @@ Lenses:
   ``0305_guardrail_escalate_action`` chains onto 0304_metrics_staging_recorded_at_index, and
   ``0306_trigger_secret_encryption`` chains onto 0305_guardrail_escalate_action, and
   ``0307_runs_guardrail_override_resume_pending`` chains onto 0306_trigger_secret_encryption, and
-  ``0308_policy_gate_evaluation_mode`` chains onto 0307_runs_guardrail_override_resume_pending as the single
+  ``0308_runs_dispatch_phase_history`` chains onto ``0307_runs_guardrail_override_resume_pending``, and
+  ``0309_hitl_claims_decision_sweep`` chains onto ``0308_runs_dispatch_phase_history``, and
+  ``0310_policy_gate_evaluation_mode`` chains onto ``0309_hitl_claims_decision_sweep`` as the single
   linear head; the revision id matches the filename, and neither
   branch_labels nor depends_on is set (the pre-commit check-migration-heads
   hook and every ``test_single_head_*`` pin depend on that shape).
@@ -57,7 +59,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0289_pipelines_environment_profile"
 _MIGRATION_DOWN_REVISION = "0288_runs_execution_origin"
-_HEAD_MIGRATION = "0308_policy_gate_evaluation_mode"
+_HEAD_MIGRATION = "0310_policy_gate_evaluation_mode"
 _TABLE = "pipelines"
 _COLUMN = "environment_profile_id"
 _FK_NAME = "fk_pipelines_environment_profile_id"

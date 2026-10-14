@@ -19,6 +19,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from cryptography.fernet import Fernet
 
 from modulo.core.trigger_engine.slack_app_mention import (
     DuplicateWebhookError,
@@ -27,6 +28,7 @@ from modulo.core.trigger_engine.slack_app_mention import (
     SlackEventTypeError,
     SlackSignatureError,
     SlackTimestampExpiredError,
+    _resolve_signing_secret,
     _slack_dedup_hash,
     extract_challenge,
     handle_app_mention,
@@ -617,3 +619,48 @@ async def test_handle_app_mention_busy_lock_raises() -> None:
             slack_timestamp=str(int(time.time())),
             snapshot_id=_SNAP,
         )
+
+
+# ---------------------------------------------------------------------------
+# _resolve_signing_secret — FAR-1735 fail-closed arm (REAL resolver, no mock)
+# ---------------------------------------------------------------------------
+
+
+def _plain_session_mock() -> AsyncMock:
+    session = AsyncMock()
+    session.in_transaction = MagicMock(return_value=True)
+    session.info = {}
+    return session
+
+
+async def test_resolve_signing_secret_undecryptable_token_fails_closed() -> None:
+    """FAR-1735 slack_app_mention fail-closed arm: a structurally complete
+    Fernet token the configured key cannot decrypt raises
+    ``SlackSignatureError`` — driven through the REAL shared resolver and the
+    REAL scope-bound decode (no decode mock). Ciphertext is never used as
+    the signing secret."""
+    alien_token = Fernet(Fernet.generate_key().decode()).encrypt(b"alien-signing").decode()
+
+    with pytest.raises(SlackSignatureError, match="decryption failed"):
+        await _resolve_signing_secret(
+            _plain_session_mock(),
+            uuid.uuid4(),
+            {"signing_secret": alien_token},
+            _ORG,
+        )
+
+
+async def test_resolve_signing_secret_gaaaa_prefixed_plaintext_accepted() -> None:
+    """FAR-1735 consistency: a legacy plaintext that merely begins with
+    ``gAAAA`` is accepted unchanged (the warn-only shim) — never fed to the
+    decryptor and failed closed."""
+    tricky_plaintext = "gAAAA-not-actually-a-fernet-token"
+
+    resolved = await _resolve_signing_secret(
+        _plain_session_mock(),
+        uuid.uuid4(),
+        {"signing_secret": tricky_plaintext},
+        _ORG,
+    )
+
+    assert resolved == tricky_plaintext

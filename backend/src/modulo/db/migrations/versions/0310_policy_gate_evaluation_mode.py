@@ -1,7 +1,7 @@
 """Add ``policy_gates.evaluation_mode`` (FAR-939 chunk 12).
 
-Revision ID: 0308_policy_gate_evaluation_mode
-Revises: 0307_runs_guardrail_override_resume_pending
+Revision ID: 0310_policy_gate_evaluation_mode
+Revises: 0309_hitl_claims_decision_sweep
 Create Date: 2026-10-13
 
 Chunk 12 makes human review a NATIVE evaluation mode for a Policy Gate: a
@@ -43,8 +43,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0308_policy_gate_evaluation_mode"
-down_revision: str | None = "0307_runs_guardrail_override_resume_pending"
+revision: str = "0310_policy_gate_evaluation_mode"
+down_revision: str | None = "0309_hitl_claims_decision_sweep"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
