@@ -110,7 +110,9 @@ DISPATCH_TRACKER_ATTR = "_dispatch_phase_tracker"
 # ``dispatch_phase='claimed'`` stamp (see ``_CLAIM_UPDATE_SQL`` below) is the
 # guaranteed floor and resets on every re-claim; these later entries are
 # best-effort instrumentation layered on top. ``PHASE_CLAIMED`` is
-# deliberately excluded — re-writing it here would duplicate the floor.
+# deliberately excluded — re-writing it here would duplicate the floor
+# (FAR-1714: the claim's own history entry rides the claim statement itself,
+# so a tracker-recorded ``claimed`` would also duplicate the timeline).
 # FAR-1422: ``PHASE_FIRST_NODE_DISPATCHED`` makes the pre-node vs
 # node-started transition durable — a run that STARTED a node then hung
 # persists ``first_node_dispatched`` instead of looking like it never
@@ -137,6 +139,13 @@ DURABLE_PHASES: frozenset[str] = frozenset(
 # the exact contract this writer already promises. N/A, no change.
 PHASE_WRITE_TIMEOUT_SECONDS = 2.0
 
+# FAR-1714: bound on the dropped-write counter bump (``_record_drop``).
+# DELIBERATELY tighter than ``PHASE_WRITE_TIMEOUT_SECONDS``: instrumenting an
+# abandoned write must not cost as much as the abandoned write itself, or
+# every drop would double the flush latency exactly when the DB is saturated
+# (the FAR-1511 condition this counter exists to expose).
+DROP_COUNTER_WRITE_TIMEOUT_SECONDS = 0.5
+
 # FAR-1088 (W2): the single guarded UPDATE for a post-claim phase entry.
 #
 # * ``claim_token=:tok`` fences superseded attempts: a successor re-claim
@@ -148,18 +157,53 @@ PHASE_WRITE_TIMEOUT_SECONDS = 2.0
 # * Both the SET value and the guard use the DB clock (``now()``), the same
 #   clock the claim's floor stamp used — so client/DB clock skew can never
 #   reject a legitimate forward entry.
+# * FAR-1714: the same guarded SET appends ``{"phase", "entered_at"}`` onto
+#   the ``dispatch_phase_history`` JSONB array, so the full per-attempt phase
+#   timeline is queryable after the fact (only the LAST phase survives in the
+#   two scalar columns). The append is inside this statement — never a second
+#   write — so it inherits the token fence AND the monotonic guard: every
+#   append both stores ``entered_at=now()`` and is guarded by
+#   ``entered_at <= now()``, hence the stored ``dispatch_phase_entered_at``
+#   is always the timestamp of the LAST history entry, and an out-of-order
+#   commit can neither move the phase backwards nor splice an older entry
+#   after a newer one (history stays non-decreasing).
+# ``:phase`` is used twice (the scalar SET and the JSONB append), so the
+# append's occurrence is CAST to ``text`` explicitly: without it asyncpg/
+# Postgres cannot infer the parameter's type from the variadic-``any``
+# ``jsonb_build_object`` and the statement fails with "could not determine
+# data type of parameter $1".
 _PHASE_UPDATE_SQL = text(
-    "UPDATE runs SET dispatch_phase=:phase, dispatch_phase_entered_at=now() "
+    "UPDATE runs SET dispatch_phase=:phase, dispatch_phase_entered_at=now(), "
+    "dispatch_phase_history=coalesce(dispatch_phase_history, '[]'::jsonb)"
+    "||jsonb_build_array(jsonb_build_object('phase', CAST(:phase AS text), 'entered_at', now())) "
     "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok "
     "AND (dispatch_phase_entered_at IS NULL OR dispatch_phase_entered_at <= now()) "
     "RETURNING id"
+)
+
+# FAR-1714: count an abandoned (timed-out / failed) durable phase write on the
+# run row — the durable saturation signal FAR-1511 could previously only see
+# in ephemeral worker logs (10-13 drops/min on prod, unobservable after the
+# fact).
+#
+# * NOT claim-token fenced, DELIBERATELY: a drop is an observation about the
+#   DATABASE being slow, not attempt state. The write is additive
+#   (``+ 1`` — it never overwrites anything), so a superseded attempt's
+#   drops still belong on the row; they are exactly the signal wanted when
+#   saturation outlives one attempt.
+# * RLS still applies — the org context is set on the connection first, the
+#   same way ``DispatchPhaseWriter._write`` does it.
+# * Not monotonic-guarded: a drop can be recorded whether or not a phase
+#   entry landed (the whole point is counting the entries that did NOT).
+_DROP_COUNTER_UPDATE_SQL = text(
+    "UPDATE runs SET dispatch_phase_write_drops=dispatch_phase_write_drops+1 WHERE id=:rid AND organisation_id=:oid"
 )
 
 
 class DispatchPhaseWriter:
     """Durable, best-effort writer for post-claim dispatch-phase entries.
 
-    FAR-1088 (W2). Four load-bearing properties (a previous design violated
+    FAR-1088 (W2). Five load-bearing properties (a previous design violated
     the middle two and was rejected):
 
     1. **Single-flight + coalescing** — at most ONE write is in flight per
@@ -175,6 +219,11 @@ class DispatchPhaseWriter:
        token fence (see ``_PHASE_UPDATE_SQL``).
     4. **No clearing** — nothing here resets the columns; only a re-claim
        does (and the columns are internal, not API-projected).
+    5. **Dropped writes are counted durably** (FAR-1714) — an abandoned write
+       bumps ``runs.dispatch_phase_write_drops`` so saturation is visible
+       from the DB, not only from ephemeral worker logs. The bump is itself
+       best-effort: bounded by ``DROP_COUNTER_WRITE_TIMEOUT_SECONDS``,
+       fail-soft, and never raises into the run.
     """
 
     def __init__(
@@ -273,6 +322,7 @@ class DispatchPhaseWriter:
                     phase,
                     self._timeout_seconds,
                 )
+                await self._record_drop()
             except Exception:
                 _log.warning(
                     "dispatch_phase.write_failed run=%s phase=%s (dropped)",
@@ -280,6 +330,51 @@ class DispatchPhaseWriter:
                     phase,
                     exc_info=True,
                 )
+                await self._record_drop()
+
+    async def _record_drop(self) -> None:
+        """Durably count one abandoned phase write (FAR-1714).
+
+        Called from ``_drain``'s timeout and failure arms — the two places a
+        write is abandoned. Best-effort like every write here: bounded,
+        fail-soft, and NEVER raising into the run (the WARNING log above is
+        the guaranteed signal; the counter is the durable one). A bump that
+        itself times out or fails is logged and dropped — a counter cannot
+        count its own failure. ``CancelledError`` propagates: worker/job
+        shutdown is not ours to swallow (mirrors ``_drain``).
+
+        Deliberately NOT counted: ``record`` scheduling drops with no running
+        loop — counting those needs a write, which needs the loop that is
+        missing, and the flush-time log line remains their signal.
+        """
+        try:
+            await asyncio.wait_for(self._bump_drop_counter(), timeout=DROP_COUNTER_WRITE_TIMEOUT_SECONDS)
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError:
+            _log.warning(
+                "dispatch_phase.drop_counter_timeout run=%s (dropped)",
+                self._run_id,
+            )
+        except Exception:
+            _log.warning(
+                "dispatch_phase.drop_counter_write_failed run=%s (dropped)",
+                self._run_id,
+                exc_info=True,
+            )
+
+    async def _bump_drop_counter(self) -> None:
+        async with self._engine.connect() as c:
+            # RLS org context — the runs policy matches zero rows without it.
+            await c.execute(
+                text(_SQL_SET_ORG_ID),
+                {"val": self._org_id},
+            )
+            await c.execute(
+                _DROP_COUNTER_UPDATE_SQL,
+                {"rid": self._run_id, "oid": self._org_id},
+            )
+            await c.commit()
 
     async def _write(self, phase: str) -> None:
         async with self._engine.connect() as c:
@@ -705,10 +800,26 @@ def _resolve_claim_cap(claim_cap: int | None) -> int:
 # it is written on EVERY claim (execute re-dispatch/re-claim AND the HITL
 # resume claim), a re-claim resets the phase, so a re-woken run can never
 # report a previous attempt's stale phase. Every claim site stamps.
+#
+# FAR-1714: each claim ALSO appends a ``{"phase": "claimed", "entered_at"}``
+# entry onto ``dispatch_phase_history`` in the same statement. The scalar
+# floor keeps only the CURRENT attempt's claim time (the later durable phases
+# overwrite it), but history is cumulative and NEVER reset — so the claim
+# entry doubles as the ATTEMPT BOUNDARY: split the array on its ``claimed``
+# entries and every attempt's claim→first-node interval decomposes from the
+# DB, including the wedged attempt a later re-claim superseded (exactly the
+# 10-08→10-12 incident window that ephemeral logs could not reconstruct).
+# One statement, no extra connection, same guaranteed-succeeds write as the
+# floor stamp.
+_CLAIM_HISTORY_APPEND = (
+    "dispatch_phase_history=coalesce(dispatch_phase_history, '[]'::jsonb)"
+    "||jsonb_build_array(jsonb_build_object('phase', 'claimed', 'entered_at', now())) "
+)
 _CLAIM_UPDATE_SQL = text(
-    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, "
-    "dispatch_phase='claimed', dispatch_phase_entered_at=now() "
-    "WHERE id=:rid AND organisation_id=:oid "
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, "  # nosec B608  # noqa: S608 - concatenates module constants only (never caller data)
+    "dispatch_phase='claimed', dispatch_phase_entered_at=now(), "
+    + _CLAIM_HISTORY_APPEND
+    + "WHERE id=:rid AND organisation_id=:oid "
     "AND (status = 'pending' "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
     "AND claim_count < :claim_cap "
@@ -716,9 +827,10 @@ _CLAIM_UPDATE_SQL = text(
 )
 
 _CLAIM_UPDATE_SQL_WITH_TOKEN = text(
-    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok, "
-    "dispatch_phase='claimed', dispatch_phase_entered_at=now() "
-    "WHERE id=:rid AND organisation_id=:oid "
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok, "  # nosec B608  # noqa: S608 - concatenates module constants only (never caller data)
+    "dispatch_phase='claimed', dispatch_phase_entered_at=now(), "
+    + _CLAIM_HISTORY_APPEND
+    + "WHERE id=:rid AND organisation_id=:oid "
     "AND (status = 'pending' "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
     "AND claim_count < :claim_cap "
@@ -3033,10 +3145,20 @@ async def stale_run_recovery_sweep(
 # strand it forever. Atomicity fences concurrent claims instead: the first
 # claimer moves the row to 'running', a concurrent claimer then sees a fresh
 # heartbeat and loses.
+# FAR-1728: both resume claim variants also clear
+# ``guardrail_override_resume_pending`` — the dedicated marker column the
+# guardrail-override flip sets (recovery.guardrail_override, node-started
+# branch only) and the reconcile self-heal leg selects on. This statement is
+# the SINGLE CLEARER: a successful claim stamps ``dispatch_phase='claimed'``
+# AND clears the marker in the same UPDATE, so the row leaves the self-heal
+# class and the flag never lingers past a successful claim. The clear is
+# unconditional and safe for every other resume-claim caller (HITL resume,
+# recover-node): those rows already carry false, so the write is a no-op
+# for them.
 _RESUME_CLAIM_UPDATE_SQL = text(
-    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, "
-    "dispatch_phase='claimed', dispatch_phase_entered_at=now() "
-    "WHERE id=:rid AND organisation_id=:oid "
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, "  # nosec B608  # noqa: S608 - concatenates module constants only (never caller data)
+    "dispatch_phase='claimed', dispatch_phase_entered_at=now(), "
+    "guardrail_override_resume_pending=false, " + _CLAIM_HISTORY_APPEND + "WHERE id=:rid AND organisation_id=:oid "
     "AND (status IN ('awaiting_human', 'claimed', 'hitl_parked') "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
     "AND claim_count < :claim_cap "
@@ -3044,9 +3166,9 @@ _RESUME_CLAIM_UPDATE_SQL = text(
 )
 
 _RESUME_CLAIM_UPDATE_SQL_WITH_TOKEN = text(
-    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok, "
-    "dispatch_phase='claimed', dispatch_phase_entered_at=now() "
-    "WHERE id=:rid AND organisation_id=:oid "
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok, "  # nosec B608  # noqa: S608 - concatenates module constants only (never caller data)
+    "dispatch_phase='claimed', dispatch_phase_entered_at=now(), "
+    "guardrail_override_resume_pending=false, " + _CLAIM_HISTORY_APPEND + "WHERE id=:rid AND organisation_id=:oid "
     "AND (status IN ('awaiting_human', 'claimed', 'hitl_parked') "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
     "AND claim_count < :claim_cap "
@@ -3092,9 +3214,15 @@ def build_resume_claim_update(
     FAR-1088: both resume claim variants stamp ``dispatch_phase='claimed'`` +
     its entry timestamp in this same statement, exactly like the execute
     claim variants (``build_claim_update``) — a resumed run's phase floor is
-    written atomically with the resume claim, so every claim site stamps and
+    written atomically with the resume claim, and every claim site stamps and
     a re-claim always resets the phase (see the note above
     ``_CLAIM_UPDATE_SQL``).
+
+    FAR-1728: both variants ALSO clear ``runs.guardrail_override_resume_pending``
+    in this same statement — the single clearer of the guardrail-override
+    resume self-heal marker (see the template comment above), so a successful
+    claim takes the row out of the self-heal class and clears the flag in one
+    atomic write.
     """
     if claim_token is not None:
         return _RESUME_CLAIM_UPDATE_SQL_WITH_TOKEN

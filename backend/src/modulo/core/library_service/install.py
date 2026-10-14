@@ -919,7 +919,15 @@ async def install_collection(
     # 2. Resolve manifest pins
     # Local org collections carry the pins on the ``manifest_pins`` column;
     # built-in modulo/community collections carry them in ``content_json``.
-    manifest_pins = collection.manifest_pins or (collection.content_json or {}).get("manifest_pins") or []
+    # The legacy ``content_json["pins"]`` key (written by an earlier version of
+    # the API routes) is accepted as a last resort so already-persisted rows
+    # keep resolving; the ``manifest_pins`` COLUMN stays the first source.
+    manifest_pins = (
+        collection.manifest_pins
+        or (collection.content_json or {}).get("manifest_pins")
+        or (collection.content_json or {}).get("pins")
+        or []
+    )
     resolved_pins: list[LibraryPrimitive] = []
     for pin in manifest_pins:
         slug = pin.get("slug", "")
@@ -945,7 +953,13 @@ async def install_collection(
     # 3. Build the materialize_import bundle
     bundle = _build_bundle_from_pins(resolved_pins)
 
-    # 4. Refuse if the collection is already installed in this organisation
+    # 4. Refuse if the collection is already installed in this organisation.
+    # No manual ``deleted_at IS NULL`` predicate: since 0309
+    # ``CollectionInstall`` inherits ``SoftDeleteMixin``, so the global
+    # ``do_orm_execute`` filter already hides soft-deleted (uninstalled) rows —
+    # a reinstall after uninstall passes this check, and the partial unique
+    # index on (organisation_id, collection_id) WHERE deleted_at IS NULL lets
+    # the new row coexist with the retired one.
     existing_stmt = select(CollectionInstall).where(
         CollectionInstall.organisation_id == org_id,
         CollectionInstall.collection_id == collection_row_id,
@@ -966,6 +980,7 @@ async def install_collection(
         organisation_id=org_id,
         status="installed",
         community_sourced=collection.source in ("community", "registry"),
+        created_by=created_by,
     )
     session.add(install)
     await session.flush()

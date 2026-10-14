@@ -23,7 +23,9 @@ unit-tests:
   - backend/tests/unit/api/test_admin_tiers_endpoint.py
   - backend/tests/unit/api/test_stripe_webhook.py
   - backend/tests/unit/api/test_viewmodel_license.py
+  - backend/tests/unit/api/test_viewmodel_resolve_tier.py
   - backend/tests/unit/api/test_admin_orgs_coverage_gaps.py
+  - backend/tests/unit/mcp/test_mcp_governance_read_tools.py
   - backend/tests/unit/test_license_adversarial.py
   - backend/tests/unit/test_team_license_activation.py
 bdd:
@@ -49,8 +51,8 @@ Licensing manages Ed25519-signed license keys and the Community / Team tier gate
 the feature set for its tier, gates Team-scoped surfaces (SSO, team RBAC, audit viewer,
 admin spend limits) with a 402 when absent or expired, and backs the admin license-status,
 tier-catalogue and feature-flag inspection endpoints. (The public, unauthenticated
-`/api/v1/license` surface resolves the deployment-level licence ladder — the in-memory
-licence, then a verified env-var key — and reports community / `is_valid: false` when
+`/api/v1/license` surface resolves the deployment-level licence ladder - the in-memory
+licence, then a verified env-var key - and reports community / `is_valid: false` when
 neither is valid; see Behaviours.)
 
 ## Behaviours
@@ -95,7 +97,7 @@ neither is valid; see Behaviours.)
 - [x] Stripe purchase webhook: POST `/api/v1/webhooks/stripe` verifies the raw body
       against its `Stripe-Signature` header (HMAC-SHA256 over `<timestamp>.<raw_body>`
       with a ±300s replay window) and FAILS CLOSED (400) on a missing / invalid /
-      tampered / stale-timestamp signature or a non-JSON payload — never reaching
+      tampered / stale-timestamp signature or a non-JSON payload - never reaching
       fulfilment; a valid `invoice.paid` dispatches `fulfil_team_purchase` exactly once
       as a background task with the `customer_email` and `org_name` extracted,
       `checkout.session.completed` is acknowledged but NEVER fulfils (the FAR-180
@@ -107,48 +109,93 @@ neither is valid; see Behaviours.)
       signed during `fulfil_team_purchase` does not verify against the
       deployment's own configured public key (a misconfigured keypair), the key
       is NOT emailed and the Stripe event is left UNCLAIMED so a corrected
-      deployment plus Stripe's retry can still fulfil the purchase — mirroring
+      deployment plus Stripe's retry can still fulfil the purchase - mirroring
       `admin_license.issue_license`, which answers 500 for the same condition
       instead of returning a bad key (`test_stripe_fulfilment.py`,
       `test_unverifiable_generated_key_is_not_emailed_or_claimed`)
 - [x] Licence-status cache is invalidated on every licence mutation: the admin
       status cache (`license:{org_id}`, 60s TTL in `admin_license.py`) is busted
-      when the underlying licence changes — a system upload
+      when the underlying licence changes - a system upload
       (`POST /api/v1/admin/license`) deletes every `license:*` entry, and an
       org-level rotate/clear (`PUT/DELETE /api/v1/admin/orgs/{org_id}/license`)
-      deletes that org's entry — so the next status read reflects the new state
+      deletes that org's entry - so the next status read reflects the new state
       instead of serving the stale resolution until TTL. Invalidation is
       best-effort (fails open with a logged warning; the licence mutation has
       already committed) (`test_admin_license.py`
       `TestLicenseCacheInvalidationSystemChange`,
       `test_admin_orgs_coverage_gaps.py` set/remove invalidation tests; FAR-1719)
+- [x] Env-var licence keys are VERIFIED (Ed25519 signature + expiry via
+      `parse_and_verify`), never trusted on mere presence, at every
+      licence-reading surface: the `/viewmodel/current` plan tier
+      (`viewmodel._resolve_tier` rung 3 - an unverifiable key falls through to
+      community instead of reporting "team"; already verified by FAR-1720 and
+      now routed through the shared helper), the admin feature-flag list's
+      `license.has_license_key` and `license.is_valid`
+      (`admin_feature_flags._build_registry` / `_license_is_valid` - `is_valid`
+      is no longer hardcoded `true`), the MCP `list_feature_flags` tool's
+      licence block (same `has_key` rule plus a truthful `is_valid`), the
+      env-SAML availability boolean (`sso.is_saml_available`), and the
+      env-SAML config gate (`auth.sso._resolve_saml_config`, which fails CLOSED
+      with the same 400 message as an absent key). A valid signed key still
+      enables every one of those surfaces
+      (`test_viewmodel_resolve_tier.py`, `test_admin_feature_flags.py`
+      `TestBuildRegistryEnvKeyVerification` / `TestLicenseIsValid`,
+      `test_mcp_governance_read_tools.py`, `test_sso.py`
+      `TestSamlEnvLicenseVerification`, `sso_saml.feature`; FAR-1733)
 
 ## Known Gaps
 
 - **License-driven gating is not applied to EVERY registered `feat-*` surface**
-  — `require_feature` / `get_plan_context` gate the licensed Team-tier surfaces
+  - `require_feature` / `get_plan_context` gate the licensed Team-tier surfaces
   (SSO providers, `/api/v1/teams`, audit export, admin spend limits), not the
   whole feature registry (tracked as the manifest `feat-license` unchecked
   deferral). The previously-tracked "`stripe_webhook.py` and `admin_tiers.py`
   are cited as adjacents but not behaviour-covered" gap was closed by the
-  2026-09-23 product-map walk — the tier catalogue now has executing BDD
+  2026-09-23 product-map walk - the tier catalogue now has executing BDD
   coverage (`admin/tier_catalog.feature`) and the Stripe purchase webhook ships
   a dedicated executing BDD surface (`licensing/stripe_billing.feature`), both
   cited above.
-- **`admin_feature_flags.list_feature_flags` hardcodes `license.is_valid = True`**
-  regardless of whether a key exists, verifies, or has expired (the MCP
-  `list_feature_flags` tool mirrors the same hardcode in `mcp_server.py`).
-  The public `/api/v1/license` surface was unified with the real licence
-  resolution by FAR-1720; this admin/MCP surface still reports a constant
-  `is_valid: true` and is a follow-up, not part of that fix.
 
 ## QA History
 
-- 2026-10-13: **FAR-1720** — unified the public `/api/v1/license` surface
+- 2026-10-13: **FAR-1733** - replaced env-var licence-key PRESENCE-trust with
+  verification at the remaining surfaces. `viewmodel._resolve_tier` rung 3 had
+  already been made to verify via `parse_and_verify` by **FAR-1720** earlier the
+  same day, so FAR-1733 only routes it through the shared helper (behaviour
+  unchanged); the surfaces actually fixed here are `admin_feature_flags`'s
+  `_build_registry` and the MCP `list_feature_flags` tool (which counted the
+  env key on presence for `has_license_key` AND hardcoded
+  `license.is_valid = True`), `sso.is_saml_available` (a present env key
+  enabled env-SAML), and `auth.sso._resolve_saml_config` (any non-empty key
+  satisfied the Team-feature gate - fail-open). All now
+  verify the key through one shared helper (`core.license.verify_license_key`,
+  the session-free form of the canonical `_resolve_paid_plan` rung-3 check):
+  an unverifiable/expired key falls through to community / `false` on the
+  reporting surfaces and FAILS CLOSED on the SSO security gates (the env-SAML
+  config gate raises the same 400 "requires a license key" message as an
+  absent key, so the pre-auth surface never discloses whether a key is
+  configured). The admin/MCP `is_valid` blocks now report whether a valid
+  licence actually resolved (in-memory, verified env key, or verified
+  org-level key), which resolves the residual "hardcoded `is_valid: true`"
+  gap FAR-1720 left for this entry. Proved by regression tests that FAIL
+  against the old code at those fixed surfaces: `test_admin_feature_flags.py`
+  (`TestBuildRegistryEnvKeyVerification`, `TestLicenseIsValid`, and the
+  endpoint `is_valid` block), `test_mcp_governance_read_tools.py`
+  (invalid env key → `has_license_key=false`/`is_valid=false`; verified org
+  key distinction), and `test_sso.py` `TestSamlEnvLicenseVerification`
+  (invalid key → env-SAML unavailable / config raises / login route 400;
+  valid key still enables each surface end-to-end). The SAML BDD steps
+  (`sso_saml.feature`, `sso_team_mapping.feature`) now carry a genuinely
+  signed key. `test_viewmodel_resolve_tier.py` pins the FAR-1720-verified rung
+  against the shared-helper refactor (it passes against main too - the rung
+  was already verified). Status stays `partial` (the manifest's
+  universal-gating deferral is unchanged).
+
+- 2026-10-13: **FAR-1720** - unified the public `/api/v1/license` surface
   with the real licence resolution. `viewmodel.license_info` previously
   reported `tier = "team"` iff `settings.modulo_license_key` was non-empty,
   hardcoded `features: ["notifications"]`, and always answered
-  `is_valid: True` — it trusted the env-var key on mere presence and never
+  `is_valid: True` - it trusted the env-var key on mere presence and never
   consulted `get_license()`, so it could disagree with every other licence
   surface. It now mirrors rungs 2-3 of the canonical ladder
   (`feature_flags._resolve_paid_plan`): the in-memory licence
@@ -172,11 +219,11 @@ neither is valid; see Behaviours.)
   under Known Gaps (out of scope here). Status stays `partial` (the
   manifest's universal-gating deferral is unchanged).
 
-- 2026-10-12: **Improve Architecture product-map walk** — Stripe fulfilment
+- 2026-10-12: **Improve Architecture product-map walk** - Stripe fulfilment
   error-path hardening. `core/stripe_fulfilment.py::fulfil_team_purchase`
   logged a warning and then STILL emailed the generated licence key when the key
   failed verification against the deployment's own public key (a misconfigured
-  keypair), and then claimed the event — so the customer received a licence the
+  keypair), and then claimed the event - so the customer received a licence the
   product rejects on upload and Stripe was told the purchase was fulfilled, with
   no retry. The path now fails CLOSED: no email, no claim, `return None`, so a
   corrected deployment plus Stripe's retry can still fulfil (mirroring
@@ -192,13 +239,13 @@ neither is valid; see Behaviours.)
   resolution gap. Status stays `partial` (the manifest's universal-gating
   deferral is unchanged).
 
-- 2026-10-12: **FAR-1719** — closed the licence-status cache-invalidation gap
+- 2026-10-12: **FAR-1719** - closed the licence-status cache-invalidation gap
   raised by the improve-architecture `feat-license` pass. A system upload
   (`POST /api/v1/admin/license`) now busts every `license:*` Redis entry, and
   an org-level rotate/clear (`PUT/DELETE /api/v1/admin/orgs/{org_id}/license`)
   busts the mutated org's `license:{org_id}` entry. Both invalidations are
   best-effort (fail open with a logged `license.cache_invalidate_failed`
-  warning) — the licence mutation has already committed, so a Redis failure
+  warning) - the licence mutation has already committed, so a Redis failure
   must not turn the request into a 500 (commit-then-error). Regression tests
   drive the real routes over a shared fakeredis server and prove the second
   status read reflects the new licence rather than the stale cache
@@ -209,21 +256,21 @@ neither is valid; see Behaviours.)
   licence mutation" gap is resolved. The public `/api/v1/license` surface is
   intentionally untouched (FAR-1720).
 
-- 2026-09-29: **Improve Architecture product-map walk** — reconciled the
+- 2026-09-29: **Improve Architecture product-map walk** - reconciled the
   tracker frontmatter `status:` with the manifest `feat-license` registry: the
   entry now reads `status: partial` (matching the manifest's unchecked
   "license-driven gating is not applied to EVERY registered `feat-*` surface"
   deferral, now also named in Known Gaps) instead of `covered`. The two layers
-  previously disagreed on the same feature's coverage — a reader of the graph
+  previously disagreed on the same feature's coverage - a reader of the graph
   got the opposite answer from the machine layer Assistant reads from the
   manifest.
 
-- 2026-09-25: **Improve Architecture product-map walk** — sharpened the
+- 2026-09-25: **Improve Architecture product-map walk** - sharpened the
   manifest `feat-license` registry entry: the shipped composition-root gating
   (`require_feature` / `get_plan_context`, Team-tier 402 gates verified here) is now
   ticked, while the not-yet-universal "gating across EVERY registered feature"
-  claim stays unchecked (partial). No behaviour change — registry accuracy only.
-- 2026-09-23: **product-map review pass** — closed `feat-license`'s
+  claim stays unchecked (partial). No behaviour change - registry accuracy only.
+- 2026-09-23: **product-map review pass** - closed `feat-license`'s
   "`stripe_webhook.py` / `admin_tiers.py` not behaviour-covered" gap
   (`docs/product-map/licensing/license.md`). Registered the new
   `licensing/stripe_billing.feature` into the executing BDD suite from the new
@@ -244,7 +291,7 @@ neither is valid; see Behaviours.)
   `test_admin_tiers_endpoint.py` / `test_stripe_webhook.py` to the unit-test
   citations. `_ORPHANED_BDD_FEATURES` stays empty.
 
-- 2026-09-14: **product-map review pass** — closed the "no executing BDD
+- 2026-09-14: **product-map review pass** - closed the "no executing BDD
   surface for feature-flag inspection" gap: wired `licensing/feature_flag_inspection.feature`
   into the executing suite via the new `steps/test_feature_flag_inspection.py` (5 scenarios)
   and dropped the file from the tracked orphaned-BDD debt list (`_ORPHANED_BDD_FEATURES`).
@@ -254,7 +301,7 @@ neither is valid; see Behaviours.)
   presence, the unknown-flag 404, the toggle override write-back (`overridden: true`) and
   the public `/api/v1/license` surface. Feature-flag inspection is no longer unit-tested only.
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass** - extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/settings/license`: the whole-page view(s) `SettingsLicenseView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -262,7 +309,7 @@ neither is valid; see Behaviours.)
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-27: **product-map review pass** — added this behaviour-tracker
+- 2026-08-27: **product-map review pass** - added this behaviour-tracker
   for the registered manifest feature `feat-license`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `core/license.py`,
   `core/license_signing.py`, `api/routes/admin_license.py` and the licensing BDD/unit

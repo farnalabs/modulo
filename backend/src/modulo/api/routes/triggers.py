@@ -53,7 +53,7 @@ from modulo.api.team_scope import (
 )
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
-from modulo.auth.secret_storage import _is_encrypted_token, encrypt_stored_secret
+from modulo.auth.secret_storage import encrypt_stored_secret, is_encrypted_secret
 from modulo.core.audit_coverage import audited
 from modulo.core.cron_helpers import (
     _count_ongoing_runs,
@@ -499,12 +499,24 @@ def _merge_trigger_config(current: dict[str, Any] | None, update: dict[str, Any]
 _SECRET_CONFIG_KEYS = TRIGGER_CONFIG_SECRET_KEYS
 
 
-def _encrypt_trigger_config_secrets(config: dict[str, Any] | None, fernet_key: str) -> dict[str, Any]:
+def _encrypt_trigger_config_secrets(
+    config: dict[str, Any] | None,
+    fernet_key: str,
+    old_fernet_key: str = "",
+) -> dict[str, Any]:
     """Encrypt known secret fields in a trigger config_json before storage.
 
     Only encrypts values that are plaintext strings (not already encrypted
     bytes/base64 strings or masked placeholders). Existing encrypted values
     are left unchanged so updates are idempotent.
+
+    FAR-1735: classification is the :func:`is_encrypted_secret`
+    DECRYPTABILITY probe, not the ``gAAAA`` prefix heuristic — a plaintext
+    secret that merely begins with ``gAAAA`` is still encrypted (the prefix
+    check stored such values in the clear, and the read path then failed
+    closed on them permanently). *old_fernet_key* (the rotation window's
+    previous key, when set) is probed too, so ciphertext under the old key
+    is never double-encrypted mid-rotation.
 
     FAR-1732: encryption failure FAILS CLOSED — it re-raises (after a
     structured log) rather than silently persisting the plaintext secret
@@ -516,7 +528,12 @@ def _encrypt_trigger_config_secrets(config: dict[str, Any] | None, fernet_key: s
     result = dict(config)
     for key in _SECRET_CONFIG_KEYS:
         val = result.get(key)
-        if isinstance(val, str) and val and val != SENSITIVE_VALUE_MASK and not _is_encrypted_token(val):
+        if (
+            isinstance(val, str)
+            and val
+            and val != SENSITIVE_VALUE_MASK
+            and not is_encrypted_secret(val, fernet_key, old_fernet_key)
+        ):
             try:
                 result[key] = encrypt_stored_secret(val, fernet_key).decode()
             except Exception:
@@ -1316,7 +1333,9 @@ async def create_trigger(
                 # A fresh ongoing trigger must fire on the first scheduler tick
                 # (the scan selects next_fire_at IS NULL OR due).
                 next_fire_at = datetime.datetime.now(datetime.UTC)
-            encrypted_config = _encrypt_trigger_config_secrets(req.config_json, settings.fernet_key)
+            encrypted_config = _encrypt_trigger_config_secrets(
+                req.config_json, settings.fernet_key, settings.fernet_key_old
+            )
             trigger = Trigger(
                 organisation_id=principal.organisation_id,
                 pipeline_id=pipeline_id,
@@ -1412,7 +1431,7 @@ async def _apply_trigger_update(
     if req.config_json is not None:
         merged = _merge_trigger_config(trigger.config_json, req.config_json)
         _validate_trigger_config_keys(merged, context="merged config_json")
-        trigger.config_json = _encrypt_trigger_config_secrets(merged, settings.fernet_key)
+        trigger.config_json = _encrypt_trigger_config_secrets(merged, settings.fernet_key, settings.fernet_key_old)
     if req.cron_expression is not None:
         trigger.cron_expression = req.cron_expression
     if req.cron_timezone is not None:

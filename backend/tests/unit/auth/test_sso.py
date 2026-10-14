@@ -35,10 +35,51 @@ from modulo.auth.sso import (
     verify_state,
 )
 from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry
+from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, clear_license, set_public_key
+from modulo.core.registry.crypto import generate_keypair, sign_primitive
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
+
+# FAR-1733: the env-SAML licence gates (is_saml_available / _resolve_saml_config)
+# verify the key (signature + expiry) instead of trusting presence, so tests
+# that exercise the env-SAML path with a licence must carry a GENUINELY valid
+# signed key. The keypair below signs one at import time; the autouse fixture
+# installs the matching public key for every test and restores it after.
+_TEST_KP = generate_keypair()
+_TEST_PRIV = _TEST_KP["private_key"]
+_TEST_PUB = _TEST_KP["public_key"]
+
+
+def _make_valid_license_key(tier: str = "team") -> str:
+    payload: dict[str, Any] = {
+        "tier": tier,
+        "features": ["sso", "team_rbac", "audit_viewer"],
+        "expires_at": (datetime.now(UTC) + timedelta(days=365)).isoformat(),
+        "org_id": "test-org",
+    }
+    sig_hex = sign_primitive(payload, _TEST_PRIV)
+    payload_b64 = (
+        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
+        .decode()
+        .rstrip("=")
+    )
+    sig_b64 = base64.urlsafe_b64encode(bytes.fromhex(sig_hex)).decode().rstrip("=")
+    return f"{payload_b64}.{sig_b64}"
+
+
+_VALID_LICENSE_KEY = _make_valid_license_key()
+
+
+@pytest.fixture(autouse=True)
+def _reset_license_state() -> Generator[None, None, None]:
+    """FAR-1733: in-memory licence + configured public key are module globals."""
+    clear_license()
+    set_public_key(_TEST_PUB)
+    yield
+    clear_license()
+    set_public_key(_LICENSE_PUBLIC_KEY_HEX)
 
 
 @pytest.fixture(autouse=True)
@@ -64,7 +105,7 @@ def _override(**kwargs: str | bool) -> Settings:
         "database_url": "postgresql+asyncpg://localhost/test",
         "secret_key": _VALID_32,
         "fernet_key": _VALID_32,
-        "modulo_license_key": "test-license",
+        "modulo_license_key": _VALID_LICENSE_KEY,
         "modulo_oidc_providers": json.dumps(
             [
                 {
@@ -339,7 +380,7 @@ class TestSsoProvidersEndpoint:
 
     def test_saml_enabled_with_license(self, client: TestClient) -> None:
         _override_settings(
-            modulo_license_key="license-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
             modulo_saml_idp_metadata_url="https://idp.example.com/metadata",
         )
@@ -369,6 +410,130 @@ class TestSsoProvidersEndpoint:
 
 
 # ---------------------------------------------------------------------------
+# FAR-1733 — env-SAML licence gates verify the key (fail closed)
+# ---------------------------------------------------------------------------
+# The env branch of is_saml_available and the env fallback of
+# _resolve_saml_config previously trusted the env-var key on mere PRESENCE.
+# Both now require a key parse_and_verify confirms; an unverifiable key does
+# not enable env-SAML (the DB-provider path is unaffected).
+
+
+class TestSamlEnvLicenseVerification:
+    SAMPLE_IDP_METADATA = """<?xml version="1.0"?>
+<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+                     entityID="https://idp.example.com">
+  <md:IDPSSODescriptor
+   protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+    <md:SingleSignOnService
+     Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+     Location="https://idp.example.com/sso"/>
+  </md:IDPSSODescriptor>
+</md:EntityDescriptor>"""
+
+    def _env_settings(self, license_key: str) -> Settings:
+        return _override(
+            modulo_license_key=license_key,
+            modulo_saml_enabled=True,
+            modulo_saml_idp_metadata_xml=self.SAMPLE_IDP_METADATA,
+        )
+
+    # ── site 4: is_saml_available ───────────────────────────────────────
+
+    async def test_env_saml_unavailable_with_invalid_license_key(self) -> None:
+        """FAR-1733 prove-the-fix: an env key present but unverifiable must NOT
+        enable the env-SAML availability boolean. The old code trusted presence,
+        so this assertion fails against the old code.
+        """
+        from modulo.api.routes.sso import is_saml_available
+
+        settings = self._env_settings("not-a-valid-key")
+        session = _mock_session()
+        with patch("modulo.api.routes.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=None):
+            assert await is_saml_available(settings, None, session) is False
+
+    async def test_env_saml_available_with_valid_license_key(self) -> None:
+        """The VALID-key path still enables env-SAML (must not be broken)."""
+        from modulo.api.routes.sso import is_saml_available
+
+        settings = self._env_settings(_VALID_LICENSE_KEY)
+        session = _mock_session()
+        with patch("modulo.api.routes.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=None):
+            assert await is_saml_available(settings, None, session) is True
+
+    async def test_db_saml_provider_unaffected_by_env_key_state(self) -> None:
+        """The DB-provider rung of the availability boolean is unchanged."""
+        from modulo.api.routes.sso import is_saml_available
+
+        settings = self._env_settings("not-a-valid-key")
+        session = _mock_session()
+        db_saml = SimpleNamespace(metadata_xml=self.SAMPLE_IDP_METADATA, metadata_url=None)
+        with patch("modulo.api.routes.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=db_saml):
+            assert await is_saml_available(settings, None, session) is True
+
+    # ── site 5: _resolve_saml_config env fallback ───────────────────────
+
+    async def test_env_saml_config_fails_closed_on_invalid_license_key(self) -> None:
+        """FAR-1733 prove-the-fix: the env fallback previously accepted ANY
+        non-empty key; an unverifiable key now raises (fail closed).
+        """
+        from modulo.auth.sso import _resolve_saml_config
+
+        settings = self._env_settings("not-a-valid-key")
+        session = _mock_session()
+        with (
+            patch("modulo.auth.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=None),
+            pytest.raises(ValueError, match="requires a license"),
+        ):
+            await _resolve_saml_config(None, session, settings)
+
+    async def test_env_saml_config_passes_with_valid_license_key(self) -> None:
+        """The VALID-key path still resolves the env SAML config (must not be broken)."""
+        from modulo.auth.sso import _resolve_saml_config
+
+        settings = self._env_settings(_VALID_LICENSE_KEY)
+        session = _mock_session()
+        with patch("modulo.auth.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=None):
+            idp_metadata, entity_id, _key, _cert, db = await _resolve_saml_config(None, session, settings)
+        assert idp_metadata == self.SAMPLE_IDP_METADATA
+        assert db is None
+        assert entity_id == settings.modulo_saml_entity_id
+
+    async def test_env_saml_config_fails_closed_on_absent_license_key(self) -> None:
+        from modulo.auth.sso import _resolve_saml_config
+
+        settings = self._env_settings("")
+        session = _mock_session()
+        with (
+            patch("modulo.auth.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=None),
+            pytest.raises(ValueError, match="requires a license"),
+        ):
+            await _resolve_saml_config(None, session, settings)
+
+    async def test_env_saml_login_route_maps_invalid_key_to_400(self) -> None:
+        """End-to-end through the pre-auth login route: invalid key -> 400."""
+        settings = self._env_settings("not-a-valid-key")
+        _app.dependency_overrides[get_settings] = lambda: settings
+        mock_session = _mock_session()
+
+        async def _override_session() -> AsyncMock:
+            yield mock_session
+
+        _app.dependency_overrides[get_db_session] = _override_session
+        _app.dependency_overrides[get_system_db_session] = _override_session
+        _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="team"))
+        _app.dependency_overrides[get_anonymous_plan_context] = lambda: DbPlanContext(
+            FeatureFlagRegistry(current_tier="team")
+        )
+        try:
+            with patch("modulo.api.routes.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=None):
+                resp = TestClient(_app).get("/api/v1/auth/saml/login", follow_redirects=False)
+        finally:
+            _app.dependency_overrides.clear()
+        assert resp.status_code == 400
+        assert "requires a license" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
 # SAML IdP metadata parsing
 # ---------------------------------------------------------------------------
 
@@ -390,7 +555,7 @@ class TestSamlMetadataParsing:
         from modulo.auth.sso import saml_get_auth_url
 
         settings = _override(
-            modulo_license_key="license-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
             modulo_saml_idp_metadata_xml=self.SAMPLE_IDP_METADATA,
         )
@@ -935,7 +1100,7 @@ class TestSamlGetAuthUrl:
         from modulo.auth.sso import saml_get_auth_url
 
         settings = _override(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
         )
         session = _mock_session()
@@ -1003,7 +1168,7 @@ class TestSamlProcessResponse:
         from modulo.auth.sso import saml_process_response
 
         settings = _override(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
             modulo_saml_idp_metadata_xml=self.SAMPLE_IDP_METADATA,
         )
@@ -1020,7 +1185,7 @@ class TestSamlProcessResponse:
         from modulo.auth.sso import saml_process_response
 
         settings = _override(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
             modulo_saml_idp_metadata_xml=self.SAMPLE_IDP_METADATA,
         )
@@ -1104,7 +1269,7 @@ class TestSamlProcessResponse:
         from modulo.auth.sso import saml_process_response
 
         settings = _override(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
             modulo_saml_idp_metadata_xml=self.SAMPLE_IDP_METADATA,
             modulo_public_url="https://app.example.com",
@@ -1137,7 +1302,7 @@ class TestSamlProcessResponse:
         from modulo.auth.sso import saml_process_response
 
         settings = _override(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
             modulo_saml_idp_metadata_xml=self.SAMPLE_IDP_METADATA,
             modulo_public_url="https://app.example.com",
@@ -1265,7 +1430,7 @@ class TestSamlParseIdpMetadata:
 class TestSamlRoutesExtended:
     def test_saml_login_with_license_and_metadata(self, client: TestClient) -> None:
         _override_settings(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
         )
         with patch("modulo.api.routes.sso.saml_get_auth_url", new_callable=AsyncMock) as m:
@@ -1276,7 +1441,7 @@ class TestSamlRoutesExtended:
 
     def test_saml_acs_with_license_and_valid_response(self, client: TestClient) -> None:
         _override_settings(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
         )
 
@@ -1299,7 +1464,7 @@ class TestSamlRoutesExtended:
 
     def test_saml_acs_malformed_response(self, client: TestClient) -> None:
         _override_settings(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
         )
 
@@ -1317,7 +1482,7 @@ class TestSamlRoutesExtended:
         so /saml/metadata must serve even when modulo_saml_enabled is False — matching
         saml_login/saml_acs which resolve the DB provider without the env flag."""
         _override_settings(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=False,
         )
 
@@ -1334,7 +1499,7 @@ class TestSamlRoutesExtended:
         so the SP-metadata document stays well-formed (issue #282..#281: XML
         injection through the org-configurable entity_id)."""
         _override_settings(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=False,
         )
 
@@ -1361,7 +1526,7 @@ class TestSamlRoutesExtended:
     def test_saml_metadata_rejected_when_no_db_provider_and_env_flag_off(self, client: TestClient) -> None:
         """Preserves the pure-env-var contract: no DB provider AND flag off -> 400."""
         _override_settings(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=False,
         )
 
@@ -1377,7 +1542,7 @@ class TestSamlRoutesExtended:
         attribute, no injected elements, and the output must stay well-formed.
         """
         _override_settings(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
             modulo_public_url="https://app.example.com",
         )
@@ -1408,7 +1573,7 @@ class TestSamlRoutesExtended:
         """FAR-915 defence-in-depth: the Location attribute interpolates the
         public URL too and must be escaped alongside entity_id."""
         _override_settings(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
             modulo_public_url='https://app.example.com" onload="x',
         )
@@ -2487,7 +2652,7 @@ class TestPerProviderSamlRoutes:
         """POST /saml/{slug}/acs resolves provider by slug and processes response."""
         provider = _make_saml_provider(provider_id="okta-saml")
         _override_settings(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
         )
         with (
@@ -2515,7 +2680,7 @@ class TestPerProviderSamlRoutes:
     def test_per_provider_acs_unknown_slug_returns_404(self, client: TestClient) -> None:
         """POST /saml/{slug}/acs returns uniform 404 for unknown slug."""
         _override_settings(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
         )
         with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
@@ -2532,7 +2697,7 @@ class TestPerProviderSamlRoutes:
         """POST /saml/{slug}/acs returns same 404 for disabled provider."""
         provider = _make_saml_provider(provider_id="okta-saml", enabled=False)
         _override_settings(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
         )
         with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
@@ -2550,7 +2715,7 @@ class TestPerProviderSamlRoutes:
         provider = _make_saml_provider(provider_id="google-oidc")
         provider.provider_type = "oidc"
         _override_settings(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
         )
         with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
@@ -2570,7 +2735,7 @@ class TestPerProviderSamlRoutes:
             entity_id="https://idp.okta.com/sp/abc123",
         )
         _override_settings(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
             modulo_public_url="https://app.example.com",
         )
@@ -2586,7 +2751,7 @@ class TestPerProviderSamlRoutes:
         """GET /saml/{slug}/metadata uses default Entity ID when provider has none."""
         provider = _make_saml_provider(provider_id="okta-saml", entity_id=None)
         _override_settings(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
             modulo_public_url="https://app.example.com",
         )
@@ -2602,7 +2767,7 @@ class TestPerProviderSamlRoutes:
     def test_per_provider_metadata_unknown_slug_returns_404(self, client: TestClient) -> None:
         """GET /saml/{slug}/metadata returns uniform 404 for unknown slug."""
         _override_settings(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
         )
         with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
@@ -2615,7 +2780,7 @@ class TestPerProviderSamlRoutes:
         """GET /saml/{slug}/login resolves provider and redirects to IdP."""
         provider = _make_saml_provider(provider_id="okta-saml")
         _override_settings(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
         )
         with (
@@ -2635,7 +2800,7 @@ class TestPerProviderSamlRoutes:
     def test_per_provider_login_unknown_slug_returns_404(self, client: TestClient) -> None:
         """GET /saml/{slug}/login returns uniform 404 for unknown slug."""
         _override_settings(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
         )
         with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
@@ -2647,7 +2812,7 @@ class TestPerProviderSamlRoutes:
     def test_no_preauth_route_401s_without_credentials(self, client: TestClient) -> None:
         """Pre-auth SAML per-provider routes must never 401 for missing Authorization."""
         _override_settings(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
         )
         with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
@@ -2678,7 +2843,7 @@ class TestPerProviderSamlRoutes:
             entity_id="https://idp-b.example.com/sp",
         )
         _override_settings(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
             modulo_public_url="https://app.example.com",
         )
@@ -2786,7 +2951,7 @@ class TestPerProviderAudienceEndToEnd:
 
     def _settings(self) -> Settings:
         return _override(
-            modulo_license_key="lic-123",
+            modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
             modulo_public_url=self.PUBLIC_URL,
         )
@@ -2975,14 +3140,14 @@ class TestPerProviderSamlRouteErrorPaths:
         )
 
     def test_acs_missing_response_returns_400(self, client: TestClient) -> None:
-        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
         with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
             mock_lookup.return_value = self._provider()
             resp = client.post("/api/v1/auth/saml/acs/okta-saml", data={"SAMLResponse": ""}, follow_redirects=False)
         assert resp.status_code == 400
 
     def test_acs_value_error_returns_401(self, client: TestClient) -> None:
-        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
         with (
             patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
             patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process,
@@ -2995,7 +3160,7 @@ class TestPerProviderSamlRouteErrorPaths:
     def test_acs_programming_error_returns_501(self, client: TestClient) -> None:
         from sqlalchemy.exc import ProgrammingError
 
-        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
         with (
             patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
             patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process,
@@ -3008,7 +3173,7 @@ class TestPerProviderSamlRouteErrorPaths:
     def test_acs_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         from sqlalchemy.exc import SQLAlchemyError
 
-        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
         with (
             patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
             patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process,
@@ -3021,7 +3186,7 @@ class TestPerProviderSamlRouteErrorPaths:
     def test_acs_http_exception_passthrough(self, client: TestClient) -> None:
         from fastapi import HTTPException
 
-        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
         with (
             patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
             patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process,
@@ -3032,7 +3197,7 @@ class TestPerProviderSamlRouteErrorPaths:
         assert resp.status_code == 418
 
     def test_acs_unexpected_error_returns_500(self, client: TestClient) -> None:
-        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
         with (
             patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
             patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process,
@@ -3043,7 +3208,7 @@ class TestPerProviderSamlRouteErrorPaths:
         assert resp.status_code == 500
 
     def test_login_value_error_returns_400(self, client: TestClient) -> None:
-        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
         with (
             patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
             patch("modulo.api.routes.sso.saml_get_auth_url", new_callable=AsyncMock) as mock_auth,
@@ -3056,7 +3221,7 @@ class TestPerProviderSamlRouteErrorPaths:
     def test_login_programming_error_returns_501(self, client: TestClient) -> None:
         from sqlalchemy.exc import ProgrammingError
 
-        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
         with (
             patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
             patch("modulo.api.routes.sso.saml_get_auth_url", new_callable=AsyncMock) as mock_auth,
@@ -3069,7 +3234,7 @@ class TestPerProviderSamlRouteErrorPaths:
     def test_login_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         from sqlalchemy.exc import SQLAlchemyError
 
-        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
         with (
             patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
             patch("modulo.api.routes.sso.saml_get_auth_url", new_callable=AsyncMock) as mock_auth,
@@ -3082,7 +3247,7 @@ class TestPerProviderSamlRouteErrorPaths:
     def test_login_http_exception_passthrough(self, client: TestClient) -> None:
         from fastapi import HTTPException
 
-        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
         with (
             patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
             patch("modulo.api.routes.sso.saml_get_auth_url", new_callable=AsyncMock) as mock_auth,
@@ -3093,7 +3258,7 @@ class TestPerProviderSamlRouteErrorPaths:
         assert resp.status_code == 418
 
     def test_login_unexpected_error_returns_500(self, client: TestClient) -> None:
-        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
         with (
             patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
             patch("modulo.api.routes.sso.saml_get_auth_url", new_callable=AsyncMock) as mock_auth,
@@ -3104,7 +3269,7 @@ class TestPerProviderSamlRouteErrorPaths:
         assert resp.status_code == 500
 
     def test_metadata_unexpected_error_returns_500(self, client: TestClient) -> None:
-        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
         with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
             mock_lookup.side_effect = RuntimeError("boom")
             resp = client.get("/api/v1/auth/saml/okta-saml/metadata", follow_redirects=False)
@@ -3193,8 +3358,8 @@ class TestSamlRelayStateRouteIntegration:
     def test_login_emits_relay_state_signed_for_provider(self, client: TestClient) -> None:
         """GET /saml/{slug}/login passes a signed relay_state to saml_get_auth_url."""
         provider = _make_saml_provider(provider_id="okta-saml")
-        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
-        settings = _override(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
+        settings = _override(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
 
         with (
             patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
@@ -3217,8 +3382,8 @@ class TestSamlRelayStateRouteIntegration:
     def test_acs_accepts_valid_signed_relay_state(self, client: TestClient) -> None:
         """POST /saml/{slug}/acs accepts a valid signed RelayState for the right provider."""
         provider = _make_saml_provider(provider_id="okta-saml")
-        settings = _override(modulo_license_key="lic-123", modulo_saml_enabled=True)
-        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        settings = _override(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
 
         relay_state = sign_saml_relay_state("okta-saml", settings.secret_key)
 
@@ -3246,7 +3411,7 @@ class TestSamlRelayStateRouteIntegration:
     def test_acs_rejects_tampered_relay_state(self, client: TestClient) -> None:
         """POST /saml/{slug}/acs rejects a tampered RelayState."""
         provider = _make_saml_provider(provider_id="okta-saml")
-        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
 
         with (
             patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
@@ -3268,8 +3433,8 @@ class TestSamlRelayStateRouteIntegration:
     def test_acs_rejects_relay_state_signed_for_different_provider(self, client: TestClient) -> None:
         """POST /saml/{slug}/acs rejects a RelayState signed for a DIFFERENT provider."""
         provider = _make_saml_provider(provider_id="okta-saml")
-        settings = _override(modulo_license_key="lic-123", modulo_saml_enabled=True)
-        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        settings = _override(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
 
         # Sign for a different provider
         relay_state = sign_saml_relay_state("different-provider", settings.secret_key)
@@ -3297,7 +3462,7 @@ class TestSamlRelayStateRouteIntegration:
         This is the critical regression guard: absence-tolerance is deliberate.
         """
         provider = _make_saml_provider(provider_id="okta-saml")
-        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
 
         with (
             patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
@@ -3321,7 +3486,7 @@ class TestSamlRelayStateRouteIntegration:
 
     def test_legacy_singleton_path_unchanged_no_relay_state(self, client: TestClient) -> None:
         """Legacy /saml/acs does NOT verify RelayState — preserves backward compatibility."""
-        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
 
         with (
             patch("modulo.api.routes.sso._get_enabled_saml_global", new_callable=AsyncMock),
@@ -3357,7 +3522,7 @@ class TestSamlRelayStateRouteIntegration:
         """FAR-1516: when the SYSTEM session is free, the legacy ACS route reads
         the enabled provider once and rebinds the audit org to its organisation."""
         provider = _make_saml_provider(provider_id="okta-saml")
-        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
         system_session = self._free_system_session()
 
         async def override_system() -> AsyncGenerator[AsyncMock, None]:
@@ -3388,7 +3553,7 @@ class TestSamlRelayStateRouteIntegration:
 
     def test_legacy_acs_keeps_sentinel_org_when_no_provider_resolves(self, client: TestClient) -> None:
         """FAR-1516: an env-only (or absent) provider leaves the sentinel org in place."""
-        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
         system_session = self._free_system_session()
 
         async def override_system() -> AsyncGenerator[AsyncMock, None]:

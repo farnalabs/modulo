@@ -75,7 +75,7 @@ from modulo.api.middleware.sensitive_mask import (
 from modulo.api.middleware.sensitive_mask import (
     mask_config_json,
     mask_pipeline_graph_node,
-    merge_masked_config,
+    merge_masked_config_json,
     merge_masked_graph_nodes,
 )
 from modulo.api.routes.api_keys import enforce_grants_mint_cap_for
@@ -3616,6 +3616,11 @@ async def query_analytics_concurrency(
     description="Get the full graph (nodes + edges) of a pipeline by ID. "
     "Returns nodes with their configuration (agent_prompt, agent_commands, template_id, timeout_seconds, etc.) "
     "and edges with their source/target/type. "
+    "Secret-bearing node fields (env_vars, context_files, composite_parameter_values, "
+    "parameter_overrides) are masked as \u2022\u2022\u2022\u2022\u2022\u2022 here; those masked values are "
+    "safe to send back unchanged to update_pipeline_graph, which resolves them to the "
+    "stored secrets rather than overwriting them — so a graph containing secrets can be "
+    "read, edited and written back. "
     "For pipelines that use sandbox_agent nodes, this is how you read the current agent_commands before modifying it.",
 )
 @_RETRY_DB
@@ -4116,7 +4121,17 @@ async def _update_pipeline_graph_impl(
     "HITL gates (node hitl_config or edge hitl_review_config) must carry a human-provided "
     "description (min 20 chars) explaining why the gate exists; a graph write whose "
     "gates lack one is rejected with validation_failed (FAR-613: the MCP path enforces "
-    "the HITL description rule specifically). EXPERIMENTAL (FAR-1743 / ADR 037): a "
+    "the HITL description rule specifically). "
+    "Redacted secret values round-trip safely: the credential-bearing node fields "
+    "(env_vars, context_files, composite_parameter_values, parameter_overrides) are rendered "
+    "as \u2022\u2022\u2022\u2022\u2022\u2022 on read, and a masked value you re-send is resolved back to the "
+    "stored secret before the write persists — you CAN update a graph that contains secrets "
+    "without re-entering them. Resolution is per node, matched by the node's unchanged id: a "
+    "masked echo is only resolved against the stored node with the same id, so a re-id'd "
+    "node's masked values are dropped rather than restored. Only a new, non-masked value "
+    "overwrites a stored secret; omitting the field drops it, so re-send masked values "
+    "unchanged rather than dropping them. "
+    "EXPERIMENTAL (FAR-1743 / ADR 037): a "
     "sandbox_agent node may set `model_class` (a registry capability class such as "
     "'builder', resolved to a concrete model id at snapshot mint and consumed via the "
     "top-level `{{ model }}` template variable, e.g. `--model {{ model }}`); the field, "
@@ -4641,7 +4656,14 @@ def _run_status_base(run: Run) -> dict[str, Any]:
 
 
 def _run_status_detail(run: Run, blobs: RunBlobs) -> dict[str, Any]:
-    from modulo.api.routes.runs import _clamp_node_token_usage_union
+    # FAR-1737: reuse the REST serialisers verbatim — the masked input payload
+    # and the deadline-triage projection must be byte-identical to
+    # ``GET /api/v1/runs/{run_id}``, never a hand-rolled copy of either.
+    from modulo.api.routes.runs import (
+        _clamp_node_token_usage_union,
+        _deadline_triage_from_markers,
+        _mask_output_value,
+    )
 
     token_usage = _clamp_node_token_usage_union(run.node_token_usage or {})
     # FAR-583 read-switch: the blobs reassemble from run_node_outputs
@@ -4658,6 +4680,19 @@ def _run_status_detail(run: Run, blobs: RunBlobs) -> dict[str, Any]:
     result: dict[str, Any] = {"nodes": nodes}
     if run.cost_breakdown is not None:
         result["cost_breakdown"] = _sanitize_cost_breakdown(run.cost_breakdown)
+    # FAR-1737: detail-parity with REST. Without these, a failed sandbox run
+    # was unrecoverable over MCP — ``nodes: []`` carried neither the original
+    # input (prompt) nor the per-attempt sandbox envelopes that explain why
+    # the node produced no output. ``input_payload`` goes through the SAME
+    # masker REST uses; ``deadline_triage`` is projected by the SAME helper
+    # from the markers already reassembled for this detail read. Both are
+    # detail-only: the base response never touches either (matches REST, where
+    # the mask/projection sit behind the detail builder).
+    _raw_input_payload = getattr(run, "input_payload", None)
+    result["input_payload"] = (
+        _mask_output_value(_raw_input_payload) if isinstance(_raw_input_payload, dict) and _raw_input_payload else None
+    )
+    result["deadline_triage"] = _deadline_triage_from_markers(getattr(blobs, "markers", None))
     return result
 
 
@@ -4720,7 +4755,15 @@ async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
     return result
 
 
-@mcp.tool(description="Get current run status. Pass detail=true for per-node breakdown.")
+@mcp.tool(
+    description=(
+        "Get current run status. Pass detail=true for a per-node breakdown, the "
+        "masked run input_payload (the original run input, sensitive fields "
+        "redacted), and deadline_triage[] — the per-attempt sandbox envelopes "
+        "(attempt_key, no_output_reason, sandbox_log_tail, raw_output_tail, "
+        "stdout_length) that explain why a node produced no output."
+    )
+)
 @_RETRY_DB
 async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
     try:
@@ -7243,7 +7286,8 @@ def _build_trigger_record(
     # ``hmac_secret``/``signing_secret`` under Fernet tokens identical to the
     # REST path (read paths decrypt with plaintext fallback, so nothing that
     # consumed plaintext breaks).
-    encrypted_config = _encrypt_trigger_config_secrets(config_json, get_settings().fernet_key)
+    _settings = get_settings()
+    encrypted_config = _encrypt_trigger_config_secrets(config_json, _settings.fernet_key, _settings.fernet_key_old)
     trigger = Trigger(
         organisation_id=org_id,
         pipeline_id=pid,
@@ -7601,11 +7645,16 @@ def _merge_trigger_config_json(trigger: Any, config_json: dict[str, Any] | None)
     # MERGE into the existing blob — never wholesale replace.
     # A masked placeholder must never clobber the stored secret
     # (read-modify-write round-trip guard). Keep the existing value.
-    merged = merge_masked_config(trigger.config_json, config_json)
+    # FAR-1735: use the RECURSIVE masked merge — the same
+    # ``merge_masked_config_json`` REST's PATCH uses — so a nested masked
+    # secret (e.g. ``input_template.api_key``) round-tripped through MCP is
+    # preserved at every depth, not clobbered by the shallow merge.
+    merged = merge_masked_config_json(trigger.config_json or {}, config_json)
     # FAR-1732: encrypt webhook/HMAC secrets after the masked merge — the same
     # shared helper REST's PUT route uses. Idempotent: values already stored
     # under Fernet tokens (or mask sentinels) pass through untouched.
-    trigger.config_json = _encrypt_trigger_config_secrets(merged, get_settings().fernet_key)
+    settings = get_settings()
+    trigger.config_json = _encrypt_trigger_config_secrets(merged, settings.fernet_key, settings.fernet_key_old)
 
 
 async def _apply_trigger_field_updates(
@@ -7720,7 +7769,11 @@ async def _update_trigger_txn(
         # return COMMITS — validating after mutation would persist an
         # invalid merged config while reporting a validation error.
         if config_json is not None:
-            merged_config = merge_masked_config(trigger.config_json, config_json)
+            # FAR-1735: validate the SAME recursive masked merge the write
+            # path uses (REST parity) — the shallow merge here previously
+            # judged a different shape than `_merge_trigger_config_json`
+            # persisted.
+            merged_config = merge_masked_config_json(trigger.config_json or {}, config_json)
             try:
                 _validate_trigger_config_keys(merged_config, context="merged config_json")
             except FastAPIHTTPException as exc:
@@ -9342,7 +9395,7 @@ async def list_feature_flags() -> dict[str, Any]:
             }
 
         from modulo.core.feature_flags import FeatureFlagRegistry
-        from modulo.core.license import get_license
+        from modulo.core.license import get_license, verify_license_key
         from modulo.db.crud.organisation import get_organisation
 
         settings = get_settings()
@@ -9352,10 +9405,21 @@ async def list_feature_flags() -> dict[str, Any]:
             org = await get_organisation(s, org_id)
             plan_ctx = await resolve_plan_context(settings, s, org)
             lic = get_license()
-            has_key = bool(settings.modulo_license_key) or lic is not None
+            # FAR-1733: the env-var key is only counted after verification
+            # (never on mere presence); is_valid reports whether any rung of
+            # the licence ladder resolved a VALID licence — in-memory, a
+            # verified env key, or a verified org-level key.
+            env_data = verify_license_key(getattr(settings, "modulo_license_key", "") or "")
+            has_key = env_data is not None or lic is not None
             org_settings = getattr(org, "settings_json", None)
-            if not has_key and isinstance(org_settings, dict):
-                has_key = bool(org_settings.get("license_key"))
+            org_key = org_settings.get("license_key") if isinstance(org_settings, dict) else None
+            if not has_key and org_key:
+                has_key = True
+            license_valid = (
+                lic is not None
+                or env_data is not None
+                or (bool(org_key) and verify_license_key(str(org_key)) is not None)
+            )
             registry = await FeatureFlagRegistry.from_db(s, plan_ctx.tier(), has_license_key=has_key)
 
             # Best-effort overlay of the org's per-flag overrides (same
@@ -9371,7 +9435,7 @@ async def list_feature_flags() -> dict[str, Any]:
             "license": {
                 "tier": registry.current_tier,
                 "has_license_key": registry.has_license_key,
-                "is_valid": True,
+                "is_valid": license_valid,
             },
             "dev_mode": settings.modulo_dev_mode,
             "flags": [

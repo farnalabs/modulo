@@ -120,7 +120,9 @@ from modulo.db.crud.rating import (
     RatingCooldownError,
     SelfRatingError,
     get_rating_aggregate,
+    list_abuse_reports,
     list_ratings_for_primitive,
+    review_abuse_report,
     submit_abuse_report,
     submit_rating,
     update_primitive_ratings_aggregate,
@@ -141,6 +143,8 @@ _MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE = (
 )
 _CODE_LIBRARY_MANAGE = "library.manage"
 _CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE = "library.create_pipeline_from_template_endpoint"
+_CODE_LIBRARY_LIST_ABUSE_REPORTS = "library.list_abuse_reports_endpoint"
+_CODE_LIBRARY_REVIEW_ABUSE_REPORT = "library.review_abuse_report_endpoint"
 _MSG_ORGANISATION_ID_REQUIRED = "Organisation ID required"
 
 
@@ -379,9 +383,16 @@ class RatingSubmit(BaseModel):
 
 
 class RatingResponse(BaseModel):
+    """One rating as the API renders it.
+
+    ``account_id`` mirrors the ``PrimitiveRating`` ORM column exactly (an
+    earlier ``user_id`` name had no ORM counterpart, so ``model_validate``
+    failed on every real row); ``None`` for an anonymous/removed account.
+    """
+
     id: uuid.UUID
     primitive_id: uuid.UUID
-    user_id: uuid.UUID | None
+    account_id: uuid.UUID | None
     thumbs_up: bool
     comment: str | None
     created_at: datetime
@@ -405,15 +416,62 @@ class AbuseReportSubmit(BaseModel):
 
 
 class AbuseReportResponse(BaseModel):
+    """The 201 body of ``POST /{primitive_id}/ratings/abuse``.
+
+    ``reporter_account_id`` mirrors the ``PrimitiveAbuseReport`` ORM column
+    exactly (an earlier ``reporter_user_id`` name had no ORM counterpart, so
+    ``model_validate`` raised ``ValidationError`` — which ``handle_db_errors``
+    maps to 422 — on every real report).
+    """
+
     id: uuid.UUID
     primitive_id: uuid.UUID
     rating_id: uuid.UUID | None
-    reporter_user_id: uuid.UUID | None
+    reporter_account_id: uuid.UUID | None
     reason: str
     status: str
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class AbuseReportQueueItem(BaseModel):
+    """One report as the moderation queue renders it.
+
+    Field names mirror the ``PrimitiveAbuseReport`` ORM columns exactly, so
+    this shape validates against a real, flushed row.
+    """
+
+    id: uuid.UUID
+    primitive_id: uuid.UUID
+    rating_id: uuid.UUID | None
+    reporter_account_id: uuid.UUID | None
+    reason: str
+    status: str
+    reviewed_at: datetime | None
+    reviewer_account_id: uuid.UUID | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AbuseReportQueueResponse(BaseModel):
+    items: list[AbuseReportQueueItem]
+    total: int
+
+
+class AbuseReportResolveRequest(BaseModel):
+    """The moderation decision to RECORD on a report.
+
+    ``reviewed`` — the report is upheld (the flagged rating was judged to
+    violate the rules); ``dismissed`` — the report is rejected. Either value
+    only stamps ``status`` / ``reviewed_at`` / ``reviewer_account_id`` on the
+    REPORT row: resolving a report does NOT remove, hide or alter the rating
+    it points at. There is no rating-delete path in the product, and adding
+    one is a separate product decision.
+    """
+
+    status: Literal["reviewed", "dismissed"]
 
 
 class ImportBundleResponse(BaseModel):
@@ -1735,6 +1793,111 @@ async def submit_abuse_report_endpoint(
 
 
 # ---------------------------------------------------------------------------
+# Abuse-report moderation queue (FAR-1753)
+#
+# A report is FILED by any org member (POST /{primitive_id}/ratings/abuse)
+# and TRIAGED here by library managers. Resolving a report RECORDS A DECISION
+# on the report row — it never touches the reported rating itself.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/admin/abuse-reports")
+@handle_db_errors(_CODE_LIBRARY_LIST_ABUSE_REPORTS)
+async def list_abuse_reports_endpoint(
+    status_filter: Literal["pending", "reviewed", "dismissed"] | None = Query(default=None, alias="status"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> AbuseReportQueueResponse:
+    """List this organisation's abuse-report queue, newest first.
+
+    Read-only triage view: optionally narrowed with ``?status=pending`` (the
+    default queue), ``reviewed`` or ``dismissed``. Org-scoped by the caller's
+    ``organisation_id``; reporting a decision on a row is done via the resolve
+    endpoint, not here.
+    """
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            result = await list_abuse_reports(
+                session,
+                principal.organisation_id,
+                status_filter=status_filter,
+                page=page,
+                page_size=page_size,
+            )
+    except IntegrityError:
+        _log.exception(_CODE_LIBRARY_LIST_ABUSE_REPORTS)
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception(_CODE_LIBRARY_LIST_ABUSE_REPORTS)
+        raise _not_implemented_error() from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_LIBRARY_LIST_ABUSE_REPORTS)
+        _log.exception("list_abuse_reports_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    return AbuseReportQueueResponse(
+        items=[AbuseReportQueueItem.model_validate(report) for report in result.items],
+        total=result.total,
+    )
+
+
+@router.post(
+    "/admin/abuse-reports/{report_id}/resolve",
+    dependencies=[Depends(audited("abuse_report_reviewed", "abuse_report", principal_dep=get_current_tenant_user))],
+)
+@handle_db_errors(_CODE_LIBRARY_REVIEW_ABUSE_REPORT)
+async def review_abuse_report_endpoint(
+    report_id: uuid.UUID,
+    req: AbuseReportResolveRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> AbuseReportQueueItem:
+    """Record a moderation decision on one abuse report.
+
+    Sets ``status`` to ``reviewed`` (report upheld) or ``dismissed`` (report
+    rejected) and stamps ``reviewed_at`` and ``reviewer_account_id`` from the
+    authenticated principal.
+
+    **Resolving a report RECORDS A DECISION — it does NOT remove the rating.**
+    Only the report row changes; the flagged rating stays published, because
+    there is no rating-delete path in the product and adding one is a
+    separate product decision.
+
+    A report belonging to another organisation is invisible here (explicit
+    ``org_id`` predicate + RLS), so it answers 404 rather than leaking its
+    existence.
+    """
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            report = await review_abuse_report(
+                session,
+                report_id,
+                org_id=principal.organisation_id,
+                new_status=req.status,
+                reviewer_account_id=principal.account_id,
+            )
+    except IntegrityError:
+        _log.exception(_CODE_LIBRARY_REVIEW_ABUSE_REPORT)
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception(_CODE_LIBRARY_REVIEW_ABUSE_REPORT)
+        raise _not_implemented_error() from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_LIBRARY_REVIEW_ABUSE_REPORT)
+        _log.exception("review_abuse_report_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    if report is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Abuse report not found",
+        )
+    return AbuseReportQueueItem.model_validate(report)
+
+
+# ---------------------------------------------------------------------------
 # Create pipeline from template
 # ---------------------------------------------------------------------------
 
@@ -2236,7 +2399,11 @@ async def create_collection_endpoint(
                 author=principal.account_id.hex,
                 version="1.0",
                 tags=[],
-                content_json={"pins": [p.model_dump() for p in req.manifest_pins]},
+                # ``manifest_pins`` is the CANONICAL key the install/upgrade
+                # readers look for (and what the in-code registry seed data
+                # writes). The previous ``"pins"`` key was never read back, so
+                # API-authored collections resolved no pins on install.
+                content_json={"manifest_pins": [p.model_dump() for p in req.manifest_pins]},
                 source_url=None,
                 forked_from=None,
                 checksum=None,
@@ -2289,7 +2456,7 @@ async def update_collection_endpoint(
             await _set_rls_context(session, principal)
             prim = await _load_draft_collection(session, org_id, primitive_id)
             prim.manifest_pins = [p.model_dump() for p in req.manifest_pins]
-            prim.content_json = {"pins": prim.manifest_pins}
+            prim.content_json = {"manifest_pins": prim.manifest_pins}
             await session.flush()
     except HTTPException:
         raise
@@ -2762,7 +2929,16 @@ async def get_collection_install_endpoint(
             from modulo.db.models.collection_install import CollectionInstall
 
             install = await session.get(CollectionInstall, install_id)
-            if install is None or install.collection_id != primitive_id or install.organisation_id != org_id:
+            # A soft-deleted (uninstalled) install is retired history: treat it
+            # exactly like an absent row. ``session.get`` can resolve it from
+            # the session identity map, bypassing the global ``deleted_at IS
+            # NULL`` filter, so the guard is explicit.
+            if (
+                install is None
+                or install.deleted_at is not None
+                or install.collection_id != primitive_id
+                or install.organisation_id != org_id
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Install {install_id} not found for collection {primitive_id}",

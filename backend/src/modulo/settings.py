@@ -224,6 +224,19 @@ class Settings(BaseSettings):
     # closed until the operator configures it.
     modulo_license_private_key: str = Field(default="", repr=False)
 
+    # Offline-verifiable evidence (FAR-1697). Ed25519 private key (PEM) that
+    # signs the compliance export manifest, so a third party holding only the
+    # artefact + the published public key can verify authorship, re-verify the
+    # embedded audit chain and re-derive every derived value. The matching
+    # public key is derived and published via the admin verification-key
+    # endpoint and embedded in each pack. Empty (default) disables signed
+    # evidence - signing fails closed until the operator configures it.
+    # repr=False so the private key never leaks into logs/settings dumps.
+    modulo_evidence_signing_key: str = Field(default="", repr=False)
+    # Human-readable identity stamped into the signed manifest as the exporter.
+    # Empty (default) falls back to "modulo". Never a credential.
+    modulo_evidence_exporter_identity: str = Field("")
+
     # Stripe billing — purchase fulfilment webhook (FAR-178). Empty defaults
     # keep the app bootable without Stripe configured; when both keys are set,
     # ``stripe_enabled`` is True and the /api/v1/webhooks/stripe webhook is
@@ -653,15 +666,18 @@ class Settings(BaseSettings):
     # minutes is a claimed-but-never-executed zombie (the execute_run watchdog
     # normally fails it at SAQ_SETUP_GRACE_SECONDS; this branch catches the case
     # where the worker process itself is wedged and cannot run the watchdog).
-    # MUST exceed the pipeline's max node timeout so a legitimate long first
-    # node (which writes its first checkpoint only after completing) is never
-    # failed. Default 35 min > the 1800s node timeout used by agent pipelines
-    # (5 min margin for graph compile + reconcile tick cadence). Reduced from
-    # 45 min by FAR-199: a wedged worker fleet left claimed-but-nodeless runs
-    # 'running' for the whole window (observed executor_stalled /
-    # never_dispatched runs sitting 45-70 min before terminalization); 35 min
-    # bounds that accumulation while staying above the max node timeout so a
-    # slow-but-healthy first node is never false-failed. Tunable per deploy.
+    # FAR-1740: this is now only the FLOOR — the effective window is derived
+    # PER-PIPELINE from the pipeline's longest node ``timeout_seconds`` as
+    # ``ceil(max_node_timeout/60) + 5`` minutes, clamped to
+    # ``[saq_claimed_nodeless_minutes, 1440]`` (cron_helpers
+    # ``pipeline_nodeless_window_minutes``), so a 3300s-node pipeline gets a
+    # 60-minute window and a slow-but-healthy first node is never false-failed.
+    # Default 35 min keeps the historical behaviour for the 1800s-node agent
+    # pipelines exactly (5 min margin for graph compile + reconcile tick
+    # cadence). Reduced from 45 min by FAR-199: a wedged worker fleet left
+    # claimed-but-nodeless runs 'running' for the whole window (observed
+    # executor_stalled / never_dispatched runs sitting 45-70 min before
+    # terminalization); 35 min bounds that accumulation. Tunable per deploy.
     saq_claimed_nodeless_minutes: int = Field(default=35, alias="SAQ_CLAIMED_NODELESS_MINUTES", ge=5, le=1440)
     # FAR-873: early-detect window for claimed-but-nodeless zombies. A SAQ run
     # that has been 'running' with a FRESH heartbeat but ZERO progress after
@@ -921,6 +937,19 @@ class Settings(BaseSettings):
     modulo_health_db_hygiene_dead_ratio: float = Field(
         default=0.60, alias="MODULO_HEALTH_DB_HYGIENE_DEAD_RATIO", ge=0.0, le=1.0
     )
+
+    # ------------------------------------------------------------------
+    # FAR-1771 — event-loop stall ATTRIBUTION (opt-in, off by default).
+    # ------------------------------------------------------------------
+    # When > 0 (milliseconds), process startup installs stall attribution on
+    # the process's event loop: asyncio's slow-callback warning is armed at
+    # this threshold (loop.set_debug + loop.slow_callback_duration), and a
+    # low-frequency sampler thread records the loop thread's stack so the
+    # readiness stall log can NAME the blocking callback (file:line) when a
+    # synchronous call freezes the loop — the FAR-1439 class that starves
+    # every async DB op at once. 0 (the default) = off: no sampler thread,
+    # no loop debug flags, no per-tick work — zero cost, exactly as today.
+    modulo_slow_callback_warn_ms: int = Field(default=0, alias="MODULO_SLOW_CALLBACK_WARN_MS", ge=0, le=60_000)
 
     # ------------------------------------------------------------------
     # In-process worker-liveness watchdog (postmortem 2026-08-09, FAR-121)

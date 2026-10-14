@@ -30,14 +30,22 @@ def test_format_path_of_empty_path_is_empty_string() -> None:
 
 def test_describe_scalar_field_value_uses_value_wording() -> None:
     """An empty path (a scalar field value) describes the value, not a key."""
-    finding = MaskSentinelFinding(node_id="n1", field="env_vars", path=())
-    assert finding.describe() == "sub-node 'n1' field 'env_vars' value"
-    assert not finding.key
+    detail = MaskSentinelFinding(node_id="n1", field="env_vars", path=()).describe()
+    # Substring assertions, not exact equality: the contract is "names the
+    # node + field as a value", so wording tweaks elsewhere in the sentence
+    # stay visible while the discriminating shape cannot drift silently.
+    assert "sub-node 'n1'" in detail
+    assert "'env_vars'" in detail
+    assert "value" in detail
+    assert not MaskSentinelFinding(node_id="n1", field="env_vars", path=()).key
 
 
 def test_describe_keyed_value_names_the_key() -> None:
     finding = MaskSentinelFinding(node_id="n1", field="env_vars", path=("GITHUB_TOKEN",))
-    assert finding.describe() == "sub-node 'n1' field 'env_vars' key 'GITHUB_TOKEN'"
+    detail = finding.describe()
+    assert "sub-node 'n1'" in detail
+    assert "'env_vars'" in detail
+    assert "key 'GITHUB_TOKEN'" in detail
     assert finding.key == "GITHUB_TOKEN"
 
 
@@ -113,11 +121,33 @@ def test_unresolved_none_stored_marks_every_finding() -> None:
     assert [f.node_id for f in find_unresolved_mask_sentinels(incoming, None)] == ["n1"]
 
 
+def test_unresolved_matching_id_missing_field_is_unresolved() -> None:
+    """A stored counterpart that omits the sentinel field fails closed (unresolved)."""
+    incoming = [{"id": "n1", "env_vars": {"K": SENSITIVE_VALUE_MASK}}]
+    stored = [{"id": "n1"}]
+    assert [f.node_id for f in find_unresolved_mask_sentinels(incoming, stored)] == ["n1"]
+
+
 def test_format_detail_truncates_and_counts_the_remainder() -> None:
     findings = [MaskSentinelFinding(node_id=f"n{i}", field="env_vars", path=("K",)) for i in range(3)]
-    assert format_mask_sentinel_detail(findings, limit=1) == ("sub-node 'n0' field 'env_vars' key 'K'; (+2 more)")
+    detail = format_mask_sentinel_detail(findings, limit=1)
+    # Must name the FIRST finding (substrings, not exact equality) and must
+    # carry the bounded-remainder marker — dropping either breaks the contract.
+    assert "sub-node 'n0'" in detail
+    assert "(+2 more)" in detail
 
 
 def test_format_detail_within_limit_has_no_remainder() -> None:
     findings = [MaskSentinelFinding(node_id="n0", field="env_vars", path=("K",))]
-    assert format_mask_sentinel_detail(findings, limit=5) == "sub-node 'n0' field 'env_vars' key 'K'"
+    detail = format_mask_sentinel_detail(findings, limit=5)
+    assert "sub-node 'n0'" in detail
+    assert "'env_vars'" in detail
+    assert "(+" not in detail
+
+
+def test_walker_reports_idless_node_as_question_mark() -> None:
+    """A node without an ``id`` still reports its finding, as "?" — fail-loud,
+    not a crash and not a silent "None" identifier."""
+    nodes = [{"env_vars": {"K": SENSITIVE_VALUE_MASK}}]
+    findings = find_mask_sentinel_values(nodes)
+    assert [(f.node_id, f.field, f.path) for f in findings] == [("?", "env_vars", ("K",))]

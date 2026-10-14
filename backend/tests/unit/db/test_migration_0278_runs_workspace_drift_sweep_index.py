@@ -42,7 +42,10 @@ index and dropping the sweep back to a full-table scan of ``runs`` every
 ``0301_oauth_consent_state_preauth_rls``, then
 ``0302_runs_run_grouping``, then
 ``0303_feedback_records_lookup_indexes``, then
-``0305_guardrail_escalate_action`` then ``0306_trigger_secret_encryption`` as the single linear head) and the
+``0305_guardrail_escalate_action`` then ``0306_trigger_secret_encryption`` then
+``0307_runs_guardrail_override_resume_pending`` then ``0308_runs_dispatch_phase_history`` then
+``0311_library_cluster_schema_hygiene`` as the
+single linear head) and the
 ``ORDER BY id`` / ``LIMIT 200`` access shape
 the ``(id)`` key is chosen to serve.
 
@@ -69,7 +72,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0278_runs_workspace_drift_sweep_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0277_run_daily_facts_trigger_dispatch_phase"
-_CHAIN_HEAD_MIGRATION = "0306_trigger_secret_encryption"
+_CHAIN_HEAD_MIGRATION = "0311_library_cluster_schema_hygiene"
 _INDEX_NAME = "ix_runs_workspace_drift_sweep"
 _KEY_COLUMNS = ("id",)
 

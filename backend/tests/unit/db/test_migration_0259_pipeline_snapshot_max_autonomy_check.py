@@ -52,7 +52,10 @@ Lenses:
     0302_runs_run_grouping chains onto 0301_oauth_consent_state_preauth_rls, and
     0303_feedback_records_lookup_indexes chains onto 0302_runs_run_grouping, and
     0305_guardrail_escalate_action chains onto 0304_metrics_staging_recorded_at_index, and
-    0306_trigger_secret_encryption chains onto 0305_guardrail_escalate_action as the
+    0306_trigger_secret_encryption chains onto 0305_guardrail_escalate_action, and
+    0307_runs_guardrail_override_resume_pending chains onto 0306_trigger_secret_encryption, and
+    0308_runs_dispatch_phase_history chains onto 0307_runs_guardrail_override_resume_pending, and
+    0311_library_cluster_schema_hygiene chains onto 0308_runs_dispatch_phase_history as the
     single linear head.
 * **Structure (mocked ``op``)** - upgrade emits FOUR existence-gated DO blocks
   (add NOT VALID, then VALIDATE, for each of the two columns) carrying the full
@@ -78,7 +81,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0259_pipeline_snapshot_max_autonomy_check"
 _MIGRATION_DOWN_REVISION = "0258_pipeline_accountability_owners"
-_HEAD_MIGRATION = "0306_trigger_secret_encryption"
+_HEAD_MIGRATION = "0311_library_cluster_schema_hygiene"
 _MAX_CEILING_CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_level"
 _DEFAULT_LEVEL_CONSTRAINT = "ck_pipeline_snapshots_default_autonomy_level"
 _CONSTRAINTS = (_MAX_CEILING_CONSTRAINT, _DEFAULT_LEVEL_CONSTRAINT)

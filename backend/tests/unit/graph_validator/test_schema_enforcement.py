@@ -9,6 +9,7 @@ All pure validation tests call _check_schema_fields directly (no DB).
 Tests needing DB interaction use mocked AsyncSession.
 """
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
@@ -17,6 +18,12 @@ import pytest
 
 from modulo.core.graph_validator import GraphValidator, ValidationResult
 from modulo.db.crud.schema import SchemaDeletionProtectedError, delete_schema
+from tests.unit.graph_validator._helpers import (
+    schema_version_row as _schema_version_row,
+)
+from tests.unit.graph_validator._helpers import (
+    schema_version_session as _schema_version_session,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -43,39 +50,42 @@ def _snapshot(**kw):
     return snap
 
 
-def _schema_version_row(schema_id, definition_json, *, version="1.0"):
-    sv = MagicMock()
-    sv.schema_id = schema_id
-    sv.version = version
-    sv.definition_json = definition_json
-    return sv
+def _deletion_session(
+    *,
+    get_schema_row,
+    agent_count: int = 0,
+    pin_count: int = 0,
+    library_count: int = 0,
+):
+    """Mock session for ``delete_schema`` keyed by each query's OWN FROM table.
 
-
-def _mock_session_for_schema_versions(rows, *, use_scalar_one=False):
+    ``delete_schema`` issues four distinct SELECTs (the schema lookup, then the
+    Agent / SnapshotSchemaPin / LibraryPrimitive reference counts). Keying by
+    the statement's final FROM clause instead of call order means reordering
+    the queries inside the CRUD function cannot silently break these tests:
+    each query always answers with its own table's result, and any NEW query
+    fails loudly instead of scavenging a positional slot.
+    """
+    counts = {
+        "agents": agent_count,
+        "snapshot_schema_pins": pin_count,
+        "library_primitives": library_count,
+    }
     session = AsyncMock()
-    exc_result = MagicMock()
-    if use_scalar_one:
-        if len(rows) > 1:
-            _rows = list(rows)
 
-            def _make_call(_row):
-                r = MagicMock()
-                r.scalar_one_or_none.return_value = _row
-                r.scalar_one.return_value = _row
-                return r
-
-            results = [_make_call(r) for r in _rows]
-            session.execute = AsyncMock(side_effect=results)
+    def _exec(stmt, *_a, **_kw):
+        tables = [f.name for f in stmt.get_final_froms() if hasattr(f, "name")]
+        table = tables[0] if tables else None
+        result = MagicMock()
+        if table == "schemas":
+            result.scalar_one_or_none.return_value = get_schema_row
+        elif table in counts:
+            result.scalar_one.return_value = counts[table]
         else:
-            rv = rows[0] if rows else None
-            exc_result.scalar_one_or_none.return_value = rv
-            exc_result.scalar_one.return_value = rv
-            session.execute = AsyncMock(return_value=exc_result)
-    else:
-        scalars = MagicMock()
-        scalars.all.return_value = rows
-        exc_result.scalars.return_value = scalars
-        session.execute = AsyncMock(return_value=exc_result)
+            raise AssertionError(f"Unexpected query in delete_schema test: FROM {tables}")
+        return result
+
+    session.execute = AsyncMock(side_effect=_exec)
     return session
 
 
@@ -344,7 +354,7 @@ async def test_version_pinning_resolves_pinned_not_latest():
             version="1.0",
         ),
     ]
-    session = _mock_session_for_schema_versions(rows, use_scalar_one=True)
+    session = _schema_version_session(rows)
 
     definitions = await GraphValidator()._resolve_schema_definitions(
         {(schema_id, "1.0"): None},
@@ -358,7 +368,7 @@ async def test_version_pinning_resolves_pinned_not_latest():
 async def test_version_pinning_returns_empty_for_missing_version():
     """Pinned to a version that doesn't exist → empty dict (no crash)."""
     schema_id = uuid.uuid4()
-    session = _mock_session_for_schema_versions([], use_scalar_one=True)
+    session = _schema_version_session([])
 
     definitions = await GraphValidator()._resolve_schema_definitions(
         {(schema_id, "99.0"): None},
@@ -380,27 +390,12 @@ async def test_schema_deletion_blocked_when_pinned():
     schema_mock.id = schema_id
     schema_mock.system = False
 
-    # Mock session to simulate SnapshotSchemaPin count > 0
-    session = AsyncMock()
-
-    get_schema_result = MagicMock()
-    get_schema_result.scalar_one_or_none.return_value = schema_mock
-
-    agent_count_result = MagicMock()
-    agent_count_result.scalar_one.return_value = 0
-
-    pin_count_result = MagicMock()
-    pin_count_result.scalar_one.return_value = 1
-
-    lib_count_result = MagicMock()
-    lib_count_result.scalar_one.return_value = 0
-
-    session.execute.side_effect = [
-        get_schema_result,
-        agent_count_result,
-        pin_count_result,
-        lib_count_result,
-    ]
+    session = _deletion_session(
+        get_schema_row=schema_mock,
+        agent_count=0,
+        pin_count=1,
+        library_count=0,
+    )
 
     with pytest.raises(SchemaDeletionProtectedError) as exc_info:
         await delete_schema(session, schema_id)
@@ -415,26 +410,12 @@ async def test_schema_deletion_allowed_when_not_pinned():
     schema_mock.id = schema_id
     schema_mock.system = False
 
-    session = AsyncMock()
-
-    get_schema_result = MagicMock()
-    get_schema_result.scalar_one_or_none.return_value = schema_mock
-
-    agent_count_result = MagicMock()
-    agent_count_result.scalar_one.return_value = 0
-
-    pin_count_result = MagicMock()
-    pin_count_result.scalar_one.return_value = 0
-
-    lib_count_result = MagicMock()
-    lib_count_result.scalar_one.return_value = 0
-
-    session.execute.side_effect = [
-        get_schema_result,
-        agent_count_result,
-        pin_count_result,
-        lib_count_result,
-    ]
+    session = _deletion_session(
+        get_schema_row=schema_mock,
+        agent_count=0,
+        pin_count=0,
+        library_count=0,
+    )
 
     result = await delete_schema(session, schema_id)
     assert result is True
@@ -445,8 +426,15 @@ async def test_schema_deletion_allowed_when_not_pinned():
 # ===================================================================
 
 
-async def test_pre_existing_pipeline_gets_degraded_warning():
-    """Pre-Phase-1 snapshot with incompatible schemas does not block early."""
+async def test_pre_existing_pipeline_logs_degraded_mode(caplog: pytest.LogCaptureFixture):
+    """Pre-Phase-1 snapshot with incompatible schemas does not block early.
+
+    The degraded-mode signal is the WARNING-level log record emitted when the
+    incompatibility is detected on a pre-existing snapshot, so it is pinned here
+    via ``caplog``. The returned result is still invalid and carries the
+    ``SCHEMA_FIELD_INCOMPATIBLE`` error.
+    """
+    caplog.set_level(logging.WARNING)
     out_id = uuid.uuid4()
     in_id = uuid.uuid4()
 
@@ -468,12 +456,13 @@ async def test_pre_existing_pipeline_gets_degraded_warning():
         _schema_version_row(out_id, {"type": "object", "properties": {"x": {"type": "string"}}}),
         _schema_version_row(in_id, {"type": "object", "properties": {"x": {"type": "integer"}}}),
     ]
-    session = _mock_session_for_schema_versions(rows, use_scalar_one=True)
+    session = _schema_version_session(rows)
 
     result = await GraphValidator().validate_for_run(snap, {}, session)
 
     assert not result.is_valid
     assert any(i.code == "SCHEMA_FIELD_INCOMPATIBLE" for i in result.issues)
+    assert any("Schema incompatibility in pipeline" in r.getMessage() for r in caplog.records)
 
 
 async def test_non_pre_existing_pipeline_blocks_on_incompatible():
@@ -499,7 +488,7 @@ async def test_non_pre_existing_pipeline_blocks_on_incompatible():
         _schema_version_row(out_id, {"type": "object", "properties": {"x": {"type": "string"}}}),
         _schema_version_row(in_id, {"type": "object", "properties": {"x": {"type": "integer"}}}),
     ]
-    session = _mock_session_for_schema_versions(rows, use_scalar_one=True)
+    session = _schema_version_session(rows)
 
     result = await GraphValidator().validate_for_run(snap, {}, session)
 

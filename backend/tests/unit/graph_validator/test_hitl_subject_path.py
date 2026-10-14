@@ -7,7 +7,7 @@ Covers ``_check_hitl_subject_path`` (HITL_SUBJECT_PATH_*) and
 """
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -15,22 +15,34 @@ from modulo.core.graph_validator import (
     HITL_SUBJECT_PATH_MAX_LENGTH,
     GraphValidator,
 )
+from tests.unit.graph_validator._helpers import (
+    UUID_A as _UUID_A,
+)
+from tests.unit.graph_validator._helpers import (
+    UUID_B as _UUID_B,
+)
+from tests.unit.graph_validator._helpers import (
+    VALID_DESCRIPTION as _VALID_DESCRIPTION,
+)
+from tests.unit.graph_validator._helpers import (
+    codes_of as _codes,
+)
+from tests.unit.graph_validator._helpers import (
+    gated_edge_graph as _gated_edge_shape,
+)
+from tests.unit.graph_validator._helpers import (
+    hitl_node_graph as _hitl_node_shape,
+)
+from tests.unit.graph_validator._helpers import (
+    session_returning as _session_returning_rows,
+)
 
-_UUID_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-_UUID_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-_VALID_DESCRIPTION = "Approve the deploy only after a human has reviewed the plan."
 _VALID_SUBJECT_PATH = "result.summary"
 
 
 def _session_returning() -> AsyncMock:
     """Mock session whose execute() returns no rows (no DB-backed checks fire)."""
-    session = AsyncMock()
-    scalars_result = MagicMock()
-    scalars_result.all.return_value = []
-    execute_result = MagicMock()
-    execute_result.scalars.return_value = scalars_result
-    session.execute = AsyncMock(return_value=execute_result)
-    return session
+    return _session_returning_rows([])
 
 
 def _gated_edge_graph(
@@ -40,10 +52,7 @@ def _gated_edge_graph(
     config: dict = {"label": "Review gate", "description": description}
     if subject_path is not None:
         config["subject_path"] = subject_path
-    return {
-        "nodes": [{"id": _UUID_A}, {"id": _UUID_B}],
-        "edges": [{"source": _UUID_A, "target": _UUID_B, "type": "normal", "hitl_review_config": config}],
-    }
+    return _gated_edge_shape(config)
 
 
 def _hitl_node_graph(
@@ -53,13 +62,7 @@ def _hitl_node_graph(
     config: dict = {"description": description}
     if subject_path is not None:
         config["subject_path"] = subject_path
-    return {
-        "nodes": [
-            {"id": _UUID_A, "node_type": "hitl", "hitl_config": config},
-            {"id": _UUID_B},
-        ],
-        "edges": [{"source": _UUID_A, "target": _UUID_B, "type": "normal"}],
-    }
+    return _hitl_node_shape(config)
 
 
 # ---------------------------------------------------------------------------
@@ -191,10 +194,6 @@ async def test_gateless_edge_not_flagged():
 # ---------------------------------------------------------------------------
 
 
-def _codes(result) -> set[str]:
-    return {i.code for i in result.issues}
-
-
 class TestCheckHitlSubjectPath:
     """Direct unit tests for ``GraphValidator._check_hitl_subject_path``."""
 
@@ -237,11 +236,12 @@ class TestCheckHitlSubjectPath:
         )
         assert "HITL_SUBJECT_PATH_TOO_LONG" in _codes(result)
 
-    def test_empty_string_skipped(self):
+    @pytest.mark.parametrize("blank", ["", "   "])
+    def test_empty_string_skipped(self, blank):
         from modulo.core.graph_validator import ValidationResult
 
         result = ValidationResult()
-        GraphValidator._check_hitl_subject_path({"subject_path": "  "}, "node 'x'", result)
+        GraphValidator._check_hitl_subject_path({"subject_path": blank}, "node 'x'", result)
         assert not result.issues
 
     def test_non_string_skipped(self):

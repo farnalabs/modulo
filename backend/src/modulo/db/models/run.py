@@ -517,6 +517,29 @@ class Run(OrgScoped):
     # Enqueue-failure audit timestamp (migration 0074) — set when a SAQ
     # dispatch enqueue fails so dispatcher_reconcile can fail the run.
     enqueue_failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # FAR-1728 (migration 0307): the guardrail-override resume self-heal's
+    # DEDICATED discriminator — a BOOLEAN column, never a sentinel string in
+    # the observation column ``error_detail`` (which is exposed on REST/MCP
+    # responses; a healthy overridden run must not carry a control-flow marker
+    # on the wire). SINGLE WRITER: only ``recovery.guardrail_override``'s flip
+    # sets it, and only for a node-started (``first_node_dispatched``)
+    # eval-blocked run — in the same atomic optimistic UPDATE that flips the
+    # status. SINGLE CLEARER: the resume claim
+    # (``pipeline_execution._RESUME_CLAIM_UPDATE_SQL`` / ``..._WITH_TOKEN``)
+    # clears it in the same statement that stamps
+    # ``dispatch_phase='claimed'``, so a successful claim takes the row out of
+    # the self-heal class and clears the flag in one write. The zero-node
+    # override flip (``pending`` — nothing to resume, re-dispatched
+    # ``execute_run``) never sets it. INTERNAL ONLY: not API-projected.
+    # NOT NULL DEFAULT false (server_default in the migration): pre-existing
+    # rows read false, no backfill. Inert on a terminal row left behind by the
+    # age gate (the flag is only consulted together with the
+    # ``running`` + ``first_node_dispatched`` + stale-heartbeat shape) — the
+    # claim-clear covers the healthy path; a wedged row's lingering flag is
+    # never read and never surfaces.
+    guardrail_override_resume_pending: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
     # Sandbox dispatch lifecycle state (migration 0074) — the persistent handle
     # dispatch.py reads to resume/retry a sandbox_agent node after a crash.
     # D8 (FAR-594) JSON vocabulary (written by ``runner_capacity`` /
@@ -551,6 +574,39 @@ class Run(OrgScoped):
     # never lack a phase even if no node ever ran.
     dispatch_phase: Mapped[str | None] = mapped_column(Text)
     dispatch_phase_entered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # FAR-1714: the full durable phase timeline the two columns above can only
+    # hold the LAST edge of. Append-only JSONB array of
+    # ``{"phase": ..., "entered_at": <ISO-8601 timestamptz>}`` — one entry per
+    # durable phase write (``_PHASE_UPDATE_SQL``), PLUS one ``"claimed"``
+    # entry appended by each of the four claim statements (execute/resume,
+    # plain/token), so:
+    #   * every attempt's claim time is recoverable (the scalar floor is
+    #     overwritten by the later phases),
+    #   * the ``claimed`` entries are the ATTEMPT BOUNDARIES — split the
+    #     array on them to decompose claim→first-node per attempt;
+    #   * entries are CUMULATIVE across re-claims, never reset — the wedged
+    #     prior attempt is exactly what incident forensics need.
+    # Entries are non-decreasing in ``entered_at`` (the monotonic guard on
+    # ``_PHASE_UPDATE_SQL`` pairs every append with ``entered_at=now()``).
+    # INTERNAL ONLY: not API-projected (like ``dispatch_phase`` above).
+    # NULL for rows that predate migration 0308.
+    dispatch_phase_history: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"),
+        nullable=True,
+    )
+    # FAR-1714 / FAR-1511: how many durable phase writes this run ABANDONED
+    # at the 2 s bound (``PHASE_WRITE_TIMEOUT_SECONDS`` — timeout or DB
+    # error, ``DispatchPhaseWriter._drain``'s arms). The durable saturation
+    # signal: prod showed 10-13 drops/min, previously visible only in
+    # ephemeral worker logs. NOT reset by a re-claim (neither
+    # ``_CLAIM_UPDATE_SQL`` nor the fenced pending-reset names it — the drops
+    # are an observation about the DATABASE, cumulative for the run's whole
+    # life, additive-only so no attempt can stomp another's count). NOT
+    # claim-token fenced for the same reason. NOT API-projected; aggregate
+    # with ``SUM(dispatch_phase_write_drops)`` over runs for the org-level
+    # saturation view. NOT NULL DEFAULT 0: rows that predate migration 0308
+    # never recorded a drop.
+    dispatch_phase_write_drops: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     # FAR-583 B1: the legacy blob columns (outputs_json / node_telemetry_json /
     # raw_output_markers) are NO LONGER mapped on the ORM — the per-node store
     # `run_node_outputs` is the single blob surface (crud.run_node_outputs).

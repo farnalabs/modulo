@@ -26,12 +26,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.run import batch_delete_old_terminal_runs
 from modulo.db.models.audit_event import AuditEvent
+from modulo.db.models.collection_install import CollectionInstall
+from modulo.db.models.composite_template import CompositeTemplate
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.primitive_abuse_report import PrimitiveAbuseReport
+from modulo.db.models.primitive_rating import PrimitiveRating
+from modulo.db.models.publisher import Publisher
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.soft_delete import include_soft_deleted
 
@@ -133,7 +138,17 @@ async def _abort_org_live_sandboxes(session: AsyncSession, org_id: uuid.UUID) ->
 
 
 async def _collect_org_export(session: AsyncSession, org: Organisation) -> dict[str, Any]:
-    """Bundle all org-owned data into a JSON-serialisable dict."""
+    """Bundle the org-owned data this export covers into a JSON-serialisable dict.
+
+    This archive is a curated subset, not an exhaustive dump: it covers the
+    FAR-1758 library cluster plus the pre-existing org-owned tables selected
+    below, and a table missing from it is data the org never gets back — so
+    library-cluster tables must be added here when introduced. Soft-deletable
+    tables are read through :func:`include_soft_deleted`: a soft-deleted row
+    is still org-owned data awaiting purge, and dropping it silently would
+    make the archive incomplete exactly when an org retires entities before
+    deleting itself (FAR-1758).
+    """
     org_id = org.id
 
     stmt = select(OrgMembership).where(OrgMembership.organisation_id == org_id)
@@ -146,7 +161,11 @@ async def _collect_org_export(session: AsyncSession, org: Organisation) -> dict[
         .all()
     )
     library = (
-        (await session.execute(select(LibraryPrimitive).where(LibraryPrimitive.organisation_id == org_id)))
+        (
+            await session.execute(
+                include_soft_deleted(select(LibraryPrimitive).where(LibraryPrimitive.organisation_id == org_id))
+            )
+        )
         .scalars()
         .all()
     )
@@ -157,6 +176,36 @@ async def _collect_org_export(session: AsyncSession, org: Organisation) -> dict[
     )
     backends = (
         (await session.execute(select(ModelBackend).where(ModelBackend.organisation_id == org_id))).scalars().all()
+    )
+    # Library cluster tables the archive previously omitted (FAR-1758 item 6).
+    composites = (
+        (
+            await session.execute(
+                include_soft_deleted(select(CompositeTemplate).where(CompositeTemplate.organisation_id == org_id))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    ratings = (
+        (await session.execute(select(PrimitiveRating).where(PrimitiveRating.organisation_id == org_id)))
+        .scalars()
+        .all()
+    )
+    abuse_reports = (
+        (await session.execute(select(PrimitiveAbuseReport).where(PrimitiveAbuseReport.organisation_id == org_id)))
+        .scalars()
+        .all()
+    )
+    publishers = (await session.execute(select(Publisher).where(Publisher.organisation_id == org_id))).scalars().all()
+    installs = (
+        (
+            await session.execute(
+                include_soft_deleted(select(CollectionInstall).where(CollectionInstall.organisation_id == org_id))
+            )
+        )
+        .scalars()
+        .all()
     )
 
     def _serialise(records: Any) -> list[dict[str, Any]]:
@@ -182,6 +231,11 @@ async def _collect_org_export(session: AsyncSession, org: Organisation) -> dict[
         "runs": _serialise(runs),
         "audit_events": _serialise(audit),
         "library_primitives": _serialise(library),
+        "composite_templates": _serialise(composites),
+        "primitive_ratings": _serialise(ratings),
+        "primitive_abuse_reports": _serialise(abuse_reports),
+        "publishers": _serialise(publishers),
+        "collection_installs": _serialise(installs),
         "connector_instances": _serialise(connectors),
         "model_backends": _serialise(backends),
         "exported_at": datetime.now(UTC).isoformat(),

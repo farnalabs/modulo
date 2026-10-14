@@ -838,29 +838,39 @@ async def test_create_slack_snapshot_none_returns_500_and_skips_pause_check() ->
 # ---------------------------------------------------------------------------
 
 
-def _fernet_token(secret: str) -> str:
+def _fernet_token(secret: str, key: str | None = None) -> str:
     import base64
 
     from cryptography.fernet import Fernet
 
-    key = base64.urlsafe_b64encode(b"s" * 32).decode()
+    key = key or base64.urlsafe_b64encode(b"s" * 32).decode()
     return Fernet(key.encode()).encrypt(secret.encode()).decode()
 
 
+def _fake_settings_with_key(fernet_key: str) -> MagicMock:
+    settings = MagicMock()
+    settings.fernet_key = fernet_key
+    return settings
+
+
 async def test_verify_slack_delivery_encrypted_signing_secret_verifies() -> None:
-    """FAR-1732: a Fernet-token signing_secret decrypts via the shared
-    scope-bound helper and the signature check runs against the DECRYPTED
-    secret — never against the raw ciphertext blob."""
+    """FAR-1732/1735: a Fernet-token signing_secret decrypts via the shared
+    bounded resolver with the REAL decode helper (no decode mock — the
+    patch target is ``modulo.api.routes.slack.get_settings``, the name the
+    route actually binds, so the fail-closed/decrypt plumbing is genuinely
+    exercised) and the signature check runs against the DECRYPTED secret —
+    never against the raw ciphertext blob."""
+    import base64
+
     from modulo.api.routes.slack import _verify_slack_delivery
 
-    token = _fernet_token(_SECRET)
+    valid_key = base64.urlsafe_b64encode(b"s" * 32).decode()
+    token = _fernet_token(_SECRET, valid_key)
     trigger = MagicMock()
     trigger.pipeline_id = uuid.uuid4()
     trigger.config_json = {"signing_secret": token}
     raw_body = _event_body()
     ts = str(int(time.time()))
-    fake_settings = MagicMock()
-    fake_settings.fernet_key = "unused-by-mock"
 
     with (
         patch(
@@ -870,12 +880,7 @@ async def test_verify_slack_delivery_encrypted_signing_secret_verifies() -> None
         ),
         patch("modulo.api.routes.slack.set_rls_org", new_callable=AsyncMock),
         patch("modulo.api.routes.slack.set_rls_execution_context", new_callable=AsyncMock),
-        patch("modulo.settings.get_settings", return_value=fake_settings),
-        patch(
-            "modulo.api.routes.slack.decode_stored_secret_scoped",
-            new_callable=AsyncMock,
-            return_value=_SECRET,
-        ),
+        patch("modulo.api.routes.slack.get_settings", return_value=_fake_settings_with_key(valid_key)),
     ):
         result_trigger, org_id = await _verify_slack_delivery(
             session=AsyncMock(),
@@ -893,12 +898,17 @@ async def test_verify_slack_delivery_encrypted_signing_secret_verifies() -> None
 
 
 async def test_verify_slack_delivery_undecryptable_token_fails_closed() -> None:
-    """FAR-1732: a stored value shaped like a Fernet token that CANNOT be
-    decrypted must fail closed (401) — never fall back to comparing Slack's
-    signature against ciphertext-as-secret."""
+    """FAR-1732/1735: a stored value shaped like a Fernet token that CANNOT be
+    decrypted under the configured key must fail closed (401) — never fall
+    back to comparing Slack's signature against ciphertext-as-secret. The
+    REAL decode helper raises ``DecryptionError`` here (no decode mock)."""
+    import base64
+
     from modulo.api.routes.slack import _verify_slack_delivery
 
-    token = _fernet_token(_SECRET)
+    other_key = base64.urlsafe_b64encode(b"x" * 32).decode()
+    configured_key = base64.urlsafe_b64encode(b"s" * 32).decode()
+    token = _fernet_token(_SECRET, other_key)
     trigger = MagicMock()
     trigger.config_json = {"signing_secret": token}
     with (
@@ -909,11 +919,7 @@ async def test_verify_slack_delivery_undecryptable_token_fails_closed() -> None:
         ),
         patch("modulo.api.routes.slack.set_rls_org", new_callable=AsyncMock),
         patch("modulo.api.routes.slack.set_rls_execution_context", new_callable=AsyncMock),
-        patch(
-            "modulo.api.routes.slack.decode_stored_secret_scoped",
-            new_callable=AsyncMock,
-            side_effect=Exception("key rotated away"),
-        ),
+        patch("modulo.api.routes.slack.get_settings", return_value=_fake_settings_with_key(configured_key)),
         pytest.raises(HTTPException) as exc_info,
     ):
         await _verify_slack_delivery(
@@ -931,11 +937,17 @@ async def test_verify_slack_delivery_undecryptable_token_fails_closed() -> None:
     assert exc_info.value.detail == "Slack signature verification failed"
 
 
-async def test_verify_slack_delivery_plaintext_secret_uses_fallback_on_decrypt_error() -> None:
-    """FAR-1732: when the decrypt helper raises for a PLAINTEXT (non-token)
-    stored secret, the route logs the degradation and falls back to the stored
-    plaintext — pre-encryption triggers keep delivering. (The token-shaped
-    failure arm fails closed; this is the tolerant arm.)"""
+async def test_verify_slack_delivery_legacy_plaintext_accepted_with_dated_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-1735 bounded shim: a NON-token stored secret is legacy pre-0306
+    plaintext — accepted so pre-migration deployments keep delivering, but
+    ONLY with a loud dated warning (``trigger_secret.legacy_plaintext``), so
+    a future plaintext write is surfaced in the logs, never silently
+    accepted. The REAL decode helper is used (no decode mock): a plaintext
+    value is returned unchanged by the resolver, it does NOT raise."""
+    import logging as _logging
+
     from modulo.api.routes.slack import _verify_slack_delivery
 
     trigger = MagicMock()
@@ -952,11 +964,7 @@ async def test_verify_slack_delivery_plaintext_secret_uses_fallback_on_decrypt_e
         ),
         patch("modulo.api.routes.slack.set_rls_org", new_callable=AsyncMock),
         patch("modulo.api.routes.slack.set_rls_execution_context", new_callable=AsyncMock),
-        patch(
-            "modulo.api.routes.slack.decode_stored_secret_scoped",
-            new_callable=AsyncMock,
-            side_effect=Exception("transient decrypt failure"),
-        ),
+        caplog.at_level(_logging.WARNING, logger="modulo.core.trigger_secrets"),
     ):
         result_trigger, org_id = await _verify_slack_delivery(
             session=AsyncMock(),
@@ -971,3 +979,5 @@ async def test_verify_slack_delivery_plaintext_secret_uses_fallback_on_decrypt_e
 
     assert result_trigger is trigger
     assert org_id == _ORG_ID
+    assert "trigger_secret.legacy_plaintext" in caplog.text
+    assert "signing_secret" in caplog.text

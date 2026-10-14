@@ -10,11 +10,7 @@ import pytest
 
 from modulo import settings
 from modulo.core.graph_validator import GraphValidator, ValidationResult
-
-
-def _codes(result: ValidationResult) -> set[str]:
-    return {i.code for i in result.issues}
-
+from tests.unit.graph_validator._helpers import codes_of as _codes
 
 # ---------------------------------------------------------------------------
 # _check_edges — GRAPH_NO_EDGES
@@ -53,16 +49,6 @@ def test_edges_no_warning_with_edges():
 # ---------------------------------------------------------------------------
 
 
-def test_duplicate_node_id_is_error():
-    """Duplicate node IDs in the graph are a hard error."""
-    nid = str(uuid.uuid4())
-    graph = {"nodes": [{"id": nid}, {"id": nid}], "edges": []}
-    result = ValidationResult()
-    GraphValidator._check_edges(graph, result)
-    assert "GRAPH_DUPLICATE_NODE_ID" in _codes(result)
-    assert not result.is_valid
-
-
 def test_duplicate_node_id_reports_duplicate_id():
     """The GRAPH_DUPLICATE_NODE_ID issue carries the duplicated node id."""
     nid = str(uuid.uuid4())
@@ -72,6 +58,7 @@ def test_duplicate_node_id_reports_duplicate_id():
     dup = next(i for i in result.issues if i.code == "GRAPH_DUPLICATE_NODE_ID")
     assert dup.node_id == nid
     assert nid in dup.message
+    assert not result.is_valid
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +130,24 @@ def test_sandbox_valid_config_no_issues():
     result = ValidationResult()
     GraphValidator._check_sandbox_agent_config(graph, result)
     assert not result.issues
+
+
+def test_sandbox_read_only_non_bool_errors():
+    """A smuggled non-bool read_only fails closed at save time (FAR-212 PR B)."""
+    graph = {"nodes": [_sandbox_node(read_only="yes")], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_READ_ONLY_INVALID" in _codes(result)
+    assert not result.is_valid
+
+
+def test_sandbox_git_credentials_unrecognised_scope_errors():
+    """An unrecognised git_credentials scope fails closed at save time (FAR-212 PR B)."""
+    graph = {"nodes": [_sandbox_node(git_credentials="full")], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_GIT_CREDENTIALS_INVALID" in _codes(result)
+    assert not result.is_valid
 
 
 def test_sandbox_missing_command_errors():
@@ -518,7 +523,7 @@ def test_sandbox_script_mode_jinja_not_checked():
         "id": str(uuid.uuid4()),
         "node_type": "sandbox_agent",
         "mode": "script",
-        "script_command": "python3 main.py",
+        "script_command": "python3 {{ }}.py",
         "template_id": "opencode",
     }
     graph = {"nodes": [node], "edges": []}
@@ -879,7 +884,7 @@ def test_sandbox_heredoc_clean_list_is_valid():
     assert result.is_valid
 
 
-def test_sandbox_heredoc_in_single_item_list_is_flagged():
+def test_sandbox_heredoc_in_single_item_list_is_not_flagged():
     """FAR-664: a single-item agent_commands list containing a heredoc is safe
     (no join happens for a single command) and must not be rejected."""
     node = _sandbox_node(agent_commands=["python3 - <<'PY'\nprint('hi')\nPY"])

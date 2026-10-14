@@ -240,6 +240,15 @@ INVENTORY: dict[str, PathRecord] = {
     "connector_health_checks": _exempt("derived_cache"),
     "health_readiness_alert": _exempt("notification_only"),
     "memory_monitor_cron": _exempt("liveness"),
+    # FAR-1707: the kill-switch drill appends exactly one system_audit_events
+    # fact per run (event_type="kill_switch_drill"). It is a non-mutating
+    # self-test — the downgrade check is in-memory and the fail-closed check
+    # drives the reader with a raising stub, so no org-owned row changes; the
+    # audit record is the deliberate, durable evidence.
+    "run_kill_switch_drill": _audited(
+        ("src/modulo/core/guardrails/kill_switch_drill.py", "append_system_audit_event("),
+        ("src/modulo/core/guardrails/kill_switch_drill.py", '_KILL_SWITCH_DRILL_EVENT_TYPE = "kill_switch_drill"'),
+    ),
     # --- reconcilers / sweep helpers declared under core/ -----------------
     "reconcile_facts": _exempt("derived_analytics"),
     "reconcile_runner_workspaces": _exempt("infra_container_gc"),
@@ -261,6 +270,18 @@ INVENTORY: dict[str, PathRecord] = {
         _TERMINAL_ADVANCE,
     ),
     "maybe_alarm_approve_sweep": _audited(("src/modulo/core/hitl_manager/sweep_alarm.py", "append_audit_event")),
+    # FAR-1593: materialises the org's applied guardrail config onto a newly
+    # created/cloned pipeline, inside the creating request's transaction
+    # (``db.crud.pipeline.create_pipeline`` / ``_clone_pipeline_config``). It is
+    # not a request-less background path: it runs with the creating principal
+    # in scope and writes no separate SYSTEM event — the org-owned ``Eval``
+    # guardrail rows are part of the enclosing creation action, recorded by the
+    # request-surface audit (``pipeline_created`` on create, ``pipeline_cloned``
+    # on clone).
+    "seed_org_guardrail_rows_for_pipeline": _audited(
+        ("src/modulo/api/routes/pipelines.py", 'audited("pipeline_created", "pipeline"'),
+        ("src/modulo/api/routes/pipelines.py", 'audited("pipeline_cloned", "pipeline"'),
+    ),
     # --- boot-time seeds declared under core/ -----------------------------
     "seed_default_alert_rules_for_org": _exempt("boot_default_config"),
     "seed_default_alert_rules": _exempt("boot_default_config"),

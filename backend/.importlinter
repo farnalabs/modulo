@@ -210,6 +210,18 @@ ignore_imports =
     # helper (no core business logic flows into db), the same narrow
     # cross-boundary category as the pure-decision-function exemptions above.
     modulo.db.seed_demo -> modulo.core.demo
+    # FAR-1593 — pipeline-creation guardrail freshness: create_pipeline (the
+    # single ORM chokepoint every creation path funnels through — REST, MCP,
+    # templates, onboarding, library install, workflow import, clone)
+    # materialises the org's APPLIED guardrail rows onto the new pipeline in
+    # the SAME transaction. The enforcement seams (run creation, webhook
+    # pre-trigger) load guardrail rows BY PIPELINE and the apply/import
+    # fan-out only covers pipelines that exist at apply time, so without the
+    # seed a post-apply pipeline runs unguarded while /drift reports clean.
+    # Same narrow cross-boundary category as the FAR-208 guardrail seam above:
+    # db.crud.pipeline only invokes the seed entry point; all config parsing
+    # and row building stays in core.guardrails.materialise.
+    modulo.db.crud.pipeline -> modulo.core.guardrails.materialise
 
 [importlinter:contract:connectors-do-not-import-core]
 name = Connectors don't reach into core

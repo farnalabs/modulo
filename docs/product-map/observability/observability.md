@@ -60,7 +60,7 @@ observability exports (OTLP metrics/traces). Surfaces: `/admin/errors`,
 
 _Error Forwarders (`/settings/error-forwarders`) and Browser Monitoring config
 (`/settings/monitoring`) are deferred from the MVP nav (hidden via
-`visibility: private_preview`). Behaviour detail removed for the MVP cut — restore
+`visibility: private_preview`). Behaviour detail removed for the MVP cut - restore
 from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
 (browser monitoring)._
 
@@ -79,8 +79,8 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
       `principal.organisation_id`, so instance-level / unattributed rows (the
       public frontend ingest path and org-less backend ERRORs) written into the
       `SYSTEM_ORG_ID` sentinel partition were write-only. Three system-admin
-      read routes now expose that partition — `GET /api/v1/errors/instance`,
-      `/instance/{error_id}` and `/instance/{error_id}/events` — each gated by
+      read routes now expose that partition - `GET /api/v1/errors/instance`,
+      `/instance/{error_id}` and `/instance/{error_id}/events` - each gated by
       the system permission `errors.resolve_instance` as a route-level
       dependency (a tenant principal is refused 403 before any query runs, with
       or without a forged scope parameter) and each RLS-pinning its transaction
@@ -129,7 +129,7 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
       `update_failed`) while the `code` extension member keeps the same value;
       the code→type map is deliberately sparse per RFC §4 (a plain resource 404
       and `database_error`/`conflict`/`internal_error`/`migration_required`
-      stay status-derived — same type, so no minting), each type's `status`
+      stay status-derived - same type, so no minting), each type's `status`
       equals the HTTP status the raising route declares (§3.1.2) and carries a
       short per-type title (§3.1.3), and the frontend error formatter mirrors
       the per-type titles so a surfaced problem title matches the backend
@@ -139,10 +139,10 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
 
 ## Known Gaps
 
-- **Forwarder end-to-end delivery is not BDD-exercised per provider** — the
+- **Forwarder end-to-end delivery is not BDD-exercised per provider** - the
   forwarder config contract is locked; actual outbound delivery to each vendor
   is unit-tested at the dispatcher boundary.
-- **No E2E browser-monitoring smoke test** — browser-monitor config is
+- **No E2E browser-monitoring smoke test** - browser-monitor config is
   unit/BDD-verified at the API layer only.
 
 ## QA History
@@ -154,7 +154,7 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   `api/models/problem.py` / `formatError.ts` / `test_problem.py` citations, and
   recorded the deliberate no-mint guards (status-derived generics) so the sparse
   code→type map is auditable.
-- 2026-10-07: **FAR-1556 follow-up to FAR-1547 (PR #1353)** — registered the
+- 2026-10-07: **FAR-1556 follow-up to FAR-1547 (PR #1353)** - registered the
   instance-errors surface the feature PR's allowlist excluded: the three
   system-admin sentinel-partition read routes (`GET /api/v1/errors/instance`,
   `/instance/{error_id}`, `/instance/{error_id}/events` in
@@ -164,10 +164,10 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   two-partition boundary. Behaviour and `status: covered` re-verified against
   `routes/errors.py`, the test suite and the manifest `feat-observability`
   registry (which already carries the matching FAR-1547 behaviour line and the
-  `admin-errors-scope*` / `admin-error-detail-instance-readonly` testids) — no
+  `admin-errors-scope*` / `admin-error-detail-instance-readonly` testids) - no
   drift found, so the manifest needed no change.
 
-- 2026-09-22: **product-map walk** — closed the "No BDD for OTel *trace* span
+- 2026-09-22: **product-map walk** - closed the "No BDD for OTel *trace* span
   capture" gap. Re-anchored `otel_traces.feature` so its four scenarios drive
   the REAL `LangGraphOtelBridge` seams network-free and DB-free (the
   InMemorySpanExporter pattern of `tests/unit/otel_bridge/test_handler.py`):
@@ -179,7 +179,7 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   processor so nothing reaches the exporter. The previous steps fabricated span
   dicts in `ctx` and never touched the bridge.
 
-- 2026-09-21: **product-map walk** — closed the "`active_run_observability.feature`
+- 2026-09-21: **product-map walk** - closed the "`active_run_observability.feature`
   is deselected from CI" gap. Un-gated the two scenarios and re-anchored them so
   they drive the REAL `GET /api/v1/runs/{id}` and `GET /api/v1/runs/{id}/events`
   routes with only the `_do_*` DB-fetch seams patched (the route handler, the
@@ -190,7 +190,7 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   Removed the two scenarios from
   `PINNED_AWAITING_IMPLEMENTATION`; the feature is now executing BDD coverage.
 
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass** - registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/errors`, `/admin/errors/:id`, `/settings/error-forwarders`,
   `/settings/monitoring`, `/settings/observability`
@@ -202,7 +202,7 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   without importing it, so the entitlement gate could not resolve and the whole
   page surface silently degraded to an unresolved custom element.
 
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass** - registered the shared
   surface the `/admin/errors/:id`, `/settings/error-forwarders` and
   `/settings/monitoring` whole-page views render (`components/shared/JsonViewer.vue`
   and `components/shared/ErrorAlert.vue` static testids `json-viewer*` /
@@ -214,14 +214,14 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   `SettingsMonitorConfigView.vue`, so the error-detail / forwarders / browser-monitor
   surfaces stay visible to Assistant's docs indexer and `/api/v1/manifest`.
 
-- 2026-09-11: **product-map review pass** — registered the shared
+- 2026-09-11: **product-map review pass** - registered the shared
   search-bar surface (`components/shared/FilterBar.vue` static testids
   `filter-bar-search` / `filter-bar-search-wrapper`) in the `/admin/errors` manifest
   `elements:` inventory and wired the component into the reverse testid-coverage
   guard, so the error-list search control the page ships stays visible to Assistant's
   docs indexer and `/api/v1/manifest`.
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass** - extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/settings/observability`: the whole-page view(s) `SettingsObservabilityView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -229,13 +229,13 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-27: **product-map review pass** — added this entry to
+- 2026-08-27: **product-map review pass** - added this entry to
   close the coverage gap for the registered `feat-observability` feature (no
   behaviour-tracker existed). Behaviours verified against `core/error_tracking/`,
   the `/api/v1/errors*` + `/api/v1/settings/observability` +
   `/api/v1/admin/monitor-config` routes, the error-observability BDD features,
   and the observability-forwarder-monitor unit suites. Status: covered.
-- 2026-08-30: **duplicate-entry reconciliation** — a parallel product-map walk
+- 2026-08-30: **duplicate-entry reconciliation** - a parallel product-map walk
   had added a second `feat-observability` tracker at `monitor/observability.md`,
   breaking the one-entry-per-feature invariant. This entry is retained; the
   duplicate's unique citations (`otel_bridge/`, the seven `error_tracking` unit

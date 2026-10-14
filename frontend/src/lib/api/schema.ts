@@ -4725,7 +4725,9 @@ export interface paths {
          *     resumable checkpoint (``GuardrailOverrideNoCheckpointError``, FAR-1711
          *     M1 — the reachable case is a non-interactive pipeline, which never
          *     persists one): resuming it would silently re-execute it, so the run is
-         *     left terminal ``eval_blocked`` rather than burned.
+         *     left terminal eval_blocked rather than burned. The checkpoint never
+         *     appears later, so re-calling this endpoint returns the same 409 — the
+         *     remediation for such a run is a NEW run, not another override attempt.
          *
          *     Requires operator or admin role.
          */
@@ -5655,6 +5657,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/audit/evidence-pack": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Evidence Pack Endpoint
+         * @description Build and sign the offline-verifiable evidence pack for the org's chain.
+         *
+         *     The response is a self-contained artefact (signed manifest + Ed25519
+         *     signature + published verification key + file bytes) that a third party can
+         *     verify with nothing but this body and the pre-published public key.
+         */
+        get: operations["evidence_pack_endpoint_api_v1_admin_audit_evidence_pack_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/audit/verification-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Verification Key Endpoint
+         * @description Publish the org's Ed25519 evidence verification key (public, not secret).
+         *
+         *     An external auditor can fetch this once and verify any evidence pack the
+         *     org exports; the key is also embedded in every pack as an artefact.
+         */
+        get: operations["verification_key_endpoint_api_v1_admin_audit_verification_key_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/libraries": {
         parameters: {
             query?: never;
@@ -5875,6 +5924,64 @@ export interface paths {
         put?: never;
         /** Submit Abuse Report Endpoint */
         post: operations["submit_abuse_report_endpoint_api_v1_libraries__primitive_id__ratings_abuse_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/libraries/admin/abuse-reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Abuse Reports Endpoint
+         * @description List this organisation's abuse-report queue, newest first.
+         *
+         *     Read-only triage view: optionally narrowed with ``?status=pending`` (the
+         *     default queue), ``reviewed`` or ``dismissed``. Org-scoped by the caller's
+         *     ``organisation_id``; reporting a decision on a row is done via the resolve
+         *     endpoint, not here.
+         */
+        get: operations["list_abuse_reports_endpoint_api_v1_libraries_admin_abuse_reports_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/libraries/admin/abuse-reports/{report_id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Review Abuse Report Endpoint
+         * @description Record a moderation decision on one abuse report.
+         *
+         *     Sets ``status`` to ``reviewed`` (report upheld) or ``dismissed`` (report
+         *     rejected) and stamps ``reviewed_at`` and ``reviewer_account_id`` from the
+         *     authenticated principal.
+         *
+         *     **Resolving a report RECORDS A DECISION — it does NOT remove the rating.**
+         *     Only the report row changes; the flagged rating stays published, because
+         *     there is no rating-delete path in the product and adding one is a
+         *     separate product decision.
+         *
+         *     A report belonging to another organisation is invisible here (explicit
+         *     ``org_id`` predicate + RLS), so it answers 404 rather than leaking its
+         *     existence.
+         */
+        post: operations["review_abuse_report_endpoint_api_v1_libraries_admin_abuse_reports__report_id__resolve_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -10229,7 +10336,76 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** AbuseReportResponse */
+        /**
+         * AbuseReportQueueItem
+         * @description One report as the moderation queue renders it.
+         *
+         *     Field names mirror the ``PrimitiveAbuseReport`` ORM columns exactly, so
+         *     this shape validates against a real, flushed row.
+         */
+        AbuseReportQueueItem: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Primitive Id
+             * Format: uuid
+             */
+            primitive_id: string;
+            /** Rating Id */
+            rating_id: string | null;
+            /** Reporter Account Id */
+            reporter_account_id: string | null;
+            /** Reason */
+            reason: string;
+            /** Status */
+            status: string;
+            /** Reviewed At */
+            reviewed_at: string | null;
+            /** Reviewer Account Id */
+            reviewer_account_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** AbuseReportQueueResponse */
+        AbuseReportQueueResponse: {
+            /** Items */
+            items: components["schemas"]["AbuseReportQueueItem"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * AbuseReportResolveRequest
+         * @description The moderation decision to RECORD on a report.
+         *
+         *     ``reviewed`` — the report is upheld (the flagged rating was judged to
+         *     violate the rules); ``dismissed`` — the report is rejected. Either value
+         *     only stamps ``status`` / ``reviewed_at`` / ``reviewer_account_id`` on the
+         *     REPORT row: resolving a report does NOT remove, hide or alter the rating
+         *     it points at. There is no rating-delete path in the product, and adding
+         *     one is a separate product decision.
+         */
+        AbuseReportResolveRequest: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "reviewed" | "dismissed";
+        };
+        /**
+         * AbuseReportResponse
+         * @description The 201 body of ``POST /{primitive_id}/ratings/abuse``.
+         *
+         *     ``reporter_account_id`` mirrors the ``PrimitiveAbuseReport`` ORM column
+         *     exactly (an earlier ``reporter_user_id`` name had no ORM counterpart, so
+         *     ``model_validate`` raised ``ValidationError`` — which ``handle_db_errors``
+         *     maps to 422 — on every real report).
+         */
         AbuseReportResponse: {
             /**
              * Id
@@ -10243,8 +10419,8 @@ export interface components {
             primitive_id: string;
             /** Rating Id */
             rating_id: string | null;
-            /** Reporter User Id */
-            reporter_user_id: string | null;
+            /** Reporter Account Id */
+            reporter_account_id: string | null;
             /** Reason */
             reason: string;
             /** Status */
@@ -17582,7 +17758,14 @@ export interface components {
             /** Total */
             total: number;
         };
-        /** RatingResponse */
+        /**
+         * RatingResponse
+         * @description One rating as the API renders it.
+         *
+         *     ``account_id`` mirrors the ``PrimitiveRating`` ORM column exactly (an
+         *     earlier ``user_id`` name had no ORM counterpart, so ``model_validate``
+         *     failed on every real row); ``None`` for an anonymous/removed account.
+         */
         RatingResponse: {
             /**
              * Id
@@ -17594,8 +17777,8 @@ export interface components {
              * Format: uuid
              */
             primitive_id: string;
-            /** User Id */
-            user_id: string | null;
+            /** Account Id */
+            account_id: string | null;
             /** Thumbs Up */
             thumbs_up: boolean;
             /** Comment */
@@ -33258,6 +33441,74 @@ export interface operations {
             };
         };
     };
+    evidence_pack_endpoint_api_v1_admin_audit_evidence_pack_get: {
+        parameters: {
+            query?: {
+                /** @description Optional run id to name in the pack manifest */
+                run_id?: string | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    verification_key_endpoint_api_v1_admin_audit_verification_key_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
     list_library_primitives_endpoint_api_v1_libraries_get: {
         parameters: {
             query?: {
@@ -33798,6 +34049,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AbuseReportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    list_abuse_reports_endpoint_api_v1_libraries_admin_abuse_reports_get: {
+        parameters: {
+            query?: {
+                status?: ("pending" | "reviewed" | "dismissed") | null;
+                page?: number;
+                page_size?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AbuseReportQueueResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    review_abuse_report_endpoint_api_v1_libraries_admin_abuse_reports__report_id__resolve_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                report_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AbuseReportResolveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AbuseReportQueueItem"];
                 };
             };
             /** @description Validation Error */

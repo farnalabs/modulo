@@ -122,6 +122,21 @@ def _make_main_session() -> AsyncMock:
     return session
 
 
+def _assert_main_session_read_nothing_but_the_guardrail_pin(main_session: AsyncMock) -> None:
+    """The caller's session must not re-read the SOURCE pipeline.
+
+    Stated as "the only statement it ran is the org guardrail-pin read" rather
+    than "it ran no statement at all": FAR-1593 materialises the org's applied
+    guardrail config onto the clone in the caller's transaction, which reads
+    ``organisations.guardrail_pins_json`` on this session — a single-row read
+    of an unrelated table that takes no lock on the source, so the torn-read
+    invariant the split-transaction design protects still holds.
+    """
+    executed = [str(call.args[0]) for call in main_session.execute.await_args_list]
+    unexpected = [stmt for stmt in executed if "guardrail_pins_json" not in stmt]
+    assert not unexpected, f"main session must never read the source, saw: {unexpected}"
+
+
 # ---------------------------------------------------------------------------
 # FAR-1440: the clone-engine sslmode contract. The source engine's URL is
 # clean (its ``sslmode`` was extracted into connect_args upstream), so the
@@ -253,7 +268,7 @@ async def test_step_a_commits_before_step_b_writes(monkeypatch: pytest.MonkeyPat
     assert cloned is not None
     # The main session (caller's) never queried the source: no lock is held on
     # the caller's connection during the slow clone work.
-    main_session.execute.assert_not_awaited()
+    _assert_main_session_read_nothing_but_the_guardrail_pin(main_session)
     assert events[-1] == "step_a_committed"
 
 
@@ -384,7 +399,7 @@ async def test_step_b_uses_step_a_snapshot_not_a_live_reread(monkeypatch: pytest
     )
 
     # The main session (caller's) never re-reads the source: no lock dependency.
-    main_session.execute.assert_not_awaited()
+    _assert_main_session_read_nothing_but_the_guardrail_pin(main_session)
     added_pipelines = [c for c in main_session.add.call_args_list if type(c.args[0]).__name__ == "Pipeline"]
     assert added_pipelines, "expected the cloned Pipeline to be added on the main session"
     cloned = added_pipelines[0].args[0]
