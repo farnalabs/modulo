@@ -521,7 +521,7 @@ async def saml_acs_provider(
 
     RelayState verification (FAR-1003, defense-in-depth):
     - valid signed RelayState for THIS provider → proceed
-    - tampered / wrong provider / expired → reject (303 to the login page)
+    - tampered / wrong provider / expired → reject (401)
     - absent → do NOT fail; proceed on URL path (IdP-initiated SSO)
 
     Security reasoning: with routing by URL path, a forged RelayState
