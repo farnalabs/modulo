@@ -175,10 +175,11 @@ _MIGRATION_PATH = (
 # 0307_runs_guardrail_override_resume_pending chained onto 0306_trigger_secret_encryption, and
 # 0308_runs_dispatch_phase_history chained onto 0307_runs_guardrail_override_resume_pending, and
 # 0309_hitl_claims_decision_sweep chained onto 0308_runs_dispatch_phase_history, and
-# 0310_policy_gate_evaluation_mode chained onto 0309_hitl_claims_decision_sweep as the chain head.
+# 0310_library_cluster_db_hardening chained onto 0309_hitl_claims_decision_sweep, and
+# 0311_policy_gate_evaluation_mode chained onto 0310_library_cluster_db_hardening as the chain head.
 # (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
 # migration under test, not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0310_policy_gate_evaluation_mode"
+_CHAIN_HEAD_MIGRATION_NAME = "0311_policy_gate_evaluation_mode"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

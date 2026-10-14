@@ -48,7 +48,8 @@ Lenses:
     0307_runs_guardrail_override_resume_pending chains onto 0306_trigger_secret_encryption, and
     0308_runs_dispatch_phase_history chains onto 0307_runs_guardrail_override_resume_pending, and
     0309_hitl_claims_decision_sweep chains onto 0308_runs_dispatch_phase_history, and
-    0310_policy_gate_evaluation_mode chains onto 0309_hitl_claims_decision_sweep as the
+    0310_library_cluster_db_hardening chains onto 0309_hitl_claims_decision_sweep, and
+    0311_policy_gate_evaluation_mode chains onto 0310_library_cluster_db_hardening as the
     single linear head. This migration was originally numbered 0268; main landed
   ``0268_webhook_lookup_expiry_indexes`` and
   ``0269_webhook_dedup_check_constraints`` in the meantime, claiming that slot,
@@ -91,7 +92,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0270_pipeline_snapshots_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0269_webhook_dedup_check_constraints"
-_HEAD_MIGRATION = "0310_policy_gate_evaluation_mode"
+_HEAD_MIGRATION = "0311_policy_gate_evaluation_mode"
 _CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - 0264

@@ -34,7 +34,7 @@ class PolicyGate(SoftDeleteMixin, OrgScoped):
             name="ck_policy_gates_action",
         ),
         # FAR-939 chunk 12 — evaluation-mode vocabulary, shipped by migration
-        # 0310_policy_gate_evaluation_mode. The predicate and name match that
+        # 0311_policy_gate_evaluation_mode. The predicate and name match that
         # migration's SQLite batch definition EXACTLY so metadata.create_all()
         # / SQLite-mirror CTAS parity holds against the shipped contract:
         # 'automatic' (current behaviour — automated evals govern) or

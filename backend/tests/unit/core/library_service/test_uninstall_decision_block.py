@@ -47,6 +47,9 @@ def _make_install_row(install_id: uuid.UUID, org_id: uuid.UUID, collection_id: u
     install.id = install_id
     install.organisation_id = org_id
     install.collection_id = collection_id
+    # Explicit None: a bare MagicMock auto-creates deleted_at as a truthy mock,
+    # which _load_install's soft-delete guard rejects as already-uninstalled.
+    install.deleted_at = None
     return install
 
 
@@ -146,8 +149,9 @@ class TestUninstallCollectionPartialDecisionBlock:
         # No detachments
         assert not result["detached"]
 
-        # The install record itself is deleted (called for unblocked pipeline + install)
-        session.delete.assert_any_await(install)
+        # The install record itself is SOFT-deleted (deleted_at stamped), not
+        # hard-deleted — its provenance row and entity children survive.
+        assert install.deleted_at is not None
 
     @pytest.mark.asyncio
     async def test_blocked_message_names_remediation(self) -> None:

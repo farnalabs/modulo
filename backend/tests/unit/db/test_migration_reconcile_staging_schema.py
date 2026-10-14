@@ -143,8 +143,9 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0307_runs_guardrail_override_resume_pending chains off 0306_trigger_secret_encryption, and
 # 0308_runs_dispatch_phase_history chains off 0307_runs_guardrail_override_resume_pending, and
 # 0309_hitl_claims_decision_sweep chains off 0308_runs_dispatch_phase_history, and
-# 0310_policy_gate_evaluation_mode chains off 0309_hitl_claims_decision_sweep as the chain head.
-_CHAIN_HEAD_MIGRATION = "0310_policy_gate_evaluation_mode"
+# 0310_library_cluster_db_hardening chains off 0309_hitl_claims_decision_sweep, and
+# 0311_policy_gate_evaluation_mode chains off 0310_library_cluster_db_hardening as the chain head.
+_CHAIN_HEAD_MIGRATION = "0311_policy_gate_evaluation_mode"
 
 
 def _source(name: str) -> str:

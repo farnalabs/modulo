@@ -128,10 +128,16 @@ def _snapshot_pins(install: CollectionInstall, collection: LibraryPrimitive) -> 
                 }
             )
         return out
-    return [
-        {**p, "primitive_type": ""}
-        for p in _pins_from_manifest(collection.manifest_pins or (collection.content_json or {}).get("manifest_pins"))
-    ]
+    # Fall back to the collection row's current manifest for legacy installs.
+    # ``manifest_pins`` is the canonical source; the legacy
+    # ``content_json["pins"]`` key (written by an earlier version of the API
+    # routes) is accepted last so already-persisted rows keep resolving.
+    manifest_pins = (
+        collection.manifest_pins
+        or (collection.content_json or {}).get("manifest_pins")
+        or (collection.content_json or {}).get("pins")
+    )
+    return [{**p, "primitive_type": ""} for p in _pins_from_manifest(manifest_pins)]
 
 
 def _pin_entity_map(install: CollectionInstall) -> dict[str, dict[str, list[str]]]:
@@ -242,6 +248,12 @@ async def _load_install(
     """Load and validate the install record against org + collection."""
     install = await session.get(CollectionInstall, install_id)
     if install is None or install.organisation_id != org_id:
+        raise UpgradeInstallNotFoundError(f"Install {install_id} not found for organisation {org_id}")
+    # Soft-deleted (uninstalled) installs are retired history, never live.
+    # ``session.get`` can resolve an already-uninstalled row from the session
+    # identity map, bypassing the global ``deleted_at IS NULL`` filter, so the
+    # guard is explicit — the same rule ``uninstall._load_install`` applies.
+    if install.deleted_at is not None:
         raise UpgradeInstallNotFoundError(f"Install {install_id} not found for organisation {org_id}")
     if install.collection_id != collection_id:
         raise UpgradeInstallNotFoundError(f"Install {install_id} does not belong to collection {collection_id}")
@@ -1009,7 +1021,11 @@ async def _load_new_pins(
     newer: LibraryPrimitive,
 ) -> tuple[list[dict[str, str]], dict[str, LibraryPrimitive]]:
     """Resolve the newer version's manifest pins and the primitives they map to."""
-    new_pin_dicts = _pins_from_manifest(newer.manifest_pins or (newer.content_json or {}).get("manifest_pins"))
+    # ``manifest_pins`` column is canonical; ``content_json["pins"]`` is the
+    # legacy API-authored key, accepted last for already-persisted rows.
+    new_pin_dicts = _pins_from_manifest(
+        newer.manifest_pins or (newer.content_json or {}).get("manifest_pins") or (newer.content_json or {}).get("pins")
+    )
     new_pins: list[dict[str, str]] = []
     new_pin_prims: dict[str, LibraryPrimitive] = {}
     for pin in new_pin_dicts:

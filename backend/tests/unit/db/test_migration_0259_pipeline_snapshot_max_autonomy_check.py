@@ -56,7 +56,8 @@ Lenses:
     0307_runs_guardrail_override_resume_pending chains onto 0306_trigger_secret_encryption, and
     0308_runs_dispatch_phase_history chains onto 0307_runs_guardrail_override_resume_pending, and
     0309_hitl_claims_decision_sweep chains onto 0308_runs_dispatch_phase_history, and
-    0310_policy_gate_evaluation_mode chains onto 0309_hitl_claims_decision_sweep as the
+    0310_library_cluster_db_hardening chains onto 0309_hitl_claims_decision_sweep, and
+    0311_policy_gate_evaluation_mode chains onto 0310_library_cluster_db_hardening as the
     single linear head.
 * **Structure (mocked ``op``)** - upgrade emits FOUR existence-gated DO blocks
   (add NOT VALID, then VALIDATE, for each of the two columns) carrying the full
@@ -82,7 +83,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0259_pipeline_snapshot_max_autonomy_check"
 _MIGRATION_DOWN_REVISION = "0258_pipeline_accountability_owners"
-_HEAD_MIGRATION = "0310_policy_gate_evaluation_mode"
+_HEAD_MIGRATION = "0311_policy_gate_evaluation_mode"
 _MAX_CEILING_CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_level"
 _DEFAULT_LEVEL_CONSTRAINT = "ck_pipeline_snapshots_default_autonomy_level"
 _CONSTRAINTS = (_MAX_CEILING_CONSTRAINT, _DEFAULT_LEVEL_CONSTRAINT)
