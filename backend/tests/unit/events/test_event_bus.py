@@ -259,7 +259,7 @@ async def test_publish_background_broadcast_is_discarded_after_completion() -> N
 # ---------------------------------------------------------------------------
 
 
-async def test_redis_broker_property_exposes_configured_broker(bus: EventBus) -> None:
+def test_redis_broker_property_exposes_configured_broker(bus: EventBus) -> None:
     """The SSE relay reads the broker off the bus; None means no Redis leg."""
     assert bus.redis_broker is None
 

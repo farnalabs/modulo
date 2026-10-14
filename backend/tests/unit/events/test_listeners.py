@@ -124,7 +124,7 @@ def test_safe_str_attr(
         assert _safe_str_attr(target, attr, "run", "created") == expected
 
     if expected_log is None:
-        assert caplog.text == ""
+        assert not caplog.text
     else:
         assert expected_log in caplog.text
 
