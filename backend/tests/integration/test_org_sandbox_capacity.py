@@ -159,6 +159,8 @@ async def _seed_run(
 ) -> uuid.UUID:
     from sqlalchemy import column, insert, inspect, table
 
+    from modulo.db.models.run import Run
+
     run_id = uuid.uuid4()
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     values: dict = {
@@ -184,25 +186,33 @@ async def _seed_run(
             if value is not None
         }
     )
-    # INSERT restricted to the columns the LIVE table actually has. The
-    # test_migration_* suites seed a private database stalled at their own
-    # alembic revision, so an ORM ``insert(Run)`` — which emits EVERY mapped
-    # column — dies there on columns a later migration adds (FAR-1728's 0307
-    # ``runs.guardrail_override_resume_pending`` broke migration_0275 and
-    # migration_0300 this way). A lightweight table() carrying only the
-    # columns present keeps the seeder legal at any revision and identical at
-    # head, where every column exists.
-    #
-    # Reflection must go through ``conn.run_sync``: the engine is an asyncpg
-    # AsyncEngine, whose ``sync_engine`` cannot be inspected directly from the
-    # running event loop (doing so raises MissingGreenlet).
+    # The test_migration_* suites seed a private database stalled at their own
+    # alembic revision, so the INSERT must name only columns the LIVE table
+    # actually has. An ORM ``insert(Run)`` also emits every later-migration
+    # column (and Python-side default): FAR-1728's 0307
+    # ``runs.guardrail_override_resume_pending``, absent at 0274/0297, broke
+    # those suites this way. Reflect the live column set — the synchronous
+    # Inspector must run inside ``run_sync`` to be safe on the async engine —
+    # and insert the intersection with the values we set.
     async with db_engine.connect() as conn:
-        reflected_columns = await conn.run_sync(
-            lambda sync_conn: [col["name"] for col in inspect(sync_conn).get_columns("runs")]
+        existing_columns = await conn.run_sync(
+            lambda sync_conn: {col["name"] for col in inspect(sync_conn).get_columns("runs")}
         )
-    existing_columns = set(reflected_columns)
+    # A head-shaped database has every column the ORM maps; a database pinned at
+    # an earlier revision does not. At head, every column this seeder sets must
+    # exist — silently dropping one there would mask a dropped/renamed column.
+    # On a pinned-revision database the omission is expected, so only assert at
+    # head.
+    if set(Run.__table__.c.keys()) <= existing_columns:
+        missing = set(values) - existing_columns
+        assert not missing, f"_seed_run sets runs columns absent at head: {sorted(missing)}"
     columns = [name for name in values if name in existing_columns]
-    runs_table = table("runs", *(column(name) for name in columns))
+    # id/status/organisation_id always exist, so ``columns`` is never empty in
+    # practice; guard anyway — insert() with zero columns is a compile-time
+    # error, and an explicit message names the real cause.
+    if not columns:
+        raise RuntimeError("runs table lacks every column _seed_run sets — stale pinned revision?")
+    runs_table = table("runs", *(column(name, Run.__table__.c[name].type) for name in columns))
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
         await session.execute(insert(runs_table).values({name: values[name] for name in columns}))

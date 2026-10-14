@@ -30,9 +30,11 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from modulo.auth.secret_storage import DecryptionError
 from modulo.core.trigger_engine import (
     _CI_FAILURE_COALESCE_WINDOW_MAX_SECONDS,
     _CI_FAILURE_COALESCE_WINDOW_SECONDS,
@@ -982,6 +984,47 @@ async def test_handle_webhook_validation_raises(
         )
     if extra_assert is not None:
         assert extra_assert(exc_info)
+
+
+async def test_handle_webhook_undecryptable_hmac_secret_fails_closed() -> None:
+    """FAR-1735 engine re-raise arm: a structurally complete Fernet token the
+    configured key cannot decrypt raises ``DecryptionError`` out of
+    handle_webhook — driven through the REAL shared resolver and the REAL
+    scope-bound decode (no decode mock). The engine logs the failure and
+    re-raises; ciphertext is never used as the HMAC key and no delivery
+    proceeds past the resolver. The settings patch pins a VALID fernet key so
+    the assertion does not depend on which conftest populated the ambient
+    settings cache in a combined test run."""
+    import base64
+
+    from modulo.settings import Settings
+
+    alien_token = Fernet(Fernet.generate_key().decode()).encrypt(b"alien-secret").decode()
+    trigger = _make_trigger(hmac_secret=alien_token)
+    session = _make_session(trigger=trigger, active_run_count=0)
+    fake_settings = Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key="a" * 32,
+        fernet_key=base64.urlsafe_b64encode(b"s" * 32).decode(),
+        modulo_admin_password="pw",
+        redis_url="",
+    )
+
+    with (
+        patch("modulo.settings.get_settings", return_value=fake_settings),
+        patch("modulo.core.trigger_engine.time.time", return_value=_VALID_TS),
+        pytest.raises(DecryptionError),
+    ):
+        await TriggerEngine().handle_webhook(
+            session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=_RAW_BODY,
+            raw_payload=_RAW_PAYLOAD,
+            hmac_signature="sha256=whatever",
+            modulo_timestamp=str(_VALID_TS),
+            snapshot_id=_SNAP,
+        )
 
 
 @pytest.mark.parametrize(

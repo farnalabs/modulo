@@ -75,7 +75,7 @@ from modulo.api.middleware.sensitive_mask import (
 from modulo.api.middleware.sensitive_mask import (
     mask_config_json,
     mask_pipeline_graph_node,
-    merge_masked_config,
+    merge_masked_config_json,
     merge_masked_graph_nodes,
 )
 from modulo.api.routes.api_keys import enforce_grants_mint_cap_for
@@ -7265,7 +7265,8 @@ def _build_trigger_record(
     # ``hmac_secret``/``signing_secret`` under Fernet tokens identical to the
     # REST path (read paths decrypt with plaintext fallback, so nothing that
     # consumed plaintext breaks).
-    encrypted_config = _encrypt_trigger_config_secrets(config_json, get_settings().fernet_key)
+    _settings = get_settings()
+    encrypted_config = _encrypt_trigger_config_secrets(config_json, _settings.fernet_key, _settings.fernet_key_old)
     trigger = Trigger(
         organisation_id=org_id,
         pipeline_id=pid,
@@ -7623,11 +7624,16 @@ def _merge_trigger_config_json(trigger: Any, config_json: dict[str, Any] | None)
     # MERGE into the existing blob — never wholesale replace.
     # A masked placeholder must never clobber the stored secret
     # (read-modify-write round-trip guard). Keep the existing value.
-    merged = merge_masked_config(trigger.config_json, config_json)
+    # FAR-1735: use the RECURSIVE masked merge — the same
+    # ``merge_masked_config_json`` REST's PATCH uses — so a nested masked
+    # secret (e.g. ``input_template.api_key``) round-tripped through MCP is
+    # preserved at every depth, not clobbered by the shallow merge.
+    merged = merge_masked_config_json(trigger.config_json or {}, config_json)
     # FAR-1732: encrypt webhook/HMAC secrets after the masked merge — the same
     # shared helper REST's PUT route uses. Idempotent: values already stored
     # under Fernet tokens (or mask sentinels) pass through untouched.
-    trigger.config_json = _encrypt_trigger_config_secrets(merged, get_settings().fernet_key)
+    settings = get_settings()
+    trigger.config_json = _encrypt_trigger_config_secrets(merged, settings.fernet_key, settings.fernet_key_old)
 
 
 async def _apply_trigger_field_updates(
@@ -7742,7 +7748,11 @@ async def _update_trigger_txn(
         # return COMMITS — validating after mutation would persist an
         # invalid merged config while reporting a validation error.
         if config_json is not None:
-            merged_config = merge_masked_config(trigger.config_json, config_json)
+            # FAR-1735: validate the SAME recursive masked merge the write
+            # path uses (REST parity) — the shallow merge here previously
+            # judged a different shape than `_merge_trigger_config_json`
+            # persisted.
+            merged_config = merge_masked_config_json(trigger.config_json or {}, config_json)
             try:
                 _validate_trigger_config_keys(merged_config, context="merged config_json")
             except FastAPIHTTPException as exc:

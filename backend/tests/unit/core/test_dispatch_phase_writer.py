@@ -2,13 +2,17 @@
 
 The writer records post-claim phase entries (``loading_setup``,
 ``setup_complete``, ``streaming``, ``first_node_dispatched``) durably on
-``runs.dispatch_phase``. Four load-bearing properties are proven here:
+``runs.dispatch_phase``. Five load-bearing properties are proven here:
 
 1. Single-flight + coalescing (at most one in-flight write, latest wins).
 2. Bounded + fail-soft (timeout/error are logged and dropped, never raised).
 3. Monotonic (the UPDATE guard rejects a backwards phase; token fence rejects
    a superseded attempt).
 4. Tracker wiring — exactly ``DURABLE_PHASES`` are recorded; no clearing.
+5. FAR-1714 — every durable write appends a ``dispatch_phase_history``
+   timeline entry inside the guarded UPDATE; all four claim statements append
+   the ``claimed`` attempt-boundary entry; an abandoned write bumps
+   ``runs.dispatch_phase_write_drops`` without ever raising into the run.
 
 Prove-the-fix: without the writer, every test here fails at import/construction
 (``DispatchPhaseWriter`` does not exist) or at the recorded-state assertions.
@@ -24,12 +28,16 @@ from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
+import modulo.core.pipeline_execution as pe
 import modulo.core.saq_worker as sw
 from modulo.core.pipeline_engine.event_broker import RunEventBroker
 from modulo.core.pipeline_engine.executor import PipelineExecutor, _StreamContext, _StreamState
 from modulo.core.pipeline_execution import (
+    _DROP_COUNTER_UPDATE_SQL,
     _PHASE_UPDATE_SQL,
+    DROP_COUNTER_WRITE_TIMEOUT_SECONDS,
     DURABLE_PHASES,
     PHASE_CLAIMED,
     PHASE_FIRST_NODE_DISPATCHED,
@@ -67,6 +75,8 @@ def _row(
         "id": _RUN_ID,
         "dispatch_phase": phase,
         "dispatch_phase_entered_at": entered_at,
+        "dispatch_phase_history": None,
+        "dispatch_phase_write_drops": 0,
         "claim_token": token,
     }
 
@@ -92,12 +102,21 @@ class _FakeConn:
             sql = str(stmt)
             if "set_config" in sql:
                 return _FakeResult([])
+            p = params or {}
+            if "dispatch_phase_write_drops" in sql:
+                # FAR-1714 drop-counter bump: additive, token-fence-free,
+                # bypasses the phase-write block gate (a bump is attempted
+                # AFTER the phase write was abandoned) unless its own
+                # failure mode is being simulated.
+                if eng.raise_bump_error:
+                    raise RuntimeError("simulated drop-counter failure")
+                eng.row["dispatch_phase_write_drops"] += 1
+                return _FakeResult([])
             eng.write_started.set()
             if eng.block is not None:
                 await eng.block.wait()
             if eng.raise_error:
                 raise RuntimeError("simulated DB failure")
-            p = params or {}
             eng.attempts.append(dict(p))
             row = eng.row
             now = eng.db_now()
@@ -108,6 +127,13 @@ class _FakeConn:
             if ok:
                 row["dispatch_phase"] = p["phase"]
                 row["dispatch_phase_entered_at"] = now
+                # FAR-1714: the SAME guarded UPDATE appends one history
+                # entry — a rejected statement appends nothing.
+                history = row["dispatch_phase_history"]
+                if history is None:
+                    history = []
+                    row["dispatch_phase_history"] = history
+                history.append({"phase": p["phase"], "entered_at": now.isoformat()})
             return _FakeResult([(row["id"],)] if ok else [])
         finally:
             eng.in_flight -= 1
@@ -123,6 +149,7 @@ class _FakeEngine:
         self.max_in_flight = 0
         self.block: asyncio.Event | None = None
         self.raise_error = False
+        self.raise_bump_error = False
         self.write_started = asyncio.Event()
 
     def db_now(self) -> datetime:
@@ -502,6 +529,183 @@ class TestExecutorFirstNodeDispatchDurable:
         # Exactly ONE write: only the first event entered the phase, so the
         # second node event scheduled no additional durable record.
         assert len(eng.attempts) == 1
+
+
+class TestHistoryAppend:
+    """FAR-1714 property 5a: every durable phase write appends a timeline entry.
+
+    The append rides the SAME guarded UPDATE as the scalar phase columns, so
+    it inherits the token fence and the monotonic guard — a rejected
+    statement splices nothing.
+    """
+
+    @pytest.mark.asyncio
+    async def test_each_durable_phase_appends_one_entry_in_order(self) -> None:
+        eng = _FakeEngine(_fwd_row())
+        writer = _writer(eng)
+        for phase in (PHASE_LOADING_SETUP, PHASE_SETUP_COMPLETE, PHASE_STREAMING, PHASE_FIRST_NODE_DISPATCHED):
+            writer.record(phase)
+            await writer.flush()
+        history = eng.row["dispatch_phase_history"]
+        assert history is not None
+        assert [entry["phase"] for entry in history] == [
+            PHASE_LOADING_SETUP,
+            PHASE_SETUP_COMPLETE,
+            PHASE_STREAMING,
+            PHASE_FIRST_NODE_DISPATCHED,
+        ]
+        # Every entry carries the timestamp the timeline is read by.
+        assert all(entry["entered_at"] for entry in history)
+
+    @pytest.mark.asyncio
+    async def test_backwards_entry_does_not_append(self) -> None:
+        # The monotonic guard rejects the statement — no phase move, NO splice.
+        stored_future = datetime.now(UTC) + timedelta(seconds=30)
+        eng = _FakeEngine(_row(stored_future, phase=PHASE_STREAMING))
+        writer = _writer(eng)
+        writer.record(PHASE_LOADING_SETUP)
+        await writer.flush()
+        assert eng.row["dispatch_phase"] == PHASE_STREAMING
+        assert eng.row["dispatch_phase_history"] is None
+
+    @pytest.mark.asyncio
+    async def test_superseded_claim_token_does_not_append(self) -> None:
+        # A successor re-claim rotated the token — the fence rejects, so the
+        # replaced attempt cannot pollute the successor's timeline.
+        eng = _FakeEngine(_row(datetime.now(UTC) - timedelta(seconds=1), token="tok-successor"))
+        writer = _writer(eng)
+        writer.record(PHASE_SETUP_COMPLETE)
+        await writer.flush()
+        assert eng.row["dispatch_phase"] == "claimed"
+        assert eng.row["dispatch_phase_history"] is None
+
+    def test_phase_update_appends_inside_the_guarded_statement(self) -> None:
+        sql = str(_PHASE_UPDATE_SQL)
+        assert "dispatch_phase_history=coalesce(dispatch_phase_history, '[]'::jsonb)" in sql
+        assert "jsonb_build_array(jsonb_build_object('phase', CAST(:phase AS text), 'entered_at', now()))" in sql
+        # The append inherits BOTH guards — it is never a second, unfenced write.
+        assert "claim_token=:tok" in sql
+        assert "dispatch_phase_entered_at IS NULL OR dispatch_phase_entered_at <=" in sql
+
+
+class TestClaimHistoryEntry:
+    """FAR-1714 property 5b: all four claim statements append ``claimed``.
+
+    The claim's history entry is the ATTEMPT BOUNDARY: the scalar floor only
+    keeps the current attempt's claim time (later durable phases overwrite
+    it), while history is cumulative — split the array on ``claimed`` entries
+    to decompose claim→first-node per attempt.
+    """
+
+    def test_execute_claims_append_the_attempt_boundary(self) -> None:
+        for stmt in (
+            pe.build_claim_update(_stale_seconds=450),
+            pe.build_claim_update(_stale_seconds=450, claim_token="tok-abc"),
+        ):
+            sql = str(stmt.compile(dialect=postgresql.dialect()))
+            assert "dispatch_phase_history=coalesce(dispatch_phase_history, '[]'::jsonb)" in sql
+            assert "jsonb_build_object('phase', 'claimed', 'entered_at', now())" in sql
+
+    def test_resume_claims_append_the_attempt_boundary(self) -> None:
+        for stmt in (
+            pe.build_resume_claim_update(_stale_seconds=450),
+            pe.build_resume_claim_update(_stale_seconds=450, claim_token="tok-abc"),
+        ):
+            sql = str(stmt.compile(dialect=postgresql.dialect()))
+            assert "dispatch_phase_history=coalesce(dispatch_phase_history, '[]'::jsonb)" in sql
+            assert "jsonb_build_object('phase', 'claimed', 'entered_at', now())" in sql
+
+    def test_claim_still_stamps_the_scalar_floor_in_the_same_statement(self) -> None:
+        # FAR-1088's contract must survive the history append.
+        stmt = pe.build_claim_update(_stale_seconds=450, claim_token="tok-abc")
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "dispatch_phase='claimed'" in sql
+        assert "dispatch_phase_entered_at=now()" in sql
+        assert sql.count("UPDATE") == 1
+
+
+class TestDropCounter:
+    """FAR-1714 property 5c: abandoned writes are counted, never raised."""
+
+    @pytest.mark.asyncio
+    async def test_timeout_increments_the_counter_and_never_raises(self, caplog: pytest.LogCaptureFixture) -> None:
+        eng = _FakeEngine(_fwd_row())
+        eng.block = asyncio.Event()  # never released: the phase write hangs
+        writer = _writer(eng, timeout_seconds=0.05)
+        with caplog.at_level(logging.WARNING, logger=_LOGGER):
+            writer.record(PHASE_STREAMING)
+            await writer.flush()  # must not raise
+        assert "dispatch_phase.write_timeout" in caplog.text
+        assert eng.row["dispatch_phase"] == "claimed"
+        # The abandoned write left a durable fingerprint.
+        assert eng.row["dispatch_phase_write_drops"] == 1
+
+    @pytest.mark.asyncio
+    async def test_db_error_increments_the_counter_and_never_raises(self, caplog: pytest.LogCaptureFixture) -> None:
+        eng = _FakeEngine(_fwd_row())
+        eng.raise_error = True
+        writer = _writer(eng)
+        with caplog.at_level(logging.WARNING, logger=_LOGGER):
+            writer.record(PHASE_LOADING_SETUP)
+            await writer.flush()  # must not raise
+        assert "dispatch_phase.write_failed" in caplog.text
+        assert eng.row["dispatch_phase_write_drops"] == 1
+
+    @pytest.mark.asyncio
+    async def test_counter_write_failure_itself_is_swallowed(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A bump that cannot land is logged and dropped — no recursion, no raise."""
+        eng = _FakeEngine(_fwd_row())
+        eng.raise_error = True  # the phase write fails...
+        eng.raise_bump_error = True  # ...and so does its counter bump
+        writer = _writer(eng)
+        with caplog.at_level(logging.WARNING, logger=_LOGGER):
+            writer.record(PHASE_LOADING_SETUP)
+            await writer.flush()  # must not raise
+        assert "dispatch_phase.write_failed" in caplog.text
+        assert "dispatch_phase.drop_counter_write_failed" in caplog.text
+        assert eng.row["dispatch_phase_write_drops"] == 0
+
+    @pytest.mark.asyncio
+    async def test_bump_timeout_is_swallowed(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The bump carries its own tighter bound, and failing it never raises."""
+        assert DROP_COUNTER_WRITE_TIMEOUT_SECONDS < PHASE_WRITE_TIMEOUT_SECONDS
+
+        eng = _FakeEngine(_fwd_row())
+        eng.raise_error = True  # phase write fails -> drop recorded
+        writer = _writer(eng)
+
+        async def _hang_bump() -> None:
+            await asyncio.Event().wait()
+
+        writer._bump_drop_counter = _hang_bump  # type: ignore[method-assign]
+        monkeypatch.setattr(pe, "DROP_COUNTER_WRITE_TIMEOUT_SECONDS", 0.01)
+        with caplog.at_level(logging.WARNING, logger=_LOGGER):
+            writer.record(PHASE_STREAMING)
+            await writer.flush()  # must not raise
+        assert "dispatch_phase.drop_counter_timeout" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_cancelled_bump_propagates_and_is_not_swallowed(self) -> None:
+        """Worker/job shutdown is not ours to swallow — a cancelled bump re-raises."""
+        eng = _FakeEngine(_fwd_row())
+        writer = _writer(eng)
+
+        async def _cancel() -> None:
+            raise asyncio.CancelledError
+
+        writer._bump_drop_counter = _cancel  # type: ignore[method-assign]
+        with pytest.raises(asyncio.CancelledError):
+            await writer._record_drop()
+
+    def test_drop_counter_sql_is_additive_and_not_token_fenced(self) -> None:
+        sql = str(_DROP_COUNTER_UPDATE_SQL)
+        # Additive + run-scoped: a superseded attempt's drops still land.
+        assert "dispatch_phase_write_drops=dispatch_phase_write_drops+1" in sql
+        assert "claim_token" not in sql
+        assert "id=:rid" in sql
+        assert "organisation_id=:oid" in sql
 
 
 class TestExecuteRunWiresWriter:
