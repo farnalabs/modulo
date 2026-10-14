@@ -12,10 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 from modulo.core.graph_validator import GraphValidator, ValidationResult
 from modulo.core.graph_validator.mask_sentinel import MASK_SENTINEL_ISSUE_CODE
 from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
-
-
-def _codes(result: ValidationResult) -> set[str]:
-    return {i.code for i in result.issues}
+from tests.unit.graph_validator._helpers import codes_of as _codes
 
 
 def _template(sub_graph: dict[str, Any] | None = None) -> MagicMock:

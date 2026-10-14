@@ -868,6 +868,59 @@ class TestUpdateTriggerSuccess(_AuthContext):
         assert _decrypt_stored(trigger.config_json["hmac_secret"]) == "real-secret"
         assert trigger.config_json["work_item_ref_paths"] == ["backend", "frontend"]
 
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_update_trigger_already_token_secret_round_trips_unchanged(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-1735 wire-level: an ALREADY-token secret value round-trips
+        through the MCP update path BYTE-FOR-BYTE — the decryptability probe
+        recognises the stored ciphertext, so no double-encryption occurs."""
+        stored_token = Fernet(_VALID_FERNET_KEY.encode()).encrypt(b"already-encrypted-secret").decode()
+        trigger = _make_mock_trigger(config_json={"hmac_secret": stored_token})
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        with _patch_fernet_settings():
+            result = await update_trigger(trigger_id=str(trigger.id), config_json={"hmac_secret": SENSITIVE_VALUE_MASK})
+
+        assert result.get("error") is None
+        # FAR-1735: byte-for-byte round-trip — no double encryption.
+        assert trigger.config_json["hmac_secret"] == stored_token
+        assert _decrypt_stored(trigger.config_json["hmac_secret"]) == "already-encrypted-secret"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_update_trigger_nested_masked_secret_preserved_by_recursive_merge(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-1735 wire-level: MCP now uses the RECURSIVE masked merge (REST
+        parity) — a NESTED masked value (``input_template.api_key``) round-tripped
+        through MCP preserves the stored secret instead of being clobbered by
+        the old shallow merge, which replaced the whole nested dict."""
+        nested_plaintext = "nested-api-key-value"
+        trigger = _make_mock_trigger(config_json={"input_template": {"api_key": nested_plaintext, "region": "eu"}})
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        with _patch_fernet_settings():
+            result = await update_trigger(
+                trigger_id=str(trigger.id),
+                config_json={"input_template": {"api_key": SENSITIVE_VALUE_MASK}},
+            )
+
+        assert result.get("error") is None
+        merged = trigger.config_json["input_template"]
+        # FAR-1735: nested masked secret preserved, siblings merge through.
+        assert merged["api_key"] == nested_plaintext
+        assert merged["region"] == "eu"
+
 
 # ---------------------------------------------------------------------------
 # update_trigger — connector team gate (FAR-1595)

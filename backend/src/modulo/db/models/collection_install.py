@@ -12,7 +12,7 @@ conformance test (``tests/unit/db/test_migration_0207_collection_install_trackin
 pins those invariants so model/migration drift cannot silently pass the mocked
 unit tests.
 
-Migration ``0308_library_cluster_db_hardening`` then extended the table with the
+Migration ``0309_library_cluster_db_hardening`` then extended the table with the
 two columns a provenance row was missing: ``deleted_at`` (soft delete — an
 uninstall marks the row instead of destroying the audit trail, and the
 ``SoftDeleteMixin`` global filter hides it from reads) and ``created_by`` (the
@@ -98,7 +98,7 @@ class CollectionInstall(SoftDeleteMixin, Base):
     installed_entities: Mapped[list[dict[str, Any]] | None] = mapped_column(_JSONB_COL, nullable=True)
     created_by: Mapped[UUID | None] = mapped_column(
         Uuid(),
-        # Named to match migration 0308's explicit DDL so create_all and the
+        # Named to match migration 0309's explicit DDL so create_all and the
         # migrated DB agree (the sibling FKs on this table are named too).
         ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL, name="fk_collection_install_created_by"),
         nullable=True,
@@ -122,7 +122,7 @@ class CollectionInstall(SoftDeleteMixin, Base):
             "status IN ('installed', 'failed')",
             name="ck_collection_install_status",
         ),
-        # Partial unique (0308): one LIVE install per (org, collection); a
+        # Partial unique (0309): one LIVE install per (org, collection); a
         # soft-deleted (uninstalled) row no longer blocks a reinstall.
         Index(
             "uq_collection_install_org_collection",

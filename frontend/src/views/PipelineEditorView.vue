@@ -179,6 +179,54 @@
                 <option value="fully_autonomous">{{ $t('views.PipelineEditorView.autonomy_fully_autonomous') }}</option>
               </select>
             </div>
+            <!-- FAR-1696 (ADR 043 S5): progressive-autonomy visibility panel,
+                 mounted next to the ceiling control it reads alongside. The
+                 panel renders the pipeline's default / ceiling / earned levels
+                 and carries the admin/owner manual demote / promote actions;
+                 a successful change refetches the pipeline below. -->
+            <div class="relative">
+              <button
+                type="button"
+                ref="autonomyPanelToggleRef"
+                :class="btnToolbarSecondary"
+                :aria-expanded="autonomyPanelOpen"
+                aria-haspopup="dialog"
+                :aria-controls="autonomyPanelDialogId"
+                data-testid="pipeline-editor-autonomy-panel-toggle"
+                @click="toggleAutonomyPanel"
+              >
+                {{ $t('views.PipelineEditorView.autonomy_panel_toggle') }}
+              </button>
+              <dialog
+                v-if="autonomyPanelOpen"
+                open
+                :id="autonomyPanelDialogId"
+                ref="autonomyPanelDialogRef"
+                class="absolute right-0 left-auto top-full z-50 mt-1 w-80 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-card p-3 shadow-lg"
+                tabindex="-1"
+                :aria-label="$t('views.PipelineEditorView.autonomy_panel_title')"
+                data-testid="pipeline-editor-autonomy-panel-dialog"
+              >
+                <ProgressiveAutonomyPanel
+                  :pipeline-id="pipelineId"
+                  :default-level="pipeline?.default_autonomy_level ?? null"
+                  :max-level="pipeline?.max_autonomy_level ?? null"
+                  :earned-level="pipeline?.earned_autonomy_level ?? null"
+                  :earned-updated-at="pipeline?.earned_autonomy_updated_at ?? null"
+                  @changed="onAutonomyChanged"
+                />
+                <div class="mt-3 flex justify-end">
+                  <button
+                    type="button"
+                    :class="btnToolbarSecondary"
+                    data-testid="pipeline-editor-autonomy-panel-close"
+                    @click="closeAutonomyPanel"
+                  >
+                    {{ $t('common.close') }}
+                  </button>
+                </div>
+              </dialog>
+            </div>
             <!-- FAR-1558: per-pipeline environment profile - the runtime provider
                  this pipeline's runs dispatch on. Gated on the
                  `environment_profiles` plan feature because the profile list
@@ -475,18 +523,6 @@
              renders it - and never issues the admin-only GET. In-flow under the
              toolbar so it never covers the canvas. -->
         <SnapshotLockCard v-if="isSystemAdmin" :pipeline-id="pipelineId" />
-        <!-- FAR-1696 slice (b): progressive-autonomy visibility + manual
-             promote/demote over the FAR-1175 earned-autonomy state. Sits with
-             the toolbar's autonomy-ceiling control; an unset earned level
-             renders its explicit "using pipeline default" fallback. -->
-        <ProgressiveAutonomyPanel
-          :pipeline-id="pipelineId"
-          :default-level="pipeline?.default_autonomy_level ?? null"
-          :max-level="pipeline?.max_autonomy_level ?? null"
-          :earned-level="pipeline?.earned_autonomy_level ?? null"
-          :earned-updated-at="pipeline?.earned_autonomy_updated_at ?? null"
-          @changed="loadPipeline"
-        />
         <!-- FAR-688: legacy HITL gates whose descriptions predate the
              minimum (reads never hard-fail on them) — surface WHICH gates
              need descriptions so the user can find and fix them. -->
@@ -1947,6 +1983,57 @@ watch(retryPolicyOpen, (open) => {
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onRetryPolicyKeydown)
 })
+
+// FAR-1696 (ADR 043 S5): progressive-autonomy panel popover. Same
+// open/Escape/focus-return shape as the retry-policy panel above it, and the
+// same toggle→panel aria-controls wiring (the toggle button references this
+// dialog id so AT can announce the controlled element).
+const autonomyPanelDialogId = 'pipeline-editor-autonomy-panel-dialog'
+const autonomyPanelOpen = ref(false)
+const autonomyPanelToggleRef = ref<HTMLButtonElement | null>(null)
+const autonomyPanelDialogRef = ref<HTMLDialogElement | null>(null)
+
+function toggleAutonomyPanel() {
+  autonomyPanelOpen.value = !autonomyPanelOpen.value
+  if (autonomyPanelOpen.value) {
+    nextTick(() => {
+      autonomyPanelDialogRef.value?.focus()
+    })
+  } else {
+    autonomyPanelToggleRef.value?.focus()
+  }
+}
+
+function closeAutonomyPanel() {
+  autonomyPanelOpen.value = false
+  autonomyPanelToggleRef.value?.focus()
+}
+
+function onAutonomyPanelKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && autonomyPanelOpen.value) {
+    event.preventDefault()
+    closeAutonomyPanel()
+  }
+}
+
+watch(autonomyPanelOpen, (open) => {
+  if (open) {
+    document.addEventListener('keydown', onAutonomyPanelKeydown)
+  } else {
+    document.removeEventListener('keydown', onAutonomyPanelKeydown)
+  }
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onAutonomyPanelKeydown)
+})
+
+// A manual demote/promote writes earned_autonomy_level server-side; refetch
+// the pipeline so the toolbar ceiling control, the panel and any other
+// pipeline-derived state all re-read the same persisted value.
+async function onAutonomyChanged() {
+  await loadPipeline()
+}
 
 async function saveRetryPolicy() {
   if (retryPolicySaving.value) return

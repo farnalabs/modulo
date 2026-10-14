@@ -307,7 +307,11 @@ def test_receive_webhook_hmac_failure_returns_401(client: TestClient) -> None:
 
 def test_receive_webhook_valid_hmac_promotes_audit_actor_source(client: TestClient) -> None:
     """FAR-1516: a delivery that passes the route-level HMAC check records
-    ``signature_verified`` provenance instead of the default ``unauthenticated``."""
+    ``signature_verified`` provenance instead of the default ``unauthenticated``.
+
+    FAR-1735: the stored secret is plaintext legacy (non-token) — the shared
+    bounded resolver's dated shim accepts it (with a warning); no decode mock.
+    """
     hmac_secret = "test-hmac-secret"
     system_session = make_system_session_mock(trigger_config={"hmac_secret": hmac_secret})
     app_session = _make_mock_session()
@@ -327,10 +331,6 @@ def test_receive_webhook_valid_hmac_promotes_audit_actor_source(client: TestClie
     signature = "sha256=" + hmac.new(hmac_secret.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
     try:
         with (
-            patch(
-                "modulo.api.routes.webhooks.decode_stored_secret_scoped",
-                new=AsyncMock(return_value=hmac_secret),
-            ),
             patch("modulo.core.audit_coverage.append_audit_event", new=captured),
             patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
             patch("modulo.api.routes.webhooks.dispatch_run", new=AsyncMock(return_value=("enqueued", "job-id"))),
@@ -355,13 +355,14 @@ def test_receive_webhook_valid_hmac_promotes_audit_actor_source(client: TestClie
     assert captured.call_args.kwargs["payload_json"]["actor_source"] == "signature_verified"
 
 
-def test_receive_webhook_hmac_secret_decrypt_failure_falls_back_to_raw_secret(
+def test_receive_webhook_legacy_plaintext_secret_accepted_with_dated_warning(
     client: TestClient, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """HMAC-secret decrypt failure falls back to the RAW stored secret with the
-    exception LOGGED (never silent): the stored value may itself be the
-    plaintext secret, so a delivery signed against it must still verify — and
-    the decrypt failure must be visible in the logs either way."""
+    """FAR-1735 bounded shim: a NON-token stored hmac_secret is legacy pre-0306
+    plaintext — accepted so a delivery signed against it still verifies (the
+    pre-migration read path keeps working), but ONLY with a loud dated
+    ``trigger_secret.legacy_plaintext`` warning, so a future plaintext write
+    is surfaced in the logs rather than silently accepted."""
     import logging as _logging
 
     stored_secret = "stored-plaintext-secret"
@@ -382,33 +383,142 @@ def test_receive_webhook_hmac_secret_decrypt_failure_falls_back_to_raw_secret(
     signature = "sha256=" + hmac.new(stored_secret.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
     try:
         with (
-            patch(
-                "modulo.api.routes.webhooks.decode_stored_secret_scoped",
-                new=AsyncMock(side_effect=ValueError("fernet decode failed")),
-            ),
             patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
             patch("modulo.api.routes.webhooks.dispatch_run", new=AsyncMock(return_value=("enqueued", "job-id"))),
             patch("modulo.api.routes.webhooks.set_rls_org", new=AsyncMock()),
+            caplog.at_level(_logging.WARNING, logger="modulo.core.trigger_secrets"),
         ):
             m.return_value = (_make_mock_run(), None, {})
-            with caplog.at_level(_logging.ERROR, logger="modulo.api.routes.webhooks"):
-                resp = client.post(
-                    f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
-                    content=body,
-                    headers={
-                        "Content-Type": "application/json",
-                        "X-Modulo-Timestamp": str(ts),
-                        "X-Modulo-Webhook-Secret": signature,
-                    },
-                )
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+                content=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Modulo-Timestamp": str(ts),
+                    "X-Modulo-Webhook-Secret": signature,
+                },
+            )
     finally:
         app.dependency_overrides.pop(get_system_db_session, None)
         app.dependency_overrides.pop(get_db_session, None)
 
-    # The fallback (raw) secret verified the signature → accepted, not 401.
+    # The legacy-plaintext shim verified the signature → accepted, not 401.
     assert resp.status_code == 202, resp.text
-    # The decrypt failure was LOGGED, not swallowed silently.
-    assert "webhooks.hmac_secret_decrypt_failed" in caplog.text
+    assert "trigger_secret.legacy_plaintext" in caplog.text
+    assert "hmac_secret" in caplog.text
+
+
+def test_receive_webhook_gaaaa_prefixed_plaintext_secret_accepted_with_dated_warning(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """FAR-1735 consistency: the route reader's shared resolver classifies
+    with the DECRYPTABILITY probe, not the ``gAAAA`` prefix. A legacy
+    plaintext hmac_secret that merely BEGINS with ``gAAAA`` is accepted with
+    the dated warning (delivery verifies) — never misclassified as ciphertext
+    and failed closed. The REAL resolver runs (no decode mock)."""
+    import logging as _logging
+
+    stored_secret = "gAAAA-not-actually-a-fernet-token"
+    system_session = make_system_session_mock(trigger_config={"hmac_secret": stored_secret})
+    app_session = _make_mock_session()
+
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield system_session
+
+    async def override_app_session() -> AsyncGenerator[AsyncMock, None]:
+        yield app_session
+
+    app.dependency_overrides[get_system_db_session] = override_system_session
+    app.dependency_overrides[get_db_session] = override_app_session
+
+    ts = int(time.time())
+    body = b'{"event": "test"}'
+    signature = "sha256=" + hmac.new(stored_secret.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
+    try:
+        with (
+            patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.dispatch_run", new=AsyncMock(return_value=("enqueued", "job-id"))),
+            patch("modulo.api.routes.webhooks.set_rls_org", new=AsyncMock()),
+            caplog.at_level(_logging.WARNING, logger="modulo.core.trigger_secrets"),
+        ):
+            m.return_value = (_make_mock_run(), None, {})
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+                content=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Modulo-Timestamp": str(ts),
+                    "X-Modulo-Webhook-Secret": signature,
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+        app.dependency_overrides.pop(get_db_session, None)
+
+    # The gAAAA-prefixed plaintext verified the signature → accepted, not 401/500.
+    assert resp.status_code == 202, resp.text
+    assert "trigger_secret.legacy_plaintext" in caplog.text
+    assert "hmac_secret" in caplog.text
+
+
+def test_receive_webhook_undecryptable_token_secret_fails_closed(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """FAR-1735 fail-closed: a token-shaped hmac_secret that CANNOT be decrypted
+    under the configured key is a server-side misconfiguration — the delivery
+    is refused (500), and the ciphertext is NEVER used as the HMAC key (no
+    fallback to the raw stored value). The REAL decode helper raises
+    ``DecryptionError`` here (no decode mock); the settings patch targets
+    ``modulo.api.routes.webhooks.get_settings``, the name the route binds."""
+    import base64
+    import logging as _logging
+
+    from cryptography.fernet import Fernet
+
+    valid_key = base64.urlsafe_b64encode(b"s" * 32).decode()
+    other_key = base64.urlsafe_b64encode(b"x" * 32).decode()
+    stored_token = Fernet(other_key.encode()).encrypt(b"secret-that-cannot-decrypt").decode()
+    system_session = make_system_session_mock(trigger_config={"hmac_secret": stored_token})
+    app_session = _make_mock_session()
+
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield system_session
+
+    async def override_app_session() -> AsyncGenerator[AsyncMock, None]:
+        yield app_session
+
+    app.dependency_overrides[get_system_db_session] = override_system_session
+    app.dependency_overrides[get_db_session] = override_app_session
+
+    fake_settings = MagicMock()
+    fake_settings.fernet_key = valid_key
+    ts = int(time.time())
+    body = b'{"event": "test"}'
+    signature = "sha256=" + hmac.new(b"whatever", f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
+    try:
+        with (
+            patch("modulo.api.routes.webhooks.get_settings", return_value=fake_settings),
+            patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.set_rls_org", new=AsyncMock()),
+            caplog.at_level(_logging.ERROR, logger="modulo.api.routes.webhooks"),
+        ):
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+                content=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Modulo-Timestamp": str(ts),
+                    "X-Modulo-Webhook-Secret": signature,
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+        app.dependency_overrides.pop(get_db_session, None)
+
+    # Fail closed: 500 (server-side secret misconfiguration), no run created.
+    assert resp.status_code == 500, resp.text
+    m.assert_not_called()
+    assert "webhooks.hmac_secret_undecryptable" in caplog.text
 
 
 def test_receive_webhook_paused_org_returns_202_paused(client: TestClient) -> None:
