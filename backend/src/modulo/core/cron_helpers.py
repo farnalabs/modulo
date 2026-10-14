@@ -2895,6 +2895,61 @@ async def _suite_run_fire_gates(
     return None
 
 
+async def _suite_run_llm_judge_guard(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    eval_suite_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """Skip a judge suite fire only when the org has NO ACTIVE model backend (FAR-1742).
+
+    FAR-1712 wired an org-scoped judge callable into the SAQ ``execute_suite_run``
+    job, so a suite containing an ``llm_judge`` definition now fires normally and
+    reaches that wired job whenever the org has at least one ACTIVE
+    ``ModelBackend``. The former blanket refusal (skip reason
+    ``llm_judge_unsupported``) is gone: it rejected the fire before the run was
+    ever built, so the scheduled path never reached the job FAR-1742 exists to
+    reach.
+
+    A judge suite whose org has NO ACTIVE backend still cannot be judged — the
+    runner would raise ``suite contains llm_judge definitions but no judge
+    callable was provided`` and terminalise the whole run as failed. Skip the
+    fire up front instead (a clear, observable skip) so config never promises a
+    run it cannot deliver. Non-judge suites are unaffected: the ACTIVE-backend
+    probe runs only for a suite that actually carries an ``llm_judge`` definition.
+    """
+    from sqlalchemy import select
+
+    from modulo.core.eval_engine.execute_suite_run import load_suite_definitions
+    from modulo.db.models.model_backend import ModelBackend
+
+    suite_defs = await load_suite_definitions(session, org_id, eval_suite_id)
+    if not any(str(getattr(d, "eval_type", "")) == "llm_judge" for d in suite_defs):
+        return None
+    active_backend_id = (
+        await session.execute(
+            select(ModelBackend.id)
+            .where(
+                ModelBackend.organisation_id == org_id,
+                ModelBackend.status == "active",
+            )
+            .limit(1)
+        )
+    ).first()
+    if active_backend_id is not None:
+        return None
+    _log.warning(
+        "fire_suite_run_trigger: suite %s contains llm_judge definitions but org %s has no "
+        "ACTIVE model backend; skipping fire (the run would hard-fail at execution)",
+        eval_suite_id,
+        org_id,
+    )
+    return {
+        "status": "skipped",
+        "reason": "llm_judge_backend_unavailable",
+        "suite_id": str(eval_suite_id),
+    }
+
+
 async def _build_suite_run_or_skip(
     session: AsyncSession,
     trigger: Any,
@@ -3018,6 +3073,10 @@ async def fire_suite_run_trigger(
         assert model_backend_id is not None  # nosec B101
 
         skip = await _suite_run_fire_gates(session, trigger, org_id, trigger_id, dataset_id)
+        if skip is not None:
+            return skip
+
+        skip = await _suite_run_llm_judge_guard(session, org_id, trigger.eval_suite_id)
         if skip is not None:
             return skip
 
