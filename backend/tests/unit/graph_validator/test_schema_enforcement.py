@@ -436,9 +436,10 @@ async def test_schema_deletion_allowed_when_not_pinned():
 async def test_pre_existing_pipeline_logs_degraded_mode(caplog: pytest.LogCaptureFixture):
     """Pre-Phase-1 snapshot with incompatible schemas does not block early.
 
-    The degraded-mode signal is a WARNING-level log record (the ``SCHEMA_DEGRADED``
-    issue is stripped by ``_strip_warnings`` before ``validate_for_run`` returns),
-    so it is pinned here via ``caplog``.
+    The degraded-mode signal is the WARNING-level log record emitted when the
+    incompatibility is detected on a pre-existing snapshot, so it is pinned here
+    via ``caplog``. The returned result is still invalid and carries the
+    ``SCHEMA_FIELD_INCOMPATIBLE`` error.
     """
     caplog.set_level(logging.WARNING)
     out_id = uuid.uuid4()
