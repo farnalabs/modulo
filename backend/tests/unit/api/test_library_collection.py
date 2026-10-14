@@ -148,7 +148,7 @@ def _make_collection_primitive(
     p.author = _USER_ID.hex
     p.version = "1.0"
     p.tags = []
-    p.content_json = {"pins": manifest_pins or []}
+    p.content_json = {"manifest_pins": manifest_pins or []}
     p.source_url = None
     p.forked_from = None
     p.checksum = None
@@ -247,7 +247,11 @@ class TestCreateCollectionEndpoint:
         mock_prim = _make_collection_primitive()
         with (
             patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
-            patch("modulo.api.routes.library.create_library_primitive", new_callable=AsyncMock, return_value=mock_prim),
+            patch(
+                "modulo.api.routes.library.create_library_primitive",
+                new_callable=AsyncMock,
+                return_value=mock_prim,
+            ) as create_mock,
         ):
             resp = client.post(
                 "/api/v1/libraries/collections",
@@ -261,6 +265,11 @@ class TestCreateCollectionEndpoint:
         data = resp.json()
         assert data["status"] == "draft"
         assert data["manifest_pins"] == [{"slug": "my-schema", "version": "1.0"}]
+        # The pins must be persisted under the CANONICAL ``manifest_pins`` key —
+        # the one the install/upgrade readers look for — not the legacy ``pins``.
+        assert create_mock.call_args.kwargs["content_json"] == {
+            "manifest_pins": [{"slug": "my-schema", "version": "1.0"}]
+        }
 
     def test_create_collection_duplicate_slug(self, client: TestClient) -> None:
         existing = _make_collection_primitive()
@@ -744,6 +753,9 @@ def _make_install_record(
     rec.connector_checklist = []
     rec.installed_entities = []
     rec.created_at = _NOW
+    # Explicit None: a bare MagicMock auto-creates deleted_at as a truthy mock,
+    # which the endpoint's retired-install (soft-delete) guard would 404.
+    rec.deleted_at = None
     return rec
 
 
@@ -1095,6 +1107,19 @@ class TestGetCollectionInstallEndpoint:
         )
         assert resp.status_code == 404
 
+    def test_get_install_retired_returns_404(self, client: TestClient) -> None:
+        """A soft-deleted (uninstalled) install is retired history: the get
+        endpoint 404s it exactly like an absent row (0308 guard — a row can
+        reach here from the session identity map, bypassing the global
+        soft-delete filter)."""
+        mock_install = _make_install_record()
+        mock_install.deleted_at = _NOW
+        client.mock_session.get = AsyncMock(return_value=mock_install)
+        resp = client.get(
+            f"/api/v1/libraries/collections/{mock_install.collection_id}/installs/{mock_install.install_id}",
+        )
+        assert resp.status_code == 404
+
     def test_get_install_programming_error(self, client: TestClient) -> None:
         client.mock_session.get = AsyncMock(
             side_effect=ProgrammingError("stmt", {}, RuntimeError("missing table")),
@@ -1313,6 +1338,7 @@ class TestUninstallCollectionService:
             install = MagicMock()
             install.organisation_id = _ORG_ID
             install.collection_id = uuid.uuid4()
+            install.deleted_at = None
             mock_session.get = AsyncMock(return_value=install)
             await uninstall_collection(
                 mock_session,
@@ -1332,6 +1358,7 @@ class TestUninstallCollectionService:
             install = MagicMock()
             install.organisation_id = _ORG_ID
             install.collection_id = uuid.uuid4()
+            install.deleted_at = None
             mock_session.get = AsyncMock(return_value=install)
 
             # Tracking row points at an entity that no longer exists.
@@ -1390,6 +1417,7 @@ class TestGrantCollectionAgents:
             mock_install.organisation_id = _ORG_ID
             mock_install.community_sourced = True
             mock_install.agents_granted = False
+            mock_install.deleted_at = None
             mock_session.get = AsyncMock(return_value=mock_install)
             result = await grant_collection_agents(mock_session, _ORG_ID, mock_install.install_id)
             assert result.agents_granted is True
@@ -1405,6 +1433,7 @@ class TestGrantCollectionAgents:
             mock_install.organisation_id = _ORG_ID
             mock_install.community_sourced = True
             mock_install.agents_granted = True
+            mock_install.deleted_at = None
             mock_session.get = AsyncMock(return_value=mock_install)
             result = await grant_collection_agents(mock_session, _ORG_ID, mock_install.install_id)
             assert result.agents_granted is True
@@ -1420,6 +1449,7 @@ class TestGrantCollectionAgents:
             mock_install.organisation_id = _ORG_ID
             mock_install.community_sourced = False
             mock_install.agents_granted = False
+            mock_install.deleted_at = None
             mock_session.get = AsyncMock(return_value=mock_install)
             await grant_collection_agents(mock_session, _ORG_ID, mock_install.install_id)
 
@@ -1433,6 +1463,24 @@ class TestGrantCollectionAgents:
             mock_session = AsyncMock()
             mock_session.get = AsyncMock(return_value=None)
             await grant_collection_agents(mock_session, _ORG_ID, uuid.uuid4())
+
+        with pytest.raises(InstallNotFoundError):
+            asyncio.run(run())
+
+    def test_grant_soft_deleted_install_is_not_found(self) -> None:
+        """A retired (uninstalled) install must never be grantable — 0308
+        soft-delete guard on the grant path."""
+        from modulo.core.library_service.grant import InstallNotFoundError, grant_collection_agents
+
+        async def run() -> None:
+            mock_session = AsyncMock()
+            mock_install = MagicMock()
+            mock_install.organisation_id = _ORG_ID
+            mock_install.community_sourced = True
+            mock_install.agents_granted = False
+            mock_install.deleted_at = _NOW
+            mock_session.get = AsyncMock(return_value=mock_install)
+            await grant_collection_agents(mock_session, _ORG_ID, mock_install.install_id)
 
         with pytest.raises(InstallNotFoundError):
             asyncio.run(run())
@@ -1600,7 +1648,7 @@ def _make_published_collection(
     prim.description = "desc"
     prim.author = "test"
     prim.tags = []
-    prim.content_json = {"pins": []}
+    prim.content_json = {"manifest_pins": []}
     prim.manifest_pins = [{"slug": "my-schema", "version": "1.0"}]
     prim.owner_team_id = None
     prim.visibility = "org"

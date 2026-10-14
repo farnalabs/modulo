@@ -41,7 +41,10 @@ from modulo.connectors.base import (
 from modulo.connectors.security import CredentialRedactor, redacting
 from modulo.core.ssrf import pinned_async_client_sync
 
-_GITHUB_API = "https://api.github.com"
+#: Default GitHub API base (github.com). Public so callers that need "the
+#: default" outside a connector instance — the connector-hub pass-through and
+#: the API's credential-verification warning (FAR-1762) — spell it once.
+DEFAULT_BASE_URL = "https://api.github.com"
 _API_VERSION = "2022-11-28"
 
 
@@ -369,7 +372,7 @@ class GitHubConnector(ConnectorBase):
     def __init__(
         self,
         token: str,
-        base_url: str = _GITHUB_API,
+        base_url: str = DEFAULT_BASE_URL,
         *,
         circuit_failure_threshold: int = _CIRCUIT_FAILURE_THRESHOLD,
         circuit_cooldown_seconds: float = _CIRCUIT_COOLDOWN_SECONDS,

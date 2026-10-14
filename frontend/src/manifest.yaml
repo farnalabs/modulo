@@ -1323,6 +1323,9 @@ elements:
       - testid: cost-components-delete-cancel
         type: button
         dynamic_testid: false
+      - testid: cost-components-loading
+        type: element
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -5930,7 +5933,7 @@ features:
             - "[x] Draft collections can be created (POST /libraries/collections), updated (PATCH), and published (POST /publish); published collections cannot be edited"
             # Install / Uninstall (FAR-762)
             - "[x] Install resolves manifest pins to visible primitives, materialises entities via materialize_import, stamps collection_install_id on all created entities (schemas, agents, pipelines), and creates a CollectionInstall provenance record with status=installed"
-            - "[x] Uninstall deletes unmodified entities (collection_install_id matches) and detaches provenance from modified entities (collection_install_id already cleared); the CollectionInstall record and entity tracking rows are deleted"
+            - "[x] Uninstall deletes unmodified entities (collection_install_id matches) and detaches provenance from modified entities (collection_install_id already cleared); the CollectionInstall record is soft-deleted (deleted_at stamped) and its collection_install_entity rows are retained as audit history and hidden from the normal read paths; a reinstall of the same collection is permitted afterwards (the uniqueness is a partial unique index on (organisation_id, collection_id) WHERE deleted_at IS NULL)"
             - "[x] Re-install of the same version is idempotent: missing entities are re-added via materialize_import without duplicating existing ones"
             # Runnability (FAR-762)
             - "[x] compute_runnable is a pure read-time check: returns True when all connector_checklist entries are configured+bound and the org has at least one active model backend; returns False otherwise"
@@ -5939,6 +5942,9 @@ features:
             - "[x] Non-community-sourced collections (source=local) are not subject to the grant gate and agents are immediately usable"
             # Connector checklist
             - "[x] Each unique connector_type_id referenced by any agent in the collection gets a checklist entry with status=pending; the runnability check verifies all entries are configured+bound"
+            # Version upgrade (FAR-759)
+            - "[x] Collection authors cut a new version via POST /libraries/collections/{id}/versions (201 draft copying pins through version_group_id; 400 non-collection/foreign/non-published, 409 existing draft sibling); publishing the draft back-propagates update_available_version_id to installed orgs via notify_importers_of_update (backend/src/modulo/api/routes/library.py create_collection_version_endpoint, backend/src/modulo/core/library_service/__init__.py notify_importers_of_update)"
+            - "[x] Installed orgs preview and apply the upgrade, operator-initiated only with no auto-updates: GET /libraries/collections/{id}/installs/{install_id}/update reports update_available plus current/available versions and the per-entity added/changed/unchanged/removed delta with operator-modified flags (404 unknown install), and POST .../upgrade reconciles in place returning the reconciled/preserved/reported split plus warnings — operator-modified entities (cleared collection_install_id or content drifted from the install-time entity_fingerprints snapshot) are never clobbered, added pins are reported not materialised, removed pins reported not deleted, structural pipeline-graph changes reported manual, and the install record re-points at the new version row (404 unknown install, 409 no update available); the detail view surfaces the update badge and Upgrade button (collection-update-available, collection-upgrade, collection-upgrade-error) (backend/src/modulo/api/routes/library.py get_collection_update_endpoint + upgrade_collection_endpoint, backend/src/modulo/core/library_service/upgrade.py detect_collection_update + upgrade_collection, frontend/src/views/CollectionDetailView.vue, docs/product-map/library/library-collections.md)"
     feat-license:
         description: Feature licensing and plan tiers
         status: partial

@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.library_service._seed_data import MODULO_ORG_ID
@@ -33,8 +33,17 @@ from modulo.db.models.collection_install import CollectionInstall
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.organisation import Organisation
 from modulo.db.rls import set_rls_org
+from modulo.db.soft_delete import include_soft_deleted, register_soft_delete_filter
 
 pytestmark = pytest.mark.integration
+
+# Uninstall SOFT-deletes the ``CollectionInstall`` row (0308), so every claim
+# this module makes about a retired install — hidden from plain reads, able to
+# coexist with a reinstall — depends on the global ``deleted_at IS NULL``
+# listener being registered. In the app that happens at ``modulo.db.session``
+# import; this module never imports it, so register it explicitly here (the
+# same house pattern as test_soft_delete_filter.py / test_viewmodel_soft_deleted_team.py).
+register_soft_delete_filter()
 
 
 async def _seed_org(db_engine: AsyncEngine, name: str) -> uuid.UUID:
@@ -322,7 +331,8 @@ async def test_full_install_verify_uninstall_round_trip(
     model_backend: uuid.UUID,
 ) -> None:
     """Install a collection with 2 schemas + 1 agent → verify all entities
-    stamped → compute_runnable → uninstall → entities + record deleted.
+    stamped → compute_runnable → uninstall → entities deleted, install row
+    RETIRED (soft-deleted, children retained).
     """
     pins = [
         {"slug": "input-schema", "version": "1.0"},
@@ -346,6 +356,8 @@ async def test_full_install_verify_uninstall_round_trip(
     assert "agent" in entity_counts
     assert entity_counts["schema"] == 2
     assert entity_counts["agent"] == 1
+    # Total tracked entities BEFORE the uninstall — the rows must survive it.
+    pre_uninstall_entity_count = sum(entity_counts.values())
 
     # Verify installed entities have collection_install_id stamped
     # Schemas created by materialize_import get new UUIDs; use the resolved manifest
@@ -391,17 +403,27 @@ async def test_full_install_verify_uninstall_round_trip(
     assert result["deleted"]
     assert not result["detached"]
 
-    # Verify install record deleted
-    install_check = await db_session.get(CollectionInstall, install_id)
-    assert install_check is None
+    # Verify the install record is RETIRED, not destroyed (0308): a plain
+    # read is hidden by the global soft-delete filter (deleted_at IS NULL).
+    visible = await db_session.scalar(select(CollectionInstall).where(CollectionInstall.install_id == install_id))
+    assert visible is None
 
-    # Verify entity tracking rows deleted (CASCADE)
+    # ...while the row itself SURVIVES with a deleted_at stamp (the
+    # collection_install_entity children below must survive with it).
+    retired = await db_session.scalar(
+        include_soft_deleted(select(CollectionInstall).where(CollectionInstall.install_id == install_id))
+    )
+    assert retired is not None
+    assert retired.deleted_at is not None
+
+    # Verify entity tracking rows are RETAINED (the install is soft-deleted,
+    # so its provenance children are never cascade-removed).
     async with db_engine.connect() as conn:
         row = await conn.execute(
             text("SELECT count(*) FROM collection_install_entity WHERE install_id = :iid"),
             {"iid": str(install_id)},
         )
-        assert row.scalar_one() == 0
+        assert row.scalar_one() == pre_uninstall_entity_count
 
         # Verify schemas deleted
         for new_sid in schema_id_map.values():
