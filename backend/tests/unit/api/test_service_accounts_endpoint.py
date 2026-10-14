@@ -20,8 +20,8 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.api.routes.service_accounts import _validate_service_org_role
-from modulo.auth.api_key import ApiKeyTtlError
+from modulo.api.routes.service_accounts import _list_service_accounts, _validate_service_org_role
+from modulo.auth.api_key import ApiKeyGrantsUnavailableError, ApiKeyTtlError
 from modulo.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.audit_coverage import audit_session
@@ -295,6 +295,26 @@ class TestReadAndUpdate:
             resp = admin_client.get(f"/api/v1/service-accounts/{_SA_ID}")
         assert resp.status_code == 404
 
+    def test_get_service_account_without_org_membership_is_404(self, admin_client: TestClient) -> None:
+        """A service account with no membership in the caller's org is a 404.
+
+        The route is service-accounts-only and org-scoped, so a cross-org
+        service principal is indistinguishable from a missing one (the
+        account exists but its membership read resolves None).
+        """
+        with (
+            patch(
+                "modulo.api.routes.service_accounts.get_account_by_id",
+                AsyncMock(return_value=_service_account()),
+            ),
+            patch(
+                "modulo.api.routes.service_accounts.get_membership_by_account_and_org",
+                AsyncMock(return_value=None),
+            ),
+        ):
+            resp = admin_client.get(f"/api/v1/service-accounts/{_SA_ID}")
+        assert resp.status_code == 404
+
     def test_patch_rename(self, admin_client: TestClient) -> None:
         account = _service_account()
         with (
@@ -363,6 +383,35 @@ class TestReadAndUpdate:
     def test_patch_without_fields_is_422(self, admin_client: TestClient) -> None:
         resp = admin_client.patch(f"/api/v1/service-accounts/{_SA_ID}", json={})
         assert resp.status_code == 422
+
+
+class TestListServiceAccountsQuery:
+    """The query builder behind GET /api/v1/service-accounts.
+
+    Exercised directly (not through the route, which would need a real
+    session) so both arms of the optional ``search`` filter and the two
+    statement executions (count + page) are covered.
+    """
+
+    async def test_query_handles_search_and_no_search(self) -> None:
+        session = AsyncMock()
+        count_result = MagicMock()
+        count_result.scalar.return_value = 2
+        rows_result = MagicMock()
+        rows_result.all.return_value = [(_service_account(), _membership())]
+        session.execute = AsyncMock(side_effect=[count_result, rows_result, count_result, rows_result])
+
+        rows, total = await _list_service_accounts(session, org_id=_ORG_ID, page=1, page_size=20, search="ci")
+
+        assert total == 2
+        assert rows[0][1].role == "operator"
+
+        rows_no_search, total_no_search = await _list_service_accounts(
+            session, org_id=_ORG_ID, page=1, page_size=20, search=None
+        )
+
+        assert total_no_search == 2
+        assert rows_no_search[0][0] is rows[0][0]
 
 
 # ---------------------------------------------------------------------------
@@ -666,3 +715,73 @@ class TestMintServiceAccountKey:
         assert grant_cap.await_args.args[0] is mock_session
         assert grant_cap.await_args.args[1] == _SA_ID
         assert grant_cap.await_args.args[3] == ["pipeline.list"]
+
+    def test_naive_expires_at_is_accepted_as_utc(self, mint_client: tuple[TestClient, AsyncMock]) -> None:
+        """A timezone-naive ``expires_at`` is assumed UTC, never rejected."""
+        client, _ = mint_client
+        naive = (datetime.now(UTC) + timedelta(days=30)).replace(tzinfo=None).isoformat()
+        with (
+            patch("modulo.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=_service_account())),
+            patch(
+                "modulo.api.routes.service_accounts.get_membership_by_account_and_org",
+                AsyncMock(return_value=_membership()),
+            ),
+            patch(
+                "modulo.api.routes.service_accounts.resolve_role_from_membership",
+                AsyncMock(return_value="operator"),
+            ),
+            patch(
+                "modulo.api.routes.service_accounts.create_api_key",
+                AsyncMock(return_value=(_api_key(), "mk_full_key")),
+            ),
+            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()),
+        ):
+            resp = client.post(
+                f"/api/v1/service-accounts/{_SA_ID}/keys",
+                json={"name": "ci key", "expires_at": naive},
+            )
+        assert resp.status_code == 201
+
+    def test_past_expires_at_is_422(self, mint_client: tuple[TestClient, AsyncMock]) -> None:
+        client, _ = mint_client
+        past = (datetime.now(UTC) - timedelta(days=1)).isoformat()
+        resp = client.post(
+            f"/api/v1/service-accounts/{_SA_ID}/keys",
+            json={"name": "ci key", "expires_at": past},
+        )
+        assert resp.status_code == 422
+        assert "future" in resp.json()["detail"]
+
+    def test_grants_flag_read_failure_is_503(self, mint_client: tuple[TestClient, AsyncMock]) -> None:
+        """A transient grants-flag read failure fails closed as a retryable 503.
+
+        Never silently downgraded to the 422 "not enabled" (which would look
+        permanent and invite the caller to drop the grant-set).
+        """
+        client, _ = mint_client
+        with patch(
+            "modulo.api.routes.service_accounts.api_key_grants_enabled",
+            AsyncMock(side_effect=ApiKeyGrantsUnavailableError("down")),
+        ):
+            resp = client.post(
+                f"/api/v1/service-accounts/{_SA_ID}/keys",
+                json={"name": "ci key", "grants": ["pipeline.list"]},
+            )
+        assert resp.status_code == 503
+
+    def test_mint_with_no_live_role_is_403(self, mint_client: tuple[TestClient, AsyncMock]) -> None:
+        """A decommissioned/inactive target resolves no live role and is refused."""
+        client, _ = mint_client
+        with (
+            patch("modulo.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=_service_account())),
+            patch(
+                "modulo.api.routes.service_accounts.get_membership_by_account_and_org",
+                AsyncMock(return_value=_membership()),
+            ),
+            patch(
+                "modulo.api.routes.service_accounts.resolve_role_from_membership",
+                AsyncMock(return_value=None),
+            ),
+        ):
+            resp = client.post(f"/api/v1/service-accounts/{_SA_ID}/keys", json={"name": "ci key"})
+        assert resp.status_code == 403
