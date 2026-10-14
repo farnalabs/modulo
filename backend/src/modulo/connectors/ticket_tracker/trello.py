@@ -126,10 +126,11 @@ class TrelloTicketTracker(TicketTrackerBase):
 
         A ``ticket_id`` filter short-circuits to a single-card fetch (the raw
         Trello card dict is returned as the sole record); every other filter is
-        forwarded to :meth:`list_tickets`, where ``status``/``search``/``limit``/
-        ``offset`` are applied. A ``labels`` filter is forwarded but has no
-        effect — :meth:`list_tickets` does not read ``TicketFilter.labels``, so
-        it is silently ignored.
+        forwarded to :meth:`list_tickets`, where ``status``/``search``/``limit``
+        are applied and a non-zero ``offset`` is logged and ignored. A
+        ``labels`` filter is forwarded but has no effect —
+        :meth:`list_tickets` does not read ``TicketFilter.labels``, so it is
+        silently ignored.
         """
         filters = q.filters or {}
         if "ticket_id" in filters:
@@ -279,7 +280,7 @@ class TrelloTicketTracker(TicketTrackerBase):
         """Move a card between lists and/or set its due date.
 
         Only ``idList`` and ``due`` are updatable through this connector; any
-        other keyword is ignored because Trello's card PUT is field-scoped.
+        other keyword is ignored: this connector only supports ``idList``/``due``.
 
         Raises:
             ValueError: If Trello rejects the request or the transport fails; the
