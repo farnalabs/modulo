@@ -46,6 +46,13 @@ class _RedactedTrelloError(Exception):
 
 
 class TrelloTicketTracker(TicketTrackerBase):
+    """Trello board connector, scoped to the configured board's cards.
+
+    Every request authenticates via ``key``/``token`` query parameters, so the
+    transport layer is pinned and all error paths redact those credentials
+    before the message can escape (see :class:`_RedactedTrelloError`).
+    """
+
     def __init__(self, config: dict[str, Any], creds: dict[str, Any]) -> None:
         self._config = config
         self._creds = creds
@@ -93,6 +100,11 @@ class TrelloTicketTracker(TicketTrackerBase):
     @redacting
     # Defence-in-depth: health_check catches internally today; guards against a future escape.
     async def health_check(self) -> HealthResult:
+        """Probe the configured board, returning the board name as the detail.
+
+        Never raises: any transport or status failure is folded into a
+        credential-redacted :class:`HealthResult` via ``health_check_failure``.
+        """
         try:
             async with self._client() as client:
                 resp = await client.get(
@@ -108,6 +120,12 @@ class TrelloTicketTracker(TicketTrackerBase):
             return health_check_failure(_RedactedTrelloError(self._health_failure_detail(e)), self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
+        """Read one ticket by id, or list tickets matching the query filters.
+
+        A ``ticket_id`` filter short-circuits to a single-card fetch (the raw
+        Trello card dict is returned as the sole record); every other filter
+        (status/labels/search/limit/offset) is applied by :meth:`list_tickets`.
+        """
         filters = q.filters or {}
         if "ticket_id" in filters:
             ticket = await self.get_ticket(filters["ticket_id"])
@@ -124,6 +142,11 @@ class TrelloTicketTracker(TicketTrackerBase):
         return ConnectorResult(records=[t.__dict__ for t in tickets], total=len(tickets))
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
+        """Create a Trello card from *payload* and return its id and URL.
+
+        ``idList`` (supplied as ``list_id`` on the payload) is required — Trello
+        has no notion of a board-level default list.
+        """
         data = payload.data
         ticket = await self.create_ticket(
             title=data.get("title", ""),
@@ -134,6 +157,17 @@ class TrelloTicketTracker(TicketTrackerBase):
         return {"ticket_id": ticket.id, "url": ticket.url or ""}
 
     async def list_tickets(self, ticket_filter: TicketFilter | None = None) -> list[Ticket]:
+        """List the board's cards, narrowing to *ticket_filter* where possible.
+
+        ``limit`` is honoured (capped at Trello's 100-card page maximum) and
+        ``status``/``search`` are applied client-side, because the cards endpoint
+        cannot filter on them. ``offset`` has no Trello equivalent, so a non-zero
+        offset is logged and ignored rather than silently mis-paging.
+
+        Raises:
+            ValueError: If Trello rejects the request or the transport fails; the
+                message is credential-redacted.
+        """
         if ticket_filter and ticket_filter.offset:
             logger.warning("offset is not supported by Trello's API; ignoring offset=%s", ticket_filter.offset)
 
@@ -172,6 +206,12 @@ class TrelloTicketTracker(TicketTrackerBase):
         return tickets
 
     async def get_ticket(self, ticket_id: str) -> Ticket:
+        """Fetch a single card by Trello card id.
+
+        Raises:
+            ValueError: If Trello rejects the request or the transport fails; the
+                message is credential-redacted.
+        """
         async with self._client() as client:
             try:
                 resp = await client.get(
@@ -192,6 +232,18 @@ class TrelloTicketTracker(TicketTrackerBase):
                 raise ValueError(f"Trello network error: {self._redact(str(e))}") from None
 
     async def create_ticket(self, title: str, description: str | None = None, **kwargs: Any) -> Ticket:
+        """Create a card on the board.
+
+        Args:
+            title: Card name.
+            description: Optional card description (``desc``).
+            **kwargs: Must carry ``idList`` (the destination list); ``labels``
+                may be a list of names or a pre-joined string.
+
+        Raises:
+            ValueError: If ``idList`` is missing, Trello rejects the request, or
+                the transport fails; the message is credential-redacted.
+        """
         if not kwargs.get("idList"):
             raise ValueError("idList is required to create a Trello card")
         body: dict[str, Any] = {"name": title}
@@ -219,6 +271,15 @@ class TrelloTicketTracker(TicketTrackerBase):
                 raise ValueError(f"Trello network error: {self._redact(str(e))}") from None
 
     async def update_ticket(self, ticket_id: str, **kwargs: Any) -> Ticket:
+        """Move a card between lists and/or set its due date.
+
+        Only ``idList`` and ``due`` are updatable through this connector; any
+        other keyword is ignored because Trello's card PUT is field-scoped.
+
+        Raises:
+            ValueError: If Trello rejects the request or the transport fails; the
+                message is credential-redacted.
+        """
         body: dict[str, Any] = {}
         if kwargs.get("idList"):
             body["idList"] = kwargs["idList"]
@@ -242,6 +303,13 @@ class TrelloTicketTracker(TicketTrackerBase):
                 raise ValueError(f"Trello network error: {self._redact(str(e))}") from None
 
     def _to_ticket(self, raw: dict[str, Any]) -> Ticket:
+        """Map a raw Trello card payload onto the unified :class:`Ticket`.
+
+        Trello models status as the boolean ``closed`` flag (no status field), so
+        it is projected onto ``"closed"``/``"open"``. Trello has no native
+        priority or created timestamp on the card, so both are left unset. The
+        untouched payload is preserved on ``Ticket.raw``.
+        """
         labels = raw.get("labels")
         return Ticket(
             id=raw.get("id", ""),
