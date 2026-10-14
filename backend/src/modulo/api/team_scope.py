@@ -65,8 +65,10 @@ from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.environment_profile import EnvironmentProfile
 from modulo.db.models.eval_dataset import EvalDataset
 from modulo.db.models.eval_suite import EvalSuite
+from modulo.db.models.external_agent import ExternalAgent
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.lifecycle_map import LifecycleMap
+from modulo.db.models.mcp_server import McpServer
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.team import Team
@@ -245,6 +247,12 @@ resolve_library_primitive_team_scope = team_scope_resolver(LibraryPrimitive, pat
 resolve_lifecycle_map_team_scope = team_scope_resolver(LifecycleMap, path_param="lifecycle_map_id")
 resolve_eval_dataset_team_scope = team_scope_resolver(EvalDataset, path_param="dataset_id")
 resolve_eval_suite_team_scope = team_scope_resolver(EvalSuite, path_param="suite_id")
+# FAR-1692 registries: registered for registry completeness (the architecture
+# test requires every visibility model to be present), enforced by DB RLS
+# (``rls_team_isolation``, migration 0311) — not route-wired, the same
+# DB-RLS-only posture as the core tables (FAR-1514).
+resolve_external_agent_team_scope = team_scope_resolver(ExternalAgent, path_param="agent_id")
+resolve_mcp_server_team_scope = team_scope_resolver(McpServer, path_param="server_id")
 
 
 async def resolve_trigger_run_team_scope(
@@ -356,6 +364,8 @@ TEAM_SCOPED_RESOLVERS: dict[str, TeamScopeProvider] = {
     "lifecycle_maps": resolve_lifecycle_map_team_scope,
     "eval_datasets": resolve_eval_dataset_team_scope,
     "eval_suites": resolve_eval_suite_team_scope,
+    "external_agents": resolve_external_agent_team_scope,
+    "mcp_servers": resolve_mcp_server_team_scope,
 }
 
 _CREATE_DENIAL_DETAIL = "Cannot assign a resource to a team you are not a member of"

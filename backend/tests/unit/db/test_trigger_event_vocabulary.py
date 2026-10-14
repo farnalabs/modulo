@@ -174,10 +174,10 @@ _MIGRATION_PATH = (
 # 0306_trigger_secret_encryption chained onto 0305_guardrail_escalate_action, and
 # 0307_runs_guardrail_override_resume_pending chained onto 0306_trigger_secret_encryption, and
 # 0308_runs_dispatch_phase_history chained onto 0307_runs_guardrail_override_resume_pending, and
-# 0310_library_cluster_db_hardening chained onto 0308_runs_dispatch_phase_history as the chain head.
+# 0311_external_agents_mcp_servers chained onto 0308_runs_dispatch_phase_history as the chain head.
 # (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
 # migration under test, not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0310_library_cluster_db_hardening"
+_CHAIN_HEAD_MIGRATION_NAME = "0311_external_agents_mcp_servers"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
