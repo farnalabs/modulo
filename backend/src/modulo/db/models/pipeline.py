@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, ForeignKey, Integer, Numeric, String, Uuid, text
+from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, String, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped, SoftDeleteMixin
@@ -88,6 +88,19 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
         CheckConstraint(
             "run_disabled_reason IS NULL OR run_disabled_reason IN ('operator', 'circuit_breaker')",
             name="ck_pipelines_run_disabled_reason",
+        ),
+        # Partial unique from migration 0156_add_soft_delete_partial_uniques —
+        # one live pipeline per (org, name); a soft-deleted row no longer blocks
+        # a re-create. Declared on the model so the ORM metadata matches the DB.
+        Index(
+            "uq_pipelines_org_name",
+            "organisation_id",
+            "name",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            # sqlite_where as well: postgresql_where is ignored on SQLite, so
+            # create_all'd schemas would otherwise build a FULL unique index.
+            sqlite_where=text("deleted_at IS NULL"),
         ),
     )
 
