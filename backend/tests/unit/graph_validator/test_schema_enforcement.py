@@ -449,9 +449,10 @@ async def test_schema_deletion_allowed_when_not_pinned():
 async def test_pre_existing_pipeline_logs_degraded_mode(caplog: pytest.LogCaptureFixture):
     """Pre-Phase-1 snapshot with incompatible schemas does not block early.
 
-    The degraded-mode signal is a WARNING-level log record (the ``SCHEMA_DEGRADED``
-    issue is stripped by ``_strip_warnings`` before ``validate_for_run`` returns),
-    so it is pinned here via ``caplog``.
+    The grace-period degradation is logged at WARNING level, which this test
+    pins via ``caplog``. The ``SCHEMA_DEGRADED`` marker is also preserved on the
+    returned result by ``_strip_warnings`` (see ``_PRESERVED_WARNING_CODES``),
+    but the log record is the signal asserted here.
     """
     caplog.set_level(logging.WARNING)
     out_id = uuid.uuid4()
