@@ -290,6 +290,12 @@ class TestRequestOrgDeletion:
         assert "runs" in export
         assert "audit_events" in export
         assert "library_primitives" in export
+        # FAR-1758 item 6: the archive must carry the whole library cluster.
+        assert "composite_templates" in export
+        assert "primitive_ratings" in export
+        assert "primitive_abuse_reports" in export
+        assert "publishers" in export
+        assert "collection_installs" in export
         assert "connector_instances" in export
         assert "model_backends" in export
         assert "exported_at" in export
