@@ -252,15 +252,19 @@ export const usePlanStore = defineStore("plan", () => {
         // 15s withTimeout alike (settlePlanSource never throws past here).
         // 'cache'/'server'/'unavailable' are left untouched (a resolved layout
         // never falls back); a later successful fetch still overwrites with
-        // 'server'. The log carries the flags error recorded SO FAR — it fires
-        // the moment flags settles, before license/tiers have necessarily
-        // contributed, so it attributes the right failure to this fallback.
+        // 'server'. The log carries ONLY this source's own errors — flags can
+        // settle LAST (the 15s-timeout case), by which time license/tiers may
+        // have recorded theirs, so filter by the label rather than joining
+        // whatever has accumulated.
         if (flagsSource.value === "none") {
           flagsSource.value = "unavailable";
+          const flagsErrors = apiErrors.filter((entry) =>
+            entry.startsWith("Feature flags: "),
+          );
           console.warn(
             "[plan] Feature flags request settled without a payload — " +
               "mobile nav falls back to the drawer",
-            apiErrors.length > 0 ? apiErrors.join("; ") : null,
+            flagsErrors.length > 0 ? flagsErrors.join("; ") : null,
           );
         }
       });

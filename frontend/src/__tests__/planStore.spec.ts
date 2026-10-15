@@ -853,10 +853,15 @@ describe('usePlanStore', () => {
 
         expect(store.flagsSource).toBe('unavailable')
         expect(store.error).toContain('timed out')
+        // The fallback log attributes ONLY the flags source: all three
+        // requests timed out here, so a naive join would carry the license/
+        // tiers noise into a flags-fallback warning.
         expect(warn).toHaveBeenCalledWith(
           expect.stringContaining(FALLBACK_WARN),
-          expect.any(String),
+          expect.stringContaining('Feature flags request timed out'),
         )
+        const warnArgs = warn.mock.calls.find(call => String(call[0]).includes(FALLBACK_WARN))
+        expect(String(warnArgs?.[1])).not.toContain('License:')
       } finally {
         warn.mockRestore()
         vi.useRealTimers()
