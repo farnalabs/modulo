@@ -944,6 +944,26 @@ async def test_hitl_tombstone_flag_off_is_a_no_op(monkeypatch: pytest.MonkeyPatc
 _NOW = datetime.now(UTC)
 
 
+def _freeze_rc_now(monkeypatch: pytest.MonkeyPatch, now: datetime) -> None:
+    """Pin ``runner_capacity.datetime.now`` so the freshness window is deterministic.
+
+    ``_NOW`` is bound at module-import time, but the reconciler derives its own
+    ``datetime.now(UTC)`` at execution time. With a 60s freshness window
+    (``RECONCILE_STALE_HEARTBEAT_FACTOR * saq_job_heartbeat``), any >60s gap
+    between collection and this test's execution made a fresh heartbeat read as
+    stale and the protected row get terminalised alongside the leak. Freezing the
+    module's ``datetime`` to ``_NOW`` removes that collection-to-execution race.
+    """
+    import modulo.core.runner_capacity as rc
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:  # type: ignore[override]
+            return now.astimezone(tz) if tz is not None else now
+
+    monkeypatch.setattr(rc, "datetime", _FrozenDatetime)
+
+
 def _sweep_kwargs(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "status": "complete",
@@ -1502,6 +1522,10 @@ async def test_sweep_far1808_reclaims_node_started_leak_and_protects_fresh_heart
     ``heartbeat_at`` is kept live. Liveness is keyed on the heartbeat — the
     production-faithful signal — NOT the static ``updated_at``."""
     _patch_gate(monkeypatch, flag_on=False)
+    # Freeze the reconciler's clock to ``_NOW`` so the 60s freshness window is
+    # judged against the same instant the rows were built from (no
+    # collection-to-execution race — see ``_freeze_rc_now``).
+    _freeze_rc_now(monkeypatch, _NOW)
 
     class _S(_FakeGateSettings):
         runner_marker_stale_seconds = 25 * 3600
