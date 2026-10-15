@@ -3553,10 +3553,11 @@ async def update_run_status(
     caller knows what a 55P03 means for its own recovery, so the caller
     issues ``db.crud.row_lock.set_mutation_row_lock_timeout(session)`` at the
     TOP of its transaction, before any lock (FAR-1584 / FAR-1592 pattern).
-    Verified as of FAR-1601: the dispatch admission transaction
-    (``core.dispatch``) does issue it before calling in; the remaining
-    callers are caller-side follow-up on FAR-1601, not a change to this
-    shared function.
+    FAR-1610 (commit ``310f9e48e``) issued the bound at the hot ``runs``
+    writers — the dispatch-admission transaction (``core.dispatch``) and the
+    executor's run-status / claim / capacity / ceiling paths — closing the
+    caller-side follow-up this note originally recorded under FAR-1601.
+    Bounding here remains deliberately out of scope for this shared function.
     """
     if status not in RUN_STATUS_WHITELIST:
         raise ValueError(f"invalid run status: {status!r}")
@@ -3793,10 +3794,10 @@ async def unpark_parked_run(session: AsyncSession, *, run_id: uuid.UUID, org_id:
     at the top, before any lock — FAR-1584 / FAR-1592): only a caller can
     decide what a 55P03 failure means for its own flow, and injecting one
     here would surface as a bare exception inside the HITL decide path.
-    Verified as of FAR-1601: neither caller issues the bound today
-    (``core.hitl_manager``'s decide path and
-    ``gate_coalescing.evaluate_gate_coalescing``) — caller-side follow-up on
-    FAR-1601.
+    FAR-1610 (commit ``310f9e48e``) issued the bound at BOTH callers — the
+    ``core.hitl_manager`` decide path and
+    ``gate_coalescing.evaluate_gate_coalescing`` — closing the caller-side
+    follow-up this note originally recorded under FAR-1601.
     """
     await session.execute(
         update(Run)
@@ -3876,8 +3877,11 @@ async def transition_run(
     the caller's transaction (``set_mutation_row_lock_timeout`` at the top,
     before any lock): bounding it here would make every caller's broad
     ``except Exception`` swallow a 55P03 into a SILENT missed transition —
-    worse than the unbounded wait it replaces. Whether each caller issues it
-    is caller-side work tracked on FAR-1601.
+    worse than the unbounded wait it replaces. FAR-1610 (commit ``310f9e48e``)
+    issued the bound at the caller's transaction before this write (the
+    ``HITLManager.claim`` path sets it ahead of the claim UPDATE and the
+    subsequent ``transition_run``; see ``api.routes.hitl.claim_review``),
+    closing the caller-side follow-up this note originally recorded.
     """
     if target_status not in RUN_STATUS_WHITELIST:
         raise ValueError(f"invalid run status: {target_status!r}")
@@ -3931,11 +3935,13 @@ async def request_cancellation(
     class). The bound still belongs in the caller's transaction
     (``set_mutation_row_lock_timeout(session)`` at the top, before the lock):
     this is SHARED CRUD, and only the caller can decide whether a 55P03 means
-    a visible 409/500 response or a retryable outcome. Verified as of
-    FAR-1601 neither caller issues it — ``api.routes.runs._cancel_run`` and
-    ``api.mcp_server._cancel_run_impl`` (the MCP server's bound at
-    ``mcp_server``'s graph-update path does NOT cover it) — caller-side
-    follow-up on FAR-1601.
+    a visible 409/500 response or a retryable outcome. FAR-1610 (commit
+    ``310f9e48e``) issued the bound at BOTH callers —
+    ``api.routes.runs._cancel_run`` maps the 55P03 to a visible 409 and
+    ``api.mcp_server._cancel_run_impl`` maps it to a branchable ``lock_timeout``
+    result — closing the caller-side follow-up this note originally recorded
+    under FAR-1601, so an unbounded wait is no longer reachable from these
+    paths.
     """
     if reason not in CANCEL_REASON_VALUES:
         raise ValueError(f"invalid cancel reason: {reason!r}")

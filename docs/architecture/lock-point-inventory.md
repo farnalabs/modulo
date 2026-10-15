@@ -150,8 +150,8 @@ unrelated writer or is held across non-lock work.
 | D4 | `db/crud/org_deletion.py:418` | `export_org_data` | FOR UPDATE | caller txn, `include_soft_deleted` | Org lifecycle FSM (FAR-1624 marker). | watch – Organisation row, and an export may run long under it. |
 | D5 | `db/crud/error_tracking.py:86` | `upsert_error_group` | FOR UPDATE **OF error_groups** (`of=ErrorGroup`) | caller txn | Error-group aggregation upsert; `of=` avoids locking the nullable side of the `sample_event` outer join. | no. |
 | D6 | `db/crud/daily_run_count.py:54` | `upsert_daily_run_count` | FOR UPDATE | caller txn | Daily run-count upsert (non-critical convenience path; `cost_controller` is the serialised one). | no. |
-| D7 | `core/cron_helpers.py:2146` | `fire_report_trigger` | FOR UPDATE | **own** `session.begin()` | Scheduled-report fire: row locked and **held across `generator(...)`** (report data generation) until commit. | **watch – top risk** (§7). |
-| D8 | `core/reports/scheduler.py:188` | `_fire_scheduled_report` | FOR UPDATE | **own** `session.begin()` | Duplicate of D7 in the scheduler module – same lock-held-across-generation shape. | **watch – top risk** (§7). |
+| D7 | `core/cron_helpers.py:2146` | `fire_report_trigger` | FOR UPDATE | **own** `session.begin()` | Scheduled-report fire. On `main` the row is locked and **held across `generator(...)`** until commit, but this shape is **superseded by FAR-1822** ("stamp-and-commit"), which reconciles the two fire paths into one shared core and runs generation outside the row lock. **Corrected (FAR-1828):** FAR-1822 is in flight as PR #1842 (open at correction time), not yet on `main` – see §7 risk #1 and §10. | **watch – top risk** until FAR-1822 merges (§7). |
+| D8 | `core/reports/scheduler.py:188` | `_fire_scheduled_report` | FOR UPDATE | **own** `session.begin()` | On `main`, a duplicate of D7 in the scheduler module – the same lock-held-across-generation shape. FAR-1822 unifies this into the single shared fire path and releases the lock before generation. **Corrected (FAR-1828):** in flight as PR #1842, not yet on `main`. | **watch – top risk** until FAR-1822 merges (§7). |
 | D9 | `core/cost_controller/finalize.py:1628` | `_apply_spend_ceiling_gate` | **FOR NO KEY UPDATE** (`key_share=True`) | caller txn, `include_soft_deleted` | Org spend-ceiling check; deliberately key-share to avoid the deadlock that `FOR UPDATE` caused (documented). | no. |
 | D10 | `core/cost_controller/finalize.py:1705` | `_ledger_block` | FOR UPDATE | caller txn | Run-row lock for the duplicate-terminal ledger guard (`ledger_written OR ledger_refused_at`) + savepoint retries. | watch – run-row hotspot. |
 | D11 | `core/cost_controller/__init__.py:270` | `get_or_create_daily_count` | FOR UPDATE | caller txn | Daily-count row RMW with `begin_nested()` IntegrityError re-read. | no. |
@@ -218,16 +218,19 @@ single-use rows for credentials/entities.
 
 ## 7. Top serialisation risks
 
-### 1. Scheduled-report generation runs *under* the row lock (D7, D8)
+### 1. Scheduled-report generation runs *under* the row lock (D7, D8) – superseded by FAR-1822
 Both `core/cron_helpers.py:fire_report_trigger` and `core/reports/scheduler.py:_fire_scheduled_report`
-take `FOR UPDATE` on the `ScheduledReport` row and then call `generator(session, org_id, config)`
+took `FOR UPDATE` on the `ScheduledReport` row and then called `generator(session, org_id, config)`
 – the potentially heavy report-generation body – **inside the same transaction**, committing
-only after it completes. Consequences: (a) the lock is held for the whole generation window,
-not just the RMW; (b) two code paths implement the same fire-serialisation, so a fix must be
-applied twice (or the two reconciled). This is the clearest case of a lock held far longer
-than the invariant needs – the invariant is only "one firing in flight", which a short
-`SELECT … FOR UPDATE` that stamps `next_send_at`/a `firing` flag before releasing would
-satisfy.
+only after it completed. Consequences: (a) the lock was held for the whole generation window,
+not just the RMW; (b) two code paths implemented the same fire-serialisation.
+
+**FAR-1822 ("stamp-and-commit") supersedes this and closes risk #1.** It reconciles the two
+fire paths into one shared core that holds the `ScheduledReport` row lock only for two short
+critical sections (the read/snapshot before generation and the terminal stamp after it) and
+**releases the lock before generation/delivery runs**, with a Redis lease fencing concurrent
+fires. Corrected by FAR-1828. *(FAR-1822 was in flight as PR #1842 at correction time; the
+closure is final once #1842 merges – re-verify before relying on it.)*
 
 ### 2. The `organisations` row is a cross-feature mutex (C1–C3, C5, C6, D1–D4, D9, D14)
 Eleven distinct writers lock the *same* organisation row for unrelated concerns:
@@ -271,14 +274,16 @@ original finding.
    / branchable response, never an unbounded wait. Verified by
    `backend/tests/unit/api/test_far1610_cancel_run_lock_bound.py` and
    `backend/tests/unit/mcp/test_mcp_run_tools.py`. *(Category A.)*
-   **Residual:** the docstring of `db/crud/run.py::request_cancellation` still describes
-   the pre-FAR-1610 gap ("Verified as of FAR-1601 neither caller issues it"); the code is
-   correct and only the comment is stale.
+   **Residual – now FIXED by FAR-1828:** the docstrings of `db/crud/run.py` (notably
+   `request_cancellation`) described the pre-FAR-1610 gap ("Verified as of FAR-1601 neither
+   caller issues it"); the code was correct and only the comments were stale. FAR-1828
+   corrected them.
 2. **Take scheduled-report generation out from under the row lock** – in both
    `cron_helpers.fire_report_trigger` and `reports/scheduler._fire_scheduled_report`, stamp
    the fire (advance `next_send_at` / set a firing marker) and **commit before** running the
    generator, so the lock covers only the RMW; reconcile the two duplicate implementations.
    *(Category D.)*
+   **DELIVERED – FAR-1822 (PR #1842, in flight at correction time): see §7 risk #1.**
 3. **Narrow the organisation-row mutex to per-concern rows / locks** – move
    `settings_json` sub-configs (sandbox concurrency, OTEL, analytics consent, runtime flags)
    off a single `Organisation` row lock, or give each concern its own row/`key_share`-style
@@ -306,3 +311,42 @@ original finding.
 - The category assignment is a single-bucket choice for readability; some sites are
   legitimately cross-cutting (e.g. D7/D8 are both operational and "trigger-like"; B10 is a
   rotation anchor rather than a secret). The bucket chosen is noted per site.
+
+---
+
+## 10. Corrections (FAR-1828)
+
+An audit is a **hypothesis**, not ground truth. This one was **falsified within days of
+merging**, so treat the inventory above as a starting point to re-verify – not as a record of
+shipped behaviour. The corrections:
+
+- **A7 / §6 / §7 (run-row hotspot)** – the claim that `request_cancellation`'s `SELECT … FOR
+  UPDATE` was unbounded "at its callers" was **already false when the audit was written**:
+  FAR-1610 (commit `310f9e48e`, 2026-10-11 – four days earlier) has both callers
+  (`api/routes/runs._cancel_run`, `api/mcp_server._cancel_run_impl`) issue
+  `set_mutation_row_lock_timeout` before the shared-CRUD lock and map a `55P03` to a visible
+  error (409 / a branchable `lock_timeout`), rather than an unbounded wait.
+- **D7 / D8 / §7 risk #1 / §8 item 2** – the lock-held-across-generation shape is superseded by
+  FAR-1822 ("stamp-and-commit"), which reconciles the two fire paths into one shared core and
+  runs report generation outside the `ScheduledReport` row lock. **FAR-1822 closes risk #1.**
+  (In flight as PR #1842 at correction time – not yet on `main`.)
+- **`backend/src/modulo/db/crud/run.py` docstrings** – four docstrings (`request_cancellation`,
+  `update_run_status`, `unpark_parked_run`, `transition_run`) repeated a stale FAR-1601
+  "neither caller issues the bound" claim. All four are bounded **at their callers** by
+  FAR-1610; the docstrings now say so.
+
+### New findings (surfaced by the FAR-1823 design pass – findings, not fixes)
+
+1. **Five UNLOCKED `settings_json` read-modify-write writers.** Each reads
+   `Organisation.settings_json`, merges its own key, and writes the whole column back through
+   the *lockless* `db/crud/organisation.update_organisation`, so each can silently clobber a
+   concurrent writer's keys: `admin_update_email_settings` (`api/routes/admin_email.py`),
+   `admin_update_org` (`api/routes/admin.py`, `logo_url`), `costs._apply_cost_control_updates`
+   (`api/routes/costs.py`), the `run_concurrency_limit` writer (`api/routes/admin.py:4500`), and
+   `core/seed_data/demo_data.py`. This is live silent data loss on `main`, not a future risk –
+   tracked as its own ticket.
+2. **`confirm_org_deletion` uses a mixed lock order.** The handler appends the org-independent
+   system-audit event (`api/routes/admin.py:2636`) *before*
+   `db/crud/org_deletion.confirm_org_deletion` takes the `organisations` row `FOR UPDATE`
+   (`db/crud/org_deletion.py:327`) – so the per-org audit-chain-head lock is taken before the
+   org-row lock, the one FSM site out of order.
