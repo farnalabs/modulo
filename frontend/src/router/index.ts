@@ -36,6 +36,7 @@ interface ManifestEntry {
   required_permissions: string[] | null
   feature_flag: string | null
   visibility?: 'public' | 'public_preview' | 'private_preview' | 'in_dev'
+  system_admin_only?: boolean
 }
 
 const manifestRoutes = (manifest as { routes?: Record<string, ManifestEntry> })?.routes ?? {}
@@ -488,19 +489,19 @@ const router = createRouter({
       path: '/admin/system/orgs',
       name: 'admin-system-orgs',
       component: AdminSystemOrgsView,
-      meta: { breadcrumb: 'Organisations', parent: 'dashboard', requiresSystemAdmin: true },
+      meta: { breadcrumb: 'Organisations', parent: 'dashboard' },
     },
     {
       path: '/admin/system/config',
       name: 'admin-system-config',
       component: AdminSystemConfigView,
-      meta: { breadcrumb: 'System Config', parent: 'dashboard', requiresSystemAdmin: true },
+      meta: { breadcrumb: 'System Config', parent: 'dashboard' },
     },
     {
       path: '/admin/product-analytics',
       name: 'admin-product-analytics',
       component: AdminProductAnalyticsView,
-      meta: { breadcrumb: 'Product Analytics', parent: 'dashboard', requiresSystemAdmin: true },
+      meta: { breadcrumb: 'Product Analytics', parent: 'dashboard' },
     },
     {
       path: '/admin/errors',
@@ -577,6 +578,9 @@ const router = createRouter({
       meta: {
         title: 'Web Vitals',
         testid: 'dev-metrics',
+        // Deliberately inline: /dev/metrics has no manifest entry, so the
+        // manifest-derived system-admin gate (hydrateManifestMeta) cannot
+        // cover it — this is the one intentional exception.
         requiresSystemAdmin: true,
       },
     },
@@ -700,14 +704,22 @@ export function hydrateManifestMeta(to: Parameters<Parameters<typeof router.befo
     ? (manifestPathToName.get(entry.parent) ?? entry.parent)
     : undefined
 
-  // FAR-938: derive requiresSystemAdmin from the manifest sidebar_groups so
-  // it can never drift between the router and the sidebar filter.
+  // FAR-938: derive requiresSystemAdmin from the manifest so the router gate
+  // can never drift from it. A route is gated when EITHER its own route entry
+  // carries `system_admin_only: true` OR its sidebar group has
+  // `system_admin_only: true` — the two signals OR together.
+  // NOTE: the SIDEBAR filter (config/navigation.ts) reads only the group-level
+  // flag today, so a route with route-entry gating inside a VISIBLE sidebar
+  // group would be router-gated yet still listed in the sidebar.
   const routePath = (entry as unknown as { path?: string }).path
     ?? manifestByName.get(routeName)?.path
   if (routePath) {
-    const routeEntry = manifestRoutes[routePath] as unknown as { sidebar_group?: string } | undefined
+    const routeEntry = manifestRoutes[routePath] as unknown as {
+      sidebar_group?: string
+      system_admin_only?: boolean
+    } | undefined
     const groupId = routeEntry?.sidebar_group
-    if (groupId && manifestSidebarGroups[groupId]?.system_admin_only) {
+    if (routeEntry?.system_admin_only || (groupId && manifestSidebarGroups[groupId]?.system_admin_only)) {
       to.meta.requiresSystemAdmin = true
     }
   }

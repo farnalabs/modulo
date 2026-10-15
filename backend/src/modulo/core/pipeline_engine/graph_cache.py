@@ -1357,11 +1357,10 @@ def _assemble_edges(
 
 
 def _effective_gate_edges_for_source(
-    source: str,
     src_edges: list[dict[str, Any]],
     source_node_def: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """The forwarding edges of *source* that will actually compile an HITL gate.
+    """The forwarding edges of a source node that will actually compile an HITL gate.
 
     M7: this no longer re-states :func:`_link_sources`' dispatch precedence —
     it delegates to the SHARED :func:`classify_source_dispatch`, the same
@@ -1410,7 +1409,7 @@ def _validate_human_mode_pause_edges(
 
     for node_id in sorted(human_nodes):
         source_node_def = nodes_by_id.get(node_id, {})
-        gate_edges = _effective_gate_edges_for_source(node_id, source_edges.get(node_id, []), source_node_def)
+        gate_edges = _effective_gate_edges_for_source(source_edges.get(node_id, []), source_node_def)
         if len(gate_edges) != 1:
             raise ValueError(
                 f"human-mode policy-gate eval on node {node_id} requires EXACTLY ONE outgoing edge "

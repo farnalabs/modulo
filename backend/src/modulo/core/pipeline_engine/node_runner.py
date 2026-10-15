@@ -108,6 +108,7 @@ from modulo.core.credential_issuer import (
 )
 from modulo.core.eval_engine import EvalEngine, EvalResult
 from modulo.core.guardrails.loop_intercept import LoopInterceptConfig
+from modulo.core.model_class_registry import effective_model_template_value
 from modulo.core.node_output_split import (
     DEFAULT_NODE_TYPE,
     DISPATCH_PROVENANCE_FIELDS,
@@ -5249,6 +5250,173 @@ async def _hitl_review_resume_result(
     return (True, ar_result)
 
 
+def _human_gated_dtos(eval_definitions: Sequence[EvalDefDTO]) -> list[EvalDefDTO]:
+    """The HUMAN-governed, gate-owned DTOs baked into this gate.
+
+    Extracted from :func:`_ground_human_gate_evidence` for the
+    cognitive-complexity budget (S3776); behaviour unchanged.
+    """
+    return [
+        dto
+        for dto in eval_definitions
+        if getattr(dto, "policy_gate_evaluation_mode", None) == "human" and dto.policy_gate_id is not None
+    ]
+
+
+def _build_human_gate_decision(action: Any, decision: Any) -> Any:
+    """Construct the resolver's ``HumanDecision`` from the resume payload.
+
+    Extracted from :func:`_ground_human_gate_evidence` for the
+    cognitive-complexity budget (S3776); behaviour unchanged. The lazy import
+    runs at call time so this MUST be called inside the fail-open guard
+    (criterion 12): the resume path only resolves the three recognised
+    actions (anything else fails closed before this call) and the cast
+    carries a stray value through to the resolver's fail-closed branch.
+    """
+    from modulo.core.eval_engine.policy_gate import HumanDecision
+
+    return HumanDecision(
+        action=cast("Any", action),
+        decided_by=decision.get("decided_by") if isinstance(decision, dict) else None,
+        reason=decision.get("reason") if isinstance(decision, dict) else None,
+    )
+
+
+def _ground_one_human_gate_evidence(
+    session: Any,
+    dto: EvalDefDTO,
+    *,
+    human_decision: Any,
+    gate_actions_in_set: set[Any],
+    org_id: Any,
+    run_id: Any,
+    review_id: str,
+    action: Any,
+) -> None:
+    """Resolve and ground ONE human-gated DTO on an Evidence row.
+
+    Extracted from :func:`_ground_human_gate_evidence` for the
+    cognitive-complexity budget (S3776); behaviour unchanged. Called with the
+    session already open, inside the fail-open guard (criterion 12). The
+    lazy imports run at call time and therefore stay inside that guard.
+    """
+    from modulo.core.eval_engine.evidence_layer import append_evidence
+    from modulo.core.eval_engine.policy_gate import (
+        HumanGateView,
+        resolve_human_evaluation,
+    )
+
+    # Re-checked here so mypy narrows policy_gate_id (the list comprehension
+    # filter in ``_human_gated_dtos`` does not narrow the element type).
+    if dto.policy_gate_id is None:
+        return
+    if dto.failure_behaviour not in gate_actions_in_set:
+        # Loud, but deliberately NOT a skip: the live row's CHECK admits
+        # ``escalate`` (FAR-1694/0305) while the Outcome contract does not,
+        # so the resolver fail-closes the out-of-set action to ``block`` (M3)
+        # and the decision is still grounded (criterion 9).
+        _log.warning(
+            "hitl_review.human_gate_action_out_of_set",
+            extra={
+                "review_id": review_id,
+                "policy_gate_id": str(dto.policy_gate_id),
+                "action": dto.failure_behaviour,
+            },
+        )
+    outcome = resolve_human_evaluation(
+        HumanGateView(
+            policy_gate_id=dto.policy_gate_id,
+            eval_id=dto.id,
+            # Live rows carry a plain `str` action (the CHECK
+            # admits escalate); the resolver narrows it.
+            action=cast("Any", dto.failure_behaviour),
+            version=dto.policy_gate_version or 1,
+        ),
+        human_decision,
+    )
+    if not isinstance(outcome.result, bool):
+        # result=None (unrecognised action) is not a decision —
+        # nothing to ground.
+        _log.warning(
+            "hitl_review.human_gate_evidence_unresolved_decision",
+            extra={
+                "review_id": review_id,
+                "policy_gate_id": str(dto.policy_gate_id),
+                "human_action": action,
+            },
+        )
+        return
+    append_evidence(
+        session,
+        organisation_id=org_id,
+        key=f"gate_decision_{dto.policy_gate_id}",
+        subject_type="run",
+        subject_id=str(run_id),
+        value=outcome.result,
+        producer_type="policy_gate",
+        producer_id=dto.policy_gate_id,
+    )
+
+
+async def _ground_human_gate_evidence_body(
+    decision: Any,
+    eval_definitions: Sequence[EvalDefDTO],
+    *,
+    session_factory: Any,
+    org_id: Any,
+    run_id: Any,
+    review_id: str,
+    action: Any,
+) -> None:
+    """Post-decision grounding body, executed INSIDE the fail-open guard.
+
+    Extracted from :func:`_ground_human_gate_evidence` for the
+    cognitive-complexity budget (S3776); behaviour unchanged. Every line
+    that can raise after the human's decision committed runs here — the DTO
+    scan, the missing-context bail, the lazy imports, the ``HumanDecision``
+    construction, the session and the Evidence writes (criterion 12).
+    """
+    human_dtos = _human_gated_dtos(eval_definitions)
+    if not human_dtos:
+        return
+
+    if session_factory is None or org_id is None or run_id is None:
+        _log.warning(
+            "hitl_review.human_gate_evidence_grounding_skipped",
+            extra={
+                "review_id": review_id,
+                "run_id": str(run_id),
+                "human_action": action,
+                "reason": "missing_session_org_or_run",
+            },
+        )
+        return
+
+    from modulo.core.eval_engine.policy_gate import HumanGateAction
+
+    human_decision = _build_human_gate_decision(action, decision)
+
+    # M6: the gate-action vocabulary is DERIVED from the policy_gate
+    # module's HumanGateAction literal — never restated here, so the
+    # two cannot drift.
+    gate_actions_in_set = set(get_args(HumanGateAction))
+
+    async with session_factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        await set_rls_execution_context(session)
+        for dto in human_dtos:
+            _ground_one_human_gate_evidence(
+                session,
+                dto,
+                human_decision=human_decision,
+                gate_actions_in_set=gate_actions_in_set,
+                org_id=org_id,
+                run_id=run_id,
+                review_id=review_id,
+                action=action,
+            )
+
+
 async def _ground_human_gate_evidence(
     decision: Any,
     eval_definitions: Sequence[EvalDefDTO] | None,
@@ -5278,9 +5446,11 @@ async def _ground_human_gate_evidence(
     before resume runs, so the grounding write is **fail-open with a
     structured log** — it must never retro-fail an already-committed
     decision (mirrors chunk 4's fail-open decision-record philosophy).
-    The guard covers the WHOLE post-decision body: the DTO scan, the lazy
-    imports, the ``HumanDecision`` construction, the session and the
-    Evidence write (criterion 12 / §3.4). ``CancelledError`` propagates.
+    The guard covers the WHOLE post-decision body — the extracted
+    :func:`_ground_human_gate_evidence_body` runs entirely inside this
+    ``try``, so the DTO scan, the lazy imports, the ``HumanDecision``
+    construction, the session and the Evidence write are all inside it
+    (criterion 12 / §3.4). ``CancelledError`` propagates.
 
     Called from the gate node's RESUME path only — the write happens after
     the human's decision exists, never before. No ``PolicyGateDecision``
@@ -5292,107 +5462,19 @@ async def _ground_human_gate_evidence(
     action = decision.get("action") if isinstance(decision, dict) else None
     # M8 (criterion 12): EVERYTHING that can raise after the human's
     # decision committed lives INSIDE this fail-open guard — including the
-    # lazy imports and the HumanDecision construction, which previously
-    # sat above the ``try`` and could escape ``resume`` with the decision
-    # already durable.
+    # lazy imports and the HumanDecision construction (which the body
+    # performs), which previously sat above the ``try`` and could escape
+    # ``resume`` with the decision already durable.
     try:
-        human_dtos = [
-            dto
-            for dto in eval_definitions
-            if getattr(dto, "policy_gate_evaluation_mode", None) == "human" and dto.policy_gate_id is not None
-        ]
-        if not human_dtos:
-            return
-
-        if session_factory is None or org_id is None or run_id is None:
-            _log.warning(
-                "hitl_review.human_gate_evidence_grounding_skipped",
-                extra={
-                    "review_id": review_id,
-                    "run_id": str(run_id),
-                    "human_action": action,
-                    "reason": "missing_session_org_or_run",
-                },
-            )
-            return
-
-        from modulo.core.eval_engine.evidence_layer import append_evidence
-        from modulo.core.eval_engine.policy_gate import (
-            HumanDecision,
-            HumanGateAction,
-            HumanGateView,
-            resolve_human_evaluation,
+        await _ground_human_gate_evidence_body(
+            decision,
+            eval_definitions,
+            session_factory=session_factory,
+            org_id=org_id,
+            run_id=run_id,
+            review_id=review_id,
+            action=action,
         )
-
-        human_decision = HumanDecision(
-            # The resume path only resolves the three recognised actions
-            # (anything else fails closed before this call); the cast carries a
-            # stray value through to the resolver's fail-closed branch.
-            action=cast("Any", action),
-            decided_by=decision.get("decided_by") if isinstance(decision, dict) else None,
-            reason=decision.get("reason") if isinstance(decision, dict) else None,
-        )
-
-        # M6: the gate-action vocabulary is DERIVED from the policy_gate
-        # module's HumanGateAction literal — never restated here, so the
-        # two cannot drift.
-        gate_actions_in_set = set(get_args(HumanGateAction))
-
-        async with session_factory() as session, session.begin():
-            await set_rls_org(session, org_id)
-            await set_rls_execution_context(session)
-            for dto in human_dtos:
-                # Re-checked here so mypy narrows policy_gate_id (the list
-                # comprehension filter above does not narrow the element type).
-                if dto.policy_gate_id is None:
-                    continue
-                if dto.failure_behaviour not in gate_actions_in_set:
-                    # Loud, but deliberately NOT a skip: the live row's CHECK
-                    # admits ``escalate`` (FAR-1694/0305) while the Outcome
-                    # contract does not, so the resolver fail-closes the
-                    # out-of-set action to ``block`` (M3) and the decision is
-                    # still grounded (criterion 9).
-                    _log.warning(
-                        "hitl_review.human_gate_action_out_of_set",
-                        extra={
-                            "review_id": review_id,
-                            "policy_gate_id": str(dto.policy_gate_id),
-                            "action": dto.failure_behaviour,
-                        },
-                    )
-                outcome = resolve_human_evaluation(
-                    HumanGateView(
-                        policy_gate_id=dto.policy_gate_id,
-                        eval_id=dto.id,
-                        # Live rows carry a plain `str` action (the CHECK
-                        # admits escalate); the resolver narrows it.
-                        action=cast("Any", dto.failure_behaviour),
-                        version=dto.policy_gate_version or 1,
-                    ),
-                    human_decision,
-                )
-                if not isinstance(outcome.result, bool):
-                    # result=None (unrecognised action) is not a decision —
-                    # nothing to ground.
-                    _log.warning(
-                        "hitl_review.human_gate_evidence_unresolved_decision",
-                        extra={
-                            "review_id": review_id,
-                            "policy_gate_id": str(dto.policy_gate_id),
-                            "human_action": action,
-                        },
-                    )
-                    continue
-                append_evidence(
-                    session,
-                    organisation_id=org_id,
-                    key=f"gate_decision_{dto.policy_gate_id}",
-                    subject_type="run",
-                    subject_id=str(run_id),
-                    value=outcome.result,
-                    producer_type="policy_gate",
-                    producer_id=dto.policy_gate_id,
-                )
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -9817,6 +9899,31 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         resolved = node_def.get("_resolved_parameters")
         if isinstance(resolved, dict):
             template_vars["parameter"] = resolved
+
+        # FAR-1743 / ADR 037 rev 2 (EXPERIMENTAL): the top-level `{{ model }}`
+        # template variable — the dedicated resolution channel. The value is
+        # interpolated from the SNAPSHOT (baked `_resolved_model`), with the
+        # run's frozen `_run_overrides.model` folded in pre-dispatch (run
+        # override wins). Render is interpolation, NEVER resolution: no
+        # registry read here, and `input.model` is neither read nor written
+        # (caller input keeps its own meaning; provenance stays intact).
+        # Reads the full run_context, not the context_scope-filtered view —
+        # the fold-in is a product mechanism, not a user template key.
+        _model_value = effective_model_template_value(node_def, run_context)
+        if _model_value is not None:
+            template_vars["model"] = _model_value
+        elif node_def.get("model_class"):
+            # Fail closed (D3) BEFORE any sandbox work: an opted-in node with
+            # no resolved model must not render `{{ model }}` as empty and
+            # dispatch a sandbox on a blank --model. The normal path bakes at
+            # mint (fail-closed there); this backstop catches a snapshot whose
+            # bake is missing (e.g. an edit-kind snapshot consumed by a run).
+            raise ValueError(
+                f"sandbox_agent node '{node_id}' declares model_class "
+                f"{node_def.get('model_class')!r} but no model was resolved at snapshot mint "
+                "(no baked _resolved_model and no run-override model) — refusing to dispatch "
+                "pre-sandbox (ADR 037 D3)"
+            )
 
         try:
             rendered_prompt = template.render(**template_vars)

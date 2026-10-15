@@ -16543,6 +16543,11 @@ export interface components {
             agent_prompt?: string | null;
             /** Script Command */
             script_command?: string | null;
+            /**
+             * Model Class
+             * @description EXPERIMENTAL (FAR-1743 / ADR 037): registry capability class name (e.g. 'builder') resolved to a concrete model id at snapshot mint; the node consumes it via the top-level `{{ model }}` template variable (e.g. `--model {{ model }}`). Optional — absent means the node's literal model strings render unchanged. sandbox_agent nodes only. Unknown classes and unreadable registries reject the run pre-dispatch (fail closed).
+             */
+            model_class?: string | null;
             /** Egress Policy */
             egress_policy?: ("default" | "deny_all" | "selected") | null;
             /** Egress Allowlist */

@@ -66,6 +66,7 @@ from modulo.core.eval_engine.coverage_gap import (
     compute_coverage_gap,
 )
 from modulo.core.eval_engine.eval_definition_write import (
+    EvalWriteOptions,
     create_or_update_eval,
     validate_guardrail_request,
 )
@@ -1283,10 +1284,12 @@ async def create_eval_definition(
                     failure_behaviour="warn",
                     pass_threshold=req.pass_threshold,
                     suite_id=req.suite_id,
-                    # FAR-939 chunk 12: fresh create — automatic (current
-                    # behaviour). The mode is authored via the dedicated
-                    # gate routes.
-                    evaluation_mode="automatic",
+                    write_options=EvalWriteOptions(
+                        # FAR-939 chunk 12: fresh create — automatic (current
+                        # behaviour). The mode is authored via the dedicated
+                        # gate routes.
+                        evaluation_mode="automatic",
+                    ),
                 )
             except PolicyGateBindingViolationError as exc:
                 raise HTTPException(
@@ -2656,9 +2659,11 @@ async def update_eval_definition(
                     failure_behaviour=current_failure_behaviour,
                     pass_threshold=updates.get("pass_threshold", eval_row.pass_threshold),
                     suite_id=updates.get("suite_id", eval_row.suite_id),
-                    eval_suite_id=updates.get("eval_suite_id", getattr(eval_row, "eval_suite_id", None)),
-                    existing_eval_id=eval_row.id,
-                    evaluation_mode=current_evaluation_mode,
+                    write_options=EvalWriteOptions(
+                        eval_suite_id=updates.get("eval_suite_id", getattr(eval_row, "eval_suite_id", None)),
+                        existing_eval_id=eval_row.id,
+                        evaluation_mode=current_evaluation_mode,
+                    ),
                 )
             except PolicyGateBindingViolationError as exc:
                 raise HTTPException(
@@ -3350,9 +3355,11 @@ async def _insert_eval_definition(
                     failure_behaviour="warn",
                     pass_threshold=None,
                     suite_id=None,
-                    # FAR-939 chunk 12: fresh create from a run sample —
-                    # automatic (current behaviour).
-                    evaluation_mode="automatic",
+                    write_options=EvalWriteOptions(
+                        # FAR-939 chunk 12: fresh create from a run sample —
+                        # automatic (current behaviour).
+                        evaluation_mode="automatic",
+                    ),
                 )
             except PolicyGateBindingViolationError as exc:
                 raise HTTPException(

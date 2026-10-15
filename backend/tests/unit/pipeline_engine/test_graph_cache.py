@@ -1028,7 +1028,7 @@ def test_effective_gate_edges_delegates_to_the_shared_classifier() -> None:
         "modulo.core.pipeline_engine.graph_cache.classify_source_dispatch",
         return_value=dispatch,
     ) as classifier:
-        result = _effective_gate_edges_for_source("node-a", [sentinel_edge], {"node_type": "agent"})
+        result = _effective_gate_edges_for_source([sentinel_edge], {"node_type": "agent"})
 
     classifier.assert_called_once()
     assert result == [sentinel_edge]

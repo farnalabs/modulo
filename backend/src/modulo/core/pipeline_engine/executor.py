@@ -261,6 +261,33 @@ _RETRY_POLICY_MAX_RETRIES = 5
 # the write site and the read site so the stamp cannot drift.
 _GATED_EVAL_MODES_KEY = "gated_eval_modes"
 
+# FAR-967 §3.1 / FAR-939 chunk 12: the shared "no gate governs this eval"
+# verdict of the policy-gate resolution helpers — warn semantics, no
+# PolicyGateDecision row (``policy_gate_id is None`` downstream). One name
+# so every ungoverned arm returns an identical, recognisable value.
+_NO_GOVERNED_GATE: tuple[str, uuid.UUID | None, int | None, uuid.UUID | None, str | None] = (
+    "warn",
+    None,
+    None,
+    None,
+    None,
+)
+
+
+def _governed_evaluation_mode(gate: PolicyGate) -> str:
+    """Normalise ``policy_gates.evaluation_mode`` to the closed DTO vocabulary.
+
+    Production rows always carry the NOT NULL column (migration
+    0313_policy_gate_evaluation_mode); the attribute fallback keeps
+    pre-0313 ORM stand-ins and legacy fixtures (no attribute at all) on
+    today's behaviour — automatic. Hoisted out of
+    ``PipelineExecutor._resolve_governed_gate`` for the cognitive-complexity
+    budget (S3776); behaviour is unchanged.
+    """
+    raw = getattr(gate, "evaluation_mode", None)
+    return "human" if raw == "human" else "automatic"
+
+
 # Canonical dotted error codes written at terminalization (agent-failure UX) and
 # matched by the retry policy. Constants are pure aliases so the retry policy,
 # the failure write, and log names cannot drift (S1192).
@@ -1939,6 +1966,60 @@ def _clamp_to_ceiling(base_level: AutonomyLevel, ceiling: str | None) -> str:
     return base_level.value
 
 
+def _index_dtos_by_eval_id(eval_defs_by_node: dict[str, list[EvalDefDTO]]) -> dict[str, EvalDefDTO]:
+    """Flatten a per-node DTO universe into an id-indexed lookup.
+
+    Extracted from ``PipelineExecutor._overlay_frozen_gated_eval_modes`` for
+    the cognitive-complexity budget (S3776); behaviour unchanged. Last write
+    wins on duplicate ids, exactly as the original inline double loop.
+    """
+    by_eval_id: dict[str, EvalDefDTO] = {}
+    for dtos in eval_defs_by_node.values():
+        for dto in dtos:
+            by_eval_id[str(dto.id)] = dto
+    return by_eval_id
+
+
+def _frozen_eval_mode_entries(config: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The ``gated_eval_modes`` stamp entries of one fired-gate config.
+
+    Extracted from ``PipelineExecutor._overlay_frozen_gated_eval_modes`` for
+    the cognitive-complexity budget (S3776); behaviour unchanged — a config
+    that is not a dict, or whose stamp key is not a list, contributes no
+    entries, and non-dict entries are dropped.
+    """
+    if not isinstance(config, dict):
+        return []
+    entries = config.get(_GATED_EVAL_MODES_KEY)
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+def _apply_frozen_eval_mode_entry(entry: dict[str, Any], by_eval_id: dict[str, EvalDefDTO]) -> bool:
+    """Apply ONE fire-time evaluation-mode stamp to its target DTO.
+
+    Extracted from ``PipelineExecutor._overlay_frozen_gated_eval_modes`` for
+    the cognitive-complexity budget (S3776); behaviour unchanged. Returns
+    ``True`` only when a stamp was applied: the entry must carry a known
+    ``eval_id`` and a closed-vocabulary ``evaluation_mode``, the DTO must
+    exist and be gate-owned, and the stamp's ``policy_gate_id`` must match
+    the DTO's live governing gate (operator control / gate identity win over
+    the freeze). Mutates ``target_dto`` in place on success.
+    """
+    eval_id = entry.get("eval_id")
+    mode = entry.get("evaluation_mode")
+    if not eval_id or mode not in ("automatic", "human"):
+        return False
+    target_dto = by_eval_id.get(str(eval_id))
+    if target_dto is None or target_dto.policy_gate_id is None:
+        return False
+    if str(target_dto.policy_gate_id) != str(entry.get("policy_gate_id")):
+        return False
+    target_dto.policy_gate_evaluation_mode = str(mode)
+    return True
+
+
 class PipelineExecutor:
     """Execute a single pipeline run (HITL-aware, supports parallel fan-out).
 
@@ -2727,45 +2808,17 @@ class PipelineExecutor:
         path (named foreclosure, chunk 12 §10).
         """
 
-        def _mode(gate: PolicyGate) -> str:
-            # Normalise to the closed vocabulary on the DTO. Production rows
-            # always carry the NOT NULL column (migration 0308); the
-            # attribute fallback keeps pre-0308 ORM stand-ins and legacy
-            # fixtures (no attribute at all) on today's behaviour —
-            # automatic.
-            raw = getattr(gate, "evaluation_mode", None)
-            return "human" if raw == "human" else "automatic"
-
         eval_id = str(eval_row.id)
-        eval_type = eval_row.eval_type
         pipeline_key = str(pipeline_id)
 
         # No live gate row at all.
         if policy_gate is None:
-            if pinned_universe and pin is not None:
-                # Pinned, but the live row is gone (soft-deleted since
-                # snapshot creation) — skip, mirroring the guardrail-pin
-                # soft-delete skip precedent.
-                _log.info(
-                    "eval_defs.pinned_gate_unavailable",
-                    extra={"eval_id": eval_id, "pipeline_id": pipeline_key},
-                )
-                return ("warn", None, None, None, None)
-            if eval_type == "guardrail":
-                # Guardrail-typed Evals keep warn semantics by design.
-                return ("warn", None, None, None, None)
-            # Anomaly: node-scoped non-guardrail Eval without a gate. This
-            # means its PolicyGate binding was rejected during backfill —
-            # log a warning but do not crash.
-            _log.warning(
-                "eval_defs.node_without_gate",
-                extra={
-                    "eval_id": eval_id,
-                    "eval_type": eval_type,
-                    "pipeline_id": pipeline_key,
-                },
+            return PipelineExecutor._governed_gate_absent_live_row(
+                eval_row,
+                pin,
+                pinned_universe=pinned_universe,
+                pipeline_id=pipeline_id,
             )
-            return ("warn", None, None, None, None)
 
         # Pin membership first: a gate absent from the pin set is never
         # evaluated for this run, whatever the live state (§3.1).
@@ -2774,7 +2827,7 @@ class PipelineExecutor:
                 "eval_defs.gate_not_pinned",
                 extra={"eval_id": eval_id, "pipeline_id": pipeline_key},
             )
-            return ("warn", None, None, None, None)
+            return _NO_GOVERNED_GATE
 
         # Operator control (§5.2): a disabled live row removes the gate from
         # evaluation — it overrides the pin. STRICT attribute read (FAR-967
@@ -2791,17 +2844,90 @@ class PipelineExecutor:
                     "policy_gate_id": str(policy_gate.id),
                 },
             )
-            return ("warn", None, None, None, None)
+            return _NO_GOVERNED_GATE
 
         # Live fallback (§6.1 case (i)): the live action governs.
         if not pinned_universe:
-            return (policy_gate.action, policy_gate.id, policy_gate.version, policy_gate.node_id, _mode(policy_gate))
+            return (
+                policy_gate.action,
+                policy_gate.id,
+                policy_gate.version,
+                policy_gate.node_id,
+                _governed_evaluation_mode(policy_gate),
+            )
 
         # Pinned universe, live row present and enabled: the PIN governs
         # (criterion 10) — not the live ``action``. ``pin`` is non-None here
         # by construction: the no-pin case returned above (pinned universe)
         # and the live fallback returned just above.
         assert pin is not None
+        return PipelineExecutor._governed_gate_from_pin(
+            policy_gate,
+            pin,
+            eval_id=eval_id,
+            pipeline_key=pipeline_key,
+        )
+
+    @staticmethod
+    def _governed_gate_absent_live_row(
+        eval_row: Eval,
+        pin: dict[str, Any] | None,
+        *,
+        pinned_universe: bool,
+        pipeline_id: uuid.UUID,
+    ) -> tuple[str, uuid.UUID | None, int | None, uuid.UUID | None, str | None]:
+        """Verdict when NO live PolicyGate row exists for this eval (FAR-967 §3.1).
+
+        Extracted from :meth:`_resolve_governed_gate` for cognitive-complexity
+        budget (S3776) — behaviour is unchanged: every arm returns the
+        ungoverned ``("warn", None, None, None, None)`` verdict, differing
+        only in which structured event it emits.
+        """
+        eval_id = str(eval_row.id)
+        eval_type = eval_row.eval_type
+        pipeline_key = str(pipeline_id)
+        if pinned_universe and pin is not None:
+            # Pinned, but the live row is gone (soft-deleted since
+            # snapshot creation) — skip, mirroring the guardrail-pin
+            # soft-delete skip precedent.
+            _log.info(
+                "eval_defs.pinned_gate_unavailable",
+                extra={"eval_id": eval_id, "pipeline_id": pipeline_key},
+            )
+            return _NO_GOVERNED_GATE
+        if eval_type == "guardrail":
+            # Guardrail-typed Evals keep warn semantics by design.
+            return _NO_GOVERNED_GATE
+        # Anomaly: node-scoped non-guardrail Eval without a gate. This
+        # means its PolicyGate binding was rejected during backfill —
+        # log a warning but do not crash.
+        _log.warning(
+            "eval_defs.node_without_gate",
+            extra={
+                "eval_id": eval_id,
+                "eval_type": eval_type,
+                "pipeline_id": pipeline_key,
+            },
+        )
+        return _NO_GOVERNED_GATE
+
+    @staticmethod
+    def _governed_gate_from_pin(
+        policy_gate: PolicyGate,
+        pin: dict[str, Any],
+        *,
+        eval_id: str,
+        pipeline_key: str,
+    ) -> tuple[str, uuid.UUID | None, int | None, uuid.UUID | None, str | None]:
+        """Resolve the governing verdict from a snapshot PIN (FAR-967 §3.1/§3.3).
+
+        Extracted from :meth:`_resolve_governed_gate` for cognitive-complexity
+        budget (S3776) — behaviour unchanged. The pin's ``policy_gate_id``
+        must still match the live row, its ``action`` must be in the closed
+        decision vocabulary, and its optional ``node_id`` (when parseable)
+        overrides the live row's node. Returns the ungoverned verdict on any
+        pin-side rejection.
+        """
         if str(pin.get("policy_gate_id")) != str(policy_gate.id):
             # The pinned gate was replaced since snapshot creation (the live
             # row belongs to a different gate) — the pinned row is gone.
@@ -2809,7 +2935,7 @@ class PipelineExecutor:
                 "eval_defs.pinned_gate_replaced",
                 extra={"eval_id": eval_id, "pipeline_id": pipeline_key},
             )
-            return ("warn", None, None, None, None)
+            return _NO_GOVERNED_GATE
 
         pin_action = pin.get("action")
         if pin_action not in ("warn", "block"):
@@ -2820,7 +2946,7 @@ class PipelineExecutor:
                 "eval_defs.pin_action_invalid",
                 extra={"eval_id": eval_id, "pipeline_id": pipeline_key, "action": str(pin_action)},
             )
-            return ("warn", None, None, None, None)
+            return _NO_GOVERNED_GATE
 
         gate_node_id = policy_gate.node_id
         pin_node_id = pin.get("node_id")
@@ -2832,7 +2958,13 @@ class PipelineExecutor:
                     "eval_defs.pin_node_id_invalid",
                     extra={"eval_id": eval_id, "pipeline_id": pipeline_key},
                 )
-        return (str(pin_action), policy_gate.id, policy_gate.version, gate_node_id, _mode(policy_gate))
+        return (
+            str(pin_action),
+            policy_gate.id,
+            policy_gate.version,
+            gate_node_id,
+            _governed_evaluation_mode(policy_gate),
+        )
 
     @staticmethod
     def _build_eval_defs_by_node(
@@ -2988,31 +3120,12 @@ class PipelineExecutor:
         """
         if not fired_gate_configs:
             return 0
-        by_eval_id: dict[str, EvalDefDTO] = {}
-        for dtos in eval_defs_by_node.values():
-            for dto in dtos:
-                by_eval_id[str(dto.id)] = dto
+        by_eval_id = _index_dtos_by_eval_id(eval_defs_by_node)
         applied = 0
         for config in fired_gate_configs:
-            if not isinstance(config, dict):
-                continue
-            entries = config.get(_GATED_EVAL_MODES_KEY)
-            if not isinstance(entries, list):
-                continue
-            for entry in entries:
-                if not isinstance(entry, dict):
-                    continue
-                eval_id = entry.get("eval_id")
-                mode = entry.get("evaluation_mode")
-                if not eval_id or mode not in ("automatic", "human"):
-                    continue
-                target_dto = by_eval_id.get(str(eval_id))
-                if target_dto is None or target_dto.policy_gate_id is None:
-                    continue
-                if str(target_dto.policy_gate_id) != str(entry.get("policy_gate_id")):
-                    continue
-                target_dto.policy_gate_evaluation_mode = str(mode)
-                applied += 1
+            for entry in _frozen_eval_mode_entries(config):
+                if _apply_frozen_eval_mode_entry(entry, by_eval_id):
+                    applied += 1
         return applied
 
     async def _run_post_node_evals(

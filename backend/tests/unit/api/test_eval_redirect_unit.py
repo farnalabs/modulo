@@ -21,6 +21,7 @@ from modulo.api.mcp_server import (
     update_eval_definition,
 )
 from modulo.core.eval_engine.eval_definition_write import (
+    EvalWriteOptions,
     create_or_update_eval,
     validate_guardrail_request,
 )
@@ -344,7 +345,7 @@ class TestFirstTimeRedirectCreate:
             failure_behaviour="warn",
             pass_threshold=None,
             suite_id=None,
-            existing_eval_id=missing_id,
+            write_options=EvalWriteOptions(existing_eval_id=missing_id),
         )
 
         assert row.id == missing_id
@@ -585,9 +586,10 @@ class TestEvaluationModeCarriedOrPreserved:
         recorder.assert_awaited_once()
         kwargs = recorder.await_args.kwargs
         # THE C1 assertion: the live mode is forwarded, not defaulted.
-        assert kwargs["evaluation_mode"] == "human"
+        options = kwargs["write_options"]
+        assert options.evaluation_mode == "human"
         assert kwargs["failure_behaviour"] == "block"
-        assert kwargs["existing_eval_id"] == eval_row.id
+        assert options.existing_eval_id == eval_row.id
 
     async def test_helper_update_with_no_mode_preserves_the_live_human_mode(self) -> None:
         """``evaluation_mode=None`` (an update surface that does not carry
@@ -616,8 +618,8 @@ class TestEvaluationModeCarriedOrPreserved:
             failure_behaviour="block",
             pass_threshold=None,
             suite_id=None,
-            existing_eval_id=eval_row.id,
             # evaluation_mode deliberately omitted -> None -> PRESERVE.
+            write_options=EvalWriteOptions(existing_eval_id=eval_row.id),
         )
 
         assert gate.evaluation_mode == "human"
@@ -649,8 +651,10 @@ class TestEvaluationModeCarriedOrPreserved:
             failure_behaviour="warn",
             pass_threshold=None,
             suite_id=None,
-            existing_eval_id=eval_row.id,
-            evaluation_mode="automatic",
+            write_options=EvalWriteOptions(
+                existing_eval_id=eval_row.id,
+                evaluation_mode="automatic",
+            ),
         )
 
         assert gate.evaluation_mode == "automatic"
@@ -702,7 +706,7 @@ class TestEvaluationModeCarriedOrPreserved:
             failure_behaviour="block",
             pass_threshold=None,
             suite_id=None,
-            evaluation_mode="human",
+            write_options=EvalWriteOptions(evaluation_mode="human"),
         )
 
         added = [call.args[0] for call in session.add.call_args_list]

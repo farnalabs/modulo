@@ -28,7 +28,8 @@ Lenses:
   ``0309_hitl_claims_decision_sweep`` chains onto ``0308_runs_dispatch_phase_history``, and
   ``0310_library_cluster_db_hardening`` chains onto ``0309_hitl_claims_decision_sweep``, and
   ``0311_library_cluster_schema_hygiene`` chains onto ``0310_library_cluster_db_hardening``, and
-  ``0312_policy_gate_evaluation_mode`` chains onto ``0311_library_cluster_schema_hygiene`` as the single
+  ``0312_memberships_active_lookups`` chains onto ``0311_library_cluster_schema_hygiene``, and
+  ``0313_policy_gate_evaluation_mode`` chains onto ``0312_memberships_active_lookups`` as the single
   linear head; the revision id matches the filename, and neither
   branch_labels nor depends_on is set (the pre-commit check-migration-heads
   hook and every ``test_single_head_*`` pin depend on that shape).
@@ -61,7 +62,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0289_pipelines_environment_profile"
 _MIGRATION_DOWN_REVISION = "0288_runs_execution_origin"
-_HEAD_MIGRATION = "0312_policy_gate_evaluation_mode"
+_HEAD_MIGRATION = "0313_policy_gate_evaluation_mode"
 _TABLE = "pipelines"
 _COLUMN = "environment_profile_id"
 _FK_NAME = "fk_pipelines_environment_profile_id"
