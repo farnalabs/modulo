@@ -46,7 +46,12 @@ class _RedactedTrelloError(Exception):
 
 
 class TrelloTicketTracker(TicketTrackerBase):
-    """Trello board connector, scoped to the configured board's cards.
+    """Trello connector for the configured board.
+
+    Board-scoped operations (:meth:`list_tickets`, :meth:`create_ticket`, and
+    the listing path of :meth:`query`) act on the configured board, while
+    :meth:`get_ticket` and :meth:`update_ticket` address any card by id via
+    ``/cards/{id}`` independent of that board.
 
     Every request authenticates via ``key``/``token`` query parameters, so the
     transport layer is pinned and all error paths redact those credentials
@@ -165,7 +170,7 @@ class TrelloTicketTracker(TicketTrackerBase):
     async def list_tickets(self, ticket_filter: TicketFilter | None = None) -> list[Ticket]:
         """List the board's cards, narrowing to *ticket_filter* where possible.
 
-        ``limit`` is honoured (capped at Trello's 100-card page maximum) and
+        ``limit`` is honoured (capped at 100 cards per page by this connector) and
         ``status``/``search`` are applied client-side, because the cards endpoint
         cannot filter on them. ``offset`` has no Trello equivalent, so a non-zero
         offset is logged and ignored rather than silently mis-paging.
