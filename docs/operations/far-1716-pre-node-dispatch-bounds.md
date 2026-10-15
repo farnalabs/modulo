@@ -78,6 +78,21 @@ With `SAQ_RUN_TIMEOUT = 7200` s (`core/dispatch.py:34`) that is
 token usage, no `__final__` output, no checkpoints) go through the nodeless
 router's own terminalizer; rows with node progress are failed `no_progress`.
 
+**FAR-1803 caveat (2026-10-15).** The claim "the ~135-minute age bound
+terminal-fails it regardless" was FALSE for one shape: a node-STARTED row
+(`dispatch_phase='first_node_dispatched'`) carrying a LIVE dispatch marker
+(`{"state": "dispatching", ...}`). The age gate's FAR-1740 (3) live-marker
+arm shielded such a row from the gate **regardless of whether the executor
+that wrote the marker was still alive** — so when the executor died mid-dispatch
+(heartbeat stale, zero node outputs), the row sat `running` holding a
+sandbox-concurrency slot, invisible to every reconcile counter, until the
+25-hour runner-marker sweep. Observed on prod 2026-10-14/15 (runs 35905,
+36255, 36269, 36274, 36278, 36283, 36325-36327). Fixed by FAR-1803: the
+shield now applies only while `heartbeat_at` is fresh (a stale/NULL heartbeat
+proves the owning attempt is gone), the reconcile scan admits the class under
+a dedicated leg counting it `node_started_executor_lost` (never re-dispatched
+— FAR-1649), and the age gate collects it `no_progress` at the bound.
+
 ## 3. Therefore a zero-node run legitimately lives ~35–135 minutes
 
 Under current defaults, a run claimed by SAQ that executes no node is
@@ -85,7 +100,10 @@ re-dispatched by (b) on a 35-minute cycle (budget `SAQ_NODELESS_REDISPATCH_BUDGE
 default 4, `cron_helpers.py:4861`), with each attempt bounded by (a)'s 600 s
 grace, until the (c) ~135-minute age bound terminal-fails it regardless. A
 zero-node run sitting in `running` for an hour is **not** a diagnosis of a
-55-minute cap being ignored - no such cap applies to it.
+55-minute cap being ignored - no such cap applies to it. A node-STARTED run
+whose executor dies mid-dispatch is the same ~135-minute bound (FAR-1803,
+above): held and counted as `node_started_executor_lost` from the first
+stale-heartbeat tick, terminalised `no_progress` at the bound.
 
 ## 4. Timestamp semantics: `started_at` vs `dispatch_phase_entered_at`
 

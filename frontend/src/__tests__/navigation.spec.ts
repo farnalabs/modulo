@@ -39,6 +39,9 @@ const mockManifest = vi.hoisted(() => ({
     '/admin/costs': { name: 'admin-costs', breadcrumb: 'Costs', sidebar_group: 'configure', sidebar_order: 12, type: 'page', required_tier: 'team', required_roles: ['admin'], required_permissions: null, exact: true },
     '/admin/costs/limits': { name: 'admin-costs-limits', breadcrumb: 'Spend Limits', sidebar_group: null, sidebar_order: null, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/admin/costs/controls': { name: 'admin-costs-controls', breadcrumb: 'Cost Controls', sidebar_group: null, sidebar_order: null, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
+    // FAR-1796: a route-ENTRY system_admin_only gate inside a NON-gated group.
+    // The group is visible to everyone, so only the item-level flag can hide it.
+    '/admin/secret-tool': { name: 'admin-secret-tool', breadcrumb: 'Secret Tool', sidebar_group: 'configure', sidebar_order: 99, system_admin_only: true, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
     '/settings/license': { name: 'settings-license', breadcrumb: 'License', sidebar_group: 'system', sidebar_order: 1, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/settings/teams': { name: 'settings-teams', breadcrumb: 'Teams', sidebar_group: 'admin', sidebar_order: 2, type: 'list_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/settings/sso': { name: 'settings-sso', breadcrumb: 'SSO', sidebar_group: 'admin', sidebar_order: 3, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
@@ -397,5 +400,25 @@ describe('navigation.ts', () => {
   it('getVisibleNavGroups includes system group for system-admin', () => {
     const groups = getVisibleNavGroups(visibilityContext({ isSystemAdmin: true }))
     expect(groups.find((g: any) => g.id === 'system')).toBeDefined()
+  })
+
+  it('hides a route-entry system_admin_only item from non-system-admins in a visible group (FAR-1796)', () => {
+    // The `configure` group is not group-gated, so a route-entry-only
+    // system_admin_only flag must by itself hide the item from non-admins and
+    // reveal it to system admins.
+    const allItems = getNavGroups().flatMap((g) => g.items)
+    const item = allItems.find((i) => i.to === '/admin/secret-tool')
+    expect(item, 'the mock route must produce a nav item').toBeDefined()
+    expect(item!.systemAdminOnly).toBe(true)
+
+    const nonAdminItems = getVisibleNavGroups(visibilityContext({ isSystemAdmin: false }))
+      .flatMap((g) => g.items)
+      .map((i) => i.to)
+    expect(nonAdminItems).not.toContain('/admin/secret-tool')
+
+    const adminItems = getVisibleNavGroups(visibilityContext({ isSystemAdmin: true }))
+      .flatMap((g) => g.items)
+      .map((i) => i.to)
+    expect(adminItems).toContain('/admin/secret-tool')
   })
 })

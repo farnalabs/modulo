@@ -466,6 +466,8 @@ export default {
       "run_b": "Run B",
       "paste_run_id": "Paste a run ID (or select from dropdown)",
       "select_recent_run": "Select recent run...",
+      "select_run_a": "Select run A",
+      "select_run_b": "Select run B",
       "loading": "Loading...",
       "compare": "Compare",
       "outputs_identical": "Outputs are identical",
@@ -3806,6 +3808,7 @@ export default {
       "mcp_detail": "OAuth clients: {clients} - API keys: {keys}",
       "commands_detail": "Composite templates: {composites} - Library primitives: {primitives}",
       "autonomy_detail": "Manual approval: {manual} - Notify on complete: {notify} - Fully autonomous: {autonomous}",
+      "autonomy_detail_partial": "Manual approval: {manual} - Notify on complete: {notify} - Fully autonomous: {autonomous} (first {sampled} of {total} pipelines)",
       "telemetry_detail": "OpenTelemetry export: {otel} - Error groups: {errors} - Notification endpoints: {endpoints}",
       "telemetry_otel_configured": "configured",
       "telemetry_otel_not_configured": "not configured",
@@ -4375,7 +4378,9 @@ export default {
       "view_all": "View all notifications"
     },
     "PageTabs": {
-      "section_navigation": "Section navigation"
+      "section_navigation": "Section navigation",
+      "available_on_plan": "Available on the {plan} plan",
+      "locked_aria": "{label} (Available on the {plan} plan)"
     },
     "FeatureGate": {
       "team_feature": "Team Feature",

@@ -96,6 +96,10 @@ _CRON_HOURLY = "0 * * * *"
 #: (FAR-1707). Distinct from analytics_facts_maintenance's 01:00 slot so the
 #: two daily crons never contend.
 _CRON_DAILY = "0 3 * * *"
+#: Once-daily cadence (02:30) — the FAR-132 legacy-shape straggler sweep. A
+#: distinct off-peak slot from the other daily crons (facts maintenance 01:00,
+#: kill-switch drill 03:00) so the three never contend.
+_CRON_DAILY_0230 = "30 2 * * *"
 
 # Scheduled run-retention window (FAR-1549). Pinned explicitly so the purge
 # and its audit record read the SAME cutoff: ``batch_delete_old_terminal_runs``
@@ -1158,6 +1162,47 @@ async def dispatcher_reconcile(_ctx: dict[str, Any]) -> dict[str, Any]:
     return await _ch.dispatcher_reconcile()
 
 
+async def legacy_agent_return_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — detect run_node_outputs rows still carrying the legacy shape (FAR-132).
+
+    The periodic invariant gating the FAR-132 Agent-Return-split strip. The scan
+    + LOUD detection log live in
+    :func:`modulo.core.cron_helpers.legacy_agent_return_sweep`; this wrapper owns
+    the durable liveness record (mirroring ``decision_record_reconcile``): the
+    outcome (``last_run_at`` + ``legacy_count``) is persisted to the shared Redis
+    key every tick so /healthz/ready can warn when the sweep is stale or
+    missing. A sweep failure is persisted (with the error) and then RE-RAISED so
+    SAQ's ``retries`` engage — a silently dead invariant must not be invisible.
+    """
+    from modulo.core import cron_helpers as _ch
+
+    try:
+        result = await _ch.legacy_agent_return_sweep()
+    except Exception as exc:
+        await _persist_sweep_stats(
+            LEGACY_AGENT_RETURN_SWEEP_STATS_KEY,
+            {
+                "last_run_at": datetime.now(UTC).isoformat(),
+                "legacy_count": 0,
+                "error": f"sweep_failed ({type(exc).__name__}: {exc})"[:200],
+            },
+            LEGACY_AGENT_RETURN_SWEEP_STATS_TTL_SECONDS,
+        )
+        raise
+
+    stats: dict[str, Any] = {
+        "last_run_at": datetime.now(UTC).isoformat(),
+        "legacy_count": result.get("legacy_count", 0),
+        "sample_truncated": result.get("sample_truncated", False),
+    }
+    await _persist_sweep_stats(
+        LEGACY_AGENT_RETURN_SWEEP_STATS_KEY,
+        stats,
+        LEGACY_AGENT_RETURN_SWEEP_STATS_TTL_SECONDS,
+    )
+    return stats
+
+
 async def claim_expiry(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — expire stale HITL claims (SAQ SOLE writer/notifier, F1)."""
     from modulo.core.hitl_manager.expiry_job import expire_stale_claims
@@ -1603,6 +1648,20 @@ DECISION_RECORD_RECONCILE_STATS_KEY = "saq:cron:stats:decision_record_reconcile"
 DECISION_RECORD_RECONCILE_STALE_SECONDS = 3 * 60 * 60
 # TTL: one sweep past the stale window (same arithmetic as the sibling keys).
 DECISION_RECORD_RECONCILE_STATS_TTL_SECONDS = DECISION_RECORD_RECONCILE_STALE_SECONDS + 60
+
+# Cross-process stats key for the FAR-132 legacy-shape straggler sweep (same
+# contract as the sibling detection crons: the daily cron persists its outcome
+# — ``legacy_count`` + ``last_run_at`` — and /healthz/ready reads it to detect a
+# silently dead sweep or a never-run sweep). The sweep is read-only (it never
+# mutates a row), so its liveness is the only signal that the strip-gating
+# invariant is still being evaluated.
+LEGACY_AGENT_RETURN_SWEEP_STATS_KEY = "saq:cron:stats:legacy_agent_return_sweep"
+# The sweep runs daily at 02:30; a last_run_at older than 72h means at least two
+# ticks were missed -> report "stale" (advisory). Mirrors the sibling 3x-cadence
+# arithmetic (decision_record_reconcile: hourly -> 3h).
+LEGACY_AGENT_RETURN_SWEEP_STALE_SECONDS = 3 * 24 * 60 * 60
+# TTL: one sweep past the stale window.
+LEGACY_AGENT_RETURN_SWEEP_STATS_TTL_SECONDS = LEGACY_AGENT_RETURN_SWEEP_STALE_SECONDS + 60
 
 
 async def _persist_sweep_stats(key: str, stats: dict[str, Any], ttl_seconds: int) -> None:
@@ -2458,6 +2517,7 @@ def _system_functions() -> list[Any]:
         health_readiness_alert,
         memory_monitor_cron,
         run_kill_switch_drill,
+        legacy_agent_return_sweep,
     ]
 
 
@@ -2825,6 +2885,25 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
             heartbeat=30,
             retries=1,
             ttl=300,
+        ),
+        # legacy_agent_return_sweep: daily at 02:30 (FAR-132) — the periodic
+        # invariant that gates stripping the Agent-Return-split's legacy
+        # tolerance. It counts run_node_outputs rows still reaching the legacy
+        # fallback, logs a LOUD ERROR when any remain (zero is healthy), and
+        # persists ``last_run_at`` + ``legacy_count`` to
+        # ``saq:cron:stats:legacy_agent_return_sweep`` for the /healthz/ready
+        # advisory. READ-ONLY: it mutates no row, so unique=True simply prevents
+        # two machines double-scanning one slot, and retries=1 is enough for a
+        # transient DB error (a scan that cannot run re-raises and must never be
+        # mistaken for a clean zero).
+        CronJob(
+            legacy_agent_return_sweep,
+            cron=_CRON_DAILY_0230,
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=1,
+            ttl=900,
         ),
     ]
 

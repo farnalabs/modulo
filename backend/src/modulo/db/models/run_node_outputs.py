@@ -64,6 +64,13 @@ from modulo.db.models.base import Base, TimestampMixin
 FINAL_ATTEMPT_KEY = "__final__"
 META_NODE_ID = "__run_meta__"
 UNKNOWN_NODE_ID = "__unknown__"
+#: Reserved sentinel namespace prefix for ``node_id``. A node id beginning
+#: with this prefix is a bookkeeping row — ``__run_meta__`` (run metadata),
+#: ``__unknown__`` (unparseable-marker evidence), ``__mwi_audit__`` (workspace
+#: input audit) — never a genuine node return. Defined once here so consumers
+#: (e.g. the FAR-132 straggler sweep) can exclude the whole namespace rather
+#: than maintain a drifting list of sentinel literals.
+SENTINEL_NODE_ID_PREFIX = "__"
 
 
 def json_bytes(value: Any) -> int:

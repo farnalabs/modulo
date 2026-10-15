@@ -8,7 +8,7 @@ README for `.github/workflows/k8s-conformance.yml`.
 
 | Leg | Trigger | Cluster | Scope |
 | --- | --- | --- | --- |
-| `kind` | pull requests and pushes to `main`, path-filtered to the runtime-provider / bundled-runner / pipeline-engine / conformance surfaces, `deploy/helm/**` (FAR-1558 follow-up: a chart-only change lints the chart without creating a cluster), + the workflow itself; manual via `workflow_dispatch` (`job=kind`) | throwaway [kind](https://kind.sigs.k8s.io) cluster, deleted `always()` | The runtime-provider conformance suite (`backend/tests/conformance/`, marker `runtime_provider_conformance`) plus the negative suite (a deliberately broken adapter must fail; a kill-before-collect must be detected, never a synthetic success), plus `helm lint` on the chart (runs whenever either the conformance surface or the chart changed). |
+| `kind` | pull requests and pushes to `main`, path-filtered to `backend/src/modulo/core/{runtime_provider,bundled_runner,pipeline_engine}/**`, `backend/tests/conformance/**`, `backend/pyproject.toml`, `backend/uv.lock` and the workflow itself, + `deploy/helm/**` (FAR-1558 follow-up: a chart-only change lints the chart without creating a cluster); manual via `workflow_dispatch` (`job=kind`). Pushes to `main` and manual dispatches are deliberately **unfiltered**. | throwaway [kind](https://kind.sigs.k8s.io) cluster, deleted `always()` | The runtime-provider conformance suite (`backend/tests/conformance/runtime_provider/`, marker `runtime_provider_conformance`) plus the negative suite (a deliberately broken adapter must fail; a kill-before-collect must be detected, never a synthetic success), plus `helm lint deploy/helm/modulo` on the chart (runs whenever either the conformance surface or the chart changed). |
 | `managed` | weekly cron (Monday 04:00 UTC); manual via `workflow_dispatch` (`job=managed`) | ONE managed cloud per ISO week, rotating EKS -> AKS -> GKE so all three cycle over three weeks | The same conformance suite against a real cloud control plane. |
 | `staleness` | daily cron (05:17 UTC); manual via `workflow_dispatch` (`job=staleness`) | none | Last-green visibility on the deploy-staleness-check pattern: publishes the last-green dates to the run summary and fails when the gate goes dark. Counts only runs where the conformance suite step actually executed and passed (FAR-1620) - a path-skipped docs-only/chart-only success never refreshes last-green. |
 
@@ -108,12 +108,27 @@ job would read as green.
 
 ```sh
 kind create cluster --name modulo-conformance --wait 180s
+kubectl wait --for=condition=Ready nodes --all --timeout=120s
+# The suite's pods run the runtime provider's default workspace image
+# (`python:3.13-slim`, `core/runtime_provider/k8s.py::_DEFAULT_IMAGE`). CI
+# pre-loads it into the kind node to sidestep Docker Hub pull limits; do the
+# same locally, otherwise every pod waits on a registry pull.
+docker pull python:3.13-slim
+kind load docker-image python:3.13-slim --name modulo-conformance
 cd backend
 uv sync --frozen
 uv run pytest tests/conformance/ -m runtime_provider_conformance --tb=short -q --timeout=600
 kind delete cluster --name modulo-conformance
 ```
 
+The `pytest` flags match the workflow's invocation exactly. CI runs it as
+`uv run --no-build --no-sync pytest ...` because `uv sync --frozen` already
+populated the environment on the preceding step; `--no-build` is safe there
+only because the sync already built `pytest-bdd` (a pinned source archive with
+no wheel, so `--no-build` on a cold cache hard-fails the sync - FAR-791). Keep
+the two steps separate locally for the same reason.
+
 `KUBECONFIG` (or the default kubeconfig path) must point at the kind
-cluster; the suite creates and deletes its own namespace. Never leave a kind
-cluster running after a local run.
+cluster; the suite creates and deletes its own namespace, and the workflow's
+final cleanup is `kubectl delete namespace -l modulo.conformance=true`. Never
+leave a kind cluster running after a local run.

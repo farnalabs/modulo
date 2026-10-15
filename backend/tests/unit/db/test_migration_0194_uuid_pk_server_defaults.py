@@ -33,7 +33,7 @@ _EXPECTED_COUNT = 84
 # id column too, so it is out of scope for the same reason.
 # system_audit_events (0285_system_audit_events, FAR-1517) sets
 # gen_random_uuid() inline on its id column, same as the tables above.
-# external_agents / mcp_servers (0313_external_agents_mcp_servers, FAR-1692)
+# external_agents / mcp_servers (0314_external_agents_mcp_servers, FAR-1692)
 # set gen_random_uuid() inline on their id columns too.
 _POST_0194_TABLES = frozenset(
     {

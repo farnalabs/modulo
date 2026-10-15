@@ -23,7 +23,7 @@ Modulo's control). ``approval_status`` is a first-class readable field so
 policies/evals can branch on the pin state (ADR 055 §4).
 
 Scoping: org-scoped with a team-visibility pair, DB-RLS-enforced
-(``rls_team_isolation``, migration ``0313``).
+(``rls_team_isolation``, migration ``0314``).
 """
 
 import uuid

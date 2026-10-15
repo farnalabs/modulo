@@ -87,7 +87,7 @@ compensation, and single-node self-correction. Built on the eval engine
       free so viewer-scoped callers cannot mutate the pin or generate audit
       rows by polling
 - [x] Creation-time materialisation (FAR-1593): a pipeline created AFTER an
-      apply/import inherits the applied org config in the SAME transaction —
+      apply/import inherits the applied org config in the SAME transaction:
       `db/crud/pipeline.py::create_pipeline` (the ORM chokepoint user-facing
       creation paths funnel through: REST, MCP, templates, onboarding, library
       install, workflow import) and the clone path

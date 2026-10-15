@@ -15,7 +15,7 @@ Deliberately distinct from:
 
 Scoping: org-scoped (``OrgScoped``) with a team-visibility pair
 (``visibility``/``owner_team_id``). The table is enforced by DB RLS alone
-(``rls_team_isolation``, created in migration ``0313``), the same
+(``rls_team_isolation``, created in migration ``0314``), the same
 DB-RLS-only posture the core team-scoped tables take (FAR-1514).
 """
 

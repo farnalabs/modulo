@@ -94,7 +94,7 @@ configured a signing key cannot emit signed evidence.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `MODULO_EVIDENCE_SIGNING_KEY` | For signed evidence | – | PEM-encoded Ed25519 private key that signs the evidence manifest. Set it to enable signing; the matching public key is derived and published automatically via the admin verification-key endpoint. Empty disables signed evidence. |
-| `MODULO_EVIDENCE_EXPORTER_IDENTITY` | No | `modulo` | Human-readable identity stamped into the signed manifest as the exporter. Never a credential. |
+| `MODULO_EVIDENCE_EXPORTER_IDENTITY` | No | `""` (falls back to `modulo` at stamp time) | Human-readable identity stamped into the signed manifest as the exporter. Never a credential. |
 
 ---
 

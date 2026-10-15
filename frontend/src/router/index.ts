@@ -708,9 +708,8 @@ export function hydrateManifestMeta(to: Parameters<Parameters<typeof router.befo
   // can never drift from it. A route is gated when EITHER its own route entry
   // carries `system_admin_only: true` OR its sidebar group has
   // `system_admin_only: true` — the two signals OR together.
-  // NOTE: the SIDEBAR filter (config/navigation.ts) reads only the group-level
-  // flag today, so a route with route-entry gating inside a VISIBLE sidebar
-  // group would be router-gated yet still listed in the sidebar.
+  // NOTE: the SIDEBAR filter (config/navigation.ts) honours BOTH signals too
+  // (FAR-1796), so the router gate and the sidebar cannot disagree.
   const routePath = (entry as unknown as { path?: string }).path
     ?? manifestByName.get(routeName)?.path
   if (routePath) {
