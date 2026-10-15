@@ -529,11 +529,14 @@ class Settings(BaseSettings):
     # A node may legitimately execute at most ``MAX_NODE_TIMEOUT_SECONDS``
     # (3300s) after the marker write that starts it, so a marker older than
     # the default 7200s (2x the max node timeout, with provisioning /
-    # sweep-cadence margin) PLUS a stale ``updated_at`` (heartbeat stopped —
-    # 2x SAQ_JOB_HEARTBEAT) proves the executor is dead. BOTH conditions must
-    # hold: a live long-running node refreshes ``updated_at`` and is never
-    # reclaimed. The load-time ``_node_started_stale_invariant`` below rejects
-    # a pin below a legitimate single-node dispatch window.
+    # sweep-cadence margin) PLUS a stale ``heartbeat_at`` (the executor stopped
+    # beating — 2x SAQ_JOB_HEARTBEAT) proves the executor is dead. BOTH
+    # conditions must hold: a live long-running node refreshes ``heartbeat_at``
+    # and is never reclaimed. ``runs.updated_at`` is NOT the liveness signal —
+    # it is a static insert-time default nothing refreshes, so keying on it
+    # would make the second condition vacuously true. The load-time
+    # ``_node_started_stale_invariant`` below rejects a pin below a legitimate
+    # single-node dispatch window.
     node_started_stale_seconds: int = Field(default=7200, alias="NODE_STARTED_STALE_SECONDS", ge=1, le=604800)
     # FAR-767: per-org lock_timeout for the runner-marker sweep's transactional
     # statements (candidate scan + CAS updates). A sweep org pass that blocks on

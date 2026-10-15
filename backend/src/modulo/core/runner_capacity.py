@@ -32,8 +32,10 @@ the atomic replacement:
   (``dispatch_phase='first_node_dispatched'``) is excluded from the
   reconciler's re-dispatch set, so instead of waiting the 25h cap it is
   reclaimed (``failed`` / ``worker_lost``, NEVER re-dispatched) as soon as its
-  marker exceeds ``node_started_stale_seconds`` AND its ``updated_at`` has gone
-  stale (both conditions — a live node refreshes ``updated_at``). Every
+  marker exceeds ``node_started_stale_seconds`` AND its ``heartbeat_at`` has
+  gone stale (both conditions — a live executor refreshes ``heartbeat_at``
+  every ``RUN_HEARTBEAT_SECONDS``; ``updated_at`` is a static insert-time
+  default nothing refreshes, so it can never testify to liveness). Every
   per-row clear/transition UPDATE is CAS-guarded on the
   classified marker text (a concurrent fresh-marker commit makes the UPDATE
   match 0 rows — the sweep never clobbers a marker it did not classify), the
@@ -727,8 +729,11 @@ DEFAULT_MARKER_STALE_SECONDS = 25 * 3600
 # reclaimed by the 25h marker-stale cap. This bound (2x the 3300s max node
 # timeout + provisioning / sweep margin, mirroring Settings'
 # ``node_started_stale_seconds`` default) tightens that window for this shape.
-# The authoritative value is ``Settings.node_started_stale_seconds``; this
-# constant is the module-level fallback for callers that do not pass one.
+# The bound no longer carries the liveness safety: reclaim additionally
+# requires a STALE ``heartbeat_at`` (see :func:`sweep_heartbeat_reference`),
+# which is what proves the executor died. The authoritative value is
+# ``Settings.node_started_stale_seconds``; this constant is the module-level
+# fallback for callers that do not pass one.
 DEFAULT_NODE_STARTED_STALE_SECONDS = 7200
 
 # The candidate-scan batch size (F8). A per-org scan without a LIMIT degrades
@@ -738,7 +743,8 @@ DEFAULT_NODE_STARTED_STALE_SECONDS = 7200
 SWEEP_CANDIDATE_BATCH = 500
 
 _SWEEP_CANDIDATE_SQL = text(
-    "SELECT id, status, error_code, sandbox_dispatch_state, updated_at, dispatch_phase "
+    "SELECT id, status, error_code, sandbox_dispatch_state, updated_at, dispatch_phase, "
+    "heartbeat_at, started_at, created_at "
     "FROM runs "
     "WHERE organisation_id = :oid AND sandbox_dispatch_state IS NOT NULL "
     "AND (CAST(:after AS uuid) IS NULL OR id > CAST(:after AS uuid)) "
@@ -797,6 +803,31 @@ def sweep_staleness_reference(
     return parse_marker_written_at(marker_json) or updated_at
 
 
+def sweep_heartbeat_reference(
+    heartbeat_at: datetime | None,
+    started_at: datetime | None,
+    created_at: datetime | None,
+) -> datetime | None:
+    """The RUN-LIVENESS timestamp the sweep compares (pure function).
+
+    Mirrors ``run_admission.reconcile_pipeline_slots``'s
+    ``COALESCE(heartbeat_at, started_at, created_at)`` — the SAME signal the
+    pipeline-slot reconciler already trusts. The executor refreshes
+    ``heartbeat_at`` every ``RUN_HEARTBEAT_SECONDS`` (30) regardless of node
+    progress, so a stale (or absent) reference proves the executor is dead.
+
+    ``runs.updated_at`` is deliberately NOT used: it is a static insert-time
+    default that nothing refreshes (the codebase says so at
+    ``core/cron_helpers.py`` — the FAR-596 cancel terminalizer uses
+    ``created_at`` as its age anchor "because ``runs.updated_at`` is a static
+    insert-time default that no status transition bumps in this codebase";
+    the executor heartbeat writes only ``heartbeat_at`` via raw SQL). Keying
+    liveness on it made the FAR-1808 reclaim's second condition vacuously
+    true for any run older than the fresh window.
+    """
+    return heartbeat_at or started_at or created_at
+
+
 def classify_sweep_action(
     *,
     status: str,
@@ -806,7 +837,7 @@ def classify_sweep_action(
     now: datetime,
     stale_seconds: int,
     recoverable: bool,
-    row_fresh: bool = False,
+    heartbeat_fresh: bool = False,
     node_started: bool = False,
     node_started_stale_seconds: int | None = None,
 ) -> str:
@@ -823,10 +854,10 @@ def classify_sweep_action(
     a terminal non-fence marker clears immediately (d1). Non-terminal rows
     then follow fence → recoverable → staleness; only a STALE non-fence
     marker is cleared, and a stale clear on a RUNNING run also transitions it
-    terminal (d2) UNLESS the row itself is fresh (``row_fresh`` — e.g. a
-    freshly-resumed long-parked run whose tombstone marker is old but whose
-    heartbeat/updated_at is live): a fresh row is alive, so the sweep only
-    clears the stale marker, never terminalises over a live attempt.
+    terminal (d2) UNLESS the run's heartbeat is FRESH (``heartbeat_fresh`` —
+    e.g. a freshly-resumed long-parked run whose tombstone marker is old but
+    whose ``heartbeat_at`` is live): a live executor is alive, so the sweep
+    only clears the stale marker, never terminalises over a live attempt.
 
     FAR-1808 ``node_started``: a RUNNING run whose ``dispatch_phase`` is
     ``first_node_dispatched`` is excluded from the reconciler's re-dispatch
@@ -835,14 +866,21 @@ def classify_sweep_action(
     cap is REPLACED by a tighter two-condition rule: reclaim
     (``transition_stale_running`` — always WITHOUT re-dispatch) only when BOTH
     (1) the marker age reference is older than ``node_started_stale_seconds``
-    (beyond any legitimate single-node dispatch window) AND (2) the row is
-    STALE (``not row_fresh`` — the heartbeat stopped, so the executor died).
-    Either condition failing keeps it live: a fresh row is a live attempt the
-    sweep must never terminalise over, and an in-window marker is still within
-    a legitimate node's execution. ``node_started_stale_seconds`` is the
-    Settings value (``DEFAULT_NODE_STARTED_STALE_SECONDS`` as a fallback); a
-    ``None`` bound disables the rule. Fence and recoverable still outrank it
-    (rules a/b), and a ``None`` age reference keeps the row live.
+    (beyond any legitimate single-node dispatch window) AND (2) the run's
+    heartbeat has gone STALE (``not heartbeat_fresh`` — the executor died; a
+    live executor refreshes ``heartbeat_at`` every ``RUN_HEARTBEAT_SECONDS``
+    regardless of node progress, so a stale one is provably dead).
+    ``heartbeat_fresh`` is computed by the caller from ``heartbeat_at``
+    (falling back to ``started_at``/``created_at``) — NEVER ``runs.updated_at``,
+    which is a static insert-time default nothing refreshes and so would make
+    condition (2) vacuously true. Condition (2) carries the liveness safety, so
+    the age bound in (1) no longer does. Either condition failing keeps it
+    live: a fresh heartbeat is a live attempt the sweep must never terminalise
+    over, and an in-window marker is still within a legitimate node's
+    execution. ``node_started_stale_seconds`` is the Settings value
+    (``DEFAULT_NODE_STARTED_STALE_SECONDS`` as a fallback); a ``None`` bound
+    disables the rule. Fence and recoverable still outrank it (rules a/b), and
+    a ``None`` age reference keeps the row live.
     """
     if status in TERMINAL_STATUSES:
         # Terminal rows: anomaly exemption BEFORE the fence rule (qa F14) —
@@ -872,13 +910,13 @@ def classify_sweep_action(
         if node_started_stale_seconds is None or stale_reference is None:
             return "keep_live"
         beyond_node_window = (now - stale_reference).total_seconds() > node_started_stale_seconds
-        if beyond_node_window and not row_fresh:
+        if beyond_node_window and not heartbeat_fresh:
             return "transition_stale_running"
         return "keep_live"
     # Non-terminal: only a STALE non-fence marker is cleared. A stale clear on
-    # a RUNNING run also transitions it terminal (no zombie) — unless the row
-    # itself is FRESH (a freshly-resumed long-parked run: its tombstone /
-    # previous-attempt marker is old but the heartbeat is live), where the
+    # a RUNNING run also transitions it terminal (no zombie) — unless the run's
+    # heartbeat is FRESH (a freshly-resumed long-parked run: its tombstone /
+    # previous-attempt marker is old but the executor is live), where the
     # sweep clears only the marker. The other non-terminal statuses keep their
     # lifecycle (a parked/waiting run is not killed over a stale marker) — the
     # marker clear alone makes them capacity-neutral.
@@ -887,7 +925,7 @@ def classify_sweep_action(
     age = (now - stale_reference).total_seconds()
     if age <= stale_seconds:
         return "keep_live"
-    if status == "running" and not row_fresh:
+    if status == "running" and not heartbeat_fresh:
         return "transition_stale_running"
     return "clear_stale"
 
@@ -1118,10 +1156,11 @@ async def _process_sweep_row(
 ) -> _SweepOutcome | None:
     """Classify and apply one sweep-row action; return the outcome or ``None``.
 
-    Handles the lazy-recoverability check (F8), row-freshness (d2 exemption),
-    classification via :func:`classify_sweep_action`, and CAS-guarded SQL
-    execution for clear/transition actions.  The caller increments ``scanned``
-    and appends any non-``None`` return to ``committed_outcomes``.
+    Handles the lazy-recoverability check (F8), heartbeat freshness (the d2
+    exemption AND the FAR-1808 liveness condition), classification via
+    :func:`classify_sweep_action`, and CAS-guarded SQL execution for
+    clear/transition actions.  The caller increments ``scanned`` and appends
+    any non-``None`` return to ``committed_outcomes``.
     """
     marker_json: str | None = row.sandbox_dispatch_state
     # Lazy recoverability (F8): terminal rows skip the check entirely (the
@@ -1133,7 +1172,19 @@ async def _process_sweep_row(
         recoverable = False
     else:
         recoverable = await _run_recoverable(session, row.id, recovery_or, exclusion)
-    row_fresh = row.updated_at is not None and ((now - row.updated_at).total_seconds() <= fresh_window)
+    # Liveness is judged from the run's HEARTBEAT (falling back to
+    # started_at/created_at), NEVER runs.updated_at — see
+    # :func:`sweep_heartbeat_reference`. The candidate SQL selects the three
+    # columns; a row double that does not expose them degrades to a ``None``
+    # reference = NOT fresh (the pre-existing "no fresh liveness signal"
+    # direction — the general d2 rule still transitions exactly as before and
+    # the FAR-1808 rule keys off the same real signal production provides).
+    heartbeat_reference = sweep_heartbeat_reference(
+        getattr(row, "heartbeat_at", None),
+        getattr(row, "started_at", None),
+        getattr(row, "created_at", None),
+    )
+    heartbeat_fresh = heartbeat_reference is not None and ((now - heartbeat_reference).total_seconds() <= fresh_window)
     # FAR-1808: the candidate SQL selects ``dispatch_phase``; a row double that
     # does not expose it degrades to node_started=False (the safe direction —
     # no reclaim), never a false termination.
@@ -1146,7 +1197,7 @@ async def _process_sweep_row(
         now=now,
         stale_seconds=stale_window,
         recoverable=recoverable,
-        row_fresh=row_fresh,
+        heartbeat_fresh=heartbeat_fresh,
         node_started=node_started,
         node_started_stale_seconds=node_started_stale_seconds,
     )
@@ -1360,10 +1411,12 @@ async def reconcile_runner_dispatch_markers(
     node_started_stale_seconds = int(
         getattr(settings, "node_started_stale_seconds", DEFAULT_NODE_STARTED_STALE_SECONDS)
     )
-    # The "fresh row" window for the d2 exemption (qa F14): a run whose row
-    # was written more recently than the reconciler's stale-heartbeat window
-    # is alive (heartbeat writes refresh updated_at) — the sweep clears its
-    # stale marker but never terminalises over it.
+    # The heartbeat-freshness window for the d2 exemption AND the FAR-1808
+    # liveness condition: a run whose heartbeat (falling back to
+    # started_at/created_at) is more recent than the reconciler's
+    # stale-heartbeat window is alive — the sweep clears its stale marker but
+    # never terminalises over it. Mirrors ``reconcile_pipeline_slots``'s
+    # reference; keyed on ``heartbeat_at`` (NOT the static ``updated_at``).
     from modulo.core.cron_helpers import RECONCILE_STALE_HEARTBEAT_FACTOR, _bound_org
 
     fresh_window = RECONCILE_STALE_HEARTBEAT_FACTOR * int(settings.saq_job_heartbeat)
@@ -1535,5 +1588,6 @@ __all__ = [
     "resolve_runner_capacity_decision",
     "runner_capacity_lock_keys",
     "runner_marker_sweep_lock_keys",
+    "sweep_heartbeat_reference",
     "sweep_staleness_reference",
 ]

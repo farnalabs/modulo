@@ -41,6 +41,7 @@ from modulo.core.runner_capacity import (
     reconcile_runner_dispatch_markers,
     runner_capacity_lock_keys,
     runner_marker_sweep_lock_keys,
+    sweep_heartbeat_reference,
     sweep_staleness_reference,
 )
 
@@ -952,7 +953,7 @@ def _sweep_kwargs(**overrides: Any) -> dict[str, Any]:
         "now": _NOW,
         "stale_seconds": 25 * 3600,
         "recoverable": False,
-        "row_fresh": False,
+        "heartbeat_fresh": False,
     }
     base.update(overrides)
     return base
@@ -1038,9 +1039,9 @@ def test_sweep_d_stale_running_transitions_terminal() -> None:
 
 def test_sweep_d_fresh_row_never_terminalised() -> None:
     """qa F14: a freshly-resumed long-parked run (old tombstone/previous-
-    attempt marker but a LIVE updated_at/heartbeat) is never terminalised by
-    the sweep — only its stale marker is cleared."""
-    action = classify_sweep_action(**_sweep_kwargs(status="running", row_fresh=True))
+    attempt marker but a LIVE heartbeat) is never terminalised by the
+    sweep — only its stale marker is cleared."""
+    action = classify_sweep_action(**_sweep_kwargs(status="running", heartbeat_fresh=True))
     assert action == "clear_stale"
 
 
@@ -1075,12 +1076,13 @@ _NODE_STARTED_STALE = 7200  # 2h — the Settings default
 
 def test_sweep_far1808_node_started_leak_reclaimed() -> None:
     """A node-STARTED running run whose marker is older than the window AND
-    whose row is stale (executor died) is reclaimed WITHOUT re-dispatch."""
+    whose heartbeat went stale (executor died) is reclaimed WITHOUT
+    re-dispatch."""
     action = classify_sweep_action(
         **_sweep_kwargs(
             status="running",
             stale_reference=_NOW - timedelta(hours=10),
-            row_fresh=False,
+            heartbeat_fresh=False,
             node_started=True,
             node_started_stale_seconds=_NODE_STARTED_STALE,
         )
@@ -1088,14 +1090,19 @@ def test_sweep_far1808_node_started_leak_reclaimed() -> None:
     assert action == "transition_stale_running"
 
 
-def test_sweep_far1808_node_started_fresh_row_protected() -> None:
-    """The SAME old marker with a FRESH row (live heartbeat) is kept — a live
-    long-running node refreshes updated_at and must never be terminalised."""
+def test_sweep_far1808_node_started_fresh_heartbeat_protected() -> None:
+    """A legitimately long-running node with an OLD marker but a FRESH
+    heartbeat is kept — a live executor refreshes ``heartbeat_at`` every
+    ``RUN_HEARTBEAT_SECONDS`` and must never be terminalised.
+
+    This is the production-faithful protect case: liveness is keyed on the
+    REAL signal (``heartbeat_at``), not the static ``updated_at`` the old
+    test injected (which production never refreshes)."""
     action = classify_sweep_action(
         **_sweep_kwargs(
             status="running",
             stale_reference=_NOW - timedelta(hours=10),
-            row_fresh=True,
+            heartbeat_fresh=True,
             node_started=True,
             node_started_stale_seconds=_NODE_STARTED_STALE,
         )
@@ -1105,12 +1112,12 @@ def test_sweep_far1808_node_started_fresh_row_protected() -> None:
 
 def test_sweep_far1808_node_started_in_window_kept() -> None:
     """A marker still inside the node window (1h < 2h) is kept even with a
-    stale row — the node could legitimately still be executing."""
+    stale heartbeat — the node could legitimately still be executing."""
     action = classify_sweep_action(
         **_sweep_kwargs(
             status="running",
             stale_reference=_NOW - timedelta(hours=1),
-            row_fresh=False,
+            heartbeat_fresh=False,
             node_started=True,
             node_started_stale_seconds=_NODE_STARTED_STALE,
         )
@@ -1147,15 +1154,15 @@ def test_sweep_far1808_node_started_rule_does_not_apply_without_bound() -> None:
 
 def test_sweep_far1808_node_started_legacy_marker_uses_updated_at_reference() -> None:
     """A legacy tier-less marker (no written_at) falls back to updated_at as
-    the age reference — a node-started leak with a stale updated_at is still
-    reclaimed past the bound."""
+    the marker-AGE reference; with a stale heartbeat the node-started leak is
+    still reclaimed past the bound."""
     legacy = json.dumps({"state": "dispatching", "attempt_key": "k"})
     action = classify_sweep_action(
         **_sweep_kwargs(
             status="running",
             marker_json=legacy,
             stale_reference=_NOW - timedelta(hours=10),
-            row_fresh=False,
+            heartbeat_fresh=False,
             node_started=True,
             node_started_stale_seconds=_NODE_STARTED_STALE,
         )
@@ -1200,7 +1207,7 @@ def test_sweep_far1808_node_started_rule_only_for_running() -> None:
         **_sweep_kwargs(
             status="awaiting_human",
             stale_reference=_NOW - timedelta(hours=30),
-            row_fresh=False,
+            heartbeat_fresh=False,
             node_started=True,
             node_started_stale_seconds=_NODE_STARTED_STALE,
         )
@@ -1230,6 +1237,18 @@ def test_sweep_staleness_reference_falls_back_to_updated_at() -> None:
     fresh_marker = build_dispatch_marker("k", "e2b")
     assert sweep_staleness_reference(fresh_marker, updated) is not None
     assert sweep_staleness_reference(fresh_marker, updated) != updated
+
+
+def test_sweep_heartbeat_reference_falls_back_to_started_then_created() -> None:
+    """The liveness reference mirrors ``reconcile_pipeline_slots``'s
+    ``COALESCE(heartbeat_at, started_at, created_at)`` — never ``updated_at``."""
+    hb = _NOW - timedelta(seconds=5)
+    started = _NOW - timedelta(minutes=5)
+    created = _NOW - timedelta(hours=1)
+    assert sweep_heartbeat_reference(hb, started, created) == hb
+    assert sweep_heartbeat_reference(None, started, created) == started
+    assert sweep_heartbeat_reference(None, None, created) == created
+    assert sweep_heartbeat_reference(None, None, None) is None
 
 
 def _early_detect_settings(*, early: int | None, nodeless: int = 35) -> Any:
@@ -1302,6 +1321,14 @@ class _Row:
         self.updated_at = kw.get("updated_at", _NOW - timedelta(hours=30))
         # FAR-1808: the candidate SQL selects ``dispatch_phase``.
         self.dispatch_phase = kw.get("dispatch_phase")
+        # The run-LIVENESS columns the candidate SQL now selects. Liveness is
+        # judged from these (heartbeat → started_at → created_at), never the
+        # static ``updated_at``. ``created_at`` mirrors the ``updated_at``
+        # default (an old run) so a default row reads as ``not fresh``;
+        # supply ``heartbeat_at`` to model a live executor.
+        self.heartbeat_at = kw.get("heartbeat_at")
+        self.started_at = kw.get("started_at")
+        self.created_at = kw.get("created_at", _NOW - timedelta(hours=30))
 
 
 class _FakeLockConn:
@@ -1466,13 +1493,14 @@ async def test_sweep_clears_terminal_and_stale_markers_and_transitions_running(
     assert fence.id not in factory.transitioned
 
 
-async def test_sweep_far1808_reclaims_node_started_leak_and_protects_fresh_row(
+async def test_sweep_far1808_reclaims_node_started_leak_and_protects_fresh_heartbeat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """FAR-1808 end-to-end through the sweep orchestration: a node-started
-    running run with an old marker AND a stale updated_at is transitioned
+    running run with an old marker AND a STALE ``heartbeat_at`` is transitioned
     (``failed`` / ``worker_lost``), while the identical run with a FRESH
-    updated_at is kept live."""
+    ``heartbeat_at`` is kept live. Liveness is keyed on the heartbeat — the
+    production-faithful signal — NOT the static ``updated_at``."""
     _patch_gate(monkeypatch, flag_on=False)
 
     class _S(_FakeGateSettings):
@@ -1499,13 +1527,19 @@ async def test_sweep_far1808_reclaims_node_started_leak_and_protects_fresh_row(
     leaked = _Row(
         status="running",
         sandbox_dispatch_state=old_marker,
+        # A dead executor stopped beating: production never refreshes
+        # updated_at, so heartbeat_at is the real — and stale — signal.
+        heartbeat_at=_NOW - timedelta(hours=9),
         updated_at=_NOW - timedelta(hours=9),
         dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
     )
     protected = _Row(
         status="running",
         sandbox_dispatch_state=old_marker,
-        updated_at=_NOW,  # fresh heartbeat — the executor is alive
+        heartbeat_at=_NOW,  # fresh heartbeat — the executor is alive
+        # updated_at deliberately left STALE: it proves liveness is NOT keyed
+        # on the static insert-time default.
+        updated_at=_NOW - timedelta(hours=9),
         dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
     )
     factory = _FakeSweepFactory([leaked, protected])
