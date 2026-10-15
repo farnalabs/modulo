@@ -25,10 +25,14 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from modulo.api.routes.pipelines import _sync_agent_row_commands
 from modulo.db.crud.pipeline import replace_pipeline_graph
+from modulo.db.crud.pipeline_snapshot import _materialize_agent_fields
 from modulo.db.models.account import Account
+from modulo.db.models.agent import Agent
 from modulo.db.models.base import Base
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.pipeline import Pipeline
@@ -38,6 +42,7 @@ from modulo.db.models.pipeline_edge import PipelineEdge
 # SQLite cannot render (same rationale as test_pipeline_graph_updated_audit).
 _TABLE_NAMES = {
     "accounts",
+    "agents",
     "org_memberships",
     "pipelines",
     "pipeline_edges",
@@ -56,14 +61,17 @@ _NODE_B = "00000000-0000-0000-0000-0000000000a2"
 _EDGE_ID = uuid.UUID("00000000-0000-0000-0000-0000000000e1")
 
 
-def _node(node_id: str, *, agent_commands: list[str]) -> dict[str, Any]:
-    return {
+def _node(node_id: str, *, agent_commands: list[str], agent_id: str | None = None) -> dict[str, Any]:
+    node: dict[str, Any] = {
         "id": node_id,
         "node_type": "agent",
         "position": {"x": 0, "y": 0},
         "label": node_id[-2:],
         "agent_commands": list(agent_commands),
     }
+    if agent_id is not None:
+        node["agent_id"] = agent_id
+    return node
 
 
 def _edge(edge_id: str, source: str, target: str) -> dict[str, Any]:
@@ -191,6 +199,60 @@ class TestExplicitSaveRecordsEditSnapshot:
             pytest.raises(RuntimeError, match="could not record its edit snapshot"),
         ):
             await _patch_graph(session, [_node(_NODE_A, agent_commands=["v2"])], [])
+
+
+class TestEditSnapshotMaterializesPostSyncAgentRow:
+    """FAR-1810 review (MAJOR): the edit snapshot's bound-node payload must be
+    materialized from the Agent row AFTER the FAR-488a command sync, so the
+    snapshot recorded for the version just saved carries the command the
+    operator saved — not the pre-sync Agent-row value.
+
+    ``create_snapshot_from_live_graph`` -> ``_materialize_agent_fields``
+    OVERWRITES a bound node's ``agent_commands`` with the Agent-row value at
+    snapshot time (``pipeline_snapshot.py`` ``_apply_agent_fields``). The routes
+    therefore run ``_sync_agent_row_commands`` BEFORE the write that mints the
+    snapshot; this test drives that exact order against a real session and
+    captures the payload the snapshot copy would materialize. Under the pre-fix
+    order (sync AFTER the write) the captured node carried the stale Agent-row
+    command, so this fails when the ordering regresses.
+    """
+
+    async def test_edit_snapshot_payload_pins_the_post_sync_agent_command(self, session: AsyncSession) -> None:
+        agent_id = uuid.UUID("00000000-0000-0000-0000-0000000000a7")
+        session.add(
+            Agent(
+                id=agent_id,
+                organisation_id=_ORG_ID,
+                account_id=_ACCOUNT_ID,
+                name="bound-agent",
+                prompt_template="p",
+                agent_commands=["run --old"],
+            )
+        )
+        # The live node mirrors the pre-save Agent row, so saving --new is a real
+        # change and the snapshot is NOT suppressed.
+        await _seed_graph(
+            session,
+            [_node(_NODE_A, agent_commands=["run --old"], agent_id=str(agent_id))],
+            with_edge=False,
+        )
+
+        saved = [_node(_NODE_A, agent_commands=["run --new"], agent_id=str(agent_id))]
+        captured: dict[str, Any] = {}
+
+        async def _capture(session_arg: AsyncSession, *, pipeline_id: uuid.UUID, **_kwargs: Any) -> Any:
+            pipeline = (await session_arg.execute(select(Pipeline).where(Pipeline.id == pipeline_id))).scalar_one()
+            nodes = [dict(n) for n in (pipeline.graph_nodes_json or [])]
+            await _materialize_agent_fields(session_arg, nodes)
+            captured["nodes"] = nodes
+            return _mock_snapshot()
+
+        with patch("modulo.db.crud.pipeline.create_snapshot_edit", new=_capture):
+            # Route order: FAR-488a sync FIRST, then the write mints the snapshot.
+            await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=saved)
+            await _patch_graph(session, saved, [])
+
+        assert captured["nodes"][0]["agent_commands"] == ["run --new"]
 
 
 class TestNoOpSuppression:
