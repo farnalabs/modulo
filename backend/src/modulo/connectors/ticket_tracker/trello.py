@@ -279,8 +279,8 @@ class TrelloTicketTracker(TicketTrackerBase):
     async def update_ticket(self, ticket_id: str, **kwargs: Any) -> Ticket:
         """Move a card between lists and/or set its due date.
 
-        Only ``idList`` and ``due`` are updatable through this connector; any
-        other keyword is ignored: this connector only supports ``idList``/``due``.
+        Only ``idList`` and ``due`` are forwarded to Trello; any other keyword
+        is ignored.
 
         Raises:
             ValueError: If Trello rejects the request or the transport fails; the
