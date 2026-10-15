@@ -2,8 +2,8 @@
 
 Covers proof-of-brokenness regression, type promotion, nullable handling,
 additionalProperties, required fields, nested objects, array items,
-version pinning, deletion protection, grace period degradation,
-schema pins map parsing, and backward compatibility.
+version pinning, deletion protection, pre-existing snapshot blocking
+(FAR-1760), schema pins map parsing, and backward compatibility.
 
 All pure validation tests call _check_schema_fields directly (no DB).
 Tests needing DB interaction use mocked AsyncSession.
@@ -422,17 +422,17 @@ async def test_schema_deletion_allowed_when_not_pinned():
 
 
 # ===================================================================
-# Test 10 — Grace period degradation
+# Test 10 — Pre-existing snapshot schema blocking (FAR-1760)
 # ===================================================================
 
 
-async def test_pre_existing_pipeline_logs_degraded_mode(caplog: pytest.LogCaptureFixture):
-    """Pre-Phase-1 snapshot with incompatible schemas does not block early.
+async def test_pre_existing_pipeline_blocked_with_truthful_message(caplog: pytest.LogCaptureFixture):
+    """Pre-Phase-1 snapshot with a field-level incompatibility is INVALID (blocked).
 
-    The degraded-mode signal is the WARNING-level log record emitted when the
-    incompatibility is detected on a pre-existing snapshot, so it is pinned here
-    via ``caplog``. The returned result is still invalid and carries the
-    ``SCHEMA_FIELD_INCOMPATIBLE`` error.
+    FAR-1760: the pre-existing carve-out must not signal a degraded proceed
+    that never happens. The run stays blocked, the log and the surfaced error
+    both say the run is blocked, and no ``proceeds in degraded mode`` text is
+    emitted in either channel.
     """
     caplog.set_level(logging.WARNING)
     out_id = uuid.uuid4()
@@ -462,7 +462,60 @@ async def test_pre_existing_pipeline_logs_degraded_mode(caplog: pytest.LogCaptur
 
     assert not result.is_valid
     assert any(i.code == "SCHEMA_FIELD_INCOMPATIBLE" for i in result.issues)
-    assert any("Schema incompatibility in pipeline" in r.getMessage() for r in caplog.records)
+    blocked = [i for i in result.issues if i.code == "SCHEMA_PRE_EXISTING_BLOCKED"]
+    assert blocked
+    assert "Run is blocked" in blocked[0].message
+    assert not any(i.code == "SCHEMA_DEGRADED" for i in result.issues)
+    blocked_logs = [r.getMessage() for r in caplog.records if "Run is blocked" in r.getMessage()]
+    assert any("Schema incompatibility in pipeline" in msg for msg in blocked_logs)
+    surfaced = " ".join(r.getMessage() for r in caplog.records)
+    surfaced += " " + " ".join(f"{i.code} {i.message}" for i in result.issues)
+    assert "proceeds in degraded mode" not in surfaced
+
+
+async def test_pre_existing_pipeline_input_mismatch_blocked_with_truthful_message(caplog: pytest.LogCaptureFixture):
+    """Pre-Phase-1 snapshot with an input-payload mismatch is INVALID (blocked).
+
+    The input-schema carve-out mirrors the field-level one: blocked with a
+    truthful message, no ``proceeds in degraded mode`` signal on any channel.
+    """
+    caplog.set_level(logging.WARNING)
+    entry_id = uuid.uuid4()
+
+    graph = {
+        "nodes": [
+            {"id": "a", "input_schema_pin": {"schema_id": str(entry_id), "schema_version": "1.0"}},
+            {"id": "b"},
+        ],
+        "edges": [{"source": "a", "target": "b", "type": "normal"}],
+    }
+
+    snap = _snapshot(
+        graph_json=graph,
+        created_at=datetime(2026, 7, 21, 12, 0, 0, tzinfo=UTC),
+        schema_pins_json=[],
+    )
+
+    rows = [
+        _schema_version_row(
+            entry_id, {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+        ),
+    ]
+    session = _schema_version_session(rows)
+
+    result = await GraphValidator().validate_for_run(snap, {}, session)
+
+    assert not result.is_valid
+    assert any(i.code == "INPUT_SCHEMA_MISMATCH" for i in result.issues)
+    blocked = [i for i in result.issues if i.code == "SCHEMA_PRE_EXISTING_BLOCKED"]
+    assert blocked
+    assert "Run is blocked" in blocked[0].message
+    assert not any(i.code == "SCHEMA_DEGRADED" for i in result.issues)
+    blocked_logs = [r.getMessage() for r in caplog.records if "Run is blocked" in r.getMessage()]
+    assert any("Input schema incompatibility in pipeline" in msg for msg in blocked_logs)
+    surfaced = " ".join(r.getMessage() for r in caplog.records)
+    surfaced += " " + " ".join(f"{i.code} {i.message}" for i in result.issues)
+    assert "proceeds in degraded mode" not in surfaced
 
 
 async def test_non_pre_existing_pipeline_blocks_on_incompatible():
