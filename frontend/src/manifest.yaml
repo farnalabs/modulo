@@ -3904,6 +3904,9 @@ elements:
       - testid: run-detail-breadcrumb-runs
         type: link
         dynamic_testid: false
+      - testid: run-detail-pipeline-version-link
+        type: link
+        dynamic_testid: false
       - testid: run-detail-dispatched
         type: element
         dynamic_testid: false
@@ -6179,6 +6182,8 @@ features:
             - "[x] A run is refused for a pipeline that may not run (FAR-1528, extended by FAR-1530): create_run raises PipelineNotRunnableError when the pipeline is archived, soft-deleted OR paused (run_enabled=false — the FAR-1530 Paused execution state), and every REST entry point that can reach it (manual trigger, rerun, test trigger, webhook, replay, slack, variant runs, feedback correction) maps the refusal to 409 Conflict through the shared pipeline_not_runnable_http helper naming the pipeline id and state — never a generic 500 — while the cron/polling/ongoing fire jobs handle the same refusal without crashing; the archived / soft-deleted / paused precedence is resolved by the shared state classifier (deleted outranks archived outranks paused), the state gate reads org-scoped and is RLS-fenced, and a pipeline that does not exist is still refused upstream by the route's own 404 entry filter (backend/src/modulo/api/routes/runs.py, backend/src/modulo/db/crud/run.py classify state gate, backend/src/modulo/core/exceptions.py, test_runs_endpoint.py, test_runs_rerun_endpoint.py, test_pipeline_state_gate.py, test_pipeline_state_gate_rls.py)"
             # Run execution-origin provenance (FAR-1141 / ADR-042)
             - "[x] Every run carries WHERE its work was executed (FAR-1141, ADR-042): runs.execution_origin (migration 0288, closed vocabulary via EXECUTION_ORIGIN_DISPATCHED='dispatched', single-sourced in db/models/run.py) is stamped 'dispatched' by create_run when the run's FROZEN snapshot graph contains at least one `dispatch` node — part of the work executed OUTSIDE Modulo and only witnessed/triggered by it; NULL means executed by Modulo or the run predates the column (legacy rows are deliberately never backfilled). The provenance rides every run-rendering surface: RunResponse + the /api/v1/viewmodel runs, the dashboard and lifecycle-map run rows, the runs list detail, and the analytics execution_origin dimension (bucket + chart label via the utility executionOriginLabel so raw keys like 'dispatched' never surface), and the run-detail page renders a 'Dispatched' provenance badge for such runs (frontend/src/utils/runUtils.ts, frontend/src/lib/api/runs.ts, backend/src/modulo/db/crud/run.py, backend/src/modulo/api/routes/{runs,viewmodel,dashboard,lifecycle_maps,analytics}.py, frontend dispatchDisplay.spec.ts / executionOriginLabel.spec.ts)"
+            # Run -> pipeline-version link (FAR-1813)
+            - "[x] The runs list row and the run detail render the pipeline NAME as a real focusable link to the version that run executed (/pipelines/{pipeline_id}/editor?snapshot={snapshot_id}), built ONLY from that run's own snapshot_id so a rerun links to the source snapshot it re-executed and never to the pipeline head; a legacy run with snapshot_id NULL links to the live editor with a title stating the run has no recorded version, a deleted pipeline (pipeline_name NULL) renders plain text instead of a dead link, and the list row keeps a separate 'View run' link so run detail stays reachable now the name opens the version (frontend/src/components/runs/RunPipelineVersionLink.vue, RunsListView.vue, RunDetailView.vue, RunPipelineVersionLink.spec.ts)"
     feat-runtime:
         description: Runtime configuration, rate limits, retention, sandbox concurrency, and the Runners page (D5)
         status: covered
