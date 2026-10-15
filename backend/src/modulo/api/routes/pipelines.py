@@ -1357,6 +1357,30 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     )
     agent_prompt: str | None = None
     script_command: str | None = None
+    # FAR-1743 / ADR 037 rev 2 (EXPERIMENTAL): optional registry capability
+    # class (e.g. "builder") for sandbox_agent nodes — a CLASS name resolved to
+    # a concrete model id at snapshot mint, NOT a Model Backend entity (no
+    # org-scoped credentials reach the sandbox). The node consumes the baked
+    # value through the top-level ``{{ model }}`` template variable
+    # (``--model {{ model }}``); ``{{ model }}`` without this field is rejected
+    # by GraphValidator at save/run validation so a stray reference can never
+    # render empty. Absent = no first-class reference: the node's literal
+    # ``--model`` strings keep rendering unchanged (safe mixed state during the
+    # slice-B migration). Resolution FAILS CLOSED pre-dispatch on an unknown
+    # class or an unreadable registry (ADR 037 D3). The field is experimental
+    # until slice B de-experimentalises it — it may change before then, and
+    # ``input.model`` keeps whatever meaning callers already give it (never
+    # written by the product).
+    model_class: str | None = Field(
+        default=None,
+        max_length=128,
+        description="EXPERIMENTAL (FAR-1743 / ADR 037): registry capability class name "
+        "(e.g. 'builder') resolved to a concrete model id at snapshot mint; the node "
+        "consumes it via the top-level `{{ model }}` template variable (e.g. "
+        "`--model {{ model }}`). Optional — absent means the node's literal model "
+        "strings render unchanged. sandbox_agent nodes only. Unknown classes and "
+        "unreadable registries reject the run pre-dispatch (fail closed).",
+    )
     # FAR-296 Phase 3: egress control + resource-limit config surface.
     # egress_policy: "default" (internet allowed, e2b default), "deny_all"
     # (allow_internet_access=False), or "selected" (allow_internet_access=False
@@ -1572,6 +1596,25 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         """
         return v if isinstance(v, str) and v else " && "
 
+    @field_validator("model_class", mode="after")
+    @classmethod
+    def _validate_model_class(cls, v: str | None) -> str | None:
+        """FAR-1743 (EXPERIMENTAL): shape-check the registry class name.
+
+        The field is optional (None = no first-class reference); a present
+        value must be a non-empty, trimmed class name. Whether the class is
+        KNOWN is deliberately NOT checked here — the registry is resolved at
+        snapshot mint and fails closed there (ADR 037 D3), so a typo is caught
+        at run start with a node-naming error instead of blocking a save on a
+        registry the API process may not even be configured to read.
+        """
+        if v is None:
+            return None
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("model_class must be a non-empty registry class name (e.g. 'builder')")
+        return stripped
+
     @model_validator(mode="wrap")
     @classmethod
     def validate_node_type(
@@ -1640,7 +1683,11 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         the same treatment: the runtime only reads them for sandbox nodes.
         FAR-1273 adds ``single_pr_per_run`` to the same set: the one-PR-per-run
         ``gh`` guard is installed only inside a sandbox, so the flag on any
-        other node type would declare a guard nothing installs.
+        other node type would declare a guard nothing installs. FAR-1743 adds
+        ``model_class``: the class is resolved at mint only for sandbox_agent
+        nodes and consumed through the sandbox ``{{ model }}`` template
+        variable, so on any other node type it would be a declared-but-unread
+        reference to a mechanism that never runs.
         """
         if self.node_type == "sandbox_agent":
             return
@@ -1654,6 +1701,8 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             raise ValueError("Only sandbox_agent nodes can set agent_commands")
         if self.commands_concatenation_string != " && ":
             raise ValueError("Only sandbox_agent nodes can set commands_concatenation_string")
+        if self.model_class is not None:
+            raise ValueError("Only sandbox_agent nodes can set model_class")
 
     def _validate_agent_only_fields(self) -> None:
         if self.node_type != "agent" and self.parameter_set_id is not None:

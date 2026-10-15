@@ -78,4 +78,15 @@ describe('manifest merge-key gating (js-yaml regression guard)', () => {
     })
     expect(gatedRoutes.length).toBeGreaterThanOrEqual(25)
   })
+
+  it('route-level system-admin gates carry system_admin_only: true (manifest is the single source)', () => {
+    // These three routes have a blank sidebar_group, so the sidebar-group
+    // derivation alone can never gate them — the route entry must carry the
+    // signal itself. Regression guard for an inline-meta-only gate.
+    for (const path of ['/admin/system/orgs', '/admin/system/config', '/admin/product-analytics']) {
+      const route = routes[path]
+      expect(route, `${path} must exist`).toBeDefined()
+      expect(route.system_admin_only).toBe(true)
+    }
+  })
 })

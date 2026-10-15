@@ -935,6 +935,7 @@ async def _render_agent_template(
     raw_input: Any,
     run_id: str,
     node_id: str,
+    node_def: dict[str, Any] | None = None,
 ) -> tuple[str, str, str] | dict[str, Any]:
     """Render agent prompt and command templates for the sandbox.
 
@@ -957,6 +958,27 @@ async def _render_agent_template(
         "run_context": scoped_run_context,
         "input": raw_input,
     }
+    # FAR-1743 / ADR 037 rev 2 (EXPERIMENTAL): the top-level `{{ model }}`
+    # template variable from the SNAPSHOT's baked `_resolved_model`, with the
+    # run's frozen `_run_overrides.model` folded in pre-dispatch (run override
+    # wins) — the same interpolation the E2B node-runner path performs; never a
+    # registry read and never a write to `input.model`. Reads the FULL
+    # run_context from state (not the context_scope-filtered view). Fail closed
+    # before any workspace provisioning when an opted-in node has no value.
+    # Lazy import: this module stays dependency-light (mirrors the jinja helper).
+    from modulo.core.model_class_registry import effective_model_template_value
+
+    _node_def = node_def or {}
+    _model_value = effective_model_template_value(_node_def, state.get("run_context") or {})
+    if _model_value is not None:
+        template_vars["model"] = _model_value
+    elif _node_def.get("model_class"):
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' declares model_class "
+            f"{_node_def.get('model_class')!r} but no model was resolved at snapshot mint "
+            "(no baked _resolved_model and no run-override model) — refusing to dispatch "
+            "pre-sandbox (ADR 037 D3)"
+        )
     try:
         rendered_prompt = env.from_string(agent_prompt_template).render(**template_vars)
         rendered_agent_command = env.from_string(agent_command).render(**template_vars)
@@ -1583,6 +1605,9 @@ async def run_bundled_runner_node(
             raw_input=raw_input,
             run_id=run_id,
             node_id=node_id,
+            # FAR-1743 / ADR 037: the snapshot-baked model_class metadata the
+            # `{{ model }}` interpolation (and its fail-closed backstop) reads.
+            node_def=node_def,
         )
         if isinstance(template_result, dict):
             return template_result

@@ -4131,7 +4131,13 @@ async def _update_pipeline_graph_impl(
     "node's masked values are dropped rather than restored. Only a new, non-masked value "
     "overwrites a stored secret; omitting the field drops it, so re-send masked values "
     "unchanged rather than dropping them. "
-    "Returns the updated graph."
+    "EXPERIMENTAL (FAR-1743 / ADR 037): a "
+    "sandbox_agent node may set `model_class` (a registry capability class such as "
+    "'builder', resolved to a concrete model id at snapshot mint and consumed via the "
+    "top-level `{{ model }}` template variable, e.g. `--model {{ model }}`); the field, "
+    "the template variable, and the baked `_resolved_model` / `_model_origin` metadata "
+    "are all experimental and may change before de-experimentalisation. Returns the "
+    "updated graph."
 )
 @mcp_audited("pipeline_graph_updated", "pipeline", fail_closed=False)
 @_RETRY_DB

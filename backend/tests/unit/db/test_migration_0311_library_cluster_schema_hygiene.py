@@ -8,9 +8,10 @@ Lenses:
 
 * **Chain** — 0311 revises ``0310_library_cluster_db_hardening``; the
   migrations directory has exactly one head
-  (``0312_collection_install_drop_installed_entities``, which chains onto this
-  migration and is pinned by all sibling chain tests); the revision id matches
-  the filename; neither ``branch_labels`` nor ``depends_on`` is set.
+  (``0313_collection_install_drop_installed_entities``, which chains onto
+  ``0312_memberships_active_lookups`` and is pinned by all sibling chain
+  tests); the revision id matches the filename; neither ``branch_labels`` nor
+  ``depends_on`` is set.
 * **Upgrade** — drops the two redundant indexes, then adds the
   ``publishers.trust_tier`` CHECK and the ``library_primitives.version_group_id``
   self-FK (each ``NOT VALID`` then ``VALIDATE``-d, each gated on its OWN
@@ -44,7 +45,7 @@ from modulo.db.models.publisher import Publisher
 
 _MIGRATION_REVISION = "0311_library_cluster_schema_hygiene"
 _MIGRATION_DOWN_REVISION = "0310_library_cluster_db_hardening"
-_HEAD_MIGRATION = "0312_collection_install_drop_installed_entities"
+_HEAD_MIGRATION = "0313_collection_install_drop_installed_entities"
 
 _DROP_INSTALL_ENTITY_INDEX = "ix_collection_install_entity_install_id"
 _DROP_PUBLISHER_INDEX = "ix_publishers_public_key_hex"
@@ -103,7 +104,7 @@ def _joined(rec: _Recorder) -> str:
 
 
 class TestChain:
-    def test_single_head_is_0312_collection_install_drop_installed_entities(self) -> None:
+    def test_single_head_is_0313_collection_install_drop_installed_entities(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 

@@ -399,6 +399,15 @@ class Settings(BaseSettings):
     # is ready for production use.  Consumed in node_runner before host-side
     # ref resolution.
     modulo_workspace_inputs_enabled: bool = Field(False, alias="MODULO_WORKSPACE_INPUTS_ENABLED")
+    # FAR-1743 / ADR 037 rev 2 (EXPERIMENTAL): path to the devtools-owned
+    # model-management.json registry the sandbox_agent ``model_class`` seam
+    # resolves through at snapshot mint. None (default) = no registry: nodes
+    # without ``model_class`` resolve nothing (existing pipelines unchanged),
+    # while a node that DECLARES ``model_class`` fails closed pre-dispatch
+    # (ModelClassResolutionError, ADR 037 D3). When set, the file must stay
+    # readable — a configured-but-broken registry rejects sandbox runs loudly
+    # instead of silently shipping them on the wrong model.
+    model_class_registry_path: str | None = Field(default=None, alias="MODEL_CLASS_REGISTRY_PATH")
     # FAR-1050 R6 (E2B provider-conformance rewire): the
     # ``MODULO_E2B_VIA_PROVIDER`` flag is RETIRED. The legacy direct E2B path
     # was deleted in R6 — every sandbox dispatch runs through the

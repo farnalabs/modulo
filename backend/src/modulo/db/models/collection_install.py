@@ -8,7 +8,7 @@ FAR-1754: ``CollectionInstallEntity`` is the SINGLE source of truth for
 "what this install wrote" — uninstall (``core/library_service/uninstall.py``)
 acts on it and the install API response derives its ``installed_entities``
 list from it. The parent's duplicate ``installed_entities`` JSON column was
-dropped (migration ``0312_collection_install_drop_installed_entities``): the
+dropped (migration ``0313_collection_install_drop_installed_entities``): the
 same fact was persisted twice with nothing keeping the copies in sync, so any
 divergence silently misreported what uninstall would act on.
 

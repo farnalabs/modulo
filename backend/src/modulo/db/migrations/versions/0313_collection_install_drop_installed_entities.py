@@ -1,7 +1,7 @@
 """Drop the duplicate ``collection_install.installed_entities`` JSON column.
 
-Revision ID: 0312_collection_install_drop_installed_entities
-Revises: 0311_library_cluster_schema_hygiene
+Revision ID: 0313_collection_install_drop_installed_entities
+Revises: 0312_memberships_active_lookups
 Create Date: 2026-10-14
 
 FAR-1754: which schemas/agents/pipelines a collection install wrote was
@@ -33,8 +33,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
-revision: str = "0312_collection_install_drop_installed_entities"
-down_revision: str | None = "0311_library_cluster_schema_hygiene"
+revision: str = "0313_collection_install_drop_installed_entities"
+down_revision: str | None = "0312_memberships_active_lookups"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
