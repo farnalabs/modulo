@@ -193,8 +193,15 @@ async def test_due_report_executes_and_transitions_schedule(
     assert result["next_send_at"] == (expected_next.isoformat() if expected_next else None)
     generator.assert_awaited_once()
     deliverer.assert_awaited_once()
-    update_statement = session.execute.await_args_list[1].args[0]
-    update_params = update_statement.compile().params
+    # FAR-1822: the terminal UPDATE is the last write (Phase 1 stamps
+    # next_send_at under a short lock before generation; Phase 3 stamps the
+    # terminal last_sent_at/next_send_at/active after it).
+    final_statement = [
+        call.args[0]
+        for call in session.execute.await_args_list
+        if str(call.args[0]).lstrip().startswith("UPDATE") and "active" in str(call.args[0])
+    ][-1]
+    update_params = final_statement.compile().params
     assert update_params["active"] is expected_active
     assert update_params["next_send_at"] == expected_next
 
@@ -216,7 +223,14 @@ async def test_failed_delivery_does_not_deactivate_one_time_report() -> None:
         result = await _fire_scheduled_report(report_id=report.id, org_id=report.organisation_id)
 
     assert result == {"status": "failed", "reason": "generation_or_delivery_failed"}
-    assert session.execute.await_count == 1
+    # FAR-1822: Phase 1 makes two statements before generation (SELECT … FOR
+    # UPDATE, then the short-lock next_send_at stamp); the failure path adds no
+    # further write — a failed one_time report is NOT deactivated.
+    assert session.execute.await_count == 2
+    writes = [
+        call.args[0] for call in session.execute.await_args_list if str(call.args[0]).lstrip().startswith("UPDATE")
+    ]
+    assert all("active" not in str(stmt).lstrip() for stmt in writes)
 
 
 async def test_cost_crud_filters_and_cannot_delete_quality_report() -> None:

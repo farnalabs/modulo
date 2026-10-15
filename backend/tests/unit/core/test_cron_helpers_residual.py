@@ -595,6 +595,9 @@ def _report_row() -> SimpleNamespace:
         config_json={},
         recipient_config={"email": "ops@example.com"},
         active=True,
+        # FAR-1822: the shared fire core stamps the next-run state under the
+        # short lock, so the row must carry its cron expression.
+        cron_expression="0 9 * * *",
     )
 
 

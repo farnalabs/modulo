@@ -8,6 +8,7 @@ import logging
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -257,7 +258,11 @@ class TestFireScheduledReport:
         assert result["status"] == "sent"
         assert result["next_send_at"] == "2026-07-08T09:00:00+00:00"
 
-        update_params = session.execute.await_args_list[1].args[0].compile().params
+        # FAR-1822: the terminal stamp is now the LAST statement (the first
+        # write is the short-lock claim/stamp of next_send_at before generation).
+        sent = [call.args[0] for call in session.execute.await_args_list if "last_sent_at" in str(call.args[0])]
+        assert sent, "a successful send must stamp last_sent_at"
+        update_params = sent[-1].compile().params
         assert "last_sent_at" in update_params
         assert isinstance(update_params["last_sent_at"], datetime.datetime)
         assert update_params["last_sent_at"].tzinfo is not None
@@ -286,6 +291,176 @@ class TestFireScheduledReport:
             pytest.raises(asyncio.CancelledError),
         ):
             await _fire_scheduled_report(report_id=report_id, org_id=org_id)
+
+
+# ---------------------------------------------------------------------------
+# FAR-1822: lock-scope + concurrent-fire fencing
+# ---------------------------------------------------------------------------
+
+
+class _LockTrackingBegin:
+    """Async context manager that flips the session's lock-transaction flag."""
+
+    def __init__(self, session: _LockTrackingSession) -> None:
+        self._session = session
+
+    async def __aenter__(self) -> _LockTrackingSession:
+        self._session.open_txns += 1
+        return self._session
+
+    async def __aexit__(self, *args: object) -> bool:
+        self._session.open_txns -= 1
+        # The FOR UPDATE transaction has ended (commit/rollback).
+        self._session.lock_txn_open = False
+        return False
+
+
+class _LockTrackingSession:
+    """Session double recording whether a ``FOR UPDATE`` txn is open.
+
+    ``lock_txn_open`` is set True when a ``SELECT … FOR UPDATE`` runs inside an
+    open ``begin()`` block and reset False the moment that block exits — so a
+    generator that reads it observes whether the report row lock is still held
+    while it runs.
+    """
+
+    def __init__(self, report: MagicMock) -> None:
+        self.report = report
+        self.open_txns = 0
+        self.lock_txn_open = False
+        self.executed: list[object] = []
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    def begin(self) -> _LockTrackingBegin:
+        return _LockTrackingBegin(self)
+
+    async def execute(self, stmt: object, params: object = None) -> MagicMock:
+        self.executed.append(stmt)
+        if "FOR UPDATE" in str(stmt) and self.open_txns > 0:
+            self.lock_txn_open = True
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = self.report
+        return result
+
+    def add(self, obj: object) -> None:
+        return None
+
+    async def flush(self) -> None:
+        return None
+
+
+class _LeaseRedis:
+    """Minimal in-memory Redis double implementing SET NX + compare-and-delete."""
+
+    def __init__(self) -> None:
+        self._values: dict[str, str] = {}
+
+    async def set(self, key: str, value: str, *, nx: bool = False, ex: int | None = None) -> bool | None:
+        if nx and key in self._values:
+            return None
+        self._values[key] = value
+        return True
+
+    async def eval(self, script: str, numkeys: int, key: str, token: str) -> int:
+        if self._values.get(key) == token:
+            del self._values[key]
+            return 1
+        return 0
+
+
+class TestFireScheduledReportLockScope:
+    """FAR-1822: generation runs OUTSIDE the report row lock, and concurrent
+    fires of the same report cannot both run."""
+
+    async def test_generation_runs_after_the_row_lock_is_released(self) -> None:
+        report = make_report_mock(report_type="lock_probe", cron_expression="0 9 * * *")
+        observed: dict[str, object] = {}
+
+        async def generator(session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
+            observed["lock_held"] = getattr(session, "lock_txn_open", None)
+            return {"rows": 1}
+
+        session = _LockTrackingSession(report)
+        with (
+            patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock) as rls,
+            patch(
+                "modulo.core.reports.scheduler._acquire_report_fire_lease",
+                new_callable=AsyncMock,
+                return_value="tok",
+            ),
+            patch("modulo.core.reports.scheduler._release_report_fire_lease", new_callable=AsyncMock),
+            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+            patch("modulo.core.reports.scheduler.get_formatter", return_value=None),
+            patch("modulo.core.reports.scheduler.get_deliverer", return_value=AsyncMock(return_value=[])),
+            patch(
+                "modulo.core.reports.scheduler.compute_next_send",
+                return_value=datetime.datetime(2026, 7, 1, tzinfo=datetime.UTC),
+            ),
+        ):
+            result = await _fire_scheduled_report(
+                report_id=report.id,
+                org_id=report.organisation_id,
+                session_factory=lambda: session,
+            )
+
+        # The old locked-across-generation body would have observed True here.
+        assert observed["lock_held"] is False
+        assert result["status"] == "sent"
+        # RLS is (re-)applied in every phase's own transaction, including the
+        # out-of-lock generation transaction.
+        assert rls.await_count == 3
+
+    async def test_concurrent_fires_cannot_double_run(self) -> None:
+        report = make_report_mock(report_type="concurrency_probe", cron_expression="0 9 * * *")
+        select_result = MagicMock()
+        select_result.scalar_one_or_none.return_value = report
+        session = MockSession([select_result, MagicMock(), MagicMock()])
+        redis = _LeaseRedis()
+
+        gen_calls: list[int] = []
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def generator(gen_session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
+            gen_calls.append(1)
+            started.set()
+            await release.wait()
+            return {"rows": 1}
+
+        async def fire() -> dict[str, object]:
+            return await _fire_scheduled_report(
+                report_id=report.id,
+                org_id=report.organisation_id,
+                session_factory=lambda: session,
+                redis_client=redis,  # type: ignore[arg-type]
+            )
+
+        with (
+            patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
+            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+            patch("modulo.core.reports.scheduler.get_formatter", return_value=None),
+            patch("modulo.core.reports.scheduler.get_deliverer", return_value=AsyncMock(return_value=[])),
+            patch(
+                "modulo.core.reports.scheduler.compute_next_send",
+                return_value=datetime.datetime(2026, 7, 1, tzinfo=datetime.UTC),
+            ),
+        ):
+            first = asyncio.create_task(fire())
+            try:
+                await asyncio.wait_for(started.wait(), timeout=5)
+                second_result = await asyncio.wait_for(asyncio.create_task(fire()), timeout=5)
+            finally:
+                release.set()
+            first_result = await asyncio.wait_for(first, timeout=5)
+
+        assert first_result["status"] == "sent"
+        assert second_result == {"status": "skipped", "reason": "already_firing"}
+        assert len(gen_calls) == 1
 
 
 # ---------------------------------------------------------------------------

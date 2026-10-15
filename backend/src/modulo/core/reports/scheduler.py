@@ -5,6 +5,14 @@ fire job (``fire_report_trigger`` in :mod:`modulo.core.cron_helpers`, enqueued
 by ``fire_due_triggers``) generates, formats, and delivers each due report as a
 bounded SAQ job. The Celery beat scheduler (``DatabaseReportScheduler`` /
 ``ReportFireTask``) was removed in PR C of the Celery->SAQ migration.
+
+The admin/search fire logic itself lives here, in ``_fire_scheduled_report`` —
+the SINGLE implementation shared by the SAQ fire job
+(``cron_helpers.fire_report_trigger``) and every other caller. The
+``ScheduledReport`` row lock is held only for the two short critical sections
+(claim/stamp, then final stamp); report generation/delivery runs outside it and
+is fenced by a Redis ``SET NX`` lease so two fires of the same report can never
+run concurrently (FAR-1822).
 """
 
 from __future__ import annotations
@@ -23,6 +31,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from croniter import croniter
+from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
@@ -161,53 +170,166 @@ async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fire logic — shared async core (called by the SAQ fire_report_trigger job)
+# Fire logic — the SINGLE shared async core
 # ---------------------------------------------------------------------------
+
+#: Redis key prefix for the per-report fire lease (FAR-1822). The lease makes
+#: "one firing in flight per report" explicit now that generation no longer
+#: runs under the ``ScheduledReport`` row lock.
+_REPORT_FIRE_LEASE_PREFIX = "saq:report:firing:"
+
+#: Lease lifetime in seconds. Must comfortably exceed the worst-case
+#: generation+delivery window (the SAQ fire job's own ``FIRE_JOB_TIMEOUT`` is
+#: 300s) so a slow fire is never pre-empted by a second one, while a fire that
+#: crashes mid-generation still has its lease expire and the report recover.
+_REPORT_FIRE_LEASE_TTL_SECONDS = 900
+
+#: Release the lease only when we still own it (compare-and-delete), so a fire
+#: whose lease already expired cannot delete a newer fire's lease.
+_RELEASE_REPORT_FIRE_LEASE_LUA = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
+)
+
+
+async def _acquire_report_fire_lease(
+    redis_client: AsyncRedis | None,
+    report_id: uuid.UUID,
+) -> str | None:
+    """Claim the exclusive per-report fire lease.
+
+    Returns the lease token when acquired, or ``None`` when another fire already
+    holds it (or the lease cannot be established). Callers MUST treat ``None``
+    as "do not generate" — the guard fails CLOSED so an unreachable lease can
+    never let the same report fire twice concurrently.
+    """
+    if redis_client is None:
+        _log.warning("report fire lease unavailable (no redis client); refusing to fire %s", report_id)
+        return None
+    key = f"{_REPORT_FIRE_LEASE_PREFIX}{report_id}"
+    token = uuid.uuid4().hex
+    try:
+        # SET NX stores *token* only when the key is absent — the atomic claim.
+        acquired = await redis_client.set(key, token, nx=True, ex=_REPORT_FIRE_LEASE_TTL_SECONDS)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("report fire lease acquire failed for %s; refusing to fire", report_id)
+        return None
+    if not acquired:
+        return None
+    return token
+
+
+async def _release_report_fire_lease(redis_client: AsyncRedis | None, report_id: uuid.UUID, token: str | None) -> None:
+    """Best-effort release of the fire lease (compare-and-delete on the token)."""
+    if redis_client is None or token is None:
+        return
+    key = f"{_REPORT_FIRE_LEASE_PREFIX}{report_id}"
+    try:
+        await redis_client.eval(_RELEASE_REPORT_FIRE_LEASE_LUA, 1, key, token)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # pragma: no cover - a stuck lease self-heals via its TTL
+        _log.warning("report fire lease release failed for %s", report_id, exc_info=True)
 
 
 async def _fire_scheduled_report(
     *,
     report_id: uuid.UUID,
     org_id: uuid.UUID,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+    redis_client: AsyncRedis | None = None,
+    rls_setter: Callable[[AsyncSession, uuid.UUID], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
-    """Core fire logic — runs inside asyncio.run() (the Celery task was removed in PR C)."""
-    engine = _get_engine()
-    factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+    """Generate, format and deliver ONE scheduled report — the single fire path.
 
-    async with factory() as session, session.begin():
-        await _set_rls_org(session, org_id)
+    FAR-1822: the ``ScheduledReport`` row lock (``SELECT … FOR UPDATE``) is held
+    ONLY for two short critical sections — the claim/stamp before generation and
+    the terminal stamp after it — and is RELEASED before the (potentially heavy)
+    generator/formatter/deliverer run. Concurrency is fenced by a Redis ``SET NX``
+    lease so two fires of the same report can never run at once.
 
-        now = datetime.datetime.now(datetime.UTC)
-        result = await session.execute(
-            select(ScheduledReport)
-            .where(
-                ScheduledReport.id == report_id,
-                ScheduledReport.organisation_id == org_id,
-                ScheduledReport.next_send_at <= now,
+    Phase 1 (short lock): read the active report, compute + stamp its next-run
+    state, and commit. Phase 2 (no lock): generate/format/deliver. Phase 3
+    (short lock): stamp ``last_sent_at`` and the terminal ``active`` state.
+
+    Callers own the failure policy: on a ``failed`` result the SAQ fire job backs
+    ``next_send_at`` off so ``fire_due_triggers`` cannot re-enqueue every 30s.
+    """
+    rls = rls_setter or _set_rls_org
+    factory = session_factory or async_sessionmaker(_get_engine(), expire_on_commit=False, autobegin=False)
+
+    lease_token = await _acquire_report_fire_lease(redis_client, report_id)
+    if lease_token is None:
+        return {"status": "skipped", "reason": "already_firing"}
+    try:
+        # ---- Phase 1: SHORT row lock — read + stamp next-run state, commit ----
+        async with factory() as session, session.begin():
+            await rls(session, org_id)
+
+            now = datetime.datetime.now(datetime.UTC)
+            report = (
+                await session.execute(
+                    select(ScheduledReport)
+                    .where(
+                        ScheduledReport.id == report_id,
+                        ScheduledReport.organisation_id == org_id,
+                        ScheduledReport.active.is_(True),
+                    )
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if report is None or not report.active:
+                return {"status": "skipped", "reason": "report_inactive_or_missing"}
+
+            # Snapshot the plain values generation needs BEFORE the transaction
+            # commits (the ORM instance is detached afterwards).
+            report_type = report.report_type
+            config = report.config_json or {}
+            recipient_config = report.recipient_config or {}
+            schedule_type = config.get("schedule_type")
+
+            if schedule_type == "one_time":
+                next_send: datetime.datetime | None = None
+            else:
+                try:
+                    next_send = compute_next_send(report.cron_expression, after=now)
+                except (ValueError, TypeError, KeyError) as exc:
+                    _log.exception(
+                        "Invalid cron expression '%s' for report %s: %s",
+                        report.cron_expression,
+                        report_id,
+                        exc,
+                        exc_info=True,
+                    )
+                    await session.execute(
+                        update(ScheduledReport).where(ScheduledReport.id == report_id).values(active=False)
+                    )
+                    return {"status": "failed", "reason": f"invalid_cron: {exc}"}
+
+            # Stamp-and-commit: next-run state advanced under the lock, then the
+            # transaction commits — the row lock is gone before generation runs.
+            await session.execute(
+                update(ScheduledReport).where(ScheduledReport.id == report_id).values(next_send_at=next_send)
             )
-            .with_for_update()
-        )
-        report = result.scalar_one_or_none()
-        if report is None or not report.active:
-            return {"status": "skipped", "reason": "report_inactive_or_missing"}
-
-        generator = get_generator(report.report_type)
+        # ---- Phase 2: generate + deliver OUTSIDE the row lock ----
+        generator = get_generator(report_type)
         if generator is None:
-            _log.warning("No generator registered for report type %s", report.report_type)
-            return {"status": "failed", "reason": f"no_generator_for_{report.report_type}"}
+            _log.warning("No generator registered for report type %s", report_type)
+            return {"status": "failed", "reason": f"no_generator_for_{report_type}"}
 
         try:
-            config = report.config_json or {}
-            report_data = await generator(session, org_id, config)
+            async with factory() as gen_session, gen_session.begin():
+                # The generator runs in its OWN transaction (the row lock is
+                # gone) — re-apply the org RLS context so it can read the
+                # team-scoped tables org-wide exactly as before.
+                await rls(gen_session, org_id)
+                report_data = await generator(gen_session, org_id, config)
 
-            formatter = get_formatter(report.report_type)
-            payload: Any = report_data
-            if formatter is not None:
-                payload = formatter(report_data)
+            formatter = get_formatter(report_type)
+            payload: Any = formatter(report_data) if formatter is not None else report_data
 
-            deliverer = get_deliverer(report.report_type)
-            recipient_config = report.recipient_config or {}
-            delivery_results: list[dict[str, Any]] = []
+            deliverer = get_deliverer(report_type)
             if deliverer is not None:
                 delivery_results = await deliverer(payload, recipient_config)
             else:
@@ -215,52 +337,38 @@ async def _fire_scheduled_report(
         except asyncio.CancelledError:
             raise
         except Exception:
-            _log.exception("Report %s (%s) generation or delivery failed", report_id, report.report_type)
+            _log.exception("Report %s (%s) generation or delivery failed", report_id, report_type)
             return {"status": "failed", "reason": "generation_or_delivery_failed"}
 
-        schedule_type = config.get("schedule_type")
-        if schedule_type == "one_time":
-            next_send = None
-        else:
-            try:
-                next_send = compute_next_send(report.cron_expression, after=now)
-            except (ValueError, TypeError, KeyError) as exc:
-                _log.exception(
-                    "Invalid cron expression '%s' for report %s: %s",
-                    report.cron_expression,
-                    report_id,
-                    exc,
-                    exc_info=True,
+        # ---- Phase 3: SHORT row lock — stamp the terminal state, commit ----
+        async with factory() as session, session.begin():
+            await rls(session, org_id)
+            await session.execute(
+                update(ScheduledReport)
+                .where(ScheduledReport.id == report_id)
+                .values(
+                    last_sent_at=now,
+                    next_send_at=next_send,
+                    active=schedule_type != "one_time",
                 )
-                await session.execute(
-                    update(ScheduledReport).where(ScheduledReport.id == report_id).values(active=False)
-                )
-                return {"status": "failed", "reason": f"invalid_cron: {exc}"}
-
-        await session.execute(
-            update(ScheduledReport)
-            .where(ScheduledReport.id == report_id)
-            .values(
-                last_sent_at=now,
-                next_send_at=next_send,
-                active=schedule_type != "one_time",
             )
-        )
 
         _log.info(
             "Report %s (%s) sent. Next send: %s",
             report_id,
-            report.report_type,
+            report_type,
             next_send.isoformat() if next_send is not None else "none (one-time report completed)",
         )
 
         return {
             "status": "sent",
             "report_id": str(report_id),
-            "report_type": report.report_type,
+            "report_type": report_type,
             "next_send_at": next_send.isoformat() if next_send is not None else None,
             "delivery_results": delivery_results,
         }
+    finally:
+        await _release_report_fire_lease(redis_client, report_id, lease_token)
 
 
 # ---------------------------------------------------------------------------

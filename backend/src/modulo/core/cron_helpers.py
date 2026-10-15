@@ -2113,89 +2113,41 @@ async def fire_polling_trigger(
 async def fire_report_trigger(*, report_id: uuid.UUID, org_id: uuid.UUID) -> dict[str, Any]:
     """Fire one scheduled report — generate, format, deliver (SAQ bounded job).
 
-    Plan F1 report delivery: timeout=300 / retries=2 SAQ knobs at enqueue; on
-    failure the job backs off ``next_send_at`` by +5min (or deactivates after 5
-    consecutive failures) so ``fire_due_triggers`` NEVER re-enqueues every 30s.
-    ``next_send_at`` was already advanced at enqueue time; success sets
-    ``last_sent_at`` only.
+    Delegates the fire mechanics to the shared core
+    (:func:`modulo.core.reports.scheduler._fire_scheduled_report`), which holds
+    the ``ScheduledReport`` row lock only for its two short claim/stamp sections
+    and runs generation/delivery OUTSIDE it (FAR-1822). This wrapper owns the
+    SAQ-specific failure policy: Plan F1 report delivery (timeout=300 /
+    retries=2 SAQ knobs at enqueue); on failure the job backs off
+    ``next_send_at`` by +5min (or deactivates after 5 consecutive failures) so
+    ``fire_due_triggers`` NEVER re-enqueues every 30s; on success it clears the
+    consecutive-failure counter.
     """
-    from sqlalchemy import update
-
-    from modulo.core.reports.scheduler import (
-        _deliver_via_config,
-        get_deliverer,
-        get_formatter,
-        get_generator,
-    )
-    from modulo.db.models.scheduled_report import ScheduledReport
+    from modulo.core.reports.scheduler import _fire_scheduled_report
 
     factory = _open_factory()
     settings = get_settings()
     redis_client = AsyncRedis.from_url(settings.redis_url, socket_connect_timeout=5)
     try:
-        async with factory() as session, session.begin():
-            await _set_rls_org(session, org_id)
+        result = await _fire_scheduled_report(
+            report_id=report_id,
+            org_id=org_id,
+            session_factory=factory,
+            redis_client=redis_client,
+            rls_setter=_set_rls_org,
+        )
+        status = result.get("status")
+        if status == "failed":
             now = datetime.now(UTC)
-            result = await session.execute(
-                select(ScheduledReport)
-                .where(
-                    ScheduledReport.id == report_id,
-                    ScheduledReport.organisation_id == org_id,
-                    ScheduledReport.active.is_(True),
-                )
-                .with_for_update()
-            )
-            report = result.scalar_one_or_none()
-            if report is None:
-                return {"status": "skipped", "reason": "report_inactive_or_missing"}
-
-            generator = get_generator(report.report_type)
-            if generator is None:
-                _log.warning("No generator registered for report type %s", report.report_type)
+            async with factory() as session, session.begin():
+                await _set_rls_org(session, org_id)
                 await _handle_report_failure(session, redis_client, report_id, now)
-                return {"status": "failed", "reason": f"no_generator_for_{report.report_type}"}
-
-            try:
-                config = report.config_json or {}
-                report_data = await generator(session, org_id, config)
-                formatter = get_formatter(report.report_type)
-                payload: Any = report_data
-                if formatter is not None:
-                    payload = formatter(report_data)
-                deliverer = get_deliverer(report.report_type)
-                recipient_config = report.recipient_config or {}
-                if deliverer is not None:
-                    delivery_results = await deliverer(payload, recipient_config)
-                else:
-                    delivery_results = await _deliver_via_config(payload, recipient_config)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception("Report %s (%s) generation or delivery failed", report_id, report.report_type)
-                await _handle_report_failure(session, redis_client, report_id, now)
-                return {"status": "failed", "reason": "generation_or_delivery_failed"}
-
-            schedule_type = (report.config_json or {}).get("schedule_type")
-            values: dict[str, Any] = {"last_sent_at": now}
-            if schedule_type == "one_time":
-                values["active"] = False
-                values["next_send_at"] = None
-            # next_send_at was already advanced to the next cron match at enqueue time.
-
-            await session.execute(update(ScheduledReport).where(ScheduledReport.id == report_id).values(**values))
+        elif status == "sent":
             await _clear_report_failure_counter(redis_client, report_id)
-            _log.info("Report %s (%s) sent", report_id, report.report_type)
-            return {
-                "status": "sent",
-                "report_id": str(report_id),
-                "report_type": report.report_type,
-                "delivery_results": delivery_results,
-            }
+        return result
     finally:
         with _suppress_aclose():
             await redis_client.aclose()
-
-    return {"status": "error", "reason": "unexpected"}
 
 
 async def _handle_report_failure(
