@@ -825,12 +825,11 @@ class TestEvaluateBackpressure:
         assert skip is True
         assert "oldest_age=" in reason
 
-    async def test_capacity_demoted_aged_pending_does_not_skip(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_org_capacity_demoted_aged_pending_does_not_skip(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # FAR-1826: the queue's unfiltered oldest is aged, but EVERY aged row is
-        # capacity-demoted (org/pipeline cap full) — a healthy pipeline queued
-        # at the gate, not a wedge. The capacity-filtered oldest is absent, so
-        # the age leg must NOT rate-limit. (Pre-fix this refused: it used the
-        # unfiltered age.)
+        # ``org_capacity_limited`` (the ORG is at capacity; THIS pipeline is
+        # healthy and queued at the gate, not wedged). The org-capacity-filtered
+        # oldest is absent, so the age leg must NOT rate-limit.
         monkeypatch.setattr(ra, "get_settings", lambda: MagicMock(trigger_backpressure_max_age_seconds=3600))
         old = datetime.now(UTC) - timedelta(hours=2)
         session = self._session_with_filtered_age(5, None)
@@ -843,11 +842,42 @@ class TestEvaluateBackpressure:
         assert skip is False
         assert reason == ""
 
-    async def test_capacity_demoted_and_wedged_mixed_uses_filtered_age(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # Mixed queue: the unfiltered oldest is an aged capacity-demoted row, but
-        # a genuinely-wedged (non-capacity) pending row is only 10 min old — the
-        # pipeline is draining, so the age leg must admit. (Pre-fix this refused
-        # on the unfiltered age.)
+    async def test_pipeline_capacity_aged_pending_still_skips_on_filtered_age(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # FAR-1826 (narrowed): ``pipeline_capacity`` is NOT a benign capacity
+        # marker. It is written when THIS pipeline's OWN active-run count reaches
+        # ``max_concurrent_runs`` — a count that includes leaked ``running`` rows
+        # — so a pipeline pinned at its own cap is a real wedge (the FAR-604
+        # class), and the org-capacity filter must still COUNT it. Here the
+        # unfiltered oldest is an aged ``org_capacity_limited`` row (3h) the filter
+        # drops, but a ``pipeline_capacity`` row 2h old still exceeds the 1h limit,
+        # so the age leg MUST refuse (429) and cite the FILTERED age, not the
+        # unfiltered one. (If ``pipeline_capacity`` were excluded too, the filtered
+        # oldest would be absent and this would wrongly admit.)
+        monkeypatch.setattr(ra, "get_settings", lambda: MagicMock(trigger_backpressure_max_age_seconds=3600))
+        unfiltered_oldest = datetime.now(UTC) - timedelta(hours=3)
+        filtered_oldest = datetime.now(UTC) - timedelta(hours=2)
+        session = self._session_with_filtered_age(5, filtered_oldest)
+        with patch(
+            "modulo.db.crud.run.get_pipeline_queue_depth",
+            new_callable=AsyncMock,
+            return_value=(2, unfiltered_oldest),
+        ):
+            skip, reason = await evaluate_backpressure(session, pipeline_id=PIPELINE_ID)
+        assert skip is True
+        assert "oldest_age=" in reason
+        # The refusal cites the age of the counted (non-org-capacity) row, not the
+        # excluded org-capacity row.
+        assert "oldest_age=10800s" not in reason
+
+    async def test_org_capacity_demoted_and_wedged_mixed_uses_filtered_age(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Mixed queue: the unfiltered oldest is an aged ``org_capacity_limited``
+        # row, but a genuinely-wedged (non-capacity) pending row is only 10 min
+        # old — the pipeline is draining, so the age leg must admit. (Pre-fix
+        # this refused on the unfiltered age.)
         monkeypatch.setattr(ra, "get_settings", lambda: MagicMock(trigger_backpressure_max_age_seconds=3600))
         aged_capacity = datetime.now(UTC) - timedelta(hours=2)
         recent_wedged = datetime.now(UTC) - timedelta(minutes=10)
@@ -934,12 +964,13 @@ def _seed_run(
 
 
 class TestCapacityDemotedAgeExclusion:
-    """Real-SQLite coverage of the FAR-1826 capacity filter.
+    """Real-SQLite coverage of the FAR-1826 org-capacity filter.
 
     The ``TestEvaluateBackpressure`` cases above prove the evaluator's DECISION
-    (which signal feeds which leg); these prove the SQL PREDICATE — that the
-    age reader actually excludes capacity-demoted rows and counts everything
-    else.
+    (which signal feeds which leg); these prove the SQL PREDICATE — that the age
+    reader excludes ONLY ``org_capacity_limited`` rows and still COUNTS
+    ``pipeline_capacity`` (a pipeline pinned at its own cap is a real wedge) plus
+    every non-capacity / NULL-code row.
     """
 
     @pytest.fixture
@@ -954,7 +985,7 @@ class TestCapacityDemotedAgeExclusion:
             yield db_session
         await engine.dispose()
 
-    async def test_excludes_capacity_demoted_rows(self, session: AsyncSession) -> None:
+    async def test_excludes_org_capacity_demoted_rows(self, session: AsyncSession) -> None:
         pipeline_id = uuid.uuid4()
         # Naive datetimes: SQLite returns naive values, so seed naive to keep the
         # equality exact (production Postgres is timestamptz / tz-aware).
@@ -977,10 +1008,10 @@ class TestCapacityDemotedAgeExclusion:
             ]
         )
         await session.commit()
-        oldest = await ra._oldest_non_capacity_pending_created_at(session, pipeline_id)
+        oldest = await ra._oldest_non_org_capacity_pending_created_at(session, pipeline_id)
         assert oldest == aged_wedged
 
-    async def test_returns_none_when_only_capacity_demoted(self, session: AsyncSession) -> None:
+    async def test_returns_none_when_only_org_capacity_demoted(self, session: AsyncSession) -> None:
         pipeline_id = uuid.uuid4()
         session.add_all(
             [
@@ -993,13 +1024,42 @@ class TestCapacityDemotedAgeExclusion:
                 _seed_run(
                     pipeline_id=pipeline_id,
                     status="pending",
-                    created_at=datetime(2020, 1, 1, 11, 0, 0),
+                    created_at=datetime(2020, 1, 1, 13, 0, 0),
+                    error_code="org_capacity_limited",
+                ),
+            ]
+        )
+        await session.commit()
+        assert await ra._oldest_non_org_capacity_pending_created_at(session, pipeline_id) is None
+
+    async def test_pipeline_capacity_demoted_row_is_still_counted(self, session: AsyncSession) -> None:
+        # FAR-1826 (narrowed): ``pipeline_capacity`` is NOT excluded. It is the
+        # pipeline being pinned at its OWN cap (count includes leaked ``running``
+        # slots), i.e. a real wedge — so the age reader must return its
+        # created_at and keep tripping the age leg. An older
+        # ``org_capacity_limited`` row must NOT mask it.
+        pipeline_id = uuid.uuid4()
+        org_capacity_oldest = datetime(2020, 1, 1, 10, 0, 0)
+        pipeline_capacity = datetime(2020, 1, 1, 12, 0, 0)
+        session.add_all(
+            [
+                _seed_run(
+                    pipeline_id=pipeline_id,
+                    status="pending",
+                    created_at=org_capacity_oldest,
+                    error_code="org_capacity_limited",
+                ),
+                _seed_run(
+                    pipeline_id=pipeline_id,
+                    status="pending",
+                    created_at=pipeline_capacity,
                     error_code="pipeline_capacity",
                 ),
             ]
         )
         await session.commit()
-        assert await ra._oldest_non_capacity_pending_created_at(session, pipeline_id) is None
+        oldest = await ra._oldest_non_org_capacity_pending_created_at(session, pipeline_id)
+        assert oldest == pipeline_capacity
 
     async def test_counts_non_capacity_pending_and_ignores_other_statuses(self, session: AsyncSession) -> None:
         pipeline_id = uuid.uuid4()
@@ -1029,7 +1089,7 @@ class TestCapacityDemotedAgeExclusion:
             ]
         )
         await session.commit()
-        assert await ra._oldest_non_capacity_pending_created_at(session, pipeline_id) == wedged
+        assert await ra._oldest_non_org_capacity_pending_created_at(session, pipeline_id) == wedged
 
 
 # ---------------------------------------------------------------------------
