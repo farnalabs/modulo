@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes.in_app_notifications import _preference_change_is_noop
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.notifier.event_mapper import notification_categories
@@ -549,3 +550,37 @@ def test_put_back_to_original_state_emits_audit_again(client: TestClient) -> Non
         second = client.put(_PREFERENCES_PATH, json={"notification_opt_outs": {"run.failed": False}})
         assert second.status_code == 200, second.text
     assert len(_success_audit_calls(emit)) == 1
+
+
+# ---------------------------------------------------------------------------
+# FAR-247: the extracted no-op detector (audit-change detection)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("requested_opt_outs", "before_opted_out", "dashboard_level", "before_level", "expected"),
+    [
+        # Nothing requested at all -> no change.
+        ({}, {"run.failed"}, None, "info", True),
+        # An opt-out that already exists -> no change.
+        ({"run.failed": True}, {"run.failed"}, None, "info", True),
+        # A new opt-out -> change.
+        ({"run.stalled": True}, set(), None, "info", False),
+        # Toggling an existing opt-out OFF -> change (row removal).
+        ({"run.failed": False}, {"run.failed"}, None, "info", False),
+        # An explicitly unchanged dashboard level -> no change.
+        ({}, set(), "info", "info", True),
+        # A changed dashboard level -> change.
+        ({}, set(), "warning", "info", False),
+        # dashboard_level None means the request did not carry one.
+        ({}, set(), None, "warning", True),
+    ],
+)
+def test_preference_change_is_noop(
+    requested_opt_outs: dict[str, bool],
+    before_opted_out: set[str],
+    dashboard_level: str | None,
+    before_level: str,
+    expected: bool,
+) -> None:
+    assert _preference_change_is_noop(requested_opt_outs, before_opted_out, dashboard_level, before_level) is expected

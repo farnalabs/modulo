@@ -148,6 +148,25 @@ async def _load_dashboard_level(session: AsyncSession, account_id: uuid.UUID) ->
     return cast(str, prefs.get(_DASHBOARD_LEVEL_KEY, "info"))
 
 
+def _preference_change_is_noop(
+    requested_opt_outs: dict[str, bool],
+    before_opted_out: set[str],
+    dashboard_level: str | None,
+    before_level: str,
+) -> bool:
+    """Return True when a preferences PUT changes no stored state (FAR-247).
+
+    Merge semantics: keys absent from ``requested_opt_outs`` are untouched, so
+    only requested keys can change. A ``dashboard_level`` of ``None`` means the
+    request did not carry one, so it cannot change the stored level.
+    """
+    opt_outs_changed = any(
+        opted_out != (category in before_opted_out) for category, opted_out in requested_opt_outs.items()
+    )
+    level_changed = dashboard_level is not None and dashboard_level != before_level
+    return not (opt_outs_changed or level_changed)
+
+
 def _notification_to_response(
     n: Notification,
     run_state: LinkedRunState | None = None,
@@ -506,14 +525,14 @@ async def update_preferences(
                 account_id=principal.account_id,
             )
             before_level = await _load_dashboard_level(session, principal.account_id)
-            requested = req.notification_opt_outs or {}
-            opt_outs_changed = any(
-                opted_out != (category in before_opted_out) for category, opted_out in requested.items()
-            )
-            level_changed = dashboard_level is not None and dashboard_level != before_level
             # Suppress the success AuditEvent on a no-op PUT (FAR-247); the
             # attempt/error event still fires if the handler fails below.
-            request.state.audit_no_change = not (opt_outs_changed or level_changed)
+            request.state.audit_no_change = _preference_change_is_noop(
+                req.notification_opt_outs or {},
+                before_opted_out,
+                dashboard_level,
+                before_level,
+            )
             if req.notification_opt_outs is not None:
                 await set_notification_preferences(
                     session=session,
