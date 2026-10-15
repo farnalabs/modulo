@@ -2,6 +2,7 @@
 
 import asyncio
 import copy
+import json
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -15,6 +16,7 @@ from sqlalchemy.pool import NullPool
 
 from modulo.core.exceptions import SnapshotLockNotAvailableError
 from modulo.core.guardrails import fingerprint_guardrail_pins
+from modulo.core.model_class_registry import ModelClassResolutionError
 from modulo.db.crud.pipeline_snapshot import (
     SNAPSHOT_LOCK_ATTEMPTS,
     SNAPSHOT_LOCK_RETRY_SLEEP_SECONDS,
@@ -1325,3 +1327,226 @@ async def test_unbound_pipeline_freezes_a_null_binding() -> None:
 
     assert isinstance(snapshot, PipelineSnapshot)
     assert snapshot.environment_profile_id is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-1743 / ADR 037 rev 2 — model_class resolution AT MINT (never at dispatch)
+# ---------------------------------------------------------------------------
+
+
+def _model_class_mint_setup(
+    model_class: str | None,
+    agent_commands: list[str] | None = None,
+) -> tuple[AsyncMock, uuid.UUID, str]:
+    """Agent-less sandbox_agent pipeline (one node, optional ``model_class``)
+    plus the six-read session mint needs: pipeline, edges, allocation lock,
+    version max, guardrail rows, policy-gate rows. No agent / connector /
+    schema / backend reads are issued for this graph shape."""
+    pipeline_id = uuid.uuid4()
+    node_id = uuid.uuid4()
+    node: dict[str, Any] = {
+        "id": str(node_id),
+        "node_type": "sandbox_agent",
+        "template_id": "opencode",
+        "agent_commands": agent_commands or ["opencode run --model {{ model }} --auto < /home/user/prompt.md"],
+    }
+    if model_class is not None:
+        node["model_class"] = model_class
+
+    pipeline = MagicMock()
+    pipeline.id = pipeline_id
+    pipeline.organisation_id = uuid.uuid4()
+    pipeline.name = "Any Pipe"
+    pipeline.environment_profile_id = None
+    pipeline.graph_nodes_json = [node]
+    pipeline.run_context_defaults = {}
+
+    session = AsyncMock(spec=AsyncSession)
+    session.execute.side_effect = [
+        _scalar_result(pipeline),  # _load_pipeline_and_edges -> Pipeline
+        _scalars_result([]),  # _load_pipeline_and_edges -> PipelineEdge
+        _allocation_lock_result(),  # FAR-1625 allocation row lock (result ignored)
+        _scalar_result(0),  # snapshot_version max -> version 1
+        _scalars_result([]),  # guardrail rows (none bound)
+        _scalars_result([]),  # policy gate rows (none bound)
+    ]
+    return session, pipeline_id, str(node_id)
+
+
+def _write_model_class_registry(tmp_path: Any, payload: dict[str, Any]) -> str:
+    path = tmp_path / "model-management.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return str(path)
+
+
+async def test_mint_bakes_model_class_resolution_for_run_snapshots(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resolution is provably AT MINT: the run snapshot's node metadata carries
+    the baked `_resolved_model` + `_model_origin`, so every later render (and
+    replay) reads the SNAPSHOT — not the live registry."""
+    from modulo.settings import get_settings
+
+    registry_path = _write_model_class_registry(
+        tmp_path,
+        {"classes": {"builder": {"model": "opencode-go/mimo-v2.6-flash"}}, "pipelines_default": "builder"},
+    )
+    monkeypatch.setattr(get_settings(), "model_class_registry_path", registry_path)
+    session, pipeline_id, node_id = _model_class_mint_setup("builder")
+
+    with _bind_lock_connection(session, _lock_attempt_result(True)):
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    assert isinstance(snapshot, PipelineSnapshot)
+    node = snapshot.graph_json["nodes"][0]
+    assert node["id"] == node_id
+    assert node["_resolved_model"] == "opencode-go/mimo-v2.6-flash"
+    assert node["_model_origin"] == "node_model_class"
+    # The declaration itself travels with the bake (the snapshot is
+    # self-describing: render's fail-closed backstop reads it).
+    assert node["model_class"] == "builder"
+
+
+async def test_mint_refuses_run_on_unknown_model_class(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PROVE-THE-FIX (D3): an unknown class rejects the run PRE-dispatch —
+    the refusal raises out of mint BEFORE any snapshot row is inserted, so no
+    run can start, no sandbox spins, zero cost. The message names the node and
+    the class."""
+    from modulo.settings import get_settings
+
+    registry_path = _write_model_class_registry(
+        tmp_path,
+        {"classes": {"builder": {"model": "opencode-go/mimo-v2.6-flash"}}, "pipelines_default": "builder"},
+    )
+    monkeypatch.setattr(get_settings(), "model_class_registry_path", registry_path)
+    session, pipeline_id, node_id = _model_class_mint_setup("no-such-class")
+
+    with (
+        _bind_lock_connection(session, _lock_attempt_result(True)),
+        pytest.raises(ModelClassResolutionError) as excinfo,
+    ):
+        await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    detail = str(excinfo.value.detail)
+    assert "no-such-class" in detail
+    assert node_id in detail
+    session.add.assert_not_called()
+    session.flush.assert_not_awaited()
+
+
+async def test_mint_refuses_run_when_registry_missing_and_node_opts_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PROVE-THE-FIX (D3): a node that DECLARES model_class with no registry
+    configured fails closed — 'missing registry' rejects the run pre-dispatch."""
+    from modulo.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "model_class_registry_path", None)
+    session, pipeline_id, node_id = _model_class_mint_setup("builder")
+
+    with (
+        _bind_lock_connection(session, _lock_attempt_result(True)),
+        pytest.raises(ModelClassResolutionError) as excinfo,
+    ):
+        await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    assert "MODEL_CLASS_REGISTRY_PATH" in str(excinfo.value.detail)
+    assert node_id in str(excinfo.value.detail)
+    session.add.assert_not_called()
+
+
+async def test_edit_snapshot_fails_open_when_resolution_is_impossible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The version-kind gate: an EDIT snapshot continues unbaked (logged) when
+    resolution cannot run, so a missing/broken registry can never lock authors
+    out of graph saves. Any run later consuming such a snapshot still fails
+    closed at render (the node_runner / runner_dispatch backstop)."""
+    from modulo.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "model_class_registry_path", None)
+    session, pipeline_id, _node_id = _model_class_mint_setup("builder")
+
+    with _bind_lock_connection(session, _lock_attempt_result(True)):
+        snapshot = await create_snapshot_from_live_graph(
+            session,
+            pipeline_id=pipeline_id,
+            version_kind="edit",
+            created_kind="edit",
+        )
+
+    assert isinstance(snapshot, PipelineSnapshot)
+    assert "_resolved_model" not in snapshot.graph_json["nodes"][0]
+
+
+async def test_edit_snapshot_bakes_when_resolution_succeeds(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the registry IS available an edit snapshot bakes too — variant runs
+    pin snapshots of any version_kind, so the bake must not be run-kind-only
+    on the success path."""
+    from modulo.settings import get_settings
+
+    registry_path = _write_model_class_registry(
+        tmp_path,
+        {"classes": {"builder": {"model": "opencode-go/mimo-v2.6-flash"}}, "pipelines_default": "builder"},
+    )
+    monkeypatch.setattr(get_settings(), "model_class_registry_path", registry_path)
+    session, pipeline_id, _node_id = _model_class_mint_setup("builder")
+
+    with _bind_lock_connection(session, _lock_attempt_result(True)):
+        snapshot = await create_snapshot_from_live_graph(
+            session,
+            pipeline_id=pipeline_id,
+            version_kind="edit",
+            created_kind="edit",
+        )
+
+    assert isinstance(snapshot, PipelineSnapshot)
+    node = snapshot.graph_json["nodes"][0]
+    assert node["_resolved_model"] == "opencode-go/mimo-v2.6-flash"
+    assert node["_model_origin"] == "node_model_class"
+
+
+async def test_mint_without_model_class_and_without_registry_leaves_nodes_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Back-compat at the mint seam: a literal-only pipeline with no registry
+    configured resolves nothing — every existing pipeline keeps working."""
+    from modulo.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "model_class_registry_path", None)
+    session, pipeline_id, _node_id = _model_class_mint_setup(None)
+
+    with _bind_lock_connection(session, _lock_attempt_result(True)):
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    assert isinstance(snapshot, PipelineSnapshot)
+    node = snapshot.graph_json["nodes"][0]
+    assert "_resolved_model" not in node
+    assert "_model_origin" not in node
+
+
+async def test_mint_does_not_bake_unreferenced_registry_intent(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No dead provenance (FAR-1743 fix): a registry-covered sandbox node whose
+    commands never reference `{{ model }}` and that declares no ``model_class``
+    must NOT receive `_resolved_model` / `_model_origin` — the registry's
+    intent is not the model that ran. Before the bake gate the mint baked the
+    ``pipelines_default`` class into this literal node."""
+    from modulo.settings import get_settings
+
+    registry_path = _write_model_class_registry(
+        tmp_path,
+        {"classes": {"builder": {"model": "opencode-go/mimo-v2.6-flash"}}, "pipelines_default": "builder"},
+    )
+    monkeypatch.setattr(get_settings(), "model_class_registry_path", registry_path)
+    session, pipeline_id, _node_id = _model_class_mint_setup(
+        None,
+        agent_commands=["opencode run --model opencode-go/literal-model --auto < /home/user/prompt.md"],
+    )
+
+    with _bind_lock_connection(session, _lock_attempt_result(True)):
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    assert isinstance(snapshot, PipelineSnapshot)
+    node = snapshot.graph_json["nodes"][0]
+    assert "_resolved_model" not in node
+    assert "_model_origin" not in node
