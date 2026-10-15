@@ -251,6 +251,15 @@ def make_mock_run(**kwargs: Any) -> MagicMock:
     r = MagicMock()
     r.id = kwargs.get("id", uuid.uuid4())
     r.pipeline_id = kwargs.get("pipeline_id", uuid.uuid4())
+    # ``Run.organisation_id`` is an always-present, non-null column
+    # (db/models/base.py::OrgScoped). The run-trigger route reads it back
+    # through the run_node_outputs org guard and compares it to the session's
+    # bound org, so a stand-in that left it a bare MagicMock child trips the
+    # guard once the BDD session mock exposes a real ``info`` dict for
+    # ``set_rls_org`` to bind into (FAR-1830). Default it to the ORG_ID the
+    # shared BDD clients authenticate as, so the guard is genuinely exercised;
+    # a scenario exercising another tenant overrides it explicitly.
+    r.organisation_id = kwargs.get("organisation_id", ORG_ID)
     r.status = kwargs.get("status", "pending")
     r.langgraph_thread_id = str(uuid.uuid4())
     r.error_detail = kwargs.get("error_detail")
