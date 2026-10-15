@@ -9,6 +9,25 @@ async function nextTick() {
 
 const { mockGet } = vi.hoisted(() => ({ mockGet: vi.fn() }))
 
+/** A page of pipelines as `GET /api/v1/pipelines` returns it. */
+function pipelinePage(
+  items: Array<{ earned?: string | null; pinned?: string | null }>,
+  total: number,
+  nextCursor: string | null,
+) {
+  return ok({
+    items: items.map((p) => ({
+      earned_autonomy_level: p.earned ?? null,
+      default_autonomy_level: p.pinned ?? null,
+    })),
+    total,
+    page: 1,
+    page_size: 100,
+    next_cursor: nextCursor,
+    has_more: nextCursor !== null,
+  })
+}
+
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: mockGet,
@@ -36,10 +55,10 @@ type Override = unknown | (() => unknown)
  * test can flip a level from failing to healthy for the retry assertion.
  */
 function mockDefaults(overrides: Record<string, Override> = {}) {
-  mockGet.mockImplementation(async (url: string) => {
+  mockGet.mockImplementation(async (url: string, ...rest: unknown[]) => {
     const override = overrides[url]
     if (override !== undefined) {
-      return typeof override === 'function' ? (override as () => unknown)() : override
+      return typeof override === 'function' ? (override as (...args: unknown[]) => unknown)(url, ...rest) : override
     }
     switch (url) {
       case '/api/v1/model-backends':
@@ -118,17 +137,33 @@ describe('GovernanceStackView — hierarchy readout', () => {
       expect(wrapper.find(`[data-testid="governance-level-ready-${id}"]`).exists()).toBe(true)
     }
 
+    // Exact text, not `toContain`: a pipe-joined message that never
+    // pluralised ("2 model backend | 2 model backends") contains every one of
+    // these substrings and would pass a containment assertion.
     const count = (id: string) => wrapper.find(`[data-testid="governance-level-count-${id}"]`).text()
-    expect(count('models')).toContain('2 model backends')
-    expect(count('tools')).toContain('0 connectors')
-    expect(count('mcp')).toContain('2 MCP clients or keys')
-    expect(count('agents')).toContain('3 agents')
-    expect(count('commands')).toContain('9 reusable units')
-    expect(count('autonomy')).toContain('4 pipelines')
-    expect(count('telemetry')).toContain('4 telemetry destinations')
+    expect(count('models')).toBe('2 model backends')
+    expect(count('tools')).toBe('0 connectors')
+    expect(count('mcp')).toBe('2 MCP clients or keys')
+    expect(count('agents')).toBe('3 agents')
+    expect(count('commands')).toBe('9 reusable units')
+    expect(count('autonomy')).toBe('4 pipelines')
+    expect(count('telemetry')).toBe('4 telemetry destinations')
 
     expect(wrapper.find('[data-testid="governance-level-state-models"]').text()).toBe('Configured')
     expect(wrapper.find('[data-testid="governance-level-state-tools"]').text()).toBe('Empty')
+  })
+
+  it('pluralises a single entity onto the singular form', async () => {
+    mockDefaults({
+      '/api/v1/model-backends': ok({ items: [{ id: 'm1' }], total: 1, page: 1, page_size: 1 }),
+      '/api/v1/agents': ok({ items: [{ id: 'agent-1' }], total: 1, page: 1, page_size: 1 }),
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="governance-level-count-models"]').text()).toBe('1 model backend')
+    expect(wrapper.find('[data-testid="governance-level-count-agents"]').text()).toBe('1 agent')
   })
 
   it('renders the empty state when a level has no configured entities', async () => {
@@ -140,7 +175,7 @@ describe('GovernanceStackView — hierarchy readout', () => {
     await nextTick()
 
     expect(wrapper.find('[data-testid="governance-level-state-models"]').text()).toBe('Empty')
-    expect(wrapper.find('[data-testid="governance-level-count-models"]').text()).toContain('0 model backends')
+    expect(wrapper.find('[data-testid="governance-level-count-models"]').text()).toBe('0 model backends')
   })
 
   it('summarises the autonomy ladder across the three rungs', async () => {
@@ -152,6 +187,71 @@ describe('GovernanceStackView — hierarchy readout', () => {
     expect(detail).toContain('Manual approval: 1')
     expect(detail).toContain('Notify on complete: 1')
     expect(detail).toContain('Fully autonomous: 1')
+  })
+
+  it('counts every rung across cursor pages, not only the first page', async () => {
+    // 150 pipelines: the first 100-item page holds 50 autonomous + 50 manual,
+    // the second page holds the 50 notify pipelines. A single-page read would
+    // report 150 pipelines alongside a distribution that sums to 100.
+    const pageOne = pipelinePage(
+      [
+        ...Array.from({ length: 50 }, () => ({ earned: 'fully_autonomous' })),
+        ...Array.from({ length: 50 }, () => ({ pinned: 'manual_approval' })),
+      ],
+      150,
+      'cursor-page-2',
+    )
+    const pageTwo = pipelinePage(
+      Array.from({ length: 50 }, () => ({ earned: 'notify_on_complete' })),
+      150,
+      null,
+    )
+    mockDefaults({
+      '/api/v1/pipelines': (_url: string, options?: { params?: { query?: { cursor?: string } } }) =>
+        options?.params?.query?.cursor ? pageTwo : pageOne,
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="governance-level-count-autonomy"]').text()).toBe('150 pipelines')
+    const detail = wrapper.find('[data-testid="governance-level-detail-autonomy"]').text()
+    expect(detail).toContain('Manual approval: 50')
+    expect(detail).toContain('Notify on complete: 50')
+    expect(detail).toContain('Fully autonomous: 50')
+    expect(detail).not.toContain('of 150 pipelines')
+  })
+
+  it('labels the rung distribution as partial when the page walk hits its cap', async () => {
+    // Every page claims another page follows; the walk is bounded, so the
+    // readout must say it is describing a prefix of the pipeline set rather
+    // than silently reporting a complete-looking distribution.
+    const page = (_url: string, options?: { params?: { query?: { cursor?: string } } }) => {
+      const cursor = options?.params?.query?.cursor
+      return pipelinePage([{ pinned: 'manual_approval' }], 5000, cursor ? `cursor-${cursor}` : 'cursor-1')
+    }
+    mockDefaults({ '/api/v1/pipelines': page })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="governance-level-count-autonomy"]').text()).toBe('5000 pipelines')
+    const detail = wrapper.find('[data-testid="governance-level-detail-autonomy"]').text()
+    expect(detail).toContain('Manual approval: 20')
+    expect(detail).toContain('of 5000 pipelines')
+  })
+
+  it('fails the level when a page after the first fails', async () => {
+    const page = (_url: string, options?: { params?: { query?: { cursor?: string } } }) =>
+      options?.params?.query?.cursor ? FAILURE : pipelinePage([{ pinned: 'manual_approval' }], 150, 'cursor-page-2')
+    mockDefaults({ '/api/v1/pipelines': page })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    expect(errored(wrapper, 'autonomy')).toBe(true)
+    expect(restricted(wrapper, 'autonomy')).toBe(false)
+    expect(wrapper.find('[data-testid="governance-level-ready-autonomy"]').exists()).toBe(false)
   })
 
   it('deep-links each level to its management surface', async () => {
