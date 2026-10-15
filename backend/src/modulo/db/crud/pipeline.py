@@ -2070,6 +2070,14 @@ def _graph_content_unchanged(
     This is the no-op suppression that caps save-driven snapshot volume and
     keeps "at rest the live graph equals the latest snapshot" true: a save that
     changes nothing records no new version.
+
+    Deliberately conservative: the incoming edges are compared as sent, BEFORE
+    ``_preserve_omitted_gate_config`` resolves an omitted ``hitl_review_config``
+    back to the stored value. A client that omits the key (or sends
+    ``present=False``) therefore reads as "changed" against the stored edge and
+    mints an extra edit snapshot even though the persisted graph is identical.
+    That errs toward MORE versions, never fewer — a real change can never be
+    suppressed — so the volume cap is a soft bound, not a correctness one.
     """
     if json.dumps(previous_nodes, sort_keys=True, default=str) != json.dumps(new_nodes, sort_keys=True, default=str):
         return False

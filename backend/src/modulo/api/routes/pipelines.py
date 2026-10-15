@@ -3302,6 +3302,15 @@ async def replace_pipeline_graph_endpoint(
                 principal.organisation_id,
                 pipeline_owner_team_id=pipeline.owner_team_id,
             )
+            # FAR-488a + FAR-1810: keep the bound Agent rows in step with
+            # node-level agent_commands PATCHes BEFORE the write, because the
+            # write mints the FAR-1810 edit snapshot — and the snapshot copy's
+            # ``_materialize_agent_fields`` OVERWRITES each bound node's
+            # ``agent_commands`` with the Agent-row value. Syncing first makes
+            # the snapshot (and any rollback replaying it) pin the command the
+            # operator just saved; pre-change the sync ran AFTER the write, so
+            # the snapshot carried the stale command.
+            await _sync_agent_row_commands(session, org_id=principal.organisation_id, nodes=node_data)
             graph = await replace_pipeline_graph(
                 session,
                 pipeline_id=pipeline_id,
@@ -3317,10 +3326,6 @@ async def replace_pipeline_graph_endpoint(
                 record_edit_snapshot=True,
             )
             if graph is not None:
-                # FAR-488a: keep the bound Agent rows in step with node-level
-                # agent_commands PATCHes INSIDE the same transaction, so the
-                # next snapshot materializes the command the operator saved.
-                await _sync_agent_row_commands(session, org_id=principal.organisation_id, nodes=node_data)
                 issues = await _validate_graph_save(
                     session,
                     org_id=principal.organisation_id,
@@ -3669,6 +3674,11 @@ async def _apply_graph_update(
         org_id,
         pipeline_owner_team_id=effective_owner_team_id,
     )
+    # FAR-488a + FAR-1810: same Agent-row sync as the PATCH /graph endpoint,
+    # and it must run BEFORE the write mints the edit snapshot — the snapshot
+    # materializes bound nodes from the Agent row, so syncing first pins the
+    # command the operator just saved.
+    await _sync_agent_row_commands(session, org_id=org_id, nodes=node_data)
     graph = await replace_pipeline_graph(
         session,
         pipeline_id=pipeline_id,
@@ -3685,9 +3695,6 @@ async def _apply_graph_update(
     )
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
-    # FAR-488a: same Agent-row sync as the PATCH /graph endpoint — a graph
-    # replacement shipped inside a PATCH update payload must also run.
-    await _sync_agent_row_commands(session, org_id=org_id, nodes=node_data)
     # FAR-681 QA gate parity: the dedicated graph endpoint runs
     # _validate_graph_save after the write, rejecting GUARDRAIL_CAP_EXCEEDED,
     # REDACT_CORRECT_BLOCKED and HITL_REVIEW_DESCRIPTION_REQUIRED with 422 (the
@@ -6072,7 +6079,12 @@ async def _save_graph(
     graph-write endpoints.
     """
     edge_dicts = [_edge_to_dict(e) if hasattr(e, "source_node_id") else dict(e) for e in edges]
-    graph = await replace_pipeline_graph(
+    # FAR-488a + FAR-1810: node-conversion saves go through here too — sync the
+    # bound Agent rows BEFORE the write mints the edit snapshot, so the snapshot
+    # materializes the command the operator just saved rather than the pre-sync
+    # Agent-row value (a no-op when the node commands already mirror the row).
+    await _sync_agent_row_commands(session, org_id=org_id, nodes=nodes)
+    return await replace_pipeline_graph(
         session,
         pipeline_id=pipeline_id,
         org_id=org_id,
@@ -6086,9 +6098,3 @@ async def _save_graph(
         grants_deny_guardrail_admin=grants_deny_guardrail_admin,
         record_edit_snapshot=record_edit_snapshot,
     )
-    if graph is not None:
-        # FAR-488a: node-conversion saves go through here too — keep the same
-        # "what you save is what runs" Agent-row sync (a no-op when the node
-        # commands already mirror the bound Agent rows).
-        await _sync_agent_row_commands(session, org_id=org_id, nodes=nodes)
-    return graph
