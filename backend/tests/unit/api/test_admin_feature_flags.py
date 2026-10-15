@@ -17,6 +17,7 @@ from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes import admin_feature_flags
 from modulo.api.routes.admin_feature_flags import (
     _build_registry,
     _emit_org_flag_override_audit,
@@ -196,6 +197,32 @@ def _patch_resolve_tier() -> Generator[None, None, None]:
         new_callable=AsyncMock,
         return_value="community",
     ):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _patch_org_settings_writer() -> Generator[None, None, None]:
+    """Apply the FAR-1830 atomic settings patch in-memory for the unit tier.
+
+    ``update_org_settings_patch`` writes through the real DB (a JSONB statement
+    the mocked session cannot run) and its fail-closed tenant guard needs a
+    bound RLS context. The unit tier has neither, so this mirrors the helper's
+    top-level merge semantics onto whichever org the route's (patched)
+    ``get_organisation`` returns. The real helper is covered by
+    ``tests/integration/crud/test_org_settings_patch.py``.
+    """
+
+    async def _apply(session, organisation_id, patch=None, delete_keys=None, **_kwargs):
+        org = await admin_feature_flags.get_organisation(session, organisation_id)
+        settings = dict(org.settings_json or {}) if org is not None and isinstance(org.settings_json, dict) else {}
+        settings.update(patch or {})
+        for key in delete_keys or []:
+            settings.pop(key, None)
+        if org is not None:
+            org.settings_json = settings
+        return settings
+
+    with patch("modulo.api.routes.admin_feature_flags.update_org_settings_patch", new=_apply):
         yield
 
 
@@ -879,6 +906,80 @@ class TestOrgOverrideRoundTrip:
             get_resp = client.get("/api/v1/admin/feature-flags/webhook_trigger/org-override")
         assert get_resp.status_code == 200
         assert get_resp.json()["override"] is True
+
+
+class TestOrgSettingsPatchScope:
+    """FAR-1830: the org-override writers emit ONLY ``feature_overrides`` and
+    bind the org RLS context (a revert to a whole-column write would not call
+    the patch helper at all)."""
+
+    _ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+    def _capture_patch(self) -> tuple[dict, Any]:
+        captured: dict = {}
+
+        async def _capture(session, organisation_id, patch=None, delete_keys=None, **_kwargs):
+            captured["patch"] = patch
+            return patch or {}
+
+        return captured, _capture
+
+    def test_toggle_patches_only_feature_overrides_and_binds_org(self, client: TestClient) -> None:
+        org = _org_with_overrides()
+        captured, capture = self._capture_patch()
+        bind = AsyncMock()
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.update_org_settings_patch",
+                new=capture,
+            ),
+            patch("modulo.api.routes.admin_feature_flags.set_rls_org", bind),
+            patch(
+                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                new_callable=MagicMock,
+                return_value=AsyncMock(),
+            ),
+        ):
+            resp = client.put("/api/v1/admin/feature-flags/webhook_trigger", json={"enabled": True})
+        assert resp.status_code == 200
+        assert set(captured["patch"]) == {"feature_overrides"}
+        assert captured["patch"]["feature_overrides"] == {"webhook_trigger": True}
+        assert bind.await_count >= 1
+        for call in bind.await_args_list:
+            assert str(call.args[1]) == self._ORG_ID
+
+    def test_clear_patches_only_feature_overrides(self, client: TestClient) -> None:
+        org = _org_with_overrides(webhook_trigger=True)
+        captured, capture = self._capture_patch()
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.update_org_settings_patch",
+                new=capture,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                new_callable=MagicMock,
+                return_value=AsyncMock(),
+            ),
+        ):
+            resp = client.delete("/api/v1/admin/feature-flags/webhook_trigger/org-override")
+        assert resp.status_code == 200
+        assert set(captured["patch"]) == {"feature_overrides"}
+        assert not captured["patch"]["feature_overrides"]
 
 
 class TestOrgOverrideOrgIdGuard:
