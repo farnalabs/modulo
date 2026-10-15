@@ -45,7 +45,7 @@ REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 # `components.SidebarNav.group_${id}` fallback template and swallows the rest
 # of the file as one bogus "key" (that fallback is checked via the manifest's
 # declared-group keys instead, which is what it resolves to at runtime).
-_RE_NAV_LABEL = re.compile(r"components\.SidebarNav\.([A-Za-z0-9_]+)(?=['\"])")
+_RE_NAV_LABEL = re.compile(r"components\.SidebarNav\.(\w+)(?=['\"])")
 _RE_LOCALE_KEY = re.compile(r'"((?:item|group)_[^"]+)"')
 #: Manifest-shaped group nav label key (``group_build``), as opposed to the
 #: UI-hint keys (``group_collapsed_hint``) SidebarNav.vue consumes directly.
@@ -54,7 +54,7 @@ _RE_GROUP_LABEL = re.compile(r"group_[a-z]+$")
 #: Reverse-parity candidates are scoped to it: the flat file also carries
 #: unrelated keys such as ``group_by`` / ``item_count`` that would read as
 #: orphans otherwise.
-_RE_SIDEBAR_BLOCK = re.compile(r'"SidebarNav":\s*\{(.*?)\n    \},', re.DOTALL)
+_RE_SIDEBAR_BLOCK = re.compile(r'"SidebarNav":\s*\{(.*?)\n {4}\},', re.DOTALL)
 _DIFF_RANGE_RE = re.compile(r"^[A-Za-z0-9._~^/\-]+$")
 
 _NAV_PATH = str(Path("frontend") / "src" / "config" / "navigation.ts")
@@ -145,6 +145,84 @@ def _sidebar_nav_keys(locale_content: str) -> set[str]:
     return set(_RE_LOCALE_KEY.findall(match.group(1)))
 
 
+def _referenced_nav_keys(nav_content: str) -> set[str]:
+    """item_*/group_* label keys navigation.ts references by name."""
+    referenced: set[str] = set()
+    for match in _RE_NAV_LABEL.finditer(nav_content):
+        key = match.group(1)
+        if key.startswith(("item_", "group_")):
+            referenced.add(key)
+    return referenced
+
+
+def _defined_locale_keys(locale_content: str) -> set[str]:
+    """item_*/group_* keys defined anywhere in the flat locale file."""
+    return {match.group(1) for match in _RE_LOCALE_KEY.finditer(locale_content)}
+
+
+def _load_manifest_group_keys() -> tuple[set[str], list[str], bool]:
+    """Manifest live group keys + problems, and whether the manifest exists."""
+    manifest_path = str(Path(REPO_ROOT) / _MANIFEST_PATH)
+    if not Path(manifest_path).exists():
+        print(
+            f"validate-translations: {_MANIFEST_PATH} not found - skipping manifest label-key parity",
+            file=sys.stderr,
+        )
+        return set(), [], False
+    keys, problems = _manifest_group_keys(manifest_path)
+    return keys, problems, True
+
+
+def _orphan_group_problems(locale_content: str, manifest_keys: set[str], manifest_exists: bool) -> list[str] | None:
+    """Orphaned ``group_*`` locale keys, or None when the check is skipped.
+
+    ``None`` means the locale file has no SidebarNav block (check not
+    applicable); an empty list means the check ran and found no orphans.
+    """
+    if not manifest_exists:
+        return []
+    sidebar_keys = _sidebar_nav_keys(locale_content)
+    if not sidebar_keys:
+        print(
+            "validate-translations: no SidebarNav block in en-US.js - skipping orphan group-key check",
+            file=sys.stderr,
+        )
+        return None
+    return sorted(k for k in sidebar_keys if _RE_GROUP_LABEL.match(k) and k not in manifest_keys)
+
+
+def _report_forward_missing(missing: list[str]) -> None:
+    for key in missing:
+        print(f"FAIL: missing translation key: {key}", file=sys.stderr)
+    print(
+        f"\nvalidate-translations: FAILED - {len(missing)} key(s) referenced in "
+        "navigation.ts / manifest.yaml but not defined in en-US.js",
+        file=sys.stderr,
+    )
+
+
+def _report_manifest_problems(manifest_problems: list[str]) -> None:
+    for problem in manifest_problems:
+        print(f"FAIL: {problem}", file=sys.stderr)
+    print(
+        f"\nvalidate-translations: FAILED - {len(manifest_problems)} manifest label-key problem(s)",
+        file=sys.stderr,
+    )
+
+
+def _report_orphans(orphans: list[str]) -> None:
+    for key in orphans:
+        print(
+            f"FAIL: locale nav key {_NAMESPACE}{key} is not a manifest sidebar_group "
+            "labelKey or declared-group fallback (orphaned group key)",
+            file=sys.stderr,
+        )
+    print(
+        f"\nvalidate-translations: FAILED - {len(orphans)} orphaned group nav key(s) in en-US.js",
+        file=sys.stderr,
+    )
+
+
 def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Check sidebar nav translation key parity.",
@@ -164,93 +242,44 @@ def _main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    nav_path = str(Path(REPO_ROOT) / _NAV_PATH)
-    locale_path = str(Path(REPO_ROOT) / _LOCALE_PATH)
-    manifest_path = str(Path(REPO_ROOT) / _MANIFEST_PATH)
-
-    nav_content = _read(nav_path)
+    nav_content = _read(str(Path(REPO_ROOT) / _NAV_PATH))
     if not nav_content:
         print(f"validate-translations: {_NAV_PATH} not found - skipping", file=sys.stderr)
         return 0
 
-    locale_content = _read(locale_path)
+    locale_content = _read(str(Path(REPO_ROOT) / _LOCALE_PATH))
     if not locale_content:
         print(f"validate-translations: {_LOCALE_PATH} not found - skipping", file=sys.stderr)
         return 0
 
-    # Extract referenced item_*/group_* keys from navigation.ts
-    referenced: set[str] = set()
-    for match in _RE_NAV_LABEL.finditer(nav_content):
-        key = match.group(1)
-        if key.startswith(("item_", "group_")):
-            referenced.add(key)
-    nav_referenced = set(referenced)
-
-    # Extract defined item_*/group_* keys from en-US.js
-    defined: set[str] = set()
-    for match in _RE_LOCALE_KEY.finditer(locale_content):
-        defined.add(match.group(1))
+    nav_referenced = _referenced_nav_keys(nav_content)
+    defined = _defined_locale_keys(locale_content)
 
     # Manifest label keys: forward (must resolve in the locale file) and the
     # liveness set for the vice-versa direction below.
-    manifest_keys: set[str] = set()
-    manifest_problems: list[str] = []
-    if Path(manifest_path).exists():
-        manifest_keys, manifest_problems = _manifest_group_keys(manifest_path)
-        referenced |= manifest_keys
-    else:
-        print(
-            f"validate-translations: {_MANIFEST_PATH} not found - skipping manifest label-key parity",
-            file=sys.stderr,
-        )
+    manifest_keys, manifest_problems, manifest_exists = _load_manifest_group_keys()
+    referenced = nav_referenced | manifest_keys
 
     # 1 + 2 (forward): every referenced / declared nav label key resolves.
     missing = sorted(f"{_NAMESPACE}{k}" for k in referenced if k not in defined)
     if missing:
-        for key in missing:
-            print(f"FAIL: missing translation key: {key}", file=sys.stderr)
-        print(
-            f"\nvalidate-translations: FAILED - {len(missing)} key(s) referenced in "
-            "navigation.ts / manifest.yaml but not defined in en-US.js",
-            file=sys.stderr,
-        )
+        _report_forward_missing(missing)
         return 1
 
     if manifest_problems:
-        for problem in manifest_problems:
-            print(f"FAIL: {problem}", file=sys.stderr)
-        print(
-            f"\nvalidate-translations: FAILED - {len(manifest_problems)} manifest label-key problem(s)",
-            file=sys.stderr,
-        )
+        _report_manifest_problems(manifest_problems)
         return 1
 
     # 3 (vice versa): every manifest-shaped group nav key in the locale's
     # SidebarNav block is live.
-    sidebar_keys = _sidebar_nav_keys(locale_content)
-    if Path(manifest_path).exists():
-        if sidebar_keys:
-            orphans = sorted(k for k in sidebar_keys if _RE_GROUP_LABEL.match(k) and k not in manifest_keys)
-            if orphans:
-                for key in orphans:
-                    print(
-                        f"FAIL: locale nav key {_NAMESPACE}{key} is not a manifest sidebar_group "
-                        "labelKey or declared-group fallback (orphaned group key)",
-                        file=sys.stderr,
-                    )
-                print(
-                    f"\nvalidate-translations: FAILED - {len(orphans)} orphaned group nav key(s) in en-US.js",
-                    file=sys.stderr,
-                )
-                return 1
-        else:
-            print(
-                "validate-translations: no SidebarNav block in en-US.js - skipping orphan group-key check",
-                file=sys.stderr,
-            )
+    orphans = _orphan_group_problems(locale_content, manifest_keys, manifest_exists)
+    if orphans:
+        _report_orphans(orphans)
+        return 1
 
     # Loud but non-blocking: locale item_* keys nothing in navigation.ts
     # references (dead keys - cleanup tracked separately from this gate).
+    sidebar_keys = _sidebar_nav_keys(locale_content)
     stale_items = sorted(k for k in sidebar_keys if k.startswith("item_") and k not in nav_referenced)
     if stale_items:
         print(

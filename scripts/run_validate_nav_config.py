@@ -69,32 +69,44 @@ def _read(path: str) -> str:
         return ""
 
 
+def _child_path(key_node: object, path: tuple[str, ...]) -> tuple[str, ...]:
+    """Extend ``path`` with a scalar mapping key (non-scalar keys leave it)."""
+    if isinstance(key_node, ScalarNode):
+        return path + (key_node.value,)
+    return path
+
+
+def _duplicate_keys_under_scope(node: MappingNode, path: tuple[str, ...]) -> list[str]:
+    """Duplicate scalar keys directly under one nav-relevant mapping scope."""
+    counts: Counter[str] = Counter(key.value for key, _value in node.value if isinstance(key, ScalarNode))
+    return [
+        f"{_MANIFEST_PATH}: duplicate mapping key {key!r} under {'/'.join(path)} "
+        f"({count} occurrences — YAML keeps only the last)"
+        for key, count in sorted(counts.items())
+        if count > 1
+    ]
+
+
+def _walk_duplicate_keys(node: object, path: tuple[str, ...], problems: list[str]) -> None:
+    """Recursively collect duplicate-key problems from a composed YAML tree."""
+    if isinstance(node, MappingNode):
+        if path and path[0] in _DUP_SCOPES:
+            problems.extend(_duplicate_keys_under_scope(node, path))
+        for key_node, value_node in node.value:
+            _walk_duplicate_keys(value_node, _child_path(key_node, path), problems)
+    elif isinstance(node, SequenceNode):
+        for item in node.value:
+            _walk_duplicate_keys(item, path, problems)
+
+
 def _duplicate_key_problems(manifest_text: str) -> list[str]:
     """Report literal duplicate mapping keys under the nav-relevant scopes."""
     problems: list[str] = []
-
-    def walk(node: object, path: tuple[str, ...]) -> None:
-        if isinstance(node, MappingNode):
-            counts: Counter[str] = Counter(key.value for key, _value in node.value if isinstance(key, ScalarNode))
-            if path and path[0] in _DUP_SCOPES:
-                for key, count in sorted(counts.items()):
-                    if count > 1:
-                        problems.append(
-                            f"{_MANIFEST_PATH}: duplicate mapping key {key!r} under {'/'.join(path)} "
-                            f"({count} occurrences — YAML keeps only the last)"
-                        )
-            for key_node, value_node in node.value:
-                child = path + (key_node.value,) if isinstance(key_node, ScalarNode) else path
-                walk(value_node, child)
-        elif isinstance(node, SequenceNode):
-            for item in node.value:
-                walk(item, path)
-
     # yaml.compose returns the document's ROOT node directly (not a wrapper),
     # so walk it as-is; a None result means an empty document.
     root = yaml.compose(manifest_text)
     if root is not None:
-        walk(root, ())
+        _walk_duplicate_keys(root, (), problems)
     return problems
 
 
@@ -115,30 +127,21 @@ def _is_nav_entry(entry: object) -> bool:
     return bool(entry.get("sidebar_group")) and entry.get("type") != "detail_page"
 
 
-def _structure_problems(manifest: object) -> list[str]:
-    """Deliverable 1: group-id / sidebar_order uniqueness, presence, sanity."""
+def _referential_problems(routes: dict, groups: dict) -> list[str]:
+    """Every declared route sidebar_group resolves to a declared group id."""
     problems: list[str] = []
-    if not isinstance(manifest, dict):
-        return [f"{_MANIFEST_PATH}: manifest root must be a mapping"]
-
-    routes = manifest.get("routes")
-    groups = manifest.get("sidebar_groups")
-    if not isinstance(routes, dict):
-        problems.append(f"{_MANIFEST_PATH}: missing or non-mapping 'routes'")
-        routes = {}
-    if not isinstance(groups, dict):
-        problems.append(f"{_MANIFEST_PATH}: missing or non-mapping 'sidebar_groups'")
-        groups = {}
-
-    # Referential sanity: every declared sidebar_group resolves to a group id.
     for path, entry in routes.items():
         if not isinstance(entry, dict):
             continue
         group = entry.get("sidebar_group")
         if group and group not in groups:
             problems.append(f"route {path!r} references undeclared sidebar_group {group!r}")
+    return problems
 
-    # Presence + uniqueness on the entries the sidebar actually renders.
+
+def _sidebar_order_problems(routes: dict) -> list[str]:
+    """Presence + uniqueness of sidebar_order on the entries the sidebar renders."""
+    problems: list[str] = []
     seen_orders: dict[object, dict[object, str]] = {}
     for path, entry in routes.items():
         if not isinstance(entry, dict) or not _is_nav_entry(entry):
@@ -158,8 +161,12 @@ def _structure_problems(manifest: object) -> list[str]:
             )
         else:
             group_orders[order] = path
+    return problems
 
-    # Presence: each declared group carries the fields navigation.ts reads.
+
+def _group_field_problems(groups: dict) -> list[str]:
+    """Each declared group carries the fields navigation.ts reads."""
+    problems: list[str] = []
     for group_id, group in groups.items():
         if not isinstance(group, dict):
             problems.append(f"sidebar_group {group_id!r} must be a mapping")
@@ -171,7 +178,27 @@ def _structure_problems(manifest: object) -> list[str]:
             problems.append(f"sidebar_group {group_id!r} must carry an integer 'order'")
         if type(group.get("default_expanded")) is not bool:
             problems.append(f"sidebar_group {group_id!r} must carry a boolean 'default_expanded'")
+    return problems
 
+
+def _structure_problems(manifest: object) -> list[str]:
+    """Deliverable 1: group-id / sidebar_order uniqueness, presence, sanity."""
+    problems: list[str] = []
+    if not isinstance(manifest, dict):
+        return [f"{_MANIFEST_PATH}: manifest root must be a mapping"]
+
+    routes = manifest.get("routes")
+    groups = manifest.get("sidebar_groups")
+    if not isinstance(routes, dict):
+        problems.append(f"{_MANIFEST_PATH}: missing or non-mapping 'routes'")
+        routes = {}
+    if not isinstance(groups, dict):
+        problems.append(f"{_MANIFEST_PATH}: missing or non-mapping 'sidebar_groups'")
+        groups = {}
+
+    problems.extend(_referential_problems(routes, groups))
+    problems.extend(_sidebar_order_problems(routes))
+    problems.extend(_group_field_problems(groups))
     return problems
 
 
