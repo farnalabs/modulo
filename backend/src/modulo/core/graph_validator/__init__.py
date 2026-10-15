@@ -32,6 +32,7 @@ from modulo.connectors.base import (
     connector_type_supports_dispatch,
     unrestricted_allowed_operations,
 )
+from modulo.connectors.rest import _DEFAULT_MAX_FANOUT_CARDINALITY, _DEFAULT_TIMEOUT
 from modulo.core.graph_validator._types import (
     ValidationIssue,
     ValidationResult,
@@ -3491,16 +3492,12 @@ class GraphValidator:
             if max_cardinality is None:
                 return None
         else:
-            from modulo.connectors.rest import _DEFAULT_MAX_FANOUT_CARDINALITY
-
             max_cardinality = float(_DEFAULT_MAX_FANOUT_CARDINALITY)
         if "per_item_timeout" in fanout:
             per_item_timeout = _as_positive_number(fanout.get("per_item_timeout"))
             if per_item_timeout is None:
                 return None
         else:
-            from modulo.connectors.rest import _DEFAULT_TIMEOUT
-
             per_item_timeout = _DEFAULT_TIMEOUT
         max_retries_raw = fanout.get("max_retries")
         if isinstance(max_retries_raw, int) and not isinstance(max_retries_raw, bool) and max_retries_raw >= 0:
