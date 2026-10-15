@@ -480,7 +480,7 @@ async def test_install_response_entity_list_matches_child_rows(
     function is then driven DIRECTLY on that role so the endpoint's own
     in-transaction load + threading is pinned, not just the helpers. The
     migrated schema must also no longer carry the duplicate JSON column
-    (migration 0311).
+    (migration 0313).
     """
     pins = [
         {"slug": "input-schema", "version": "1.0"},
@@ -555,7 +555,7 @@ async def test_install_response_entity_list_matches_child_rows(
     reported = sorted((entry["entity_type"], entry["entity_id"]) for entry in response.installed_entities or [])
     assert reported == expected
 
-    # Migration 0311 dropped the duplicate JSON column from the migrated schema.
+    # Migration 0313 dropped the duplicate JSON column from the migrated schema.
     async with db_engine.connect() as conn:
         columns = await conn.run_sync(lambda sync_conn: inspect(sync_conn).get_columns("collection_install"))
     column_names = [column["name"] for column in columns]
