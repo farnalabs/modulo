@@ -35,9 +35,9 @@ the SAQ children, and the CLI sees the bundled endpoints.
 3. **Field defaults** in `modulo.settings` sit below the pinned file.
 
 Practical consequence: exporting `DATABASE_URL` in your shell says
-"ignore the bundled Postgres and use mine" (launcher-hostile ambient
-values like `PG*` and company URLs are scrubbed at boot per ADR 031
-Decision 2, so only intentional exports survive).
+"ignore the bundled Postgres and use mine" (`PG*` client vars are scrubbed
+at boot and ambient `DATABASE_URL`/`REDIS_URL` are refused before first
+boot per ADR 031 Decisions 2/8, so only intentional exports survive).
 
 ## Compose / container deployments: env > secret-manager > defaults
 
