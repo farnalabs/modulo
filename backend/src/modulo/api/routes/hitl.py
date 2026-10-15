@@ -74,7 +74,6 @@ from modulo.core.notifier import Notifier
 from modulo.core.pipeline_engine.executor import (
     PipelineExecutor,
     SandboxCapacityExceededError,
-    org_sandbox_capacity_free,
 )
 from modulo.db.crud.hitl_review_config import (
     EVENT_HUMAN_ONLY_DENIED,
@@ -300,39 +299,18 @@ _REVIEW_PAGE_SIZE_MAX = 100
 _PENDING_WORK_REVIEW_STATUSES = frozenset({"undecided", "pending", "claimed"})
 
 
-async def _require_org_sandbox_capacity(session: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
-    """Raise ``409`` when the org sandbox cap blocks a gate resume.
+def _capacity_deferred_response(run_id: uuid.UUID, action: str) -> dict[str, str]:
+    """Queued-success body for a resume denied by the org sandbox capacity cap.
 
-    Runs BEFORE the HITL gate decision is committed so a capacity decline
-    never deadlocks the run (gate decided + run stuck). The gate stays
-    undecided and the human can retry once a slot frees.
-
-    409 Conflict (rather than 202 Accepted) is returned because nothing is
-    accepted or queued by this call — the request conflicts with the current
-    state (org at sandbox capacity) and no state is changed.
-
-    Applied to the resume actions (approve / approve-with-modification /
-    deliver-manual / submit-manual), which continue executing the sandbox
-    graph. ``reject_gate`` is deliberately exempt: a human rejection that has
-    already been committed is never bounced off the gate by a transient
-    capacity limit.
-
-    That exemption is a POLICY choice, not a "no sandbox work follows"
-    argument. A rejection resumes the graph: it routes the run to its reject
-    route (``reject_target`` config or a reject edge) when one exists — and
-    that route DOES resume downstream (including sandbox) execution. With no
-    reject route (FAR-1487) the run ENDS ``rejected`` by default (no
-    downstream work), unless the gate is set to ``on_reject: proceed`` (or has
-    a ``correction_target``), in which case it continues along the normal
-    path. The approve(409-gated)/reject(not gated) asymmetry for the routed /
-    proceed cases is a known point of this design, flagged here rather than
-    justified.
+    FAR-1831: the HITL gate decision is committed BEFORE the resume is
+    attempted, so a full org sandbox cap must never discard the human decision.
+    The inline resume transaction rolls back on the denial (the run stays
+    ``awaiting_human``), and ``dispatcher_reconcile``'s F6a path re-dispatches
+    the resume once a slot frees — so the request is a SUCCESS, not a 409
+    ``Conflict`` (nothing conflicts: the decision was accepted).
     """
-    if not await org_sandbox_capacity_free(session, org_id, run_id):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Sandbox concurrency limit reached; gate left undecided. Retry when capacity frees up.",
-        )
+    logger.info("hitl.resume_capacity_deferred action=%s run=%s", action, run_id)
+    return {"status": "queued", "run_id": str(run_id)}
 
 
 def _client_type(principal: TenantPrincipal) -> str:
@@ -810,7 +788,6 @@ async def _run_hitl_manager(
     review_id: str,
     *,
     enforce_human_only: bool,
-    require_sandbox: bool,
     mgr_method: str,
     action: str | None = None,
     answer: dict[str, Any] | None = None,
@@ -877,8 +854,6 @@ async def _run_hitl_manager(
                     payload["answer"] = answer
             if enforce_human_only:
                 await _enforce_human_only_gate(session, principal, run_id, review_id, audit_action)
-            if require_sandbox:
-                await _require_org_sandbox_capacity(session, run_id, principal.organisation_id)
             try:
                 # FAR-860: forward the answer to the manager for audit enrichment.
                 manager_kwargs = dict(call_kwargs)
@@ -988,7 +963,6 @@ async def approve_review(
         run_id,
         review_id,
         enforce_human_only=True,
-        require_sandbox=True,
         mgr_method="approve",
         claim_token=req.claim_token,
         decision_payload=resume_data,
@@ -1005,8 +979,8 @@ async def approve_review(
             org_id=principal.organisation_id,
             resume_data=resume_data,
         )
-    except SandboxCapacityExceededError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except SandboxCapacityExceededError:
+        return _capacity_deferred_response(run_id, "approve")
     except Exception as exc:
         logger.exception("hitl.approve_review.resume_failed")
         raise HTTPException(
@@ -1081,7 +1055,6 @@ async def approve_review_with_modification(
         run_id,
         review_id,
         enforce_human_only=True,
-        require_sandbox=True,
         mgr_method="approve_with_modification",
         claim_token=req.claim_token,
         modified_output=req.modified_output,
@@ -1099,8 +1072,8 @@ async def approve_review_with_modification(
             org_id=principal.organisation_id,
             resume_data=resume_data,
         )
-    except SandboxCapacityExceededError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except SandboxCapacityExceededError:
+        return _capacity_deferred_response(run_id, "approve_with_modification")
     except Exception as exc:
         logger.exception("hitl.approve_with_modification.resume_failed")
         raise HTTPException(
@@ -1144,13 +1117,17 @@ async def reject_review(
     which continues the run along the normal path.
     """
     # FAR-541: the payload is stamped with the gate it resolves (see approve_review).
-    # No require_sandbox guard here (unlike the resume actions): the capacity
-    # exemption is POLICY — a human rejection already committed must not be
-    # bounced off the gate by a transient capacity limit — and NOT a claim
-    # that rejection avoids sandbox work. A rejection routes to the gate's
-    # reject route when one is configured (downstream execution resumes); with
-    # no reject route the run ENDS ``rejected`` (FAR-1487) unless the gate is
-    # explicitly ``on_reject: proceed``.
+    # Reject resumes the graph WITHOUT a sandbox-capacity check
+    # (``check_sandbox_capacity=False``): a human rejection already committed
+    # must never be bounced off the gate by a transient capacity limit. That is
+    # a POLICY choice, not a "no sandbox work follows" claim — a rejection
+    # routes to the gate's reject route when one is configured (downstream
+    # execution resumes); with no reject route the run ENDS ``rejected``
+    # (FAR-1487) unless the gate is explicitly ``on_reject: proceed``. All four
+    # resume actions (approve / approve-with-modification / deliver-manual /
+    # submit-manual) now share the same decision-first contract: the decision
+    # commits, and a capacity-denied resume is queued rather than 409'd
+    # (FAR-1831).
     #
     # The human_only guard is not applied mechanically, but it IS effectively
     # in force: reject requires a claim_token and non-browser principals can
@@ -1165,7 +1142,6 @@ async def reject_review(
         run_id,
         review_id,
         enforce_human_only=False,
-        require_sandbox=False,
         mgr_method="reject",
         claim_token=req.claim_token,
         decision_payload=resume_data,
@@ -1246,7 +1222,6 @@ async def deliver_manual_output(
         run_id,
         review_id,
         enforce_human_only=True,
-        require_sandbox=True,
         mgr_method="deliver_manual",
         claim_token=req.claim_token,
         output=req.output,
@@ -1261,8 +1236,8 @@ async def deliver_manual_output(
             org_id=principal.organisation_id,
             resume_data=resume_data,
         )
-    except SandboxCapacityExceededError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except SandboxCapacityExceededError:
+        return _capacity_deferred_response(run_id, "deliver_manual")
     except Exception as exc:
         logger.exception("hitl.deliver_manual_output.resume_failed")
         raise HTTPException(
@@ -1314,7 +1289,6 @@ async def submit_manual_output(
         run_id,
         review_id,
         enforce_human_only=True,
-        require_sandbox=True,
         mgr_method="approve",
         action="submit_manual",
         claim_token=req.claim_token,
@@ -1329,8 +1303,8 @@ async def submit_manual_output(
             org_id=principal.organisation_id,
             resume_data=resume_data,
         )
-    except SandboxCapacityExceededError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except SandboxCapacityExceededError:
+        return _capacity_deferred_response(run_id, "submit_manual")
     except Exception as exc:
         logger.exception("hitl.submit_manual_output.resume_failed")
         raise HTTPException(

@@ -8709,6 +8709,35 @@ async def _clear_previous_attempt_marker(
     )
 
 
+async def _resume_org_capacity_free(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+) -> bool:
+    """True when the org's sandbox cap can admit *run_id*'s resume (fail-open).
+
+    FAR-1831: the F6a resume re-dispatch must not run into a saturated org —
+    ``dispatch_run`` never org-cap-defers a ``resume_run`` (its check is
+    execute-only), so without this gate every tick would claim the run
+    (``claim_count++``) only for the executor's capacity gate to deny it,
+    exhausting the claim cap and stranding a decided run ``awaiting_human``.
+
+    Reuses the HITL route pre-check verbatim — it is the single source of truth
+    for "may this org admit another sandbox resume now" (flag-on converges onto
+    ``runner_capacity.resolve_runner_capacity_decision``, flag-off onto the
+    legacy graph-based count). Fail-open: any read error admits the resume so a
+    committed decision is never lost behind a transient read fault.
+
+    The ``pipeline_engine.executor`` import is LAZY (in-function) and is the
+    exact module pair already sanctioned for ``_retry_after_policy`` (FAR-733,
+    ``.importlinter``): no new contract edge and no import-time langgraph
+    coupling for the API seams that reach ``cron_helpers``.
+    """
+    from modulo.core.pipeline_engine.executor import org_sandbox_capacity_free
+
+    return await org_sandbox_capacity_free(session, org_id, run_id)
+
+
 async def _re_dispatch_reconciled_run(
     session: AsyncSession,
     q: RedisQueue,
@@ -8729,7 +8758,19 @@ async def _re_dispatch_reconciled_run(
     re-dispatched RUNNING run has its previous attempt's stale marker
     refreshed first (qa F2 — a stale marker must never survive into the new
     attempt's running state).
+
+    FAR-1831: a ``resume_run`` re-dispatch is capacity-gated FIRST — a
+    saturated org skips the tick (no claim burned, no enqueue) and the row is
+    re-attempted once a slot frees. Placed before the marker refresh so the
+    row keeps its pre-dispatch shape (the FAR-1728 override marker survives).
     """
+    if job_type == "resume_run" and not await _resume_org_capacity_free(session, org_id, row.id):
+        summary["capacity_deferred"] += 1
+        _log.info(
+            "dispatcher_reconcile: resume of run %s deferred — org sandbox capacity full",
+            row.id,
+        )
+        return enqueue_failed_redispatched
     if getattr(row, "status", None) == "running":
         await _clear_previous_attempt_marker(session, org_id, row)
     try:

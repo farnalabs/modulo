@@ -1414,6 +1414,98 @@ async def fail_run_terminal(
     return ok
 
 
+#: FAR-1831: the closed HITL gate-decision action vocabulary a committed
+#: ``hitl_claims.decision_payload`` carries (the same set
+#: ``cron_helpers._awaiting_human_has_committed_decision`` accepts). A
+#: ``resume_run`` payload whose ``action`` is one of these IS a committed gate
+#: decision; node-recovery payloads carry ``skip``/``replay`` and the FAR-1728
+#: guardrail-override resume carries no payload at all.
+_HITL_RESUME_ACTIONS = frozenset({"approved", "rejected", "deliver_manual", "manual_output"})
+
+
+def resume_carries_committed_hitl_decision(resume_data: dict[str, Any] | None) -> bool:
+    """True when a resume payload is a committed HITL gate decision (FAR-1831).
+
+    ``resume_run`` has three dispatchers and only ONE of them carries a human
+    decision:
+
+      * the F6a reconcile leg re-dispatches a parked run with ``resume_data``
+        reconstructed from the committed ``hitl_claims`` decision (an
+        ``action`` from :data:`_HITL_RESUME_ACTIONS`) — this is the case that
+        may be parked non-terminally on a capacity denial;
+      * node recovery (``api/routes/runs.py``) sends ``{"action": "skip"|
+        "replay", ...}``;
+      * the FAR-1728 guardrail-override resume sends no payload (``None``).
+
+    Only the first has a decision F6a will resume from, so only it may be
+    reset to ``awaiting_human``; the other two must keep a terminal, observable
+    outcome (parking them would strand them decisionless).
+    """
+    return isinstance(resume_data, dict) and resume_data.get("action") in _HITL_RESUME_ACTIONS
+
+
+async def defer_capacity_denied_run_to_awaiting_human(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    *,
+    claim_token: str | None = None,
+) -> bool:
+    """Reset a capacity-denied RESUME from ``running`` back to ``awaiting_human``.
+
+    FAR-1831: a HITL gate decision is ALREADY committed before a resume is
+    dispatched (the HITL route's inline resume, the MCP ``review_hitl``
+    decision, or ``dispatcher_reconcile``'s F6a re-dispatch). A full org
+    sandbox cap must therefore never terminal-fail the decided run.
+    ``executor._enforce_resume_sandbox_capacity`` raises
+    ``SandboxCapacityExceededError`` on the resume path ONLY (it is the sole
+    raiser of this exception type), and its transaction rolls back — but the
+    resume CLAIM has already moved the row to ``running``. This fenced write
+    restores ``awaiting_human`` so the committed decision survives and
+    ``dispatcher_reconcile``'s F6a path re-dispatches the resume once a slot
+    frees.
+
+    ONLY a resume carrying a committed HITL decision may be parked here — see
+    :func:`resume_carries_committed_hitl_decision` and the call-site guard in
+    :func:`run_executor_with_watchdog`. A node-recovery or guardrail-override
+    resume has no committed decision for F6a to resume from, so parking it in
+    ``awaiting_human`` would strand it decisionless; those keep the ordinary
+    terminal outcome.
+
+    The write REFUNDS the single claim this capacity-denied resume consumed
+    (``refund_claim_count=True``): the executor never ran a node, so the claim
+    is not a real attempt. Without the refund, the lock-free/fail-open capacity
+    PRE-CHECK admitting while the executor's atomic gate denies would burn one
+    ``claim_count`` per race, and once ``claim_count`` reached
+    ``SAQ_RUN_CLAIM_CAP`` the resume claim itself would silently no-op
+    (``claim_count < :claim_cap``) and strand the committed decision forever.
+    Only THIS contested capacity claim is refunded, so a genuine poison run —
+    whose claims are consumed on non-capacity failures and never refunded —
+    still exhausts the budget and terminalises.
+
+    Fenced by the claim token AND ``from_status='running'`` via the shared
+    fenced writer (CANCEL-WINS: a cancellation-requested row is rewritten to
+    ``cancelled``), so a superseded original can never demote a successor's
+    claim and a cancelled run is never resurrected. Returns ``True`` when the
+    reset landed (``False`` when the fence rejected it — superseded, already
+    moved on, or cancelled).
+    """
+    from modulo.db.crud.run import update_run_status
+
+    factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, uuid.UUID(org_id))
+        refreshed = await update_run_status(
+            session,
+            uuid.UUID(run_id),
+            "awaiting_human",
+            claim_token=claim_token,
+            from_status="running",
+            refund_claim_count=True,
+        )
+    return refreshed is not None
+
+
 def _is_transient_db_error(exc: BaseException) -> bool:
     """True for a transient DB fault worth retrying (FAR-604 P0).
 
@@ -2070,6 +2162,7 @@ async def run_executor_with_watchdog(
     claim_token: str | None = None,
     superseded: asyncio.Event | None = None,
     dispatch_tracker: DispatchPhaseTracker | None = None,
+    hitl_decision_resume: bool = False,
 ) -> dict[str, Any]:
     """Run ``execute_fn`` under the DB heartbeat loop + zombie watchdog.
 
@@ -2094,10 +2187,19 @@ async def run_executor_with_watchdog(
       cancellation re-raises. All three await the watchdog to completion first
       so a pending ``fail_run_terminal`` transaction commits.
 
+    ``hitl_decision_resume`` (FAR-1831) MUST be True only when this resume
+    carries a COMMITTED HITL gate decision (:func:`resume_carries_committed_hitl_decision`).
+    A sandbox-capacity denial on such a resume is parked non-terminally back to
+    ``awaiting_human`` (the F6a reconcile leg re-dispatches it once a slot
+    frees). On any other resume — node recovery, guardrail override — the same
+    denial keeps the honest terminal outcome instead of stranding a
+    decisionless run in ``awaiting_human``.
+
     Honest outcomes: returns ``{"status": "complete"}`` only when the run row
     actually reached ``complete``; a generic executor exception is
     terminal-failed with ``executor_failed`` (token-guarded) and returns
-    ``{"status": "failed"}``; an ``awaiting_human`` pause returns
+    ``{"status": "failed"}``; a HITL-decision resume capacity denial returns
+    ``{"status": "capacity_deferred"}``; an ``awaiting_human`` pause returns
     ``{"status": "awaiting_human"}``; a HITL rejection that ended the run
     (FAR-1487) returns ``{"status": "rejected"}``. The caller only runs
     ``mark_complete`` on a genuine ``complete``.
@@ -2256,6 +2358,34 @@ async def run_executor_with_watchdog(
     )
 
     if exec_exc is not None:
+        # FAR-1831: a sandbox-capacity denial on a resume carrying a COMMITTED
+        # HITL decision must NOT terminal-fail the run — the decision would be
+        # lost. Reset the row to ``awaiting_human`` (fenced, and refunding the
+        # contested claim) so dispatcher_reconcile's F6a path re-dispatches the
+        # resume when a slot frees, and report a deferred (non-failure) outcome.
+        #
+        # SCOPED to a HITL-decision resume (``hitl_decision_resume``): the
+        # parking target is re-dispatched ONLY when a committed gate decision
+        # exists (F6a guard). A node-recovery or guardrail-override resume has
+        # none, so parking it in ``awaiting_human`` would strand it
+        # decisionless and erase the previously-visible terminal signal — those
+        # fall through to the honest terminal outcome below (no silent
+        # failure). This exception type is raised ONLY by the resume capacity
+        # gate (executor._enforce_resume_sandbox_capacity), never by the
+        # execute path, so the reset cannot misfire on a first dispatch.
+        from modulo.core.pipeline_engine.executor import (
+            SandboxCapacityExceededError as _SandboxCapacityExceededError,
+        )
+
+        if hitl_decision_resume and isinstance(exec_exc, _SandboxCapacityExceededError):
+            reset = await defer_capacity_denied_run_to_awaiting_human(aeng, run_id, org_id, claim_token=claim_token)
+            _log.warning(
+                "pipeline_execution.resume_capacity_deferred run=%s reset=%s — "
+                "committed decision preserved; dispatcher_reconcile will re-dispatch",
+                run_id,
+                reset,
+            )
+            return {"status": "capacity_deferred"}
         # Honest outcome: a generic executor failure is terminal-failed
         # (token-guarded) BEFORE returning — never a silent wrong-success.
         await fail_run_terminal(
@@ -3404,6 +3534,11 @@ async def resume_run(
         job=job,
         claim_token=claim_token,
         dispatch_tracker=tracker,
+        # FAR-1831: only a resume that carries a committed HITL gate decision
+        # may be parked non-terminally on a capacity denial. Derived from the
+        # payload here so every dispatch path (F6a HITL resume vs node recovery
+        # vs guardrail override) is classified by the same predicate.
+        hitl_decision_resume=resume_carries_committed_hitl_decision(resume_data),
         execute_fn=lambda: executor.resume(
             run_id=rid,
             org_id=oid,
