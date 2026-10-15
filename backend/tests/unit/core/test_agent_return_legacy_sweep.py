@@ -20,6 +20,7 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from collections.abc import AsyncIterator
@@ -223,6 +224,38 @@ async def test_sql_predicate_matches_shared_row_predicate(
     assert report.legacy_count == len(flagged)
 
 
+@pytest.mark.asyncio
+async def test_sample_predicate_drift_is_dropped_and_logged(
+    engine: AsyncEngine, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A sampled row the shared predicate rejects is dropped and logged.
+
+    The SQL filter and ``stored_row_is_legacy`` are documented twins, so in
+    practice a sampled row always passes the per-row re-confirmation. This
+    pins the defensive drift branch: when the two disagree, the offending row
+    is excluded from the sample, the exact ``legacy_count`` is unaffected, and
+    a structured ERROR surfaces the drift rather than it passing silently.
+    """
+    maker = _maker(engine)
+    await _seed(maker, _row("legacy", outputs={"output": {"answer": 1}}))
+    with (
+        patch(
+            "modulo.core.agent_return_legacy.stored_row_is_legacy",
+            return_value=False,
+        ),
+        caplog.at_level(logging.ERROR, logger="modulo.core.agent_return_legacy"),
+    ):
+        async with maker() as session:
+            report = await count_legacy_agent_return_rows(session)
+
+    assert report.legacy_count == 1
+    assert not report.sample
+    assert report.sample_truncated is True
+    drift = [r for r in caplog.records if r.message == "agent_return.sample_predicate_drift"]
+    assert drift, "predicate-drift record missing"
+    assert drift[0].levelno == logging.ERROR
+
+
 # ---------------------------------------------------------------------------
 # cron wrapper (legacy_agent_return_sweep) — fail-loud contract
 # ---------------------------------------------------------------------------
@@ -298,6 +331,27 @@ async def test_cron_reraises_a_failed_scan_never_a_silent_zero() -> None:
             new=AsyncMock(side_effect=RuntimeError("db down")),
         ),
         pytest.raises(RuntimeError, match="db down"),
+    ):
+        await ch.legacy_agent_return_sweep()
+
+
+@pytest.mark.asyncio
+async def test_cron_propagates_cancellation_unchanged() -> None:
+    """A cancelled scan propagates as ``CancelledError``, never swallowed.
+
+    ``asyncio.CancelledError`` is a ``BaseException`` (not ``Exception``), so
+    the generic fail-loud handler must not intercept it — cancellation has to
+    unwind the task rather than be logged as a scan failure.
+    """
+    from modulo.core import cron_helpers as ch
+
+    with (
+        patch.object(ch, "_open_system_factory", return_value=_sessionmaker_mock()),
+        patch(
+            "modulo.core.agent_return_legacy.count_legacy_agent_return_rows",
+            new=AsyncMock(side_effect=asyncio.CancelledError()),
+        ),
+        pytest.raises(asyncio.CancelledError),
     ):
         await ch.legacy_agent_return_sweep()
 
