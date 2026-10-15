@@ -13,6 +13,16 @@
 - [ ] **`MODULO_TELEMETRY_ENABLED` is not set** (defaults to `false`)
   - verify: `docker compose -f deploy/compose/docker-compose.prod.yml exec modulo env | grep MODULO_TELEMETRY`
   - expected: no output or `MODULO_TELEMETRY_ENABLED=false`
+  - **the env var alone is not sufficient.** A deployment-wide, process-global
+    runtime override can flip it on without a restart: `GET /api/v1/admin/telemetry`
+    reports the effective value (`is_telemetry_enabled()` reads the runtime-config store
+    first, and only falls back to the env-var-backed `Settings` value).
+  - verify: `GET /api/v1/admin/telemetry` (needs `system.config.manage`) returns
+    `{"enabled": false}`
+  - the override applies to the web process immediately but the SAQ workers are separate
+    processes with their own store instance, so set the env var in the deployment
+    environment rather than relying on the override (see
+    `docs/operations/network-egress.md` §Cross-process note)
 - [ ] **`OTEL_EXPORTER_OTLP_ENDPOINT` is not set**
   - verify: `docker compose -f deploy/compose/docker-compose.prod.yml exec modulo env | grep OTEL_EXPORTER_OTLP`
   - expected: no output
@@ -54,8 +64,20 @@
 ## 6. Container image security
 
 - [ ] **Image is pulled from VPC-internal registry** (ECR, GAR, ACR) – not Docker Hub
+  - the shipped `deploy/compose/docker-compose.prod.yml` does **not** satisfy this out of
+    the box: it pins `ghcr.io/farnalabs/modulo:${TAG:-latest}`, `postgres:16-alpine` and
+    `redis:8-alpine`. The last two are Docker Hub official images, so an air-gapped or
+    egress-restricted VPC cannot pull them.
   - verify: `docker compose -f deploy/compose/docker-compose.prod.yml config | grep image`
-  - expected: all images from internal registry URL
+  - expected **baseline**: the three images above
+  - expected **compliant**: every image resolves to an internal registry URL, which means
+    mirroring all three into it (the Modulo image via the `${TAG}` variable, Postgres and
+    Redis by mirroring the official images or pointing those service blocks at your own
+    internal tags) before running the check again
+  - note that `backend/tests/architecture/test_prod_compose_env_contract.py` guards the
+    compose **environment** contract only (every variable reaches the app, every required
+    `Settings` field is satisfied, every required variable is in the `.env` example); it
+    does not check the `image:` lines, so a registry change is yours to keep correct
 
 ## 7. Secrets
 
@@ -86,11 +108,11 @@
 
 | Variable | Required Value | Reason |
 |---|---|---|
-| `MODULO_TELEMETRY_ENABLED` | `false` (default) | Prevents OTel egress |
-| `CORS_ORIGINS` | VPC-internal domain | No external-origin CORS needed |
-| `MODULO_PUBLIC_URL` | VPC-internal URL | Links must resolve inside VPC |
-| `SECRET_KEY` | Set to random 32+ byte value | Must not use placeholder |
-| `FERNET_KEY` | Set to valid Fernet key | Must not use placeholder |
+| `MODULO_TELEMETRY_ENABLED` | `false` (default) | Prevents OTel egress; see §1 for the runtime override |
+| `CORS_ORIGINS` | VPC-internal domain, comma-separated, no trailing slash | No external-origin CORS needed; a trailing `/` is rejected at boot |
+| `MODULO_PUBLIC_URL` | VPC-internal URL | Browser-facing base for post-login redirects, SSO and the MCP OAuth authorize link |
+| `SECRET_KEY` | Random 32+ byte value | Below 32 bytes, or one of the blocked placeholders (`changeme`, `secret`, `your-secret-key`, `development`, `test`, `insecure`), is rejected at boot |
+| `FERNET_KEY` | Valid Fernet key | Same 32-byte minimum; the value is loaded by `cryptography.fernet.Fernet`, so it must be a real Fernet key, not an arbitrary 32-byte string |
 
 ---
 

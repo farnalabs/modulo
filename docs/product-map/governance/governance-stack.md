@@ -59,7 +59,7 @@ change**, so `pnpm run generate:api` is not required.
 - [x] The rung distribution is read across EVERY page of
       `GET /api/v1/pipelines` (keyset `next_cursor`, `page_size=100`, bounded
       at 20 pages), so the three rungs always sum to the pipeline total the
-      count beside them shows — a single-page read put "150 pipelines" above a
+      count beside them shows: a single-page read put "150 pipelines" above a
       ladder that summed to 100, because `page_size` is capped at 100 while the
       count comes from `total`.
 - [x] A failure on any page after the first fails the autonomy level (its
@@ -69,7 +69,7 @@ change**, so `pnpm run generate:api` is not required.
       string ("… (first {sampled} of {total} pipelines)") rather than a
       prefix dressed up as the whole ladder.
 - [x] Count labels pluralise through vue-i18n's named-`count` form, and the
-      spec asserts the rendered text EXACTLY (singular forms included) — a
+      spec asserts the rendered text EXACTLY (singular forms included): a
       `toContain` assertion also matches an unpluralised pipe-joined message,
       so containment alone proved nothing about pluralisation.
 - [x] Plan-gated levels reuse the same `FeatureGate` as their management page
@@ -96,18 +96,18 @@ change**, so `pnpm run generate:api` is not required.
 
 ## QA History
 
-- 2026-10-14 (improve-architecture, first pass on this entry — the entry had
-  never been through one). Fixed MAJOR — level 6 read a single 100-item page of
+- 2026-10-14 (improve-architecture, first pass on this entry; the entry had
+  never been through one). Fixed MAJOR: level 6 read a single 100-item page of
   `/api/v1/pipelines` and reported the rung distribution from it while taking
   the count from `total`; with more than 100 pipelines the ladder contradicted
   the count printed above it, and a failure on any later page was invisible.
-  Now walks the keyset cursor (bounded, truncation-labelled). Fixed MINOR — the
+  Now walks the keyset cursor (bounded, truncation-labelled). Fixed MINOR: the
   view carried a hand-written `PipelineAutonomyFields` interface and an
   `as unknown as` cast justified by a comment claiming
   `earned_autonomy_level` / `default_autonomy_level` were absent from the
   generated `schema.ts`; both have been in `schema.ts` (PipelineResponse)
   since it was regenerated, so the cast is gone and the field names are now
-  checked by `vue-tsc`. Fixed MINOR (vacuous coverage) — the count assertions
+  checked by `vue-tsc`. Fixed MINOR (vacuous coverage): the count assertions
   were `toContain`, which a pipe-joined unpluralised message satisfies; they
   now assert exact rendered text, with a singular-form case. Verified against
   the code: the four plan-gate names claimed here match the management pages'
