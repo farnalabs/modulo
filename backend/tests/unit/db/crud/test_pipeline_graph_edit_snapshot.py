@@ -443,6 +443,98 @@ class TestSaveSurfaceWiring:
         snap_mock.assert_awaited_once()
         assert snap_mock.await_args.kwargs["pipeline_id"] == _PIPELINE_ID
 
+    async def test_mcp_update_pipeline_graph_pins_post_sync_agent_command(self, session: AsyncSession) -> None:
+        """FAR-1810 review (MAJOR): the MCP ``update_pipeline_graph`` surface must
+        run the FAR-488a agent-command sync BEFORE the write mints the edit
+        snapshot.
+
+        The MCP tool is an explicit-save surface (``record_edit_snapshot=True``),
+        but the sync used to live only in the REST routes. The snapshot copy's
+        ``_materialize_agent_fields`` OVERWRITES a bound node's ``agent_commands``
+        with the Agent-row value, which was still the PRE-sync value — so a save
+        that changed a bound node's commands recorded a snapshot disagreeing with
+        the live graph (live ``run --new``, snapshot ``run --old``), and a rollback
+        replaying it would restore the stale command. Driving the REAL MCP tool
+        through to the REAL CRUD (no mocked write) and capturing the materialized
+        snapshot payload, this fails when the MCP sync is removed.
+        """
+        import modulo.api.mcp_server as ms
+
+        agent_id = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
+        session.add(
+            Agent(
+                id=agent_id,
+                organisation_id=_ORG_ID,
+                account_id=_ACCOUNT_ID,
+                name="mcp-bound-agent",
+                prompt_template="p",
+                agent_commands=["run --old"],
+            )
+        )
+
+        def _sandbox_node(*, commands: list[str]) -> dict[str, Any]:
+            # A sandbox_agent node is the only type the API model lets carry a
+            # node-level ``agent_commands``; it is also agent-bindable, which is
+            # exactly the shape ``_materialize_agent_fields`` overwrites.
+            return {
+                "id": _NODE_A,
+                "node_type": "sandbox_agent",
+                "agent_id": str(agent_id),
+                "position": {"x": 0, "y": 0},
+                "label": "a",
+                "template_id": "opencode",
+                "agent_prompt": "do the thing",
+                "agent_commands": commands,
+            }
+
+        await _seed_graph(session, [_sandbox_node(commands=["run --old"])], with_edge=False)
+
+        @asynccontextmanager
+        async def _session_factory(_org_id: uuid.UUID) -> AsyncGenerator[AsyncSession, None]:
+            yield session
+
+        captured: dict[str, Any] = {}
+
+        async def _capture(session_arg: AsyncSession, *, pipeline_id: uuid.UUID, **_kwargs: Any) -> Any:
+            pipeline = (await session_arg.execute(select(Pipeline).where(Pipeline.id == pipeline_id))).scalar_one()
+            nodes = [dict(n) for n in (pipeline.graph_nodes_json or [])]
+            await _materialize_agent_fields(session_arg, nodes)
+            captured["nodes"] = nodes
+            return _mock_snapshot()
+
+        previous = {name: getattr(ms, name).get(None) for name in _MCP_CTX_NAMES}
+        ms._ctx_org_id.set(_ORG_ID)
+        ms._ctx_user_id.set(_ACCOUNT_ID)
+        ms._ctx_role.set("admin")
+        ms._ctx_team_id.set(None)
+        ms._ctx_auth_type.set("api_key")
+        ms._ctx_key_scope.set("org")
+        try:
+            with (
+                patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+                patch("modulo.api.mcp_server._session", _session_factory),
+                patch(
+                    "modulo.core.team_visibility.find_connector_team_mismatches",
+                    new=AsyncMock(return_value=[]),
+                ),
+                patch("modulo.db.crud.pipeline.create_snapshot_edit", new=_capture),
+            ):
+                result = await ms.update_pipeline_graph(
+                    pipeline_id=str(_PIPELINE_ID),
+                    nodes=[_sandbox_node(commands=["run --new"])],
+                    edges=[],
+                )
+        finally:
+            for name, value in previous.items():
+                getattr(ms, name).set(value)
+
+        assert "error" not in result, result
+        # The edit snapshot materializes the POST-sync Agent-row command...
+        assert captured["nodes"][0]["agent_commands"] == ["run --new"]
+        # ...and it agrees with the live graph the MCP write persisted.
+        live = (await session.execute(select(Pipeline).where(Pipeline.id == _PIPELINE_ID))).scalar_one()
+        assert live.graph_nodes_json[0]["agent_commands"] == ["run --new"]
+
 
 # ---------------------------------------------------------------------------
 # REST wiring: PATCH /{id}/graph is the primary explicit-save surface and must

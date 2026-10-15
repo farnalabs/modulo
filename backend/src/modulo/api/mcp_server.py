@@ -3948,6 +3948,19 @@ async def _replace_pipeline_graph_txn(
         dispatch_err = await _reject_unsupported_dispatch_bindings(s, org_id, nodes)
         if dispatch_err is not None:
             return dispatch_err
+        # FAR-1810 review (MAJOR): the MCP surface is an explicit-save surface,
+        # so it must run the SAME FAR-488a agent-command sync the REST graph
+        # endpoints run BEFORE the write mints the edit snapshot. The snapshot
+        # copy's ``_materialize_agent_fields`` OVERWRITES each bound node's
+        # ``agent_commands`` with the Agent-row value at snapshot time, so
+        # syncing first makes the live graph the write persists and the new
+        # edit snapshot agree — and any rollback replaying that snapshot pins
+        # the command the caller saved, not the pre-sync Agent-row value. The
+        # sync runs inside this transaction (``_session`` commits it with the
+        # graph write), so a failure rolls the whole save back.
+        from modulo.api.routes.pipelines import _sync_agent_row_commands
+
+        await _sync_agent_row_commands(s, org_id=org_id, nodes=nodes)
         # FAR-309 PR A review: the guardrail-binding strip guard runs in the
         # service layer (replace_pipeline_graph, under the row lock) — the
         # MCP surface inherits it via caller_type="mcp".
