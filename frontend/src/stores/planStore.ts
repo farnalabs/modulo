@@ -105,7 +105,16 @@ export const usePlanStore = defineStore("plan", () => {
   // fall back to the unresolved state mid-session (FAR-1237 guard). Note
   // `loaded` stays false on a cache hit — it means "fetched from the server",
   // which the router's tier guard relies on.
-  const flagsSource = ref<"none" | "cache" | "server">(
+  //
+  // 'unavailable' (FAR-1805) = the flags request SETTLED without a payload
+  // (403 for a non-system-admin, 5xx, rejection, the 15s timeout, or the
+  // all-undefined no-payload branch). It is terminal "cannot be read", not
+  // "has not been read yet": layout consumers treat it as known-and-default
+  // (drawer) instead of 'pending', because a permanent placeholder is a
+  // silent failure path. Unlike 'none' it IS recoverable — a later successful
+  // fetch overwrites it with 'server' (applyFeatureFlagsPayload), while a
+  // cache hit or payload still never returns to 'none'.
+  const flagsSource = ref<"none" | "cache" | "server" | "unavailable">(
     cachedFlags ? "cache" : "none",
   );
   const devMode = ref(false);
@@ -251,6 +260,23 @@ export const usePlanStore = defineStore("plan", () => {
       error.value = formatApiError(e);
     } finally {
       isLoading.value = false;
+      // FAR-1805: a fetch that settles WITHOUT a flags payload is terminal —
+      // never leave layout consumers in 'pending' forever (fail open, with a
+      // log). The guard is "still 'none' after settle", deliberately not "an
+      // error was recorded": the all-undefined no-payload branch
+      // ({data: undefined, error: undefined}) records no apiError at all, so
+      // an error-only check would miss it. This covers 4xx/5xx, rejection,
+      // and the 15s withTimeout alike. 'cache'/'server'/'unavailable' are
+      // left untouched (a resolved layout never falls back), and a later
+      // successful fetch still overwrites this with 'server'.
+      if (flagsSource.value === "none") {
+        flagsSource.value = "unavailable";
+        console.warn(
+          "[plan] Feature flags request settled without a payload — " +
+            "mobile nav falls back to the drawer",
+          error.value,
+        );
+      }
     }
   }
 
