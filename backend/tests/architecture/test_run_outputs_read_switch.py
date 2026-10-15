@@ -79,6 +79,16 @@ _SCOPED_ALLOWLIST: dict[tuple[str, str], str] = {
         "RunNodeOutput.outputs_json (the new-table column), NOT the legacy runs "
         "blob column that B1 cut — FAR-802 workspace_inputs_count daily fact"
     ),
+    ("core/agent_return_legacy.py", "_legacy_predicate"): (
+        "RunNodeOutput.outputs_json / .node_telemetry_json (the new-table columns), "
+        "NOT the legacy runs blob column that B1 cut — FAR-132 read-only legacy-shape "
+        "straggler set-based predicate"
+    ),
+    ("core/agent_return_legacy.py", "count_legacy_agent_return_rows"): (
+        "RunNodeOutput.outputs_json / .node_telemetry_json (the new-table columns), "
+        "NOT the legacy runs blob column that B1 cut — FAR-132 read-only legacy-shape "
+        "straggler sample projection"
+    ),
 }
 
 # Raw-text allowlist — whole files whose string constants may carry the

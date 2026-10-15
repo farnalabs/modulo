@@ -54,6 +54,19 @@ _PIPELINE_ROW_SNIPPET = "FROM pipelines"
 # itself stub the result explicitly.
 _LIFECYCLE_MAP_ROW_SNIPPET = "FROM lifecycle_maps"
 
+# FAR-1754: the install API response derives its ``installed_entities`` list
+# from the ``collection_install_entity`` child rows (a SELECT on install_id).
+# The strict mock raises on un-stubbed queries, so serve the default "no
+# entities recorded" shape; tests asserting real content stub it explicitly.
+_INSTALL_ENTITY_ROWS_SNIPPET = "FROM collection_install_entity"
+
+
+def _is_install_entity_rows_query(stmt: Any) -> bool:
+    """Matches the install-response entity-list SELECT (collection_install_entity)."""
+    if not isinstance(stmt, Select):
+        return False
+    return _INSTALL_ENTITY_ROWS_SNIPPET in str(stmt)
+
 
 def _is_lifecycle_map_row_query(stmt: Any) -> bool:
     """Matches the lifecycle-map team-gate SELECT (and any ORM row-read FROM lifecycle_maps)."""
@@ -200,6 +213,11 @@ def configure_mock_session(session: AsyncMock, *, allow_empty_execute: bool = Fa
                 lifecycle_map_result = MagicMock()
                 lifecycle_map_result.first.return_value = (None, "org")
                 return lifecycle_map_result
+            if _is_install_entity_rows_query(args[0] if args else None):
+                # FAR-1754: default to "no child rows" (an empty entity list).
+                install_entity_result = MagicMock()
+                install_entity_result.scalars.return_value.all.return_value = []
+                return install_entity_result
             raise AssertionError(
                 "Unexpected session.execute(); stub the expected result or opt in with allow_empty_execute=True"
             )

@@ -106,13 +106,7 @@ class TestGetRateLimits:
         assert data["mode"] == "in_memory"
         assert data["rules"] == [_expected_rule_dict(r) for r in RateLimitMiddleware.RULES]
         assert data["rules"], "no rate limit rules returned"
-
-    def test_get_lists_default_rule_prefixes(self, client: TestClient) -> None:
-        resp = client.get("/api/v1/admin/rate-limits")
-        assert resp.status_code == 200
-        prefixes = [r["path_prefix"] for r in resp.json()["rules"]]
-        assert prefixes == [r.path_prefix for r in RateLimitMiddleware.RULES]
-        assert "/api/v1/runs" in prefixes
+        assert "/api/v1/runs" in [r["path_prefix"] for r in data["rules"]]
 
 
 class TestUpdateRateLimits:

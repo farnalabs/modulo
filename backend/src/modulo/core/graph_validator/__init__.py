@@ -92,8 +92,10 @@ _JSON_TYPE_MAP: MappingProxyType[str, type | tuple[type, ...]] = MappingProxyTyp
     }
 )
 
-# Phase 1 cutover: pipelines with snapshots created before this date
-# use degraded-mode validation (warnings instead of hard errors).
+# Phase 1 cutover: snapshots created before this date are "pre-existing".
+# Schema incompatibilities BLOCK runs on those snapshots too (FAR-1760);
+# the pre-existing carve-out only changes the MESSAGE (a distinct blocked
+# log + error), never the outcome — there is no degraded-mode proceed.
 _PHASE_1_CUTOVER = datetime(2026, 7, 22, tzinfo=UTC)
 
 _DEFERRED_SCHEMA_KEYWORDS = frozenset({"$ref", "oneOf", "anyOf", "allOf", "not", "if", "then", "else"})
@@ -1587,8 +1589,10 @@ class GraphValidator:
     ) -> ValidationResult:
         """Pre-run validation — all save-time checks plus input schema checking.
 
-        Returns errors only (no warnings). Any error blocks run start,
-        unless the snapshot pre-dates the Phase 1 cutover (grace period).
+        Returns errors only (no warnings). Any error blocks run start —
+        including on snapshots that pre-date the Phase 1 cutover, which get
+        a distinct "run is blocked" log and error for schema incompatibility
+        (FAR-1760). A pre-existing snapshot is never a reason to proceed.
         """
         result = ValidationResult()
 
@@ -1605,17 +1609,17 @@ class GraphValidator:
             session,
             result,
         )
-        if not result.is_valid and pre_existing:
-            _log.warning(
-                "Schema incompatibility in pipeline %s (snapshot %s). Run proceeds in degraded mode.",
-                snapshot.pipeline_id,
-                snapshot.id,
-            )
-            result.warning(
-                "SCHEMA_DEGRADED",
-                "Schema incompatibility found. Run proceeds in degraded mode.",
-            )
-        elif not result.is_valid:
+        if not result.is_valid:
+            if pre_existing:
+                _log.warning(
+                    "Schema incompatibility in pipeline %s (snapshot %s). Run is blocked.",
+                    snapshot.pipeline_id,
+                    snapshot.id,
+                )
+                result.error(
+                    "SCHEMA_PRE_EXISTING_BLOCKED",
+                    "Schema incompatibility found on a pre-Phase-1 snapshot. Run is blocked.",
+                )
             return self._strip_warnings(result)
 
         # Input payload compatibility with entry node schema.
@@ -1628,17 +1632,17 @@ class GraphValidator:
             session,
             result,
         )
-        if not result.is_valid and pre_existing:
-            _log.warning(
-                "Input schema incompatibility in pipeline %s (snapshot %s). Run proceeds in degraded mode.",
-                snapshot.pipeline_id,
-                snapshot.id,
-            )
-            result.warning(
-                "SCHEMA_DEGRADED",
-                "Input schema incompatibility found. Run proceeds in degraded mode.",
-            )
-        elif not result.is_valid:
+        if not result.is_valid:
+            if pre_existing:
+                _log.warning(
+                    "Input schema incompatibility in pipeline %s (snapshot %s). Run is blocked.",
+                    snapshot.pipeline_id,
+                    snapshot.id,
+                )
+                result.error(
+                    "SCHEMA_PRE_EXISTING_BLOCKED",
+                    "Input schema incompatibility found on a pre-Phase-1 snapshot. Run is blocked.",
+                )
             return self._strip_warnings(result)
 
         # Sandbox agent config check. Run-time surface for the `{{ model }}`

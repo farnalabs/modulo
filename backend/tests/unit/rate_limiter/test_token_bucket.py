@@ -59,6 +59,16 @@ class TestTokenBucket:
         with pytest.raises(ValueError, match="tokens must be > 0"):
             await bucket.consume(0)
 
+    async def test_consume_multiple_tokens_is_all_or_nothing(self) -> None:
+        """Multi-token consume drains partially but never overdraws: a request
+        for more tokens than remain fails WITHOUT consuming the remainder."""
+        clock = FakeClock()
+        bucket = TokenBucket(rate=1.0, burst=4, clock=clock)
+        assert await bucket.consume(3) is True
+        assert await bucket.consume(2) is False  # only 1 left: nothing consumed
+        assert await bucket.consume(1) is True
+        assert await bucket.consume() is False
+
     def test_constructor_validates_rate(self) -> None:
         with pytest.raises(ValueError, match="rate must be > 0"):
             TokenBucket(rate=0, burst=1)
