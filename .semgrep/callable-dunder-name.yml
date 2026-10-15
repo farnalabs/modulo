@@ -63,11 +63,25 @@ rules:
       - pattern-not-inside: |
           def $F(..., $Y: type[...], ...):
               ...
+      # `except $E:` matches only a bare-type handler. `except SomeType as exc:`
+      # (the dominant idiom in this repo) binds a name and `except:` binds
+      # nothing, so each form needs its own pattern or the gate silently misses
+      # the very handler it exists to police.
       - pattern-either:
           - pattern-inside: |
               try:
                   ...
               except $E:
+                  ...
+          - pattern-inside: |
+              try:
+                  ...
+              except $E as $N:
+                  ...
+          - pattern-inside: |
+              try:
+                  ...
+              except:
                   ...
           - pattern-inside: |
               $LOG.$METHOD(...)
