@@ -251,7 +251,7 @@ class TestTeamScopeWiring:
             "eval_suites",
             # FAR-1692: external-agent + MCP-server registries carry the
             # visibility pair and are registered for completeness; enforced by
-            # DB RLS alone (migration 0312), never route-wired.
+            # DB RLS alone (migration 0313), never route-wired.
             "external_agents",
             "mcp_servers",
         }

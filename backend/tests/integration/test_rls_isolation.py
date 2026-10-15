@@ -130,7 +130,7 @@ async def test_rls_policies_exist_on_all_org_scoped_tables(
         "lifecycle_maps",
         "eval_datasets",
         "eval_suites",
-        # FAR-1692 (0312): the registries carry the team-visibility pair, so
+        # FAR-1692 (0313): the registries carry the team-visibility pair, so
         # they too get ONLY rls_team_isolation (org check included).
         "external_agents",
         "mcp_servers",
@@ -834,7 +834,7 @@ async def test_team_scoped_tables_have_no_org_only_policy(db_engine: AsyncEngine
         "lifecycle_maps",
         "eval_datasets",
         "eval_suites",
-        # FAR-1692 (0312):
+        # FAR-1692 (0313):
         "external_agents",
         "mcp_servers",
     }

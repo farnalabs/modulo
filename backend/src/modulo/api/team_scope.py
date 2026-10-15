@@ -249,7 +249,7 @@ resolve_eval_dataset_team_scope = team_scope_resolver(EvalDataset, path_param="d
 resolve_eval_suite_team_scope = team_scope_resolver(EvalSuite, path_param="suite_id")
 # FAR-1692 registries: registered for registry completeness (the architecture
 # test requires every visibility model to be present), enforced by DB RLS
-# (``rls_team_isolation``, migration 0312) — not route-wired, the same
+# (``rls_team_isolation``, migration 0313) — not route-wired, the same
 # DB-RLS-only posture as the core tables (FAR-1514).
 resolve_external_agent_team_scope = team_scope_resolver(ExternalAgent, path_param="agent_id")
 resolve_mcp_server_team_scope = team_scope_resolver(McpServer, path_param="server_id")
