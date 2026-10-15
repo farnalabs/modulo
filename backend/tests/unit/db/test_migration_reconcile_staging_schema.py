@@ -144,8 +144,10 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0308_runs_dispatch_phase_history chains off 0307_runs_guardrail_override_resume_pending, and
 # 0309_hitl_claims_decision_sweep chains off 0308_runs_dispatch_phase_history, and
 # 0310_library_cluster_db_hardening chains off 0309_hitl_claims_decision_sweep, and
-# 0312_external_agents_mcp_servers chains off 0310_library_cluster_db_hardening as the chain head.
-_CHAIN_HEAD_MIGRATION = "0312_external_agents_mcp_servers"
+# 0311_library_cluster_schema_hygiene chains off 0310_library_cluster_db_hardening, and
+# 0312_memberships_active_lookups chains off 0311_library_cluster_schema_hygiene, and
+# 0313_external_agents_mcp_servers chains off 0312_memberships_active_lookups as the chain head.
+_CHAIN_HEAD_MIGRATION = "0313_external_agents_mcp_servers"
 
 
 def _source(name: str) -> str:

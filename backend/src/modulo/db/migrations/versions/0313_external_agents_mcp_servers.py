@@ -1,7 +1,7 @@
 """External-agent + MCP-server registries, with MCP tool-definition pinning (FAR-1692 S1+S2).
 
-Revision ID: 0312_external_agents_mcp_servers
-Revises: 0311_library_cluster_schema_hygiene
+Revision ID: 0313_external_agents_mcp_servers
+Revises: 0312_memberships_active_lookups
 Create Date: 2026-10-14
 
 Two new org-scoped registry tables (FAR-1692 Decision D4):
@@ -45,8 +45,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
-revision: str = "0312_external_agents_mcp_servers"
-down_revision: str | None = "0311_library_cluster_schema_hygiene"
+revision: str = "0313_external_agents_mcp_servers"
+down_revision: str | None = "0312_memberships_active_lookups"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

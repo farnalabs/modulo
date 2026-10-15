@@ -1,12 +1,12 @@
-"""Unit tests for migration 0312_external_agents_mcp_servers (FAR-1692 S1+S2).
+"""Unit tests for migration 0313_external_agents_mcp_servers (FAR-1692 S1+S2).
 
 Structural contract (no Postgres / Testcontainers needed). Every sibling
-migration (0304-0310) pins its own shape with a dedicated test; this gives 0312
+migration (0304-0310) pins its own shape with a dedicated test; this gives 0313
 the same first-class coverage. It pins the four things a reviewer needs to trust
 the migration without a live DB:
 
-* **Revision chain** - 0312 revises ``0311_library_cluster_schema_hygiene``; the
-  migrations directory has exactly one head (``0312_external_agents_mcp_servers``),
+* **Revision chain** - 0313 revises ``0312_memberships_active_lookups``; the
+  migrations directory has exactly one head (``0313_external_agents_mcp_servers``),
   the revision id matches the filename, and neither ``branch_labels`` nor
   ``depends_on`` is set (the pre-commit check-migration-heads hook and every
   ``test_single_head_*`` pin depend on that shape).
@@ -43,10 +43,10 @@ from alembic.script import ScriptDirectory
 from modulo.db.models import ExternalAgent, McpServer
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0312_external_agents_mcp_servers"
+_MIGRATION_NAME = "0313_external_agents_mcp_servers"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
-_DOWN_REVISION = "0311_library_cluster_schema_hygiene"
-_HEAD_MIGRATION = "0312_external_agents_mcp_servers"
+_DOWN_REVISION = "0312_memberships_active_lookups"
+_HEAD_MIGRATION = "0313_external_agents_mcp_servers"
 
 _EXTERNAL_AGENTS = "external_agents"
 _MCP_SERVERS = "mcp_servers"
@@ -141,11 +141,11 @@ def _joined(rec: _Recorder) -> str:
 
 
 class TestChain:
-    def test_single_head_is_0312_external_agents_mcp_servers(self) -> None:
+    def test_single_head_is_0313_external_agents_mcp_servers(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
-    def test_down_revision_is_0311_library_cluster_schema_hygiene(self) -> None:
+    def test_down_revision_is_0312_memberships_active_lookups(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
 
     def test_revision_id_matches_filename(self) -> None:
@@ -223,7 +223,7 @@ class TestUpgradePostgres:
 
     def test_no_dead_org_only_policy(self) -> None:
         # Postgres ORs permissive policies: an org-only rls_org_isolation beside
-        # the team policy would be dead weight and re-open the 0124 leak. 0311
+        # the team policy would be dead weight and re-open the 0124 leak. 0313
         # ships ONLY rls_team_isolation on both tables.
         joined = _joined(_run("upgrade", "postgresql", roles_exist=True))
         assert "rls_org_isolation" not in joined

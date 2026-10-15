@@ -8,6 +8,7 @@ tests use monkeypatched paths — no real FS access.
 from __future__ import annotations
 
 import textwrap
+import threading
 from typing import Any
 from unittest.mock import patch
 
@@ -264,3 +265,40 @@ class TestMemoryMonitorCron:
         with patch.object(wm, "capture_memory_stats", return_value={}):
             result = await wm.memory_monitor_cron({})
         assert result["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_blocking_read_runs_off_the_event_loop_thread(self, tmp_path: Any) -> None:
+        """FAR-1776: the cron's ``/proc`` read must not run on the event loop.
+
+        ``memory_monitor_cron`` fires on the worker's event loop every 5 min;
+        a synchronous FS read there is the FAR-1439 stall class behind the
+        ``dispatch_phase.write_timeout`` drops. The blocking reader must
+        therefore execute on a DIFFERENT thread than the loop the coroutine
+        runs on (via ``asyncio.to_thread``) — without the fix this assertion
+        fails because the reader runs inline on the loop thread.
+        """
+        loop_thread_id = threading.get_ident()
+
+        meminfo = tmp_path / "meminfo"
+        meminfo.write_text("MemTotal: 1000 kB\nMemAvailable: 900 kB\n")
+        reader_thread_ids: list[int] = []
+        real_reader = wm._read_proc_meminfo
+
+        def _recording_reader() -> dict[str, int]:
+            reader_thread_ids.append(threading.get_ident())
+            return real_reader()
+
+        with (
+            patch.object(wm, "_read_proc_meminfo", side_effect=_recording_reader),
+            patch.object(wm, "_PROC_MEMINFO_PATH", str(meminfo)),
+            patch.object(wm, "_CGROUP_MEMORY_FAILCNT", "/nonexistent"),
+            patch.object(wm, "_CGROUP_MEMORY_OOM_CONTROL", "/nonexistent"),
+            patch.object(wm, "_CGROUP_MEMORY_PEAK", "/nonexistent"),
+        ):
+            result = await wm.memory_monitor_cron({})
+
+        assert reader_thread_ids
+        assert reader_thread_ids[0] != loop_thread_id
+        # The values produced are unchanged — same parse, different thread.
+        assert result["MemTotal"] == 1000
+        assert result["MemAvailable"] == 900

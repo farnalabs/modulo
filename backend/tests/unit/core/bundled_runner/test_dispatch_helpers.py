@@ -112,3 +112,63 @@ async def test_render_agent_template_uses_shared_sandbox_jinja_environment(
 
     assert calls == [None]
     assert result == ("hello", "echo hi", "null")
+
+
+# ---------------------------------------------------------------------------
+# FAR-1743 / ADR 037 rev 2 — the top-level `{{ model }}` template variable
+# ---------------------------------------------------------------------------
+
+
+async def test_render_agent_template_injects_baked_model_value() -> None:
+    """The Bundled Runner path interpolates `{{ model }}` from the SNAPSHOT's
+    baked `_resolved_model` — parity with the E2B node-runner render."""
+    result = await rd._render_agent_template(
+        sandbox_mode="llm",
+        agent_command="opencode run --model {{ model }} --auto",
+        agent_prompt_template="hello",
+        state={"run_context": {"input": {"task": "x"}}},
+        scoped_run_context={},
+        raw_input=None,
+        run_id="run-1",
+        node_id="n1",
+        node_def={"model_class": "builder", "_resolved_model": "opencode-go/mimo-v2.6-flash"},
+    )
+
+    _prompt, rendered_command, _input_json = result
+    assert rendered_command == "opencode run --model opencode-go/mimo-v2.6-flash --auto"
+
+
+async def test_render_agent_template_run_override_beats_baked_value() -> None:
+    """Rung 1 folds in pre-dispatch: the run's frozen `_run_overrides.model`
+    overrides the baked value for that run."""
+    result = await rd._render_agent_template(
+        sandbox_mode="llm",
+        agent_command="opencode run --model {{ model }} --auto",
+        agent_prompt_template="hello",
+        state={"run_context": {"_run_overrides": {"model": "opencode-go/variant-choice"}}},
+        scoped_run_context={},
+        raw_input=None,
+        run_id="run-1",
+        node_id="n1",
+        node_def={"model_class": "builder", "_resolved_model": "opencode-go/mimo-v2.6-flash"},
+    )
+
+    _prompt, rendered_command, _input_json = result
+    assert rendered_command == "opencode run --model opencode-go/variant-choice --auto"
+
+
+async def test_render_agent_template_model_class_without_value_fails_closed() -> None:
+    """An opted-in node with no baked model and no run override refuses before
+    any workspace provisioning (ADR 037 D3) — no blank --model dispatch."""
+    with pytest.raises(ValueError, match="no model was resolved at snapshot mint"):
+        await rd._render_agent_template(
+            sandbox_mode="llm",
+            agent_command="opencode run --model {{ model }} --auto",
+            agent_prompt_template="hello",
+            state={"run_context": {"input": {}}},
+            scoped_run_context={},
+            raw_input=None,
+            run_id="run-1",
+            node_id="n1",
+            node_def={"model_class": "builder"},
+        )
