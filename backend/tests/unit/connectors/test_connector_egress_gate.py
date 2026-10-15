@@ -49,6 +49,7 @@ from modulo.connectors.jenkins import JenkinsConnector
 from modulo.connectors.jira import JiraConnector
 from modulo.connectors.n8n import N8NConnector
 from modulo.connectors.onepassword import OnePasswordConnector
+from modulo.connectors.plane import PlaneConnector
 from modulo.connectors.sentry import SentryConnector
 from modulo.connectors.sonarqube import SonarQubeConnector
 from modulo.connectors.teamcity import TeamCityConnector
@@ -93,6 +94,8 @@ def _build(name: str, base_url: str) -> Any:
         # Woodpecker (FAR-1766) is a self-hosted instance root from tenant
         # config, so it is gated exactly the same way.
         "woodpecker": lambda: WoodpeckerCIRunner(token=TOKEN, base_url=base_url),
+        # Plane (FAR-1767) targets a self-hosted / air-gapped instance root.
+        "plane": lambda: PlaneConnector(token=TOKEN, base_url=base_url, workspace_slug="acme"),
     }
     return builders[name]()
 
@@ -116,6 +119,7 @@ CONNECTOR_NAMES = [
     "confluence",
     "gitlab_ci",
     "woodpecker",
+    "plane",
 ]
 
 

@@ -42,6 +42,7 @@ from modulo.connectors.gitea import GiteaConnector
 from modulo.connectors.grafana import GrafanaConnector
 from modulo.connectors.jenkins import JenkinsConnector
 from modulo.connectors.onepassword import OnePasswordConnector
+from modulo.connectors.plane import PlaneConnector
 from modulo.connectors.sentry import SentryConnector
 from modulo.connectors.sonarqube import SonarQubeConnector
 from modulo.connectors.teamcity import TeamCityConnector
@@ -113,6 +114,10 @@ _MIGRATED = {
     "azure_pipelines": ("dev.azure.com", AzurePipelinesConnector(token=TOKEN, organization="org", project="p")),
     "gitlab_ci": ("gitlab.example.com", GitLabCIRunner(token=TOKEN, base_url="https://gitlab.example.com")),
     "woodpecker": ("ci.example.com", WoodpeckerCIRunner(token=TOKEN, base_url="https://ci.example.com")),
+    "plane": (
+        "plane.example.com",
+        PlaneConnector(token=TOKEN, base_url="https://plane.example.com/api/v1", workspace_slug="acme"),
+    ),
 }
 
 

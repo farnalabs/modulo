@@ -41,6 +41,7 @@ from modulo.connectors.npm import NpmConnector
 from modulo.connectors.onepassword import OnePasswordConnector
 from modulo.connectors.opsgenie import OpsgenieConnector
 from modulo.connectors.pagerduty import PagerDutyConnector
+from modulo.connectors.plane import PlaneConnector
 from modulo.connectors.pypi import PyPIConnector
 from modulo.connectors.sentry import SentryConnector
 from modulo.connectors.sharepoint import SharePointConnector
@@ -131,4 +132,11 @@ BUILD_CASES: list[tuple[str, dict[str, Any], dict[str, Any], type[ConnectorBase]
     ("codeclimate", {}, {"token": "cc2_token"}, CodeClimateConnector, ConnectorType.CODECLIMATE),
     ("snyk", {}, {"token": "snyk_token"}, SnykConnector, ConnectorType.SNYK),
     ("n8n", {}, {"token": "n8n_token"}, N8NConnector, ConnectorType.N8N),
+    (
+        "plane",
+        {"base_url": "https://plane.example.com/api/v1", "workspace_slug": "acme"},
+        {"token": "plane_token"},
+        PlaneConnector,
+        ConnectorType.TICKET_TRACKER,
+    ),
 ]

@@ -281,6 +281,7 @@ ignore_imports =
     # base_url from tenant connector config - same narrow exception for the
     # shared SSRF security primitive as the CI runners above.
     modulo.connectors.ci_runner.woodpecker -> modulo.core.ssrf
+    modulo.connectors.plane -> modulo.core.ssrf
     # FAR-526B: the GitHub Actions CI runner pins the hardcoded api.github.com via
     # the shared SSRF primitive, and the GitHub/Trello ticket-tracker connectors
     # pin their base_url host. Same narrow exception for the shared security
