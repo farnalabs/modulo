@@ -758,6 +758,21 @@ class TestEvaluateBackpressure:
         session.execute = AsyncMock(return_value=result)
         return session
 
+    def _session_with_filtered_age(self, max_concurrent: int | None, filtered_oldest: datetime | None) -> Any:
+        """Session routing ``execute`` to the two reads the age path makes.
+
+        Call 1 is the ``pipelines`` ``max_concurrent_runs`` lookup; call 2 is
+        the FAR-1826 capacity-filtered oldest-pending read (only issued when the
+        unfiltered oldest is already over the limit).
+        """
+        pipeline_result = MagicMock()
+        pipeline_result.scalar_one_or_none.return_value = max_concurrent
+        filtered_result = MagicMock()
+        filtered_result.scalar_one_or_none.return_value = filtered_oldest
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=[pipeline_result, filtered_result])
+        return session
+
     async def test_queue_over_depth_skips(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(ra, "get_settings", lambda: MagicMock(trigger_backpressure_max_age_seconds=3600))
         session = self._session(2)
@@ -799,20 +814,12 @@ class TestEvaluateBackpressure:
         # A genuinely wedged pending row (no capacity marker) is still refused:
         # the capacity-filtered oldest age is over the limit.
         monkeypatch.setattr(ra, "get_settings", lambda: MagicMock(trigger_backpressure_max_age_seconds=3600))
-        session = self._session(5)
         old = datetime.now(UTC) - timedelta(hours=2)
-        with (
-            patch(
-                "modulo.db.crud.run.get_pipeline_queue_depth",
-                new_callable=AsyncMock,
-                return_value=(2, old),
-            ),
-            patch.object(
-                ra,
-                "_oldest_non_capacity_pending_created_at",
-                new_callable=AsyncMock,
-                return_value=old,
-            ),
+        session = self._session_with_filtered_age(5, old)
+        with patch(
+            "modulo.db.crud.run.get_pipeline_queue_depth",
+            new_callable=AsyncMock,
+            return_value=(2, old),
         ):
             skip, reason = await evaluate_backpressure(session, pipeline_id=PIPELINE_ID)
         assert skip is True
@@ -822,49 +829,33 @@ class TestEvaluateBackpressure:
         # FAR-1826: the queue's unfiltered oldest is aged, but EVERY aged row is
         # capacity-demoted (org/pipeline cap full) — a healthy pipeline queued
         # at the gate, not a wedge. The capacity-filtered oldest is absent, so
-        # the age leg must NOT rate-limit.
+        # the age leg must NOT rate-limit. (Pre-fix this refused: it used the
+        # unfiltered age.)
         monkeypatch.setattr(ra, "get_settings", lambda: MagicMock(trigger_backpressure_max_age_seconds=3600))
-        session = self._session(5)
         old = datetime.now(UTC) - timedelta(hours=2)
-        with (
-            patch(
-                "modulo.db.crud.run.get_pipeline_queue_depth",
-                new_callable=AsyncMock,
-                return_value=(2, old),
-            ),
-            patch.object(
-                ra,
-                "_oldest_non_capacity_pending_created_at",
-                new_callable=AsyncMock,
-                return_value=None,
-            ) as filtered,
+        session = self._session_with_filtered_age(5, None)
+        with patch(
+            "modulo.db.crud.run.get_pipeline_queue_depth",
+            new_callable=AsyncMock,
+            return_value=(2, old),
         ):
             skip, reason = await evaluate_backpressure(session, pipeline_id=PIPELINE_ID)
         assert skip is False
         assert reason == ""
-        # The filtered read WAS consulted (the unfiltered signal looked aged).
-        filtered.assert_awaited_once()
 
     async def test_capacity_demoted_and_wedged_mixed_uses_filtered_age(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Mixed queue: the unfiltered oldest is an aged capacity-demoted row, but
         # a genuinely-wedged (non-capacity) pending row is only 10 min old — the
-        # pipeline is draining, so the age leg must admit.
+        # pipeline is draining, so the age leg must admit. (Pre-fix this refused
+        # on the unfiltered age.)
         monkeypatch.setattr(ra, "get_settings", lambda: MagicMock(trigger_backpressure_max_age_seconds=3600))
-        session = self._session(5)
         aged_capacity = datetime.now(UTC) - timedelta(hours=2)
         recent_wedged = datetime.now(UTC) - timedelta(minutes=10)
-        with (
-            patch(
-                "modulo.db.crud.run.get_pipeline_queue_depth",
-                new_callable=AsyncMock,
-                return_value=(2, aged_capacity),
-            ),
-            patch.object(
-                ra,
-                "_oldest_non_capacity_pending_created_at",
-                new_callable=AsyncMock,
-                return_value=recent_wedged,
-            ),
+        session = self._session_with_filtered_age(5, recent_wedged)
+        with patch(
+            "modulo.db.crud.run.get_pipeline_queue_depth",
+            new_callable=AsyncMock,
+            return_value=(2, aged_capacity),
         ):
             skip, reason = await evaluate_backpressure(session, pipeline_id=PIPELINE_ID)
         assert skip is False
