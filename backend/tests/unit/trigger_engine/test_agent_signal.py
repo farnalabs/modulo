@@ -665,6 +665,70 @@ class TestFireAgentSignalChildPayloadShape:
         payload = mock_create_run.call_args[1]["input_payload"]
         assert payload["node_output"] == _SANDBOX_AGENT_ENVELOPE
 
+    async def test_default_agent_type_embeds_pure_return(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """The common ``agent`` node type hands the child its pure return (the
+        outer ``output`` key) — never the surrounding envelope."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
+        agent_envelope = {"output": {"result": "ok"}, "status": "complete", "summary": "done"}
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+            node_output=agent_envelope,
+            node_type="agent",
+        )
+
+        assert len(results) == 1
+        payload = mock_create_run.call_args[1]["input_payload"]
+        assert payload["node_output"] == {"result": "ok"}
+
+    async def test_empty_string_node_type_resolves_as_default_agent(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """A graph node that declares no ``node_type`` compiles as the default
+        ``agent`` type, but the derived type map records it as ``""``. The
+        empty string must resolve exactly like ``agent`` so the node hands the
+        child its pure return, not the legacy envelope (FAR-131)."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
+        agent_envelope = {"output": {"result": "ok"}, "status": "complete"}
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+            node_output=agent_envelope,
+            node_type="",
+        )
+
+        assert len(results) == 1
+        payload = mock_create_run.call_args[1]["input_payload"]
+        assert payload["node_output"] == {"result": "ok"}
+
     async def test_does_not_write_node_outputs_to_source_run(
         self,
         mock_session: MagicMock,
