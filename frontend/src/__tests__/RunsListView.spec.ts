@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
-import { formatHeartbeatAge } from '../utils/runUtils'
+import { formatHeartbeatAge, heartbeatDisplayText, heartbeatAgeSeconds, isHeartbeatStale, formatRunDate } from '../utils/runUtils'
 import i18n from '../i18n'
 
 const t = i18n.global.t
@@ -24,6 +24,44 @@ describe('formatHeartbeatAge (shared heartbeat humanizer, FAR-624)', () => {
     expect(formatHeartbeatAge(97344, t)).toBe('1d 3h ago')
     expect(formatHeartbeatAge(172799, t)).toBe('1d 23h ago')
     expect(formatHeartbeatAge(172800, t)).toBe('2d 0h ago')
+  })
+})
+
+describe('heartbeatDisplayText (terminal vs live heartbeat, FAR-1839)', () => {
+  const NOW = Date.parse('2026-01-02T12:00:00Z')
+  // Stub absolute formatter so the terminal branch is asserted exactly,
+  // independent of the host locale's date rendering.
+  const absolute = (iso: string) => `AT:${iso}`
+
+  it('shows the absolute last heartbeat for a terminal run that HAS one', () => {
+    expect(heartbeatDisplayText('2026-01-02T11:55:00Z', 'complete', NOW, t, absolute)).toBe('AT:2026-01-02T11:55:00Z')
+    expect(heartbeatDisplayText('2026-01-02T11:55:00Z', 'failed', NOW, t, absolute)).toBe('AT:2026-01-02T11:55:00Z')
+    expect(heartbeatDisplayText('2026-01-02T11:55:00Z', 'cancelled', NOW, t, absolute)).toBe('AT:2026-01-02T11:55:00Z')
+    expect(heartbeatDisplayText('2026-01-02T11:55:00Z', 'rejected', NOW, t, absolute)).toBe('AT:2026-01-02T11:55:00Z')
+  })
+
+  it('renders "—" only when the heartbeat is genuinely absent or unreadable', () => {
+    expect(heartbeatDisplayText(null, 'complete', NOW, t, absolute)).toBe('—')
+    expect(heartbeatDisplayText(undefined, 'failed', NOW, t, absolute)).toBe('—')
+    expect(heartbeatDisplayText('', 'complete', NOW, t, absolute)).toBe('—')
+    expect(heartbeatDisplayText('not-a-date', 'complete', NOW, t, absolute)).toBe('—')
+    expect(heartbeatDisplayText(null, 'running', NOW, t, absolute)).toBe('—')
+  })
+
+  it('keeps the live-run humanized age unchanged', () => {
+    expect(heartbeatDisplayText('2026-01-02T11:59:15Z', 'running', NOW, t, absolute)).toBe('45s ago')
+    expect(heartbeatDisplayText('2026-01-02T11:59:55Z', 'running', NOW, t, absolute)).toBe('just now')
+    // A live run must never take the terminal branch, however old its
+    // heartbeat — it stays a growing relative age.
+    expect(heartbeatDisplayText('2026-01-02T11:00:00Z', 'running', NOW, t, absolute)).toBe('1h 00m ago')
+  })
+
+  it('leaves staleness to heartbeatAgeSeconds so a terminal run can never be stale', () => {
+    const terminalAge = heartbeatAgeSeconds('2026-01-02T09:00:00Z', 'complete', NOW)
+    expect(terminalAge).toBeNull()
+    expect(isHeartbeatStale(terminalAge)).toBe(false)
+    const liveAge = heartbeatAgeSeconds('2026-01-02T11:55:00Z', 'running', NOW)
+    expect(isHeartbeatStale(liveAge)).toBe(true)
   })
 })
 
@@ -870,8 +908,28 @@ describe('RunsListView', () => {
     wrapper.unmount()
   })
 
-  it('renders a dash for the heartbeat when the run is terminal', async () => {
-    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, heartbeat_at: new Date().toISOString() }])
+  it('renders the absolute last heartbeat for a terminal run instead of a dash (FAR-1839)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    vi.setSystemTime(new Date('2026-01-02T12:00:00Z')) // nosemgrep: new-date-without-guard
+    const heartbeatAt = new Date(Date.now() - 5 * 60_000).toISOString() // nosemgrep: new-date-without-guard
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, heartbeat_at: heartbeatAt }])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    const cell = wrapper.find('[data-testid="runs-list-heartbeat-run1"]')
+    expect(cell.exists()).toBe(true)
+    // baseRun.status is terminal — the cell must show the kept heartbeat's
+    // absolute time (the shared list formatter), never the "—" placeholder.
+    expect(cell.text()).not.toBe('—')
+    expect(cell.text()).toBe(formatRunDate(heartbeatAt))
+    // Staleness stays a live-run signal: no warning colouring on a finished run.
+    expect(cell.classes()).not.toContain('text-warning-text')
+    wrapper.unmount()
+    vi.useRealTimers()
+  })
+
+  it('renders a dash for the heartbeat when a terminal run has no heartbeat at all (FAR-1839)', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, heartbeat_at: null }])
     const wrapper = mountView()
     await flushPromises()
     await nextTick()
