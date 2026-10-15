@@ -1595,7 +1595,7 @@ async def test_seeded_graph_passes_the_graph_read_validation(
     through ``_graph_response`` — the exact serializer the graph endpoint
     uses — and requires zero validation issues and no dropped node/edge. Each
     node must also pass STRICT (write-path) validation, and the whole graph
-    the PATCH /graph body model, so the editor can re-save it unchanged.
+    the PUT /graph body model, so the editor can re-save it unchanged.
     """
     await _run_seed(session, monkeypatch, _demo_settings())
     pipeline = await _pipeline_by_name(session, spec.name)

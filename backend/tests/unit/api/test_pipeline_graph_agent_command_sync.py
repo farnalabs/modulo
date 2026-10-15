@@ -1,7 +1,7 @@
 """FAR-488a: node-level agent_commands PATCHes must reach the bound Agent row.
 
 At snapshot time ``_apply_agent_fields`` overwrites a bound node's
-``agent_commands`` with the Agent row's non-NULL value. The graph PATCH used to
+``agent_commands`` with the Agent row's non-NULL value. The graph write used to
 persist node-level commands to ``graph_nodes_json`` only, so an operator's
 PATCH read back correctly but every run silently executed the stale Agent-row
 command. These tests pin the sync ("what you PATCH is what runs") at three
@@ -236,7 +236,7 @@ def test_snapshot_materializes_synced_agent_commands() -> None:
 def test_snapshot_shadow_overrides_node_command_with_agent_row() -> None:
     """The shadow itself: an out-of-step Agent row would override the node
     value at snapshot time — the exact mechanism behind the FAR-488 incident,
-    and the reason the row must be synced on every graph PATCH."""
+    and the reason the row must be synced on every graph write."""
     agent = Agent(name="reviewer", prompt_template="p")
     agent.agent_commands = ["stale-agent-row-command"]
     node = _node(uuid.uuid4(), agent_id=uuid.uuid4(), agent_commands=["fresh-node-command"])

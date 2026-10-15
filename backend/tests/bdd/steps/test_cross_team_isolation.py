@@ -158,7 +158,7 @@ def user_requests_connector(username: str, connector_name: str, request, ctx) ->
 
 @when(parsers.parse('I bind connector "{connector_name}" to a node in pipeline "{pipeline_name}"'))
 def bind_cross_team_connector(connector_name: str, pipeline_name: str, request, ctx) -> None:
-    """PATCH the real graph-replace route; the REAL team-visibility predicate
+    """PUT the real graph-replace route; the REAL team-visibility predicate
     judges the binding.
 
     ``_prepare_graph_write`` and ``_enforce_connector_team_bindings`` (with its
@@ -170,8 +170,7 @@ def bind_cross_team_connector(connector_name: str, pipeline_name: str, request, 
     ppdata = ctx.get("pipelines", {}).get(pipeline_name)
     if cpdata is None or ppdata is None:
         raise AssertionError(
-            "binding step requires the connector and pipeline to be declared; "
-            "the real graph PATCH route cannot be driven"
+            "binding step requires the connector and pipeline to be declared; the real graph PUT route cannot be driven"
         )
     connector_id = uuid.UUID(cpdata["id"])
     with (

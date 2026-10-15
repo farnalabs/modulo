@@ -3,7 +3,7 @@ import { test, expect, loginAsAdmin } from './setup/fixtures'
 // Structural e2e for /pipelines/:id/editor (FAR-638, batch A). The editor
 // route previously rotted broken with zero coverage (FAR-616/629), so these
 // specs pin the FIXED behaviour: the page loads for an existing pipeline id,
-// the toolbar + canvas render, and the save flow reaches the graph PATCH.
+// the toolbar + canvas render, and the save flow reaches the graph PUT.
 // Mirrors json-viewer.spec.ts: mock the :id endpoints with a fake id and
 // navigate directly — structural assertions only, no seeded data.
 const PIPELINE_ID = 'e2e-editor-pipeline'
@@ -78,7 +78,7 @@ test.describe('Pipeline Editor', { tag: '@regression' }, () => {
     await expect(page.getByText('no components in pipeline')).toBeVisible()
   })
 
-  test('save flow reaches the graph PATCH endpoint', { tag: '@regression' }, async ({ page, env }) => {
+  test('save flow reaches the graph PUT endpoint', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.route(`**/api/v1/pipelines/${PIPELINE_ID}`, (route) => {
       if (route.request().method() === 'GET') {
@@ -86,10 +86,10 @@ test.describe('Pipeline Editor', { tag: '@regression' }, () => {
       }
       return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
     })
-    const graphPatches: string[] = []
+    const graphPuts: string[] = []
     await page.route(`**/api/v1/pipelines/${PIPELINE_ID}/graph`, (route) => {
-      if (route.request().method() === 'PATCH') {
-        graphPatches.push(route.request().url())
+      if (route.request().method() === 'PUT') {
+        graphPuts.push(route.request().url())
         return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(EMPTY_GRAPH) })
       }
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(EMPTY_GRAPH) })
@@ -100,8 +100,8 @@ test.describe('Pipeline Editor', { tag: '@regression' }, () => {
 
     await page.getByTestId('pipeline-editor-save').click()
 
-    await expect.poll(() => graphPatches.length, {
-      message: 'Save must issue a PATCH to the pipeline graph endpoint',
+    await expect.poll(() => graphPuts.length, {
+      message: 'Save must issue a PUT to the pipeline graph endpoint',
     }).toBeGreaterThan(0)
     await expect(page.getByTestId('pipeline-editor-save-error')).toHaveCount(0)
     await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible()

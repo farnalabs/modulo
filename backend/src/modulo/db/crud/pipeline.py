@@ -1733,7 +1733,7 @@ def reject_declared_policy_gates(nodes: list[dict[str, Any]], *, surface: str) -
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         detail=(
             f"{surface} cannot persist a declared policy_gate block (eval_id(s): {eval_ids}); "
-            "only the pipeline graph write (REST graph PATCH / MCP update_pipeline_graph) "
+            "only the pipeline graph write (REST graph PUT / MCP update_pipeline_graph) "
             "translates a declared gate into a PolicyGate row. Author the gate through that "
             "path instead of storing it directly in graph_nodes_json."
         ),
