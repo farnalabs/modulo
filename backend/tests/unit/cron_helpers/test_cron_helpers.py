@@ -298,6 +298,32 @@ class TestFireDueTriggers:
         redis_client.aclose.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_report_enqueue_carries_the_fire_epoch(self) -> None:
+        """FAR-1822: the due-scan's enqueue tick is passed to the fire job as its
+        epoch, so SAQ's retry (same epoch) is idempotent and can steal a lease a
+        crashed attempt left behind."""
+        with (
+            _tick_scope(
+                [
+                    _org_result([ORG]),
+                    _pause_result(ORG),
+                    _rows_result([]),
+                    _rows_result([]),
+                    _rows_result([_report_row(REPORT)]),
+                ],
+            ) as (_session, _redis_client),
+            patch.object(ch, "_advance_report_next_send", new_callable=AsyncMock, return_value=True),
+            patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-id") as enqueue,
+        ):
+            await ch.fire_due_triggers()
+
+        report_calls = [c for c in enqueue.await_args_list if c.kwargs.get("report_id") == str(REPORT)]
+        assert len(report_calls) == 1
+        epoch = report_calls[0].kwargs["epoch"]
+        assert isinstance(epoch, str)
+        assert "T" in epoch
+
+    @pytest.mark.asyncio
     async def test_soft_deleted_triggers_excluded_from_scans(self) -> None:
         """FAR-166: the cron/polling/catch-up scan SELECTs must filter
         ``Trigger.deleted_at IS NULL`` — a soft-deleted trigger (deleted_at set,
