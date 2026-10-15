@@ -957,28 +957,6 @@ async def _exchange_code(
         return _require_json_object(decoded, "OIDC token response")
 
 
-def _decode_id_token_claims(id_token: str) -> dict[str, object]:
-    """Decode ID token claims without signature verification.
-
-    The code exchange with the token endpoint is over HTTPS (transport-level
-    security), but this does not protect against a compromised token endpoint
-    or a malicious IdP. In production, verify the JWT signature using the
-    provider's JWKS endpoint and validate the ``iss`` and ``aud`` claims.
-    """
-    _log.warning("sso.id_token_no_verify")
-    parts = id_token.split(".")
-    if len(parts) != 3:
-        return {}
-    try:
-        pad = (4 - len(parts[1]) % 4) % 4
-        padded = parts[1] + "=" * pad
-        decoded = json.loads(base64.urlsafe_b64decode(padded))
-        return _require_json_object(decoded, "OIDC ID token claims")
-    except ValueError as exc:
-        _log.warning("sso.id_token_decode_failed", extra={"error": str(exc)})
-        return {}
-
-
 # ---------------------------------------------------------------------------
 # SAML helpers
 # ---------------------------------------------------------------------------

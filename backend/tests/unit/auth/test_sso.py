@@ -625,55 +625,6 @@ class TestSamlMetadataParsing:
         assert attrs.get("displayName") == "Test User"
 
 
-# ---------------------------------------------------------------------------
-# ID token decoding
-# ---------------------------------------------------------------------------
-
-
-class TestDecodeIdTokenClaims:
-    def test_decodes_valid_token(self) -> None:
-        from modulo.auth.sso import _decode_id_token_claims
-
-        header = base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
-        payload = (
-            base64.urlsafe_b64encode(b'{"email":"user@example.com","name":"Test User","sub":"abc123"}')
-            .rstrip(b"=")
-            .decode()
-        )
-        sig = base64.urlsafe_b64encode(b"signature").rstrip(b"=").decode()
-        id_token = f"{header}.{payload}.{sig}"
-
-        claims = _decode_id_token_claims(id_token)
-        assert claims["email"] == "user@example.com"
-        assert claims["name"] == "Test User"
-        assert claims["sub"] == "abc123"
-
-    def test_returns_empty_for_malformed_token(self) -> None:
-        from modulo.auth.sso import _decode_id_token_claims
-
-        assert not _decode_id_token_claims("not-a-jwt")
-        assert not _decode_id_token_claims("no.dots")
-
-    def test_returns_empty_on_bad_padding(self) -> None:
-        from modulo.auth.sso import _decode_id_token_claims
-
-        id_token = "header.bad-payload.sig"
-        assert not _decode_id_token_claims(id_token)
-
-    def test_returns_empty_on_empty_string(self) -> None:
-        from modulo.auth.sso import _decode_id_token_claims
-
-        assert not _decode_id_token_claims("")
-
-    @pytest.mark.parametrize("payload", [[], "claims", None])
-    def test_returns_empty_when_payload_is_not_an_object(self, payload: object) -> None:
-        from modulo.auth.sso import _decode_id_token_claims
-
-        encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
-
-        assert not _decode_id_token_claims(f"header.{encoded}.signature")
-
-
 class TestOidcJsonResponseShapes:
     @pytest.mark.parametrize("payload", [[], "discovery", None])
     async def test_discovery_rejects_non_object_json(self, payload: object) -> None:
