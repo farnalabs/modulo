@@ -588,7 +588,7 @@ async def _load_org_dashboard(
 ) -> tuple[PageResult[Pipeline], PageResult[Run], list[PendingHitlReview], list[ViewInfo], ViewInfo | None]:
     """Load the org-scoped dashboard slice: pipelines, runs, pending HITL reviews, saved views."""
     pipelines_page = await list_pipelines(session, page=1, page_size=20, organisation_id=organisation_id)
-    runs_page = await list_runs(session, page=1, page_size=10)
+    runs_page = await list_runs(session, organisation_id=organisation_id, page=1, page_size=10)
 
     user_team_ids = [m.team_id for m in memberships]
     pending_hitl = await _fetch_pending_hitl_reviews(session, organisation_id, user_team_ids)

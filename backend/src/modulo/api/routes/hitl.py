@@ -1360,7 +1360,10 @@ async def list_run_pending_reviews(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            run = await get_run(session, run_id)
+            # Defence-in-depth org predicate (FAR-328): RLS is the backstop, the
+            # explicit filter makes cross-tenant access impossible even if RLS
+            # were misconfigured.
+            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
             if run is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 

@@ -631,6 +631,7 @@ async def _do_list_runs(
         await set_rls_user_context(session, user.account_id, user.org_role)
         result = await db_list_runs(
             session,
+            organisation_id=user.organisation_id,
             pipeline_id=query.pipeline_id,
             status=query.run_status,
             trigger_type=query.trigger_type,
