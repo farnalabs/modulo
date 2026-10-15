@@ -4231,6 +4231,9 @@ elements:
       - testid: diff-identical-banner
         type: element
         dynamic_testid: false
+      - testid: diff-raw-outputs-toggle
+        type: element
+        dynamic_testid: false
       - testid: json-viewer
         type: element
         dynamic_testid: false
