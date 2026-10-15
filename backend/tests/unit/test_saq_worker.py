@@ -186,6 +186,7 @@ class TestFunctionsWiring:
             "health_readiness_alert",
             "memory_monitor_cron",
             "run_kill_switch_drill",
+            "legacy_agent_return_sweep",
         }
         # fire_due_triggers: every 60s (croniter parses 5-field cron), timeout=300, retries=3 (F1).
         fdt = jobs["fire_due_triggers"]
@@ -331,6 +332,18 @@ class TestFunctionsWiring:
         assert hra.heartbeat == 30
         assert hra.ttl == 300
         assert hra.unique is True
+
+        # legacy_agent_return_sweep: daily at 02:30 (FAR-132) — read-only
+        # legacy-shape straggler scan; unique so two machines cannot
+        # double-scan, one retry for a transient DB error (a scan that cannot
+        # run re-raises rather than reporting a false clean zero).
+        lars = jobs["legacy_agent_return_sweep"]
+        assert lars.cron == "30 2 * * *"
+        assert lars.timeout == 300
+        assert lars.retries == 1
+        assert lars.heartbeat == 30
+        assert lars.ttl == 900
+        assert lars.unique is True
 
     def test_sync_interval_to_cron_maps_seconds_to_5_field_cron(self) -> None:
         assert sw._sync_interval_to_cron(300) == "*/5 * * * *"

@@ -182,6 +182,16 @@ _RUNNER_HEALTH_PROBE_STALE_SECONDS = 3 * 60
 _DECISION_RECORD_RECONCILE_STATS_KEY = "saq:cron:stats:decision_record_reconcile"
 _DECISION_RECORD_RECONCILE_STALE_SECONDS = 3 * 60 * 60
 
+# legacy_agent_return_sweep (FAR-132): the read-only Agent-Return-split
+# legacy-shape straggler sweep runs daily on the system worker and persists its
+# outcome (``legacy_count`` + ``last_run_at``) to this Redis key. Same advisory
+# contract as its siblings, with the stale window tuned to the daily cadence
+# (72h — two missed ticks before it alerts): a dead sweep means the strip-gating
+# invariant has silently stopped being evaluated, so a missing or stale key
+# warns without gating readiness.
+_LEGACY_AGENT_RETURN_SWEEP_STATS_KEY = "saq:cron:stats:legacy_agent_return_sweep"
+_LEGACY_AGENT_RETURN_SWEEP_STALE_SECONDS = 3 * 24 * 60 * 60
+
 # System-cron liveness watchdog (plan F8): fire_due_triggers runs every 60s
 # (SAQ system cron, cron="* * * * *"); a machine whose heartbeat is older than
 # 2x the cadence has a silently dead cron scheduler and fails readiness so Fly
@@ -1355,6 +1365,25 @@ async def _check_decision_record_reconcile() -> CheckResult:
     )
 
 
+async def _check_legacy_agent_return_sweep() -> CheckResult:
+    """ADVISORY — last legacy_agent_return_sweep outcome (never gates readiness).
+
+    The FAR-132 read-only Agent-Return-split legacy-shape straggler sweep
+    (``saq_worker.legacy_agent_return_sweep``) runs daily in the SYSTEM WORKER
+    process and persists its outcome (``legacy_count`` + ``last_run_at``) to
+    ``saq:cron:stats:legacy_agent_return_sweep``. A dead sweep means the
+    invariant that gates stripping the legacy tolerance has silently stopped;
+    the sweep itself never mutates a row, so this is alert-only — a missing or
+    >72h-stale key reports "degraded" while the app stays healthy. Fail-open on
+    Redis read errors.
+    """
+    return await _check_sweep_stats_advisory(
+        _LEGACY_AGENT_RETURN_SWEEP_STATS_KEY,
+        _LEGACY_AGENT_RETURN_SWEEP_STALE_SECONDS,
+        "legacy_count",
+    )
+
+
 async def _check_fleet_system_crons() -> CheckResult:
     """Fleet-wide system-cron liveness — the sole readiness path (ADR 043 / FAR-1158).
 
@@ -1540,6 +1569,7 @@ async def evaluate_readiness() -> ReadinessResponse:
             rms_check,
             rhp_check,
             drr_check,
+            lars_check,
         ) = await asyncio.gather(
             _check_database(),
             _check_redis(),
@@ -1556,6 +1586,7 @@ async def evaluate_readiness() -> ReadinessResponse:
             _check_runner_marker_sweep(),
             _check_runner_health_probe(),
             _check_decision_record_reconcile(),
+            _check_legacy_agent_return_sweep(),
         )
     finally:
         lag_stop.set()
@@ -1675,6 +1706,11 @@ async def evaluate_readiness() -> ReadinessResponse:
         # the decision-record corruption-detection surface has silently
         # stopped; the sweep mutates nothing, so it stays alert-only.
         "decision_record_reconcile": drr_check,
+        # ADVISORY only — excluded from the aggregate (never gates readiness).
+        # FAR-132: a dead legacy-shape straggler sweep means the invariant that
+        # gates stripping the Agent-Return legacy tolerance has silently
+        # stopped; the sweep mutates nothing, so it stays alert-only.
+        "legacy_agent_return_sweep": lars_check,
     }
 
     # Aggregate over the NON-advisory checks only.
