@@ -1710,13 +1710,13 @@ def test_list_connector_types_offers_only_hub_buildable_ids(client: TestClient) 
     """
     from modulo.core.connector_hub import _build_connector
     from modulo.core.plugin_registry import get_plugin_registry
-    from tests.unit.connector_hub.test_build_connector import _BUILD_CASES
+    from tests.unit.connector_hub._fixtures import BUILD_CASES
 
     resp = client.get("/api/v1/connectors/types")
     assert resp.status_code == 200
     ids = [item["id"] for item in resp.json()["items"]]
     assert ids
-    fixtures = {row[0]: (row[1], row[2]) for row in _BUILD_CASES}
+    fixtures = {row[0]: (row[1], row[2]) for row in BUILD_CASES}
     fixtures["rest"] = ({"base_url": "https://api.example.com"}, {"auth_mode": "bearer", "token": "rest_token"})
     fixtures["ticket-tracker"] = ({"provider": "github"}, {"token": "tt_token"})
     fixtures["linear"] = ({}, {"token": "linear_token"})
@@ -1728,6 +1728,46 @@ def test_list_connector_types_offers_only_hub_buildable_ids(client: TestClient) 
         assert fixture is not None, f"/types offered {type_id!r} with no buildable fixture"
         config, creds = fixture
         assert _build_connector(type_id, config, creds) is not None
+
+
+# ── FAR-1772: MCP list_connector_types agrees with GET /types ─────────────
+
+
+async def test_mcp_list_connector_types_matches_rest_surface() -> None:
+    """The MCP tool and ``GET /api/v1/connectors/types`` advertise the SAME
+    buildable id set — a drift on either surface fails here.
+
+    Both surfaces must reuse ``buildable_connector_type_ids()`` (FAR-1764's
+    helper). Before FAR-1772 the MCP tool iterated the raw ``ConnectorType``
+    enum: it advertised the unbuildable abstract labels ``ci-runner`` /
+    ``custom`` and omitted the hub-native CI ids ``github_actions_ci`` /
+    ``gitlab_ci``, disagreeing with the REST surface.
+    """
+    from modulo.api.mcp_server import _ctx_role
+    from modulo.api.mcp_server import list_connector_types as mcp_list_connector_types
+    from modulo.api.routes.connectors import list_connector_types as rest_list_connector_types
+
+    rest = await rest_list_connector_types()
+    rest_ids = [item.id for item in rest.items]
+
+    # Real scope gate runs (connector.list resolves to viewer); only the
+    # per-event credential re-validation is stubbed — no live credential exists
+    # in a unit test, and authz denial is covered by the MCP tool's own tests.
+    role_token = _ctx_role.set("operator")
+    try:
+        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+            mcp_result = await mcp_list_connector_types()
+    finally:
+        _ctx_role.reset(role_token)
+
+    assert "error" not in mcp_result, mcp_result
+    mcp_ids = [item["id"] for item in mcp_result["data"]]
+    assert mcp_ids == rest_ids, f"MCP/REST connector-type surfaces drifted: {mcp_ids!r} vs {rest_ids!r}"
+    # The FAR-1772 defect class, pinned explicitly on the MCP side too.
+    assert "ci-runner" not in mcp_ids
+    assert "custom" not in mcp_ids
+    assert "github_actions_ci" in mcp_ids
+    assert "gitlab_ci" in mcp_ids
 
 
 def test_create_and_health_check_github_actions_ci_connector(client: TestClient) -> None:
