@@ -109,7 +109,8 @@ describe('manifest merge-key gating (js-yaml regression guard)', () => {
     // not a source-text scrape: requiresSystemAdmin must still be set and the
     // accidental org-role gate must be gone.
     const routeName = routes['/admin/product-analytics'].name as string
-    expect(typeof routeName === 'string' && routeName.length > 0).toBe(true)
+    expect(typeof routeName).toBe('string')
+    expect(routeName.length).toBeGreaterThan(0)
     const route = { name: routeName, meta: {} as Record<string, unknown> }
     hydrateManifestMeta(route as never)
     expect(route.meta.requiresSystemAdmin).toBeTruthy()

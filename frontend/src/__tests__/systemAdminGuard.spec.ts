@@ -1,4 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import yaml from 'js-yaml'
+
+// FAR-1797: the router looks a route up by `to.name` in `manifestByName`
+// (router/index.ts), so the router route NAME must equal the REAL manifest
+// route `name:` — a mismatch makes hydrateManifestMeta early-return and
+// silently drops requiresSystemAdmin. The mock manifest below cannot prove
+// that binding (it compares two literals in this file), so the binding test
+// reads the REAL manifest from disk — the same approach as manifestGating.spec.ts.
+const REAL_MANIFEST = yaml.load(
+  readFileSync(resolve(__dirname, '../manifest.yaml'), 'utf-8'),
+) as { routes: Record<string, { name?: string; system_admin_only?: boolean }> }
+
+// The three route-entry system-admin gates FAR-1797 pins. Used as the
+// vacuity guard so the real-manifest loop cannot silently become a no-op.
+const EXPECTED_GATED_PATHS = [
+  '/admin/system/orgs',
+  '/admin/system/config',
+  '/admin/product-analytics',
+] as const
 
 // Restore the REAL vue-router (the shared vitest setup mocks it globally with a
 // stub whose getRoutes() is always []) so the default router export carries its
@@ -174,14 +195,37 @@ describe('FAR-938: SYSTEM sidebar group system_admin_only guard', () => {
       { name: 'admin-product-analytics', path: '/admin/product-analytics' },
     ]
 
-    it('binds each router route name to the manifest route name on the same path', () => {
-      for (const { name, path } of systemRoutes) {
-        const manifestEntry = (mockManifest.routes as Record<string, { name?: string }>)[path]
-        expect(manifestEntry, `manifest entry for ${path} must exist`).toBeDefined()
-        expect(manifestEntry.name).toBe(name)
+    it('binds every REAL-manifest system-admin route name to a real router record on the same path', () => {
+      // Driven from the real manifest from disk, never the mock: a rename of
+      // the real manifest route `name:` must fail here, because at runtime
+      // hydrateManifestMeta looks the route up by `to.name` and a mismatch
+      // silently drops requiresSystemAdmin with no failing test.
+      const matchedPaths: string[] = []
 
-        const record = router.getRoutes().find((r) => r.name === name)
-        expect(record, `router record ${name} must exist`).toBeDefined()
+      for (const [path, entry] of Object.entries(REAL_MANIFEST.routes)) {
+        if (!entry?.name || entry.system_admin_only !== true) continue
+        const record = router.getRoutes().find((r) => r.name === entry.name)
+        expect(record, `router must expose a record named ${entry.name} at ${path}`).toBeDefined()
+        expect(record!.path).toBe(path)
+        matchedPaths.push(path)
+      }
+
+      // Vacuity guard: the loop above must actually have exercised every known
+      // gate; otherwise the binding assertion is a silent no-op.
+      for (const path of EXPECTED_GATED_PATHS) {
+        expect(matchedPaths, `vacuity: ${path} must be covered by the real-manifest bind`).toContain(path)
+      }
+      expect(matchedPaths.length).toBeGreaterThanOrEqual(EXPECTED_GATED_PATHS.length)
+    })
+
+    it('the REAL manifest names each gated route exactly as its real router record', () => {
+      for (const path of EXPECTED_GATED_PATHS) {
+        const entry = REAL_MANIFEST.routes[path]
+        expect(entry, `real manifest entry for ${path} must exist`).toBeDefined()
+        expect(entry.system_admin_only).toBe(true)
+
+        const record = router.getRoutes().find((r) => r.name === entry.name)
+        expect(record, `real router record ${entry.name} must exist`).toBeDefined()
         expect(record!.path).toBe(path)
       }
     })
