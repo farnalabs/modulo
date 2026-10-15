@@ -45,6 +45,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_PIPELINE_NOT_FOUND, MSG_THIS_FEATURE_NOT_AVAILABLE
 from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import (
     get_db_session,
     require_feature,
@@ -89,6 +90,7 @@ from modulo.core.capability_scope import (
     validate_allowed_connectors_subset,
     validate_no_self_tools,
 )
+from modulo.core.exceptions import SnapshotLockNotAvailableError
 from modulo.core.graph_validator import HITL_DESCRIPTION_MIN_LENGTH, GraphValidator
 from modulo.core.pipeline_engine.git_content import GitContentRefError, validate_agent_git_content_values
 from modulo.core.pipeline_engine.scatter_join import (
@@ -151,7 +153,7 @@ from modulo.db.crud.pipeline import (
 )
 from modulo.db.crud.pipeline_folder import move_pipeline_to_folder
 from modulo.db.crud.pipeline_owner import is_account_in_team
-from modulo.db.crud.pipeline_snapshot import create_snapshot_edit
+from modulo.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS, create_snapshot_edit
 from modulo.db.crud.pipeline_snapshot_versioning import (
     delete_snapshot,
     diff_snapshots,
@@ -295,6 +297,38 @@ def _raise_db_migration_error(exc: ProgrammingError) -> None:
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+    ) from None
+
+
+def _raise_snapshot_lock_busy(exc: SnapshotLockNotAvailableError, *, log_prefix: str, action: str) -> NoReturn:
+    """Translate a contended edit-snapshot lock into the retryable 503 contract.
+
+    FAR-1810: every explicit graph save now creates an edit snapshot, and that
+    snapshot's bounded graph-copy lock is shared with concurrent RUN starts — so
+    a save can legitimately lose the race. ``_acquire_snapshot_lock`` /
+    ``_acquire_snapshot_allocation_lock`` raise the typed
+    ``SnapshotLockNotAvailableError``, a plain ``Exception`` carrying no
+    SQLSTATE, so neither this module's route-local ``except SQLAlchemyError``
+    arms nor ``handle_db_errors``'s 55P03 -> 409 map can see it: it fell
+    through to the generic ``Exception -> 500 "Internal server error"`` arm and
+    reported a transient busy lock as a server bug.
+
+    This is CONTENTION, not a fault: answer the same retryable 503 every
+    run-start surface already answers (``routes.runs``, ``webhooks``, ``slack``,
+    ``triggers``), preceded by the same structured ``snapshot_lock_unavailable``
+    record so the event stays observable. The action word names the operation
+    the caller should retry.
+    """
+    logger.warning("%s.snapshot_lock_busy: %s", log_prefix, exc)
+    log_service_unavailable(
+        "snapshot_lock_unavailable",
+        exc,
+        route=log_prefix,
+        detail=f"snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts",
+    )
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=(f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — retry the {action}"),
     ) from None
 
 
@@ -3269,6 +3303,15 @@ async def replace_pipeline_graph_endpoint(
                 principal.organisation_id,
                 pipeline_owner_team_id=pipeline.owner_team_id,
             )
+            # FAR-488a + FAR-1810: keep the bound Agent rows in step with
+            # node-level agent_commands PATCHes BEFORE the write, because the
+            # write mints the FAR-1810 edit snapshot — and the snapshot copy's
+            # ``_materialize_agent_fields`` OVERWRITES each bound node's
+            # ``agent_commands`` with the Agent-row value. Syncing first makes
+            # the snapshot (and any rollback replaying it) pin the command the
+            # operator just saved; pre-change the sync ran AFTER the write, so
+            # the snapshot carried the stale command.
+            await _sync_agent_row_commands(session, org_id=principal.organisation_id, nodes=node_data)
             graph = await replace_pipeline_graph(
                 session,
                 pipeline_id=pipeline_id,
@@ -3281,12 +3324,9 @@ async def replace_pipeline_graph_endpoint(
                 is_guardrail_admin=_is_guardrail_admin(principal),
                 grants_deny_privilege=_grants_deny_privilege(principal),
                 grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
+                record_edit_snapshot=True,
             )
             if graph is not None:
-                # FAR-488a: keep the bound Agent rows in step with node-level
-                # agent_commands PATCHes INSIDE the same transaction, so the
-                # next snapshot materializes the command the operator saved.
-                await _sync_agent_row_commands(session, org_id=principal.organisation_id, nodes=node_data)
                 issues = await _validate_graph_save(
                     session,
                     org_id=principal.organisation_id,
@@ -3308,6 +3348,11 @@ async def replace_pipeline_graph_endpoint(
         # write is rolled back with it. Surface 422 instead of the decorator's
         # 500.
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1810: the edit snapshot's bounded lock lost its race against a
+        # concurrent run start — retryable contention, never the decorator's
+        # generic 500.
+        _raise_snapshot_lock_busy(exc, log_prefix="pipelines.replace_graph", action="save")
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
@@ -3630,6 +3675,11 @@ async def _apply_graph_update(
         org_id,
         pipeline_owner_team_id=effective_owner_team_id,
     )
+    # FAR-488a + FAR-1810: same Agent-row sync as the PATCH /graph endpoint,
+    # and it must run BEFORE the write mints the edit snapshot — the snapshot
+    # materializes bound nodes from the Agent row, so syncing first pins the
+    # command the operator just saved.
+    await _sync_agent_row_commands(session, org_id=org_id, nodes=node_data)
     graph = await replace_pipeline_graph(
         session,
         pipeline_id=pipeline_id,
@@ -3642,12 +3692,10 @@ async def _apply_graph_update(
         is_guardrail_admin=_is_guardrail_admin(principal),
         grants_deny_privilege=_grants_deny_privilege(principal),
         grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
+        record_edit_snapshot=True,
     )
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
-    # FAR-488a: same Agent-row sync as the PATCH /graph endpoint — a graph
-    # replacement shipped inside a PATCH update payload must also run.
-    await _sync_agent_row_commands(session, org_id=org_id, nodes=node_data)
     # FAR-681 QA gate parity: the dedicated graph endpoint runs
     # _validate_graph_save after the write, rejecting GUARDRAIL_CAP_EXCEEDED,
     # REDACT_CORRECT_BLOCKED and HITL_REVIEW_DESCRIPTION_REQUIRED with 422 (the
@@ -3945,6 +3993,10 @@ async def update_pipeline_endpoint(
         # the write rolls back with it. Surface 422 instead of the decorator's
         # 500.
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1810: a graph_json PATCH's edit snapshot lost its bounded lock
+        # race — retryable contention, never the decorator's generic 500.
+        _raise_snapshot_lock_busy(exc, log_prefix="pipelines.update", action="save")
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
@@ -5176,6 +5228,11 @@ async def save_edit_snapshot_endpoint(
                 draft=req.draft,
                 channel=channel,
             )
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1810 sweep: this endpoint creates the same edit snapshot the
+        # graph-save paths do, so it carries the same contended-lock failure —
+        # translated here too rather than left as the decorator's generic 500.
+        _raise_snapshot_lock_busy(exc, log_prefix="pipelines.save_edit_snapshot", action="save")
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
@@ -5686,6 +5743,7 @@ async def _save_locked_graph(
         is_guardrail_admin=_is_guardrail_admin(principal),
         grants_deny_privilege=_grants_deny_privilege(principal),
         grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
+        record_edit_snapshot=True,
     )
     if graph is None:
         return None
@@ -5884,6 +5942,10 @@ async def convert_node_to_agent_endpoint(
                 nodes=nodes,
                 edges=edges,
             )
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1810: the conversion's edit snapshot lost its bounded lock race —
+        # retryable contention, never the decorator's generic 500.
+        _raise_snapshot_lock_busy(exc, log_prefix="pipelines.convert_node_to_agent", action="save")
     except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied, GitContentRefError, ProgrammingError) as exc:
         await _finalize_locked_graph_save(exc, session, principal=principal, pipeline_id=pipeline_id)
 
@@ -5985,6 +6047,10 @@ async def revert_node_to_manual_endpoint(
                 nodes=nodes,
                 edges=edges,
             )
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1810: the revert's edit snapshot lost its bounded lock race —
+        # retryable contention, never the decorator's generic 500.
+        _raise_snapshot_lock_busy(exc, log_prefix="pipelines.revert_node_to_manual", action="save")
     except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied, GitContentRefError, ProgrammingError) as exc:
         await _finalize_locked_graph_save(exc, session, principal=principal, pipeline_id=pipeline_id)
 
@@ -6034,16 +6100,25 @@ async def _save_graph(
     is_guardrail_admin: bool = False,
     grants_deny_privilege: bool = False,
     grants_deny_guardrail_admin: bool = False,
+    record_edit_snapshot: bool = False,
 ) -> tuple[list[dict[str, Any]], list[Any]] | None:
     """Persist updated nodes + edges via replace_pipeline_graph.
 
     Accepts edges as either ORM model instances (PipelineEdge) or plain dicts.
     Forwards is_privileged + caller_type + account_id + is_guardrail_admin to
     the underlying graph write (ADR 047 backstop /
-    hitl-gate-removal-guard-plan.md v19 / FAR-309 PR A review).
+    hitl-gate-removal-guard-plan.md v19 / FAR-309 PR A review). Node-conversion
+    saves pass ``record_edit_snapshot=True`` (FAR-1810) so a conversion — a
+    deliberate graph edit — records an edit snapshot like the sibling
+    graph-write endpoints.
     """
     edge_dicts = [_edge_to_dict(e) if hasattr(e, "source_node_id") else dict(e) for e in edges]
-    graph = await replace_pipeline_graph(
+    # FAR-488a + FAR-1810: node-conversion saves go through here too — sync the
+    # bound Agent rows BEFORE the write mints the edit snapshot, so the snapshot
+    # materializes the command the operator just saved rather than the pre-sync
+    # Agent-row value (a no-op when the node commands already mirror the row).
+    await _sync_agent_row_commands(session, org_id=org_id, nodes=nodes)
+    return await replace_pipeline_graph(
         session,
         pipeline_id=pipeline_id,
         org_id=org_id,
@@ -6055,10 +6130,5 @@ async def _save_graph(
         is_guardrail_admin=is_guardrail_admin,
         grants_deny_privilege=grants_deny_privilege,
         grants_deny_guardrail_admin=grants_deny_guardrail_admin,
+        record_edit_snapshot=record_edit_snapshot,
     )
-    if graph is not None:
-        # FAR-488a: node-conversion saves go through here too — keep the same
-        # "what you save is what runs" Agent-row sync (a no-op when the node
-        # commands already mirror the bound Agent rows).
-        await _sync_agent_row_commands(session, org_id=org_id, nodes=nodes)
-    return graph
