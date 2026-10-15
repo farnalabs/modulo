@@ -59,7 +59,7 @@ reports resolve against a consistent fact model.
       /`limit`) and a CSV attachment with a `Content-Disposition: attachment`
       header for `format=csv`
 - [x] Scan export (`/scan`) streams the WHOLE matching fact set in one response
-      (NDJSON by default, or a CSV attachment) with no offset/limit pagination —
+      (NDJSON by default, or a CSV attachment) with no offset/limit pagination -
       the server keyset-paginates over the stable `(run_date, created_at,
       run_id)` order in fixed page-size batches, sharing the typed filters, org +
       team-boundary scoping, per-org rate limit and bounded statement timeout of
@@ -70,14 +70,14 @@ reports resolve against a consistent fact model.
       falling back to `started_at` − `created_at` when the phase timestamp is
       NULL (pre-migration rows / no durable phase / purged-run backfills), and
       is groupable per trigger with `dimension=trigger_type` or
-      `dimension=trigger_id` — both provenance fields are copied onto
+      `dimension=trigger_id` - both provenance fields are copied onto
       `run_daily_facts` at finalize so the read never joins `runs` (ADR 020)
       and the metric survives the run purge; NULL when the bucket has no
       sample, never 0 (`core/analytics/builder.py`,
       `backend/tests/unit/api/test_analytics_export_contract.py`)
 - [x] Node-deadline watchdog firings (FAR-1463): every query bucket carries
       `node_deadline_watchdog_fired_count`, the `SUM` of the per-run
-      `RunDailyFact` column (COALESCEd to 0 — count semantics, never NULL for
+      `RunDailyFact` column (COALESCEd to 0 - count semantics, never NULL for
       an empty bucket), and the per-run export item carries the raw
       `node_deadline_watchdog_fired_count`. This is the observability signal
       the `error_code` dimension can never show: the FAR-1463 firing record is
@@ -91,7 +91,7 @@ reports resolve against a consistent fact model.
 
 ## Known Gaps
 
-- Per-org analytics rate limiting is a best-effort in-memory window (60/min) —
+- Per-org analytics rate limiting is a best-effort in-memory window (60/min) -
   not a shared Redis-scaled limiter across a fleet of workers.
 
 ## QA History
@@ -118,7 +118,7 @@ reports resolve against a consistent fact model.
   `test_analytics_export_contract.py` unit citation.
   `_ORPHANED_BDD_FEATURES` stays empty.
 
-- 2026-09-21: **product-map review pass** — closed the
+- 2026-09-21: **product-map review pass** - closed the
   "No server-side streaming / scan export for the whole org in one response"
   gap. Added `GET /api/v1/analytics/scan` (NDJSON `application/x-ndjson`
   default, CSV attachment for `format=csv`) with a new
@@ -134,7 +134,7 @@ reports resolve against a consistent fact model.
   isolation, feature-gate 402, unauthenticated 401). The manifest `feat-analytics`
   deferral is demoted to only the Redis-scaled limiter follow-up.
 
-- 2026-09-19: **product-map review pass** — closed the "No
+- 2026-09-19: **product-map review pass** - closed the "No
   dedicated BDD feature files for `/analytics`" gap. Registered
   `analytics/query.feature` into the executing BDD suite from the colocated
   `features/analytics/test_analytics_query_steps.py`, driving the REAL
@@ -150,7 +150,7 @@ reports resolve against a consistent fact model.
   the advisory-only guardrail scorecard. Status remains covered;
   `_ORPHANED_BDD_FEATURES` stays empty.
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass** - extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/analytics`: the whole-page view(s) `AnalyticsView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -158,7 +158,7 @@ reports resolve against a consistent fact model.
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-27: **product-map review pass** — added this behaviour-tracker
+- 2026-08-27: **product-map review pass** - added this behaviour-tracker
   for the registered manifest feature `feat-analytics`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/analytics.py`,
   `core/analytics/*` and the analytics unit/integration suites. Status: covered.

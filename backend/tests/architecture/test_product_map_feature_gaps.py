@@ -323,7 +323,7 @@ def test_every_manifest_feature_has_a_behaviour_tracker():
 
 #: Status values the two product-map layers are allowed to carry. A manifest
 #: feature WITH an explicit ``status:`` must agree with its behaviour-tracker;
-#: every manifest feature today carries one (32 ``covered`` + 4 ``partial``).
+#: every manifest feature today carries one (34 ``covered`` + 3 ``partial``).
 def test_graph_tracker_status_matches_manifest_registry():
     """A behaviour-tracker's ``status:`` must agree with its manifest registry status.
 

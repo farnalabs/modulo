@@ -122,6 +122,13 @@ class TestCollectOrgExport:
             "runs",
             "audit_events",
             "library_primitives",
+            # Library-cluster sections added by FAR-1758 item 6 — the archive
+            # claims to bundle ALL org-owned data, so each must be present.
+            "composite_templates",
+            "primitive_ratings",
+            "primitive_abuse_reports",
+            "publishers",
+            "collection_installs",
             "connector_instances",
             "model_backends",
             "exported_at",

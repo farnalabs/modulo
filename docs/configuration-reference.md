@@ -81,6 +81,23 @@ See [`docs/product-map/configure/apply.md`](./product-map/configure/apply.md).
 
 ---
 
+## Evidence Signing
+
+Signs the offline-verifiable evidence export: an Ed25519 signature over the
+canonical manifest, so a third party holding only the artefact and the
+pre-published public key can verify authorship and re-derive the embedded
+audit chain without contacting Modulo. See
+[`docs/offline-verifiable-evidence.md`](./offline-verifiable-evidence.md).
+Signing is disabled by default and fails closed: an instance that has not
+configured a signing key cannot emit signed evidence.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_EVIDENCE_SIGNING_KEY` | For signed evidence | – | PEM-encoded Ed25519 private key that signs the evidence manifest. Set it to enable signing; the matching public key is derived and published automatically via the admin verification-key endpoint. Empty disables signed evidence. |
+| `MODULO_EVIDENCE_EXPORTER_IDENTITY` | No | `modulo` | Human-readable identity stamped into the signed manifest as the exporter. Never a credential. |
+
+---
+
 ## Stripe (Purchase Fulfilment)
 
 The `POST /api/v1/webhooks/stripe` webhook verifies the `Stripe-Signature`
@@ -409,7 +426,7 @@ The same SMTP configuration also drives the system worker's in-app readiness ale
 
 Notifications are edge-triggered and deduplicated: a new state must hold for 2 consecutive ticks (a ~10-minute worst-case notification latency, a single-probe blip never emails), and the dedup state is persisted in Redis so there is **one email per incident, never one per tick**. With no SMTP configuration (the compose deployment default), the cron still runs and evaluates health, never errors, and logs at most once per hour that alerting is disabled – quiet, not silent.
 
-The alerting also covers the **advisory** sweeps whose failure is real breakage (FAR-1571). The readiness aggregate deliberately excludes the advisory checks, so `REAL_FAILURE_ADVISORY_CHECKS` names the ones that *are* alert-worthy: a sustained non-`ok` on `stale_run_recovery`, `slot_reconciliation`, `hitl_park_sweep`, `runner_workspace_reconcile`, `runner_marker_sweep`, `runner_health_probe` or `dispatcher_reconcile` at its `degraded` tier emails the same incident/recovery pair even while the aggregate still reads `ok` (the email reports `degraded`, never the misleading `ok`). Benign or other-channel advisories: `event_loop_lag`, `break_glass`, and a not-measured `db_hygiene` probe - stay quiet, and the 2-tick hysteresis is unchanged, so a single transient advisory blip still never emails.
+The alerting also covers the **advisory** sweeps whose failure is real breakage (FAR-1571). The readiness aggregate deliberately excludes the advisory checks, so `REAL_FAILURE_ADVISORY_CHECKS` names the ones that *are* alert-worthy: a sustained non-`ok` on `stale_run_recovery`, `slot_reconciliation`, `hitl_park_sweep`, `runner_workspace_reconcile`, `runner_marker_sweep`, `runner_health_probe` or `dispatcher_reconcile` at its `degraded` tier emails the same incident/recovery pair even while the aggregate still reads `ok` (the email reports `degraded`, never the misleading `ok`). Benign or other-channel advisories: `break_glass` and a not-measured `db_hygiene` probe - stay quiet, and the 2-tick hysteresis is unchanged, so a single transient advisory blip still never emails. `event_loop_lag` is the exception, gated by magnitude rather than silenced outright (FAR-1771): under 250 ms (`_LOOP_LAG_DEGRADED_MS`, `api/routes/health.py`) it reads `ok` and stays quiet; from 250 ms to 1 s it reads `degraded` - visible in the readiness payload, but it never pages; at 1 s or above (`SEVERE_EVENT_LOOP_STALL_MS`, `core/health_alerts.py`) it reads `degraded`, flips `HealthObservation.observed_state` and is listed as a failing check, so it emails like a real failure (same 2-tick hysteresis). All three bands stay out of the readiness aggregate, so `event_loop_lag` never gates bluegreen.
 
 This covers degradation *while the app is up*. A **full outage** is covered separately by the compose deployment's external [Gatus health watchdog](./deployment.md#health-watchdog-docker-compose), which does not depend on Modulo itself running.
 

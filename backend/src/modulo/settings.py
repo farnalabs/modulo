@@ -399,6 +399,15 @@ class Settings(BaseSettings):
     # is ready for production use.  Consumed in node_runner before host-side
     # ref resolution.
     modulo_workspace_inputs_enabled: bool = Field(False, alias="MODULO_WORKSPACE_INPUTS_ENABLED")
+    # FAR-1743 / ADR 037 rev 2 (EXPERIMENTAL): path to the devtools-owned
+    # model-management.json registry the sandbox_agent ``model_class`` seam
+    # resolves through at snapshot mint. None (default) = no registry: nodes
+    # without ``model_class`` resolve nothing (existing pipelines unchanged),
+    # while a node that DECLARES ``model_class`` fails closed pre-dispatch
+    # (ModelClassResolutionError, ADR 037 D3). When set, the file must stay
+    # readable — a configured-but-broken registry rejects sandbox runs loudly
+    # instead of silently shipping them on the wrong model.
+    model_class_registry_path: str | None = Field(default=None, alias="MODEL_CLASS_REGISTRY_PATH")
     # FAR-1050 R6 (E2B provider-conformance rewire): the
     # ``MODULO_E2B_VIA_PROVIDER`` flag is RETIRED. The legacy direct E2B path
     # was deleted in R6 — every sandbox dispatch runs through the
@@ -928,6 +937,19 @@ class Settings(BaseSettings):
     modulo_health_db_hygiene_dead_ratio: float = Field(
         default=0.60, alias="MODULO_HEALTH_DB_HYGIENE_DEAD_RATIO", ge=0.0, le=1.0
     )
+
+    # ------------------------------------------------------------------
+    # FAR-1771 — event-loop stall ATTRIBUTION (opt-in, off by default).
+    # ------------------------------------------------------------------
+    # When > 0 (milliseconds), process startup installs stall attribution on
+    # the process's event loop: asyncio's slow-callback warning is armed at
+    # this threshold (loop.set_debug + loop.slow_callback_duration), and a
+    # low-frequency sampler thread records the loop thread's stack so the
+    # readiness stall log can NAME the blocking callback (file:line) when a
+    # synchronous call freezes the loop — the FAR-1439 class that starves
+    # every async DB op at once. 0 (the default) = off: no sampler thread,
+    # no loop debug flags, no per-tick work — zero cost, exactly as today.
+    modulo_slow_callback_warn_ms: int = Field(default=0, alias="MODULO_SLOW_CALLBACK_WARN_MS", ge=0, le=60_000)
 
     # ------------------------------------------------------------------
     # In-process worker-liveness watchdog (postmortem 2026-08-09, FAR-121)

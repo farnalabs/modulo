@@ -87,19 +87,19 @@ registry (`feat-router`).
 
 ## Known Gaps
 
-- **Edge-gate HITL remains compile-supported** — the legacy edge-level
+- **Edge-gate HITL remains compile-supported** - the legacy edge-level
   `hitl_review_config` is deliberately not removed; the `hitl` node lowers onto
   it (ADR 050, backward-compatible). (The prior "No BDD feature scenarios"
-  gap was closed 2026-09-17 by `router_nodes.feature` — Router authoring,
+  gap was closed 2026-09-17 by `router_nodes.feature` - Router authoring,
   first-match-wins/default/classifier routing semantics, and the
   RouterNoMatchError → `router_no_match` terminalisation are now executing BDD
   coverage.)
 
 ## QA History
 
-- 2026-09-25: **Improve Architecture product-map walk** — closed the stale
+- 2026-09-25: **Improve Architecture product-map walk** - closed the stale
   `feat-router` "partial" in the manifest feature registry: complex / nested
-  conditional routing ships through the full standard JMESPath engine — router
+  conditional routing ships through the full standard JMESPath engine - router
   guards, conditional edges, loop counters and HITL gate conditions all evaluate
   via the single consolidated `compile_jmespath` /
   `evaluate_jmespath_condition` (truthiness `bool(...)`) in
@@ -107,7 +107,7 @@ registry (`feat-router`).
   `contains` / multi-level access are first-class while an invalid expression
   surfaces an actionable `ValueError`. Manifest `feat-router` status is now
   `covered`, matching this tracker.
-- 2026-09-17: **product-map review pass** — closed the
+- 2026-09-17: **product-map review pass** - closed the
   "No BDD feature scenarios" Known Gap. Added
   `backend/tests/bdd/features/pipelines/router_nodes.feature` (wired from
   `steps/test_router_nodes.py`), exercising the real shipped seams: the
@@ -120,7 +120,7 @@ registry (`feat-router`).
   `failed` classification, plus the `TERMINAL_STATUSES` contract. All 9
   scenarios executing green; `_ORPHANED_BDD_FEATURES` stays empty.
 
-- 2026-08-29: **product-map review pass** — entry added to close
+- 2026-08-29: **product-map review pass** - entry added to close
   the feature-graph gap behind the manifest `feat-router` registry entry (with
   `/pipelines` route referencing it) that shipped in FAR-415 but had no
   behaviour-tracker node. Behaviours re-verified against ADR 050,

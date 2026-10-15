@@ -1,7 +1,7 @@
 import uuid
 from typing import Any, Final
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, String, Text, Uuid
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, String, Text, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped, SoftDeleteMixin
@@ -50,6 +50,19 @@ class EnvironmentProfile(SoftDeleteMixin, OrgScoped):
         CheckConstraint(
             _initialisation_strategy_check_sql(),
             name="ck_env_profiles_initialisation_strategy",
+        ),
+        # Partial unique from migration 0156_add_soft_delete_partial_uniques —
+        # one live profile per (org, name); a soft-deleted row no longer blocks
+        # a re-create. Declared on the model so the ORM metadata matches the DB.
+        Index(
+            "uq_environment_profiles_org_name",
+            "organisation_id",
+            "name",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            # sqlite_where as well: postgresql_where is ignored on SQLite, so
+            # create_all'd schemas would otherwise build a FULL unique index.
+            sqlite_where=text("deleted_at IS NULL"),
         ),
     )
 

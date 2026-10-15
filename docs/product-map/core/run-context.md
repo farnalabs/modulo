@@ -44,7 +44,7 @@ telemetry emits gate-outcome events for observability.
       run-context recommendation may always **lower** the effective level but is
       capped at the pinned `max_autonomy_level` (when unset, the effective
       ceiling is the pipeline default, so a recommendation can only lower
-      autonomy — the FAR-1163 S0 fix for the context-setter escalation hole),
+      autonomy - the FAR-1163 S0 fix for the context-setter escalation hole),
       with a safe manual-approval fallback when the default/recommendation is
       unset or invalid
 - [x] Autonomy telemetry emits the expected gate-outcome event payload; failures are
@@ -54,16 +54,16 @@ telemetry emits gate-outcome events for observability.
 
 ## Known Gaps
 
-- **Context writes are role-gated at the decorator layer** — enforcement is
+- **Context writes are role-gated at the decorator layer** - enforcement is
   behavioural (node role), not a storage-level permission, so a mislabeled runtime
   is the boundary.
 
 ## QA History
 
-- 2026-10-10: **qa-iterate product-map pass** — corrected claims drifted from
+- 2026-10-10: **qa-iterate product-map pass** - corrected claims drifted from
   the shipped code. The seeding and context-setter write guard are implemented
   in `core/pipeline_engine/executor.py` (`_seed_state`) and
-  `core/pipeline_engine/decorator.py` — added to `code:`. Dropped the false
+  `core/pipeline_engine/decorator.py` - added to `code:`. Dropped the false
   "explicit input overrides defaults" claim (input is nested under the `input`
   key and coexists with defaults; `_seed_state` never merges it over the
   spread). Restated autonomy resolution as ceiling-clamped (a recommendation can
@@ -71,7 +71,7 @@ telemetry emits gate-outcome events for observability.
   FAR-1163 S0 work. Cited the `.feature` file in `bdd:` (the prior `.py` steps
   citation bypassed the registered-coverage guard). Status: covered.
 
-- 2026-08-25: **product-map review pass** — entry added to close the
+- 2026-08-25: **product-map review pass** - entry added to close the
   dangling `depends-on: feat-core-run-context` edge in `teams/org-entity.md`.
   Behaviours re-verified against `core/run_context/*` and its unit/BDD suites.
   Status: covered.
