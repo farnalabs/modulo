@@ -241,6 +241,9 @@ jobs:
       - name: Validate sidebar nav translations
         working-directory: .
         run: uv run --no-build --project backend --no-sync python scripts/run_validate_translations.py
+      - name: Validate manifest nav structure
+        working-directory: .
+        run: uv run --no-build --project backend --no-sync python scripts/run_validate_nav_config.py
       - name: Trivy filesystem scan (dependency CVEs + misconfigs)
         uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297
         # Pin the vulnerability DB to the canonical GHCR repository instead of
