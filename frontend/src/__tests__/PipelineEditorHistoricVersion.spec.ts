@@ -15,6 +15,7 @@ import { useRoute } from 'vue-router'
 const apiGetMock = vi.hoisted(() => vi.fn())
 const apiPostMock = vi.hoisted(() => vi.fn())
 const apiPatchMock = vi.hoisted(() => vi.fn())
+const apiPutMock = vi.hoisted(() => vi.fn())
 const useApiFns = vi.hoisted(() => ({
   get: vi.fn().mockResolvedValue([]),
   post: vi.fn().mockResolvedValue({}),
@@ -25,7 +26,7 @@ vi.mock('../lib/api/client', () => ({
     GET: apiGetMock,
     POST: apiPostMock,
     PATCH: apiPatchMock,
-    PUT: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
+    PUT: apiPutMock.mockResolvedValue({ data: {}, error: undefined }),
     DELETE: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
   },
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
@@ -101,6 +102,23 @@ const SNAPSHOT_DETAIL = {
   graph_json: FROZEN_GRAPH,
 }
 
+// FAR-1812 QA: a sandbox_agent node is the shape that mounts the
+// runner-binding panel (it lives under the inspector's sandbox_agent block),
+// so the write-affordance assertions need a graph carrying one.
+const SANDBOX_NODE_ID = 'node-sandbox'
+const SANDBOX_GRAPH = {
+  nodes: [
+    {
+      id: SANDBOX_NODE_ID,
+      node_type: 'sandbox_agent',
+      label: 'Runner Node',
+      agent_id: 'agent-frozen',
+      position: { x: 80, y: 80 },
+    },
+  ],
+  edges: [],
+}
+
 const router = createRouter({
   history: createWebHistory(),
   routes: [{ path: '/pipelines/:id/editor', name: 'pipeline-editor', component: PipelineEditorView }],
@@ -128,16 +146,91 @@ function seedRoute(query: Record<string, string>) {
   sharedRoute.query = { ...query }
 }
 
+/** Any graph fixture shape (LIVE/FROZEN/SANDBOX graphs all satisfy it). */
+type TestGraph = { nodes: Array<Record<string, unknown>>; edges: unknown[] }
+
 // Every payload is CLONED: the editor holds the response objects by
 // reference (rawNodes IS result.nodes), so a test that mutates the editable
 // state must never poison the shared fixture for the next mount.
-function seedApi() {
+function seedApi(opts: { liveGraph?: TestGraph; frozenGraph?: TestGraph } = {}) {
+  const liveGraph = opts.liveGraph ?? LIVE_GRAPH
+  const frozenGraph = opts.frozenGraph ?? FROZEN_GRAPH
   apiGetMock.mockImplementation((url: string) => {
     if (url.includes('/snapshots/{snapshot_id}')) {
-      return Promise.resolve({ data: structuredClone(SNAPSHOT_DETAIL), error: undefined, response: { status: 200 } })
+      return Promise.resolve({
+        data: { ...structuredClone(SNAPSHOT_DETAIL), graph_json: structuredClone(frozenGraph) },
+        error: undefined,
+        response: { status: 200 },
+      })
     }
     if (url.endsWith('/snapshots')) {
       return Promise.resolve({ data: { items: structuredClone(SNAPSHOT_LIST) }, error: undefined })
+    }
+    if (url.includes('/pipelines/{pipeline_id}/graph')) {
+      return Promise.resolve({ data: structuredClone(liveGraph), error: undefined })
+    }
+    if (url.includes('/pipelines/{pipeline_id}')) {
+      return Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline' }, error: undefined })
+    }
+    return Promise.resolve({ data: { items: [] }, error: undefined })
+  })
+  apiPostMock.mockResolvedValue({ data: {}, error: undefined })
+  apiPatchMock.mockResolvedValue({ data: {}, error: undefined })
+}
+
+/** `[from, from-1, …, to]` — a version-DESCENDING history. */
+function versionRange(from: number, to = 1): number[] {
+  const out: number[] = []
+  for (let v = from; v >= to; v -= 1) out.push(v)
+  return out
+}
+
+/**
+ * A version-DESCENDING snapshot history served WITH the real endpoint's
+ * pagination (`page`/`page_size`, default page_size=20, `total` = all rows)
+ * so the `?version=` alias resolver is exercised exactly as in production.
+ * `drop` removes versions to model admin-deleted rows (gaps in the range).
+ */
+function seedPagedSnapshots(versions: number[], opts: { drop?: number[] } = {}) {
+  const dropped = new Set(opts.drop ?? [])
+  const rows = versions
+    .filter((v) => !dropped.has(v))
+    .map((v) => ({
+      id: `snap-v${v}`,
+      pipeline_id: 'test-pipeline-id',
+      snapshot_version: v,
+      tag: null,
+      notes: null,
+      created_at: '2026-08-01T12:00:00Z',
+      created_by: 'acct-0123456789abcdef',
+      version_kind: 'edit',
+      created_kind: 'edit',
+      draft: false,
+      channel: 'none',
+    }))
+  apiGetMock.mockImplementation((url: string, init?: any) => {
+    if (url.includes('/snapshots/{snapshot_id}')) {
+      const id = init?.params?.path?.snapshot_id
+      const row = rows.find((r) => r.id === id)
+      if (!row) {
+        return Promise.resolve({
+          data: undefined,
+          error: { detail: 'Snapshot not found' },
+          response: { status: 404 },
+        })
+      }
+      return Promise.resolve({
+        data: { ...structuredClone(row), graph_json: structuredClone(FROZEN_GRAPH) },
+        error: undefined,
+        response: { status: 200 },
+      })
+    }
+    if (url.endsWith('/snapshots')) {
+      const query = (init?.params?.query ?? {}) as { page?: number; page_size?: number }
+      const page = query.page ?? 1
+      const pageSize = query.page_size ?? 20
+      const items = structuredClone(rows.slice((page - 1) * pageSize, page * pageSize))
+      return Promise.resolve({ data: { items, total: rows.length }, error: undefined })
     }
     if (url.includes('/pipelines/{pipeline_id}/graph')) {
       return Promise.resolve({ data: structuredClone(LIVE_GRAPH), error: undefined })
@@ -151,9 +244,10 @@ function seedApi() {
   apiPatchMock.mockResolvedValue({ data: {}, error: undefined })
 }
 
-async function mountEditor(query: Record<string, string> = {}) {
+async function mountEditor(query: Record<string, string> = {}, afterSeed?: () => void) {
   seedRoute(query)
   seedApi()
+  afterSeed?.()
   const pinia = createPinia()
   setActivePinia(pinia)
   const store = usePlanStore()
@@ -223,7 +317,9 @@ describe('PipelineEditorView — historic version view (FAR-1812)', () => {
   })
 
   it('unmounts every write affordance while viewing (absent, not disabled)', async () => {
-    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    // The frozen graph here carries a sandbox_agent node — the shape that
+    // mounts the runner-binding panel in the node inspector.
+    const wrapper = await mountEditor({ snapshot: 'snap-4' }, () => seedApi({ frozenGraph: SANDBOX_GRAPH }))
 
     for (const testid of [
       'pipeline-editor-save',
@@ -241,7 +337,41 @@ describe('PipelineEditorView — historic version view (FAR-1812)', () => {
     // Read/inspect affordances stay.
     expect(wrapper.find('[data-testid="pipeline-editor-version-timeline"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="pipeline-editor-fit-view"]').exists()).toBe(true)
+
+    // Inspector surface: the runner-binding panel (add-row inputs, per-row
+    // remove, Save → PUT /agents/{id}/bindings) must be ABSENT too — it
+    // mutates the LIVE agent, and its data is the live agent's rows, which
+    // the snapshot does not freeze. Open the node to mount the inspector.
+    ;(wrapper.vm as any).onNodeClick({ node: { id: SANDBOX_NODE_ID } })
+    await nextTick()
+    for (const testid of [
+      'pipeline-editor-runner-bindings',
+      'pipeline-editor-runner-bindings-rows',
+      'pipeline-editor-runner-binding-add',
+      'pipeline-editor-runner-binding-save',
+      'pipeline-editor-runner-binding-target-input',
+      'pipeline-editor-runner-binding-source-input',
+      'pipeline-editor-runner-binding-backend',
+    ]) {
+      expect(wrapper.find(`[data-testid="${testid}"]`).exists(), testid).toBe(false)
+    }
+    // No write issued, and no live-state READ either (the component never
+    // mounted — absent, not disabled).
+    expect(apiPutMock).not.toHaveBeenCalled()
+    expect(
+      apiGetMock.mock.calls.filter((call) => call[0] === '/api/v1/agents/{agent_id}/bindings'),
+    ).toHaveLength(0)
     wrapper.unmount()
+
+    // Non-vacuous check: the SAME node in latest mode mounts the full write
+    // panel — proving the view-mode absence above is the v-if, not a fixture
+    // that never rendered the surface in the first place.
+    const latest = await mountEditor({}, () => seedApi({ liveGraph: SANDBOX_GRAPH }))
+    ;(latest.vm as any).onNodeClick({ node: { id: SANDBOX_NODE_ID } })
+    await nextTick()
+    expect(latest.find('[data-testid="pipeline-editor-runner-bindings"]').exists()).toBe(true)
+    expect(latest.find('[data-testid="pipeline-editor-runner-binding-save"]').exists()).toBe(true)
+    latest.unmount()
   })
 
   it('renders the inspector read-only while viewing and editable in latest mode', async () => {
@@ -345,6 +475,50 @@ describe('PipelineEditorView — historic version view (FAR-1812)', () => {
 
   it('treats a version alias with no match as the graceful miss', async () => {
     const wrapper = await mountEditor({ version: '999' })
+    const vm = wrapper.vm as any
+
+    expect(vm.isViewing).toBe(false)
+    expect(vm.versionMissing).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-version-missing"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('resolves a ?version= deeper than the first list page (bounded search, not the loaded page)', async () => {
+    // 45 versions: loadCatalog's default first page (page_size=20) holds
+    // v45…v26 — v3 EXISTS but is not on the page the old page-1-only
+    // resolver searched, so it falsely reported "no longer available".
+    const wrapper = await mountEditor({ version: '3' }, () => seedPagedSnapshots(versionRange(45)))
+    const vm = wrapper.vm as any
+
+    expect(vm.isViewing).toBe(true)
+    expect(vm.versionMissing).toBe(false)
+    expect(wrapper.find('[data-testid="pipeline-editor-historic-banner"]').text()).toContain('Viewing v3')
+    wrapper.unmount()
+  })
+
+  it('resolves a ?version= beyond the 100-row lookup page via the bounded page search', async () => {
+    // 250 versions: v42 sits at rank 209 — deeper than page 1 at
+    // page_size=100, so a bigger-page-only fix still misses it. The bounded
+    // search pages to it (<= log2(pageCount) probes, hard-capped) instead of
+    // reporting it missing.
+    const wrapper = await mountEditor({ version: '42' }, () => seedPagedSnapshots(versionRange(250)))
+    const vm = wrapper.vm as any
+
+    expect(vm.isViewing).toBe(true)
+    expect(vm.versionMissing).toBe(false)
+    expect(wrapper.find('[data-testid="pipeline-editor-historic-banner"]').text()).toContain('Viewing v42')
+    wrapper.unmount()
+  })
+
+  it('still shows the graceful miss for a genuinely absent version beyond the first page', async () => {
+    // v42 deleted from an otherwise contiguous 250-version history: the
+    // search reaches the page whose range contains 42, finds no such row
+    // (the list is sorted — absence there is absence everywhere), and
+    // reports the graceful miss: not a false hit, not a raw error.
+    const wrapper = await mountEditor(
+      { version: '42' },
+      () => seedPagedSnapshots(versionRange(250), { drop: [42] }),
+    )
     const vm = wrapper.vm as any
 
     expect(vm.isViewing).toBe(false)

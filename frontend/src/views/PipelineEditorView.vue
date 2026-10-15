@@ -1182,7 +1182,14 @@
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.env_vars') }}</dt>
               <dd class="font-mono text-[10px] break-all">{{ Object.keys(selectedNodeData.env_vars).join(', ') }}</dd>
             </div>
-            <AgentRunnerBindings :agent-id="selectedNodeData.agent_id" />
+            <!-- FAR-1812: runner bindings WRITE the LIVE agent (PUT) and READ
+                 its live rows — the snapshot freezes only the GRAPH, so
+                 there is no frozen binding state a read-only mode could
+                 show. While viewing the component is ABSENT, not disabled:
+                 no Save, no add/remove rows, and no live-state read either
+                 (the frozen view must not present live agent config as if it
+                 were frozen). -->
+            <AgentRunnerBindings v-if="!isViewing" :agent-id="selectedNodeData.agent_id" />
             <div v-if="selectedNodeData.context_files && Object.keys(selectedNodeData.context_files).length > 0">
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.context_files') }}</dt>
               <dd><ul class="list-inside list-disc text-xs text-muted-foreground"><li v-for="(content, fpath) in selectedNodeData.context_files" :key="fpath">{{ fpath }} <span class="text-[10px] opacity-60">({{ content.length }} bytes)</span></li></ul></dd>
@@ -2721,6 +2728,11 @@ async function loadGraph() {
   }
 }
 
+// FAR-1812: this list feeds the version chip / compare dropdown only. The
+// `?version=` alias does NOT resolve against it — it resolves through
+// resolveVersionAlias()'s own bounded search over the same endpoint (page 1
+// at page_size=100 + a binary search), so a partial or failed catalog load
+// can never make an existing deep version read as missing.
 async function loadCatalog() {
   pageError.value = null
   try {
@@ -2743,12 +2755,6 @@ async function loadCatalog() {
     paramSchemas.value = ps
   } catch (e) {
     console.warn('Failed to load pipeline data', e)
-  } finally {
-    // FAR-1812: the `?version=` alias resolves CLIENT-SIDE against this list.
-    // The flag is what tells the resolver "no match" means missing rather
-    // than still-loading — it flips even when the fetch above failed (an
-    // unreachable list resolves to the graceful miss, never a spinner).
-    snapshotsCatalogLoaded.value = true
   }
 }
 
@@ -3604,8 +3610,9 @@ const pageError = ref<string | null>(null)
 // FAR-1812: read-only historic version view.
 //
 // The route query selects the mode: `?snapshot=<uuid>` is the canonical deep
-// link and `?version=<n>` an alias resolved CLIENT-SIDE against the snapshot
-// list loadCatalog already fetches (snapshot wins when both are present).
+// link and `?version=<n>` an alias resolved against the server's
+// version-DESCENDING snapshot list by resolveVersionAlias()'s bounded search
+// (snapshot wins when both are present).
 //
 // THE DATA-LOSS HAZARD this block exists to prevent: the editor's Save writes
 // rawNodes/rawEdges (the LIVE graph), so hydrating those refs from an old
@@ -3615,8 +3622,6 @@ const pageError = ref<string | null>(null)
 // editable state is never touched, and every write function additionally
 // early-returns while isViewing holds.
 // ---------------------------------------------------------------------------
-
-const snapshotsCatalogLoaded = ref(false)
 
 function readQueryValue(value: unknown): string | null {
   const raw = Array.isArray(value) ? value[0] : value
@@ -3634,12 +3639,156 @@ const requestedVersion = computed(() => {
   return /^\d+$/.test(raw) ? Number(raw) : -1
 })
 
+// --- `?version=<n>` alias resolution ---------------------------------------
+// The alias resolves against the server's version-DESCENDING snapshot list
+// (`GET /{pipeline_id}/snapshots`), which is PAGINATED (page_size caps at
+// 100, default 20). Resolving only the first loaded page made a deep link
+// like `?version=3` on a long-lived pipeline report "This version is no
+// longer available" for a version that exists — a false statement on the
+// exact promise the feature exists to keep. The search here is BOUNDED by
+// construction:
+//
+//   * page 1 at SNAPSHOT_LOOKUP_PAGE_SIZE — a single request covers the top
+//     100 versions (every pipeline up to 100 versions), and
+//   * for deeper versions, a binary search over the remaining pages — at
+//     most log2(pageCount) further requests, hard-capped at
+//     SNAPSHOT_LOOKUP_MAX_PROBES (12 probes = 409,600 versions; exhausting
+//     the budget throws rather than guessing "missing").
+//
+// The `?snapshot=<uuid>` path never enters this code — no extra request, no
+// latency change for the canonical link. Nothing depends on loadCatalog's
+// page-1 list, so a partial or failed catalog load cannot make an existing
+// deep version read as missing either.
+const SNAPSHOT_LOOKUP_PAGE_SIZE = 100
+const SNAPSHOT_LOOKUP_MAX_PROBES = 12
+
+type VersionLookupStatus = 'idle' | 'loading' | 'found' | 'absent' | 'failed'
+const versionLookupStatus = ref<VersionLookupStatus>('idle')
+const versionLookupId = ref<string | null>(null)
+// Monotonic token: a search superseded by a newer query change (or a page
+// reload) must never write its result over the newer one.
+let versionLookupToken = 0
+
+async function fetchSnapshotLookupPage(
+  page: number,
+): Promise<{ items: components['schemas']['SnapshotResponse'][]; total: number }> {
+  const { data, error } = await withTimeout((signal) =>
+    api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
+      params: { path: { pipeline_id: pipelineId }, query: { page, page_size: SNAPSHOT_LOOKUP_PAGE_SIZE } },
+      signal,
+    }),
+  )
+  if (error || !data) throw new Error(`snapshot list page ${page} could not be loaded`)
+  const items = data.items ?? []
+  // `total` is always sent by the server; fall back to the page's own length
+  // so a response without it degrades to "one page", never to NaN bounds.
+  const total = Number.isFinite(data.total) ? data.total : items.length
+  return { items, total }
+}
+
+/**
+ * Find `version` in the server's version-DESC snapshot ordering.
+ *
+ * Returns the snapshot id, or null when the version is PROVABLY absent
+ * (it lies outside the existing version range, or the page whose range
+ * contains it has no such row — the list is sorted, so absence on that page
+ * is absence everywhere). Throws when the search could not complete: a
+ * failed search must never masquerade as "this version is no longer
+ * available".
+ */
+async function findSnapshotIdByVersion(version: number): Promise<string | null> {
+  const find = (items: components['schemas']['SnapshotResponse'][]) =>
+    items.find((s) => s.snapshot_version === version) ?? null
+  const pageOne = await fetchSnapshotLookupPage(1)
+  const onFirst = find(pageOne.items)
+  if (onFirst) return onFirst.id
+  if (pageOne.items.length === 0) return null // no snapshots at all
+  // Sorted version-DESC: page 1 spans [newest … oldest-on-page-1].
+  if (version > pageOne.items[0].snapshot_version) return null // newer than the newest
+  if (version >= pageOne.items[pageOne.items.length - 1].snapshot_version) {
+    return null // inside page 1's range, not present — absent
+  }
+  // Below page 1: binary search the remaining pages by the range each spans.
+  let lo = 2
+  let hi = Math.ceil(pageOne.total / SNAPSHOT_LOOKUP_PAGE_SIZE)
+  let probes = 0
+  while (lo <= hi) {
+    if (probes >= SNAPSHOT_LOOKUP_MAX_PROBES) {
+      throw new Error('version alias search exceeded its probe budget')
+    }
+    probes += 1
+    const mid = Math.floor((lo + hi) / 2)
+    const page = await fetchSnapshotLookupPage(mid)
+    // Versions saved while this search runs push every older version DOWN
+    // the ranking — refresh `hi` from each page's live total so a stale
+    // bound can never truncate the search below the target's new rank (a
+    // false "no longer available" of exactly the kind this search exists to
+    // prevent). Termination is unaffected: `probes` still caps the loop.
+    hi = Math.max(hi, Math.ceil(page.total / SNAPSHOT_LOOKUP_PAGE_SIZE))
+    if (page.items.length === 0) {
+      hi = mid - 1 // past the end (list shrank) — search earlier
+      continue
+    }
+    const hit = find(page.items)
+    if (hit) return hit.id
+    if (version > page.items[0].snapshot_version) {
+      hi = mid - 1 // belongs above this page
+      continue
+    }
+    if (version < page.items[page.items.length - 1].snapshot_version) {
+      lo = mid + 1 // belongs below this page
+      continue
+    }
+    return null // inside this page's range, not present — absent
+  }
+  return null
+}
+
+/**
+ * Resolve the current `?version=<n>` alias. No-op for the canonical
+ * `?snapshot=` link (which needs no list at all), for an absent alias, and
+ * for a malformed one (versionMissing derives that case directly, with no
+ * request). A completed search records found/absent; a FAILED one lands on
+ * pageError — an accurate load error — never on the graceful miss, because
+ * "no longer available" would be false when the search itself failed.
+ */
+async function resolveVersionAlias(): Promise<void> {
+  const token = ++versionLookupToken
+  const version = requestedVersion.value
+  if (snapshotParam.value !== null || versionParam.value === null || version === null || version <= 0) {
+    versionLookupId.value = null
+    versionLookupStatus.value = 'idle'
+    return
+  }
+  versionLookupId.value = null
+  versionLookupStatus.value = 'loading'
+  try {
+    const id = await findSnapshotIdByVersion(version)
+    if (token !== versionLookupToken) return
+    versionLookupId.value = id
+    versionLookupStatus.value = id ? 'found' : 'absent'
+  } catch (e: unknown) {
+    if (token !== versionLookupToken) return
+    console.warn('Failed to resolve the ?version= alias', e)
+    versionLookupStatus.value = 'failed'
+    pageError.value = t('views.PipelineEditorView.version_load_failed', { error: formatApiError(e) })
+  }
+}
+
+// Re-resolve whenever the alias (or its precedence against `?snapshot=`)
+// changes: entering a version, switching versions, or leaving to latest.
+// NOT immediate — mount is covered by the fetcher below, which AWAITS this
+// same routine, so `loading` spans the search and the spinner never gaps.
+// reloadPage (ErrorAlert's retry) re-runs it for the same reason: a failed
+// search must be retryable from the error it produced.
+watch([snapshotParam, versionParam], () => {
+  void resolveVersionAlias()
+})
+
 const resolvedSnapshotId = computed<string | null>(() => {
   if (snapshotParam.value !== null) return snapshotParam.value
-  const version = requestedVersion.value
-  if (version === null || version <= 0 || !snapshotsCatalogLoaded.value) return null
-  const match = snapshots.value.find((s: any) => s?.snapshot_version === version)
-  return typeof match?.id === 'string' ? match.id : null
+  if (versionLookupStatus.value !== 'found') return null
+  return versionLookupId.value
 })
 
 type VersionDetailStatus = 'idle' | 'loading' | 'ready' | 'missing' | 'failed'
@@ -3682,25 +3831,29 @@ const isViewing = computed(
     viewSnapshot.value !== null,
 )
 
-// Graceful miss: unknown/deleted snapshot, a `?version=` that resolves to
-// nothing, or a malformed version param — never a raw error, never a dead page.
+// Graceful miss: unknown/deleted snapshot, a `?version=` the bounded search
+// PROVED absent, or a malformed version param — never a raw error, never a
+// dead page. A search that could not complete ('failed') is deliberately not
+// a miss: the pageError branch tells the truth instead of the false "no
+// longer available".
 const versionMissing = computed(() => {
   if (versionDetailStatus.value === 'missing') return true
   if (snapshotParam.value !== null) return false
   if (versionParam.value === null) return false
-  if (!snapshotsCatalogLoaded.value) return false
   const version = requestedVersion.value
   if (version === null || version <= 0) return true
-  return resolvedSnapshotId.value === null
+  return versionLookupStatus.value === 'absent'
 })
 
-// Spinner only while a requested version is genuinely in flight; a failed
-// detail load falls through to pageError instead of spinning forever.
+// Spinner only while an alias search or detail load is genuinely in flight;
+// a failed search/detail falls through to pageError instead of spinning
+// forever.
 const historicResolving = computed(
   () =>
     historicRequested.value &&
     !isViewing.value &&
     !versionMissing.value &&
+    versionLookupStatus.value !== 'failed' &&
     versionDetailStatus.value !== 'failed',
 )
 
@@ -3945,7 +4098,17 @@ onBeforeUnmount(() => {
 const { loading, load: reloadPage } = useDataFetch<null>(
   async () => {
     pageError.value = null
-    await Promise.all([loadPipeline(), loadGraph(), loadCatalog(), loadFolders(), loadLifecycleMaps()])
+    // resolveVersionAlias is AWAITED here (not fire-and-forget): `loading`
+    // then spans a `?version=` search on mount, so the spinner never gaps,
+    // and reloadPage retries a failed search from the error it produced.
+    await Promise.all([
+      loadPipeline(),
+      loadGraph(),
+      loadCatalog(),
+      loadFolders(),
+      loadLifecycleMaps(),
+      resolveVersionAlias(),
+    ])
     // useDataFetch's queryFn forwards `result.data`; vue-query rejects an
     // undefined query result ("data is undefined"), so always resolve with a
     // defined payload (the loaders write their state directly).
