@@ -43,6 +43,56 @@ async function chrome(page: Page): Promise<ChromeCounts> {
   }), [HAMBURGER, RAIL, PENDING] as [string, string, string])
 }
 
+// FAR-1805: a settled chrome must also be USABLE, not just present. Open the
+// nav panel for the test's known mode and navigate to a different page via one
+// of the panel's own visible links. Duplicated here rather than shared with
+// mobile-nav-usable.spec.ts — importing across spec files would execute the
+// other file's `test.describe` registrations.
+const USABLE_NAV_TIMEOUT_MS = 15_000
+// Probe at most the first N visible nav links for one that navigates elsewhere
+// (kept in step with mobile-nav-usable.spec.ts).
+const MAX_PROBED_LINKS = 8
+
+async function openAndNavigate(page: Page, mode: 'rail' | 'drawer'): Promise<void> {
+  const trigger = page.locator(mode === 'rail' ? RAIL : HAMBURGER).first()
+  await expect(trigger, `the settled ${mode} trigger must be present and tappable`).toBeVisible()
+  await trigger.click()
+
+  const panel = mode === 'rail'
+    ? page.locator('aside[role="dialog"]')
+    : page.locator('#mobile-sidebar')
+  await expect(panel, `the ${mode}-mode nav panel must open on tap`).toBeVisible()
+
+  // Scope to the opened panel: in rail mode the in-flow icon rail also renders
+  // `.sidebar-link`s (SidebarRail -> SidebarNav). A page-wide locator can
+  // resolve `.first()` to a rail link sitting behind the modal backdrop rather
+  // than one inside the opened panel.
+  const links = panel.locator('.sidebar-link:visible')
+  await expect(links.first(), 'the opened panel must expose at least one visible nav link').toBeVisible()
+
+  const currentPath = new URL(page.url()).pathname
+  const candidateCount = Math.min(await links.count(), MAX_PROBED_LINKS)
+  for (let i = 0; i < candidateCount; i += 1) {
+    const href = await links.nth(i).getAttribute('href')
+    // Only consider in-app router links; anything else is not navigation.
+    if (!href || !href.startsWith('/')) continue
+    const targetPath = new URL(href, page.url()).pathname
+    if (targetPath === currentPath) continue
+    await links.nth(i).click()
+    await page.waitForURL((url) => new URL(url).pathname === targetPath, {
+      timeout: USABLE_NAV_TIMEOUT_MS,
+    })
+    expect(page, 'navigation must land on the SPA, never bounce to the login page')
+      .not.toHaveURL(/\/login/)
+    process.stdout.write(`[far-1237+1805] usable-nav check (${mode}): ${currentPath} -> ${targetPath}\n`)
+    return
+  }
+  throw new Error(
+    `[far-1237+1805] all ${candidateCount} visible nav links in the ${mode} panel point back to ` +
+    `${currentPath} — the panel offers no onward navigation`,
+  )
+}
+
 interface ShiftRecord {
   value: number
   nodes: string[]
@@ -223,6 +273,9 @@ test.describe('FAR-1237 — mobile first-paint layout under a slow feature-flags
     expect(firstPaint.hamburger, 'the legacy top-nav must never paint for a rail org').toBe(0)
     expect(firstPaint.rail, 'the rail must not paint before the flag resolves').toBe(0)
     expect(settled).toEqual({ hamburger: 0, rail: 1, pending: 0 })
+
+    // FAR-1805: the settled rail must also be usable, not just present.
+    await openAndNavigate(page, 'rail')
   })
 
   test('first visit (drawer org): pending placeholder paints first, the rail never appears', { tag: '@mobile' }, async ({ page }) => {
@@ -242,6 +295,8 @@ test.describe('FAR-1237 — mobile first-paint layout under a slow feature-flags
     expect(firstPaint.hamburger, 'the legacy top-nav must not paint before the flag resolves').toBe(0)
     expect(firstPaint.rail, 'the rail must never paint for a drawer org').toBe(0)
     expect(settled).toEqual({ hamburger: 1, rail: 0, pending: 0 })
+
+    await openAndNavigate(page, 'drawer')
   })
 
   test('returning rail user: the left rail paints first from the persisted cache, even while flags are slow', { tag: '@mobile' }, async ({ page }) => {
@@ -260,6 +315,8 @@ test.describe('FAR-1237 — mobile first-paint layout under a slow feature-flags
     expect(firstPaint, 'the resolved layout itself must paint first — no placeholder, no legacy top-nav')
       .toEqual({ hamburger: 0, rail: 1, pending: 0 })
     expect(settled, 'the layout must not flip once resolved').toEqual({ hamburger: 0, rail: 1, pending: 0 })
+
+    await openAndNavigate(page, 'rail')
   })
 
   test('returning drawer user (secondary UI): the top-nav paints first from cache and is never swapped for the rail', { tag: '@mobile' }, async ({ page }) => {
@@ -278,5 +335,7 @@ test.describe('FAR-1237 — mobile first-paint layout under a slow feature-flags
     expect(firstPaint, 'the secondary UI must also paint its resolved layout first')
       .toEqual({ hamburger: 1, rail: 0, pending: 0 })
     expect(settled, 'the secondary layout must not be replaced by the rail').toEqual({ hamburger: 1, rail: 0, pending: 0 })
+
+    await openAndNavigate(page, 'drawer')
   })
 })
