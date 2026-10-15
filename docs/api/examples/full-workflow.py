@@ -219,23 +219,23 @@ def main():
         # STEP 6: Set Pipeline Graph (add agent node)
         # ═══════════════════════════════════════════════════════════
         step("6. Set Pipeline Graph")
-        node_id = f"agent-{uuid.uuid4().hex[:8]}"
+        # The graph body must round-trip the API's own node shape: a real UUID
+        # ``id`` (PipelineGraphNode.id is uuid.UUID), ``node_type`` and a
+        # position — anything else is a 422 printed below instead of a save.
+        node_id = str(uuid.uuid4())
         graph = {
             "nodes": [
                 {
                     "id": node_id,
-                    "type": "agent",
-                    "data": {
-                        "agent_id": agent_id,
-                        "label": "Code Review Step",
-                        "config": {},
-                    },
+                    "node_type": "agent",
+                    "agent_id": agent_id,
+                    "label": "Code Review Step",
                     "position": {"x": 200, "y": 200},
                 },
             ],
             "edges": [],
         }
-        resp = client.patch(f"/api/v1/pipelines/{pipeline_id}/graph", json=graph, headers=headers)
+        resp = client.put(f"/api/v1/pipelines/{pipeline_id}/graph", json=graph, headers=headers)
         if resp.status_code == 200:
             print(f"  Graph saved with 1 node (agent: {agent_id})")
         else:

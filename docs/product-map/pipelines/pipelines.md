@@ -183,7 +183,7 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   `steps/test_run_context.py` and `steps/test_pipelines.py` respectively – so they are
   not re-listed here to keep the run surfaces owned by `feat-runs` / `feat-variants`.
 - **No BDD for authoring the graph through a real create/edit endpoint** – the graph
-  save path is DB-backed (the graph PATCH route), so the `validation.feature`
+  save path is DB-backed (the graph `PUT` route), so the `validation.feature`
   scenarios exercise the real `GraphValidator.validate_definition` save-time
   surface directly against a mocked session (topology + connector binding
   checks) rather than through the HTTP endpoint; the endpoint layer stays

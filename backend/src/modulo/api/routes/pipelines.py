@@ -3241,12 +3241,20 @@ async def _sync_agent_row_commands(
 class PipelineGraphNodePatch(BaseModel):
     """Partial node body for the node-targeted graph patch (FAR-1829).
 
-    A CLOSED allowlist of scalar node fields — anything the model does not
-    declare is rejected by ``extra="forbid"`` with a typed 422 field path
-    naming the offending key (``body.env_vars: Extra inputs are not
-    permitted``), so a partial body can never be an arbitrary-key passthrough.
+    A CLOSED allowlist — anything the model does not declare is rejected by
+    ``extra="forbid"`` with a typed 422 field path naming the offending key
+    (``body.env_vars: Extra inputs are not permitted``), so a partial body can
+    never be an arbitrary-key passthrough.
 
-    Two classes of field are deliberately NOT declared here:
+    The INCLUSION rule is absolute-value assignment only — no per-item
+    operations: a declared field is wholly replaced by the supplied value,
+    never incremented, appended to or edited per entry. That is why the
+    list-typed ``agent_commands`` and ``egress_allowlist`` fields ARE declared
+    (the whole list replaces the stored one) while op-list verbs (``set`` /
+    ``patch`` / ``unset``) do not exist on this route at all.
+
+    Classes of field deliberately NOT declared (these are examples — the
+    exhaustive rule is simply "any key this model does not declare is a 422"):
 
     * the credential-bearing dicts (``env_vars``, ``context_files``,
       ``composite_parameter_values``, ``parameter_overrides``) — a partial body
@@ -3254,16 +3262,31 @@ class PipelineGraphNodePatch(BaseModel):
       unpatchable rather than validated;
     * the structural / topology fields (``id``, ``node_type``, ``agent_id``,
       ``position``, and every edge) — the path's ``node_id`` addresses the node
-      and is never a body field, and a node patch changes no topology.
+      and is never a body field, and a node patch changes no topology;
+    * ``agent_prompt`` — on an ``agent`` node the runtime reads the bound
+      Agent row's prompt instead, so a node-level patch would read back right
+      while the run used the old prompt, and unlike ``agent_commands`` there
+      is no Agent-row sync that could keep the two in step.
 
     Field annotations and constraints MIRROR the same fields on
-    :class:`PipelineGraphNode` (pinned by
-    ``tests/unit/api/test_pipeline_graph_node_patch.py``), so a value the body
-    accepts is a value the merged node's own field validator accepts.
+    :class:`PipelineGraphNode` — the annotation plus every ``ge`` / ``le`` /
+    ``max_length`` / ``Literal`` member is pinned field-by-field by
+    ``tests/unit/api/test_pipeline_graph_node_patch.py`` — so a value the body
+    accepts within a declared bound is a value the merged node's own field
+    validator accepts. The single deliberate divergence is ``None``-widening:
+    the four non-nullable booleans below are ``bool | None`` here for a uniform
+    body shape, and an explicit ``null`` on them is rejected by the MERGED
+    node's ``bool`` field (422), never stored.
 
-    ``None`` is a real value here: it is supplied (present in
-    ``model_fields_set``) it clears the stored field; an ABSENT key leaves the
-    stored value untouched.
+    ``None`` semantics therefore depend on the field:
+
+    * NULLABLE on the node (``label``, ``description``,
+      ``stall_timeout_seconds``, ...): an explicitly supplied ``null`` (present
+      in ``model_fields_set``) CLEARS the stored value;
+    * the four non-nullable booleans (``enable_heartbeat``, ``idempotent``,
+      ``single_pr_per_run``, ``await_completion``): ``null`` is a 422 from the
+      merged node's own validation (see above);
+    * an ABSENT key always leaves the stored value untouched.
     """
 
     # Rejected fields are reported by the standard request-validation path, so
@@ -3305,6 +3328,17 @@ class PipelineGraphNodePatch(BaseModel):
         default=None,
         description="Sandbox egress control (sandbox_agent only).",
     )
+    # Absolute assignment (the whole list replaces the stored one) — the
+    # required companion of ``egress_policy`` above: the node's own
+    # ``_validate_sandbox_egress_allowlist_config`` fail-closes the pair
+    # ("selected" REQUIRES a non-empty allowlist, any other policy must NOT
+    # carry one), so patching either half alone could only ever 422 — the
+    # coupled pair must be patchable together.
+    egress_allowlist: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="Host:port egress allowlist (sandbox_agent, egress_policy='selected' only); "
+        "the whole list replaces the stored one.",
+    )
     wallclock_budget_seconds: int | None = Field(
         default=None,
         description="Wall-clock spend budget in seconds for the node's sandbox.",
@@ -3345,14 +3379,22 @@ class PipelineGraphNodePatch(BaseModel):
 def _joined_validation_detail(exc: ValidationError) -> str:
     """Render a Pydantic ``ValidationError`` as ``<dotted.path>: <message>`` lines.
 
+    A MODEL-level error (a ``model_validator`` rejecting a cross-field
+    combination, e.g. ``await_completion`` on a non-dispatch node) carries an
+    EMPTY ``loc`` — it is not attributable to one field, so it renders as the
+    bare message (whose Pydantic text already names the offending field)
+    rather than a ``": "`` prefix pointing at nothing.
+
     Uses :func:`_safe_validation_errors` so no ``input`` value (which for a
     model-level error is the ENTIRE node dict, credentials included) can reach
     the response — the same redaction every other write path applies.
     """
-    return "; ".join(
-        f"{'.'.join(str(part) for part in err.get('loc', ()))}: {err.get('msg', '')}"
-        for err in _safe_validation_errors(exc)
-    )
+    parts: list[str] = []
+    for err in _safe_validation_errors(exc):
+        loc = ".".join(str(part) for part in err.get("loc", ()))
+        msg = str(err.get("msg", ""))
+        parts.append(f"{loc}: {msg}" if loc else msg)
+    return "; ".join(parts)
 
 
 def _patched_node_models(
@@ -3372,7 +3414,8 @@ def _patched_node_models(
     would persist a declared-but-unread field — a silent no-op at run time.
 
     The UNCHANGED nodes keep the stored-data tolerance
-    (:func:`_graph_nodes_as_models`, strict then ``legacy_read``): they were
+    (:func:`_stored_node_model`, the ONE strict-then-``legacy_read``
+    implementation, shared with :func:`_graph_nodes_as_models`): they were
     valid at their own save time and a rule tightened since must not block an
     unrelated one-field edit any more than it blocks a node conversion.
     """
@@ -5888,27 +5931,16 @@ def _graph_nodes_as_models(nodes: list[dict[str, Any]]) -> list[PipelineGraphNod
     TYPE-SPECIFIC rules have tightened since it was written does not fail a
     conversion that ``replace_pipeline_graph`` would happily persist anyway.
 
-    A node that clears neither tier is a 422 naming that node (via
-    ``_safe_validation_errors``, so no ``env_vars``/credential value can leak
-    into the detail) rather than an opaque generic one - the graph cannot be
-    reference-checked, and this is a write path, so it fails closed.
+    The tolerance policy itself has ONE implementation —
+    :func:`_stored_node_model` (which this delegates to per stored dict), the
+    same helper the node-patch read path uses — so the two can never drift
+    apart in which stored nodes are tolerated or in how a node that clears
+    neither tier is reported: a 422 naming that node, rendered by
+    :func:`_joined_validation_detail` (so no ``env_vars``/credential value can
+    leak into the detail) rather than an opaque generic one. The graph cannot
+    be reference-checked, and this is a write path, so it fails closed.
     """
-    models: list[PipelineGraphNode] = []
-    for raw in nodes:
-        if not isinstance(raw, dict):
-            continue
-        try:
-            models.append(PipelineGraphNode.model_validate(raw))
-        except ValidationError:
-            try:
-                models.append(PipelineGraphNode.model_validate(raw, context=LEGACY_READ_CONTEXT))
-            except ValidationError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail=f"Stored graph node {raw.get('id', 'unknown')} no longer validates "
-                    f"against the current node schema: {_safe_validation_errors(exc)}",
-                ) from exc
-    return models
+    return [_stored_node_model(raw) for raw in nodes if isinstance(raw, dict)]
 
 
 def _edge_row_to_validator(edge: Any) -> dict[str, Any]:

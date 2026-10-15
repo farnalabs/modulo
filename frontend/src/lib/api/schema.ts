@@ -16728,12 +16728,20 @@ export interface components {
          * PipelineGraphNodePatch
          * @description Partial node body for the node-targeted graph patch (FAR-1829).
          *
-         *     A CLOSED allowlist of scalar node fields — anything the model does not
-         *     declare is rejected by ``extra="forbid"`` with a typed 422 field path
-         *     naming the offending key (``body.env_vars: Extra inputs are not
-         *     permitted``), so a partial body can never be an arbitrary-key passthrough.
+         *     A CLOSED allowlist — anything the model does not declare is rejected by
+         *     ``extra="forbid"`` with a typed 422 field path naming the offending key
+         *     (``body.env_vars: Extra inputs are not permitted``), so a partial body can
+         *     never be an arbitrary-key passthrough.
          *
-         *     Two classes of field are deliberately NOT declared here:
+         *     The INCLUSION rule is absolute-value assignment only — no per-item
+         *     operations: a declared field is wholly replaced by the supplied value,
+         *     never incremented, appended to or edited per entry. That is why the
+         *     list-typed ``agent_commands`` and ``egress_allowlist`` fields ARE declared
+         *     (the whole list replaces the stored one) while op-list verbs (``set`` /
+         *     ``patch`` / ``unset``) do not exist on this route at all.
+         *
+         *     Classes of field deliberately NOT declared (these are examples — the
+         *     exhaustive rule is simply "any key this model does not declare is a 422"):
          *
          *     * the credential-bearing dicts (``env_vars``, ``context_files``,
          *       ``composite_parameter_values``, ``parameter_overrides``) — a partial body
@@ -16741,16 +16749,31 @@ export interface components {
          *       unpatchable rather than validated;
          *     * the structural / topology fields (``id``, ``node_type``, ``agent_id``,
          *       ``position``, and every edge) — the path's ``node_id`` addresses the node
-         *       and is never a body field, and a node patch changes no topology.
+         *       and is never a body field, and a node patch changes no topology;
+         *     * ``agent_prompt`` — on an ``agent`` node the runtime reads the bound
+         *       Agent row's prompt instead, so a node-level patch would read back right
+         *       while the run used the old prompt, and unlike ``agent_commands`` there
+         *       is no Agent-row sync that could keep the two in step.
          *
          *     Field annotations and constraints MIRROR the same fields on
-         *     :class:`PipelineGraphNode` (pinned by
-         *     ``tests/unit/api/test_pipeline_graph_node_patch.py``), so a value the body
-         *     accepts is a value the merged node's own field validator accepts.
+         *     :class:`PipelineGraphNode` — the annotation plus every ``ge`` / ``le`` /
+         *     ``max_length`` / ``Literal`` member is pinned field-by-field by
+         *     ``tests/unit/api/test_pipeline_graph_node_patch.py`` — so a value the body
+         *     accepts within a declared bound is a value the merged node's own field
+         *     validator accepts. The single deliberate divergence is ``None``-widening:
+         *     the four non-nullable booleans below are ``bool | None`` here for a uniform
+         *     body shape, and an explicit ``null`` on them is rejected by the MERGED
+         *     node's ``bool`` field (422), never stored.
          *
-         *     ``None`` is a real value here: it is supplied (present in
-         *     ``model_fields_set``) it clears the stored field; an ABSENT key leaves the
-         *     stored value untouched.
+         *     ``None`` semantics therefore depend on the field:
+         *
+         *     * NULLABLE on the node (``label``, ``description``,
+         *       ``stall_timeout_seconds``, ...): an explicitly supplied ``null`` (present
+         *       in ``model_fields_set``) CLEARS the stored value;
+         *     * the four non-nullable booleans (``enable_heartbeat``, ``idempotent``,
+         *       ``single_pr_per_run``, ``await_completion``): ``null`` is a 422 from the
+         *       merged node's own validation (see above);
+         *     * an ABSENT key always leaves the stored value untouched.
          */
         PipelineGraphNodePatch: {
             /** Label */
@@ -16792,6 +16815,13 @@ export interface components {
              * @description Sandbox egress control (sandbox_agent only).
              */
             egress_policy?: ("default" | "deny_all" | "selected") | null;
+            /**
+             * Egress Allowlist
+             * @description Host:port egress allowlist (sandbox_agent, egress_policy='selected' only); the whole list replaces the stored one.
+             */
+            egress_allowlist?: {
+                [key: string]: unknown;
+            }[] | null;
             /**
              * Wallclock Budget Seconds
              * @description Wall-clock spend budget in seconds for the node's sandbox.

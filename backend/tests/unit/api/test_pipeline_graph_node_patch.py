@@ -14,8 +14,10 @@ could silently drop a field). The design contract these tests pin:
   that is only invalid *in combination with the stored node* is rejected (the
   property a body-only check cannot have);
 * unknown ``node_id`` is a 404, and the route carries the same permission /
-  team-scope gates as its siblings (the latter is pinned in
-  ``test_route_introspection.py``).
+  team-scope gates as its siblings (structure pinned in
+  ``test_route_introspection.py``, BEHAVIOUR — both layers of the two-layer
+  team gate actually executing — in
+  ``test_pipeline_graph_node_patch_team_gate.py``).
 
 These tests drive the REAL route handler with the real in-transaction team-gate
 helper, the real merge helpers and the real request-validation path; only the
@@ -30,12 +32,13 @@ import uuid
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from types import SimpleNamespace
-from typing import Any
+from typing import Annotated, Any, Literal, get_args, get_origin
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy import Select
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
@@ -44,6 +47,7 @@ from modulo.api.routes.pipelines import (
     PipelineGraphNode,
     PipelineGraphNodePatch,
     _build_node_patch_graph,
+    _joined_validation_detail,
 )
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -470,6 +474,59 @@ def test_cross_field_violation_against_the_stored_node_is_rejected(client: TestC
     write.assert_not_awaited()
 
 
+def test_egress_policy_and_allowlist_are_patchable_together(client: TestClient) -> None:
+    """The coupled egress pair must move as a unit — INTO ``selected``.
+
+    ``_validate_sandbox_egress_allowlist_config`` fail-closes the pair:
+    ``selected`` REQUIRES a non-empty allowlist and any other policy must NOT
+    carry one. Before ``egress_allowlist`` joined the allowlist, every attempt
+    to patch INTO (or out of) ``selected`` 422'd unconditionally, so
+    ``egress_policy`` could never reach its purpose. Both halves supplied in
+    one body must land together."""
+    target_id = uuid.uuid4()
+    target = _sandbox_node(target_id)
+    _STORED.nodes = [target]
+
+    with _graph_write_doubles(), _write_double([dict(target)]) as write:
+        resp = client.patch(
+            _patch_url(target_id),
+            json={
+                "egress_policy": "selected",
+                "egress_allowlist": [{"host": "api.github.com", "port": 443}],
+            },
+        )
+
+    assert resp.status_code == 200, resp.text
+    written = write.call_args.kwargs["nodes"][0]
+    assert written["egress_policy"] == "selected"
+    assert written["egress_allowlist"] == [{"host": "api.github.com", "port": 443}]
+    assert write.call_args.kwargs["patched_fields"] == ["egress_allowlist", "egress_policy"]
+
+
+def test_egress_pair_can_be_cleared_out_of_selected(client: TestClient) -> None:
+    """The reverse direction: a stored ``selected`` policy + allowlist moves to
+    ``deny_all`` with an explicit ``null`` clearing the companion allowlist —
+    the half that was unreachable while only ``egress_policy`` was patchable."""
+    target_id = uuid.uuid4()
+    target = _sandbox_node(
+        target_id,
+        egress_policy="selected",
+        egress_allowlist=[{"host": "api.github.com", "port": 443}],
+    )
+    _STORED.nodes = [target]
+
+    with _graph_write_doubles(), _write_double([dict(target)]) as write:
+        resp = client.patch(
+            _patch_url(target_id),
+            json={"egress_policy": "deny_all", "egress_allowlist": None},
+        )
+
+    assert resp.status_code == 200, resp.text
+    written = write.call_args.kwargs["nodes"][0]
+    assert written["egress_policy"] == "deny_all"
+    assert written["egress_allowlist"] is None
+
+
 def test_merged_node_rejects_a_boolean_field_supplied_as_null(client: TestClient) -> None:
     """``enable_heartbeat: null`` is accepted by the patch body (the field is
     nullable there so ``None`` can mean "clear"); the MERGED node's own ``bool``
@@ -489,6 +546,48 @@ def test_merged_node_rejects_a_boolean_field_supplied_as_null(client: TestClient
 
     assert resp.status_code == 422, resp.text
     assert "enable_heartbeat" in resp.json()["detail"], resp.json()["detail"]
+    write.assert_not_awaited()
+
+
+def test_model_level_rejection_renders_without_an_empty_field_path() -> None:
+    """A ``model_validator`` error carries ``loc == ()`` — it is attributable
+    to no single field, so ``_joined_validation_detail`` must render the bare
+    Pydantic message (whose text names the offending field) with NO path
+    prefix — never the ``": message"`` shape an empty dotted path produces."""
+    merged = {**_agent_node(uuid.uuid4()), "await_completion": True}
+    with pytest.raises(ValidationError) as exc_info:
+        PipelineGraphNode.model_validate(merged)
+
+    detail = _joined_validation_detail(exc_info.value)
+
+    assert not detail.startswith(":"), detail
+    assert "await_completion" in detail, detail
+
+
+def test_cross_field_model_validator_error_has_no_double_colon_in_the_response(client: TestClient) -> None:
+    """The HTTP-level counterpart: ``await_completion=true`` patched onto an
+    ``agent`` node is rejected by the MERGED node's model validator, and the
+    422 detail must name the field WITHOUT the empty-path ``": "`` (a leading
+    colon + colon pair from the message join)."""
+    target_id = uuid.uuid4()
+    _STORED.nodes = [_agent_node(target_id)]
+
+    with (
+        _graph_write_doubles(),
+        patch(
+            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            new=AsyncMock(),
+        ) as write,
+    ):
+        resp = client.patch(_patch_url(target_id), json={"await_completion": True})
+
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert "await_completion" in detail, detail
+    # "…merging the patch: <msg>" renders as ONE colon join; the empty-loc bug
+    # produced "…patch: : Value error, …" (an empty path prefixed by ": ").
+    assert ": :" not in detail, detail
+    assert not detail.startswith(":"), detail
     write.assert_not_awaited()
 
 
@@ -540,6 +639,71 @@ def test_build_node_patch_graph_404s_for_an_unknown_node() -> None:
 # The allowlist model itself — drift guards
 # ---------------------------------------------------------------------------
 
+#: The ONLY permitted annotation divergence between the two models: these four
+#: node fields are non-nullable ``bool`` on :class:`PipelineGraphNode`, while
+#: the patch body widens them to ``bool | None`` for a uniform body shape (an
+#: explicit ``null`` on them is then rejected by the MERGED node with a 422 —
+#: see the model docstring). Every other patchable field's annotation must be
+#: IDENTICAL to the node's.
+_NULL_WIDENED_NON_NULLABLE_BOOLEANS = frozenset(
+    {"enable_heartbeat", "idempotent", "single_pr_per_run", "await_completion"}
+)
+
+#: Constraint metadata classes the node field may carry, by attribute name.
+_CONSTRAINT_ATTRS = {"Ge": "ge", "Le": "le", "MaxLen": "max_length", "MinLen": "min_length"}
+
+
+def _field_constraints(field: Any) -> dict[str, Any]:
+    """The ``ge`` / ``le`` / ``max_length`` / ``min_length`` constraints on a field."""
+    found: dict[str, Any] = {}
+    for meta in field.metadata:
+        attr = _CONSTRAINT_ATTRS.get(type(meta).__name__)
+        if attr is not None:
+            found[attr] = getattr(meta, attr)
+    return found
+
+
+def _literal_groups(annotation: Any) -> tuple[tuple[Any, ...], ...]:
+    """Every ``Literal[...]`` value tuple reachable from an annotation."""
+    if get_origin(annotation) is Literal:
+        return (get_args(annotation),)
+    groups: list[tuple[Any, ...]] = []
+    for arg in get_args(annotation):
+        groups.extend(_literal_groups(arg))
+    return tuple(groups)
+
+
+def _strip_optional(annotation: Any) -> Any:
+    """Remove ``None`` from a union annotation (identity when not optional)."""
+    args = get_args(annotation)
+    if type(None) not in args:
+        return annotation
+    rest = [arg for arg in args if arg is not type(None)]
+    return rest[0] if len(rest) == 1 else annotation
+
+
+def _is_bool_like(annotation: Any) -> bool:
+    """``bool`` itself, or an ``Annotated[bool, ...]`` such as ``StrictBool``."""
+    if annotation is bool:
+        return True
+    if get_origin(annotation) is Annotated:
+        return get_args(annotation)[0] is bool
+    return False
+
+
+def _is_strict_field(field: Any) -> bool:
+    """True when the field rejects lax coercion (strict bool, either encoding)."""
+    if any(getattr(meta, "strict", None) is True for meta in field.metadata):
+        return True
+    annotation = field.annotation
+    candidates = [annotation, *[arg for arg in get_args(annotation) if arg is not type(None)]]
+    for candidate in candidates:
+        if get_origin(candidate) is Annotated and any(
+            getattr(meta, "strict", None) is True for meta in get_args(candidate)[1:]
+        ):
+            return True
+    return False
+
 
 def test_every_patchable_field_exists_on_the_node_model() -> None:
     """The patch model MIRRORS ``PipelineGraphNode``. A field renamed there but
@@ -549,6 +713,61 @@ def test_every_patchable_field_exists_on_the_node_model() -> None:
     node_fields = set(PipelineGraphNode.model_fields)
     unknown = patch_fields - node_fields
     assert not unknown, f"PipelineGraphNodePatch declares fields unknown to PipelineGraphNode: {sorted(unknown)}"
+
+
+def test_patchable_field_annotations_and_constraints_mirror_the_node_model() -> None:
+    """Field-by-field parity: the patch body's annotations and constraints must
+    actually MIRROR ``PipelineGraphNode`` — not merely use the same names.
+
+    For every patchable field:
+
+    * the annotation is IDENTICAL to the node's, except the documented
+      ``None``-widening of the four non-nullable booleans (which must remain
+      a plain ``bool`` on the node and a ``None``-stripped bool — strictness
+      preserved — on the patch);
+    * every ``ge`` / ``le`` / ``max_length`` / ``min_length`` the node field
+      carries is carried with the SAME value by the patch field;
+    * every ``Literal`` value group the node field carries is identical on the
+      patch field.
+
+    A constraint present on the body but absent on the node would accept a
+    value the merged node then rejects (or vice versa), breaking the
+    "a value the body accepts is a value the merged node accepts" guarantee.
+    """
+    patch_fields = PipelineGraphNodePatch.model_fields
+    node_fields = PipelineGraphNode.model_fields
+
+    divergent = {name for name, pf in patch_fields.items() if pf.annotation != node_fields[name].annotation}
+    assert divergent == _NULL_WIDENED_NON_NULLABLE_BOOLEANS, (
+        "every patchable field's annotation must be identical to the node's except the "
+        f"documented None-widening of the four non-nullable booleans: divergent={sorted(divergent)}"
+    )
+
+    for name, pf in patch_fields.items():
+        nf = node_fields[name]
+
+        node_constraints = _field_constraints(nf)
+        patch_constraints = _field_constraints(pf)
+        for attr, value in node_constraints.items():
+            assert patch_constraints.get(attr) == value, (
+                f"{name}: node carries {attr}={value!r} but the patch field carries "
+                f"{attr}={patch_constraints.get(attr)!r} — constraints must mirror"
+            )
+
+        assert _literal_groups(pf.annotation) == _literal_groups(nf.annotation), (
+            f"{name}: node Literal {_literal_groups(nf.annotation)} not mirrored by the "
+            f"patch annotation {_literal_groups(pf.annotation)}"
+        )
+
+        if name in _NULL_WIDENED_NON_NULLABLE_BOOLEANS:
+            assert nf.annotation is bool, f"{name}: expected a non-nullable bool on the node, got {nf.annotation!r}"
+            assert _is_bool_like(_strip_optional(pf.annotation)), (
+                f"{name}: the patch annotation must be the node's bool widened to optional, got {pf.annotation!r}"
+            )
+            assert _is_strict_field(pf) == _is_strict_field(nf), (
+                f"{name}: strictness must be preserved across the None-widening "
+                f"(node strict={_is_strict_field(nf)}, patch strict={_is_strict_field(pf)})"
+            )
 
 
 def test_never_patchable_fields_are_absent_from_the_allowlist() -> None:

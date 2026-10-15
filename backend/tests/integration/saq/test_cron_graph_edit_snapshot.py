@@ -16,7 +16,7 @@ Two hypotheses:
   start), so a run pins a stale snapshot after an edit.
 
 This module decides between them end to end, through the real HTTP routes
-(``PATCH /api/v1/pipelines/{id}/graph``, ``POST /api/v1/runs``) and the real
+(``PUT /api/v1/pipelines/{id}/graph``, ``POST /api/v1/runs``) and the real
 scheduler dispatch (``fire_due_triggers`` -> ``fire_cron_trigger``) against a
 real Postgres + Redis (testcontainers):
 

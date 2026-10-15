@@ -391,7 +391,7 @@ async def test_cross_team_connector_binding_is_rejected_409(
     """A team-private connector owned by ANOTHER team must not be persisted.
 
     The named error in ``detail`` is what lets a client branch on it, so assert
-    on it rather than only the status - the same detail ``PATCH /graph`` returns
+    on it rather than only the status - the same detail ``PUT /graph`` returns
     for the identical mismatch.
     """
     scenario = await _seed_scenario(db_engine, test_org, test_user)

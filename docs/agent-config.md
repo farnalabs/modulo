@@ -36,7 +36,7 @@ A `NULL` value (or omitting the field) defaults to `verbatim`.
 Set `schema_profile` on an individual node in the pipeline graph:
 
 ```json
-PATCH /api/v1/pipelines/{pipeline_id}/graph
+PUT /api/v1/pipelines/{pipeline_id}/graph
 {
   "nodes": [
     {
@@ -114,7 +114,7 @@ Caught before the graph is persisted via the MCP interface. Returns structured e
 
 ### Layer 3: GraphValidator (`core/graph_validator/`)
 
-Runs on-save (via the REST API's `PATCH /{pipeline_id}/graph` endpoint) and pre-run (when a pipeline is triggered). Errors block execution; warnings are advisory. Codes below reflect the current validator. Several are fail-closed: an invalid or unknown value is a hard error so a declared control can never silently no-op.
+Runs on-save (via the REST API's `PUT /{pipeline_id}/graph` endpoint) and pre-run (when a pipeline is triggered). Errors block execution; warnings are advisory. Codes below reflect the current validator. Several are fail-closed: an invalid or unknown value is a hard error so a declared control can never silently no-op.
 
 **Topology**
 

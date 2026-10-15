@@ -830,7 +830,7 @@ def test_get_pipeline_not_found_returns_404(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# GET/PATCH /api/v1/pipelines/{id}/graph
+# GET/PUT /api/v1/pipelines/{id}/graph
 # ---------------------------------------------------------------------------
 
 
