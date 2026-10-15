@@ -82,16 +82,12 @@ class TestRateLimitMiddlewareInit:
         assert mw._registry is registry
 
     def test_set_rules_updates_class_rules(self):
-        RateLimitMiddleware.set_rules([RateLimitRule(path_prefix="/custom", max_requests=5, window_s=10)])
-        assert [RateLimitRule(path_prefix="/custom", max_requests=5, window_s=10)] == RateLimitMiddleware.RULES
-        RateLimitMiddleware.set_rules(
-            [
-                RateLimitRule(path_prefix="/api/v1/runs", max_requests=60, window_s=60),
-                RateLimitRule(path_prefix="/api/v1/triggers", max_requests=100, window_s=60),
-                RateLimitRule(path_prefix="/api/v1/errors/ingest", max_requests=10, window_s=60),
-                RateLimitRule(path_prefix="/mcp", max_requests=200, window_s=60),
-            ]
-        )
+        original = list(RateLimitMiddleware.RULES)
+        try:
+            RateLimitMiddleware.set_rules([RateLimitRule(path_prefix="/custom", max_requests=5, window_s=10)])
+            assert [RateLimitRule(path_prefix="/custom", max_requests=5, window_s=10)] == RateLimitMiddleware.RULES
+        finally:
+            RateLimitMiddleware.set_rules(original)
 
 
 class TestDispatch:
@@ -226,20 +222,8 @@ class TestShouldRateLimit:
         assert mw._should_rate_limit(make_mock_request(method="GET", path="/api/v1/runs/x/hitl/y")) is False
 
 
-class TestRuleFor:
-    def test_matching_prefix(self):
-        mw = RateLimitMiddleware(app=FastAPI(), settings=make_settings(), registry=_registry())
-        assert mw._rule_for(make_mock_request(path="/api/v1/runs")) == RateLimitRule(
-            path_prefix="/api/v1/runs", max_requests=60, window_s=60
-        )
-
-    def test_no_match(self):
-        mw = RateLimitMiddleware(app=FastAPI(), settings=make_settings(), registry=_registry())
-        assert mw._rule_for(make_mock_request(path="/api/v1/other")) == RateLimitRule(
-            path_prefix="", max_requests=0, window_s=0
-        )
-
-
+# NOTE: _rule_for prefix/no-match branches are covered by
+# test_middleware_internals.py::TestRuleFor (plus HITL precedence) — not repeated here.
 class TestClientKey:
     @pytest.fixture
     def middleware(self) -> RateLimitMiddleware:

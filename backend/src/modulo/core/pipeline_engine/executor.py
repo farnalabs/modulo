@@ -278,8 +278,8 @@ def _governed_evaluation_mode(gate: PolicyGate) -> str:
     """Normalise ``policy_gates.evaluation_mode`` to the closed DTO vocabulary.
 
     Production rows always carry the NOT NULL column (migration
-    0313_policy_gate_evaluation_mode); the attribute fallback keeps
-    pre-0313 ORM stand-ins and legacy fixtures (no attribute at all) on
+    0314_policy_gate_evaluation_mode); the attribute fallback keeps
+    pre-0314 ORM stand-ins and legacy fixtures (no attribute at all) on
     today's behaviour — automatic. Hoisted out of
     ``PipelineExecutor._resolve_governed_gate`` for the cognitive-complexity
     budget (S3776); behaviour is unchanged.

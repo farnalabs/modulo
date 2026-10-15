@@ -145,8 +145,9 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0309_hitl_claims_decision_sweep chains off 0308_runs_dispatch_phase_history, and
 # 0310_library_cluster_db_hardening chains off 0309_hitl_claims_decision_sweep, and
 # 0311_library_cluster_schema_hygiene chains off 0310_library_cluster_db_hardening, and
-# 0313_policy_gate_evaluation_mode chains off 0312_memberships_active_lookups as the chain head.
-_CHAIN_HEAD_MIGRATION = "0313_policy_gate_evaluation_mode"
+# 0314_policy_gate_evaluation_mode chains off 0313_collection_install_drop_installed_entities,
+# which chains off 0312_memberships_active_lookups, as the chain head.
+_CHAIN_HEAD_MIGRATION = "0314_policy_gate_evaluation_mode"
 
 
 def _source(name: str) -> str:

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { createI18n } from 'vue-i18n'
+import { setActivePinia, createPinia } from 'pinia'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import enUS from '../../locales/en-US.js'
@@ -34,6 +35,7 @@ vi.mock('vue-router', () => ({
 }))
 
 import { useRoute } from 'vue-router'
+import { usePlanStore } from '../../stores/planStore'
 import PageTabs from '../../components/PageTabs.vue'
 
 function createWrapper(tabs: any[], routePath = '/evals/editor') {
@@ -65,6 +67,7 @@ function createWrapper(tabs: any[], routePath = '/evals/editor') {
 describe('PageTabs', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    setActivePinia(createPinia())
   })
 
   it('renders all tabs with labels', () => {
@@ -205,6 +208,145 @@ describe('PageTabs', () => {
   it('spaces adjacent mobile tabs at least 0.5rem apart', () => {
     const mobile = mobileStyleBlock()
     expect(mobile).toMatch(/gap:\s*0\.5rem/)
+  })
+
+  // ── FAR-47: tier-locked tabs ──────────────────────────────────────────────
+  //
+  // A tier-gated tab is never hidden: it keeps its place in the bar, leads
+  // with a padlock, carries the "Available on the <plan> plan" tooltip, and
+  // links to the license page. The locked state comes from the manifest's
+  // route metadata + the plan store, so no view wiring is involved.
+
+  describe('tier-locked tabs (FAR-47)', () => {
+    const costTabs = [
+      { label: 'Overview', to: '/admin/costs' },
+      { label: 'Spend Limits', to: '/admin/costs/limits' },
+      { label: 'Browse', to: '/schemas' },
+    ]
+
+    it('locks team-tier tabs on the community plan with padlock + plan tooltip, keeping the bar shape', () => {
+      const store = usePlanStore()
+      store.$patch({ currentTier: 'community', loaded: true })
+      const wrapper = createWrapper(costTabs, '/admin/costs')
+
+      // Never hidden: every tab still occupies space in the bar.
+      const links = wrapper.findAll('.page-tab')
+      expect(links).toHaveLength(3)
+
+      // Team-tier tabs lock (Overview + Spend Limits)…
+      const locked = links[1]
+      expect(locked.classes()).toContain('locked')
+      expect(locked.attributes('href')).toBe('/settings/license')
+      expect(locked.attributes('title')).toBe('Available on the Team plan')
+      expect(locked.find('[data-testid="lock-icon"]').exists()).toBe(true)
+      expect(links[0].classes()).toContain('locked')
+      expect(links[0].attributes('href')).toBe('/settings/license')
+
+      // …while the community-tier sibling keeps its own destination, unlocked.
+      expect(links[2].classes()).not.toContain('locked')
+      expect(links[2].attributes('href')).toBe('/schemas')
+      expect(links[2].find('[data-testid="lock-icon"]').exists()).toBe(false)
+    })
+
+    it('gives a locked tab an accessible name that carries the label and the plan', () => {
+      const store = usePlanStore()
+      store.$patch({ currentTier: 'community', loaded: true })
+      const wrapper = createWrapper(costTabs, '/admin/costs')
+
+      const lockedTabs = wrapper.findAll('.page-tab.locked')
+      expect(lockedTabs).toHaveLength(2)
+      const spendLimits = lockedTabs[1]
+      expect(spendLimits.attributes('data-testid')).toBe('page-tab-locked')
+      expect(spendLimits.attributes('aria-label')).toBe('Spend Limits (Available on the Team plan)')
+      // Focusable trigger with tab semantics preserved.
+      expect(spendLimits.attributes('role')).toBe('tab')
+      expect(spendLimits.attributes('aria-selected')).toBe('false')
+    })
+
+    it('keeps the badge on a locked tab so the bar keeps its shape', () => {
+      const store = usePlanStore()
+      store.$patch({ currentTier: 'community', loaded: true })
+      const wrapper = createWrapper(
+        [{ label: 'Spend Limits', to: '/admin/costs/limits', badge: 3, badgeVariant: 'warning' as const }],
+        '/admin/costs',
+      )
+
+      const locked = wrapper.find('.page-tab.locked')
+      expect(locked.find('.page-tab-badge').text()).toBe('3')
+      expect(locked.find('.page-tab-badge').classes()).toContain('badge-warning')
+    })
+
+    it('does not lock team-tier tabs when the org is on the team plan', () => {
+      const store = usePlanStore()
+      store.$patch({ currentTier: 'team', loaded: true })
+      const wrapper = createWrapper(costTabs, '/admin/costs')
+
+      expect(wrapper.findAll('.page-tab.locked')).toHaveLength(0)
+      expect(wrapper.findAll('[data-testid="lock-icon"]')).toHaveLength(0)
+      const links = wrapper.findAll('.page-tab')
+      expect(links.map((l) => l.attributes('href'))).toEqual([
+        '/admin/costs',
+        '/admin/costs/limits',
+        '/schemas',
+      ])
+      expect(links[1].attributes('title')).toBeUndefined()
+      expect(links[1].attributes('aria-label')).toBeUndefined()
+    })
+
+    it('never locks a community-tier or ungated tab, even on the community plan', () => {
+      const store = usePlanStore()
+      store.$patch({ currentTier: 'community', loaded: true })
+      const wrapper = createWrapper(
+        [
+          { label: 'Browse', to: '/schemas' },
+          { label: 'Evals', to: '/evals/editor' },
+          { label: 'Ad hoc', to: '/no-such-route' },
+        ],
+        '/schemas',
+      )
+
+      expect(wrapper.findAll('.page-tab.locked')).toHaveLength(0)
+      expect(wrapper.findAll('[data-testid="lock-icon"]')).toHaveLength(0)
+      const links = wrapper.findAll('.page-tab')
+      expect(links.map((l) => l.attributes('href'))).toEqual([
+        '/schemas',
+        '/evals/editor',
+        '/no-such-route',
+      ])
+    })
+
+    it('does not lock a team-tier tab while the plan is still resolving (no locked-flash)', () => {
+      // Before the plan sources resolve, the active tier defaults to
+      // `community`, so isAtMinimumTier cannot yet tell an entitled user from
+      // an under-tier one. Rendering a lock here would flash at a
+      // tier-entitled user; the tab must stay unlocked until the plan is known.
+      const store = usePlanStore()
+      store.$patch({ currentTier: 'community', loaded: false })
+      const wrapper = createWrapper(
+        [{ label: 'Spend Limits', to: '/admin/costs/limits' }],
+        '/admin/runners',
+      )
+
+      const link = wrapper.find('.page-tab')
+      expect(link.classes()).not.toContain('locked')
+      expect(link.find('[data-testid="lock-icon"]').exists()).toBe(false)
+      expect(link.attributes('href')).toBe('/admin/costs/limits')
+    })
+
+    it('locks a team-tier tab once the plan resolves as community', () => {
+      // The complement of the case above: the same under-tier user, once the
+      // plan has resolved, does get the lock treatment.
+      const store = usePlanStore()
+      store.$patch({ currentTier: 'community', loaded: true })
+      const wrapper = createWrapper(
+        [{ label: 'Spend Limits', to: '/admin/costs/limits' }],
+        '/admin/runners',
+      )
+
+      const link = wrapper.find('.page-tab')
+      expect(link.classes()).toContain('locked')
+      expect(link.attributes('href')).toBe('/settings/license')
+    })
   })
 })
 

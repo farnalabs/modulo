@@ -8249,16 +8249,42 @@ async def list_connector_types() -> dict[str, Any]:
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("list_connector_types")
 
-        from modulo.connectors.base import ConnectorType
+        # FAR-1772: advertise the hub-BUILDABLE catalogue — the same set
+        # ``GET /api/v1/connectors/types`` offers (FAR-1764, the shared
+        # ``buildable_connector_type_ids()`` helper). The raw ``ConnectorType``
+        # enum also contains the abstract labels ``ci-runner`` / ``custom``
+        # that ``_build_connector`` cannot instantiate, and omits the hub-native
+        # CI-runner ids ``github_actions_ci`` / ``gitlab_ci``.
+        from modulo.connectors.base import (
+            CI_RUNNER_CAPABILITIES,
+            ConnectorType,
+            connector_type_supports_dispatch,
+        )
+        from modulo.core.connector_hub import buildable_connector_type_ids
+
+        buildable = buildable_connector_type_ids()
+        # Ordering mirrors the REST route: enum declaration order first, then
+        # hub-native/plugin ids alphabetically.
+        ordered: list[str] = [t.value for t in ConnectorType if t.value in buildable]
+        ordered += sorted(buildable - set(ordered))
 
         items: list[dict[str, Any]] = []
-        for t in ConnectorType:
+        for type_id in ordered:
+            try:
+                capabilities = sorted(c.value for c in ConnectorType(type_id).capabilities)
+            except ValueError:
+                # Hub-native CI-runner ids (github_actions_ci / gitlab_ci)
+                # implement the CI-runner capability contract; plugin-
+                # registered types are not introspectable here (empty list).
+                capabilities = (
+                    sorted(c.value for c in CI_RUNNER_CAPABILITIES) if connector_type_supports_dispatch(type_id) else []
+                )
             item: dict[str, Any] = {
-                "id": t.value,
-                "name": t.value.replace("_", " ").title(),
-                "capabilities": sorted(c.value for c in t.capabilities),
+                "id": type_id,
+                "name": type_id.replace("_", " ").title(),
+                "capabilities": capabilities,
             }
-            metadata = _connector_type_field_metadata(t.value)
+            metadata = _connector_type_field_metadata(type_id)
             if metadata is not None:
                 item["credential_fields"] = metadata["credential_fields"]
                 item["config_fields"] = metadata["config_fields"]

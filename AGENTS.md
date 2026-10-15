@@ -120,3 +120,23 @@ Rules:
 2. Do not rely on "some other import probably pulled it in". The registration is a side effect of one specific module (`modulo.db.session`), and whether it has fired depends on which imports happened to run first in that process; assert the precondition explicitly in the module that depends on it (register at import, and — like `test_soft_delete_filter.py` — optionally assert `sqlalchemy.event.contains(SASession, "do_orm_execute", _apply_soft_delete_filter)` so a future removal of the registration fails loudly).
 3. When a soft-delete assertion fails in a way that looks like the filter is inverted (a retired row reads as live, a uniqueness guard reports "already installed" after an uninstall), check filter registration in the test process BEFORE debugging the production code.
 4. This is a test-process concern only. Production and app startup register the filter normally, so a repro that only fails under pytest and never in the app is the signature of this class.
+
+### A route that returns a failure response instead of raising silently inverts its own audit record (2026-10-15)
+
+The `audited()` / `audited_system()` FastAPI dependencies (`backend/src/modulo/core/audit_coverage.py`) derive the audit `outcome` purely from whether the route handler raised: a normal return stamps `outcome="success"`, a propagating exception stamps `outcome="error"`. So a route that converts a failure into a returned response — a redirect, a soft error body — while guarded by such a dependency records the operation as a SUCCESS. Observed on FAR-1791: the SAML ACS routes were changed to `return` a 303 login redirect on a failed sign-in, and `saml_acs_attempted` (declared `fail_closed=True`) then recorded `outcome="success"` for a DENIED authentication — falsifying the exact security record it exists to provide, and it was silent because no test referenced the event. It also flips the append strategy: the error path is fail-open, the success path fail-closed.
+
+Rules:
+
+1. An audited route signals failure by RAISING, never by returning a failure-shaped response. Convert the exception to the desired HTTP response at the app boundary (a registered exception handler) so the dependency teardown sees the exception and records `outcome="error"` before the handler builds the response.
+2. Subclass the project's existing HTTP exception type (so passthrough decorators like `handle_db_errors` re-raise it unchanged) rather than a bare `Exception`.
+3. Whenever a change alters what an `audited*`-guarded route does on failure, add a test that asserts the emitted event's `outcome` for BOTH a failed and a successful call — asserting only the HTTP response shape does not pin the audit outcome (the old code would pass those).
+
+### A browser-facing error-contract change isn't done until the BDD/integration tests AND the generated OpenAPI schema are migrated in the same change (2026-10-15)
+
+FAR-1791 changed SSO callback failures from `401/400 + JSON {detail}` to `303 + Location`. The committed unit tests were updated, but the BDD feature files, the integration tests and the committed `frontend/src/lib/api/schema.ts` still asserted/published the OLD contract: the BDD steps called `resp.json()` on the response (which raises on a 303 — CI-breaking), and because a route docstring is emitted verbatim into the OpenAPI spec, the published `schema.ts` still described `401` for a security control — i.e. the public API contract stated the opposite of the shipped behaviour. A follow-up commit then deliberately reverted the accurate docstring to avoid regenerating `schema.ts`, shipping a knowingly false contract rather than regenerating it.
+
+Rules:
+
+1. A status-code / response-body contract change is not complete until every BDD feature/steps and integration test that asserts the old contract is migrated in place — never deleted, disabled or gutted — and they are included in the same change.
+2. Any change to a route docstring/description must be followed by regenerating the committed `frontend/src/lib/api/schema.ts` in the SAME change, using the pinned generator (not the worktree-broken `pnpm run generate:api`), and the resulting diff must be limited to the intended text (report it if it is not).
+3. Never "fix" a schema-freshness hook by reverting accurate documentation to match a stale generated file — regenerate the file.

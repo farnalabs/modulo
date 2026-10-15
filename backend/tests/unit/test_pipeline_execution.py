@@ -1665,6 +1665,8 @@ class TestSaqWorkerSettings:
         #   decision-record corruption-detection sweep.
         # + run_kill_switch_drill (FAR-1707) — daily kill-switch self-test that
         #   records one system-audit fact per run.
+        # + legacy_agent_return_sweep (FAR-132) — daily read-only sweep of
+        #   legacy-shape agent-return rows in the system worker.
         cron_names = {c.function.__name__ for c in settings["cron_jobs"]}
         assert cron_names == {
             "analytics_facts_maintenance",
@@ -1693,6 +1695,7 @@ class TestSaqWorkerSettings:
             "runner_health_probe",
             "health_readiness_alert",
             "run_kill_switch_drill",
+            "legacy_agent_return_sweep",
         }
         assert settings["after_process"] is not None
 

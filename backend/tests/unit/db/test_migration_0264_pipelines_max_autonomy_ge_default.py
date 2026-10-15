@@ -56,7 +56,8 @@ Lenses:
     0310_library_cluster_db_hardening chains onto 0309_hitl_claims_decision_sweep, and
     0311_library_cluster_schema_hygiene chains onto 0310_library_cluster_db_hardening, and
     0312_memberships_active_lookups chains onto 0311_library_cluster_schema_hygiene, and
-    0313_policy_gate_evaluation_mode chains onto 0312_memberships_active_lookups as the
+    0313_collection_install_drop_installed_entities chains onto 0312_memberships_active_lookups, and
+    0314_policy_gate_evaluation_mode chains onto 0313_collection_install_drop_installed_entities as the
     single linear head (0259's test documents the run-up through 0288).
 * **Structure (mocked ``op``)** - upgrade emits THREE statements IN ORDER: the
   existence-gated ``ADD ... NOT VALID`` FIRST (so its ACCESS EXCLUSIVE is taken
@@ -92,7 +93,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0264_pipelines_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0263_evidence_layer"
-_HEAD_MIGRATION = "0313_policy_gate_evaluation_mode"
+_HEAD_MIGRATION = "0314_policy_gate_evaluation_mode"
 _CONSTRAINT = "ck_pipelines_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - a

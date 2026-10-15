@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { useRouter } from 'vue-router'
+import { setActivePinia, createPinia } from 'pinia'
 
 vi.mock('../lib/api/client', () => ({
   api: {
@@ -42,6 +43,8 @@ const INFER_OK = {
 describe('SchemaInferenceView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // PageTabs resolves tier-locked state via the plan store (FAR-47).
+    setActivePinia(createPinia())
     ;(api.GET as any).mockResolvedValue({ data: { items: [] }, error: undefined })
     ;(api.POST as any).mockResolvedValue({ data: null, error: undefined })
   })

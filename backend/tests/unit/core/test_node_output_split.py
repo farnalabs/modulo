@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from modulo.core.cost_controller.finalize import _node_output_dict
+from modulo.core.cost_controller.finalize import _node_output_dict, _store_split_result
 from modulo.core.node_output_split import (
     DISPATCH_PROVENANCE_FIELDS,
     NODE_TYPE_GATE,
@@ -29,6 +29,7 @@ from modulo.core.node_output_split import (
     node_stdout_artifact,
     node_telemetry,
     split_node_output,
+    stored_row_is_legacy,
 )
 
 
@@ -772,3 +773,77 @@ def test_extend_type_map_skips_edges_without_source_or_target() -> None:
         ]
     }
     assert not extend_node_type_map_from_edges(None, graph)
+
+
+# ---------------------------------------------------------------------------
+# stored_row_is_legacy (FAR-132): the row-scope twin of has_telemetry_entry
+# ---------------------------------------------------------------------------
+
+
+def test_stored_row_is_legacy_only_when_outputs_present_and_telemetry_absent() -> None:
+    """Legacy == outputs present AND telemetry absent (the accessor's fallback)."""
+    assert stored_row_is_legacy(outputs_present=True, telemetry_present=False) is True
+    # A P1+ row: telemetry present, so it never reaches the legacy branch.
+    assert stored_row_is_legacy(outputs_present=True, telemetry_present=True) is False
+    # No outputs side: nothing for the legacy fallback to derive from.
+    assert stored_row_is_legacy(outputs_present=False, telemetry_present=False) is False
+    # Outputs absent but telemetry present: a skipped-recovery marker row.
+    assert stored_row_is_legacy(outputs_present=False, telemetry_present=True) is False
+
+
+def test_stored_row_is_legacy_agrees_with_has_telemetry_entry_on_a_one_node_map() -> None:
+    """The row predicate is the single-node form of has_telemetry_entry.
+
+    A ``__final__`` row stores one node per side, so the reassembled per-run
+    telemetry map holds an entry for the node iff its telemetry side is present.
+    Pin the equivalence across all four presence combinations so the two cannot
+    drift.
+    """
+    for outputs_present in (False, True):
+        for telemetry_present in (False, True):
+            telemetry_map = {"n": None} if telemetry_present else {}
+            row_form = stored_row_is_legacy(outputs_present=outputs_present, telemetry_present=telemetry_present)
+            map_form = outputs_present and not has_telemetry_entry(telemetry_map, "n")
+            assert row_form is map_form
+
+
+def test_split_node_output_never_yields_a_legacy_row_for_splittable_types() -> None:
+    """INVARIANT (FAR-132): a row written by the current writer for a splittable
+    node type NEVER matches the legacy predicate.
+
+    ``finalize._store_split_result`` is the single place that decides which of
+    the two LOCKSTEP columns gets a key, so this test derives the row's
+    presence flags from THAT writer's output rather than hardcoding them.
+    ``split_node_output`` returning a non-None telemetry dict means the writer
+    stores a telemetry side, and ``stored_row_is_legacy`` is therefore False for
+    a new row. If a writer regression ever stopped storing the telemetry side,
+    the derived ``telemetry_present`` would be False and this test would fail
+    (hardcoding True made the old form tautological).
+    """
+    from modulo.core.node_output_split import SPLITTABLE_NODE_TYPES
+
+    envelopes: dict[str, Any] = {
+        "sandbox_agent": {"artifacts": [{"output": {"output_json": {"pr_url": "u"}}}]},
+        "agent": {"output": {"answer": 1}, "status": "completed"},
+        "connector": {"artifacts": [{"output": {"rows": 3}}]},
+        "dispatch": {"artifacts": [{"output": {"fired": True}}]},
+        "manual": {"manual_output": {"decision": "ok"}},
+        NODE_TYPE_GATE: {"artifacts": [{"human_data": {"approved": True}}]},
+    }
+    assert set(envelopes) == set(SPLITTABLE_NODE_TYPES)
+
+    for node_type, envelope in envelopes.items():
+        ret, telemetry = split_node_output(envelope, node_type, None, run_id="r", node_id="n")
+        # The splitter MUST yield a telemetry dict for a splittable type (the
+        # writer stores a side only when it is non-None).
+        assert telemetry is not None, node_type
+        # Drive the WRITER's column assignment, then read the presence flags
+        # back off its output.
+        merged_outputs: dict[str, Any] = {}
+        merged_telemetry: dict[str, Any] = {}
+        _store_split_result(merged_outputs, merged_telemetry, "n", ret, telemetry)
+        outputs_present = "n" in merged_outputs
+        telemetry_present = "n" in merged_telemetry
+        assert telemetry_present is True, f"writer dropped the telemetry side for {node_type}"
+        is_legacy = stored_row_is_legacy(outputs_present=outputs_present, telemetry_present=telemetry_present)
+        assert is_legacy is False, node_type

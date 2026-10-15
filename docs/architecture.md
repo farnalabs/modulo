@@ -865,10 +865,19 @@ Note: duplicate ADR numbers were resolved by FAR-1157 (devtools commit `b65b5de`
 
 ## Import Contracts (enforced by import-linter)
 
-- `modulo.api` must not import `langgraph` directly
-- `modulo.connectors` must not import `modulo.api` or `modulo.auth`
-- `modulo.core`, `.api`, `.connectors` must not import `modulo_cloud` (removed; this contract is retained as a forward-compatibility guard)
-- `modulo.otel_bridge` must not import `core.pipeline_engine`, `hitl_manager`, `eval_engine`
+The eight contracts in `backend/.importlinter`, all `forbidden` type. Each has explicit
+`ignore_imports` seams where a deliberate exception exists.
+
+| Contract name | Source | Forbidden |
+|---|---|---|
+| API layer uses pipeline_engine, not LangGraph directly | `modulo.api` | `langgraph` |
+| Connectors layer is independent of API | `modulo.connectors` | `modulo.api`, `modulo.auth` |
+| Core is zero-coupled to modulo-cloud | `modulo.core`, `modulo.api`, `modulo.connectors` | `modulo_cloud` |
+| OTel bridge does not import core business logic | `modulo.otel_bridge` | `modulo.core.pipeline_engine`, `modulo.core.hitl_manager`, `modulo.core.eval_engine` |
+| Core layer never sees FastAPI | `modulo.core` | `modulo.api` |
+| DB layer has no business logic imports | `modulo.db` | `modulo.core`, `modulo.api` |
+| Connectors don't reach into core | `modulo.connectors` | `modulo.core` |
+| Concrete runtime providers are only imported inside `core/runtime_provider` (FAR-587) | `modulo` | `modulo.core.runtime_provider.{docker,e2b,k8s,local,local_docker}` |
 
 ## Testing Strategy
 
@@ -879,7 +888,12 @@ Note: duplicate ADR numbers were resolved by FAR-1157 (devtools commit `b65b5de`
 | BDD | pytest-bdd | <5m | Real Postgres |
 | E2E | Playwright | <10m | Real Postgres + Frontend |
 
-Coverage targets: `modulo.auth` 90%, `pipeline_engine` 85%, `db.rls` 95%, overall 80%.
+Coverage: `[tool.coverage.run]` in `backend/pyproject.toml` measures **branch** coverage
+(not just line coverage) over `src/modulo`, and `[tool.coverage.report]` sets
+`fail_under = 89`. There is no per-module threshold in that config; the modules named as
+targets in earlier drafts (`modulo.auth`, `pipeline_engine`, `db.rls`) are instead the
+mutation-testing (`mutmut`) `source_paths` alongside `core/license.py` and
+`core/eval_engine/`.
 
 ### Frontend API-path guard
 

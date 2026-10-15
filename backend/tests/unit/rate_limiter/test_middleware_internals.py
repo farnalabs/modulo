@@ -89,6 +89,21 @@ class TestRuleFor:
         request = make_mock_request(path="/api/v1/other")
         assert middleware._rule_for(request) == RateLimitRule(path_prefix="", max_requests=0, window_s=0)
 
+    @pytest.mark.parametrize(
+        ("path", "prefix"),
+        [
+            ("/api/v1/auth/login-context", "/api/v1/auth/login-context"),
+            ("/api/v1/auth/org-login/acme", "/api/v1/auth/org-login/"),
+        ],
+        ids=["login-context", "org-login"],
+    )
+    def test_anonymous_get_paths_resolve_to_get_rules(self, middleware, path, prefix):
+        """FAR-856: _rule_for must resolve pre-auth anonymous GET endpoints to
+        their GET_RULES enumeration-defence rule — _should_rate_limit gating
+        alone does not pin which budget applies."""
+        request = make_mock_request(method="GET", path=path)
+        assert middleware._rule_for(request) == RateLimitRule(path_prefix=prefix, max_requests=60, window_s=60)
+
     def test_hitl_rule_takes_precedence_over_prefix_match(self, middleware):
         """HITL paths must resolve to the dedicated 20/min rule, not the
         /api/v1/runs 60/min rule that also prefix-matches them."""

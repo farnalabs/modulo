@@ -27,7 +27,8 @@ database, plus ORM parity for both new columns:
    0310_library_cluster_db_hardening chains onto 0309_hitl_claims_decision_sweep, and
    0311_library_cluster_schema_hygiene chains onto 0310_library_cluster_db_hardening, and
    0312_memberships_active_lookups chains onto 0311_library_cluster_schema_hygiene, and
-   0313_policy_gate_evaluation_mode chains onto 0312_memberships_active_lookups as the single
+   0313_collection_install_drop_installed_entities chains onto 0312_memberships_active_lookups, and
+   0314_policy_gate_evaluation_mode chains onto 0313_collection_install_drop_installed_entities as the single
    linear head;
 2. the upgrade adds EXACTLY two nullable ``varchar(20)`` columns with NO
    server default and NO backfill (metadata-only on the hot ``runs`` table);
@@ -59,7 +60,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0288_runs_execution_origin"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0287_team_rls_lifecycle_evals"
-_CHAIN_HEAD_MIGRATION = "0313_policy_gate_evaluation_mode"
+_CHAIN_HEAD_MIGRATION = "0314_policy_gate_evaluation_mode"
 
 #: (table, column) pairs the upgrade must add — the two read surfaces ADR-042
 #: needs: the run row itself and the self-contained analytics fact.

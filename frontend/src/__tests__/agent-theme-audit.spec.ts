@@ -60,6 +60,9 @@ vi.mock('../stores/planStore', () => ({
     isLoading: false,
     isFree: true,
     featureEnabled: vi.fn(() => true),
+    // FAR-47: PageTabs consults the tier API to resolve locked tabs.
+    isAtMinimumTier: vi.fn(() => false),
+    getTierLabel: vi.fn((tierId: string) => tierId),
   })),
 }))
 

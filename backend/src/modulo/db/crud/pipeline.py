@@ -2216,6 +2216,46 @@ async def replace_pipeline_graph(
     # other append_audit_event call sites in this file), so the event and the
     # write commit or roll back together — a graph write that commits without
     # an audit event is no longer possible.
+    #
+    # FAR-1824 (lock-point audit §7 risk 3) — why this append is DELIBERATELY
+    # kept inside the pipeline-row lock rather than committed separately and
+    # appended afterwards. Moving it out is not safe here, for concrete
+    # reasons:
+    #
+    #   1. This function does not own its transaction — the CALLER does. The
+    #      REST route opens ``async with session.begin()`` and still runs
+    #      ``_sync_agent_row_commands`` + ``_validate_graph_save`` in the SAME
+    #      unit after this returns; the MCP tool (``_replace_pipeline_graph_txn``)
+    #      and both onboarding seams wrap it in their own session. The pipeline
+    #      row lock is held until the CALLER commits, so "commit the graph
+    #      replacement, then append" would mean committing the caller's
+    #      in-flight transaction from inside the service layer — stranding that
+    #      post-write work and the 404/rollback semantics on every surface.
+    #      Those callers (mcp_server.py, onboarding.py) are outside this
+    #      change's file allowlist.
+    #   2. FAR-1471 requires the event and the write to commit or roll back
+    #      together. A post-commit append in a separate transaction makes a
+    #      committed graph write with NO audit event possible again — the exact
+    #      unattributable-write class FAR-1471 closed (the 2026-10-03 PR
+    #      Reviewer outage).
+    #   3. A post-commit append would have to carry the before-image out of the
+    #      transaction. Keeping the append here uses the in-memory
+    #      ``previous_nodes`` / ``old_edges`` captured under the lock — the only
+    #      place the pre-write state is guaranteed consistent.
+    #
+    # Lock ORDERING is the safety-critical property of this nesting, and it is
+    # consistently pipeline -> audit-chain-head: every pipeline-lock path that
+    # appends an audit takes the pipeline row FIRST and appends LAST
+    # (``replace_pipeline_graph`` here; ``rollback_to_snapshot`` — lock then
+    # append; ``guardrail_override`` — lock then append;
+    # ``recovery._fetch_locked_run`` + ``_record_recovery_audit``). No path was
+    # found that appends an audit and THEN locks the pipeline row in the same
+    # transaction, so the two row locks cannot form a cycle and cannot
+    # deadlock. A test pins this order:
+    # ``tests/unit/db/crud/test_pipeline_graph_updated_audit.py``
+    # ``::TestGraphReplaceLockScope::test_pipeline_row_lock_precedes_audit_chain_head_lock``.
+    # Any future change that moves this append out MUST preserve that order, or
+    # remove the nesting entirely.
     await append_audit_event(
         session,
         org_id=org_id,
