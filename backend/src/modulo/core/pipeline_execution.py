@@ -1414,6 +1414,49 @@ async def fail_run_terminal(
     return ok
 
 
+async def defer_capacity_denied_run_to_awaiting_human(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    *,
+    claim_token: str | None = None,
+) -> bool:
+    """Reset a capacity-denied RESUME from ``running`` back to ``awaiting_human``.
+
+    FAR-1831: a HITL gate decision is ALREADY committed before a resume is
+    dispatched (the HITL route's inline resume, the MCP ``review_hitl``
+    decision, or ``dispatcher_reconcile``'s F6a re-dispatch). A full org
+    sandbox cap must therefore never terminal-fail the decided run.
+    ``executor._enforce_resume_sandbox_capacity`` raises
+    ``SandboxCapacityExceededError`` on the resume path ONLY (it is the sole
+    raiser of this exception type), and its transaction rolls back — but the
+    resume CLAIM has already moved the row to ``running``. This fenced write
+    restores ``awaiting_human`` so the committed decision survives and
+    ``dispatcher_reconcile``'s F6a path re-dispatches the resume once a slot
+    frees.
+
+    Fenced by the claim token AND ``from_status='running'`` via the shared
+    fenced writer (CANCEL-WINS: a cancellation-requested row is rewritten to
+    ``cancelled``), so a superseded original can never demote a successor's
+    claim and a cancelled run is never resurrected. Returns ``True`` when the
+    reset landed (``False`` when the fence rejected it — superseded, already
+    moved on, or cancelled).
+    """
+    from modulo.db.crud.run import update_run_status
+
+    factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, uuid.UUID(org_id))
+        refreshed = await update_run_status(
+            session,
+            uuid.UUID(run_id),
+            "awaiting_human",
+            claim_token=claim_token,
+            from_status="running",
+        )
+    return refreshed is not None
+
+
 def _is_transient_db_error(exc: BaseException) -> bool:
     """True for a transient DB fault worth retrying (FAR-604 P0).
 
@@ -2256,6 +2299,27 @@ async def run_executor_with_watchdog(
     )
 
     if exec_exc is not None:
+        # FAR-1831: a sandbox-capacity denial on the RESUME path must NOT
+        # terminal-fail a run whose gate decision is already committed — the
+        # decision would be lost. Reset the row to ``awaiting_human`` (fenced)
+        # so dispatcher_reconcile's F6a path re-dispatches the resume when a
+        # slot frees, and report a deferred (non-failure) outcome. This
+        # exception type is raised ONLY by the resume capacity gate
+        # (executor._enforce_resume_sandbox_capacity), never by the execute
+        # path, so the reset cannot misfire on a first dispatch.
+        from modulo.core.pipeline_engine.executor import (
+            SandboxCapacityExceededError as _SandboxCapacityExceededError,
+        )
+
+        if isinstance(exec_exc, _SandboxCapacityExceededError):
+            reset = await defer_capacity_denied_run_to_awaiting_human(aeng, run_id, org_id, claim_token=claim_token)
+            _log.warning(
+                "pipeline_execution.resume_capacity_deferred run=%s reset=%s — "
+                "committed decision preserved; dispatcher_reconcile will re-dispatch",
+                run_id,
+                reset,
+            )
+            return {"status": "capacity_deferred"}
         # Honest outcome: a generic executor failure is terminal-failed
         # (token-guarded) BEFORE returning — never a silent wrong-success.
         await fail_run_terminal(

@@ -1,7 +1,7 @@
 """Route-level coverage tests for the HITL endpoints (FAR-618).
 
 Complements ``test_hitl_resilience.py`` (SQLAlchemyError→503, NotTeamMember→403,
-sandbox-capacity 409s, FAR-541 gate stamping) by covering the claim happy path
+FAR-1831 capacity-deferred queued successes, FAR-541 gate stamping) by covering the claim happy path
 and missing-claim-data 500, the per-route manager exception matrices
 (GateNotFound→404 / AlreadyClaimed|AlreadyDecided→409 / ClaimTokenInvalid→403 /
 ClaimTokenExpired→410 / DecisionPayload→422), ProgrammingError→501, the
@@ -239,7 +239,6 @@ def _decision_patches(hitl_method: str, side_effect: object, *, resume: object =
     executor = MagicMock()
     executor.resume = resume
     return [
-        patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
         patch(f"modulo.api.routes.hitl.HITLManager.{hitl_method}", new=AsyncMock(side_effect=side_effect)),
         patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
     ]
@@ -343,7 +342,6 @@ def test_resume_failure_returns_500(
     executor.resume = AsyncMock(side_effect=RuntimeError("executor down"))
     route = next(r for r in _DECISION_ROUTES if r[1] == path)
     patches = [
-        patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
         patch(f"modulo.api.routes.hitl.HITLManager.{route[3]}", new=AsyncMock(return_value=MagicMock())),
         patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
     ]
@@ -1282,7 +1280,6 @@ def test_modify_approve_choice_gate_valid_answer_reaches_manager_and_resume(
     executor = MagicMock()
     executor.resume = resume
     patches = [
-        patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
         patch("modulo.api.routes.hitl.HITLManager.approve_with_modification", new=mgr_call),
         patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
         patch(
@@ -1320,7 +1317,6 @@ def test_modify_approve_non_choice_gate_without_answer_unchanged(client: tuple[T
     executor = MagicMock()
     executor.resume = resume
     patches = [
-        patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
         patch("modulo.api.routes.hitl.HITLManager.approve_with_modification", new=mgr_call),
         patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
         patch(
@@ -1390,7 +1386,6 @@ def test_approve_choice_gate_valid_answer_reaches_manager_and_resume(
     executor = MagicMock()
     executor.resume = resume
     patches = [
-        patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
         patch("modulo.api.routes.hitl.HITLManager.approve", new=mgr_call),
         patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
         patch(
@@ -1423,7 +1418,6 @@ def test_approve_non_choice_gate_without_answer_unchanged(client: tuple[TestClie
     executor = MagicMock()
     executor.resume = resume
     patches = [
-        patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
         patch("modulo.api.routes.hitl.HITLManager.approve", new=mgr_call),
         patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
         patch(
@@ -1455,7 +1449,6 @@ def test_modify_approve_unresolvable_config_fails_open_without_answer(client: tu
     executor = MagicMock()
     executor.resume = resume
     patches = [
-        patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
         patch("modulo.api.routes.hitl.HITLManager.approve_with_modification", new=mgr_call),
         patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
         patch("modulo.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None)),
