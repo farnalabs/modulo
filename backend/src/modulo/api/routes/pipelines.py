@@ -155,6 +155,7 @@ from modulo.db.crud.pipeline_snapshot import create_snapshot_edit
 from modulo.db.crud.pipeline_snapshot_versioning import (
     delete_snapshot,
     diff_snapshots,
+    get_snapshot_by_version,
     get_snapshot_detail,
     list_snapshots,
     rollback_to_snapshot,
@@ -5181,6 +5182,39 @@ async def save_edit_snapshot_endpoint(
     if snapshot is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save edit snapshot")
     return _snapshot_to_response(snapshot)
+
+
+@router.get("/{pipeline_id}/snapshots/by-version/{snapshot_version}")
+@handle_db_errors("pipelines.get_snapshot_by_version")
+async def get_snapshot_by_version_endpoint(
+    pipeline_id: uuid.UUID,
+    snapshot_version: int,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_LIST),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> SnapshotDetailResponse:
+    """Read one snapshot by its per-pipeline version number (FAR-1811).
+
+    Backs the ``?version=<n>`` deep-link: same response model and the SAME
+    team/pipeline scoping as the by-UUID read below (FAR-1360), so a version
+    belonging to another pipeline resolves to ``None`` -> 404 and never leaks.
+    A non-integer version path segment is a 422; an absent version is a 404.
+    """
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            snapshot = await get_snapshot_by_version(
+                session,
+                pipeline_id,
+                snapshot_version,
+                organisation_id=principal.organisation_id,
+            )
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    if snapshot is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SNAPSHOT_NOT_FOUND)
+    return _snapshot_to_detail_response(snapshot)
 
 
 @router.get("/{pipeline_id}/snapshots/{snapshot_id}")

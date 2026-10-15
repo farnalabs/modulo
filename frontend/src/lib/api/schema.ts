@@ -2743,6 +2743,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/pipelines/{pipeline_id}/snapshots/by-version/{snapshot_version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Snapshot By Version Endpoint
+         * @description Read one snapshot by its per-pipeline version number (FAR-1811).
+         *
+         *     Backs the ``?version=<n>`` deep-link: same response model and the SAME
+         *     team/pipeline scoping as the by-UUID read below (FAR-1360), so a version
+         *     belonging to another pipeline resolves to ``None`` -> 404 and never leaks.
+         *     A non-integer version path segment is a 422; an absent version is a 404.
+         */
+        get: operations["get_snapshot_by_version_endpoint_api_v1_pipelines__pipeline_id__snapshots_by_version__snapshot_version__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/pipelines/{pipeline_id}/snapshots/{snapshot_id}": {
         parameters: {
             query?: never;
@@ -26940,6 +26965,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SnapshotResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_snapshot_by_version_endpoint_api_v1_pipelines__pipeline_id__snapshots_by_version__snapshot_version__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                pipeline_id: string;
+                snapshot_version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SnapshotDetailResponse"];
                 };
             };
             /** @description Validation Error */

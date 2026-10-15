@@ -84,12 +84,12 @@ def _make_settings() -> Settings:
     )
 
 
-def _make_snapshot(pipeline_id: uuid.UUID) -> MagicMock:
+def _make_snapshot(pipeline_id: uuid.UUID, version: int = 1) -> MagicMock:
     s = MagicMock()
     s.id = _SNAPSHOT_ID
     s.pipeline_id = pipeline_id
     s.organisation_id = _ORG_ID
-    s.snapshot_version = 1
+    s.snapshot_version = version
     s.tag = None
     s.notes = None
     s.created_at = _NOW
@@ -141,16 +141,19 @@ def _make_session(
     is_member: bool = True,
     team_private: bool = False,
     snapshot_pipeline_id: uuid.UUID = _OTHER_PIPELINE_ID,
+    snapshot_version: int = 1,
 ) -> AsyncMock:
     """Session double: ``configure_mock_session`` + pipelines / memberships / snapshots.
 
     ``snapshot_pipeline_id`` is the pipeline the ONE fixture snapshot belongs
-    to. A ``pipeline_id`` bind resolves that row IFF it equals
-    ``snapshot_pipeline_id`` - the real predicate's answer, read from the
-    compiled bind values (the SQL text alone cannot tell a scoped read from an
-    unscoped one, because the column list always mentions ``pipeline_id``).
-    An UNSCOPED read always finds the row, which is what makes the scoping
-    tests discriminating rather than vacuously green.
+    to, ``snapshot_version`` its version number. A ``pipeline_id`` bind resolves
+    that row IFF it equals ``snapshot_pipeline_id`` - the real predicate's
+    answer, read from the compiled bind values (the SQL text alone cannot tell a
+    scoped read from an unscoped one, because the column list always mentions
+    ``pipeline_id``); a ``snapshot_version`` bind likewise resolves IFF it equals
+    the fixture's version (FAR-1811's by-version read). An UNSCOPED read always
+    finds the row, which is what makes the scoping tests discriminating rather
+    than vacuously green.
     """
     session = AsyncMock()
     configure_mock_session(session)
@@ -163,8 +166,9 @@ def _make_session(
     pipeline_row = _make_pipeline()
     pipeline_row.visibility = "team" if team_private else "org"
     pipeline_row.owner_team_id = _TEAM_ID if team_private else None
-    snapshot = _make_snapshot(snapshot_pipeline_id)
+    snapshot = _make_snapshot(snapshot_pipeline_id, snapshot_version)
     snapshot_sql: list[str] = []
+    snapshot_binds: list[dict[str, Any]] = []
 
     async def _execute(stmt: object, *args: Any, **kwargs: Any) -> MagicMock:
         sql = str(stmt)
@@ -178,10 +182,15 @@ def _make_session(
             # contains "pipeline_id", so a substring test can never tell a
             # scoped read from an unscoped one. A ``pipeline_id`` bind answers
             # exactly what the real predicate would - the row, iff the fixture
-            # says that pipeline owns it.
+            # says that pipeline owns it; a ``snapshot_version`` bind answers
+            # the same way for the by-version read.
             binds = dict(stmt.compile().params)
+            snapshot_binds.append(binds)
             scoped = [value for name, value in binds.items() if "pipeline_id" in str(name)]
             visible = scoped[0] == snapshot_pipeline_id if scoped else True
+            if visible:
+                versioned = [value for name, value in binds.items() if "snapshot_version" in str(name)]
+                visible = versioned[0] == snapshot.snapshot_version if versioned else True
             res = MagicMock()
             res.scalar_one_or_none.return_value = snapshot if visible else None
             res.first.return_value = snapshot if visible else None
@@ -197,6 +206,7 @@ def _make_session(
 
     session.execute = AsyncMock(side_effect=_execute)
     session.snapshot_sql = snapshot_sql
+    session.snapshot_binds = snapshot_binds
     return session
 
 
@@ -559,3 +569,110 @@ async def test_restore_resolver_rejects_a_non_uuid_path_param() -> None:
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail == "Invalid pipeline_id path parameter"
     session.execute.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# FAR-1811: GET /snapshots/by-version/{snapshot_version} - the deep-link read
+# ---------------------------------------------------------------------------
+
+
+def _by_version_url(version: object = 7) -> str:
+    return f"/api/v1/pipelines/{_PATH_PIPELINE_ID}/snapshots/by-version/{version}"
+
+
+def _pipeline_binds(binds: dict[str, Any]) -> list[Any]:
+    """The ``pipeline_id``-named bind values of one compiled snapshot statement."""
+    return [value for name, value in binds.items() if "pipeline_id" in str(name)]
+
+
+def test_get_snapshot_by_version_returns_the_path_pipelines_snapshot() -> None:
+    """A hit resolves the right snapshot for the right pipeline (real CRUD).
+
+    The endpoint is new with FAR-1811: without it this URL 404s at routing
+    (no route matches ``.../snapshots/by-version/<int>``), so this test is the
+    prove-the-fix leg. The response is the by-UUID read's
+    ``SnapshotDetailResponse`` shape (``graph_json`` present), carrying the
+    requested version's row - not the list-item shape and not another row.
+    """
+    session = _make_session(snapshot_pipeline_id=_PATH_PIPELINE_ID, snapshot_version=7)
+    with _client_for(session, role="operator") as http:
+        resp = http.get(_by_version_url(7))
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["id"] == str(_SNAPSHOT_ID)
+    assert body["pipeline_id"] == str(_PATH_PIPELINE_ID)
+    assert body["snapshot_version"] == 7
+    # SnapshotDetailResponse (the by-UUID read's model), not SnapshotResponse.
+    assert isinstance(body["graph_json"], dict)
+    assert session.snapshot_binds, "the by-version endpoint must read the snapshot row"
+    assert all(_pipeline_binds(b) == [_PATH_PIPELINE_ID] for b in session.snapshot_binds), session.snapshot_binds
+
+
+def test_get_snapshot_by_version_of_a_foreign_pipeline_is_404() -> None:
+    """A version of ANOTHER pipeline addressed through this path 404s.
+
+    The FAR-1360 contract: the ``{pipeline_id}`` segment must mean something.
+    The double serves the row to any read that does NOT pin it to a pipeline,
+    so the 404 proves the route scoped the read - an unscoped read would have
+    returned the foreign snapshot with 200.
+    """
+    session = _make_session(snapshot_pipeline_id=_OTHER_PIPELINE_ID, snapshot_version=7)
+    with _client_for(session, role="operator") as http:
+        resp = http.get(_by_version_url(7))
+
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"] == _SNAPSHOT_NOT_FOUND
+    assert session.snapshot_binds, "the by-version endpoint must read the snapshot row"
+    assert all(_pipeline_binds(b) == [_PATH_PIPELINE_ID] for b in session.snapshot_binds), session.snapshot_binds
+
+
+def test_get_snapshot_by_version_absent_version_is_404() -> None:
+    """The path pipeline holds version 7; asking for 99 is a 404.
+
+    The paired 200 on the version the fixture DOES hold keeps this from being
+    a vacuous miss: the same session answers both, so the 404 is the version
+    discriminator, not a double that never finds a row.
+    """
+    session = _make_session(snapshot_pipeline_id=_PATH_PIPELINE_ID, snapshot_version=7)
+    with _client_for(session, role="operator") as http:
+        missing = http.get(_by_version_url(99))
+        present = http.get(_by_version_url(7))
+
+    assert missing.status_code == 404, missing.text
+    assert missing.json()["detail"] == _SNAPSHOT_NOT_FOUND
+    assert present.status_code == 200, present.text
+    assert present.json()["snapshot_version"] == 7
+
+
+def test_get_snapshot_by_version_non_integer_is_422() -> None:
+    """A non-integer version path segment is a 422 and never reaches the read."""
+    session = _make_session(snapshot_pipeline_id=_PATH_PIPELINE_ID, snapshot_version=7)
+    with _client_for(session, role="operator") as http:
+        resp = http.get(_by_version_url("abc"))
+
+    assert resp.status_code == 422, resp.text
+    assert not session.snapshot_sql, session.snapshot_sql
+
+
+async def test_crud_get_snapshot_by_version_scopes_on_pipeline_and_version() -> None:
+    """Both predicate legs of the real CRUD resolve independently.
+
+    A hit needs the fixture's OWN pipeline and version; either leg wrong ->
+    ``None`` (which the route maps to 404). Pins that the 404s above are the
+    scope/version predicates, not a read that always misses.
+    """
+    from modulo.db.crud.pipeline_snapshot_versioning import get_snapshot_by_version
+
+    owner = _make_session(snapshot_pipeline_id=_PATH_PIPELINE_ID, snapshot_version=7)
+    foreign = _make_session(snapshot_pipeline_id=_OTHER_PIPELINE_ID, snapshot_version=7)
+
+    found = await get_snapshot_by_version(owner, _PATH_PIPELINE_ID, 7, organisation_id=_ORG_ID)
+    assert found is not None
+    assert found.snapshot_version == 7
+
+    wrong_version = await get_snapshot_by_version(owner, _PATH_PIPELINE_ID, 9, organisation_id=_ORG_ID)
+    assert wrong_version is None
+
+    wrong_pipeline = await get_snapshot_by_version(foreign, _PATH_PIPELINE_ID, 7, organisation_id=_ORG_ID)
+    assert wrong_pipeline is None
