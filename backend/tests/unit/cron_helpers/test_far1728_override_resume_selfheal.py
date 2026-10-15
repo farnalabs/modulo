@@ -324,17 +324,20 @@ class TestLostOverrideResumeJobIsReEnqueued:
     async def test_control_node_started_row_without_the_override_marker_is_still_held_back(
         self, monkeypatch: Any
     ) -> None:
-        """The belt's scope is UNCHANGED for every other node-started row: the
-        same shape WITHOUT the flip's marker (the 2026-10-10 storm class —
-        no replay flag either) is still held back — no enqueue, counted
-        deferred — so the carve-out is strictly class-scoped and the storm
-        does not come back."""
+        """The carve-out stays class-scoped: the same shape WITHOUT the flip's
+        marker (the 2026-10-10 storm class — no replay flag either) is still
+        held back — no enqueue — so the storm does not come back. Since
+        FAR-1803 it is classified ``node_started_executor_lost`` (stale
+        heartbeat = executor gone) instead of landing on the belt's
+        ``node_started_deferred``; either way it is NEVER re-dispatched and
+        the override leg never claims it."""
         row = _override_row(uuid.uuid4(), override_marker=False, is_replay=None)
         summary, reenqueue, _session = await _run_reconcile(monkeypatch, [row])
 
         reenqueue.assert_not_awaited()
         assert summary["repaired"] == 0
-        assert summary["node_started_deferred"] == 1
+        assert summary["node_started_executor_lost"] == 1
+        assert summary["node_started_deferred"] == 0
 
     async def test_fresh_heartbeat_override_row_not_touched(self, monkeypatch: Any) -> None:
         """A FRESH-heartbeat override row (its resume job just claimed, or is
@@ -415,8 +418,10 @@ class TestWebhookReplayIsNotOverMatched:
 
         reenqueue.assert_not_awaited()
         assert summary["repaired"] == 0
-        # Falls through to the belt — held back, never re-executed.
-        assert summary["node_started_deferred"] == 1
+        # Never the override resume path — and (FAR-1803) classified as the
+        # executor-lost class: held back, counted, never re-executed.
+        assert summary["node_started_executor_lost"] == 1
+        assert summary["node_started_deferred"] == 0
 
 
 class TestPredicateSelectsTheOverrideResumeClass:

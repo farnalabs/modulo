@@ -1048,7 +1048,10 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
     counters. FAR-1649 adds the node-started counters: ``node_started_deferred``
     (row-level belt hits) and ``node_started_terminalized`` (node-started rows
     that reached the terminaliser) - both regression alarms that must never be
-    read as ``claimed_but_never_dispatched``. Every counter defaults to 0 so a
+    read as ``claimed_but_never_dispatched``. FAR-1803 adds
+    ``node_started_executor_lost`` (node-started rows whose executor heartbeat
+    is stale - the zero-node class that used to be invisible to every counter).
+    Every counter defaults to 0 so a
     pre-D worker's payload renders without error.
 
     FAR-1621: the per-org counters are included so an alert email can tell the
@@ -1071,6 +1074,12 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
         f"claimed_but_never_dispatched={stats.get('claimed_but_never_dispatched', 0)}, "
         f"node_started_terminalized={stats.get('node_started_terminalized', 0)}, "
         f"node_started_deferred={stats.get('node_started_deferred', 0)}, "
+        # FAR-1803: the node-started / executor-lost gauge — a running row with
+        # a durable first-node-start phase whose executor heartbeat is stale.
+        # Rendered unconditionally so the readiness detail can NEVER report 0
+        # for every reconcile counter while such runs exist (the observed
+        # defect this counter exists for).
+        f"node_started_executor_lost={stats.get('node_started_executor_lost', 0)}, "
         f"claim_cap_terminalized={stats.get('claim_cap_terminalized', 0)}, "
         f"age_terminalized={stats.get('age_terminalized', 0)}, "
         f"dispatch_failed_terminalized={stats.get('dispatch_failed_terminalized', 0)}, "
