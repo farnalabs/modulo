@@ -49,6 +49,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.sql import Select
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
@@ -676,3 +677,44 @@ async def test_crud_get_snapshot_by_version_scopes_on_pipeline_and_version() -> 
 
     wrong_pipeline = await get_snapshot_by_version(foreign, _PATH_PIPELINE_ID, 7, organisation_id=_ORG_ID)
     assert wrong_pipeline is None
+
+
+async def test_crud_get_snapshot_by_version_org_scope_is_optional() -> None:
+    """``organisation_id`` is a defence-in-depth scope, not a required one.
+
+    The parameter defaults to ``None`` (the sibling ``get_snapshot_detail``
+    takes the same optional scope), so the org-less leg must stay a working
+    read: the pipeline+version predicates alone resolve the row and the
+    statement carries no ``organisation_id`` bind. Pins the ``None`` branch of
+    the scope guard so it is exercised, not just the org-scoped leg above.
+    """
+    from modulo.db.crud.pipeline_snapshot_versioning import get_snapshot_by_version
+
+    owner = _make_session(snapshot_pipeline_id=_PATH_PIPELINE_ID, snapshot_version=7)
+
+    found = await get_snapshot_by_version(owner, _PATH_PIPELINE_ID, 7)
+    assert found is not None
+    assert found.snapshot_version == 7
+    assert owner.snapshot_binds, "the by-version read must issue a statement"
+    assert all("organisation_id" not in str(name) for name in owner.snapshot_binds[-1]), owner.snapshot_binds
+
+
+def test_get_snapshot_by_version_programming_error_maps_501() -> None:
+    """A ``ProgrammingError`` from the versioned read maps to 501, not 500.
+
+    The route's sibling snapshot reads translate a ``ProgrammingError`` (a
+    missing migration) into the typed 501 'feature not available' response via
+    ``_raise_db_migration_error``; the by-version read shares that arm, so this
+    pins it rather than letting the handler fall through to the generic 500.
+    """
+    session = _make_session(snapshot_pipeline_id=_PATH_PIPELINE_ID, snapshot_version=7)
+    with (
+        patch(
+            f"{_PREFIX}get_snapshot_by_version",
+            new=AsyncMock(side_effect=ProgrammingError("stmt", {}, RuntimeError("missing table"))),
+        ),
+        _client_for(session, role="operator") as http,
+    ):
+        resp = http.get(_by_version_url(7))
+
+    assert resp.status_code == 501, resp.text
