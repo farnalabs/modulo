@@ -11,6 +11,10 @@ export interface NavItem {
   requiredTier?: string | null
   requiredPermissions?: string[] | null
   requiredFeatureFlag?: string | null
+  // FAR-1796: route-entry (or inherited group) system-admin gate, mirroring the
+  // router's `requiresSystemAdmin` derivation. A visible group is not enough —
+  // an item gated only by this flag must stay hidden from non-system-admins.
+  systemAdminOnly?: boolean
 }
 
 export interface NavGroup {
@@ -102,6 +106,9 @@ interface ManifestRoute {
   required_roles?: string[] | null
   required_permissions?: string[] | null
   feature_flag?: string | null
+  // FAR-1796: route-entry system-admin gate (blank sidebar_group routes carry
+  // their gate here, not on a sidebar group).
+  system_admin_only?: boolean
 }
 
 interface ManifestSidebarGroup {
@@ -164,6 +171,9 @@ function buildSidebarGroups(): NavGroup[] {
       requiredTier: route.required_tier || null,
       requiredPermissions: route.required_permissions || null,
       requiredFeatureFlag: route.feature_flag || null,
+      // FAR-1796: the route entry ORs with its group's flag, mirroring the
+      // router's hydrateManifestMeta derivation.
+      systemAdminOnly: route.system_admin_only || group.system_admin_only || undefined,
     })
   }
 
@@ -222,6 +232,10 @@ export interface NavVisibilityContext {
 }
 
 export function isNavItemVisible(item: NavItem, ctx: NavVisibilityContext): boolean {
+  // FAR-1796: an item-level system-admin gate hides the item from non-system-
+  // admins even inside a visible group. Checked FIRST so the early-true return
+  // below (no role/tier/permission/flag restrictions) cannot bypass it.
+  if (item.systemAdminOnly && !ctx.isSystemAdmin) return false
   if ((item.visibility === 'private_preview' || item.visibility === 'in_dev') && !ctx.devMode) return false
   // FAR-535: demo sessions never see private_preview surfaces — even when the
   // instance runs with dev mode enabled. Server-side mutation denial still

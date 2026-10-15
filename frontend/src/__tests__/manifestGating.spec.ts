@@ -15,6 +15,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import yaml from 'js-yaml'
+import { hydrateManifestMeta } from '../router'
 
 const MANIFEST_PATH = resolve(__dirname, '../manifest.yaml')
 
@@ -88,5 +89,30 @@ describe('manifest merge-key gating (js-yaml regression guard)', () => {
       expect(route, `${path} must exist`).toBeDefined()
       expect(route.system_admin_only).toBe(true)
     }
+  })
+
+  it('/admin/product-analytics keeps the Team tier gate but drops the accidental admin org-role gate (FAR-1795)', () => {
+    // `<<: *team` injects BOTH `required_tier: team` AND `required_roles: [admin]`.
+    // A system_admin_only route is an INSTANCE-level gate; the org-ROLE
+    // requirement does not apply and wrongly redirected a system admin whose
+    // org_role != 'admin'. The explicit `required_roles:` after `<<:` must
+    // override the merged value to null while the tier gate survives.
+    const route = routes['/admin/product-analytics']
+    expect(route).toBeDefined()
+    expect(route.system_admin_only).toBe(true)
+    expect(route.required_tier).toBe('team')
+    expect(route.required_roles == null).toBe(true)
+  })
+
+  it('drives the REAL derivation: /admin/product-analytics is system-admin gated with no org-role requirement (FAR-1795)', () => {
+    // Exercise the actual router hydration (vite yaml plugin → hydrateManifestMeta),
+    // not a source-text scrape: requiresSystemAdmin must still be set and the
+    // accidental org-role gate must be gone.
+    const routeName = routes['/admin/product-analytics'].name as string
+    expect(typeof routeName === 'string' && routeName.length > 0).toBe(true)
+    const route = { name: routeName, meta: {} as Record<string, unknown> }
+    hydrateManifestMeta(route as never)
+    expect(route.meta.requiresSystemAdmin).toBeTruthy()
+    expect(route.meta.requiredRoles).toBeFalsy()
   })
 })

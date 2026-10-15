@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// Restore the REAL vue-router (the shared vitest setup mocks it globally with a
+// stub whose getRoutes() is always []) so the default router export carries its
+// real route records — same override pattern as routerFeatureFlagGuard.spec.ts.
+vi.mock('vue-router', async () => {
+  const actual = await vi.importActual<typeof import('vue-router')>('vue-router')
+  return actual
+})
+
 const mockManifest = vi.hoisted(() => ({
   sidebar_groups: {
     build: { label: 'BUILD', order: 1, default_expanded: true },
@@ -13,6 +21,10 @@ const mockManifest = vi.hoisted(() => ({
     // route entry itself carries the signal (the manifest-side replacement for
     // an inline router meta).
     '/admin/system/orgs': { name: 'admin-system-orgs', breadcrumb: 'Organisations', sidebar_group: null, sidebar_order: null, system_admin_only: true, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
+    // FAR-1797: the other two route-entry system-admin gates, pinned so the
+    // router route name ↔ manifest route name binding is asserted, not assumed.
+    '/admin/system/config': { name: 'admin-system-config', breadcrumb: 'System Config', sidebar_group: null, sidebar_order: null, system_admin_only: true, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
+    '/admin/product-analytics': { name: 'admin-product-analytics', breadcrumb: 'Product Analytics', sidebar_group: null, sidebar_order: null, system_admin_only: true, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
     // A normal grouped route (non-system sidebar group) — must stay ungated.
     '/library': { name: 'library', breadcrumb: 'Library', sidebar_group: 'build', sidebar_order: 2, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null },
     '/': { name: 'dashboard', breadcrumb: 'Dashboard', sidebar_group: 'build', sidebar_order: 1, type: 'page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
@@ -32,6 +44,7 @@ vi.mock('../lib/jwt', () => ({ decodeJwtPayload }))
 vi.mock('../stores/planStore', () => ({ usePlanStore }))
 
 import { hydrateManifestMeta, enforceRoleTierVisibility } from '../router'
+import router from '../router'
 
 function makeRoute(name: string, meta: Record<string, unknown> = {}): any {
   return { name, meta }
@@ -148,6 +161,54 @@ describe('FAR-938: SYSTEM sidebar group system_admin_only guard', () => {
       hydrateManifestMeta(route)
       const result = await enforceRoleTierVisibility(route, 'tok')
       expect(result).toBe(true)
+    })
+  })
+
+  // FAR-1797: pin the gating bindings. The router route NAME and the manifest
+  // route name must agree for the three route-entry system-admin gates, and the
+  // gate must be derived from the manifest — never duplicated as inline meta.
+  describe('FAR-1797: route-entry system-admin gates are pinned to the real router records', () => {
+    const systemRoutes = [
+      { name: 'admin-system-orgs', path: '/admin/system/orgs' },
+      { name: 'admin-system-config', path: '/admin/system/config' },
+      { name: 'admin-product-analytics', path: '/admin/product-analytics' },
+    ]
+
+    it('binds each router route name to the manifest route name on the same path', () => {
+      for (const { name, path } of systemRoutes) {
+        const manifestEntry = (mockManifest.routes as Record<string, { name?: string }>)[path]
+        expect(manifestEntry, `manifest entry for ${path} must exist`).toBeDefined()
+        expect(manifestEntry.name).toBe(name)
+
+        const record = router.getRoutes().find((r) => r.name === name)
+        expect(record, `router record ${name} must exist`).toBeDefined()
+        expect(record!.path).toBe(path)
+      }
+    })
+
+    it('the real router records carry NO inline requiresSystemAdmin meta', () => {
+      for (const { name } of systemRoutes) {
+        const record = router.getRoutes().find((r) => r.name === name)
+        expect(record, `router record ${name} must exist`).toBeDefined()
+        expect(record!.meta.requiresSystemAdmin).toBeFalsy()
+      }
+    })
+
+    it('each route redirects a non-system-admin and admits a system admin via the manifest-derived gate', async () => {
+      for (const { name } of systemRoutes) {
+        decodeJwtPayload.mockReturnValue({ is_system_admin: false })
+        const deniedRoute = makeRoute(name)
+        hydrateManifestMeta(deniedRoute)
+        expect(deniedRoute.meta.requiresSystemAdmin).toBe(true)
+        const denied = await enforceRoleTierVisibility(deniedRoute, 'tok')
+        expect(denied).toEqual({ name: 'dashboard' })
+
+        decodeJwtPayload.mockReturnValue({ is_system_admin: true })
+        const allowedRoute = makeRoute(name)
+        hydrateManifestMeta(allowedRoute)
+        const allowed = await enforceRoleTierVisibility(allowedRoute, 'tok')
+        expect(allowed).toBe(true)
+      }
     })
   })
 })
