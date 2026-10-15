@@ -1954,6 +1954,72 @@ class TestBindConnectorToNode(_AuthContext):
 
 
 # ---------------------------------------------------------------------------
+# FAR-1810: a contended edit-snapshot lock is RETRYABLE on the graph tools
+#
+# ``SnapshotLockNotAvailableError`` is a plain Exception carrying no SQLSTATE,
+# so it matches neither ``_replace_pipeline_graph_txn``'s 55P03 arm nor any
+# ``except SQLAlchemyError`` arm — before the explicit translation both tools
+# below fell through to their generic ``except Exception`` and answered
+# ``server_error``: a transient busy lock reported as a server bug. The
+# contract mirrors ``trigger_pipeline``'s existing ``snapshot_lock_busy``.
+# ---------------------------------------------------------------------------
+
+
+class TestSnapshotLockBusyIsRetryable(_AuthContext):
+    async def test_bind_connector_to_node_returns_snapshot_lock_busy(self) -> None:
+        connector = MagicMock()
+        connector.organisation_id = _ORG_ID
+        connector.visibility = "org"
+        connector.owner_team_id = None
+        connector.connector_type_id = "github"
+
+        node_id = uuid.uuid4()
+        pipeline = MagicMock()
+        pipeline.owner_team_id = None
+        pipeline.graph_nodes_json = [
+            {"id": str(node_id), "node_type": "connector", "position": {"x": 0, "y": 0}, "label": "n"}
+        ]
+        session = _mock_session()
+        session.execute.return_value = _make_execute_result(scalar_one_or_none=pipeline)
+
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch(
+                "modulo.db.crud.connector_instance.get_connector_instance",
+                new=AsyncMock(return_value=connector),
+            ),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
+            patch(
+                "modulo.db.crud.pipeline_snapshot.create_snapshot_edit",
+                new=AsyncMock(side_effect=SnapshotLockNotAvailableError("snapshot lock busy")),
+            ),
+        ):
+            result = await bind_connector_to_node(
+                pipeline_id=str(uuid.uuid4()),
+                node_id=str(node_id),
+                connector_type="github",
+                connector_instance_id=str(uuid.uuid4()),
+            )
+
+        assert result["error"] == "snapshot_lock_busy", result
+        assert "retry" in result["detail"].lower(), result
+        assert result["pipeline_id"], result
+
+    async def test_update_pipeline_graph_returns_snapshot_lock_busy(self) -> None:
+        pipeline_id = str(uuid.uuid4())
+        with patch.object(
+            ms,
+            "_update_pipeline_graph_impl",
+            new=AsyncMock(side_effect=SnapshotLockNotAvailableError("snapshot lock busy")),
+        ):
+            result = await update_pipeline_graph(pipeline_id=pipeline_id, nodes=[], edges=[])
+
+        assert result["error"] == "snapshot_lock_busy", result
+        assert result["pipeline_id"] == pipeline_id, result
+        assert "retry" in result["detail"].lower(), result
+
+
+# ---------------------------------------------------------------------------
 # trigger_pipeline paths
 # ---------------------------------------------------------------------------
 

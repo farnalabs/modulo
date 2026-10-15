@@ -15,6 +15,7 @@ Org context validated per-event for streaming (SSE) connections.
 
 import asyncio
 import contextvars
+import copy
 import functools
 import json
 import logging
@@ -4117,6 +4118,29 @@ async def _update_pipeline_graph_impl(
     }
 
 
+def _snapshot_lock_busy_error(pipeline_id: str) -> dict[str, Any]:
+    """The retryable ``snapshot_lock_busy`` envelope for a graph SAVE (FAR-1810).
+
+    A graph save that loses the bounded snapshot-lock race (the graph-copy
+    advisory lock held by a concurrent run start) is CONTENTION, not an
+    unexpected fault. Before this translation the exception escaped the tool
+    wrapper's ``except Exception`` arm and answered a generic ``server_error``,
+    reporting a transient busy lock as a server bug. The payload mirrors the
+    run-start contract ``trigger_pipeline`` already returns so a caller can
+    branch on one code across both surfaces.
+    """
+    from modulo.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS
+
+    return {
+        "error": "snapshot_lock_busy",
+        "pipeline_id": pipeline_id,
+        "detail": (
+            f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — "
+            "retry the save once the concurrent snapshot completes"
+        ),
+    }
+
+
 @mcp.tool(
     description="Set or replace the graph (nodes + edges) of an existing pipeline. "
     "Pass nodes as a list of dicts with id, node_type, agent_id, position (x, y), "
@@ -4153,6 +4177,12 @@ async def update_pipeline_graph(
         return await _update_pipeline_graph_impl(pipeline_id, nodes, edges)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except SnapshotLockNotAvailableError:
+        # FAR-1810: an edit snapshot's bounded lock wait losing its race is a
+        # retryable contention, not a server bug — without this arm the
+        # exception fell through to the generic ``Exception`` arm below.
+        _log.warning("update_pipeline_graph snapshot_lock_busy pipeline=%s", pipeline_id)
+        return _snapshot_lock_busy_error(pipeline_id)
     except ProgrammingError:
         _log.exception("update_pipeline_graph failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -4240,7 +4270,20 @@ def _apply_node_connector_binding(
             "field": "dispatch_action",
             "detail": f"dispatch_action must be one of {list(_BIND_DISPATCH_ACTIONS)}, got {dispatch_action!r}",
         }
-    nodes = list(pipeline.graph_nodes_json) if pipeline.graph_nodes_json else []
+    # WORK ON A DEEP COPY — never mutate the ORM-loaded value in place.
+    # ``pipelines.graph_nodes_json`` is a plain JSON column (no Mutable
+    # wrapper), so an in-place edit of a loaded node dict is invisible to the
+    # unit of work: the reassignment below then handed SQLAlchemy a list whose
+    # ELEMENTS were the very dicts the old value still points at, ``old ==
+    # new``, history came back UNCHANGED and the flush issued NO UPDATE at all.
+    # The tool answered ``status: "bound"`` while the stored graph never
+    # changed — and the edit snapshot minted from the in-memory object then
+    # disagreed with the row. Observed against the real ORM before this copy:
+    # ``attributes.get_history(pipeline, "graph_nodes_json").has_changes()``
+    # was False after a successful bind, and the committed row had no
+    # ``connector_binding``. The copy also makes the caller's no-op comparison
+    # (FAR-1810) genuinely pre-state vs post-state.
+    nodes = copy.deepcopy(list(pipeline.graph_nodes_json)) if pipeline.graph_nodes_json else []
     target = None
     for node in nodes:
         if uuid.UUID(node["id"]) == nid:
@@ -4417,7 +4460,35 @@ async def bind_connector_to_node(
 
             # FAR-1810: capture the pre-bind node payload for no-op suppression
             # (a re-bind that changes nothing must not push a snapshot).
-            previous_nodes = list(pipeline.graph_nodes_json or [])
+            #
+            # The copy MUST be DEEP (the exact pattern ``replace_pipeline_graph``
+            # uses for the same comparison): ``_apply_node_connector_binding``
+            # builds its working list the same shallow way and then mutates each
+            # target node dict IN PLACE (``target["connector_binding"] = ...``).
+            # A shallow ``list(...)`` copies only the container, so every element
+            # is the SAME dict object the post-bind list holds — the comparison
+            # below would then compare the mutated graph against ITSELF, read
+            # "unchanged" for EVERY bind, and silently suppress every snapshot
+            # (making the fail-closed ``snapshot is None`` guard underneath it
+            # unreachable on this surface).
+            previous_nodes = copy.deepcopy(list(pipeline.graph_nodes_json or []))
+
+            # FAR-1471: attribute the write to the caller's ACCOUNT id through
+            # the same ladder ``_update_pipeline_graph_impl`` uses. Every
+            # production auth path sets ``_ctx_user_id`` to the credential's
+            # owning account; a session without one RAISES here and is caught,
+            # so the snapshot is written honestly unattributed (account_id NULL)
+            # with a warning, never silently attributed to nobody.
+            try:
+                bind_account_id: uuid.UUID | None = _ctx_user_id_val()
+            except McpAuthContextError:
+                _log.warning(
+                    "mcp.bind_connector_to_node.unattributed_write pipeline_id=%s: "
+                    "no authenticated user context for this MCP request",
+                    pipeline_id,
+                )
+                bind_account_id = None
+
             bind_error = _apply_node_connector_binding(
                 pipeline,
                 nid,
@@ -4442,7 +4513,7 @@ async def bind_connector_to_node(
             from modulo.db.crud.pipeline_snapshot import create_snapshot_edit
 
             if not _graph_content_unchanged(previous_nodes, [], list(pipeline.graph_nodes_json or []), []):
-                snapshot = await create_snapshot_edit(s, pipeline_id=pid, account_id=_ctx_user_id.get(None))
+                snapshot = await create_snapshot_edit(s, pipeline_id=pid, account_id=bind_account_id)
                 if snapshot is None:
                     raise RuntimeError(
                         f"connector bind on pipeline {pid} could not record its edit snapshot; "
@@ -4468,6 +4539,12 @@ async def bind_connector_to_node(
         return response
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except SnapshotLockNotAvailableError:
+        # FAR-1810: the bind's edit snapshot can lose the bounded lock race to
+        # a concurrent run start — a retryable contention, never a generic
+        # server_error (the transaction rolls the bind back with it).
+        _log.warning("bind_connector_to_node snapshot_lock_busy pipeline_id=%s", pipeline_id)
+        return _snapshot_lock_busy_error(pipeline_id)
     except ProgrammingError:
         _log.exception("bind_connector_to_node failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}

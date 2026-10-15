@@ -45,6 +45,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_PIPELINE_NOT_FOUND, MSG_THIS_FEATURE_NOT_AVAILABLE
 from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import (
     get_db_session,
     require_feature,
@@ -89,6 +90,7 @@ from modulo.core.capability_scope import (
     validate_allowed_connectors_subset,
     validate_no_self_tools,
 )
+from modulo.core.exceptions import SnapshotLockNotAvailableError
 from modulo.core.graph_validator import HITL_DESCRIPTION_MIN_LENGTH, GraphValidator
 from modulo.core.pipeline_engine.git_content import GitContentRefError, validate_agent_git_content_values
 from modulo.core.pipeline_engine.scatter_join import (
@@ -151,7 +153,7 @@ from modulo.db.crud.pipeline import (
 )
 from modulo.db.crud.pipeline_folder import move_pipeline_to_folder
 from modulo.db.crud.pipeline_owner import is_account_in_team
-from modulo.db.crud.pipeline_snapshot import create_snapshot_edit
+from modulo.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS, create_snapshot_edit
 from modulo.db.crud.pipeline_snapshot_versioning import (
     delete_snapshot,
     diff_snapshots,
@@ -294,6 +296,38 @@ def _raise_db_migration_error(exc: ProgrammingError) -> None:
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+    ) from None
+
+
+def _raise_snapshot_lock_busy(exc: SnapshotLockNotAvailableError, *, log_prefix: str, action: str) -> NoReturn:
+    """Translate a contended edit-snapshot lock into the retryable 503 contract.
+
+    FAR-1810: every explicit graph save now creates an edit snapshot, and that
+    snapshot's bounded graph-copy lock is shared with concurrent RUN starts — so
+    a save can legitimately lose the race. ``_acquire_snapshot_lock`` /
+    ``_acquire_snapshot_allocation_lock`` raise the typed
+    ``SnapshotLockNotAvailableError``, a plain ``Exception`` carrying no
+    SQLSTATE, so neither this module's route-local ``except SQLAlchemyError``
+    arms nor ``handle_db_errors``'s 55P03 -> 409 map can see it: it fell
+    through to the generic ``Exception -> 500 "Internal server error"`` arm and
+    reported a transient busy lock as a server bug.
+
+    This is CONTENTION, not a fault: answer the same retryable 503 every
+    run-start surface already answers (``routes.runs``, ``webhooks``, ``slack``,
+    ``triggers``), preceded by the same structured ``snapshot_lock_unavailable``
+    record so the event stays observable. The action word names the operation
+    the caller should retry.
+    """
+    logger.warning("%s.snapshot_lock_busy: %s", log_prefix, exc)
+    log_service_unavailable(
+        "snapshot_lock_unavailable",
+        exc,
+        route=log_prefix,
+        detail=f"snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts",
+    )
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=(f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — retry the {action}"),
     ) from None
 
 
@@ -3308,6 +3342,11 @@ async def replace_pipeline_graph_endpoint(
         # write is rolled back with it. Surface 422 instead of the decorator's
         # 500.
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1810: the edit snapshot's bounded lock lost its race against a
+        # concurrent run start — retryable contention, never the decorator's
+        # generic 500.
+        _raise_snapshot_lock_busy(exc, log_prefix="pipelines.replace_graph", action="save")
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
@@ -3946,6 +3985,10 @@ async def update_pipeline_endpoint(
         # the write rolls back with it. Surface 422 instead of the decorator's
         # 500.
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1810: a graph_json PATCH's edit snapshot lost its bounded lock
+        # race — retryable contention, never the decorator's generic 500.
+        _raise_snapshot_lock_busy(exc, log_prefix="pipelines.update", action="save")
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
@@ -5177,6 +5220,11 @@ async def save_edit_snapshot_endpoint(
                 draft=req.draft,
                 channel=channel,
             )
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1810 sweep: this endpoint creates the same edit snapshot the
+        # graph-save paths do, so it carries the same contended-lock failure —
+        # translated here too rather than left as the decorator's generic 500.
+        _raise_snapshot_lock_busy(exc, log_prefix="pipelines.save_edit_snapshot", action="save")
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
@@ -5853,6 +5901,10 @@ async def convert_node_to_agent_endpoint(
                 nodes=nodes,
                 edges=edges,
             )
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1810: the conversion's edit snapshot lost its bounded lock race —
+        # retryable contention, never the decorator's generic 500.
+        _raise_snapshot_lock_busy(exc, log_prefix="pipelines.convert_node_to_agent", action="save")
     except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied, GitContentRefError, ProgrammingError) as exc:
         await _finalize_locked_graph_save(exc, session, principal=principal, pipeline_id=pipeline_id)
 
@@ -5954,6 +6006,10 @@ async def revert_node_to_manual_endpoint(
                 nodes=nodes,
                 edges=edges,
             )
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1810: the revert's edit snapshot lost its bounded lock race —
+        # retryable contention, never the decorator's generic 500.
+        _raise_snapshot_lock_busy(exc, log_prefix="pipelines.revert_node_to_manual", action="save")
     except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied, GitContentRefError, ProgrammingError) as exc:
         await _finalize_locked_graph_save(exc, session, principal=principal, pipeline_id=pipeline_id)
 

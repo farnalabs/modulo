@@ -1036,6 +1036,36 @@ async def _converge_pipeline_edges(
     )
     if current == sorted(_edge_signature(row) for row in edge_rows):
         return
+    # FAR-1810: this is a REAL graph write, so it must be versioned — but only
+    # when it lands on a pipeline that ALREADY has version history. A
+    # convergence write (the stored rows drifted from the spec) edits an
+    # existing pipeline and records a ``version_kind='edit'`` snapshot; a
+    # genesis write does not, because ``_seed_demo_pipeline_and_runs`` pins
+    # exactly this state as snapshot v1 through ``_get_or_create_snapshot``
+    # immediately afterwards — recording an edit snapshot here would consume
+    # version 1 for an 'edit' row that the very next call then converges over
+    # (and would drag the advisory-lock / version-allocation machinery into a
+    # seeding transaction for nothing: the post-edit state is captured either
+    # way, just as the genesis version).
+    #
+    # Genesis is detected by SNAPSHOT HISTORY, not by "there are no edge rows":
+    # a pipeline seeded by an older release can exist WITH a v1 snapshot but no
+    # edge rows (FAR-1248 — the graph read showed no connections), and filling
+    # those edges in is an edit of that existing pipeline.
+    #
+    # ``account_id`` stays unset deliberately: this is a BOOT-TIME SYSTEM write
+    # with no session principal, so the snapshot records NULL — honestly
+    # system-attributed, exactly like the ``pipeline.graph_updated`` audit
+    # event the same call already writes. Passing the demo account here would
+    # not merely label it: ``resolve_effective_privilege`` (ADR 047) then
+    # re-reads THAT account's live org role for a ``caller_type="rest"`` write,
+    # so the seed's own ``is_privileged=True`` system write would start
+    # depending on the demo user's role — and on the SQLite unit suite the
+    # same re-read crashes outright in the character-based Uuid bind processor
+    # (``'str' object has no attribute 'hex'``), failing every seed test.
+    has_version_history = (
+        await session.execute(select(PipelineSnapshot.id).where(PipelineSnapshot.pipeline_id == pipeline.id).limit(1))
+    ).scalar_one_or_none() is not None
     await replace_pipeline_graph(
         session,
         pipeline_id=pipeline.id,
@@ -1045,6 +1075,7 @@ async def _converge_pipeline_edges(
         is_privileged=True,
         caller_type="rest",
         is_guardrail_admin=True,
+        record_edit_snapshot=has_version_history,
     )
     _log.info(
         "demo_seed.pipeline_edges_converged" if existing else "demo_seed.pipeline_edges_created",

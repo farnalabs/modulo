@@ -39,6 +39,7 @@ from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 from modulo.api.routes.pipelines import GraphValidationIssue, _finalize_locked_graph_save
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.exceptions import SnapshotLockNotAvailableError
 from modulo.db.crud.hitl_review_guard import (
     GuardrailBindingStripDenied,
     HitlReviewWeakeningDenied,
@@ -55,6 +56,11 @@ _NOW = datetime(2025, 1, 1, tzinfo=UTC)
 
 _PROG = ProgrammingError("s", {}, Exception())
 _SQL = SQLAlchemyError("boom")
+#: FAR-1810: a contended edit-snapshot lock. It is a plain ``Exception``
+#: carrying no SQLSTATE, so none of the ``except SQLAlchemyError`` arms nor
+#: ``handle_db_errors``'s 55P03 map can see it — without the explicit
+#: translation each surface below fell through to the generic 500.
+_LOCK_BUSY = SnapshotLockNotAvailableError("snapshot allocation lock busy")
 
 _PREFIX = "modulo.api.routes.pipelines."
 
@@ -2574,3 +2580,113 @@ def test_update_pipeline_response_carries_rebind_flag(client: tuple[TestClient, 
     assert resp.status_code == 200, resp.text
     assert resp.json()["connector_rebind_required"] is True
     assert resp.json()["owner_team_id"] == str(_TEAM_ID)
+
+
+# ---------------------------------------------------------------------------
+# FAR-1810: a contended edit-snapshot lock is RETRYABLE, never a generic 500
+#
+# Every explicit graph save now mints an edit snapshot inside the same
+# transaction, and that snapshot's bounded lock is shared with concurrent run
+# starts. ``_acquire_snapshot_lock`` / ``_acquire_snapshot_allocation_lock``
+# raise the typed ``SnapshotLockNotAvailableError`` — a plain Exception with no
+# SQLSTATE — so it matches neither this module's ``except SQLAlchemyError``
+# arms nor ``handle_db_errors``'s 55P03 -> 409 map, and fell through to
+# ``Exception -> 500 "Internal server error"``: a transient busy lock reported
+# as a server bug. Each surface must answer the same retryable 503 the run
+# start surfaces already answer.
+# ---------------------------------------------------------------------------
+
+
+def test_update_pipeline_graph_json_lock_busy_maps_503(client: tuple[TestClient, AsyncMock]) -> None:
+    """PATCH /{id} with a graph_json payload: 503 + retryable detail, not 500."""
+    http, _session = client
+    node = _agent_node_dict()
+    agent_id = uuid.UUID(node["agent_id"])
+    agent = MagicMock()
+    agent.id = agent_id
+    agent.input_schema_id = uuid.uuid4()
+    agent.output_schema_id = uuid.uuid4()
+    agent.model_backend_id = uuid.uuid4()
+    current = _make_pipeline()
+    updated = _make_pipeline(graph_nodes_json=[node])
+    with (
+        patch(f"{_PREFIX}_get_pipeline_or_404", new=AsyncMock(return_value=current)),
+        patch(f"{_PREFIX}get_pipeline", new=AsyncMock(return_value=current)),
+        patch(f"{_PREFIX}replace_pipeline_graph", new=AsyncMock(side_effect=_LOCK_BUSY)),
+        patch(f"{_PREFIX}update_pipeline", new=AsyncMock(return_value=updated)),
+        patch(f"{_PREFIX}_enforce_connector_team_bindings", new_callable=AsyncMock),
+        patch(f"{_PREFIX}_load_agents_by_ids", new=AsyncMock(return_value={agent_id: agent})),
+        patch(f"{_PREFIX}_load_existing_schema_ids", new=AsyncMock(return_value=set())),
+        patch(f"{_PREFIX}_guardrail_config.load_pipeline_guardrail_rows", new_callable=AsyncMock, return_value=[]),
+    ):
+        _rls_started = _start_rls()
+        try:
+            resp = http.patch(
+                f"/api/v1/pipelines/{_PIPELINE_ID}",
+                json={"graph_json": {"nodes": [node], "edges": []}},
+            )
+        finally:
+            _stop_all(_rls_started)
+
+    assert resp.status_code == 503, resp.text
+    detail = resp.json()["detail"]
+    assert "snapshot lock unavailable" in detail.lower(), detail
+    assert "retry" in detail.lower(), detail
+
+
+def test_convert_to_agent_lock_busy_maps_503() -> None:
+    """The node-conversion endpoints share the same save path, so they carry
+    the same contended-lock failure — via their own endpoint arm."""
+    node_id = uuid.uuid4()
+    manual = _manual_node_dict()
+    manual["id"] = str(node_id)
+    session = _convert_session(agent=MagicMock(), connector=MagicMock(), connector_type="github", backend=MagicMock())
+    with _convert_client(session) as http, ExitStack() as stack:
+        for p in _convert_patches([manual], None, save_side_effect=_LOCK_BUSY):
+            stack.enter_context(p)
+        for p in _rls():
+            stack.enter_context(p)
+        resp = http.post(f"{_CONVERT_URL}/{node_id}/convert-to-agent", json=_convert_body())
+
+    assert resp.status_code == 503, resp.text
+    assert "snapshot lock unavailable" in resp.json()["detail"].lower(), resp.text
+    assert "retry" in resp.json()["detail"].lower(), resp.text
+
+
+def test_revert_to_manual_lock_busy_maps_503() -> None:
+    """Its sibling endpoint translates the identical failure identically."""
+    node_id = uuid.uuid4()
+    output_schema_id = uuid.uuid4()
+    agent_node = _agent_node_dict()
+    agent_node["id"] = str(node_id)
+    snapshot_node = _revert_snapshot_node(node_id, output_schema_id=output_schema_id)
+    session = _make_session()
+    with _convert_client(session) as http, ExitStack() as stack:
+        for p in _revert_patches([agent_node], _snapshot_with_node(snapshot_node), None, save_side_effect=_LOCK_BUSY):
+            stack.enter_context(p)
+        for p in _rls():
+            stack.enter_context(p)
+        resp = http.post(f"{_CONVERT_URL}/{node_id}/revert-to-manual", params={"snapshot_id": str(uuid.uuid4())})
+
+    assert resp.status_code == 503, resp.text
+    assert "snapshot lock unavailable" in resp.json()["detail"].lower(), resp.text
+
+
+def test_save_edit_snapshot_lock_busy_maps_503(client: tuple[TestClient, AsyncMock]) -> None:
+    """POST /{id}/snapshots mints the SAME edit snapshot, so it carries the
+    same failure — swept into the translation rather than left as a 500."""
+    http, _session = client
+    with (
+        patch(f"{_PREFIX}get_pipeline", new=AsyncMock(return_value=_make_pipeline())),
+        patch(f"{_PREFIX}create_snapshot_edit", new=AsyncMock(side_effect=_LOCK_BUSY)),
+    ):
+        _rls_started = _start_rls()
+        try:
+            resp = http.post(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots", json={"draft": True})
+        finally:
+            _stop_all(_rls_started)
+
+    assert resp.status_code == 503, resp.text
+    detail = resp.json()["detail"]
+    assert "snapshot lock unavailable" in detail.lower(), detail
+    assert "retry" in detail.lower(), detail

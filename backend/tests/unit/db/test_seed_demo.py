@@ -1711,6 +1711,15 @@ async def test_seed_converges_legacy_string_node_id_graph(
     )
     await session.commit()
 
+    # FAR-1810: the re-seed below converges the demo EDGES, which now mints an
+    # edit snapshot — and snapshot minting is Postgres-only (its graph-copy
+    # advisory lock is ``pg_try_advisory_lock``). This test's subject is graph
+    # + run-trace convergence, not snapshot minting, so the mint is stubbed.
+    monkeypatch.setattr(
+        "modulo.db.crud.pipeline.create_snapshot_edit",
+        AsyncMock(return_value=AsyncMock(snapshot_version=2)),
+    )
+
     await _run_seed(session, monkeypatch, _demo_settings())
 
     converged = await _pipeline_by_name(session, "Demo Governance Pipeline")
@@ -1894,3 +1903,54 @@ def test_split_int_zero_weights_returns_zeros() -> None:
 def test_split_cost_zero_weights_returns_zeros() -> None:
     """A zero weight sum yields all-zero costs and never divides by zero."""
     assert seed_demo_module._split_cost(Decimal("0.0900"), [0, 0]) == [Decimal(0), Decimal(0)]
+
+
+async def test_seed_edge_convergence_records_an_edit_snapshot(
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-1810: the demo seed's edge convergence is a REAL graph write.
+
+    Genesis (first boot) must NOT version it — ``_get_or_create_snapshot`` pins
+    exactly that state as snapshot v1 immediately afterwards, so an edit
+    snapshot here would consume version 1 for an ``'edit'`` row the very next
+    call then converges over. A convergence write against a pipeline that
+    ALREADY has version history is an edit of an existing pipeline and IS
+    versioned.
+    """
+    graph_spy = AsyncMock(wraps=pipeline_crud.replace_pipeline_graph)
+    snap_spy = AsyncMock(return_value=AsyncMock(snapshot_version=2))
+    monkeypatch.setattr("modulo.db.crud.pipeline.replace_pipeline_graph", graph_spy)
+    monkeypatch.setattr("modulo.db.crud.pipeline.create_snapshot_edit", snap_spy)
+
+    # --- genesis: the first boot builds the demo graph --------------------
+    await _run_seed(session, monkeypatch, _demo_settings())
+    pipeline = (await session.execute(select(Pipeline).where(Pipeline.name == "Demo Governance Pipeline"))).scalar_one()
+    assert graph_spy.await_count > 0, "the first boot must converge the demo edges"
+    genesis_flags = [call.kwargs.get("record_edit_snapshot") for call in graph_spy.await_args_list]
+    assert genesis_flags == [False] * len(genesis_flags), genesis_flags
+    assert snap_spy.await_count == 0, "a genesis write must not enter the edit history"
+
+    # --- drift: a stored edge row disappears, so the next boot converges ---
+    edges = await _live_edges(session, pipeline)
+    assert len(edges) > 1, f"the demo pipeline needs edges to converge: {len(edges)}"
+    await session.delete(edges[0])
+    await session.commit()
+    graph_spy.reset_mock()
+    snap_spy.reset_mock()
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    assert graph_spy.await_count == 1, graph_spy.await_count
+    assert graph_spy.await_args.kwargs["record_edit_snapshot"] is True, (
+        "a convergence write against an existing pipeline must be versioned"
+    )
+    assert snap_spy.await_count == 1, f"the convergence write must mint a snapshot: {snap_spy.await_count}"
+    kwargs = snap_spy.await_args.kwargs
+    assert kwargs["pipeline_id"] == pipeline.id
+    # Honest system attribution: the seed has no session principal, so the
+    # snapshot's actor stays NULL rather than a fabricated id. Passing
+    # ``account_id`` would also make ADR-047's live-role re-read decide this
+    # boot-time system write's privilege from the DEMO account's role (and it
+    # crashes the SQLite unit suite outright).
+    assert kwargs.get("account_id") is None, kwargs
