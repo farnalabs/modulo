@@ -560,7 +560,7 @@ CI_RUNNER_CAPABILITIES: frozenset[Capability] = frozenset(
 #: the set stays honest and ``connector_type_supports_dispatch`` fails CLOSED
 #: on it (the enum member is spelled ``ci-runner`` and reaches the capability
 #: table through ``ConnectorType`` below, not through this set).
-_HUB_CI_RUNNER_TYPE_IDS: frozenset[str] = frozenset({"github_actions_ci", "gitlab_ci"})
+_HUB_CI_RUNNER_TYPE_IDS: frozenset[str] = frozenset({"github_actions_ci", "gitlab_ci", "woodpecker"})
 
 
 def connector_type_supports_dispatch(connector_type_id: Any) -> bool:

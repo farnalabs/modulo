@@ -21,7 +21,7 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-from modulo.connectors.ci_runner import GitHubActionsCIRunner
+from modulo.connectors.ci_runner import GitHubActionsCIRunner, WoodpeckerCIRunner
 from modulo.connectors.github import GitHubConnector
 from modulo.connectors.gitlab import GitLabConnector
 from modulo.connectors.jira import JiraConnector
@@ -134,6 +134,33 @@ def test_build_github_actions_ci_default_base_url() -> None:
     connector = _build_connector("github_actions_ci", {}, {"token": "gha_token"})
     assert isinstance(connector, GitHubActionsCIRunner)
     assert connector._base_url == "https://api.github.com"
+
+
+# ── Woodpecker CI (FAR-1766): REQUIRED base_url ──────────────────────────
+
+
+def test_build_woodpecker_requires_base_url() -> None:
+    """A self-hosted instance has no public default — a missing base_url fails loud."""
+    with pytest.raises(ValueError, match="WoodpeckerCIRunner requires 'base_url' in config_json"):
+        _build_connector("woodpecker", {}, {"token": "wp_token"})
+
+
+def test_build_woodpecker_rejects_non_string_base_url() -> None:
+    with pytest.raises(TypeError, match="must be a string"):
+        _build_connector("woodpecker", {"base_url": 123}, {"token": "wp_token"})
+
+
+def test_build_woodpecker_threads_base_url_and_token() -> None:
+    connector = _build_connector(
+        "woodpecker",
+        {"base_url": "https://ci.example.com"},
+        {"token": "wp_token"},
+    )
+    assert isinstance(connector, WoodpeckerCIRunner)
+    assert connector.connector_type == ConnectorType.CI_RUNNER
+    assert connector._base_url == "https://ci.example.com"
+    # the instance root gains the API prefix exactly once
+    assert connector._api_base == "https://ci.example.com/api"
 
 
 @pytest.mark.parametrize("type_id", ["github", "github_actions_ci"])

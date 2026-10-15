@@ -36,6 +36,7 @@ from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
 from modulo.connectors.azure_pipelines import AzurePipelinesConnector
 from modulo.connectors.azure_repos import AzureReposConnector
 from modulo.connectors.ci_runner.gitlab_ci import GitLabCIRunner
+from modulo.connectors.ci_runner.woodpecker import WoodpeckerCIRunner
 from modulo.connectors.confluence import ConfluenceConnector
 from modulo.connectors.gitea import GiteaConnector
 from modulo.connectors.grafana import GrafanaConnector
@@ -111,6 +112,7 @@ _MIGRATED = {
     "azure_repos": ("dev.azure.com", AzureReposConnector(token=TOKEN, organization="org")),
     "azure_pipelines": ("dev.azure.com", AzurePipelinesConnector(token=TOKEN, organization="org", project="p")),
     "gitlab_ci": ("gitlab.example.com", GitLabCIRunner(token=TOKEN, base_url="https://gitlab.example.com")),
+    "woodpecker": ("ci.example.com", WoodpeckerCIRunner(token=TOKEN, base_url="https://ci.example.com")),
 }
 
 

@@ -38,6 +38,7 @@ def test_all_connector_types_have_polling_parity():
         "shell": "requires runtime_provider — polling has no run context",
         "github_actions_ci": "CI runner — side-effect only",
         "gitlab_ci": "CI runner — side-effect only",
+        "woodpecker": "CI runner — side-effect only",
         "azure_pipelines": "CI runner — side-effect only",
         "buildkite": "CI status — not yet implemented in _build_polling_connector",
         "circleci": "CI status — not yet implemented in _build_polling_connector",

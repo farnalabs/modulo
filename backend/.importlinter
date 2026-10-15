@@ -277,6 +277,10 @@ ignore_imports =
     # (connector_hub passes config['base_url'] straight through), so it is on the
     # same external trust boundary as the connectors above and needs the guard.
     modulo.connectors.ci_runner.gitlab_ci -> modulo.core.ssrf
+    # Self-hosted Woodpecker/Drone CI and Plane (FAR-1766/1767) take their
+    # base_url from tenant connector config - same narrow exception for the
+    # shared SSRF security primitive as the CI runners above.
+    modulo.connectors.ci_runner.woodpecker -> modulo.core.ssrf
     # FAR-526B: the GitHub Actions CI runner pins the hardcoded api.github.com via
     # the shared SSRF primitive, and the GitHub/Trello ticket-tracker connectors
     # pin their base_url host. Same narrow exception for the shared security
