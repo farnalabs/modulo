@@ -426,11 +426,12 @@ async def test_schema_deletion_allowed_when_not_pinned():
 # ===================================================================
 
 
-async def test_pre_existing_pipeline_blocked_with_truthful_message(caplog: pytest.LogCaptureFixture):
+async def test_pre_existing_pipeline_logs_degraded_mode(caplog: pytest.LogCaptureFixture):
     """Pre-Phase-1 snapshot with a field-level incompatibility is INVALID (blocked).
 
-    FAR-1760: the pre-existing carve-out must not signal a degraded proceed
-    that never happens. The run stays blocked, the log and the surfaced error
+    FAR-1760 removed the legacy degraded-mode path for pre-existing snapshots:
+    this regression test is updated in place to assert the inverse of the old
+    degraded-mode signal. The run stays blocked, the log and the surfaced error
     both say the run is blocked, and no ``proceeds in degraded mode`` text is
     emitted in either channel.
     """
