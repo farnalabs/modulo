@@ -26,6 +26,7 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   dashboard: { icon: 'LayoutDashboard', labelKey: 'components.SidebarNav.item_dashboard' },
   'governance-stack': { icon: 'LayoutTemplate', labelKey: 'components.SidebarNav.item_governance_stack' },
   analytics: { icon: 'BarChart', labelKey: 'components.SidebarNav.item_analytics' },
+  evidence: { icon: 'FileText', labelKey: 'components.SidebarNav.item_evidence' },
   notifications: { icon: 'Bell', labelKey: 'components.SidebarNav.item_notifications' },
   library: { icon: 'BookOpen', labelKey: 'components.SidebarNav.item_library' },
   'lifecycle-maps': { icon: 'Map', labelKey: 'components.SidebarNav.item_lifecycle_maps' },

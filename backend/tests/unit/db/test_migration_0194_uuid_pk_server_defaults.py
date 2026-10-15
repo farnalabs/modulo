@@ -33,6 +33,8 @@ _EXPECTED_COUNT = 84
 # id column too, so it is out of scope for the same reason.
 # system_audit_events (0285_system_audit_events, FAR-1517) sets
 # gen_random_uuid() inline on its id column, same as the tables above.
+# evidence_redaction_rules (0313_evidence_redaction_rules, FAR-944) sets
+# gen_random_uuid() inline on its id column, same as the tables above.
 _POST_0194_TABLES = frozenset(
     {
         "collection_install",
@@ -43,6 +45,7 @@ _POST_0194_TABLES = frozenset(
         "policy_gate_decisions",
         "evidence",
         "system_audit_events",
+        "evidence_redaction_rules",
     }
 )
 

@@ -91,7 +91,7 @@ A representative agent task: a support-message classification agent emits JSON
 3. `category_enum` – `category` ∈ {billing, technical, general}.
 4. `priority_enum` – `priority` ∈ {low, medium, high}.
 5. `consistency` – **business rule**: a billing issue is never `low` priority; a
-   technical outage is always `high`.
+   `technical` issue is always `high` priority.
 6. `no_extra_keys` – no hallucinated keys leak into the contract.
 
 Assertions 1–4 are things `json_schema` *could* express; assertion 5 (the
@@ -118,8 +118,7 @@ loudly (it never silently passes) – see `run_human_eval_set`.
   executed by `EvalEngine.evaluate` in the pipeline executor.
 * **HITL gate evals** – evaluated before an interrupt; see
   `pipeline_engine/node_runner.py`.
-* **Feedback evals** – ad-hoc evals via `EvalEngine.standalone_evaluate`
-  (§8.20).
+* **Feedback evals** – ad-hoc evals via `EvalEngine.standalone_evaluate`.
 
 `llm_judge` evals require a resolved judge callable (a *different* model backend
 than the one under test, where possible). `human_set` evals require no model –
@@ -406,8 +405,8 @@ included. Guardrail rows are excluded (the standard eval consumer contract).
 
 The complements to the pass-rate read-models are **static coverage** (does a
 variant have any eval at all – `coverage-gaps` on a variant group) and the
-dynamic **coverage-gap signal** described here. It answers the PRD §8.19
-problem: *"variants diverged but evals did not differentiate."* That is not a
+dynamic **coverage-gap signal** described here. It answers this problem:
+*"variants diverged but evals did not differentiate."* That is not a
 dashboard convenience – it is a signal that the **eval SUITE is insufficient**
 and must be routed to eval-quality improvement.
 

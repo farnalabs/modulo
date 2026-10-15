@@ -52,7 +52,7 @@ async def get_organisation(
 async def _seed_evidence_redaction_catch_all(session: AsyncSession, org_id: uuid.UUID) -> None:
     """Seed the MANDATORY §2.4 evidence-redaction catch-all rule for a new org.
 
-    Migration ``0312_evidence_redaction_rules`` seeds this row for orgs that
+    Migration ``0313_evidence_redaction_rules`` seeds this row for orgs that
     existed at migration time; orgs created AFTER it have no row, so the
     redaction boundary would fall back to its in-code default (which is correct
     today, but the row is the documented source of truth and the hook a future

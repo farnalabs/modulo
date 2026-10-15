@@ -97,6 +97,7 @@ Fresh entries for these features are added to the graph below as behaviour track
 - **feat-costs** - Cost tracking, spend limits, cost controls, and cost components - routes: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`, `/admin/costs/components`
 - **feat-hitl** - Human-in-the-loop approval gates and review - routes: `/settings/hitl-review`
 - **feat-analytics** - Reporting and analytics over runs, costs, and facts - routes: `/analytics`
+- **feat-evidence** - Evidence dashboard with a server-side field-level redaction boundary - routes: `/evidence`
 
 ### Improve
 - **feat-evals** - Evaluation editor and proposal queue - routes: `/evals/editor`, `/evals/proposals`
@@ -1109,9 +1110,11 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `HealthObservation.observed_state` treats their sustained failure as unhealthy
 > even while the readiness aggregate stays `ok`, so the existing
 > `health_readiness_alert` cron pages the incident/recovery pair it already sent
-> for a gating failure (hysteresis unchanged; benign `event_loop_lag` /
-> `break_glass` / not-measured `db_hygiene` advisories stay quiet, and
-> `reported_status` never renders the misleading aggregate `ok`). Removed the
+> for a gating failure (hysteresis unchanged; benign `break_glass` /
+> not-measured `db_hygiene` advisories stay quiet, while `event_loop_lag` is
+> quiet below 250 ms, visible-but-non-paging from 250 ms to 1 s, and pages only
+> at 1 s or above per FAR-1771, and `reported_status` never renders the
+> misleading aggregate `ok`). Removed the
 > stale Known Gap and restored `status: covered`. `_ORPHANED_BDD_FEATURES` stays
 > empty.
 
@@ -1273,6 +1276,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 ### Monitor
 - [feat-costs](monitor/costs.md) => PRD 8.10, 9.3
 - [feat-observability](observability/observability.md) => PRD N/A
+- [feat-evidence](monitor/evidence.md) => PRD N/A
 
 ### Notifications
 - [feat-notifications](notifications/notifications.md) => PRD N/A
