@@ -197,7 +197,14 @@ class TestAuthRateLimitMiddlewareEnabled:
         assert resp.status_code == 200
 
     def test_non_auth_path_not_rate_limited(self, mock_redis):
-        """POSTs to non-auth paths should pass through untouched."""
+        """POSTs to non-auth paths must pass through without touching the limiter.
+
+        A non-``/api/v1/auth/`` POST must never reach the shared
+        ``AuthRateLimiter``. Asserting the 200 alone would still pass if the
+        ``/api/v1/auth/`` prefix gate in ``_should_rate_limit`` regressed —
+        ``check_login`` on this mock returns allowed — so the zero-Redis
+        assertions below bind the gate (mirroring the demo-exemption test).
+        """
         limiter = AuthRateLimiterCls(
             redis_client=mock_redis,
             max_attempts=0,
@@ -213,6 +220,8 @@ class TestAuthRateLimitMiddlewareEnabled:
             resp = client.post("/api/v1/other")
 
         assert resp.status_code == 200
+        mock_redis.ttl.assert_not_awaited()
+        mock_redis.pipeline.assert_not_called()
 
     def test_demo_path_never_touches_auth_limiter(self, mock_redis):
         """FAR-535: /api/v1/auth/demo is exempt from the shared AuthRateLimiter.
