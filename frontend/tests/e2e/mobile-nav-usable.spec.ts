@@ -143,7 +143,11 @@ async function openAndNavigate(page: Page, mode: 'rail' | 'drawer'): Promise<voi
     : page.locator('#mobile-sidebar')
   await expect(panel, `the ${mode}-mode nav panel must open on tap`).toBeVisible()
 
-  const links = page.locator('.sidebar-link:visible')
+  // Scope to the opened panel: in rail mode the in-flow icon rail also renders
+  // `.sidebar-link`s (SidebarRail -> SidebarNav). A page-wide locator can
+  // resolve `.first()` to a rail link sitting behind the modal backdrop rather
+  // than one inside the opened panel.
+  const links = panel.locator('.sidebar-link:visible')
   await expect(links.first(), 'the opened panel must expose at least one visible nav link').toBeVisible()
 
   const currentPath = new URL(page.url()).pathname

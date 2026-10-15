@@ -49,6 +49,9 @@ async function chrome(page: Page): Promise<ChromeCounts> {
 // mobile-nav-usable.spec.ts — importing across spec files would execute the
 // other file's `test.describe` registrations.
 const USABLE_NAV_TIMEOUT_MS = 15_000
+// Probe at most the first N visible nav links for one that navigates elsewhere
+// (kept in step with mobile-nav-usable.spec.ts).
+const MAX_PROBED_LINKS = 8
 
 async function openAndNavigate(page: Page, mode: 'rail' | 'drawer'): Promise<void> {
   const trigger = page.locator(mode === 'rail' ? RAIL : HAMBURGER).first()
@@ -60,11 +63,15 @@ async function openAndNavigate(page: Page, mode: 'rail' | 'drawer'): Promise<voi
     : page.locator('#mobile-sidebar')
   await expect(panel, `the ${mode}-mode nav panel must open on tap`).toBeVisible()
 
-  const links = page.locator('.sidebar-link:visible')
+  // Scope to the opened panel: in rail mode the in-flow icon rail also renders
+  // `.sidebar-link`s (SidebarRail -> SidebarNav). A page-wide locator can
+  // resolve `.first()` to a rail link sitting behind the modal backdrop rather
+  // than one inside the opened panel.
+  const links = panel.locator('.sidebar-link:visible')
   await expect(links.first(), 'the opened panel must expose at least one visible nav link').toBeVisible()
 
   const currentPath = new URL(page.url()).pathname
-  const candidateCount = Math.min(await links.count(), 8)
+  const candidateCount = Math.min(await links.count(), MAX_PROBED_LINKS)
   for (let i = 0; i < candidateCount; i += 1) {
     const href = await links.nth(i).getAttribute('href')
     // Only consider in-app router links; anything else is not navigation.
