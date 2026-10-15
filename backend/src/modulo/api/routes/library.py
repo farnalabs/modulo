@@ -120,12 +120,14 @@ from modulo.db.crud.rating import (
     RatingCooldownError,
     SelfRatingError,
     get_rating_aggregate,
+    list_abuse_reports,
     list_ratings_for_primitive,
+    review_abuse_report,
     submit_abuse_report,
     submit_rating,
     update_primitive_ratings_aggregate,
 )
-from modulo.db.models.collection_install import CollectionInstall
+from modulo.db.models.collection_install import CollectionInstall, CollectionInstallEntity
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.team import Team
@@ -141,6 +143,8 @@ _MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE = (
 )
 _CODE_LIBRARY_MANAGE = "library.manage"
 _CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE = "library.create_pipeline_from_template_endpoint"
+_CODE_LIBRARY_LIST_ABUSE_REPORTS = "library.list_abuse_reports_endpoint"
+_CODE_LIBRARY_REVIEW_ABUSE_REPORT = "library.review_abuse_report_endpoint"
 _MSG_ORGANISATION_ID_REQUIRED = "Organisation ID required"
 
 
@@ -379,9 +383,16 @@ class RatingSubmit(BaseModel):
 
 
 class RatingResponse(BaseModel):
+    """One rating as the API renders it.
+
+    ``account_id`` mirrors the ``PrimitiveRating`` ORM column exactly (an
+    earlier ``user_id`` name had no ORM counterpart, so ``model_validate``
+    failed on every real row); ``None`` for an anonymous/removed account.
+    """
+
     id: uuid.UUID
     primitive_id: uuid.UUID
-    user_id: uuid.UUID | None
+    account_id: uuid.UUID | None
     thumbs_up: bool
     comment: str | None
     created_at: datetime
@@ -405,15 +416,62 @@ class AbuseReportSubmit(BaseModel):
 
 
 class AbuseReportResponse(BaseModel):
+    """The 201 body of ``POST /{primitive_id}/ratings/abuse``.
+
+    ``reporter_account_id`` mirrors the ``PrimitiveAbuseReport`` ORM column
+    exactly (an earlier ``reporter_user_id`` name had no ORM counterpart, so
+    ``model_validate`` raised ``ValidationError`` — which ``handle_db_errors``
+    maps to 422 — on every real report).
+    """
+
     id: uuid.UUID
     primitive_id: uuid.UUID
     rating_id: uuid.UUID | None
-    reporter_user_id: uuid.UUID | None
+    reporter_account_id: uuid.UUID | None
     reason: str
     status: str
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class AbuseReportQueueItem(BaseModel):
+    """One report as the moderation queue renders it.
+
+    Field names mirror the ``PrimitiveAbuseReport`` ORM columns exactly, so
+    this shape validates against a real, flushed row.
+    """
+
+    id: uuid.UUID
+    primitive_id: uuid.UUID
+    rating_id: uuid.UUID | None
+    reporter_account_id: uuid.UUID | None
+    reason: str
+    status: str
+    reviewed_at: datetime | None
+    reviewer_account_id: uuid.UUID | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AbuseReportQueueResponse(BaseModel):
+    items: list[AbuseReportQueueItem]
+    total: int
+
+
+class AbuseReportResolveRequest(BaseModel):
+    """The moderation decision to RECORD on a report.
+
+    ``reviewed`` — the report is upheld (the flagged rating was judged to
+    violate the rules); ``dismissed`` — the report is rejected. Either value
+    only stamps ``status`` / ``reviewed_at`` / ``reviewer_account_id`` on the
+    REPORT row: resolving a report does NOT remove, hide or alter the rating
+    it points at. There is no rating-delete path in the product, and adding
+    one is a separate product decision.
+    """
+
+    status: Literal["reviewed", "dismissed"]
 
 
 class ImportBundleResponse(BaseModel):
@@ -1735,6 +1793,111 @@ async def submit_abuse_report_endpoint(
 
 
 # ---------------------------------------------------------------------------
+# Abuse-report moderation queue (FAR-1753)
+#
+# A report is FILED by any org member (POST /{primitive_id}/ratings/abuse)
+# and TRIAGED here by library managers. Resolving a report RECORDS A DECISION
+# on the report row — it never touches the reported rating itself.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/admin/abuse-reports")
+@handle_db_errors(_CODE_LIBRARY_LIST_ABUSE_REPORTS)
+async def list_abuse_reports_endpoint(
+    status_filter: Literal["pending", "reviewed", "dismissed"] | None = Query(default=None, alias="status"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> AbuseReportQueueResponse:
+    """List this organisation's abuse-report queue, newest first.
+
+    Read-only triage view: optionally narrowed with ``?status=pending`` (the
+    default queue), ``reviewed`` or ``dismissed``. Org-scoped by the caller's
+    ``organisation_id``; reporting a decision on a row is done via the resolve
+    endpoint, not here.
+    """
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            result = await list_abuse_reports(
+                session,
+                principal.organisation_id,
+                status_filter=status_filter,
+                page=page,
+                page_size=page_size,
+            )
+    except IntegrityError:
+        _log.exception(_CODE_LIBRARY_LIST_ABUSE_REPORTS)
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception(_CODE_LIBRARY_LIST_ABUSE_REPORTS)
+        raise _not_implemented_error() from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_LIBRARY_LIST_ABUSE_REPORTS)
+        _log.exception("list_abuse_reports_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    return AbuseReportQueueResponse(
+        items=[AbuseReportQueueItem.model_validate(report) for report in result.items],
+        total=result.total,
+    )
+
+
+@router.post(
+    "/admin/abuse-reports/{report_id}/resolve",
+    dependencies=[Depends(audited("abuse_report_reviewed", "abuse_report", principal_dep=get_current_tenant_user))],
+)
+@handle_db_errors(_CODE_LIBRARY_REVIEW_ABUSE_REPORT)
+async def review_abuse_report_endpoint(
+    report_id: uuid.UUID,
+    req: AbuseReportResolveRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> AbuseReportQueueItem:
+    """Record a moderation decision on one abuse report.
+
+    Sets ``status`` to ``reviewed`` (report upheld) or ``dismissed`` (report
+    rejected) and stamps ``reviewed_at`` and ``reviewer_account_id`` from the
+    authenticated principal.
+
+    **Resolving a report RECORDS A DECISION — it does NOT remove the rating.**
+    Only the report row changes; the flagged rating stays published, because
+    there is no rating-delete path in the product and adding one is a
+    separate product decision.
+
+    A report belonging to another organisation is invisible here (explicit
+    ``org_id`` predicate + RLS), so it answers 404 rather than leaking its
+    existence.
+    """
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            report = await review_abuse_report(
+                session,
+                report_id,
+                org_id=principal.organisation_id,
+                new_status=req.status,
+                reviewer_account_id=principal.account_id,
+            )
+    except IntegrityError:
+        _log.exception(_CODE_LIBRARY_REVIEW_ABUSE_REPORT)
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception(_CODE_LIBRARY_REVIEW_ABUSE_REPORT)
+        raise _not_implemented_error() from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_LIBRARY_REVIEW_ABUSE_REPORT)
+        _log.exception("review_abuse_report_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    if report is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Abuse report not found",
+        )
+    return AbuseReportQueueItem.model_validate(report)
+
+
+# ---------------------------------------------------------------------------
 # Create pipeline from template
 # ---------------------------------------------------------------------------
 
@@ -2476,8 +2639,47 @@ async def _update_info(session: AsyncSession, install: CollectionInstall) -> tup
     return True, newer.version
 
 
-async def _install_response(session: AsyncSession, install: CollectionInstall) -> CollectionInstallResponse:
-    """Build the standard install response (runnability + update surfacing)."""
+async def _load_installed_entities(
+    session: AsyncSession,
+    install_id: uuid.UUID,
+) -> list[dict[str, Any]]:
+    """Derive an install's entity list from the ``collection_install_entity`` child rows.
+
+    FAR-1754: the child table is the SINGLE source of truth for "what this
+    install wrote" — the same fact is no longer duplicated into a parent JSON
+    column, so the API response can never diverge from what uninstall acts on.
+    Ordered by the child table's primary key for a deterministic response.
+
+    MUST be called INSIDE the endpoint's ``async with session.begin():`` block
+    while the org RLS context is live. The child table's FORCE-RLS policy is
+    parent-derived and FAILS CLOSED when ``app.organisation_id`` is unset
+    (migration 0207's ``_ENTITY_ORG_SCOPE``); that GUC is set with
+    ``set_config(..., is_local=true)`` — transaction-scoped — so a
+    post-transaction call would silently see zero rows on Postgres. Callers
+    thread the loaded list into :func:`_install_response`.
+    """
+    stmt = (
+        select(CollectionInstallEntity)
+        .where(CollectionInstallEntity.install_id == install_id)
+        .order_by(CollectionInstallEntity.entity_type, CollectionInstallEntity.entity_id)
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+    return [{"entity_type": row.entity_type, "entity_id": str(row.entity_id)} for row in rows]
+
+
+async def _install_response(
+    session: AsyncSession,
+    install: CollectionInstall,
+    installed_entities: list[dict[str, Any]],
+) -> CollectionInstallResponse:
+    """Build the standard install response (runnability + update surfacing).
+
+    ``installed_entities`` is loaded by the CALLER inside the endpoint's org-RLS
+    transaction (via :func:`_load_installed_entities`) and threaded in — the
+    entity table's fail-closed RLS policy hides every row from a
+    post-transaction query, so deriving it here would silently return ``[]``
+    on Postgres.
+    """
     runnable = await compute_runnable(session, install.install_id)
     update_available, available_version = await _update_info(session, install)
     return CollectionInstallResponse(
@@ -2490,7 +2692,7 @@ async def _install_response(session: AsyncSession, install: CollectionInstall) -
         agents_granted=install.agents_granted,
         resolved_manifest=install.resolved_manifest,
         connector_checklist=install.connector_checklist,
-        installed_entities=install.installed_entities,
+        installed_entities=installed_entities,
         runnable=runnable,
         update_available=update_available,
         available_version=available_version,
@@ -2551,6 +2753,10 @@ async def install_collection_endpoint(
                         else []
                     ),
                 )
+            # FAR-1754: load the entity list while the org RLS context is
+            # still live — the child table's policy fails CLOSED outside the
+            # transaction, so a post-transaction load would silently return [].
+            installed_entities = await _load_installed_entities(session, install.install_id)
     except GitContentRefError as exc:
         _log.warning("install_collection_endpoint: unpinned git-content agent prompt rejected: %s", exc)
         raise HTTPException(
@@ -2583,7 +2789,7 @@ async def install_collection_endpoint(
         raise _unavailable_error() from None
 
     # Compute runnability on read + update-available surfacing (FAR-759).
-    return await _install_response(session, install)
+    return await _install_response(session, install, installed_entities)
 
 
 @router.post(
@@ -2669,6 +2875,13 @@ async def list_collection_installs_endpoint(
                 .order_by(CollectionInstall.created_at.desc())
             )
             installs = list((await session.execute(stmt)).scalars())
+            # FAR-1754: load each install's entity list while the org RLS
+            # context is still live (the child policy fails closed outside
+            # the transaction) — one query per install, mirroring the
+            # per-install response build below.
+            entities_by_install: dict[uuid.UUID, list[dict[str, Any]]] = {
+                install.install_id: await _load_installed_entities(session, install.install_id) for install in installs
+            }
     except ProgrammingError:
         _log.exception("library.list_collection_installs_endpoint")
         raise _not_implemented_error() from None
@@ -2676,7 +2889,9 @@ async def list_collection_installs_endpoint(
         _log.exception("library.list_collection_installs_endpoint: SQLAlchemyError")
         raise _unavailable_error() from None
 
-    items: list[CollectionInstallResponse] = [await _install_response(session, install) for install in installs]
+    items: list[CollectionInstallResponse] = [
+        await _install_response(session, install, entities_by_install[install.install_id]) for install in installs
+    ]
 
     return CollectionInstallListResponse(items=items)
 
@@ -2715,6 +2930,10 @@ async def grant_collection_agents_endpoint(
                 org_id=org_id,
                 install_id=install_id,
             )
+            # FAR-1754: load the entity list while the org RLS context is
+            # still live (the child policy fails closed outside the
+            # transaction); thread it into the response below.
+            installed_entities = await _load_installed_entities(session, install.install_id)
     except GrantInstallNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -2745,7 +2964,7 @@ async def grant_collection_agents_endpoint(
         _log.exception("library.grant_collection_agents_endpoint: SQLAlchemyError")
         raise _unavailable_error() from None
 
-    return await _install_response(session, install)
+    return await _install_response(session, install, installed_entities)
 
 
 @router.get(
@@ -2780,6 +2999,10 @@ async def get_collection_install_endpoint(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Install {install_id} not found for collection {primitive_id}",
                 )
+            # FAR-1754: load the entity list while the org RLS context is
+            # still live (the child policy fails closed outside the
+            # transaction); thread it into the response below.
+            installed_entities = await _load_installed_entities(session, install.install_id)
     except HTTPException:
         raise
     except ProgrammingError:
@@ -2789,7 +3012,7 @@ async def get_collection_install_endpoint(
         _log.exception("library.get_collection_install_endpoint: SQLAlchemyError")
         raise _unavailable_error() from None
 
-    return await _install_response(session, install)
+    return await _install_response(session, install, installed_entities)
 
 
 # ---------------------------------------------------------------------------

@@ -1,22 +1,23 @@
-"""``validate_for_run`` pre-Phase-1 grace-period marker (``SCHEMA_DEGRADED``).
+"""``validate_for_run`` pre-Phase-1 snapshot blocking marker (``SCHEMA_PRE_EXISTING_BLOCKED``).
 
-``validate_for_run`` returns error-severity issues only, with one deliberate
-exception: the ``SCHEMA_DEGRADED`` marker a snapshot that pre-dates the Phase 1
-cutover records when it hits a schema incompatibility. That marker is the ONLY
-thing on the returned result that separates a grace-period degradation from a
-plain block — the accompanying log line is not on the result path, so before
-the marker survived the warning strip a caller saw two byte-identical blocking
-results and had no way to tell them apart.
+``validate_for_run`` returns error-severity issues only. A snapshot that
+pre-dates the Phase 1 cutover and hits a schema incompatibility blocks the run
+like any other — but it also carries a distinct ``SCHEMA_PRE_EXISTING_BLOCKED``
+error on the returned result (FAR-1760). That marker is the ONLY thing on the
+result path that separates a pre-existing block from a plain block: the
+accompanying "Run is blocked" log line is not on the result path, so without
+the marker a caller saw two byte-identical blocking results and had no way to
+tell them apart. There is no degraded-mode proceed.
 
 These tests pin:
 
 * the marker is present for a pre-existing snapshot with incompatible schemas,
 * it is absent for a post-cutover snapshot (the same graph, same schemas),
-* it is absent when nothing was degraded,
-* it is warning-severity and does not itself decide validity, while ordinary
-  advisory warnings are still stripped,
-* a schema degradation does not fabricate an "input schema" degradation log
-  when the input schema is in fact clean.
+* it is absent when nothing was incompatible,
+* it is error-severity and survives the warning strip, while ordinary advisory
+  warnings are still stripped,
+* a schema block does not also fabricate an "input schema" block,
+* the marker reaches the caller when the payload is ``None``.
 """
 
 import logging
@@ -74,23 +75,23 @@ def _incompatible_graph(*, extra_unreachable_node: bool = False) -> tuple[dict, 
     return graph, rows
 
 
-async def test_pre_existing_incompatibility_returns_degraded_marker(caplog):
-    """A pre-cutover snapshot blocks AND carries SCHEMA_DEGRADED on the result."""
+async def test_pre_existing_incompatibility_returns_blocked_marker(caplog):
+    """A pre-cutover snapshot blocks AND carries SCHEMA_PRE_EXISTING_BLOCKED on the result."""
     caplog.set_level(logging.WARNING)
     graph, rows = _incompatible_graph()
     snap = _snapshot(graph, created_at=_PRE_CUTOVER)
 
     result = await GraphValidator().validate_for_run(snap, {}, _session_returning(rows))
 
-    # The invalid/valid outcome is unchanged: schema errors still block.
+    # The invalid/valid outcome: schema errors still block.
     assert not result.is_valid
     assert "SCHEMA_FIELD_INCOMPATIBLE" in _codes(result)
-    # The grace-period distinction is now observable to the caller.
-    assert "SCHEMA_DEGRADED" in _codes(result)
+    # The pre-existing distinction is now observable to the caller.
+    assert "SCHEMA_PRE_EXISTING_BLOCKED" in _codes(result)
     assert any("Schema incompatibility in pipeline" in r.getMessage() for r in caplog.records)
 
 
-async def test_post_cutover_incompatibility_has_no_degraded_marker():
+async def test_post_cutover_incompatibility_has_no_blocked_marker():
     """The identical graph on a post-cutover snapshot blocks WITHOUT the marker.
 
     This is the other half of the distinction: without a marker the two results
@@ -103,11 +104,11 @@ async def test_post_cutover_incompatibility_has_no_degraded_marker():
 
     assert not result.is_valid
     assert "SCHEMA_FIELD_INCOMPATIBLE" in _codes(result)
-    assert "SCHEMA_DEGRADED" not in _codes(result)
+    assert "SCHEMA_PRE_EXISTING_BLOCKED" not in _codes(result)
 
 
-async def test_clean_pre_existing_snapshot_has_no_degraded_marker(caplog):
-    """The marker means "degraded", not "old" — a clean pre-cutover run gets none."""
+async def test_clean_pre_existing_snapshot_has_no_blocked_marker(caplog):
+    """The marker means "pre-existing block", not "old" — a clean pre-cutover run gets none."""
     caplog.set_level(logging.WARNING)
     out_id = uuid.uuid4()
     graph = {
@@ -123,15 +124,15 @@ async def test_clean_pre_existing_snapshot_has_no_degraded_marker(caplog):
     result = await GraphValidator().validate_for_run(snap, {}, _session_returning([_schema_row(out_id, shared)]))
 
     assert result.is_valid
-    assert "SCHEMA_DEGRADED" not in _codes(result)
+    assert "SCHEMA_PRE_EXISTING_BLOCKED" not in _codes(result)
 
 
-async def test_marker_is_warning_and_ordinary_warnings_are_stripped():
+async def test_marker_is_error_and_ordinary_warnings_are_stripped():
     """The marker survives the strip; a normal advisory warning does not.
 
-    ``validate_for_run`` keeps its "errors only" contract for everything except
-    the grace-period marker, and the marker is warning-severity — it does not
-    flip validity on its own.
+    ``validate_for_run`` keeps its "errors only" contract, so the pre-existing
+    marker travels as an error-severity issue — the same channel as the schema
+    error that makes the result invalid — while advisory warnings are dropped.
     """
     graph, rows = _incompatible_graph(extra_unreachable_node=True)
     snap = _snapshot(graph, created_at=_PRE_CUTOVER)
@@ -141,41 +142,38 @@ async def test_marker_is_warning_and_ordinary_warnings_are_stripped():
     assert not result.is_valid
     # Ordinary advisory warnings are still stripped (node "c" is unreachable).
     assert "TOPOLOGY_UNREACHABLE" not in _codes(result)
-    # ...but the grace-period marker is not.
-    assert "SCHEMA_DEGRADED" in _codes(result)
-    marker = next(i for i in result.issues if i.code == "SCHEMA_DEGRADED")
-    assert marker.severity == "warning"
-    # Warning-severity: only the schema error makes this invalid.
-    assert [i.code for i in result.issues if i.severity == "error"] == ["SCHEMA_FIELD_INCOMPATIBLE"]
+    # ...but the pre-existing marker is not.
+    assert "SCHEMA_PRE_EXISTING_BLOCKED" in _codes(result)
+    marker = next(i for i in result.issues if i.code == "SCHEMA_PRE_EXISTING_BLOCKED")
+    assert marker.severity == "error"
 
 
-async def test_schema_degradation_does_not_fabricate_input_schema_log(caplog):
-    """A schema degradation must not also log an input-schema degradation.
+async def test_schema_block_does_not_fabricate_input_schema_log(caplog):
+    """A schema block must not also log an input-schema block.
 
-    The grace period is keyed on what *each* check found. Keying on overall
-    invalidity made an already-invalid result re-trigger the input-schema
-    branch, logging a degradation that never happened (and duplicating the
-    marker) whenever the first node carried no input pin at all.
+    The schema check blocks and returns before the input-schema check runs, so
+    an already-invalid result can never re-trigger the input-schema branch,
+    logging a block that never happened.
     """
     caplog.set_level(logging.WARNING)
     graph, rows = _incompatible_graph()
     # Node "a" is first and carries only an output pin, so the input-schema
-    # check returns early and finds nothing to complain about.
+    # check would return early and find nothing to complain about anyway.
     snap = _snapshot(graph, created_at=_PRE_CUTOVER)
 
     result = await GraphValidator().validate_for_run(snap, {}, _session_returning(rows))
 
     assert not result.is_valid
-    assert "SCHEMA_DEGRADED" in _codes(result)
+    assert "SCHEMA_PRE_EXISTING_BLOCKED" in _codes(result)
     assert not [r for r in caplog.records if "Input schema incompatibility" in r.getMessage()]
 
 
-async def test_marker_reaches_caller_on_null_payload_early_return():
-    """The marker survives the INPUT_NULL_PAYLOAD early return too.
+async def test_marker_reaches_caller_when_payload_is_null():
+    """The marker survives to the caller even when the input payload is ``None``.
 
-    ``input_payload=None`` returns straight after the schema check; the strip
-    must not drop the grace-period marker on that path either, or the
-    distinction vanishes exactly where a caller needs it.
+    A pre-cutover snapshot with an incompatible schema blocks on the schema
+    check and returns the marker; the ``None`` payload never reaches its own
+    check, but the caller still sees the pre-existing distinction.
     """
     graph, rows = _incompatible_graph()
     snap = _snapshot(graph, created_at=_PRE_CUTOVER)
@@ -183,18 +181,17 @@ async def test_marker_reaches_caller_on_null_payload_early_return():
     result = await GraphValidator().validate_for_run(snap, None, _session_returning(rows))
 
     assert not result.is_valid
-    assert "INPUT_NULL_PAYLOAD" in _codes(result)
-    assert "SCHEMA_DEGRADED" in _codes(result)
+    assert "SCHEMA_PRE_EXISTING_BLOCKED" in _codes(result)
 
 
-async def test_input_schema_degradation_marker_on_pre_existing_snapshot(caplog):
+async def test_input_schema_block_marker_on_pre_existing_snapshot(caplog):
     """A pre-cutover snapshot whose INPUT schema is incompatible records the marker.
 
-    This is the input-schema half of the grace period, independent of the
-    field-level schema check: a graph with no output→input edges passes schema
-    compatibility, so the input check is the only source of errors. Its
-    degradation must still be observable to the caller as SCHEMA_DEGRADED, and
-    must be announced with the input-schema log line.
+    This is the input-schema half of the pre-existing carve-out, independent of
+    the field-level schema check: a graph with no output→input edges passes
+    schema compatibility, so the input check is the only source of errors. Its
+    block must still be observable to the caller as SCHEMA_PRE_EXISTING_BLOCKED,
+    and must be announced with the input-schema log line.
     """
     caplog.set_level(logging.WARNING)
     in_id = uuid.uuid4()
@@ -213,5 +210,5 @@ async def test_input_schema_degradation_marker_on_pre_existing_snapshot(caplog):
 
     assert not result.is_valid
     assert "INPUT_SCHEMA_MISMATCH" in _codes(result)
-    assert "SCHEMA_DEGRADED" in _codes(result)
+    assert "SCHEMA_PRE_EXISTING_BLOCKED" in _codes(result)
     assert any("Input schema incompatibility in pipeline" in r.getMessage() for r in caplog.records)

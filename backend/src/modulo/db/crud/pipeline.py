@@ -350,6 +350,20 @@ async def create_pipeline(
     )
     session.add(pipeline)
     await session.flush()
+    # FAR-1593: materialise the org's APPLIED guardrail config onto this
+    # pipeline in the same transaction. The enforcement seams load guardrail
+    # rows BY PIPELINE, and the apply/import fan-out only covers pipelines
+    # that exist at that moment — without this, a pipeline created after the
+    # last apply ran unguarded while the drift surface reported clean.
+    # Lazy import, the db.crud.run house shape (see .importlinter FAR-208).
+    from modulo.core.guardrails.materialise import seed_org_guardrail_rows_for_pipeline
+
+    await seed_org_guardrail_rows_for_pipeline(
+        session,
+        org_id=org_id,
+        pipeline_id=pipeline.id,
+        account_id=account_id,
+    )
     if threshold is not None:
         await audit_circuit_breaker_threshold_change(
             session,
@@ -1023,6 +1037,17 @@ async def _clone_pipeline_config(
     )
     session.add(cloned)
     await session.flush()
+    # FAR-1593: a clone carries no eval rows (FAR-1666 — evals are not
+    # cloned), so it must materialise the org's applied guardrail config
+    # exactly like a fresh create, in the same transaction.
+    from modulo.core.guardrails.materialise import seed_org_guardrail_rows_for_pipeline
+
+    await seed_org_guardrail_rows_for_pipeline(
+        session,
+        org_id=org_id,
+        pipeline_id=cloned.id,
+        account_id=account_id,
+    )
     _log.info("Pipeline config copied: new id=%s", cloned.id)
     return cloned
 
@@ -2191,6 +2216,46 @@ async def replace_pipeline_graph(
     # other append_audit_event call sites in this file), so the event and the
     # write commit or roll back together — a graph write that commits without
     # an audit event is no longer possible.
+    #
+    # FAR-1824 (lock-point audit §7 risk 3) — why this append is DELIBERATELY
+    # kept inside the pipeline-row lock rather than committed separately and
+    # appended afterwards. Moving it out is not safe here, for concrete
+    # reasons:
+    #
+    #   1. This function does not own its transaction — the CALLER does. The
+    #      REST route opens ``async with session.begin()`` and still runs
+    #      ``_sync_agent_row_commands`` + ``_validate_graph_save`` in the SAME
+    #      unit after this returns; the MCP tool (``_replace_pipeline_graph_txn``)
+    #      and both onboarding seams wrap it in their own session. The pipeline
+    #      row lock is held until the CALLER commits, so "commit the graph
+    #      replacement, then append" would mean committing the caller's
+    #      in-flight transaction from inside the service layer — stranding that
+    #      post-write work and the 404/rollback semantics on every surface.
+    #      Those callers (mcp_server.py, onboarding.py) are outside this
+    #      change's file allowlist.
+    #   2. FAR-1471 requires the event and the write to commit or roll back
+    #      together. A post-commit append in a separate transaction makes a
+    #      committed graph write with NO audit event possible again — the exact
+    #      unattributable-write class FAR-1471 closed (the 2026-10-03 PR
+    #      Reviewer outage).
+    #   3. A post-commit append would have to carry the before-image out of the
+    #      transaction. Keeping the append here uses the in-memory
+    #      ``previous_nodes`` / ``old_edges`` captured under the lock — the only
+    #      place the pre-write state is guaranteed consistent.
+    #
+    # Lock ORDERING is the safety-critical property of this nesting, and it is
+    # consistently pipeline -> audit-chain-head: every pipeline-lock path that
+    # appends an audit takes the pipeline row FIRST and appends LAST
+    # (``replace_pipeline_graph`` here; ``rollback_to_snapshot`` — lock then
+    # append; ``guardrail_override`` — lock then append;
+    # ``recovery._fetch_locked_run`` + ``_record_recovery_audit``). No path was
+    # found that appends an audit and THEN locks the pipeline row in the same
+    # transaction, so the two row locks cannot form a cycle and cannot
+    # deadlock. A test pins this order:
+    # ``tests/unit/db/crud/test_pipeline_graph_updated_audit.py``
+    # ``::TestGraphReplaceLockScope::test_pipeline_row_lock_precedes_audit_chain_head_lock``.
+    # Any future change that moves this append out MUST preserve that order, or
+    # remove the nesting entirely.
     await append_audit_event(
         session,
         org_id=org_id,

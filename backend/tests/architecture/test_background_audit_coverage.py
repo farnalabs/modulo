@@ -234,6 +234,11 @@ INVENTORY: dict[str, PathRecord] = {
     # FAR-1108 chunk 8b: read-only decision-record reconciliation — never
     # mutates a decision record.
     "decision_record_reconcile": _exempt("read_only_detection"),
+    # FAR-132: read-only scan of run_node_outputs for rows still reaching the
+    # Agent-Return-split legacy fallback. Reports through a structured ERROR log,
+    # a persisted counter (legacy_count) and the saq:cron:stats:* liveness key
+    # surfaced by the /healthz/ready advisory — mutates no row.
+    "legacy_agent_return_sweep": _exempt("read_only_detection"),
     "check_missed_fire_alerts_cron": _exempt("notification_only"),
     "library_sync": _exempt("derived_state"),
     "metrics_dump": _exempt("telemetry_watermark"),
@@ -270,6 +275,18 @@ INVENTORY: dict[str, PathRecord] = {
         _TERMINAL_ADVANCE,
     ),
     "maybe_alarm_approve_sweep": _audited(("src/modulo/core/hitl_manager/sweep_alarm.py", "append_audit_event")),
+    # FAR-1593: materialises the org's applied guardrail config onto a newly
+    # created/cloned pipeline, inside the creating request's transaction
+    # (``db.crud.pipeline.create_pipeline`` / ``_clone_pipeline_config``). It is
+    # not a request-less background path: it runs with the creating principal
+    # in scope and writes no separate SYSTEM event — the org-owned ``Eval``
+    # guardrail rows are part of the enclosing creation action, recorded by the
+    # request-surface audit (``pipeline_created`` on create, ``pipeline_cloned``
+    # on clone).
+    "seed_org_guardrail_rows_for_pipeline": _audited(
+        ("src/modulo/api/routes/pipelines.py", 'audited("pipeline_created", "pipeline"'),
+        ("src/modulo/api/routes/pipelines.py", 'audited("pipeline_cloned", "pipeline"'),
+    ),
     # --- boot-time seeds declared under core/ -----------------------------
     "seed_default_alert_rules_for_org": _exempt("boot_default_config"),
     "seed_default_alert_rules": _exempt("boot_default_config"),

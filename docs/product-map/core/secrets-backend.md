@@ -29,21 +29,21 @@ current production writers through it are model-backend API keys
 (`api/mcp_server.py`); the connector hub *prefers* this backend on read and
 falls back to the connector row's own ciphertext column. Notification-endpoint
 and OTel export keys are written direct-Fernet into their own columns and are
-re-wrapped by ``fernet_rotation.py`` — they are not routed through the
+re-wrapped by ``fernet_rotation.py`` - they are not routed through the
 pluggable store. The ``SecretsBackend`` ABC exposes async ``get_secret`` /
 ``set_secret``
 / ``delete_secret``; the factory selects ``fernet`` (default, Fernet-encrypted
 rows in the ``secrets`` table), ``vault`` (HashiCorp Vault) or ``aws`` (Secrets
 Manager), with a license gate for external backends. ``fernet_rotation.py``
 re-encrypts every encrypted store to a new key with an ``old_key`` fallback for
-no-downtime rotation. Infra-only surface — no UI route, so it is tracked here
+no-downtime rotation. Infra-only surface - no UI route, so it is tracked here
 rather than in the manifest registry.
 
 ## Behaviours
 
 - [x] ``SecretsBackend`` ABC with async ``get_secret`` / ``set_secret`` /
       ``delete_secret`` and a ``KeyError`` contract for a missing key
-- [x] Secret keys are validated / normalised (non-empty string, stripped) —
+- [x] Secret keys are validated / normalised (non-empty string, stripped) -
       invalid keys raise ``ValueError``, never touch the store
 - [x] Factory ``create_secrets_backend`` selects the backend from
       ``backend_name`` / ``MODULO_SECRETS_BACKEND`` (``fernet`` default,
@@ -54,7 +54,7 @@ rather than in the manifest registry.
 - [x] ``fernet`` backend encrypts values with ``cryptography.fernet.Fernet``
       and persists them in the ``secrets`` table with an
       ``(organisation_id, key)`` scope
-- [x] ``fernet`` backend is RLS-aware — reads the organisation id from the
+- [x] ``fernet`` backend is RLS-aware - reads the organisation id from the
       session (``app.organisation_id`` via ``current_setting``, falling back
       to ``session.info`` on non-Postgres backends) and scopes every row to
       that org; missing org context fails closed with an actionable error
@@ -69,7 +69,7 @@ rather than in the manifest registry.
       (bounded thread-pool execution with a configurable timeout)
 - [x] Implementations never log or leak secret values in exceptions,
       tracebacks or span attributes
-- [x] ``fernet_rotation`` — no-downtime key rotation: ``decrypt_with_fallback``
+- [x] ``fernet_rotation`` - no-downtime key rotation: ``decrypt_with_fallback``
       decays to the old key, ``re_encrypt_*`` re-wraps plaintext under the new
       key, and ``rotate_all_encrypted_data`` re-encrypts every encrypted store
       (secrets table, connector instances, model backends, notification
@@ -80,24 +80,24 @@ rather than in the manifest registry.
 
 - **External backends require a paid plan.** ``vault`` / ``aws`` are
   license-gated; ``fernet`` is the only community-tier store, and their
-  live-service construction remains unit-tested only —
+  live-service construction remains unit-tested only -
   ``secrets_backend.feature`` (added 2026-09-19) locks the Fernet store, the
   factory, and the unlicensed fallback end to end instead.
 
 ## QA History
 
-- 2026-10-10: **qa-iterate product-map pass** — corrected the summary scope: the
+- 2026-10-10: **qa-iterate product-map pass** - corrected the summary scope: the
   pluggable backend's production writers are model-backend keys
   (`api/routes/model_backends.py`) and the org secret vault
   (`api/mcp_server.py`), with the connector hub preferring it on read and falling
   back to the connector row's ciphertext; notification-endpoint and OTel keys are
   written direct-Fernet and only re-wrapped by `fernet_rotation`. Status: covered.
 
-- 2026-09-19: **product-map review pass** — closed the "No
+- 2026-09-19: **product-map review pass** - closed the "No
   BDD feature files" gap. Registered ``backend/tests/bdd/features/infra/
   secrets_backend.feature`` into the executing BDD suite from
   ``steps/test_secrets_backend.py``, driving the REAL
-  ``modulo.core.secrets_backend`` seams network-free and DB-free — the
+  ``modulo.core.secrets_backend`` seams network-free and DB-free - the
   ``FernetSecretsBackend`` persists/reads real rows in an in-memory aiosqlite
   engine (round-trip, in-place upsert, delete, whitespace-normalised keys),
   organisation scoping via the real ``WHERE organisation_id = :oid`` SQL the
@@ -107,7 +107,7 @@ rather than in the manifest registry.
   alien/corrupt ciphertext ``ValueError``, and the real factory default /
   unknown-name / unlicensed-``vault``-fallback logic (forced exactly as the
   unit suite does). `_ORPHANED_BDD_FEATURES` stays empty. Status: covered.
-- 2026-08-27: **product-map review pass** — entry added to
+- 2026-08-27: **product-map review pass** - entry added to
   close the feature-graph gap for a shipped infra-only surface consumed by the
   connector / model-backend / notification / OTel-export credential paths but
   invisible to the product map. Behaviours verified against

@@ -493,9 +493,27 @@ _MID_GRAPH_WEDGE_SQL = (
     # _live_dispatch_marker_tombstone_pattern) so the SQL text stays STATIC —
     # no runtime str.replace, which keeps the statement identical to the
     # template every test asserts against.
+    #
+    # FAR-1803 AMENDMENT: the shield claims a LIVE attempt owns the row — the
+    # in-process node-deadline watchdog that would fire at the node's
+    # timeout. That attempt's only liveness evidence is the heartbeat, so the
+    # shield now applies only while ``heartbeat_at`` is FRESH (bound
+    # ``:heartbeat_fresh`` — the SAME stale window the reconcile scan's
+    # stale-heartbeat legs use). A STALE (or NULL) heartbeat means the owning
+    # executor is GONE: no watchdog will ever fire, no sweep collected the row
+    # (the nodeless router's phase leg, the stale leg's phase exclusion and
+    # the claim cap all skip it), and before this amendment the ONLY collector
+    # was the 25h runner-marker sweep — observed prod: zero-node runs sitting
+    # ``running`` for 7h+ with the live ``{"state": "dispatching"}`` marker
+    # intact, holding a sandbox-concurrency slot (FAR-1803). The age bound
+    # itself is unchanged: the row must still be past
+    # ``max_age_minutes`` (>> the worst-case node deadline), so a LIVE
+    # executor's attempt is never touched — only the shield's reach narrows.
     "  AND NOT (dispatch_phase = :first_node_phase "
     "AND runs.sandbox_dispatch_state IS NOT NULL "
-    "AND runs.sandbox_dispatch_state NOT LIKE :live_marker_tombstone) "
+    "AND runs.sandbox_dispatch_state NOT LIKE :live_marker_tombstone "
+    "AND heartbeat_at IS NOT NULL "
+    "AND heartbeat_at >= now() - (:heartbeat_fresh * interval '1 second')) "
     "  AND NOT (__ZERO_PROGRESS_SHAPE__) "
     "  LIMIT :max_rows) "
     "RETURNING id"
@@ -557,6 +575,13 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     # race/regression alarm). Read through .get() like every other additive
     # counter here.
     "node_started_deferred": 0,
+    # FAR-1803: node-started rows whose EXECUTOR heartbeat is stale (the
+    # observed zero-node class — live dispatch marker, dead executor, zero
+    # node outputs). Counted EVERY tick the population exists (its own scan
+    # leg + row recheck), so the readiness detail can never report 0 while
+    # such runs sit ``running``; terminalisation at the age bound lands in
+    # ``age_terminalized``. Additive .get() contract like the rest.
+    "node_started_executor_lost": 0,
     # The terminalizer counters below (and their healthz aliases) are seeded
     # from the registry (FAR-720) just after the registry is defined — see
     # ``_dispatcher_reconcile_stats.update(_terminalizer_stats_defaults())``.
@@ -622,6 +647,8 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["capacity_deferred"] = stats.get("capacity_deferred", 0)
     # FAR-1649: held-back node-started rows (additive .get() contract).
     _dispatcher_reconcile_stats["node_started_deferred"] = stats.get("node_started_deferred", 0)
+    # FAR-1803: the node-started / executor-lost gauge (additive .get()).
+    _dispatcher_reconcile_stats["node_started_executor_lost"] = stats.get("node_started_executor_lost", 0)
     # Terminalizer counters (and their healthz aliases) derive from the
     # registry (FAR-720): a new terminalizer registers once below and is
     # carried through here, the module dict, the summary and the telemetry
@@ -5490,7 +5517,7 @@ def _build_re_dispatch_predicate(
     guards), and the re-dispatch is always ``resume_run`` — checkpoint resume,
     never re-execution (FAR-1649).
     """
-    from sqlalchemy import and_, or_
+    from sqlalchemy import and_, not_, or_
 
     from modulo.db.models.run import Run
 
@@ -5607,6 +5634,40 @@ def _build_re_dispatch_predicate(
             # this SAME predicate (parity by construction), so its
             # recoverability verdict moves in lockstep.
             or_(Run.dispatch_phase.is_(None), Run.dispatch_phase != PHASE_FIRST_NODE_DISPATCHED),
+        ),
+        # FAR-1803 — the observed zero-node class: a node-STARTED run whose
+        # EXECUTOR is gone. ``running`` + ``first_node_dispatched`` + a STALE
+        # (or NULL) heartbeat. Every other leg excludes the class (the
+        # FAR-1649 phase exclusion on the generic stale / nodeless /
+        # early-detect legs; the override leg needs its dedicated marker
+        # column), so before this leg such a row was NEVER SELECTED — not
+        # ``scanned``, not counted — while the B4 age gate's FAR-1740
+        # live-marker shield kept it ``running`` for its whole life (observed
+        # on prod 2026-10-14/15: runs sitting ``running`` for hours with a
+        # live ``{"state": "dispatching", "provider": "e2b"}`` marker, a
+        # heartbeat stale for ~7h, zero node outputs, and every
+        # dispatcher_reconcile counter 0 — FAR-1803).
+        #
+        # The leg exists ONLY to make the class visible: the row recheck in
+        # ``_reconcile_one_row`` classifies it under
+        # ``node_started_executor_lost`` and returns WITHOUT re-dispatching
+        # (FAR-1649: re-executing a started node may double its side effects),
+        # leaving terminalisation to the B4 age gate — whose live-marker
+        # shield now lifts once the heartbeat is stale (the shield's premise
+        # is "a live attempt owns this row"; a dead executor is not one).
+        # The guardrail-override class is excluded here AND in the row recheck
+        # — its own leg below owns the ``resume_run`` recovery (FAR-1728), so
+        # this leg must never shadow it. A non-saq row is out of scope: the
+        # stale_run_recovery sweep's ``worker_lost`` arm owns those.
+        and_(
+            Run.status == "running",
+            Run.dispatcher == "saq",
+            Run.dispatch_phase == PHASE_FIRST_NODE_DISPATCHED,
+            or_(
+                Run.heartbeat_at.is_(None),
+                Run.heartbeat_at < func_now_minus(stale_window),
+            ),
+            not_(Run.guardrail_override_resume_pending.is_(True)),
         ),
         # F6a gated recovery: awaiting_human/claimed/hitl_parked +
         # dispatcher='saq' + stale heartbeat. The no-job gate is applied
@@ -6202,6 +6263,7 @@ async def _terminalize_mid_graph_wedges(
     org_id: uuid.UUID,
     *,
     max_age_minutes: int,
+    stale_seconds: int | None = None,
     max_rows: int | None = None,
 ) -> list[uuid.UUID]:
     """Terminal-fail SAQ runs wedged past the age bound — with a truthful code.
@@ -6229,6 +6291,18 @@ async def _terminalize_mid_graph_wedges(
     logged and the returned run ids drive the post-commit compensating
     analytics fact (P6', FAR-162).
 
+    FAR-1803 — *stale_seconds* is the liveness bound of the FAR-1740 (3)
+    live-marker shield: a node-started row carrying a LIVE dispatch marker is
+    shielded only while its heartbeat is FRESH (an in-process attempt owns it).
+    ``None`` (the default, so every existing direct caller is unchanged)
+    resolves the SAME stale window the reconcile scan's stale-heartbeat legs
+    use (``RECONCILE_STALE_HEARTBEAT_FACTOR * SAQ_JOB_HEARTBEAT``); the
+    registry threads it from ``ReconcileTuning.stale_window`` on the
+    production path. A stale/NULL heartbeat with the marker still live is the
+    observed FAR-1803 class (executor dead, node dispatched, zero outputs) —
+    collected here at the bound instead of surviving until the 25h marker
+    sweep.
+
     FAR-746 batch cap: *max_rows* bounds the UPDATE to that many rows per tick
     (``WHERE ctid IN (SELECT ctid ... LIMIT n)``) so a huge wedge backlog
     drains gradually across 60s ticks instead of one unbounded UPDATE storm
@@ -6237,6 +6311,8 @@ async def _terminalize_mid_graph_wedges(
     """
     from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
 
+    if stale_seconds is None:
+        stale_seconds = RECONCILE_STALE_HEARTBEAT_FACTOR * int(get_settings().saq_job_heartbeat)
     detail_prefix = _NO_PROGRESS_ERROR_DETAIL_PREFIX_FMT.format(age=max_age_minutes)
     result = await session.execute(
         text(_MID_GRAPH_WEDGE_SQL.replace(_ZERO_PROGRESS_SHAPE_TOKEN, _ZERO_PROGRESS_SHAPE_SQL)),
@@ -6253,6 +6329,8 @@ async def _terminalize_mid_graph_wedges(
             # text stays the static template and the tombstone constant has ONE
             # definition (runner_capacity.MARKER_STATE_CLEARED_AT_HITL).
             "live_marker_tombstone": _live_dispatch_marker_tombstone_pattern(),
+            # FAR-1803: the shield's liveness bound (see the template comment).
+            "heartbeat_fresh": stale_seconds,
             "max_age_minutes": max_age_minutes,
             "max_rows": _terminalize_max_rows(max_rows),
         },
@@ -6618,7 +6696,10 @@ _TERMINALIZERS: tuple[ReconcileTerminalizer, ...] = (
         stall_reason=_NO_PROGRESS_ERROR_CODE,
         coroutine_name="_terminalize_mid_graph_wedges",
         alias_key="age_terminalized",
-        tuning_kwargs={"max_age_minutes": "max_age_minutes"},
+        # FAR-1803: ``stale_seconds`` is the live-marker shield's liveness
+        # bound — threaded from the SAME ``stale_window`` the scan's
+        # stale-heartbeat legs bind, so "stale" has one definition.
+        tuning_kwargs={"max_age_minutes": "max_age_minutes", "stale_seconds": "stale_window"},
     ),
     ReconcileTerminalizer(
         key="dispatch_failed",
@@ -6837,6 +6918,18 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         single-writer dedicated marker column — NOT ``is_replay``, which
         webhook/manual replay also set), re-dispatched ``resume_run`` only
         (FAR-1728).
+      * running + ``dispatcher='saq'`` + ``dispatch_phase=
+        'first_node_dispatched'`` + STALE (or NULL) heartbeat, not the
+        guardrail-override class (FAR-1803): the node-started / EXECUTOR-LOST
+        class — a node was dispatched (live ``{"state": "dispatching"}``
+        marker), the executor is gone (heartbeat stale), zero node outputs.
+        Admitted ONLY so it is visible: the row loop counts it
+        ``node_started_executor_lost`` and returns without re-dispatch (never
+        ``execute_run`` — FAR-1649); terminalisation is the B4 age gate's,
+        whose live-marker shield lifts once the heartbeat is stale. Before
+        this leg no predicate matched the class — it was never ``scanned``,
+        every counter reported 0 while such runs held a sandbox slot for
+        hours (the FAR-1803 defect).
       * running + ``dispatcher='saq'`` + FRESH heartbeat but zero node
         progress after SAQ_CLAIMED_NODELESS_MINUTES (node_token_usage/out-
         puts_json both NULL + no LangGraph checkpoint for the thread):
@@ -6918,7 +7011,12 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         bound (the same Settings knob, ~135m at the default) is terminal-failed
         ``no_progress`` (FAR-1329: the truthful age-gate code — this
         predicate never compares runs, so it must never write the supersede
-        vocabulary).
+        vocabulary). A node-STARTED row carrying a LIVE dispatch marker is
+        shielded (FAR-1740 (3)) ONLY while its heartbeat is FRESH (FAR-1803):
+        the shield's premise is a live in-process attempt, and a stale
+        heartbeat proves the executor owning it is gone — without the
+        liveness leg such a row survived to the 25h marker sweep holding a
+        slot, invisible to every counter.
       * B5 claim-cap: any ``running`` row at ``claim_count >= cap`` whose
         heartbeat is STALE is terminal-failed ``claim_cap_exhausted`` —
         selected INDEPENDENTLY of the reconcile predicates so a capped
@@ -7759,6 +7857,12 @@ def _dispatcher_summary() -> dict[str, Any]:
         # forgot the exclusion (defence-in-depth alarm, not a routine
         # per-tick signal).
         "node_started_deferred": 0,
+        # FAR-1803: node-started rows whose executor heartbeat is stale — the
+        # zero-node class that used to be invisible to EVERY counter (its own
+        # scan leg admits it; the row loop counts it and never re-dispatches
+        # it; the age gate terminalises it once the shield lifts). Additive
+        # .get() contract.
+        "node_started_executor_lost": 0,
         "streak_scanned": 0,
         "streak_deactivated": 0,
         "streak_capped": 0,
@@ -8950,6 +9054,50 @@ async def _override_resume_checkpoint_present(
     return bool(await _run_has_resumable_checkpoint(session, org_id=org_id, thread_id=thread_id))
 
 
+def _is_node_started_executor_lost_row(row: Any, stale_window: int) -> bool:
+    """FAR-1803: is *row* the node-started / executor-lost class? (row recheck)
+
+    Exactly the new scan leg re-checked row-side (the belt/recheck convention
+    shared with ``_is_nodeless_zombie_row`` / ``_is_override_resume_row``):
+    ``running`` + ``dispatcher='saq'`` + the durable ``first_node_dispatched``
+    phase + a STALE (or NULL) heartbeat + NOT the guardrail-override class.
+
+    A stale heartbeat is this module's standing evidence that the executor
+    owning the attempt is gone — the same evidence the ``worker_lost`` and
+    claim-cap arms key on. Observed prod shape (FAR-1803): a node dispatched
+    to an E2B sandbox (live ``{"state": "dispatching"}`` marker), executor
+    dead for hours, zero node outputs, and every reconcile counter 0 because
+    no leg selected the row.
+
+    Scope guards, both directions:
+
+    * a FRESH heartbeat is a LIVE attempt — not this class (the belt still
+      holds such a row back from re-dispatch);
+    * the guardrail-override class (dedicated marker column set) is owned by
+      its own ``resume_run`` leg — never double-counted here;
+    * a row source that does not expose ``dispatch_phase``/``heartbeat_at``
+      at all is NOT this class — it keeps the existing belt's fail-closed
+      hold (``node_started_deferred``), never a re-dispatch.
+    """
+    if getattr(row, "status", None) != "running":
+        return False
+    if getattr(row, "dispatcher", None) != "saq":
+        return False
+    if getattr(row, "dispatch_phase", None) != PHASE_FIRST_NODE_DISPATCHED:
+        return False
+    if getattr(row, "guardrail_override_resume_pending", None) is True:
+        return False
+    heartbeat = getattr(row, "heartbeat_at", None)
+    if heartbeat is None:
+        # No heartbeat evidence at all: nothing alive is writing — same
+        # staleness verdict the SQL leg gives a NULL heartbeat.
+        return True
+    if not isinstance(heartbeat, datetime):
+        # Unverifiable staleness fails CLOSED into the belt's hold.
+        return False
+    return (datetime.now(UTC) - heartbeat).total_seconds() > stale_window
+
+
 async def _reconcile_one_row(
     session: AsyncSession,
     q: RedisQueue,
@@ -8979,8 +9127,30 @@ async def _reconcile_one_row(
     additionally arms the tail guard below, so a zero-progress running row is
     never re-dispatched by the generic recovery path before its window elapses.
     ``stale_window`` (the SAME value the SQL stale-heartbeat legs bind, from
-    ``ReconcileTuning``) feeds the override-resume row recheck.
+    ``ReconcileTuning``) feeds the override-resume row recheck AND the
+    FAR-1803 node-started/executor-lost classification below.
     """
+    # FAR-1803 — classify the node-started / executor-lost class FIRST, before
+    # any repair branch can touch it. The class is never re-dispatched (a
+    # started node may have executed side effects — FAR-1649) and never
+    # silently skipped: it gets its own counter so a readiness read can never
+    # report 0 while such runs exist (the observed defect: every counter 0
+    # while runs sat ``running`` for hours). Terminalisation belongs to the
+    # B4 age gate, whose live-marker shield lifts once the heartbeat is stale;
+    # the row loop only holds and reports it until then.
+    if _is_node_started_executor_lost_row(row, stale_window):
+        summary["node_started_executor_lost"] += 1
+        _log.warning(
+            "dispatcher_reconcile.node_started_executor_lost run=%s org=%s dispatch_phase=%s "
+            "claim_count=%s heartbeat_at=%s — node-started row whose executor heartbeat is stale; "
+            "held back from re-dispatch (re-execution unsafe), terminalised by the age gate at the bound (FAR-1803)",
+            row.id,
+            org_id,
+            getattr(row, "dispatch_phase", None),
+            getattr(row, "claim_count", None),
+            getattr(row, "heartbeat_at", None),
+        )
+        return enqueue_failed_redispatched
     # FAR-873: early-detect for fresh-heartbeat nodeless zombies.  Fire BEFORE
     # the full nodeless repair so a wedged-worker zombie is re-dispatched ~20
     # min sooner.  The throttle uses the FULL nodeless_window (not the
@@ -9331,3 +9501,55 @@ def func_now_minus(seconds: int) -> Any:
     from sqlalchemy import text as _text
 
     return _text("now() - :seconds * interval '1 second'").bindparams(seconds=seconds)
+
+
+async def legacy_agent_return_sweep() -> dict[str, Any]:
+    """System cron — detect ``run_node_outputs`` rows still carrying the legacy shape (FAR-132).
+
+    The periodic invariant that gates the FAR-132 Agent-Return-split strip: it
+    counts rows in ``run_node_outputs`` that still reach the legacy fallback
+    (``core.node_output_split.stored_row_is_legacy`` — outputs side present,
+    telemetry side absent) and logs a LOUD structured ERROR with the count when
+    any remain. Zero is the healthy result once the P5 verify-backfill has run;
+    the tolerance in ``core.node_output_split`` may only be stripped after this
+    sweep has reported zero across a soak window.
+
+    The detection log is ERROR, not WARNING: WARNING does not reach the
+    ``ErrorTrackingLogHandler`` (registered at ERROR) so it would never appear in
+    ``error_events`` / notifications. The durable liveness record (the
+    ``saq:cron:stats:*`` key the readiness advisory reads) is persisted by the
+    ``saq_worker.legacy_agent_return_sweep`` wrapper, mirroring the sibling
+    detection crons.
+
+    Cross-org: the system session factory (modulo_system role, BYPASSRLS). Any
+    failure is logged and RE-RAISED so SAQ's ``retries`` engage — a scan that
+    cannot run must never be mistaken for a clean zero (fail-loud, never
+    silently pass).
+    """
+    from modulo.core.agent_return_legacy import count_legacy_agent_return_rows
+
+    try:
+        async with _open_system_factory()() as session, session.begin():
+            report = await count_legacy_agent_return_rows(session)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("cron_helpers.legacy_agent_return_sweep_failed")
+        raise
+
+    stats: dict[str, Any] = {
+        "legacy_count": report.legacy_count,
+        "sample_truncated": report.sample_truncated,
+    }
+    if report.legacy_count:
+        _log.error(
+            "agent_return.legacy_straggler_detected",
+            extra={
+                "legacy_count": report.legacy_count,
+                "sample": list(report.sample),
+                "sample_truncated": report.sample_truncated,
+            },
+        )
+    else:
+        _log.info("agent_return.legacy_sweep_clean", extra={"legacy_count": 0})
+    return stats

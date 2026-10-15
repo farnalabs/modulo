@@ -137,9 +137,9 @@ class TestChain:
         # then 0302_runs_run_grouping, then 0303_feedback_records_lookup_indexes,
         # then 0305_guardrail_escalate_action, then 0306_trigger_secret_encryption,
         # then 0307_runs_guardrail_override_resume_pending, then
-        # 0310_library_cluster_db_hardening now chain onto this migration, so the single head
+        # 0313_collection_install_drop_installed_entities now chain onto this migration, so the single head
         # moved up another revision.
-        assert heads == ["0310_library_cluster_db_hardening"], f"expected a single head, got {heads}"
+        assert heads == ["0313_collection_install_drop_installed_entities"], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0271_org_api_keys_revocation_sweep_indexes(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION

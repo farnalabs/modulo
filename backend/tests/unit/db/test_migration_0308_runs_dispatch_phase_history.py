@@ -3,7 +3,7 @@
 Structural contract (no Postgres needed):
 
 * **Revision chain** — 0307 revises ``0307_runs_guardrail_override_resume_pending``;
-  the migrations directory has exactly one head (``0310_library_cluster_db_hardening``,
+  the migrations directory has exactly one head (``0313_collection_install_drop_installed_entities``,
   pinned by all sibling chain tests), the revision id matches the filename, and
   neither ``branch_labels`` nor ``depends_on`` is set (the pre-commit
   check-migration-heads hook and every ``test_single_head_*`` pin depend on
@@ -36,7 +36,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0308_runs_dispatch_phase_history"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0307_runs_guardrail_override_resume_pending"
-_CHAIN_HEAD_MIGRATION = "0310_library_cluster_db_hardening"
+_CHAIN_HEAD_MIGRATION = "0313_collection_install_drop_installed_entities"
 _HISTORY_COLUMN = "dispatch_phase_history"
 _DROPS_COLUMN = "dispatch_phase_write_drops"
 
@@ -73,7 +73,7 @@ def _migration_calls(entry_point: str) -> list[tuple[str, tuple[Any, ...], dict[
 
 
 class TestChain:
-    def test_single_head_is_0310_library_cluster_db_hardening(self) -> None:
+    def test_single_head_is_0313_collection_install_drop_installed_entities(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
 

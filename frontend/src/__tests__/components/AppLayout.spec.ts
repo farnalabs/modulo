@@ -175,6 +175,15 @@ describe('AppLayout', () => {
   describe('mobile — nav flag unresolved (FAR-1237 pending placeholder)', () => {
     it('renders neither chrome on first paint — pending placeholder + header offset, no hamburger, no rail', async () => {
       mockMatchMedia(false)
+      // Hold the flags response so the store is genuinely IN FLIGHT ('none')
+      // at assertion time. Without the gate the no-payload mock would settle
+      // the store to terminal 'unavailable' (FAR-1805) within the awaits
+      // below and the placeholder would already have unmounted — the settled
+      // case is pinned by the companion test next door.
+      ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((path: string) => {
+        if (path === '/api/v1/admin/feature-flags') return new Promise(() => {})
+        return Promise.resolve({ data: null, error: undefined })
+      })
       const wrapper = mount(AppLayout, {
         global: {
           plugins: [createPinia(), router],
@@ -198,6 +207,27 @@ describe('AppLayout', () => {
       expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false)
       // The placeholder occupies the fixed header slot, so the offset matches.
       expect(wrapper.find('main').classes()).toContain('pt-14')
+    })
+
+    it("unmounts the placeholder once the fetch settles unreadable — hamburger + drawer render (FAR-1805)", async () => {
+      mockMatchMedia(false)
+      const wrapper = mount(AppLayout, {
+        global: {
+          plugins: [createPinia(), router],
+          stubs: { LogoMark: true },
+        },
+      })
+      const onboarding = useOnboardingStore()
+      onboarding.dismissed = true
+      await flushPromises()
+
+      // The no-payload mock has settled the store: terminal 'unavailable',
+      // logged by the store (console.warn is spied in beforeEach).
+      expect(usePlanStore().flagsSource).toBe('unavailable')
+      expect(wrapper.find(`[data-testid="${MOBILE_NAV_PENDING_TESTID}"]`).exists()).toBe(false)
+      expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(true) // interactive
+      expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false) // drawer fallback, not rail
+      expect(wrapper.find('main').classes()).toContain('pt-14') // header slot still occupied
     })
   })
 

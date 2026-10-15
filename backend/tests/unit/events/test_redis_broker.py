@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Awaitable, Callable, Coroutine
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -35,19 +37,30 @@ def broker(mock_redis: MagicMock) -> RedisEventBroker:
 # ---------------------------------------------------------------------------
 
 
-def test_redact_url_masks_password() -> None:
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        pytest.param(
+            "redis://:secret@localhost:6379/0",
+            "redis://:****@localhost:6379/0",
+            id="password-only",
+        ),
+        pytest.param(
+            "redis://user:secret@localhost:6379/0",
+            "redis://user:****@localhost:6379/0",
+            id="username-and-password",
+        ),
+        pytest.param(
+            "redis://localhost:6379/0",
+            "redis://localhost:6379/0",
+            id="no-password-unchanged",
+        ),
+    ],
+)
+def test_redact_url(raw: str, expected: str) -> None:
+    """The password must never reach a log line; a URL without one is verbatim."""
     broker = RedisEventBroker("redis://localhost:6379/0")
-    assert broker._redact_url("redis://:secret@localhost:6379/0") == "redis://:****@localhost:6379/0"
-
-
-def test_redact_url_masks_password_with_username() -> None:
-    broker = RedisEventBroker("redis://localhost:6379/0")
-    assert broker._redact_url("redis://user:secret@localhost:6379/0") == "redis://user:****@localhost:6379/0"
-
-
-def test_redact_url_without_password_is_unchanged() -> None:
-    broker = RedisEventBroker("redis://localhost:6379/0")
-    assert broker._redact_url("redis://localhost:6379/0") == "redis://localhost:6379/0"
+    assert broker._redact_url(raw) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +109,8 @@ async def test_publish_sends_json_to_correct_channel(broker: RedisEventBroker, m
     mock_redis.publish.assert_awaited_once_with(f"{CHANNEL_PREFIX}run:abc", expected_data)
 
 
-async def test_publish_auto_connects_when_already_connected() -> None:
+async def test_publish_does_not_reconnect_when_already_connected() -> None:
+    """A live _pub means no implicit connect() — the Redis leg stays cheap."""
     broker = RedisEventBroker("redis://test:6379/0")
     broker._pub = AsyncMock()
     broker._sub = MagicMock()
@@ -312,24 +326,41 @@ async def test_connect_race_closes_duplicate_clients() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _blocking_method(started: asyncio.Event) -> Callable[..., Awaitable[None]]:
+    """An async stand-in that signals *started* and then blocks forever."""
+
+    async def _block(*_args: object, **_kwargs: object) -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    return _block
+
+
+async def _cancel_during(
+    started: asyncio.Event, start: Callable[[], Coroutine[Any, Any, object]]
+) -> asyncio.Task[object]:
+    """Start *start*() as a task, wait for *started*, then cancel it.
+
+    Returns the cancelled task so the caller can assert the CancelledError
+    propagates and that no cleanup ran.
+    """
+    task = asyncio.create_task(start())
+    await started.wait()
+    task.cancel()
+    return task
+
+
 async def test_publish_reraises_cancellation_without_clearing_connection() -> None:
     """A cancelled publish must leave the connection intact."""
     broker = RedisEventBroker("redis://test:6379/0")
     started = asyncio.Event()
     client = MagicMock(spec=["publish", "close"])
-
-    async def _blocking_publish(*_args: object, **_kwargs: object) -> None:
-        started.set()
-        await asyncio.Event().wait()
-
-    client.publish = _blocking_publish
+    client.publish = _blocking_method(started)
     client.close = AsyncMock()
     broker._pub = client
     broker._sub = MagicMock()
 
-    task = asyncio.create_task(broker.publish("run:abc", {"event": "test"}))
-    await started.wait()
-    task.cancel()
+    task = await _cancel_during(started, lambda: broker.publish("run:abc", {"event": "test"}))
     with pytest.raises(asyncio.CancelledError):
         await task
 
@@ -343,20 +374,13 @@ async def test_subscribe_reraises_cancellation_without_clearing_connection() -> 
     started = asyncio.Event()
     client = MagicMock(spec=["publish", "close", "pubsub"])
     mock_pubsub = MagicMock()
-
-    async def _blocking_subscribe(*_args: object, **_kwargs: object) -> None:
-        started.set()
-        await asyncio.Event().wait()
-
-    mock_pubsub.subscribe = _blocking_subscribe
+    mock_pubsub.subscribe = _blocking_method(started)
     client.pubsub.return_value = mock_pubsub
     client.close = AsyncMock()
     broker._pub = MagicMock()
     broker._sub = client
 
-    task = asyncio.create_task(broker.subscribe("run:xyz"))
-    await started.wait()
-    task.cancel()
+    task = await _cancel_during(started, lambda: broker.subscribe("run:xyz"))
     with pytest.raises(asyncio.CancelledError):
         await task
 
@@ -434,18 +458,11 @@ async def test_publish_reraises_cancellation_during_error_cleanup() -> None:
     client = MagicMock(spec=["publish", "close"])
     client.publish = AsyncMock(side_effect=ConnectionError("Redis connection lost"))
     cleanup_started = asyncio.Event()
-
-    async def blocking_close(*_args: object, **_kwargs: object) -> None:
-        cleanup_started.set()
-        await asyncio.Event().wait()
-
-    client.close = blocking_close
+    client.close = _blocking_method(cleanup_started)
     broker._pub = client
     broker._sub = MagicMock()
 
-    task = asyncio.create_task(broker.publish("run:abc", {"event": "test"}))
-    await cleanup_started.wait()
-    task.cancel()
+    task = await _cancel_during(cleanup_started, lambda: broker.publish("run:abc", {"event": "test"}))
     with pytest.raises(asyncio.CancelledError):
         await task
 
@@ -458,18 +475,11 @@ async def test_subscribe_reraises_cancellation_during_error_cleanup() -> None:
     client = MagicMock(spec=["publish", "close", "pubsub"])
     client.pubsub.return_value = MagicMock(subscribe=AsyncMock(side_effect=ConnectionError("lost")))
     cleanup_started = asyncio.Event()
-
-    async def blocking_close(*_args: object, **_kwargs: object) -> None:
-        cleanup_started.set()
-        await asyncio.Event().wait()
-
-    client.close = blocking_close
+    client.close = _blocking_method(cleanup_started)
     broker._pub = MagicMock()
     broker._sub = client
 
-    task = asyncio.create_task(broker.subscribe("run:xyz"))
-    await cleanup_started.wait()
-    task.cancel()
+    task = await _cancel_during(cleanup_started, lambda: broker.subscribe("run:xyz"))
     with pytest.raises(asyncio.CancelledError):
         await task
 
@@ -481,18 +491,11 @@ async def test_close_reraises_cancellation_during_pub_close() -> None:
     broker = RedisEventBroker("redis://test:6379/0")
     started = asyncio.Event()
     pub = MagicMock(spec=["publish", "close"])
-
-    async def blocking_close(*_args: object, **_kwargs: object) -> None:
-        started.set()
-        await asyncio.Event().wait()
-
-    pub.close = blocking_close
+    pub.close = _blocking_method(started)
     broker._pub = pub
     broker._sub = None
 
-    task = asyncio.create_task(broker.close())
-    await started.wait()
-    task.cancel()
+    task = await _cancel_during(started, broker.close)
     with pytest.raises(asyncio.CancelledError):
         await task
 
@@ -502,18 +505,11 @@ async def test_close_reraises_cancellation_during_sub_close() -> None:
     broker = RedisEventBroker("redis://test:6379/0")
     started = asyncio.Event()
     sub = MagicMock(spec=["publish", "close"])
-
-    async def blocking_close(*_args: object, **_kwargs: object) -> None:
-        started.set()
-        await asyncio.Event().wait()
-
-    sub.close = blocking_close
+    sub.close = _blocking_method(started)
     broker._pub = None
     broker._sub = sub
 
-    task = asyncio.create_task(broker.close())
-    await started.wait()
-    task.cancel()
+    task = await _cancel_during(started, broker.close)
     with pytest.raises(asyncio.CancelledError):
         await task
 

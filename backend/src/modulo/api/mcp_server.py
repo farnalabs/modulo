@@ -3616,6 +3616,11 @@ async def query_analytics_concurrency(
     description="Get the full graph (nodes + edges) of a pipeline by ID. "
     "Returns nodes with their configuration (agent_prompt, agent_commands, template_id, timeout_seconds, etc.) "
     "and edges with their source/target/type. "
+    "Secret-bearing node fields (env_vars, context_files, composite_parameter_values, "
+    "parameter_overrides) are masked as \u2022\u2022\u2022\u2022\u2022\u2022 here; those masked values are "
+    "safe to send back unchanged to update_pipeline_graph, which resolves them to the "
+    "stored secrets rather than overwriting them — so a graph containing secrets can be "
+    "read, edited and written back. "
     "For pipelines that use sandbox_agent nodes, this is how you read the current agent_commands before modifying it.",
 )
 @_RETRY_DB
@@ -4116,7 +4121,23 @@ async def _update_pipeline_graph_impl(
     "HITL gates (node hitl_config or edge hitl_review_config) must carry a human-provided "
     "description (min 20 chars) explaining why the gate exists; a graph write whose "
     "gates lack one is rejected with validation_failed (FAR-613: the MCP path enforces "
-    "the HITL description rule specifically). Returns the updated graph."
+    "the HITL description rule specifically). "
+    "Redacted secret values round-trip safely: the credential-bearing node fields "
+    "(env_vars, context_files, composite_parameter_values, parameter_overrides) are rendered "
+    "as \u2022\u2022\u2022\u2022\u2022\u2022 on read, and a masked value you re-send is resolved back to the "
+    "stored secret before the write persists — you CAN update a graph that contains secrets "
+    "without re-entering them. Resolution is per node, matched by the node's unchanged id: a "
+    "masked echo is only resolved against the stored node with the same id, so a re-id'd "
+    "node's masked values are dropped rather than restored. Only a new, non-masked value "
+    "overwrites a stored secret; omitting the field drops it, so re-send masked values "
+    "unchanged rather than dropping them. "
+    "EXPERIMENTAL (FAR-1743 / ADR 037): a "
+    "sandbox_agent node may set `model_class` (a registry capability class such as "
+    "'builder', resolved to a concrete model id at snapshot mint and consumed via the "
+    "top-level `{{ model }}` template variable, e.g. `--model {{ model }}`); the field, "
+    "the template variable, and the baked `_resolved_model` / `_model_origin` metadata "
+    "are all experimental and may change before de-experimentalisation. Returns the "
+    "updated graph."
 )
 @mcp_audited("pipeline_graph_updated", "pipeline", fail_closed=False)
 @_RETRY_DB
@@ -8214,16 +8235,42 @@ async def list_connector_types() -> dict[str, Any]:
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("list_connector_types")
 
-        from modulo.connectors.base import ConnectorType
+        # FAR-1772: advertise the hub-BUILDABLE catalogue — the same set
+        # ``GET /api/v1/connectors/types`` offers (FAR-1764, the shared
+        # ``buildable_connector_type_ids()`` helper). The raw ``ConnectorType``
+        # enum also contains the abstract labels ``ci-runner`` / ``custom``
+        # that ``_build_connector`` cannot instantiate, and omits the hub-native
+        # CI-runner ids ``github_actions_ci`` / ``gitlab_ci``.
+        from modulo.connectors.base import (
+            CI_RUNNER_CAPABILITIES,
+            ConnectorType,
+            connector_type_supports_dispatch,
+        )
+        from modulo.core.connector_hub import buildable_connector_type_ids
+
+        buildable = buildable_connector_type_ids()
+        # Ordering mirrors the REST route: enum declaration order first, then
+        # hub-native/plugin ids alphabetically.
+        ordered: list[str] = [t.value for t in ConnectorType if t.value in buildable]
+        ordered += sorted(buildable - set(ordered))
 
         items: list[dict[str, Any]] = []
-        for t in ConnectorType:
+        for type_id in ordered:
+            try:
+                capabilities = sorted(c.value for c in ConnectorType(type_id).capabilities)
+            except ValueError:
+                # Hub-native CI-runner ids (github_actions_ci / gitlab_ci)
+                # implement the CI-runner capability contract; plugin-
+                # registered types are not introspectable here (empty list).
+                capabilities = (
+                    sorted(c.value for c in CI_RUNNER_CAPABILITIES) if connector_type_supports_dispatch(type_id) else []
+                )
             item: dict[str, Any] = {
-                "id": t.value,
-                "name": t.value.replace("_", " ").title(),
-                "capabilities": sorted(c.value for c in t.capabilities),
+                "id": type_id,
+                "name": type_id.replace("_", " ").title(),
+                "capabilities": capabilities,
             }
-            metadata = _connector_type_field_metadata(t.value)
+            metadata = _connector_type_field_metadata(type_id)
             if metadata is not None:
                 item["credential_fields"] = metadata["credential_fields"]
                 item["config_fields"] = metadata["config_fields"]
