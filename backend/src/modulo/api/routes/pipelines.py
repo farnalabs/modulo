@@ -3280,6 +3280,7 @@ async def replace_pipeline_graph_endpoint(
                 is_guardrail_admin=_is_guardrail_admin(principal),
                 grants_deny_privilege=_grants_deny_privilege(principal),
                 grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
+                record_edit_snapshot=True,
             )
             if graph is not None:
                 # FAR-488a: keep the bound Agent rows in step with node-level
@@ -3641,6 +3642,7 @@ async def _apply_graph_update(
         is_guardrail_admin=_is_guardrail_admin(principal),
         grants_deny_privilege=_grants_deny_privilege(principal),
         grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
+        record_edit_snapshot=True,
     )
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
@@ -5652,6 +5654,7 @@ async def _save_locked_graph(
         is_guardrail_admin=_is_guardrail_admin(principal),
         grants_deny_privilege=_grants_deny_privilege(principal),
         grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
+        record_edit_snapshot=True,
     )
     if graph is None:
         return None
@@ -6000,13 +6003,17 @@ async def _save_graph(
     is_guardrail_admin: bool = False,
     grants_deny_privilege: bool = False,
     grants_deny_guardrail_admin: bool = False,
+    record_edit_snapshot: bool = False,
 ) -> tuple[list[dict[str, Any]], list[Any]] | None:
     """Persist updated nodes + edges via replace_pipeline_graph.
 
     Accepts edges as either ORM model instances (PipelineEdge) or plain dicts.
     Forwards is_privileged + caller_type + account_id + is_guardrail_admin to
     the underlying graph write (ADR 047 backstop /
-    hitl-gate-removal-guard-plan.md v19 / FAR-309 PR A review).
+    hitl-gate-removal-guard-plan.md v19 / FAR-309 PR A review). Node-conversion
+    saves pass ``record_edit_snapshot=True`` (FAR-1810) so a conversion — a
+    deliberate graph edit — records an edit snapshot like the sibling
+    graph-write endpoints.
     """
     edge_dicts = [_edge_to_dict(e) if hasattr(e, "source_node_id") else dict(e) for e in edges]
     graph = await replace_pipeline_graph(
@@ -6021,6 +6028,7 @@ async def _save_graph(
         is_guardrail_admin=is_guardrail_admin,
         grants_deny_privilege=grants_deny_privilege,
         grants_deny_guardrail_admin=grants_deny_guardrail_admin,
+        record_edit_snapshot=record_edit_snapshot,
     )
     if graph is not None:
         # FAR-488a: node-conversion saves go through here too — keep the same

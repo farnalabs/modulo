@@ -3960,6 +3960,9 @@ async def _replace_pipeline_graph_txn(
             caller_type="mcp",
             account_id=graph_account_id,
             is_guardrail_admin=is_guardrail_admin,
+            # FAR-1810: an MCP graph update is an explicit save — it records an
+            # immutable edit snapshot like the REST graph-write endpoints.
+            record_edit_snapshot=True,
         )
         if result is None:
             return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
@@ -4412,6 +4415,9 @@ async def bind_connector_to_node(
             # validator enforces also holds on this write path.
             from modulo.connectors.base import connector_type_supports_dispatch
 
+            # FAR-1810: capture the pre-bind node payload for no-op suppression
+            # (a re-bind that changes nothing must not push a snapshot).
+            previous_nodes = list(pipeline.graph_nodes_json or [])
             bind_error = _apply_node_connector_binding(
                 pipeline,
                 nid,
@@ -4425,6 +4431,28 @@ async def bind_connector_to_node(
             if bind_error is not None:
                 return bind_error
             await s.flush()
+
+            # FAR-1810: a connector bind mutates node binding state in the graph,
+            # so it records an edit snapshot in the SAME transaction — the bind is
+            # a real graph edit and must be restorable. The pipeline row is held
+            # FOR UPDATE, so the snapshot's allocation lock is self-reentrant (see
+            # ``_acquire_snapshot_allocation_lock``). Fail closed: a snapshot error
+            # propagates to the handler's error envelope and rolls the bind back.
+            from modulo.db.crud.pipeline import _graph_content_unchanged
+            from modulo.db.crud.pipeline_snapshot import create_snapshot_edit
+
+            if not _graph_content_unchanged(previous_nodes, [], list(pipeline.graph_nodes_json or []), []):
+                snapshot = await create_snapshot_edit(s, pipeline_id=pid, account_id=_ctx_user_id.get(None))
+                if snapshot is None:
+                    raise RuntimeError(
+                        f"connector bind on pipeline {pid} could not record its edit snapshot; "
+                        "refusing to commit an unversioned graph write"
+                    )
+                _log.info(
+                    "pipeline.connector_bind_snapshot_created pipeline_id=%s snapshot_version=%s",
+                    pid,
+                    snapshot.snapshot_version,
+                )
 
         response: dict[str, Any] = {
             "pipeline_id": pipeline_id,
