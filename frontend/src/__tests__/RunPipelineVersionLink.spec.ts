@@ -109,4 +109,15 @@ describe('RunPipelineVersionLink (FAR-1813)', () => {
     expect(wrapper.find('a').text()).toBe('Data Sync')
     wrapper.unmount()
   })
+
+  it('renders the pipeline name as plain content (no slot) when there is no link target', async () => {
+    // The v-else branch's <slot> fallback only runs when NO caller slot is
+    // supplied — the link-branch tests always pass explicit slot text, and the
+    // no-slot label test only exercises the v-if branch, leaving this fallback
+    // uncovered (FAR-1813 changed-lines coverage gate).
+    const wrapper = await mountLink({ pipelineId: null, pipelineName: 'Data Sync', snapshotId: 'snap-42' })
+    expect(wrapper.find('a').exists()).toBe(false)
+    expect(wrapper.find('span').text()).toBe('Data Sync')
+    wrapper.unmount()
+  })
 })
