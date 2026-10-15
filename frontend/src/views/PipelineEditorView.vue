@@ -1823,7 +1823,7 @@ function nextFrame(): Promise<void> {
   })
 }
 async function runInitialFitView() {
-  if (initialFitDone || flowNodes.value.length === 0) return
+  if (initialFitDone || displayNodes.value.length === 0) return
   await nextTick()
   await nextFrame()
   try {
@@ -3788,10 +3788,24 @@ watch(
     viewFlowNodes.value = []
     viewFlowEdges.value = []
     versionDetailStatus.value = id ? 'loading' : 'idle'
+    // The canvas graph changes identity across this transition, so any open
+    // inspector selection refers to the WRONG graph — drop it rather than
+    // showing one graph's node config while the other renders (pane-click's
+    // cleanup also resets the param-set / overrides buffers).
+    onPaneClick()
     if (id) void loadViewedSnapshot(id)
   },
   { immediate: true },
 )
+
+// The initial-fit latch is per-graph-source: entering/leaving (or switching)
+// a version replaces every canvas node, so re-fit the new graph once it has
+// landed. Latest-mode edits keep today's behaviour (no re-fit on addNode).
+watch([isViewing, resolvedSnapshotId], async () => {
+  initialFitDone = false
+  await nextTick()
+  void runInitialFitView()
+})
 
 function versionParamsExceptSnapshot(): LocationQueryRaw {
   const out: LocationQueryRaw = {}

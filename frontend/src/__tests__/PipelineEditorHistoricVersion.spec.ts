@@ -464,11 +464,19 @@ describe('PipelineEditorView — historic version view (FAR-1812)', () => {
     const vm = wrapper.vm as any
     expect(vm.isViewing).toBe(false)
 
+    // A node selected in the live graph must not survive the transition — the
+    // inspector would otherwise show the LIVE config while the frozen graph
+    // renders on the canvas.
+    vm.onNodeClick({ node: { id: LIVE_NODE_ID } })
+    await nextTick()
+    expect(vm.selectedNodeData).not.toBeNull()
+
     // Enter the historic view — what the timeline's View action navigates to.
     sharedRoute.query = { snapshot: 'snap-4' }
     await flushPromises()
     await nextTick()
     expect(vm.isViewing).toBe(true)
+    expect(vm.selectedNodeData).toBeNull()
     expect(wrapper.find('[data-testid="pipeline-editor-historic-banner"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="pipeline-editor-save"]').exists()).toBe(false)
 
