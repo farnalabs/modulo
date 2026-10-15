@@ -3,8 +3,10 @@
 Structural contract (no Postgres needed):
 
 * **Revision chain** — 0115 revises ``0114_org_api_keys_run_id``; the tree has
-  exactly one head (``0312_memberships_active_lookups``, pinned by the sibling
-  chain tests); the revision id matches the filename; no branch labels.
+  exactly one head and 0115 is on that chain. 0115 is mid-chain, so the tip
+  legitimately moves as later migrations land on top; the exact head is pinned
+  by the sibling chain tests, not here. The revision id matches the filename;
+  no branch labels.
 * **Upgrade (mocked ``op``)** — creates ``notification_preferences`` with the
   org/account/category unique constraint and a ``String(100)`` category (NO
   CHECK — the vocabulary is code-driven), then — on Postgres — runs the 0066
@@ -33,7 +35,6 @@ from modulo.db.models.notification import NotificationPreference
 
 _MIGRATION_REVISION = "0115_notification_preferences"
 _MIGRATION_DOWN_REVISION = "0114_org_api_keys_run_id"
-_HEAD_MIGRATION = "0312_memberships_active_lookups"
 
 _UNIQUE_NAME = "uq_notification_preferences_org_account_category"
 
@@ -126,9 +127,16 @@ def _table_args(rec: _Recorder) -> tuple[object, ...]:
 
 
 class TestChain:
-    def test_single_head_is_0312_memberships_active_lookups(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
+    def test_single_head_and_this_migration_is_an_ancestor(self) -> None:
+        # 0115 is mid-chain: the tip moves as later migrations land on top (a
+        # sibling migration may become the head at any time). The invariant
+        # this test owns is that the chain still has exactly ONE head and that
+        # 0115 is on it — not the identity of the tip.
+        script = ScriptDirectory(str(_VERSIONS.parent))
+        heads = script.get_heads()
+        assert len(heads) == 1, f"expected a single head, got {heads}"
+        revisions = {rev.revision for rev in script.walk_revisions()}
+        assert _MIGRATION_REVISION in revisions, f"{_MIGRATION_REVISION} is not on the migration chain"
 
     def test_down_revision_is_0114_org_api_keys_run_id(self) -> None:
         assert _load_migration().down_revision == _MIGRATION_DOWN_REVISION
