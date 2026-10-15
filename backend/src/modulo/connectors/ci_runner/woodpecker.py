@@ -52,7 +52,6 @@ double-prefixed.
 from __future__ import annotations
 
 import base64
-import binascii
 import logging
 import re
 from collections.abc import Sequence
@@ -190,6 +189,28 @@ def _epoch_iso(value: object) -> str:
         return ""
 
 
+def _workflow_steps(workflow: dict[str, Any]) -> list[tuple[int, str]]:
+    """Extract ``(step_id, step_name)`` pairs from one workflow's ``children``.
+
+    A malformed child (not an object, or carrying no usable ``id``) is skipped
+    with a warning rather than crashing the whole log read.
+    """
+    children = workflow.get("children")
+    if not isinstance(children, list):
+        return []
+    steps: list[tuple[int, str]] = []
+    for step in children:
+        if not isinstance(step, dict):
+            continue
+        step_id = _safe_int(step.get("id"))
+        if step_id <= 0:
+            logger.warning("Skipping step with missing/invalid id in pipeline payload: %r", step.get("id"))
+            continue
+        name = step.get("name")
+        steps.append((step_id, str(name) if name else str(step_id)))
+    return steps
+
+
 def _step_tree(pipeline: object) -> list[tuple[int, str]]:
     """Extract ``(step_id, step_name)`` pairs from a pipeline payload.
 
@@ -205,20 +226,8 @@ def _step_tree(pipeline: object) -> list[tuple[int, str]]:
         return []
     steps: list[tuple[int, str]] = []
     for workflow in workflows:
-        if not isinstance(workflow, dict):
-            continue
-        children = workflow.get("children")
-        if not isinstance(children, list):
-            continue
-        for step in children:
-            if not isinstance(step, dict):
-                continue
-            step_id = _safe_int(step.get("id"))
-            if step_id <= 0:
-                logger.warning("Skipping step with missing/invalid id in pipeline payload: %r", step.get("id"))
-                continue
-            name = step.get("name")
-            steps.append((step_id, str(name) if name else str(step_id)))
+        if isinstance(workflow, dict):
+            steps.extend(_workflow_steps(workflow))
     return steps
 
 
@@ -242,7 +251,9 @@ def _decode_entry(entry: object) -> list[str]:
         return []
     try:
         text = base64.b64decode(data).decode("utf-8", errors="replace")
-    except (binascii.Error, ValueError):
+    except ValueError:
+        # ``binascii.Error`` (raised for invalid base64) is a ``ValueError``
+        # subclass, so this single handler covers both decode failures.
         logger.warning("Skipping log entry with undecodable base64 data (type=%s)", entry_type)
         return []
     text = text.rstrip("\r\n")

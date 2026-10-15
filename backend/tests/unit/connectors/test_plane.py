@@ -338,3 +338,78 @@ def test_retry_delay_prefers_retry_after_then_backoff() -> None:
     assert plane_mod._retry_delay(0, with_retry) == 5.0
     assert plane_mod._retry_delay(0, httpx.Response(503)) == plane_mod._backoff_delay(0)
     assert plane_mod._retry_delay(0, None) == plane_mod._backoff_delay(0)
+
+
+# ---------------------------------------------------------------------------
+# Degenerate bodies, un-hinted statuses, transport errors, guards
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_health_check_transport_error(plane: PlaneConnector) -> None:
+    respx.get(PROJECTS).mock(side_effect=httpx.ConnectError("no route"))
+    result = await plane.health_check()
+    assert result.ok is False
+    assert "HTTP error" in result.detail
+
+
+@respx.mock
+async def test_query_422_reports_status_without_a_hint(plane: PlaneConnector) -> None:
+    """A status with no curated hint still surfaces the status + redacted body."""
+    respx.get(PROJECTS).mock(return_value=httpx.Response(422, text="unprocessable"))
+    with pytest.raises(ValueError, match=r"Plane API error \(422\): unprocessable"):
+        await plane.query(ConnectorQuery(resource="projects"))
+
+
+@respx.mock
+async def test_query_projects_accepts_a_bare_list_body(plane: PlaneConnector) -> None:
+    """A list body is a valid page (non-object records are dropped)."""
+    respx.get(PROJECTS).mock(return_value=httpx.Response(200, json=[{"id": "1"}, "not-a-dict", {"id": "2"}]))
+    result = await plane.query(ConnectorQuery(resource="projects"))
+    assert [record["id"] for record in result.records] == ["1", "2"]
+    assert result.total == 2
+
+
+@respx.mock
+async def test_query_projects_scalar_body_returns_empty(plane: PlaneConnector) -> None:
+    respx.get(PROJECTS).mock(return_value=httpx.Response(200, json="unexpected"))
+    result = await plane.query(ConnectorQuery(resource="projects"))
+    assert not result.records
+    assert result.total is None
+
+
+@respx.mock
+async def test_list_params_omits_per_page_when_limit_is_zero(plane: PlaneConnector) -> None:
+    """A zero limit is falsy — it is not sent as ``per_page=0``."""
+    route = respx.get(PROJECTS).mock(return_value=httpx.Response(200, json=_ENVELOPE))
+    await plane.query(ConnectorQuery(resource="projects", limit=0))
+    assert "per_page" not in route.calls[0].request.url.params
+
+
+@respx.mock
+async def test_write_create_non_object_body_fails_loud(plane: PlaneConnector) -> None:
+    respx.post(f"{WS}/projects/{PROJECT_ID}/work-items/").mock(return_value=httpx.Response(201, json=[1, 2]))
+    with pytest.raises(ValueError, match="non-object body creating a work item"):
+        await plane.write(ConnectorPayload(resource="work_item", data={"project_id": PROJECT_ID, "name": "x"}))
+
+
+@respx.mock
+async def test_write_update_non_object_body_fails_loud(plane: PlaneConnector) -> None:
+    respx.patch(f"{WS}/projects/{PROJECT_ID}/work-items/{ITEM_ID}/").mock(return_value=httpx.Response(200, json=[1, 2]))
+    with pytest.raises(ValueError, match="non-object body updating a work item"):
+        await plane.write(
+            ConnectorPayload(
+                resource="work_item_update",
+                data={"project_id": PROJECT_ID, "work_item_id": ITEM_ID, "name": "x"},
+            ),
+        )
+
+
+async def test_request_exhausted_retry_budget_guard(
+    plane: PlaneConnector,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The loop's fall-through guard fails loud if the retry budget ever hit zero."""
+    monkeypatch.setattr(plane_mod, "_MAX_RETRIES", -1)
+    with pytest.raises(ValueError, match="exhausted its retry budget"):
+        await plane.query(ConnectorQuery(resource="projects"))

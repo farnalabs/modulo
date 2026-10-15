@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from typing import Any
 
 import httpx
@@ -20,8 +21,11 @@ import respx
 from modulo.connectors.base import CIRunStatus, ConnectorType
 from modulo.connectors.ci_runner.woodpecker import (
     WoodpeckerCIRunner,
+    _decode_entry,
+    _epoch_iso,
     _resolve_api_base,
     _split_run_id,
+    _step_tree,
     _WoodpeckerTestDouble,
 )
 
@@ -489,3 +493,252 @@ async def test_double_round_trips_through_the_real_parser(
 async def test_double_health_check_is_ok(double: _WoodpeckerTestDouble) -> None:
     result = await double.health_check()
     assert result.ok is True
+
+
+# ---------------------------------------------------------------------------
+# Payload parsers: malformed input degrades to empty, never crashes
+# ---------------------------------------------------------------------------
+
+
+def test_epoch_iso_handles_absent_and_out_of_range() -> None:
+    assert not _epoch_iso(0)
+    assert not _epoch_iso("not-a-number")
+    # A timestamp outside datetime's representable range degrades to "" rather
+    # than raising (OverflowError/OSError/ValueError are all swallowed).
+    assert not _epoch_iso(10**18)
+
+
+def test_step_tree_ignores_malformed_payloads() -> None:
+    assert not _step_tree("not-a-dict")
+    assert not _step_tree({"workflows": "not-a-list"})
+    assert not _step_tree({"workflows": ["not-a-dict"]})
+    assert not _step_tree({"workflows": [{"children": "not-a-list"}]})
+    # a child that is not an object is skipped
+    assert not _step_tree({"workflows": [{"children": ["not-a-dict"]}]})
+    # a child with no usable id is skipped (missing id and id <= 0)
+    assert not _step_tree({"workflows": [{"children": [{"name": "no-id"}, {"id": 0, "name": "zero"}]}]})
+    # valid children are kept; a nameless step falls back to its id
+    assert _step_tree({"workflows": [{"children": [{"id": 3}, {"id": 4, "name": "build"}]}]}) == [
+        (3, "3"),
+        (4, "build"),
+    ]
+
+
+def test_decode_entry_ignores_malformed_entries() -> None:
+    assert not _decode_entry("not-a-dict")
+    assert not _decode_entry({"type": 0})  # no data
+    assert not _decode_entry({"type": 0, "data": ""})
+    assert not _decode_entry({"type": 0, "data": 123})
+    # invalid base64 is skipped; binascii.Error is a ValueError subclass
+    assert not _decode_entry({"type": 0, "data": "A"})
+
+
+# ---------------------------------------------------------------------------
+# Lookup + pipeline read failures
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_lookup_repo_error_status_fails_loud(runner: WoodpeckerCIRunner) -> None:
+    respx.get(f"{API}/repos/lookup/acme/widget").mock(return_value=httpx.Response(500, text="boom"))
+    with pytest.raises(ValueError, match=r"Woodpecker API error \(500\)"):
+        await runner.get_run_status("acme/widget/42")
+
+
+@respx.mock
+async def test_lookup_repo_non_json_body_fails_loud(runner: WoodpeckerCIRunner) -> None:
+    respx.get(f"{API}/repos/lookup/acme/widget").mock(return_value=httpx.Response(200, text="not json"))
+    with pytest.raises(ValueError, match="non-JSON body resolving repository"):
+        await runner.get_run_status("acme/widget/42")
+
+
+@respx.mock
+async def test_lookup_repo_non_object_body_fails_loud(runner: WoodpeckerCIRunner) -> None:
+    respx.get(f"{API}/repos/lookup/acme/widget").mock(return_value=httpx.Response(200, json=[1, 2]))
+    with pytest.raises(ValueError, match="non-object body resolving repository"):
+        await runner.get_run_status("acme/widget/42")
+
+
+@respx.mock
+async def test_repo_id_missing_fails_loud(runner: WoodpeckerCIRunner) -> None:
+    respx.get(f"{API}/repos/lookup/acme/widget").mock(return_value=httpx.Response(200, json={"slug": "acme/widget"}))
+    with pytest.raises(ValueError, match="no usable repository id"):
+        await runner.get_run_status("acme/widget/42")
+
+
+@respx.mock
+async def test_get_pipeline_non_object_body_fails_loud(runner: WoodpeckerCIRunner) -> None:
+    _mock_lookup()
+    respx.get(f"{API}/repos/7/pipelines/42").mock(return_value=httpx.Response(200, json=[1, 2]))
+    with pytest.raises(ValueError, match="non-object pipeline body"):
+        await runner.get_run_status("acme/widget/42")
+
+
+# ---------------------------------------------------------------------------
+# Transport / HTTP-status failure paths
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_health_check_transport_error(runner: WoodpeckerCIRunner) -> None:
+    respx.get(f"{API}/user").mock(side_effect=httpx.ConnectError("no route"))
+    result = await runner.health_check()
+    assert result.ok is False
+    assert "HTTP error" in result.detail
+
+
+@respx.mock
+async def test_trigger_run_non_object_body_fails_loud(runner: WoodpeckerCIRunner) -> None:
+    _mock_lookup()
+    respx.post(f"{API}/repos/7/pipelines").mock(return_value=httpx.Response(200, json=[1, 2]))
+    with pytest.raises(ValueError, match="non-object pipeline body"):
+        await runner.trigger_run(pipeline_id="acme/widget", branch="main")
+
+
+@respx.mock
+async def test_trigger_run_http_status_error_fails_loud(runner: WoodpeckerCIRunner) -> None:
+    _mock_lookup()
+    respx.post(f"{API}/repos/7/pipelines").mock(return_value=httpx.Response(500, text="boom"))
+    with pytest.raises(ValueError, match=r"Woodpecker API error \(500\)"):
+        await runner.trigger_run(pipeline_id="acme/widget", branch="main")
+
+
+@respx.mock
+async def test_trigger_run_transport_error_fails_loud(runner: WoodpeckerCIRunner) -> None:
+    respx.get(f"{API}/repos/lookup/acme/widget").mock(side_effect=httpx.ConnectError("no route"))
+    with pytest.raises(ValueError, match="connection error"):
+        await runner.trigger_run(pipeline_id="acme/widget", branch="main")
+
+
+@respx.mock
+async def test_get_run_status_http_status_error_fails_loud(runner: WoodpeckerCIRunner) -> None:
+    _mock_lookup()
+    respx.get(f"{API}/repos/7/pipelines/42").mock(return_value=httpx.Response(500, text="boom"))
+    with pytest.raises(ValueError, match=r"Woodpecker API error \(500\)"):
+        await runner.get_run_status("acme/widget/42")
+
+
+@respx.mock
+async def test_get_run_status_transport_error_fails_loud(runner: WoodpeckerCIRunner) -> None:
+    respx.get(f"{API}/repos/lookup/acme/widget").mock(side_effect=httpx.ConnectError("no route"))
+    with pytest.raises(ValueError, match="connection error"):
+        await runner.get_run_status("acme/widget/42")
+
+
+@respx.mock
+async def test_get_run_logs_terminal_pipeline_without_steps_logs_a_warning(
+    runner: WoodpeckerCIRunner,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A terminal pipeline with no workflow tree is an unexpected shape (warned)."""
+    _mock_lookup()
+    respx.get(f"{API}/repos/7/pipelines/42").mock(
+        return_value=httpx.Response(200, json=_pipeline_payload(status="success")),
+    )
+    with caplog.at_level(logging.WARNING):
+        logs = await runner.get_run_logs("acme/widget/42")
+
+    assert not logs.lines
+    assert any("carries no workflow/step tree" in record.message for record in caplog.records)
+
+
+@respx.mock
+async def test_get_run_logs_non_json_step_body_marks_truncated(runner: WoodpeckerCIRunner) -> None:
+    _mock_lookup()
+    respx.get(f"{API}/repos/7/pipelines/42").mock(
+        return_value=httpx.Response(
+            200,
+            json=_pipeline_payload(
+                status="success",
+                workflows=[{"id": 1, "children": [{"id": 11, "name": "ok"}, {"id": 22, "name": "bad"}]}],
+            ),
+        ),
+    )
+    respx.get(f"{API}/repos/7/logs/42/11").mock(
+        return_value=httpx.Response(200, json=[{"line": 1, "data": _b64("kept"), "type": 0}]),
+    )
+    respx.get(f"{API}/repos/7/logs/42/22").mock(return_value=httpx.Response(200, text="<html>oops</html>"))
+
+    logs = await runner.get_run_logs("acme/widget/42")
+
+    assert "kept" in logs.lines
+    assert logs.truncated is True
+
+
+@respx.mock
+async def test_get_run_logs_http_status_error_fails_loud(runner: WoodpeckerCIRunner) -> None:
+    _mock_lookup()
+    respx.get(f"{API}/repos/7/pipelines/42").mock(return_value=httpx.Response(500, text="boom"))
+    with pytest.raises(ValueError, match=r"Woodpecker API error \(500\)"):
+        await runner.get_run_logs("acme/widget/42")
+
+
+@respx.mock
+async def test_get_run_logs_transport_error_fails_loud(runner: WoodpeckerCIRunner) -> None:
+    respx.get(f"{API}/repos/lookup/acme/widget").mock(side_effect=httpx.ConnectError("no route"))
+    with pytest.raises(ValueError, match="connection error"):
+        await runner.get_run_logs("acme/widget/42")
+
+
+@respx.mock
+async def test_list_runs_unknown_status_warns_and_lists_all(
+    runner: WoodpeckerCIRunner,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _mock_lookup()
+    route = respx.get(f"{API}/repos/7/pipelines").mock(return_value=httpx.Response(200, json=[]))
+    with caplog.at_level(logging.WARNING):
+        await runner.list_runs(pipeline_id="acme/widget", status=CIRunStatus.UNKNOWN)
+
+    assert "status" not in route.calls[0].request.url.params
+    assert any("UNKNOWN status" in record.message for record in caplog.records)
+
+
+@respx.mock
+async def test_list_runs_unmapped_status_warns_and_lists_all(
+    runner: WoodpeckerCIRunner,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _mock_lookup()
+    route = respx.get(f"{API}/repos/7/pipelines").mock(return_value=httpx.Response(200, json=[]))
+    with caplog.at_level(logging.WARNING):
+        await runner.list_runs(pipeline_id="acme/widget", status=CIRunStatus.TIMED_OUT)
+
+    assert "status" not in route.calls[0].request.url.params
+    assert any("No Woodpecker mapping" in record.message for record in caplog.records)
+
+
+@respx.mock
+async def test_list_runs_http_status_error_fails_loud(runner: WoodpeckerCIRunner) -> None:
+    _mock_lookup()
+    respx.get(f"{API}/repos/7/pipelines").mock(return_value=httpx.Response(500, text="boom"))
+    with pytest.raises(ValueError, match=r"Woodpecker API error \(500\)"):
+        await runner.list_runs(pipeline_id="acme/widget")
+
+
+@respx.mock
+async def test_list_runs_transport_error_fails_loud(runner: WoodpeckerCIRunner) -> None:
+    respx.get(f"{API}/repos/lookup/acme/widget").mock(side_effect=httpx.ConnectError("no route"))
+    with pytest.raises(ValueError, match="connection error"):
+        await runner.list_runs(pipeline_id="acme/widget")
+
+
+# ---------------------------------------------------------------------------
+# Test double: the HTTP-free paths
+# ---------------------------------------------------------------------------
+
+
+def test_double_client_is_unavailable(double: _WoodpeckerTestDouble) -> None:
+    with pytest.raises(RuntimeError, match="Test double has no HTTP client"):
+        double._client()
+
+
+async def test_double_status_and_logs_are_self_contained(double: _WoodpeckerTestDouble) -> None:
+    double._status = CIRunStatus.SUCCESS
+    status = await double.get_run_status("acme/widget/100")
+    assert status.id == "acme/widget/100"
+    assert status.pipeline_id == "acme/widget"
+    assert status.status == CIRunStatus.SUCCESS
+
+    logs = await double.get_run_logs("acme/widget/100")
+    assert logs.run_id == "acme/widget/100"
