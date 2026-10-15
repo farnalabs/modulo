@@ -2078,6 +2078,52 @@ def _graph_content_unchanged(
     )
 
 
+async def _record_edit_snapshot_if_needed(
+    session: AsyncSession,
+    *,
+    pipeline_id: uuid.UUID,
+    account_id: uuid.UUID | None,
+    previous_nodes: list[dict[str, Any]],
+    old_edges: list[dict[str, Any]],
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+) -> None:
+    """Record the FAR-1810 edit snapshot for an explicit graph save.
+
+    No-op suppression: a save whose incoming graph is semantically identical to
+    the live one (:func:`_graph_content_unchanged`) records no snapshot — this
+    caps save-driven volume and keeps "at rest the live graph equals the latest
+    snapshot" true. Fail closed: a snapshot that could not be allocated raises,
+    rolling the whole save back — a save that does not record history is a
+    broken save.
+
+    Extracted from :func:`replace_pipeline_graph` so that function's cognitive
+    complexity stays within budget; the row-lock/ordering context the caller
+    must hold is documented at the call site.
+    """
+    if _graph_content_unchanged(previous_nodes, old_edges, nodes, edges):
+        _log.info(
+            "pipeline.graph_edit_snapshot_suppressed pipeline_id=%s: incoming graph is unchanged",
+            pipeline_id,
+        )
+        return
+    snapshot = await create_snapshot_edit(session, pipeline_id=pipeline_id, account_id=account_id)
+    if snapshot is None:
+        # The caller holds the pipeline row under FOR UPDATE, so None here
+        # means the snapshot machinery could not allocate a version (e.g. the
+        # snapshot_version column is not migrated). Fail closed — a save that
+        # does not record history is a broken save.
+        raise RuntimeError(
+            f"graph save for pipeline {pipeline_id} could not record its edit snapshot; "
+            "refusing to commit an unversioned explicit save"
+        )
+    _log.info(
+        "pipeline.graph_edit_snapshot_created pipeline_id=%s snapshot_version=%s",
+        pipeline_id,
+        snapshot.snapshot_version,
+    )
+
+
 async def replace_pipeline_graph(
     session: AsyncSession,
     *,
@@ -2310,27 +2356,15 @@ async def replace_pipeline_graph(
     # this same session is self-reentrant under the held ``FOR UPDATE`` — no
     # wait, no cycle, identical to the rollback path's ordering.
     if record_edit_snapshot:
-        if _graph_content_unchanged(previous_nodes, old_edges, nodes, edges):
-            _log.info(
-                "pipeline.graph_edit_snapshot_suppressed pipeline_id=%s: incoming graph is unchanged",
-                pipeline_id,
-            )
-        else:
-            snapshot = await create_snapshot_edit(session, pipeline_id=pipeline_id, account_id=account_id)
-            if snapshot is None:
-                # The pipeline row is held under FOR UPDATE, so None here means
-                # the snapshot machinery could not allocate a version (e.g. the
-                # snapshot_version column is not migrated). Fail closed — a save
-                # that does not record history is a broken save.
-                raise RuntimeError(
-                    f"graph save for pipeline {pipeline_id} could not record its edit snapshot; "
-                    "refusing to commit an unversioned explicit save"
-                )
-            _log.info(
-                "pipeline.graph_edit_snapshot_created pipeline_id=%s snapshot_version=%s",
-                pipeline_id,
-                snapshot.snapshot_version,
-            )
+        await _record_edit_snapshot_if_needed(
+            session,
+            pipeline_id=pipeline_id,
+            account_id=account_id,
+            previous_nodes=previous_nodes,
+            old_edges=old_edges,
+            nodes=nodes,
+            edges=edges,
+        )
 
     return list(pipeline.graph_nodes_json), persisted_edges
 

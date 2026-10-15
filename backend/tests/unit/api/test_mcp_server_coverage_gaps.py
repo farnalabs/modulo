@@ -2019,6 +2019,85 @@ class TestSnapshotLockBusyIsRetryable(_AuthContext):
         assert "retry" in result["detail"].lower(), result
 
 
+class TestBindConnectorEditSnapshot(_AuthContext):
+    """FAR-1810: the connector-bind edit snapshot's no-op and fail-closed arms.
+
+    The happy-path mint is covered by ``test_team_binding_enforcement``; the two
+    branches below (a content-identical rebind records nothing, and an
+    unallocatable snapshot fails the bind closed) are the suppression and
+    fail-closed halves of the same contract.
+    """
+
+    async def _bind(self, pipeline: MagicMock, connector_instance_id: uuid.UUID, snap_return: Any) -> Any:
+        connector = MagicMock()
+        connector.organisation_id = _ORG_ID
+        connector.visibility = "org"
+        connector.owner_team_id = None
+        connector.connector_type_id = "github"
+        session = _mock_session()
+        session.execute.return_value = _make_execute_result(scalar_one_or_none=pipeline)
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch(
+                "modulo.db.crud.connector_instance.get_connector_instance",
+                new=AsyncMock(return_value=connector),
+            ),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
+            patch(
+                "modulo.db.crud.pipeline_snapshot.create_snapshot_edit",
+                new=AsyncMock(return_value=snap_return),
+            ) as snap_mock,
+        ):
+            result = await bind_connector_to_node(
+                pipeline_id=str(uuid.uuid4()),
+                node_id=str(pipeline.graph_nodes_json[0]["id"]),
+                connector_type="github",
+                connector_instance_id=str(connector_instance_id),
+            )
+        return result, snap_mock
+
+    async def test_identical_rebind_suppresses_edit_snapshot(self) -> None:
+        """A bind whose binding is already present leaves the graph unchanged,
+        so no edit snapshot is minted (no-op suppression)."""
+        connector_instance_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        pipeline = MagicMock()
+        pipeline.owner_team_id = None
+        pipeline.graph_nodes_json = [
+            {
+                "id": str(node_id),
+                "node_type": "connector",
+                "position": {"x": 0, "y": 0},
+                "label": "n",
+                "connector_binding": {
+                    "type": "github",
+                    "instance_id": str(connector_instance_id),
+                    "operation": "query",
+                },
+            }
+        ]
+
+        result, snap_mock = await self._bind(pipeline, connector_instance_id, AsyncMock(snapshot_version=1))
+
+        assert result["status"] == "bound", result
+        snap_mock.assert_not_awaited()
+
+    async def test_unallocatable_edit_snapshot_fails_closed(self) -> None:
+        """``create_snapshot_edit`` returning None rolls the bind back — the
+        generic error envelope, never a silent unversioned graph write."""
+        node_id = uuid.uuid4()
+        pipeline = MagicMock()
+        pipeline.owner_team_id = None
+        pipeline.graph_nodes_json = [
+            {"id": str(node_id), "node_type": "connector", "position": {"x": 0, "y": 0}, "label": "n"}
+        ]
+
+        result, snap_mock = await self._bind(pipeline, uuid.uuid4(), None)
+
+        assert result["error"] == "server_error", result
+        snap_mock.assert_awaited_once()
+
+
 # ---------------------------------------------------------------------------
 # trigger_pipeline paths
 # ---------------------------------------------------------------------------
