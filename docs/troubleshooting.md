@@ -48,7 +48,7 @@ Common issues, their causes, and resolutions.
 
 | Symptom | Cause | Resolution | Log Pattern |
 |---|---|---|---|
-| Gate not appearing in UI | Pipeline has `human_only` flag set, preventing automatic show | Check `human_only` flag on the pipeline – these gates require explicit human review and won't auto-proceed | Pipeline remains in `awaiting_human` state |
+| Run stuck in `awaiting_human`, gate never auto-proceeds | Gates default to `human_only=true` (FAR-609): agent and API-key approval is blocked, so the gate waits for a human decision | Review and decide the gate in the browser UI | Run remains in `awaiting_human` state |
 | `Claim token expired` | 15-minute TTL exceeded since claim | Re-claim the gate – a new claim token is auto-generated | `401: Claim token expired` |
 | `409 Conflict on claim` | Another user already claimed this gate | Wait for the other user to complete their review or for the claim token to expire (15 min) | `409: Gate <id> already claimed by user <name>` |
 | Cannot approve/reject | Claim token is invalid, expired, or gate already decided | Refresh the page; re-claim the gate if needed | `401: Invalid claim token` or `409: Gate already decided` |

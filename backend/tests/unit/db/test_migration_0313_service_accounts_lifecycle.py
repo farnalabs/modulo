@@ -1,11 +1,11 @@
-"""Unit tests for migration 0311_service_accounts_lifecycle (FAR-1478).
+"""Unit tests for migration 0313_service_accounts_lifecycle (FAR-1478).
 
 Structural + SQLite-model contract (no Postgres / Testcontainers needed —
 the real trigger + DDL are exercised against real Postgres in
-``tests/integration/db/test_migration_0311_service_accounts_lifecycle.py``):
+``tests/integration/db/test_migration_0313_service_accounts_lifecycle.py``):
 
-* **Revision chain** — 0311 revises ``0310_library_cluster_db_hardening``; the
-  migrations directory has exactly one head (``0311_service_accounts_lifecycle``,
+* **Revision chain** — 0313 revises ``0312_memberships_active_lookups``; the
+  migrations directory has exactly one head (``0313_service_accounts_lifecycle``,
   pinned by all sibling chain tests), the revision id matches the filename, and
   neither ``branch_labels`` nor ``depends_on`` is set.
 * **Source shape** — the upgrade adds ``accounts.decommissioned_at`` + the
@@ -33,10 +33,10 @@ from alembic.script import ScriptDirectory
 from modulo.db.models.account import Account
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0311_service_accounts_lifecycle"
+_MIGRATION_NAME = "0313_service_accounts_lifecycle"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
-_DOWN_REVISION = "0310_library_cluster_db_hardening"
-_HEAD_MIGRATION = "0311_service_accounts_lifecycle"
+_DOWN_REVISION = "0312_memberships_active_lookups"
+_HEAD_MIGRATION = "0313_service_accounts_lifecycle"
 
 _CHECK_NAME = "ck_accounts_decommissioned_service"
 _CHECK_PREDICATE = "decommissioned_at IS NULL OR kind = 'service'"
@@ -61,11 +61,11 @@ def _source() -> str:
 
 
 class TestChain:
-    def test_single_head_is_0311_service_accounts_lifecycle(self) -> None:
+    def test_single_head_is_0313_service_accounts_lifecycle(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
-    def test_down_revision_is_0310_library_cluster_db_hardening(self) -> None:
+    def test_down_revision_is_0312_memberships_active_lookups(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
 
     def test_revision_id_matches_filename(self) -> None:

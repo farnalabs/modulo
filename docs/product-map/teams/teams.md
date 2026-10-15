@@ -80,10 +80,10 @@ org profile, and is the product-map home for user roles.
       as `connector_team_mismatch`, org-wide resources stay shared, and there is no
       "N hidden" enumeration leak (`cross_team_isolation.feature`). The sharing rule is
       explicit (FAR-1618): teams are a VISIBILITY GROUPING, not a credential trust
-      boundary. `visibility: org` means shared across the organisation — it binds to
+      boundary. `visibility: org` means shared across the organisation - it binds to
       ANY pipeline, including one owned by a team (an org-wide connector, model backend
       or environment profile never produces a mismatch). `visibility: team` means
-      owner-team-only — it binds only to a pipeline owned by the same team, and a
+      owner-team-only - it binds only to a pipeline owned by the same team, and a
       different team's pipeline (or an org pipeline) is refused at every write path
       that can create the binding. Both directions are the same rule for connectors,
       model backends and environment profiles, but each resource type reports its own
@@ -96,9 +96,9 @@ org profile, and is the product-map home for user roles.
       (`users/roles.feature`, `auth/team_rbac.py`, `test_team_rbac.py`)
 - [x] DB team RLS covers every team-scoped table (FAR-1514):
       `lifecycle_maps`, `eval_datasets` and `eval_suites` joined the five 0124
-      tables — migration `0287_team_rls_lifecycle_evals` drops their org-only
+      tables - migration `0287_team_rls_lifecycle_evals` drops their org-only
       `rls_org_isolation` policy and creates the shared `rls_team_isolation`
-      policy carrying the full visibility matrix (org AND — `visibility='org'`
+      policy carrying the full visibility matrix (org AND - `visibility='org'`
       / NULL / no owner team / `owner_team_id IN my team_memberships` /
       org admin / `app.execution_context='true'`). Postgres ORs permissive
       policies, so a lone org policy beside a team policy made the team policy
@@ -112,7 +112,7 @@ org profile, and is the product-map home for user roles.
       paths stay team-filtered.
       The four core-table resolvers (connectors / model_backends /
       environment_profiles / library_primitives) stay INTENTIONALLY unwired from
-      route dependencies — their DB RLS alone 404s a non-member before handler
+      route dependencies - their DB RLS alone 404s a non-member before handler
       code runs, so extra request-time gates would be redundant transactions.
       Policy-DDL only, existence-guarded (idempotent), Postgres-only
       (`tests/integration/test_rls_isolation.py`,
@@ -122,16 +122,16 @@ org profile, and is the product-map home for user roles.
 ## Known Gaps
 
 - **HITL review ownership (`team_hitl_review.feature`) is cited under the hitl feature graph
-  edge, not deeply here** — this entry cites the BDD coverage; gate-claim semantics live in
+  edge, not deeply here** - this entry cites the BDD coverage; gate-claim semantics live in
   `feat-hitl`.
 - **`stale_jwt_revocation.feature` and `admin_override.feature`** exercise JWT/override
   surfaces under the teams BDD directory that are not cited by this entry's behaviours
   (they belong to the auth/JWT feature edges).
-- **`team_deletion.feature` and `team_deletion_blocked.feature` scenarios are mocked** —
+- **`team_deletion.feature` and `team_deletion_blocked.feature` scenarios are mocked** -
   both patch `delete_team` with client-constructed 409s, so neither exercises the shipped
   resource guard (the real 409 is raised by the route's owned-resource count loop); the
   active-run-blocking scenarios in `team_deletion.feature` describe a guard that does not
-  ship (the route blocks on owned resources — see the Deletion safety behaviour above).
+  ship (the route blocks on owned resources - see the Deletion safety behaviour above).
   The shipped block is covered by the unit test
   `test_delete_team_with_owned_resources_returns_409`
   (`tests/unit/api/test_teams_routes_coverage.py`), which drives the real route to a 409
@@ -145,14 +145,14 @@ org profile, and is the product-map home for user roles.
   tracker still described only the application-layer isolation. Added the
   checked behaviour line plus the migration / integration / architecture-test
   citations.
-- 2026-09-25: **Improve Architecture product-map walk** — reconciled the
+- 2026-09-25: **Improve Architecture product-map walk** - reconciled the
   manifest `feat-teams` registry entry with this tracker (both now
   `status: covered`): the "team-level resource scoping partially wired" unchecked
   item from #972 is closed against the shipped cross-team isolation /
   team-pipeline-visibility / view-as-team surfaces verified below
   (`core/team_visibility.py`, `auth/team_rbac.py`, the three BDD feature files).
   Org-membership/entity lifecycle stays owned by `feat-teams-org-entity`.
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass** - registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/users`, `/settings/teams`
   and wired the two components into the reverse testid-coverage guard
@@ -160,7 +160,7 @@ org profile, and is the product-map home for user roles.
   surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass** - extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/settings/teams`: the whole-page view(s) `SettingsTeamsView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -168,7 +168,7 @@ org profile, and is the product-map home for user roles.
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-27: **product-map review pass** — added this behaviour-tracker
+- 2026-08-27: **product-map review pass** - added this behaviour-tracker
   for the registered manifest feature `feat-teams`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/teams.py`,
   `auth/team_rbac.py`, `core/team_visibility.py` and the teams BDD/unit suites.

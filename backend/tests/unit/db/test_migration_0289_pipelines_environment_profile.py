@@ -25,7 +25,7 @@ Lenses:
   ``0306_trigger_secret_encryption`` chains onto 0305_guardrail_escalate_action, and
   ``0307_runs_guardrail_override_resume_pending`` chains onto 0306_trigger_secret_encryption, and
   ``0308_runs_dispatch_phase_history`` chains onto ``0307_runs_guardrail_override_resume_pending``, and
-  ``0311_service_accounts_lifecycle`` chains onto ``0308_runs_dispatch_phase_history`` as the single
+  ``0313_service_accounts_lifecycle`` chains onto ``0308_runs_dispatch_phase_history`` as the single
   linear head; the revision id matches the filename, and neither
   branch_labels nor depends_on is set (the pre-commit check-migration-heads
   hook and every ``test_single_head_*`` pin depend on that shape).
@@ -58,7 +58,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0289_pipelines_environment_profile"
 _MIGRATION_DOWN_REVISION = "0288_runs_execution_origin"
-_HEAD_MIGRATION = "0311_service_accounts_lifecycle"
+_HEAD_MIGRATION = "0313_service_accounts_lifecycle"
 _TABLE = "pipelines"
 _COLUMN = "environment_profile_id"
 _FK_NAME = "fk_pipelines_environment_profile_id"

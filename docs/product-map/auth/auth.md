@@ -54,7 +54,7 @@ clients.
       from a blacklisted family blacklists the family as theft
       (`backend/src/modulo/db/crud/token_family.py`)
 - [x] Cross-tab refresh serialisation: the refresh token rides the httpOnly
-      `modulo_refresh` cookie (FAR-1197 — no longer persisted in localStorage),
+      `modulo_refresh` cookie (FAR-1197 - no longer persisted in localStorage),
       which the browser shares across tabs, so a rotation by one tab is
       immediately visible to the others and no cross-tab adopt/retry loop is
       needed. Refresh attempts are still serialised with the Web Locks API

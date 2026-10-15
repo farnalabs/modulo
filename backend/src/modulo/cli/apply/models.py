@@ -366,6 +366,12 @@ class ApplyGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     commands_concatenation_string: str = " && "
     agent_prompt: str | None = None
     script_command: str | None = None
+    # FAR-1743 (ADR 037 rev 2, EXPERIMENTAL): sandbox_agent model_class twin
+    # (API PipelineGraphNode). Declared here so the CLI does NOT reject it
+    # loudly as an unknown field on a real saved graph (extra="forbid"); value
+    # rules (sandbox-only, non-empty) are enforced by the REAL API node model
+    # when the executor normalises the resolved payload through it.
+    model_class: str | None = None
     egress_policy: Literal["default", "deny_all", "selected"] | None = None
     egress_allowlist: list[dict[str, Any]] | None = None
     resource_limits: dict[str, Any] | None = None

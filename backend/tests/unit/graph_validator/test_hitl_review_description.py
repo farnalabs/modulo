@@ -9,49 +9,52 @@ their briefing UI renders the muted no-description fallback instead.
 """
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
-from modulo.core.graph_validator import HITL_DESCRIPTION_MIN_LENGTH, GraphValidator
-
-_UUID_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-_UUID_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-_VALID_DESCRIPTION = "Approve the deploy only after a human has reviewed the plan."
+from modulo.core.graph_validator import (
+    HITL_DESCRIPTION_MIN_LENGTH,
+    GraphValidator,
+    check_hitl_review_descriptions,
+)
+from tests.unit.graph_validator._helpers import (
+    UUID_A as _UUID_A,
+)
+from tests.unit.graph_validator._helpers import (
+    UUID_B as _UUID_B,
+)
+from tests.unit.graph_validator._helpers import (
+    VALID_DESCRIPTION as _VALID_DESCRIPTION,
+)
+from tests.unit.graph_validator._helpers import (
+    gated_edge_graph as _gated_edge_shape,
+)
+from tests.unit.graph_validator._helpers import (
+    hitl_node_graph as _hitl_node_shape,
+)
+from tests.unit.graph_validator._helpers import (
+    session_returning as _session_returning_rows,
+)
 
 
 def _session_returning() -> AsyncMock:
     """Mock session whose execute() returns no rows (no DB-backed checks fire)."""
-    session = AsyncMock()
-    scalars_result = MagicMock()
-    scalars_result.all.return_value = []
-    execute_result = MagicMock()
-    execute_result.scalars.return_value = scalars_result
-    session.execute = AsyncMock(return_value=execute_result)
-    return session
+    return _session_returning_rows([])
 
 
 def _gated_edge_graph(description: str | None = None) -> dict[str, Any]:
     config: dict = {"label": "Review gate"}
     if description is not None:
         config["description"] = description
-    return {
-        "nodes": [{"id": _UUID_A}, {"id": _UUID_B}],
-        "edges": [{"source": _UUID_A, "target": _UUID_B, "type": "normal", "hitl_review_config": config}],
-    }
+    return _gated_edge_shape(config)
 
 
 def _hitl_node_graph(description: str | None = None) -> dict:
     config: dict = {}
     if description is not None:
         config["description"] = description
-    return {
-        "nodes": [
-            {"id": _UUID_A, "node_type": "hitl", "hitl_config": config},
-            {"id": _UUID_B},
-        ],
-        "edges": [{"source": _UUID_A, "target": _UUID_B, "type": "normal"}],
-    }
+    return _hitl_node_shape(config)
 
 
 @pytest.mark.parametrize("graph_builder", [_gated_edge_graph, _hitl_node_graph])
@@ -148,3 +151,43 @@ async def test_inert_hitl_config_on_non_hitl_node_not_flagged():
     }
     result = await GraphValidator().validate_definition(graph, _session_returning())
     assert not any(i.code == "HITL_REVIEW_DESCRIPTION_REQUIRED" for i in result.issues)
+
+
+# ---------------------------------------------------------------------------
+# Public seam — check_hitl_review_descriptions (sessionless write surfaces)
+# ---------------------------------------------------------------------------
+
+
+def test_seam_passes_a_compliant_graph():
+    """The sessionless seam returns no issues for a gate with a full description."""
+    issues = check_hitl_review_descriptions(_gated_edge_graph(_VALID_DESCRIPTION))
+    assert not [i for i in issues if i.code == "HITL_REVIEW_DESCRIPTION_REQUIRED"]
+
+
+def test_seam_flags_edge_gate_without_description():
+    """The seam rejects (returns HITL_REVIEW_DESCRIPTION_REQUIRED for) a gated
+    edge whose config omits the description — no session required, which is
+    the whole point: the MCP update_pipeline_graph write surface cannot run
+    the full validate_definition."""
+    issues = check_hitl_review_descriptions(_gated_edge_graph(None))
+    issues = [i for i in issues if i.code == "HITL_REVIEW_DESCRIPTION_REQUIRED"]
+    assert len(issues) == 1
+    assert f"edge '{_UUID_A}->{_UUID_B}'" in issues[0].message
+
+
+def test_seam_flags_node_gate_without_description():
+    """The seam also covers the FAR-402 node-level ``hitl_config`` shape."""
+    issues = check_hitl_review_descriptions(_hitl_node_graph(None))
+    issues = [i for i in issues if i.code == "HITL_REVIEW_DESCRIPTION_REQUIRED"]
+    assert len(issues) == 1
+    assert f"node '{_UUID_A}'" in issues[0].message
+
+
+def test_seam_short_circuits_on_gateless_graph():
+    """A graph with no gates at all returns no description issues."""
+    graph = {
+        "nodes": [{"id": _UUID_A}, {"id": _UUID_B}],
+        "edges": [{"source": _UUID_A, "target": _UUID_B, "type": "normal"}],
+    }
+    issues = check_hitl_review_descriptions(graph)
+    assert not [i for i in issues if i.code == "HITL_REVIEW_DESCRIPTION_REQUIRED"]

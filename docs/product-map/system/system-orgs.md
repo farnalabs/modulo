@@ -42,7 +42,7 @@ manage org-level licenses.
       (`backend/tests/bdd/features/system_admin/system_admin_orgs.feature`)
 - [x] Hard-deleting an organisation records a durable `org_deletion_completed`
       entry in the org-independent `system_audit_events` ledger before the org
-      row is removed (FAR-1517) — the org-scoped `audit_events` chain cascades
+      row is removed (FAR-1517) - the org-scoped `audit_events` chain cascades
       away with the org, so the ledger is the surviving evidence of who deleted
       it; the append is in the same transaction (a failed append aborts the
       delete) and the row is immutable via append-only triggers
@@ -52,7 +52,7 @@ manage org-level licenses.
       `/api/v1/admin/orgs/{org_id}/license` with validation via
       `parse_and_verify` (`admin_orgs.py`)
 - [x] GET `/api/v1/admin/orgs/{org_id}/license` resolves the effective org
-      license — the org's own `settings_json.license_key` when it verifies,
+      license - the org's own `settings_json.license_key` when it verifies,
       otherwise the system license; `has_license=false` only when neither
       exists, and a missing org is 404. BDD: system_admin_orgs.feature
       (org-key resolution, system fallback, invalid-stored-key fallback,
@@ -72,13 +72,13 @@ manage org-level licenses.
       (`system_admin_orgs.feature`, `system_admin_users.feature`)
 
 ## QA History
-- 2026-10-06: **Improve Architecture product-map walk** — tracked the FAR-1517
+- 2026-10-06: **Improve Architecture product-map walk** - tracked the FAR-1517
   durable org-deletion audit record: `DELETE /api/v1/admin/orgs/{org_id}` now
   writes `org_deletion_completed` to the org-independent `system_audit_events`
   ledger in the deleting transaction, so the evidence survives the cascade that
   destroys the org-scoped chain. Added the checked behaviour line and the
   `core/system_audit_logger.py` / integration-test citations.
-- 2026-09-21: **product-map walk** — closed the remaining
+- 2026-09-21: **product-map walk** - closed the remaining
   org-CRUD BDD gaps. `system_admin_orgs.feature` gained 3 org-listing scenarios
   (system-admin list success with the two seeded orgs, the reserved
   infrastructure orgs filtered from the list, and a regular-admin 403) and
@@ -88,7 +88,7 @@ manage org-level licenses.
   `/api/v1/admin/orgs` routes with DB seams patched
   (`steps/test_system_admin.py`). The org-CRUD gap tracked under
   `feat-teams-org-entity` is now closed too.
-- 2026-09-17: **product-map review pass** — closed the "No BDD
+- 2026-09-17: **product-map review pass** - closed the "No BDD
   for org-level license management" gap: added 10 license scenarios to
   `system_admin_orgs.feature` (GET org-key resolution / system fallback /
   invalid-stored-key fallback / missing-org 404; PUT valid-200 + invalid-422 +
@@ -98,19 +98,19 @@ manage org-level licenses.
   read-modify-write. Removed the tracked known gap.
   Status: covered with no remaining known gaps.
 
-- 2026-09-17: **product-map review pass** — closed the "No BDD
+- 2026-09-17: **product-map review pass** - closed the "No BDD
   for DELETE org" half of the `feat-system-orgs` BDD gap: added DELETE coverage
   to `system_admin_orgs.feature` (successful 204 delete, 404 for a missing org,
   and 403 for a regular org admin). The narrower license-management BDD gap was
   subsequently closed by the 2026-09-17 license walk above.
 
-- 2026-09-12: **product-map review pass** — extended the reverse
+- 2026-09-12: **product-map review pass** - extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/admin/system/orgs`: the whole-page view `AdminSystemOrgsView.vue` now maps to its
   owning view so a newly shipped testid on the system-orgs page can no longer silently
   stay invisible to Assistant's docs indexer / `/api/v1/manifest`.
 
-- 2026-09-07: **product-map review pass** — added this
+- 2026-09-07: **product-map review pass** - added this
   behaviour-tracker for `feat-system-orgs`, which previously had no
   `docs/product-map/` entry. Behaviours verified against
   `routes/admin_orgs.py`, the admin orgs unit tests, and the system-admin BDD

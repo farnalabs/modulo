@@ -37,7 +37,7 @@ The advisory / dead-sweep class that removed workflow used to scan now alerts
 in-app too (FAR-1571): the readiness-degradation cron treats a sustained failure of
 the real-failure advisory sweeps as alert-worthy even while the readiness aggregate
 still reads `ok`. A TOTAL app outage cannot be alerted from in-app at all, and
-`deploy.yml`'s `--auto-rollback` runs only around a deploy — see Known Gaps. Every
+`deploy.yml`'s `--auto-rollback` runs only around a deploy - see Known Gaps. Every
 operator alert – the readiness cron and the watchdog, across
 email, generic webhook and Teams – identifies the deployment environment and carries the
 operator's `ALERT_CONTEXT` free text through one shared renderer (`core/alert_context.py`,
@@ -64,7 +64,7 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
       `MODULO_HEALTH_DB_HYGIENE_MIN_DEAD_TUPLES` / `MODULO_HEALTH_DB_HYGIENE_DEAD_RATIO`
 - [x] A database-hygiene probe that does NOT complete within its budget (timeout, or the
       probe raising) reports `degraded` – "database-hygiene probe did not complete within
-      Ns (likely an event-loop stall; see event_loop_lag) — hygiene not measured" – but is
+      Ns (likely an event-loop stall; see event_loop_lag) - hygiene not measured" – but is
       ADVISORY (FAR-1510): still listed in the body, never gating the aggregate and never
       firing the readiness alert, because no hygiene reading was taken. Only a completed
       reading graded over a threshold gates.
@@ -88,9 +88,9 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
       connect bound during session acquisition) and `org_statement_timeouts`
       (FAR-1621 SQLSTATE 57014 statement bound). Each defaults to 0 so a
       payload written before the counter existed still renders. Only the
-      outcomes counted in `org_timeouts` also land in the tick's `last_error` —
+      outcomes counted in `org_timeouts` also land in the tick's `last_error` -
       the per-org TIME cut and an in-pass `TimeoutError` fired before the slice
-      deadline — each carrying the exact `stage=` the org pass had reached; the
+      deadline - each carrying the exact `stage=` the org pass had reached; the
       lock/pool/connect/statement SKIPs deliberately leave `status="ok"` and
       `last_error=None` and carry their stage in the matching WARNING log line
       instead
@@ -143,20 +143,27 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
       alert-worthiness on the aggregate alone left a dead or erroring system sweep
       invisible in-app once the external uptime monitor went away.
       `REAL_FAILURE_ADVISORY_CHECKS` (`core/health_alerts.py`) names the advisory
-      checks whose non-`ok` result IS real breakage — `dispatcher_reconcile` at its
+      checks whose non-`ok` result IS real breakage - `dispatcher_reconcile` at its
       `degraded` tier, `stale_run_recovery`, `slot_reconciliation`,
       `hitl_park_sweep`, `runner_workspace_reconcile`, `runner_marker_sweep` and
-      `runner_health_probe` — and a non-`ok` result on any of them makes
+      `runner_health_probe` - and a non-`ok` result on any of them makes
       `HealthObservation.observed_state` `unhealthy` even while the aggregate reads
       `ok`, so the SAME `health_readiness_alert` cron now emits the sustained-failure
       alert (and its matching recovery) it already emitted for a gating failure. The
       hysteresis is unchanged, so a single transient advisory blip still never emails
-      (FAR-1512). The benign/other-channel advisories are deliberately NOT in the set
-      and never page: `event_loop_lag` (a transient stall diagnostic), `break_glass`
-      (an expected config posture) and `db_hygiene` (a GRADED failure already gates
-      the aggregate, while its not-measured probe is advisory per FAR-1510).
-      `reported_status` never renders the misleading aggregate `ok` — an advisory
-      alert reads `degraded`, `unavailable` when the aggregate is `unavailable` — and
+      (FAR-1512). The benign/other-channel advisories are deliberately NOT in the
+      set: `break_glass` (an expected config posture) and `db_hygiene` (a GRADED
+      failure already gates the aggregate, while its not-measured probe is advisory
+      per FAR-1510) never page, and `event_loop_lag` (a transient stall diagnostic)
+      is gated by magnitude rather than silenced outright (FAR-1771): under 250 ms
+      (`_LOOP_LAG_DEGRADED_MS`, `api/routes/health.py`) it reads `ok` and stays
+      quiet, 250 ms to 1 s reads `degraded` and is visible in the readiness payload
+      but never pages, and 1 s or above (`SEVERE_EVENT_LOOP_STALL_MS`,
+      `core/health_alerts.py`) reads `degraded`, flips `observed_state` and is
+      listed as a failing check so the incident email fires. Every band stays out
+      of the readiness aggregate, so it never gates bluegreen.
+      `reported_status` never renders the misleading aggregate `ok` - an advisory
+      alert reads `degraded`, `unavailable` when the aggregate is `unavailable` - and
       `_split_cleared_conditions` / `_recovery_summary` report only the alert-time
       conditions that actually cleared, so a still-degraded benign advisory is never
       falsely claimed resolved (`core/health_alerts.py`, `test_health_alerts.py`)
@@ -212,7 +219,7 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
 
 - **A TOTAL app outage has no operator channel and no ticket (untracked).**
   In-app alerting cannot fire from inside an app that is down, and `deploy.yml`'s
-  `--auto-rollback` plus its post-deploy gate run only around a deploy — a runtime
+  `--auto-rollback` plus its post-deploy gate run only around a deploy - a runtime
   crash or hang with no deploy in flight (the ~7h unalerted connection-refused
   incident that motivated FAR-400) reaches no channel. FAR-1571 explicitly excludes
   this case, so it needs its own tracked ticket (an external / off-platform probe);
@@ -232,8 +239,10 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
   `HealthObservation.observed_state` treats their sustained failure as unhealthy
   even while the readiness aggregate reads `ok`, so the `health_readiness_alert`
   cron pages the same incident/recovery email pair it already sent for a gating
-  failure (hysteresis unchanged; benign `event_loop_lag` / `break_glass` /
-  not-measured `db_hygiene` advisories stay quiet). Added the behaviour bullet,
+  failure (hysteresis unchanged; benign `break_glass` / not-measured `db_hygiene`
+  advisories stay quiet, while `event_loop_lag` stays quiet below 250 ms, is
+  visible-but-non-paging from 250 ms to 1 s, and pages only at 1 s or above per
+  FAR-1771). Added the behaviour bullet,
   removed the now-stale Known Gap, and restored `status: covered` (the remaining
   total-outage residual and the no-PRD note are tracked separately and are not
   behaviours of this surface). No `code:`/`unit-tests:` citations changed –
@@ -241,7 +250,7 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
   `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-07: **uptime-monitor removal**: deleted the external
   `.github/workflows/uptime-monitor.yml` (FAR-400 / FAR-1156) and re-pointed this
-  entry at the product's own in-app alerting as the production channel — the
+  entry at the product's own in-app alerting as the production channel - the
   `health_readiness_alert` readiness-degradation email (FAR-1446) and the in-process
   worker-liveness watchdog (ADR 021). Dropped the workflow from the `code:` citations,
   retired its behaviour bullet to an unchecked deferral, and moved the entry to

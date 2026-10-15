@@ -1,4 +1,4 @@
-"""Integration test for migration 0311_service_accounts_lifecycle (FAR-1478).
+"""Integration test for migration 0313_service_accounts_lifecycle (FAR-1478).
 
 Against REAL Postgres (testcontainers, private database per test — the
 ``test_migration_0306`` harness):
@@ -6,7 +6,7 @@ Against REAL Postgres (testcontainers, private database per test — the
 * seed a human account + a service account + their org memberships at
   ``0310_library_cluster_db_hardening`` (the deployed shape, where neither the
   decommission column nor the role-ceiling trigger exists);
-* the REAL alembic ``upgrade`` of ``0311_service_accounts_lifecycle``:
+* the REAL alembic ``upgrade`` of ``0313_service_accounts_lifecycle``:
   - ``trg_org_memberships_service_role_ceiling`` REFUSES an ``admin`` org role
     for the service account (SQLSTATE 23514, the check_violation the
     application surfaces mirror as 422) on BOTH insert and update, while an
@@ -40,7 +40,7 @@ pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = str(Path(__file__).resolve().parents[3])
 
-MIGRATION_REV = "0311_service_accounts_lifecycle"
+MIGRATION_REV = "0313_service_accounts_lifecycle"
 PREV_REV = "0310_library_cluster_db_hardening"
 
 
@@ -95,7 +95,7 @@ def _downgrade(iso_url: str, target: str) -> None:
 
 @pytest_asyncio.fixture
 async def upgraded_db_url(db_url: str) -> AsyncGenerator[str, None]:
-    """Private Postgres migrated to 0311 with human + service principals seeded at 0310_library_cluster_db_hardening."""
+    """Private Postgres migrated to 0313 with human + service principals seeded at 0310_library_cluster_db_hardening."""
     db_name, iso_url = await _fresh_db(db_url, "m0311")
     try:
         _migrate(iso_url, PREV_REV)
@@ -116,7 +116,7 @@ async def _seed(engine: AsyncEngine) -> dict[str, uuid.UUID]:
 
     The identity-NULL human is the exact QA hole: a human row whose
     ``email``/``password_hash``/``sso_subject`` are all NULL satisfies
-    ``ck_accounts_service_identity`` in BOTH kind states, so pre-0311's
+    ``ck_accounts_service_identity`` in BOTH kind states, so pre-0313's
     kind trigger a raw ``kind='service'`` flip on it succeeded and left
     its ADMIN membership intact — the state ADR 056/058 declare
     structurally impossible.

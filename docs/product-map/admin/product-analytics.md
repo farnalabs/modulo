@@ -74,23 +74,23 @@ an eligible tier.
       `TestGetConsentingOrgsLicenseEnforcement`)
 - [ ] License/plan eligibility gating is not wired into request-time routes: the
       effective-plan resolution (`core/feature_flags.py` `resolve_plan_context` /
-      `require_feature`) never consults `should_degrade_to_community`, so a
+      `api/dependencies.py` `require_feature`) never consults `should_degrade_to_community`, so a
       degraded org keeps its paid tier on API routes until that half lands.
       The dump half above is done; the route half remains feature completion,
-      not a QA fix — tracked for a follow-up ticket.
+      not a QA fix - tracked for a follow-up ticket.
 - [x] Identity and transparency endpoints disclose collection state and allow opt-out
       (`api/routes/product_analytics_identity.py`, `product_analytics_transparency.py`)
 - [x] The transparency endpoint reports the instance's REAL product-analytics
       posture, every field sourced from state a feature actually writes:
       `instance_enabled` via `consent.is_instance_analytics_enabled` (bool/string
-      aware — a stored `"false"` is OFF, not fail-open — with the
+      aware - a stored `"false"` is OFF, not fail-open - with the
       `MODULO_PRODUCT_ANALYTICS_ENABLED` env fallback), `enforcement_enabled` via
       `consent.is_license_enforcement_enabled` (the real kill switch; absent =
       enforced), `last_successful_dump_at` / `dump_count_total` from the keys the
       metrics dump writes (`constants.DUMP_WATERMARK_KEY`,
       `metrics_dump.DUMP_COUNT_KEY`), and `consent_level` from the caller's
       organisation `settings_json` (read through `consent.org_consent_level`)
-      — the per-org value is the PREFERRED source; when the caller org cannot be
+      - the per-org value is the PREFERRED source; when the caller org cannot be
       resolved the endpoint reports an instance-level aggregate
       (`_instance_consent_level`: `all` if any active org has opted in, else
       `off`) instead of a hardcoded `off` (FAR-1635). The dump increments
@@ -102,7 +102,7 @@ an eligible tier.
       `egress_allowed` is true ONLY when the instance-level master switch AND an
       explicit `all` consent are BOTH on (`core/product_analytics/consent.py`),
       so telemetry egress is fail-closed by default and opt-in is the single
-      allowed path — the Marcus CISO data-residency journey now drives this real
+      allowed path - the Marcus CISO data-residency journey now drives this real
       transparency surface (`personas/marcus-ciso.feature`,
       `api/routes/product_analytics_transparency.py`,
       `tests/unit/api/routes/test_product_analytics_transparency.py`)
@@ -119,12 +119,12 @@ an eligible tier.
       daily dump's `_aggregate_staged_events` folds each UTC day's
       `metrics_staging` rows into the payload's `event_counts` section, and
       `_purge_staging` runs on EVERY `metrics_dump` cron tick before the jitter
-      gate — deleting consumed rows (the watermark has passed their date) plus
+      gate - deleting consumed rows (the watermark has passed their date) plus
       anything older than the 30-day retention bound, so the table cannot grow
       unbounded even when a dump gate skips; the supporting plain index
       `ix_metrics_staging_recorded_at` (migration 0304) serves the purge's
-      `recorded_at < :cutoff` DELETE. Turning the org's level off — admin PUT or
-      prompt decline — purges its staged rows immediately in the same
+      `recorded_at < :cutoff` DELETE. Turning the org's level off - admin PUT or
+      prompt decline - purges its staged rows immediately in the same
       transaction (`api/routes/product_analytics.py`)
       (`tests/unit/product_analytics/test_metrics_staging_consumer.py`,
       `test_routes.py`)
@@ -133,7 +133,7 @@ an eligible tier.
       `productAnalyticsStore.isOptedIn` as the live consent function, and
       curated `track()` call sites ship with pipeline create / run start,
       schema create, connector add, model-backend add, trigger create, eval
-      create and HITL claim/approve/reject. No `page_view` event exists — the
+      create and HITL claim/approve/reject. No `page_view` event exists - the
       stale docstring claim of a server-side Redis counter was removed; no
       per-route data is captured, client or server side
       (`frontend/src/App.vue`,
@@ -142,7 +142,7 @@ an eligible tier.
 ## Consent scoping (FAR-1635)
 
 Decision: the transparency endpoint reports consent **per organisation, with an
-instance fallback** — "per org preferable, per instance acceptable". This is
+instance fallback** - "per org preferable, per instance acceptable". This is
 intentional, not an open question:
 
 - **Per-org is primary.** `consent_level` / `egress_allowed` read the caller's own
@@ -168,7 +168,7 @@ intentional, not an open question:
   enhancement (the instance aggregate is used only when the caller org is
   unknown).
 - The `/admin/product-analytics` page still cannot show in-product usage/adoption
-  metrics — it renders only the transparency endpoint's delivery/consent/enforcement
+  metrics - it renders only the transparency endpoint's delivery/consent/enforcement
   fields, which now reflect real state. An in-product analytics export/administration
   surface (self-serve downloads, configurable schedule, or a self-hosted warehouse)
   remains unshipped (warehouse scope sits under `feat-analytics`).
@@ -176,12 +176,12 @@ intentional, not an open question:
   dump is a point-in-time snapshot and the watermark advances to dump day, so
   the next dump starts the following day; such rows are held back by the purge
   (never deleted by their own dump day) and drop out via the 30-day retention
-  bound. Closing this would require the watermark to lag a full closed day —
-  which makes the vendor receive two payloads for the current date — i.e. a
+  bound. Closing this would require the watermark to lag a full closed day -
+  which makes the vendor receive two payloads for the current date - i.e. a
   payload-dedup contract change on the vendor side, not taken in FAR-1717.
 
 ## QA History
-- 2026-10-12: **Improve Architecture product-map walk** — wired the partner
+- 2026-10-12: **Improve Architecture product-map walk** - wired the partner
   `product_analytics_required` carve-out into the daily metrics dump (the dump
   half of the license-gating behaviour): `metrics_dump` now reads
   `is_enforcement_active` once per run and `_get_consenting_orgs` drops orgs
@@ -194,14 +194,14 @@ intentional, not an open question:
   circuit). The request-time route half (`resolve_plan_context` /
   `require_feature` degrading the effective plan) is still open and stays
   tracked as the remaining unchecked behaviour.
-- 2026-10-12: **FAR-1717 + FAR-1718 (staging consumer + capture init)** — closed
+- 2026-10-12: **FAR-1717 + FAR-1718 (staging consumer + capture init)** - closed
   both unwired halves of the frontend ingest path. Backend: `_build_payload`
   now folds `metrics_staging` into the payload (`_aggregate_staged_events` →
   the new `event_counts` section; `SCHEMA_VERSION` bumped 1 → 2 per the module
   contract that it changes when the payload shape changes); every
   `metrics_dump` tick purges consumed + expired staging rows (`_purge_staging`,
   bounded by the watermark and a 30-day retention cap) with the supporting
-  plain index `ix_metrics_staging_recorded_at` (migration 0304 — a *partial*
+  plain index `ix_metrics_staging_recorded_at` (migration 0304 - a *partial*
   index is impossible here: the purge cutoff is a moving bind parameter and
   Postgres requires IMMUTABLE index predicates); the admin PUT and the consent
   decline path purge the org's staged rows in the same transaction, replacing
@@ -213,7 +213,7 @@ intentional, not an open question:
   real-SQLite suite `test_metrics_staging_consumer.py` (aggregation, payload
   section, purge cutoffs, jitter-skip wiring) and `test_routes.py::TestStagingPurgeOnOptOut`
   both fail against the pre-change code (missing functions / no DELETE executed).
-- 2026-10-12: **Improve Architecture product-map walk** — documented the
+- 2026-10-12: **Improve Architecture product-map walk** - documented the
   event-ingest path and found its two unwired halves (both feature completion, not
   QA fixes). (1) `POST /api/v1/metrics/events` → `metrics_staging` has no consumer
   and no purge: `metrics_dump._build_payload` reads only aggregate tables
@@ -230,17 +230,17 @@ intentional, not an open question:
   (the global `with_loader_criteria` filter DOES apply to the core-style
   `select(func.count()).select_from(Model)` counts, so the counts exclude
   soft-deleted rows).
-- 2026-10-10: **FAR-1635 (consent scope)** — replaced the transparency
+- 2026-10-10: **FAR-1635 (consent scope)** - replaced the transparency
   endpoint's hardcoded `off` fallback with an instance-level posture. Per-org
   consent remains the primary source; when the caller org cannot be resolved
   (no `organisation_id`, or no matching row) the endpoint reports
-  `_instance_consent_level` — `all` if any active org has opted in, else `off`.
+  `_instance_consent_level` - `all` if any active org has opted in, else `off`.
   `_resolve_org` now returns the org row (not just its settings) so "resolved but
   no settings" stays per-org `off` and only a genuinely unresolvable org takes
   the instance fallback. Documented the decision (was an undecided Known Gap) and
   added tests for both paths; the fallback tests fail against the previous
   hardcoded-`off` behaviour.
-- 2026-10-10: **deliver/pa-transparency** — closed the transparency "phantom
+- 2026-10-10: **deliver/pa-transparency** - closed the transparency "phantom
   keys" gap: the endpoint read five `system_config` keys that no feature wrote, so
   `/admin/product-analytics` always rendered defaults. It now sources every field
   from real state: `instance_enabled` / `enforcement_enabled` delegate to the shared
@@ -265,18 +265,18 @@ intentional, not an open question:
   Pre-PR QA gate (same day): removed the now-dead re-parse in `_resolve_start_date`
   (normalisation is owned by `_get_consenting_orgs`), pinned `_parse_iso_date`'s
   fail-hard contract with negative tests, and aligned `_check_instance_switch` with
-  `consent.is_instance_analytics_enabled` — a stored string `"false"` previously read
+  `consent.is_instance_analytics_enabled` - a stored string `"false"` previously read
   as truthy and ran the dump while the consent surface reported the switch OFF
   (fail-open), and the `MODULO_PRODUCT_ANALYTICS_ENABLED` fallback the surface honours
   was ignored. Corrected the Known-Gaps key count (five, not four) and the
   license/plan-gating behaviour claim (module has no production call site).
-- 2026-10-03: **Improve Architecture product-map walk** — closed the CISO
+- 2026-10-03: **Improve Architecture product-map walk** - closed the CISO
   data-residency persona gap (`personas/marcus-ciso.feature`, pinned
   `@awaiting-implementation` since 2026-08): the scenario now executes against
   the REAL transparency endpoint (`GET /api/v1/product-analytics/transparency`)
   through a minimal FastAPI app (handler, permission gate, pydantic response and
   the real `is_egress_allowed` seam all run; only the `get_config` DB seam and
-  the auth principal are patched — steps in `backend/tests/bdd/steps/test_personas.py`).
+  the auth principal are patched - steps in `backend/tests/bdd/steps/test_personas.py`).
   Product delta closing the wire gap the scenario describes: the transparency
   response now carries `egress_allowed`, derived through the SAME
   `is_egress_allowed` seam as the consent response (instance master switch AND
@@ -288,25 +288,25 @@ intentional, not an open question:
   (`TestEgressPosture`, matrix-parametrised over both axes). The `feat-product-analytics`
   manifest registry gained the shipped egress-posture behaviour line; the tracker
   `bdd:` citations now include the persona journey.
-- 2026-09-29: **Improve Architecture product-map walk** — reconciled the
+- 2026-09-29: **Improve Architecture product-map walk** - reconciled the
   tracker frontmatter `status:` with the manifest `feat-product-analytics`
   registry: the entry now reads `status: partial` (matching the manifest's
   unchecked "in-product analytics export/administration surface is not shipped"
   deferral) instead of `covered`. The two layers previously disagreed on the
-  same feature's coverage — a reader of the graph got the opposite answer from
+  same feature's coverage - a reader of the graph got the opposite answer from
   the machine layer Assistant reads from the manifest.
-- 2026-09-26: **Improve Architecture product-map walk** — sharpened the manifest
+- 2026-09-26: **Improve Architecture product-map walk** - sharpened the manifest
   `feat-product-analytics` registry entry: the vague "export and scheduling is
   partially wired" gap is now split into what ships versus what is deferred.
   Scheduling ships: the jittered daily metrics-dump SAQ system cron
   (`core/product_analytics/metrics_dump.py`) gates each instance's dump window on a
   stored jitter offset aligned to the cron grid, backfills from the consented
   validity window up to the watermark, delivers to the vendor ingest endpoint, and
-  advances the watermark only on full success — ticked. An in-product analytics
+  advances the watermark only on full success - ticked. An in-product analytics
   export/administration surface (self-serve downloads, configurable schedule, or a
-  self-hosted warehouse) remains unshipped — tracked as the unchecked deferral
+  self-hosted warehouse) remains unshipped - tracked as the unchecked deferral
   (warehouse scope sits under `feat-analytics`). Status stays `partial`.
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass** - registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/product-analytics`
   and wired the two components into the reverse testid-coverage guard
@@ -314,15 +314,15 @@ intentional, not an open question:
   surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **product-map review pass** — registered the
+- 2026-09-11: **product-map review pass** - registered the
   consent prompt surface (`product-analytics/ProductAnalyticsConsentPrompt.vue`
   static testid `product-analytics-consent-prompt`) in the `/admin/product-analytics`
-  manifest `elements:` inventory — the prompt renders organisation-wide via
+  manifest `elements:` inventory - the prompt renders organisation-wide via
   `AppLayout.vue` (alongside the page's existing `consent-level` indicator) but
   had no product-map home. `test_mapped_route_elements_cover_owning_view_testids`
   now maps the route to its page view + the prompt component, so the consent
   surface cannot drift invisible to Assistant's docs indexer / `/api/v1/manifest`.
-- 2026-08-27: **product-map review pass** — added this behaviour-tracker
+- 2026-08-27: **product-map review pass** - added this behaviour-tracker
   for the registered manifest feature `feat-product-analytics`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/product_analytics*.py`,
   `core/product_analytics/*` and the product-analytics unit/BDD/integration suites
