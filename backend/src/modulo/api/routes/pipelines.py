@@ -3274,9 +3274,11 @@ class PipelineGraphNodePatch(BaseModel):
     ``tests/unit/api/test_pipeline_graph_node_patch.py`` — so a value the body
     accepts within a declared bound is a value the merged node's own field
     validator accepts. The single deliberate divergence is ``None``-widening:
-    the four non-nullable booleans below are ``bool | None`` here for a uniform
-    body shape, and an explicit ``null`` on them is rejected by the MERGED
-    node's ``bool`` field (422), never stored.
+    the four non-nullable booleans below are widened here for a uniform body
+    shape — ``enable_heartbeat`` and ``idempotent`` to ``bool | None``, and the
+    strict ``single_pr_per_run`` and ``await_completion`` to
+    ``StrictBool | None`` — and an explicit ``null`` on them is rejected by the
+    MERGED node's ``bool`` field (422), never stored.
 
     ``None`` semantics therefore depend on the field:
 

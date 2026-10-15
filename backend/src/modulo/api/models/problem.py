@@ -251,11 +251,27 @@ def problem_from_http_exception(
     )
 
 
+def _render_validation_error(error: dict[str, Any]) -> str:
+    """Render one Pydantic error as ``<dotted.path>: <message>``.
+
+    A MODEL-level error (a ``model_validator`` rejecting a cross-field
+    combination — e.g. ``PipelineGraphUpdate``'s "Graph node IDs must be
+    unique") carries an EMPTY ``loc``: it is attributable to no single field,
+    so it renders as the bare message with NO leading ``": "`` — the same
+    empty-``loc`` rule the graph write's ``_joined_validation_detail``
+    (``api/routes/pipelines.py``) applies, kept identical here so the two
+    renderers cannot drift.
+    """
+    loc = ".".join(str(part) for part in error.get("loc", ()))
+    msg = str(error.get("msg", ""))
+    return f"{loc}: {msg}" if loc else msg
+
+
 def problem_from_validation_error(
     request: Request,
     errors: Sequence[dict[str, Any]],
 ) -> ProblemDetail:
-    detail = "; ".join(f"{'.'.join(str(p) for p in e.get('loc', []))}: {e.get('msg', '')}" for e in errors)
+    detail = "; ".join(_render_validation_error(e) for e in errors)
     return ProblemDetail.from_type(
         problem_type=ProblemType.VALIDATION_ERROR,
         detail=detail or "Request validation failed",

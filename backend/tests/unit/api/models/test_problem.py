@@ -392,3 +392,25 @@ class TestProblemFromValidationError:
         errors: list[dict[str, Any]] = [{"loc": ("body", "x")}]
         problem = _problem_from_validation_error(None, errors)
         assert problem.detail == "body.x: "
+
+    def test_top_level_model_level_error_renders_bare_message_without_a_path(self) -> None:
+        """A ``model_validator`` / cross-field error carries ``loc == ()`` —
+        it is attributable to no single field, so it must render as the bare
+        Pydantic message with NO leading ``": "`` (the malformed
+        ``": Value error, …"`` shape an empty dotted path produces). The
+        message text itself names the offending condition."""
+        errors: list[dict[str, Any]] = [{"loc": (), "msg": "Value error, Graph node IDs must be unique"}]
+        problem = _problem_from_validation_error(None, errors)
+        assert problem.detail == "Value error, Graph node IDs must be unique"
+        assert not problem.detail.startswith(":"), problem.detail
+
+    def test_empty_loc_and_field_loc_errors_render_in_one_detail(self) -> None:
+        """Mixed error lists keep each rule per segment: the model-level error
+        contributes its bare message, the field error keeps its
+        ``field: message`` shape."""
+        errors: list[dict[str, Any]] = [
+            {"loc": (), "msg": "Value error, Graph exceeds maximum of 50 nodes"},
+            {"loc": ("body", "name"), "msg": "field required"},
+        ]
+        problem = _problem_from_validation_error(None, errors)
+        assert problem.detail == "Value error, Graph exceeds maximum of 50 nodes; body.name: field required"

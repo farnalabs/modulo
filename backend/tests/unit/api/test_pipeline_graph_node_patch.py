@@ -31,14 +31,16 @@ from __future__ import annotations
 import uuid
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
-from types import SimpleNamespace
-from typing import Annotated, Any, Literal, get_args, get_origin
+from types import SimpleNamespace, UnionType
+from typing import Annotated, Any, Literal, Union, get_args, get_origin
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from annotated_types import Gt
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
+from pydantic.fields import FieldInfo
 from sqlalchemy import Select
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
@@ -591,6 +593,29 @@ def test_cross_field_model_validator_error_has_no_double_colon_in_the_response(c
     write.assert_not_awaited()
 
 
+def test_put_graph_duplicate_node_ids_render_without_an_empty_field_path(client: TestClient) -> None:
+    """The SHARED request-validation renderer (``problem_from_validation_error``)
+    carries the same empty-``loc`` rule as ``_joined_validation_detail``: a
+    top-level model-level error renders its bare message, never ``": msg"``.
+    ``PUT /graph``'s ``reject_database_conflicts`` validator — this feature's
+    own sibling route — is the model validator whose errors flow through that
+    renderer, so the detail must not start with ``":"`` and must name the
+    offending condition either way the path is (or is not) prefixed."""
+    dup_id = uuid.uuid4()
+    nodes = [_agent_node(dup_id), _agent_node(dup_id)]
+
+    resp = client.put(
+        f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+        json={"nodes": nodes, "edges": []},
+    )
+
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert "must be unique" in detail, detail
+    assert not detail.startswith(":"), detail
+    assert ": :" not in detail, detail
+
+
 # ---------------------------------------------------------------------------
 # The adapter itself (read + merge + revalidate), without the HTTP layer
 # ---------------------------------------------------------------------------
@@ -649,18 +674,92 @@ _NULL_WIDENED_NON_NULLABLE_BOOLEANS = frozenset(
     {"enable_heartbeat", "idempotent", "single_pr_per_run", "await_completion"}
 )
 
-#: Constraint metadata classes the node field may carry, by attribute name.
-_CONSTRAINT_ATTRS = {"Ge": "ge", "Le": "le", "MaxLen": "max_length", "MinLen": "min_length"}
+#: Constraint metadata classes the parity guard KNOWS how to compare, by
+#: ``type(meta).__name__``. Membership is checked LOUDLY: any other metadata
+#: class on a patchable field pair fails the test naming the class, never
+#: skipped (a whitelist the guard consults but does not police is exactly the
+#: drift FAR-1829's iteration-2 review found — a ``Gt`` / pattern constraint
+#: the old map did not name was compared by neither the annotation check nor
+#: the constraint check, so a patch field could silently drop it and the body
+#: would accept a value the merged node rejects).
+#:
+#: ``_PydanticGeneralMetadata`` is pydantic's internal carrier for
+#: ``Field(pattern=...)`` (and friends) in this pydantic version; its
+#: ``__eq__`` is identity-based, so the guard compares constraints by their
+#: value-based ``repr``, not by ``==`` (observed: two ``Field(pattern="^a")``
+#: instances are NOT ``==`` but share a repr).
+_HANDLED_CONSTRAINT_KINDS = frozenset(
+    {
+        "Ge",
+        "Le",
+        "Gt",
+        "Lt",
+        "MaxLen",
+        "MinLen",
+        "MultipleOf",
+        "Pattern",
+        "StringConstraints",
+        "Strict",
+        "_PydanticGeneralMetadata",
+    }
+)
 
 
-def _field_constraints(field: Any) -> dict[str, Any]:
-    """The ``ge`` / ``le`` / ``max_length`` / ``min_length`` constraints on a field."""
-    found: dict[str, Any] = {}
+def _annotation_metadata(annotation: Any) -> Iterator[Any]:
+    """Every metadata object embedded in an ``Annotated`` layer of ``annotation``.
+
+    Pydantic moves ``Field(...)`` kwargs into ``field.metadata``, but a
+    ``StrictBool | None`` field KEEPS its ``Strict`` inside the annotation's
+    ``Annotated`` layer — a constraint must be found in either location or the
+    comparison below silently loses it.
+    """
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        args = get_args(annotation)
+        yield from args[1:]
+        yield from _annotation_metadata(args[0])
+    elif origin in (Union, UnionType):
+        for arg in get_args(annotation):
+            yield from _annotation_metadata(arg)
+
+
+def _constraint_metadata(field: Any) -> dict[str, list[str]]:
+    """Every constraint metadata object on ``field``, by class name → sorted reprs.
+
+    Reads BOTH locations Pydantic can stash a constraint — ``field.metadata``
+    and the annotation's ``Annotated`` layers — so a constraint kind present
+    on either side of a node/patch pair is always seen.
+    """
+    groups: dict[str, list[str]] = {}
+
+    def add(meta: Any) -> None:
+        groups.setdefault(type(meta).__name__, []).append(repr(meta))
+
     for meta in field.metadata:
-        attr = _CONSTRAINT_ATTRS.get(type(meta).__name__)
-        if attr is not None:
-            found[attr] = getattr(meta, attr)
-    return found
+        add(meta)
+    for meta in _annotation_metadata(field.annotation):
+        add(meta)
+    return {kind: sorted(reprs) for kind, reprs in groups.items()}
+
+
+def _assert_field_constraints_mirror(name: str, node_field: Any, patch_field: Any) -> None:
+    """The node and patch field must carry the SAME constraints, of EVERY kind
+    present on EITHER side — and any constraint class this guard does not
+    understand fails loudly by name rather than being skipped."""
+    node_groups = _constraint_metadata(node_field)
+    patch_groups = _constraint_metadata(patch_field)
+    unhandled = sorted((set(node_groups) | set(patch_groups)) - _HANDLED_CONSTRAINT_KINDS)
+    assert not unhandled, (
+        f"{name}: unhandled constraint metadata class(es) {unhandled} — the parity guard only "
+        "compares classes in _HANDLED_CONSTRAINT_KINDS; extend the guard (never skip the class) "
+        "before a patchable field may carry one"
+    )
+    for kind in sorted(set(node_groups) | set(patch_groups)):
+        node_reprs = node_groups.get(kind, [])
+        patch_reprs = patch_groups.get(kind, [])
+        assert node_reprs == patch_reprs, (
+            f"{name}: constraint {kind} must mirror between node and patch — node={node_reprs!r} patch={patch_reprs!r}"
+        )
 
 
 def _literal_groups(annotation: Any) -> tuple[tuple[Any, ...], ...]:
@@ -725,14 +824,23 @@ def test_patchable_field_annotations_and_constraints_mirror_the_node_model() -> 
       ``None``-widening of the four non-nullable booleans (which must remain
       a plain ``bool`` on the node and a ``None``-stripped bool — strictness
       preserved — on the patch);
-    * every ``ge`` / ``le`` / ``max_length`` / ``min_length`` the node field
-      carries is carried with the SAME value by the patch field;
+    * every constraint metadata object the node field carries is carried with
+      the SAME value by the patch field — of EVERY constraint kind present on
+      EITHER side (``Ge`` / ``Le`` / ``Gt`` / ``Lt`` / ``MaxLen`` / ``MinLen``
+      / ``MultipleOf`` / pattern / ``Strict`` / …), compared by
+      ``_assert_field_constraints_mirror``, which also fails loudly by name on
+      any constraint class it does not understand rather than skipping it;
     * every ``Literal`` value group the node field carries is identical on the
       patch field.
 
-    A constraint present on the body but absent on the node would accept a
-    value the merged node then rejects (or vice versa), breaking the
-    "a value the body accepts is a value the merged node accepts" guarantee.
+    The constraint loop runs on the UNION of kinds present on either side, so
+    a constraint on the NODE that the patch field omits is caught: without it
+    the body would ACCEPT a value the merged node's own field validator
+    REJECTS, breaking the "anything the body accepts, the merged node
+    accepts" guarantee. The reverse direction — a constraint present only on
+    the body — cannot make the body accept a value the node rejects (it only
+    TIGHTENS the body, making a legitimate node value unpatchable), but it is
+    still a mirror break, so it fails the same check.
     """
     patch_fields = PipelineGraphNodePatch.model_fields
     node_fields = PipelineGraphNode.model_fields
@@ -746,13 +854,7 @@ def test_patchable_field_annotations_and_constraints_mirror_the_node_model() -> 
     for name, pf in patch_fields.items():
         nf = node_fields[name]
 
-        node_constraints = _field_constraints(nf)
-        patch_constraints = _field_constraints(pf)
-        for attr, value in node_constraints.items():
-            assert patch_constraints.get(attr) == value, (
-                f"{name}: node carries {attr}={value!r} but the patch field carries "
-                f"{attr}={patch_constraints.get(attr)!r} — constraints must mirror"
-            )
+        _assert_field_constraints_mirror(name, nf, pf)
 
         assert _literal_groups(pf.annotation) == _literal_groups(nf.annotation), (
             f"{name}: node Literal {_literal_groups(nf.annotation)} not mirrored by the "
@@ -768,6 +870,52 @@ def test_patchable_field_annotations_and_constraints_mirror_the_node_model() -> 
                 f"{name}: strictness must be preserved across the None-widening "
                 f"(node strict={_is_strict_field(nf)}, patch strict={_is_strict_field(pf)})"
             )
+
+
+@pytest.mark.parametrize(
+    ("node_annotation", "expected_kind"),
+    [
+        # ``gt`` — the kind the pre-completion whitelist (Ge/Le/MaxLen/MinLen)
+        # silently ignored, live on ``PipelineGraphNode.wait_timeout``.
+        (Annotated[float, Gt(gt=0)], "Gt"),
+        # ``pattern`` — arrives as pydantic's internal general-metadata class,
+        # NOT as a ``Pattern`` instance, so a name-based map misses it twice.
+        (Annotated[str, Field(pattern="^a")], "_PydanticGeneralMetadata"),
+    ],
+)
+def test_constraint_mirror_catches_a_kind_the_old_whitelist_would_ignore(
+    node_annotation: Any, expected_kind: str
+) -> None:
+    """The guard must catch an OMITTED constraint of any kind — the exact
+    defect the old ``_CONSTRAINT_ATTRS`` map had: a node field carrying
+    ``Gt`` / a pattern was compared by neither the annotation check (the
+    annotation is unchanged) nor the constraint check (the class was not in
+    the four-name map), so a patch field could silently drop the constraint
+    and the body would accept a value the merged node rejects."""
+    node_like = FieldInfo.from_annotation(node_annotation)
+    # The patch side's ANNOTATION is irrelevant here — the mirror check reads
+    # constraint metadata only — so an empty FieldInfo stands for "the patch
+    # field omits the constraint".
+    patch_like = FieldInfo()
+
+    with pytest.raises(AssertionError, match=expected_kind):
+        _assert_field_constraints_mirror("synthetic", node_like, patch_like)
+
+
+class _NovelConstraint:
+    """A metadata class the parity guard has never seen."""
+
+
+def test_constraint_mirror_fails_loudly_on_an_unhandled_constraint_class() -> None:
+    """Even when BOTH sides carry the same constraint, a class outside
+    ``_HANDLED_CONSTRAINT_KINDS`` must fail the guard naming the class — a
+    guard that cannot compare a constraint kind must never silently skip it
+    (that silent skip WAS the old whitelist's defect)."""
+    node_like = FieldInfo.from_annotation(Annotated[int, _NovelConstraint()])
+    patch_like = FieldInfo.from_annotation(Annotated[int, _NovelConstraint()])
+
+    with pytest.raises(AssertionError, match="_NovelConstraint"):
+        _assert_field_constraints_mirror("synthetic", node_like, patch_like)
 
 
 def test_never_patchable_fields_are_absent_from_the_allowlist() -> None:
