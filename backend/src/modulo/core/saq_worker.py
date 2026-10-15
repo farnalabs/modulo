@@ -674,11 +674,17 @@ async def fire_polling_trigger(
     return await _dispatch_created_run(result, org_id=org_id, log_context="fire_polling_trigger")
 
 
-async def fire_report_trigger(_ctx: dict[str, Any], *, report_id: str, org_id: str) -> dict[str, Any]:
-    """Per-item report fire job — generate + deliver (SAQ bounded job)."""
+async def fire_report_trigger(
+    _ctx: dict[str, Any], *, report_id: str, org_id: str, epoch: str | None = None
+) -> dict[str, Any]:
+    """Per-item report fire job — generate + deliver (SAQ bounded job).
+
+    ``epoch`` is the enqueue tick replayed verbatim by SAQ on a retry, keeping
+    an already-delivered epoch from being delivered twice (FAR-1822).
+    """
     from modulo.core import cron_helpers as _ch
 
-    return await _ch.fire_report_trigger(report_id=uuid.UUID(report_id), org_id=uuid.UUID(org_id))
+    return await _ch.fire_report_trigger(report_id=uuid.UUID(report_id), org_id=uuid.UUID(org_id), epoch=epoch)
 
 
 async def fire_ongoing_trigger(

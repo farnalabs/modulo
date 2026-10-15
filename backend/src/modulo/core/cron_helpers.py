@@ -2110,28 +2110,36 @@ async def fire_polling_trigger(
     return {"status": "error", "reason": "unexpected"}
 
 
-async def fire_report_trigger(*, report_id: uuid.UUID, org_id: uuid.UUID) -> dict[str, Any]:
+async def fire_report_trigger(*, report_id: uuid.UUID, org_id: uuid.UUID, epoch: str | None = None) -> dict[str, Any]:
     """Fire one scheduled report — generate, format, deliver (SAQ bounded job).
 
     Delegates the fire mechanics to the shared core
     (:func:`modulo.core.reports.scheduler._fire_scheduled_report`), which holds
-    the ``ScheduledReport`` row lock only for its two short claim/stamp sections
+    the ``ScheduledReport`` row lock only for its two short read/stamp sections
     and runs generation/delivery OUTSIDE it (FAR-1822). This wrapper owns the
     SAQ-specific failure policy: Plan F1 report delivery (timeout=300 /
     retries=2 SAQ knobs at enqueue); on failure the job backs off
     ``next_send_at`` by +5min (or deactivates after 5 consecutive failures) so
     ``fire_due_triggers`` NEVER re-enqueues every 30s; on success it clears the
     consecutive-failure counter.
+
+    ``epoch`` is the enqueue tick passed through from ``fire_due_triggers`` and
+    replayed verbatim by SAQ on a retry — it makes the fire idempotent per
+    epoch (an already-delivered epoch is skipped, and its lease is stealable if
+    a crashed attempt left one behind; FAR-1822).
     """
     from modulo.core.reports.scheduler import _fire_scheduled_report
 
     factory = _open_factory()
     settings = get_settings()
-    redis_client = AsyncRedis.from_url(settings.redis_url, socket_connect_timeout=5)
+    # socket_timeout as well as socket_connect_timeout: an unresponsive Redis
+    # must fail fast, not hang a whole read until the 300s SAQ job timeout.
+    redis_client = AsyncRedis.from_url(settings.redis_url, socket_connect_timeout=5, socket_timeout=5)
     try:
         result = await _fire_scheduled_report(
             report_id=report_id,
             org_id=org_id,
+            epoch=epoch,
             session_factory=factory,
             redis_client=redis_client,
             rls_setter=_set_rls_org,
@@ -4321,6 +4329,10 @@ async def _process_one_due_report_row(
             f"fire:report:{row.id}:{int(now.timestamp())}",
             report_id=str(row.id),
             org_id=str(org_id),
+            # The enqueue tick is the fire's EPOCH: SAQ replays it verbatim on a
+            # retry, so the fire core can skip an already-delivered epoch and a
+            # re-queued dead job can steal its predecessor's lease (FAR-1822).
+            epoch=now.isoformat(),
         )
         if job_id is not None:
             summary["report_enqueued"] += 1

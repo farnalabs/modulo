@@ -622,6 +622,30 @@ async def test_fire_report_trigger_uses_formatter_and_deliverer():
     redis_client.delete.assert_awaited_once()
 
 
+async def test_fire_report_trigger_forwards_epoch_and_bounds_redis_timeouts():
+    """FAR-1822: the wrapper threads the enqueue epoch through to the fire core
+    and gives the Redis client a socket_timeout so an unresponsive Redis cannot
+    hang the job until its 300s timeout."""
+    redis_client = _redis()
+    with (
+        patch.object(ch, "get_settings", return_value=_settings()),
+        patch.object(ch, "AsyncRedis") as redis_cls,
+        patch.object(ch, "_open_factory", return_value=MagicMock()),
+        patch(
+            "modulo.core.reports.scheduler._fire_scheduled_report",
+            new_callable=AsyncMock,
+            return_value={"status": "sent"},
+        ) as fire,
+    ):
+        redis_cls.from_url.return_value = redis_client
+        result = await ch.fire_report_trigger(report_id=REPORT_ID, org_id=ORG, epoch="2026-07-01T09:00:00+00:00")
+
+    assert result == {"status": "sent"}
+    assert fire.await_args.kwargs["epoch"] == "2026-07-01T09:00:00+00:00"
+    assert redis_cls.from_url.call_args.kwargs["socket_timeout"] == 5
+    redis_client.aclose.assert_awaited_once()
+
+
 async def test_fire_report_trigger_falls_back_to_config_delivery():
     session = _MockSession([_trigger_result(_report_row()), MagicMock()])
     redis_client = _redis()

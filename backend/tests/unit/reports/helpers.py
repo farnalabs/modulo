@@ -10,7 +10,7 @@ different shapes. Changes to how the scheduler / CRUD layer interacts with
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -47,8 +47,14 @@ class MockSession:
     ``delete``/``flush`` for the CRUD paths.
     """
 
-    def __init__(self, execute_side_effect: list[MagicMock] | None = None) -> None:
+    def __init__(
+        self,
+        execute_side_effect: list[MagicMock] | None = None,
+        *,
+        raise_on: Callable[[object], bool] | None = None,
+    ) -> None:
         self._results = list(execute_side_effect or [])
+        self._raise_on = raise_on
         self.execute = AsyncMock(side_effect=self._next_result)
         self.delete = AsyncMock()
         self.flush = AsyncMock()
@@ -61,7 +67,12 @@ class MockSession:
         read-then-write flow (short-lock claim + terminal stamp), so a test
         cannot always predict the exact count; an exhausted queue must not be
         an error.
+
+        ``raise_on`` lets a test make a specific statement (e.g. the terminal
+        stamp) fail without counting statements.
         """
+        if self._raise_on is not None and args and self._raise_on(args[0]):
+            raise RuntimeError("scripted statement failure")
         if self._results:
             return self._results.pop(0)
         return MagicMock()

@@ -19,6 +19,8 @@ from httpx import Response
 from modulo.core.reports.scheduler import (
     _REPORT_HTTP_TIMEOUT,
     _SIGNATURE_HEADER,
+    ReportFireLeaseUnavailableError,
+    _acquire_report_fire_lease,
     _coerce_timeout,
     _deliver_slack_webhook,
     _deliver_to_urls,
@@ -26,6 +28,7 @@ from modulo.core.reports.scheduler import (
     _deliver_webhook,
     _fire_scheduled_report,
     _get_engine,
+    _lease_value,
     _parse_retry_after,
     _serialize_json_body,
     _sign_payload,
@@ -40,6 +43,7 @@ from tests.unit.reports.helpers import (
     SLACK_URL,
     SLACK_URL_2,
     MockSession,
+    MockSessionFactory,
     make_http_client,
     make_http_response,
     make_report_mock,
@@ -355,7 +359,7 @@ class _LockTrackingSession:
 
 
 class _LeaseRedis:
-    """Minimal in-memory Redis double implementing SET NX + compare-and-delete."""
+    """Minimal in-memory Redis double implementing SET NX, GET and compare-and-delete."""
 
     def __init__(self) -> None:
         self._values: dict[str, str] = {}
@@ -365,6 +369,9 @@ class _LeaseRedis:
             return None
         self._values[key] = value
         return True
+
+    async def get(self, key: str) -> str | None:
+        return self._values.get(key)
 
     async def eval(self, script: str, numkeys: int, key: str, token: str) -> int:
         if self._values.get(key) == token:
@@ -461,6 +468,307 @@ class TestFireScheduledReportLockScope:
         assert first_result["status"] == "sent"
         assert second_result == {"status": "skipped", "reason": "already_firing"}
         assert len(gen_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# FAR-1822 review fixes: epoch idempotency, lease failure/recovery, guarded
+# terminal stamp
+# ---------------------------------------------------------------------------
+
+
+def _recurring_report(last_sent_at: datetime.datetime | None = None) -> MagicMock:
+    report = make_report_mock(
+        report_type="epoch_probe",
+        cron_expression="0 9 * * *",
+        config_json={"schedule_type": "recurring"},
+    )
+    report.last_sent_at = last_sent_at
+    return report
+
+
+def _one_time_report(last_sent_at: datetime.datetime | None = None) -> MagicMock:
+    report = make_report_mock(
+        report_type="epoch_probe",
+        cron_expression="0 9 * * *",
+        config_json={"schedule_type": "one_time"},
+    )
+    report.last_sent_at = last_sent_at
+    return report
+
+
+def _select_returns(report: MagicMock) -> MagicMock:
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = report
+    return result
+
+
+def _statements(session: MockSession) -> list[object]:
+    return [call.args[0] for call in session.execute.await_args_list]
+
+
+def _updates(session: MockSession) -> list[object]:
+    return [stmt for stmt in _statements(session) if str(stmt).lstrip().startswith("UPDATE")]
+
+
+class _ExplodingRedis:
+    """Redis double whose every operation fails — an infrastructure outage."""
+
+    async def set(self, *args: object, **kwargs: object) -> None:
+        raise RuntimeError("redis down")
+
+    async def get(self, *args: object, **kwargs: object) -> None:
+        raise RuntimeError("redis down")
+
+
+class TestReportFireEpochIdempotency:
+    """Finding 1: a retry of an already-delivered epoch must never re-deliver."""
+
+    async def test_post_delivery_terminal_stamp_failure_does_not_redeliver(self) -> None:
+        delivered: list[int] = []
+
+        async def generator(session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
+            return {"rows": 1}
+
+        async def deliverer(payload: object, config: dict[str, object]) -> list[dict[str, object]]:
+            delivered.append(1)
+            return [{"status": "delivered"}]
+
+        report = _recurring_report()
+        session = MockSession(
+            [_select_returns(report)],
+            raise_on=lambda stmt: str(stmt).lstrip().startswith("UPDATE") and "last_sent_at" in str(stmt),
+        )
+
+        with (
+            report_firing_env(session),
+            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+            patch("modulo.core.reports.scheduler.get_formatter", return_value=None),
+            patch("modulo.core.reports.scheduler.get_deliverer", return_value=deliverer),
+        ):
+            result = await _fire_scheduled_report(
+                report_id=report.id,
+                org_id=report.organisation_id,
+                epoch="2026-07-01T09:00:00+00:00",
+            )
+
+        # The send happened, so the fire reports success rather than raising —
+        # SAQ must NOT retry the whole job and deliver again.
+        assert result["status"] == "sent"
+        assert len(delivered) == 1
+
+    async def test_already_delivered_epoch_is_skipped(self) -> None:
+        epoch = "2026-07-01T09:00:00+00:00"
+        report = _recurring_report(last_sent_at=datetime.datetime(2026, 7, 1, 9, 0, tzinfo=datetime.UTC))
+        session = MockSession([_select_returns(report)])
+
+        with report_firing_env(session):
+            result = await _fire_scheduled_report(
+                report_id=report.id,
+                org_id=report.organisation_id,
+                epoch=epoch,
+            )
+
+        assert result == {"status": "skipped", "reason": "already_delivered"}
+
+    async def test_newer_epoch_proceeds_after_an_earlier_delivery(self) -> None:
+        async def generator(session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
+            return {"rows": 1}
+
+        report = _recurring_report(last_sent_at=datetime.datetime(2026, 7, 1, 9, 0, tzinfo=datetime.UTC))
+        session = MockSession([_select_returns(report)])
+
+        with (
+            report_firing_env(session),
+            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+        ):
+            result = await _fire_scheduled_report(
+                report_id=report.id,
+                org_id=report.organisation_id,
+                epoch="2026-07-02T09:00:00+00:00",
+            )
+
+        assert result["status"] == "sent"
+
+
+class TestReportFireLeaseOutcome:
+    """Findings 3 + 4: an unavailable lease FAILS (never a benign skip) and a
+    re-queued same-epoch attempt recovers a dead holder's lease."""
+
+    async def test_no_redis_client_raises_lease_unavailable(self) -> None:
+        with pytest.raises(ReportFireLeaseUnavailableError):
+            await _acquire_report_fire_lease(None, uuid.uuid4(), "epoch-E")
+
+    async def test_redis_error_raises_lease_unavailable(self) -> None:
+        with pytest.raises(ReportFireLeaseUnavailableError):
+            await _acquire_report_fire_lease(_ExplodingRedis(), uuid.uuid4(), "epoch-E")  # type: ignore[arg-type]
+
+    async def test_lease_unavailable_is_a_failure_not_a_skip(self) -> None:
+        result = await _fire_scheduled_report(
+            report_id=uuid.uuid4(),
+            org_id=uuid.uuid4(),
+            epoch="epoch-E",
+            session_factory=lambda: MockSession([]),
+            redis_client=_ExplodingRedis(),  # type: ignore[arg-type]
+        )
+
+        assert result == {"status": "failed", "reason": "lease_unavailable"}
+
+    async def test_same_epoch_requeue_steals_a_dead_holders_lease(self) -> None:
+        redis = _LeaseRedis()
+        report_id = uuid.uuid4()
+        first = await _acquire_report_fire_lease(redis, report_id, "epoch-E")
+        assert first is not None
+
+        # The first attempt crashed without releasing. SAQ re-queues the same
+        # job with the SAME epoch — it must be able to re-acquire, not wait out
+        # the 900s TTL.
+        requeued = await _acquire_report_fire_lease(redis, report_id, "epoch-E")
+        assert requeued is not None
+
+        # A DIFFERENT epoch is a genuine concurrent fire — still blocked.
+        assert await _acquire_report_fire_lease(redis, report_id, "epoch-F") is None
+
+    async def test_holding_lease_without_epoch_is_not_stealable(self) -> None:
+        redis = _LeaseRedis()
+        report_id = uuid.uuid4()
+        assert await _acquire_report_fire_lease(redis, report_id) is not None
+        # No epoch to match -> a second anonymous fire is a genuine skip.
+        assert await _acquire_report_fire_lease(redis, report_id) is None
+
+    async def test_fire_recovers_a_lease_left_by_a_crashed_same_epoch_attempt(self) -> None:
+        redis = _LeaseRedis()
+        report = _recurring_report()
+        # Pre-seed the lease exactly as a crashed attempt would leave it.
+        await _acquire_report_fire_lease(redis, report.id, "epoch-E")
+
+        delivered: list[int] = []
+
+        async def generator(session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
+            return {"rows": 1}
+
+        async def deliverer(payload: object, config: dict[str, object]) -> list[dict[str, object]]:
+            delivered.append(1)
+            return [{"status": "delivered"}]
+
+        session = MockSession([_select_returns(report)])
+        with (
+            patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
+            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+            patch("modulo.core.reports.scheduler.get_formatter", return_value=None),
+            patch("modulo.core.reports.scheduler.get_deliverer", return_value=deliverer),
+        ):
+            result = await _fire_scheduled_report(
+                report_id=report.id,
+                org_id=report.organisation_id,
+                epoch="epoch-E",
+                session_factory=MockSessionFactory(session),
+                redis_client=redis,  # type: ignore[arg-type]
+            )
+
+        assert result["status"] == "sent"
+        assert len(delivered) == 1
+
+    async def test_held_lease_for_another_epoch_is_a_benign_skip(self) -> None:
+        redis = _LeaseRedis()
+        report = _recurring_report()
+        await _acquire_report_fire_lease(redis, report.id, "epoch-A")
+        session = MockSession([_select_returns(report)])
+
+        result = await _fire_scheduled_report(
+            report_id=report.id,
+            org_id=report.organisation_id,
+            epoch="epoch-B",
+            session_factory=MockSessionFactory(session),
+            redis_client=redis,  # type: ignore[arg-type]
+        )
+
+        assert result == {"status": "skipped", "reason": "already_firing"}
+
+    def test_lease_values_carry_their_epoch(self) -> None:
+        stored = _lease_value("tok", "epoch-E")
+        assert "epoch-E" in stored
+        assert _lease_value("tok", None) != stored
+
+
+class TestOneTimeReportNotStranded:
+    """Finding 2: a one-time report's next_send_at must never be nulled before
+    the terminal stamp, so a never-completed fire stays re-selectable."""
+
+    async def test_one_time_fire_leaves_next_send_at_untouched_on_failure(self) -> None:
+        async def generator(session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
+            raise RuntimeError("crashed before the terminal stamp")
+
+        report = _one_time_report()
+        session = MockSession([_select_returns(report)])
+
+        with (
+            report_firing_env(session),
+            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+        ):
+            result = await _fire_scheduled_report(
+                report_id=report.id,
+                org_id=report.organisation_id,
+                epoch="2026-07-01T09:00:00+00:00",
+            )
+
+        assert result == {"status": "failed", "reason": "generation_or_delivery_failed"}
+        # No write at all on the pre-terminal failure path — in particular
+        # nothing nulls next_send_at, so the due-scan's `next_send_at IS NOT
+        # NULL` predicate can still re-select the report.
+        assert not _updates(session)
+
+
+class TestTerminalStampDoesNotClobber:
+    """Finding 5: phase 3 must not restate state it did not observe."""
+
+    async def test_recurring_terminal_stamp_writes_only_last_sent_at(self) -> None:
+        async def generator(session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
+            return {"rows": 1}
+
+        report = _recurring_report()
+        session = MockSession([_select_returns(report)])
+
+        with (
+            report_firing_env(session),
+            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+        ):
+            result = await _fire_scheduled_report(
+                report_id=report.id,
+                org_id=report.organisation_id,
+                epoch="2026-07-01T09:00:00+00:00",
+            )
+
+        assert result["status"] == "sent"
+        terminal = [stmt for stmt in _updates(session) if "last_sent_at" in str(stmt)][-1]
+        params = terminal.compile().params
+        assert "next_send_at" not in params
+        assert "active" not in params
+
+    async def test_one_time_terminal_stamp_deactivates_and_never_reactivates(self) -> None:
+        async def generator(session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
+            return {"rows": 1}
+
+        report = _one_time_report()
+        session = MockSession([_select_returns(report)])
+
+        with (
+            report_firing_env(session),
+            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+        ):
+            result = await _fire_scheduled_report(
+                report_id=report.id,
+                org_id=report.organisation_id,
+                epoch="2026-07-01T09:00:00+00:00",
+            )
+
+        assert result["status"] == "sent"
+        terminal = [stmt for stmt in _updates(session) if "last_sent_at" in str(stmt)][-1]
+        params = terminal.compile().params
+        assert params["active"] is False
+        assert params["next_send_at"] is None
+        # The retirement is guarded on the row still being active, so a row a
+        # concurrent operator deactivated is never resurrected.
+        assert "active is true" in str(terminal).lower()
 
 
 # ---------------------------------------------------------------------------

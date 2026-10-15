@@ -1480,6 +1480,21 @@ class TestFireWrappersExtended:
         assert ch.await_args.kwargs["report_id"] == UUID(_UUID_1)
         assert ch.await_args.kwargs["org_id"] == UUID(_UUID_ORG)
 
+    @pytest.mark.asyncio
+    async def test_fire_report_trigger_forwards_epoch(self) -> None:
+        """FAR-1822: the SAQ job passes the enqueue epoch through so a retry of
+        an already-delivered epoch is idempotent."""
+        with (
+            patch(
+                "modulo.core.cron_helpers.fire_report_trigger",
+                new_callable=AsyncMock,
+                return_value={"status": "sent"},
+            ) as ch,
+        ):
+            await sw.fire_report_trigger({}, report_id=_UUID_1, org_id=_UUID_ORG, epoch="epoch-E")
+
+        assert ch.await_args.kwargs["epoch"] == "epoch-E"
+
 
 class TestSystemJobDelegates:
     """Every remaining system-worker job is a thin delegate — these pin the
