@@ -84,6 +84,37 @@ describe('useSidebarMode (FAR-1237 — resolved-mode first paint)', () => {
     expect(useSidebarMode().mobileNavMode.value).toBe('drawer')
   })
 
+  it("a fetch that settles unreadable resolves to the drawer, not a permanent pending (FAR-1805)", async () => {
+    // The mock resolves {data: null, error: undefined} — the no-payload branch
+    // that records no apiError. After it settles the store is terminal
+    // 'unavailable', which is KNOWN, so the mode must leave 'pending' and fall
+    // back to the flag default (drawer) with the header slot occupied.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const store = usePlanStore()
+      await store.fetchPlan()
+
+      expect(store.flagsSource).toBe('unavailable')
+
+      const mode = useSidebarMode()
+      expect(mode.mobileNavMode.value).toBe('drawer')
+      expect(mode.showMobileHeader.value).toBe(true)
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('[plan] Feature flags request settled without a payload'),
+        null,
+      )
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it("'unavailable' still renders the drawer chrome after a cache miss (store state, no fetch needed)", () => {
+    usePlanStore().flagsSource = 'unavailable'
+    const mode = useSidebarMode()
+    expect(mode.mobileNavMode.value).toBe('drawer')
+    expect(mode.showMobileHeader.value).toBe(true)
+  })
+
   it('desktop never shows the mobile header chrome, pending or not', () => {
     mockMatchMedia(true)
     const mode = useSidebarMode()
