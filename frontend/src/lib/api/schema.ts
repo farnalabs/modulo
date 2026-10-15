@@ -18272,6 +18272,8 @@ export interface components {
             langgraph_thread_id: string;
             /** Snapshot Id */
             snapshot_id?: string | null;
+            /** Snapshot Version */
+            snapshot_version?: number | null;
             /** Error Detail */
             error_detail?: string | null;
             /** Error Code */
