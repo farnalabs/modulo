@@ -357,11 +357,17 @@ def test_update_org_logo_and_plan(api: tuple[TestClient, AsyncMock], monkeypatch
     monkeypatch.setattr(admin, "get_organisation", AsyncMock(return_value=org))
 
     async def _update(session: Any, org_id: Any, updates: dict[str, Any]) -> Organisation:
-        org.settings_json = updates.get("settings_json", org.settings_json)
         org.plan_id = updates.get("plan_id", org.plan_id)
         return org
 
+    async def _patch_settings(session: Any, org_id: Any, patch: Any = None, delete_keys: Any = None) -> dict[str, Any]:
+        settings = dict(org.settings_json or {})
+        settings.update(patch or {})
+        org.settings_json = settings
+        return settings
+
     monkeypatch.setattr(admin, "update_organisation", _update)
+    monkeypatch.setattr(admin, "update_org_settings_patch", _patch_settings)
     resp = client.put(
         "/api/v1/admin/org",
         json={"name": "Renamed", "logo_url": "https://new/l.png", "plan_id": "pro"},

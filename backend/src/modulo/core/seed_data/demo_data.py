@@ -30,6 +30,7 @@ from modulo.core.license_signing import (
     encode_license_key,
     generate_team_license,
 )
+from modulo.db.crud.organisation import update_org_settings_patch
 from modulo.db.models.account import Account
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
@@ -249,8 +250,14 @@ async def seed_demo_org(
     new_key = _demo_org_license_key(org, tier=tier, slug=slug, private_key=private_key)
     new_settings = _demo_org_settings(org, license_key=new_key, tier=tier, full=full)
     if new_settings != (org.settings_json or {}):
-        org.settings_json = new_settings
-        await session.flush()
+        # FAR-1830: emit ONLY this seeder's top-level keys via the atomic patch.
+        # A whole-column write from the read above would drop every key another
+        # settings_json writer committed between this read and the write.
+        await update_org_settings_patch(
+            session,
+            org.id,
+            {"license_key": new_key, "demo": new_settings["demo"]},
+        )
 
 
 async def _resolve_demo_org_id(factory: async_sessionmaker[AsyncSession], slug: str | None) -> uuid.UUID | None:

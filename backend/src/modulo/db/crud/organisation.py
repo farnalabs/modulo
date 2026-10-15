@@ -1,11 +1,15 @@
 """CRUD for Organisation records."""
 
+import json
 import logging
 import uuid
+from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import ARRAY, Text, bindparam, select, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
+from sqlalchemy.orm.util import identity_key
 
 from modulo.db.crud.base import apply_updates
 from modulo.db.models.organisation import (
@@ -13,9 +17,23 @@ from modulo.db.models.organisation import (
     SYSTEM_ORG_ID,
     Organisation,
 )
+from modulo.db.rls import read_rls_org
 from modulo.db.seed import seed_system_schemas
 
 _log = logging.getLogger(__name__)
+
+
+class OrgSettingsPatchOrgMismatch(RuntimeError):  # noqa: N818  # matches the OutputsRlsMismatch sibling naming
+    """The session's bound RLS org disagrees with the patch target organisation.
+
+    ``organisations`` is not itself RLS-scoped, so a caller bound to one org
+    could otherwise issue a settings patch for another. This is a programming
+    error (wrong org bound, or a route that failed to set ``set_rls_org``): the
+    write is refused rather than silently mutating the wrong tenant. A session
+    with NO bound org (boot seeds / system context) is allowed — there is no
+    cross-org boundary to violate.
+    """
+
 
 # Sentinel org IDs that must never resolve a login page.
 _SENTINEL_ORG_IDS: frozenset[uuid.UUID] = frozenset({SYSTEM_ORG_ID, MODULO_REGISTRY_ORG_ID})
@@ -148,6 +166,150 @@ async def update_organisation(
     apply_updates(org, updates)
     await session.flush()
     return org
+
+
+async def update_org_settings_patch(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    patch: dict[str, Any] | None = None,
+    delete_keys: list[str] | None = None,
+) -> dict[str, Any]:
+    """Atomically merge (and/or remove) top-level keys of ``settings_json`` (FAR-1830).
+
+    Several independent concerns persist their state in
+    ``organisations.settings_json`` under their own top-level key (email config,
+    ``logo_url``, ``cost_controls``, ``run_concurrency_limit``, ``demo``,
+    ``license_key``, ...). The old write pattern — read the whole column, merge
+    one key in Python, write the WHOLE column back via
+    :func:`update_organisation` — takes no lock, so any two writers overlapping
+    in their read→write window silently drop each other's keys. This helper
+    replaces that read-modify-write with a single atomic statement:
+
+    - Postgres (the supported backend): ``UPDATE organisations SET
+      settings_json = (COALESCE(settings_json, '{}'::jsonb) || :patch::jsonb) -
+      :delete_keys::text[] WHERE id = :org_id RETURNING settings_json`` — the
+      read and write are one statement, so no interleaving writer can be lost.
+    - Generic backends (SQLite / MariaDB, tests + legacy): an equivalent
+      read-merge-write under ``SELECT ... FOR UPDATE``. Dialect-gated so the
+      JSONB operators never reach a backend that lacks them.
+
+    Contract:
+
+    - The caller owns the transaction and MUST have set the org RLS context
+      (``set_rls_org``) for this org — the same contract as every other
+      ``settings_json`` writer. A session bound to a DIFFERENT org is refused
+      (:class:`OrgSettingsPatchOrgMismatch`) rather than mutating the wrong
+      tenant; an unbound session (boot seeds / system context) is allowed.
+    - The lock wait is bounded via ``set_mutation_row_lock_timeout``.
+    - Any in-session ``Organisation`` for this id is refreshed to the merged
+      value WITHOUT dirtying it (``set_committed_value``), so callers read the
+      patched settings without emitting a follow-up whole-column write.
+    - The in-process settings-derived flag cache is invalidated so a patch that
+      changes a cached flag cannot serve a stale value.
+
+    Returns the refreshed ``settings_json`` mapping.
+    """
+    patch = patch or {}
+    delete_keys = list(delete_keys or [])
+
+    await _take_settings_patch_lock_wait(session)
+    bound_org = await read_rls_org(session)
+    if bound_org is not None and bound_org != organisation_id:
+        raise OrgSettingsPatchOrgMismatch(
+            f"settings_json patch org mismatch: session org {bound_org} != target org {organisation_id}"
+        )
+
+    if await _settings_patch_dialect(session) == "postgresql":
+        settings = await _apply_settings_patch_postgres(session, organisation_id, patch, delete_keys)
+    else:
+        settings = await _apply_settings_patch_generic(session, organisation_id, patch, delete_keys)
+
+    _invalidate_settings_derived_caches()
+    return settings
+
+
+async def _take_settings_patch_lock_wait(session: AsyncSession) -> None:
+    """Bound the row-lock wait for the rest of the transaction (FAR-1313)."""
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    await set_mutation_row_lock_timeout(session)
+
+
+async def _settings_patch_dialect(session: AsyncSession) -> str:
+    from modulo.db.crud.run import get_dialect_name
+
+    return await get_dialect_name(session)
+
+
+async def _apply_settings_patch_postgres(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    patch: dict[str, Any],
+    delete_keys: list[str],
+) -> dict[str, Any]:
+    stmt = text(
+        "UPDATE organisations "
+        "SET settings_json = "
+        "(COALESCE(settings_json, '{}'::jsonb) || CAST(:patch AS jsonb)) "
+        "- CAST(:delete_keys AS text[]) "
+        "WHERE id = :org_id "
+        "RETURNING settings_json"
+    ).bindparams(
+        bindparam("patch", value=json.dumps(patch)),
+        bindparam("delete_keys", value=delete_keys, type_=ARRAY(Text)),
+    )
+    result = await session.execute(stmt, {"org_id": str(organisation_id)})
+    row = result.first()
+    if row is None:
+        raise LookupError(f"organisation not found: {organisation_id}")
+    raw = row[0]
+    settings = json.loads(raw) if isinstance(raw, str) else dict(raw)
+    _sync_identity_map(session, organisation_id, settings)
+    return settings
+
+
+async def _apply_settings_patch_generic(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    patch: dict[str, Any],
+    delete_keys: list[str],
+) -> dict[str, Any]:
+    org = await get_organisation(session, organisation_id, for_update=True)
+    if org is None:
+        raise LookupError(f"organisation not found: {organisation_id}")
+    settings = dict(org.settings_json) if isinstance(org.settings_json, dict) else {}
+    settings.update(patch)
+    for key in delete_keys:
+        settings.pop(key, None)
+    org.settings_json = settings
+    await session.flush()
+    return settings
+
+
+def _sync_identity_map(session: AsyncSession, organisation_id: uuid.UUID, settings: dict[str, Any]) -> None:
+    """Refresh an already-loaded org row to the merged value without dirtying it."""
+    identity_map = getattr(session, "identity_map", None)
+    getter = getattr(identity_map, "get", None)
+    if getter is None:
+        return
+    org = getter(identity_key(Organisation, organisation_id))
+    if isinstance(org, Organisation):
+        set_committed_value(org, "settings_json", settings)
+
+
+def _invalidate_settings_derived_caches() -> None:
+    """Drop in-process caches derived from ``settings_json``.
+
+    ``db.crud.run`` mirrors the org agent-minting flag into a short-TTL
+    in-process cache (it cannot import ``core`` under the db→core import
+    contract), so a settings patch must clear it or a flag toggled here keeps
+    serving the stale value for up to the TTL. Lazy import: ``db.crud.run``
+    imports ``get_organisation`` from this module, so a module-level import
+    would be circular.
+    """
+    from modulo.db.crud.run import clear_agent_mint_flag_cache
+
+    clear_agent_mint_flag_cache()
 
 
 # ---------------------------------------------------------------------------

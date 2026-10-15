@@ -19,6 +19,7 @@ from collections.abc import Generator
 from typing import Self
 
 import pytest
+from sqlalchemy import TextClause
 
 from modulo.core.license import (
     _LICENSE_PUBLIC_KEY_HEX,
@@ -64,6 +65,9 @@ def _use_test_license_key() -> Generator[None, None, None]:
 class _FakeResult:
     def __init__(self, rows: list) -> None:
         self._rows = rows
+
+    def scalar(self):
+        return self._rows[0] if self._rows else None
 
     def scalar_one_or_none(self):
         return self._rows[0] if self._rows else None
@@ -123,7 +127,16 @@ class FakeAsyncSession:
         self.added.append(obj)
         self._store.setdefault(type(obj), []).append(obj)
 
+    def get_bind(self):
+        # Drives the dialect gate in update_org_settings_patch; "sqlite" keeps
+        # the helper on its generic (non-JSONB) merge path.
+        return types.SimpleNamespace(dialect=types.SimpleNamespace(name="sqlite"))
+
     async def execute(self, stmt):
+        if isinstance(stmt, TextClause):
+            # Non-ORM statements (e.g. read_rls_org's current_setting probe)
+            # answer "no rows".
+            return _FakeResult([])
         entity = stmt.column_descriptions[0]["entity"]
         preds = _extract_predicates(stmt.whereclause)
         matches = [

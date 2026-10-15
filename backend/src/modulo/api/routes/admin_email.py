@@ -28,7 +28,7 @@ from modulo.core.email_service import (
     _is_valid_recipient,
     send_email,
 )
-from modulo.db.crud.organisation import get_organisation, update_organisation
+from modulo.db.crud.organisation import get_organisation, update_org_settings_patch
 from modulo.settings import Settings, get_settings
 
 _CODE_ADMIN_EMAIL_ADMIN_UPDATE = "admin_email.admin_update_email_settings"
@@ -182,11 +182,15 @@ async def admin_update_email_settings(
         merged["smtp_password"] = encrypt_stored_secret(req.smtp_password, settings.fernet_key).decode()
     merged["email_from"] = req.email_from
     merged["smtp_timeout"] = req.smtp_timeout
-    settings_json["email"] = merged
 
     try:
         async with session.begin():
-            await update_organisation(session, org_id, {"settings_json": settings_json})
+            # FAR-1830: emit ONLY this writer's top-level key. The read above is
+            # for readability/merge of the email sub-object; writing the whole
+            # ``settings_json`` column back from that stale read would drop every
+            # other concern's keys (and even a concurrent email write) between the
+            # two transactions. The atomic patch merges into the live column.
+            await update_org_settings_patch(session, org_id, {"email": merged})
     except ProgrammingError:
         logger.exception(_CODE_ADMIN_EMAIL_ADMIN_UPDATE)
         raise HTTPException(

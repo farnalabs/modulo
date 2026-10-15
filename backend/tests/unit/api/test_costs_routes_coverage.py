@@ -306,10 +306,18 @@ def test_update_cost_controls_applies_all_fields(client: tuple[TestClient, Async
     org = _make_org()
     teams_result = MagicMock()
     teams_result.items = []
+
+    async def _merge_patch(session, organisation_id, patch=None, delete_keys=None):
+        settings = dict(org.settings_json or {})
+        settings.update(patch or {})
+        org.settings_json = settings
+        return settings
+
     with ExitStack() as stack:
         stack.enter_context(patch(f"{_PREFIX}get_organisation", new=AsyncMock(return_value=org)))
         stack.enter_context(patch(f"{_PREFIX}list_teams", new=AsyncMock(return_value=teams_result)))
         stack.enter_context(_rls_cm())
+        stack.enter_context(patch(f"{_PREFIX}update_org_settings_patch", new=_merge_patch))
         resp = http.put(
             "/api/v1/admin/costs/controls",
             json={
@@ -337,13 +345,13 @@ def test_update_cost_controls_applies_all_fields(client: tuple[TestClient, Async
 
 def test_update_cost_controls_no_settings_only_leaves_org_untouched() -> None:
     """A request with only unset optional fields must not rewrite settings_json."""
-    from modulo.api.routes.costs import UpdateCostControlsRequest, _apply_cost_control_updates
+    from modulo.api.routes.costs import UpdateCostControlsRequest, _cost_controls_patch
 
     org = MagicMock()
     org.daily_spend_limit = None
     org.settings_json = None
     req = UpdateCostControlsRequest(budget=None)
-    _apply_cost_control_updates(org, req)
+    assert _cost_controls_patch(org, req) is None
     assert org.settings_json is None
 
 
