@@ -38,6 +38,7 @@ vi.mock('vue-router', () => ({
 }))
 
 import PageTabs from '../../components/PageTabs.vue'
+import { usePlanStore } from '../../stores/planStore'
 
 function createWrapper(tabs: any[]) {
   return mount(PageTabs as any, {
@@ -61,6 +62,12 @@ describe('PageTabs — manifest without routes (FAR-47 fallback)', () => {
   })
 
   it('renders every tab unlocked when the manifest provides no route metadata', () => {
+    // Resolved community plan: were `manifestRoutes` not defensively defaulted
+    // to `{}`, these team-tier tabs would resolve as locked. Asserting them
+    // unlocked therefore proves the `?? {}` fallback, not merely an unresolved
+    // plan (which also renders everything unlocked).
+    const store = usePlanStore()
+    store.$patch({ currentTier: 'community', loaded: true })
     const wrapper = createWrapper([
       { label: 'Overview', to: '/admin/costs' },
       { label: 'Spend Limits', to: '/admin/costs/limits' },

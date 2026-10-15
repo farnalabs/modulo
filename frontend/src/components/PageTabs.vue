@@ -47,6 +47,12 @@ import manifest from '@/manifest.yaml'
 
 export interface Tab {
   label: string
+  /**
+   * Exact `manifest.routes` key for this tab's destination (the bare route
+   * path, e.g. `/admin/costs`). The plan-lock lookup resolves against it
+   * verbatim, so a `to` carrying a query/hash (or a trailing-slash variant)
+   * does not match a manifest entry and the tab is read as ungated.
+   */
   to: string
   icon?: Component
   badge?: number | string
@@ -102,6 +108,13 @@ function lockFor(tab: Tab): TabLock | null {
   // The explicit tier-id check also keeps it unlocked while the tier catalog
   // is unknown (an unranked currentTier makes isAtMinimumTier return false).
   if (!tier || tier === 'community') return null
+  // Until the plan sources resolve, the active tier is not yet known (it
+  // defaults to `community`), so `isAtMinimumTier` cannot distinguish an
+  // entitled user from an under-tier one. Locking here would flash a padlock
+  // at a tier-entitled user and then flip it off (FAR-47 review). Leave the
+  // tab unlocked until the plan has resolved — the analogue of the sidebar's
+  // `tierInfoLoaded` gating in config/navigation.ts.
+  if (!planStore.loaded) return null
   if (planStore.isAtMinimumTier(tier)) return null
   const plan = planStore.getTierLabel(tier)
   return {
