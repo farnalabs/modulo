@@ -29,21 +29,24 @@ interface TiersPayload {
   tiers: Array<{ tier_id: string; label: string; rank: number }>;
 }
 
-function pushSettledError(apiErrors: string[], label: string, reason: unknown): void {
-  const message = (reason as { message?: unknown } | null | undefined)?.message;
-  apiErrors.push(`${label}: ${message ?? String(reason)}`);
-}
-
-function runPlanSource<T>(
+/**
+ * Run one plan request to settlement: apply on success, record on failure.
+ * Never rejects — the request is built INSIDE a thunk so even a synchronous
+ * throw from `api.GET` lands in this function's catch rather than escaping
+ * before the chain exists. (Replaces the old allSettled-then-apply pair:
+ * applying per source lets a fast flags response settle the nav without
+ * waiting on license/tiers — FAR-1805.)
+ */
+async function settlePlanSource<T>(
   label: string,
-  settled: PromiseSettledResult<unknown>,
+  makeRequest: () => Promise<unknown>,
   apply: (res: ApiResult<T>, apiErrors: string[]) => void,
   apiErrors: string[],
-): void {
-  if (settled.status === "fulfilled") {
-    apply(settled.value as unknown as ApiResult<T>, apiErrors);
-  } else {
-    pushSettledError(apiErrors, label, settled.reason);
+): Promise<void> {
+  try {
+    apply((await makeRequest()) as ApiResult<T>, apiErrors);
+  } catch (e: unknown) {
+    apiErrors.push(`${label}: ${formatApiError(e)}`);
   }
 }
 
@@ -231,52 +234,55 @@ export const usePlanStore = defineStore("plan", () => {
     error.value = null;
     const apiErrors: string[] = [];
     try {
-      const results = await Promise.allSettled([
-        withTimeout(
-          api.GET("/api/v1/admin/feature-flags"),
-          15000,
-          "Feature flags request",
-        ),
-        withTimeout(
-          api.GET("/api/v1/admin/license"),
-          15000,
-          "License request",
-        ),
-        withTimeout(
-          api.GET("/api/v1/admin/tiers"),
-          15000,
-          "Tiers request",
-        ),
-      ]);
+      // Each source applies AS IT SETTLES (FAR-1805): a slow license/tiers
+      // response must not hold a flags answer the nav is waiting on — and,
+      // vice versa, a hung flags request must not delay tier/license state.
+      const flagsChain = settlePlanSource(
+        "Feature flags",
+        () => withTimeout(api.GET("/api/v1/admin/feature-flags"), 15000, "Feature flags request"),
+        applyFeatureFlagsPayload,
+        apiErrors,
+      ).finally(() => {
+        // FAR-1805: the FLAGS source settled without producing a payload —
+        // terminal, never 'pending' forever (fail open, with a log). The
+        // guard is "still 'none' after the flags source settled", deliberately
+        // NOT "an error was recorded": the all-undefined no-payload branch
+        // ({data: undefined, error: undefined}) records no apiError at all, so
+        // an error-only check would miss it. Covers 4xx/5xx, rejection, and the
+        // 15s withTimeout alike (settlePlanSource never throws past here).
+        // 'cache'/'server'/'unavailable' are left untouched (a resolved layout
+        // never falls back); a later successful fetch still overwrites with
+        // 'server'. The log carries the flags error recorded SO FAR — it fires
+        // the moment flags settles, before license/tiers have necessarily
+        // contributed, so it attributes the right failure to this fallback.
+        if (flagsSource.value === "none") {
+          flagsSource.value = "unavailable";
+          console.warn(
+            "[plan] Feature flags request settled without a payload — " +
+              "mobile nav falls back to the drawer",
+            apiErrors.length > 0 ? apiErrors.join("; ") : null,
+          );
+        }
+      });
+      const licenseChain = settlePlanSource(
+        "License",
+        () => withTimeout(api.GET("/api/v1/admin/license"), 15000, "License request"),
+        applyLicensePayload,
+        apiErrors,
+      );
+      const tiersChain = settlePlanSource(
+        "Tiers",
+        () => withTimeout(api.GET("/api/v1/admin/tiers"), 15000, "Tiers request"),
+        applyTiersPayload,
+        apiErrors,
+      );
 
-      const [flagsSettled, licenseSettled, tiersSettled] = results;
-
-      runPlanSource("Feature flags", flagsSettled, applyFeatureFlagsPayload, apiErrors);
-      runPlanSource("License", licenseSettled, applyLicensePayload, apiErrors);
-      runPlanSource("Tiers", tiersSettled, applyTiersPayload, apiErrors);
-
+      await Promise.all([flagsChain, licenseChain, tiersChain]);
       error.value = apiErrors.length > 0 ? apiErrors.join("; ") : null;
     } catch (e: unknown) {
       error.value = formatApiError(e);
     } finally {
       isLoading.value = false;
-      // FAR-1805: a fetch that settles WITHOUT a flags payload is terminal —
-      // never leave layout consumers in 'pending' forever (fail open, with a
-      // log). The guard is "still 'none' after settle", deliberately not "an
-      // error was recorded": the all-undefined no-payload branch
-      // ({data: undefined, error: undefined}) records no apiError at all, so
-      // an error-only check would miss it. This covers 4xx/5xx, rejection,
-      // and the 15s withTimeout alike. 'cache'/'server'/'unavailable' are
-      // left untouched (a resolved layout never falls back), and a later
-      // successful fetch still overwrites this with 'server'.
-      if (flagsSource.value === "none") {
-        flagsSource.value = "unavailable";
-        console.warn(
-          "[plan] Feature flags request settled without a payload — " +
-            "mobile nav falls back to the drawer",
-          error.value,
-        );
-      }
     }
   }
 

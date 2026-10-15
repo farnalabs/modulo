@@ -13,11 +13,14 @@ import { usePlanStore } from '../stores/planStore'
  *   the wrong layout, whatever mode the user's org actually resolves to.
  *
  * `pending` is bounded, not permanent (FAR-1805): it exists only while the
- * request is genuinely in flight. Once the plan store's flags request settles
- * it leaves 'none' — 'server'/'cache' when a value arrived, or the terminal
- * 'unavailable' when it did not (403 for a non-system-admin, 5xx, timeout) —
- * and 'unavailable' resolves to `drawer` below (the flag's default; the store
- * logs the fallback). Only an in-flight request can still be 'pending'.
+ * FLAGS request is genuinely in flight — it is applied independently of the
+ * license/tiers requests, so a slow sibling cannot hold the nav either way.
+ * When it settles the plan store leaves 'none': 'server' if a payload arrived,
+ * or the terminal 'unavailable' if it did not (403 for a non-system-admin,
+ * 5xx, timeout) — and 'unavailable' resolves to `drawer` below (the flag's
+ * default; the store logs the fallback). A cache hit starts at 'cache'
+ * synchronously, never through a settle. Only an in-flight flags request can
+ * still be 'pending'.
  *
  * Scope of the guarantee (FAR-1237 review findings): it covers the first paint
  * of the LAYOUT chrome, i.e. once AppLayout mounts. Before auth settles App.vue

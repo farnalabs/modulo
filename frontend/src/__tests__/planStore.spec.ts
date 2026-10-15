@@ -892,6 +892,48 @@ describe('usePlanStore', () => {
       }
     })
 
+    it('a fast flags settle is not held hostage by a slow license/tiers response', async () => {
+      // Before the per-source application, doFetchPlan awaited ALL THREE
+      // requests before applying any of them, so a hung license request kept
+      // the nav in "pending" for up to 15s even though the flags answer had
+      // already arrived. The nav state must key off the FLAGS settle alone.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const { api } = await import('../lib/api/client')
+        let releaseLicense!: (value: { data: null; error: null }) => void
+        const licensePromise = new Promise<{ data: null; error: null }>(resolve => {
+          releaseLicense = resolve
+        })
+        ;(api.GET as any).mockImplementation((path: string) => {
+          if (path === '/api/v1/admin/feature-flags') {
+            return Promise.resolve({ data: null, error: 'Forbidden' })
+          }
+          if (path === '/api/v1/admin/license') return licensePromise
+          return Promise.resolve({ data: mockTiersResponse, error: null })
+        })
+
+        const store = usePlanStore()
+        const fetchPromise = store.fetchPlan()
+
+        // Flags has settled (403) while license is still hanging.
+        await vi.waitFor(() => expect(store.flagsSource).toBe('unavailable'))
+        expect(store.isLoading).toBe(true) // the overall fetch is still in flight
+        expect(store.error).toBeNull() // aggregation still waits for all sources
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining('[plan] Feature flags request settled without a payload'),
+          expect.any(String),
+        )
+
+        releaseLicense({ data: null, error: null })
+        await fetchPromise
+
+        expect(store.isLoading).toBe(false)
+        expect(store.error).toContain('Forbidden')
+      } finally {
+        warn.mockRestore()
+      }
+    })
+
     it("recovers 'unavailable' -> 'server' when a later fetch succeeds", async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       try {
