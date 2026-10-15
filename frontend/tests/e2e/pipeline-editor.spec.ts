@@ -1,3 +1,4 @@
+import type { Page } from '@playwright/test'
 import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 // Structural e2e for /pipelines/:id/editor (FAR-638, batch A). The editor
@@ -132,5 +133,103 @@ test.describe('Pipeline Editor', { tag: '@regression' }, () => {
     await expect(page.locator('.vue-flow__node').first()).toBeVisible()
     // With a node present the Run button is enabled (disabled only when the graph is empty)
     await expect(page.getByTestId('pipeline-editor-run')).toBeEnabled()
+  })
+})
+
+// Mobile viewport behaviour (FAR-1841). Before the fix, at ~375x667 the editor
+// was a fixed calc(100vh - 3.5rem) block sitting below the app chrome, so the
+// canvas hung below the fold where VueFlow captures wheel/touch — nothing
+// below the fold was reachable and pinch zoomed the graph instead of the page.
+// Selecting a node then let the w-96 properties panel swallow the whole
+// viewport, crushing the canvas to 0x0 with no way to deselect. These specs
+// pin the fixed behaviour: the editor fits the leftover viewport height
+// (toolbar + canvas fully on screen, no page scroll), and the properties
+// panel opens as an overlay with a Close button that restores the canvas.
+test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
+  test.setTimeout(90_000)
+  test.use({ viewport: { width: 375, height: 667 }, hasTouch: true, isMobile: true })
+
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('assistant-panel-state', 'closed')
+    })
+  })
+
+  async function mockEditorWithNode(page: Page) {
+    await page.route(`**/api/v1/pipelines/${PIPELINE_ID}`, (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(PIPELINE) })
+      }
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+    })
+    await page.route(`**/api/v1/pipelines/${PIPELINE_ID}/graph`, (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          nodes: [{ id: 'node-1', node_type: 'agent', label: 'Reviewer Agent', position: { x: 100, y: 100 } }],
+          edges: [],
+        }),
+      })
+    })
+  }
+
+  test('editor fits the leftover viewport height — toolbar and canvas fully on screen', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
+    await mockEditorWithNode(page)
+
+    await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
+    await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+    const flow = page.locator('.vue-flow').first()
+    await expect(flow).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+
+    const toolbarBox = await page.getByTestId('pipeline-editor-toolbar').boundingBox()
+    const flowBox = await flow.boundingBox()
+    expect(toolbarBox).not.toBeNull()
+    expect(flowBox).not.toBeNull()
+
+    // Toolbar is fully above the fold — Save / Run are reachable with no scroll.
+    expect(toolbarBox!.y).toBeGreaterThanOrEqual(0)
+    expect(toolbarBox!.y + toolbarBox!.height).toBeLessThanOrEqual(667)
+    // The canvas has real width and ends at or above the viewport bottom —
+    // nothing hangs below the fold behind the touch-capturing canvas.
+    expect(flowBox!.width).toBeGreaterThan(200)
+    expect(flowBox!.y + flowBox!.height).toBeLessThanOrEqual(667)
+
+    // The document has no scrollable overflow while the editor is open.
+    const doc = await page.evaluate(() => ({
+      scrollHeight: document.documentElement.scrollHeight,
+      clientHeight: document.documentElement.clientHeight,
+    }))
+    expect(doc.scrollHeight).toBeLessThanOrEqual(doc.clientHeight)
+  })
+
+  test('node properties panel opens as a closable overlay without crushing the canvas', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
+    await mockEditorWithNode(page)
+
+    await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
+    const flow = page.locator('.vue-flow').first()
+    await expect(page.locator('.vue-flow__node').first()).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+
+    // Select the node — the properties panel must open with a Close button.
+    await page.locator('.vue-flow__node').first().click()
+    await expect(page.getByText('Node Properties')).toBeVisible()
+    const closeBtn = page.getByTestId('pipeline-editor-node-props-close')
+    await expect(closeBtn).toBeVisible()
+
+    // The canvas and toolbar keep their layout (no w-96 sibling crush).
+    const flowBox = await flow.boundingBox()
+    const toolbarBox = await page.getByTestId('pipeline-editor-toolbar').boundingBox()
+    expect(flowBox).not.toBeNull()
+    expect(toolbarBox).not.toBeNull()
+    expect(flowBox!.width).toBeGreaterThan(200)
+    expect(toolbarBox!.width).toBeGreaterThan(200)
+
+    // Close restores the editor: the panel unmounts, the canvas stays.
+    await closeBtn.click()
+    await expect(page.getByText('Node Properties')).toHaveCount(0)
+    await expect(flow).toBeVisible()
+    expect((await flow.boundingBox())!.width).toBeGreaterThan(200)
   })
 })

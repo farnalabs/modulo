@@ -1,5 +1,9 @@
 <template>
-  <div class="flex h-[calc(100vh-3.5rem)]">
+  <!-- `relative` anchors the mobile properties-panel overlay (FAR-1841);
+       `mobileFitStyle` pins the editor to the leftover viewport height on
+       <768px (see the script block) so nothing hangs below the fold behind
+       the touch-capturing canvas. Desktop keeps the height class alone. -->
+  <div ref="editorRootRef" class="relative flex h-[calc(100vh-3.5rem)]" :style="mobileFitStyle">
     <div v-if="loading" class="flex flex-1 items-center justify-center">
       <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
     </div>
@@ -709,9 +713,28 @@
         </VueFlow>
         </div>
       </div>
-      <!-- Node Properties Panel -->
-      <aside v-if="selectedNodeData && !selectedEdgeData" class="w-96 overflow-y-auto border-l bg-card p-4">
-        <h2 class="mb-4 text-base font-semibold">{{ $t('views.PipelineEditorView.node_properties') }}</h2>
+      <!-- Node Properties Panel. Mobile (FAR-1841): an in-editor overlay sheet
+           (`max-md:absolute max-md:inset-0`) with an explicit Close button.
+           As a flex sibling its fixed w-96 swallowed the whole viewport and
+           crushed the canvas to 0x0 — and with the canvas gone there was no
+           pane-click target to deselect, trapping the user in the panel.
+           Desktop keeps the docked side panel unchanged. -->
+      <aside
+        v-if="selectedNodeData && !selectedEdgeData"
+        class="w-96 overflow-y-auto border-l bg-card p-4 max-md:absolute max-md:inset-0 max-md:z-40 max-md:w-auto max-md:border-l-0"
+      >
+        <div class="mb-4 flex items-center justify-between">
+          <h2 class="text-base font-semibold">{{ $t('views.PipelineEditorView.node_properties') }}</h2>
+          <button
+            type="button"
+            class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
+            :aria-label="$t('common.close')"
+            data-testid="pipeline-editor-node-props-close"
+            @click="onPaneClick"
+          >
+            <XIcon class="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
         <dl class="space-y-4 text-sm">
           <div>
             <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.id_label') }}</dt>
@@ -1109,9 +1132,27 @@
           </button>
         </div>
       </aside>
-      <!-- Edge Properties Panel (with HITL gate config) -->
-      <aside v-if="selectedEdgeData" class="w-96 overflow-y-auto border-l bg-card p-4">
-        <h2 class="mb-4 text-base font-semibold">{{ $t('views.PipelineEditorView.edge_properties') }}</h2>
+      <!-- Edge Properties Panel (with HITL gate config). Mobile (FAR-1841):
+           same overlay-sheet treatment as the node panel above — a flex
+           sibling of this width crushes the canvas to 0x0 on a phone. The
+           header Close (mobile-only) mirrors the node panel; the existing
+           bottom Close button remains for every breakpoint. -->
+      <aside
+        v-if="selectedEdgeData"
+        class="w-96 overflow-y-auto border-l bg-card p-4 max-md:absolute max-md:inset-0 max-md:z-40 max-md:w-auto max-md:border-l-0"
+      >
+        <div class="mb-4 flex items-center justify-between">
+          <h2 class="text-base font-semibold">{{ $t('views.PipelineEditorView.edge_properties') }}</h2>
+          <button
+            type="button"
+            class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
+            :aria-label="$t('common.close')"
+            data-testid="pipeline-editor-edge-props-close"
+            @click="selectedEdgeData = null"
+          >
+            <XIcon class="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
         <dl class="space-y-3 text-sm">
           <div>
             <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.source') }}</dt>
@@ -1526,7 +1567,7 @@
   </div>
 </template>
 <script setup lang="ts">
-import { ref, computed, reactive, watch, nextTick, onBeforeUnmount } from 'vue'
+import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { VueFlow, useVueFlow, Position } from '@vue-flow/core'
@@ -2736,6 +2777,70 @@ function onPaneClick() {
   capabilityToolInput.value = ''
   capabilityContextInput.value = ''
 }
+
+// --- Mobile viewport fit (FAR-1841) ---------------------------------------
+// On mobile the editor sits BELOW the app chrome (fixed header offset,
+// banners, breadcrumb) but was always calc(100vh - 3.5rem) tall, so its
+// lower portion — the canvas — hung below the fold. VueFlow captures
+// wheel/touch over the canvas, so the page could not be scrolled from that
+// region (pinch zoomed the graph instead of revealing the UI) and the bottom
+// of the canvas was unreachable. Pin the editor to the space actually left
+// in the viewport below the chrome (<768px only): the whole editor — toolbar
+// plus canvas — then lands on screen and the document has nothing left to
+// scroll, so no touch is ever trapped. Desktop is untouched: the inline
+// height stays unset at >=768px and the h-[calc(100vh-3.5rem)] class applies.
+const MOBILE_EDITOR_MIN_HEIGHT_PX = 240
+const editorRootRef = ref<HTMLElement | null>(null)
+const mobileFitHeightPx = ref<number | null>(null)
+const mobileFitStyle = computed(() =>
+  mobileFitHeightPx.value != null ? { height: `${mobileFitHeightPx.value}px` } : undefined,
+)
+
+function refitMobileEditor() {
+  const el = editorRootRef.value
+  if (!el) return
+  if (window.matchMedia('(min-width: 768px)').matches) {
+    mobileFitHeightPx.value = null
+    return
+  }
+  // Document-relative top so the measurement is stable regardless of the
+  // current scroll position and cannot feed back through the height set here.
+  // top <= 0 means the element is not laid out yet (jsdom mounts return an
+  // all-zero rect) — skip rather than pin a bogus height.
+  const top = el.getBoundingClientRect().top + window.scrollY
+  if (top <= 0) return
+  mobileFitHeightPx.value = Math.max(Math.round(window.innerHeight - top), MOBILE_EDITOR_MIN_HEIGHT_PX)
+}
+
+let refitFrame = 0
+function scheduleMobileRefit() {
+  if (refitFrame) return
+  refitFrame = window.requestAnimationFrame(() => {
+    refitFrame = 0
+    refitMobileEditor()
+  })
+}
+
+let mobileFitObserver: MutationObserver | null = null
+onMounted(() => {
+  refitMobileEditor()
+  window.addEventListener('resize', scheduleMobileRefit)
+  // Banners above the editor mount and unmount asynchronously (onboarding,
+  // paused, legacy-HITL advisories), so the space above the editor changes
+  // after first paint — re-measure whenever the page DOM mutates.
+  mobileFitObserver = new MutationObserver(scheduleMobileRefit)
+  mobileFitObserver.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class', 'style'],
+  })
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', scheduleMobileRefit)
+  mobileFitObserver?.disconnect()
+  if (refitFrame) window.cancelAnimationFrame(refitFrame)
+})
 
 const newNodeType = ref<'agent' | 'router' | 'hitl'>('agent')
 const nodeTypeOptions = [
