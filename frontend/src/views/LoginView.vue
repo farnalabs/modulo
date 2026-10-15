@@ -157,7 +157,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import { useMutation } from '../composables/useMutation'
@@ -198,11 +198,12 @@ const ssoErrorKey = ssoErrorI18nKey(ssoErrorCode)
 const ssoErrorRef = ref<HTMLElement | null>(null)
 
 // Announce and reach the alert: focus the container once Vue mounts it. The
-// block renders only when a code is present, so the ref transitions null -> el
-// exactly when the alert appears. tabindex="-1" makes the container
-// programmatically focusable without adding it to the tab order.
-watch(ssoErrorRef, (el) => {
-  if (el) el.focus()
+// block renders only when a code is present, so `ssoErrorRef.value` is the
+// element exactly when there is an error to announce (and null otherwise, in
+// which case the optional call short-circuits). tabindex="-1" makes the
+// container programmatically focusable without adding it to the tab order.
+onMounted(() => {
+  ssoErrorRef.value?.focus()
 })
 
 // Budgets for the two anonymous pre-auth reads. Only login-context GATES the

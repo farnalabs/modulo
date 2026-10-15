@@ -139,7 +139,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import { useMutation } from '../composables/useMutation'
@@ -166,9 +166,10 @@ const ssoErrorKey = ssoErrorI18nKey(ssoErrorCode)
 const ssoErrorRef = ref<HTMLElement | null>(null)
 
 // Announce and reach the alert once Vue mounts it (the block renders only when
-// a code is present, so the ref transitions null -> el exactly then).
-watch(ssoErrorRef, (el) => {
-  if (el) el.focus()
+// a code is present, so `ssoErrorRef.value` is the element exactly then; the
+// optional call short-circuits when there is no error to announce).
+onMounted(() => {
+  ssoErrorRef.value?.focus()
 })
 
 // --- Login preferences (last org slug + last-used method) ---

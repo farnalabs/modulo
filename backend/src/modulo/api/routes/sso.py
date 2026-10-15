@@ -4,6 +4,8 @@ import logging
 import secrets
 import uuid
 import xml.sax.saxutils
+from collections.abc import Awaitable, Callable
+from functools import partial
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -134,6 +136,50 @@ async def _resolve_org_slug_for_error(session: AsyncSession, org_id: uuid.UUID |
     except Exception:
         _log.warning("sso.error_redirect_slug_lookup_failed", exc_info=True)
         return None
+
+
+async def _run_sso_callback_process(
+    session: AsyncSession,
+    process: Callable[[], Awaitable[dict[str, str]]],
+    *,
+    log_context: str,
+    contract_tag: str,
+) -> dict[str, str]:
+    """Run an SSO callback's token exchange, mapping every failure to a redirect.
+
+    Shared by the OIDC callback and both SAML ACS routes (FAR-1791). Because the
+    IdP navigates the BROWSER here, a failure must raise :class:`SsoCallbackError`
+    (rendered as the 303 login redirect by ``sso_callback_error_handler``) rather
+    than a raw JSON error page. The transaction is opened here so a
+    ``session.begin()`` fault is mapped on the same path.
+
+    Exception ordering is load-bearing and identical for every caller:
+    ``SsoProvisioningDeniedError`` is a ``ValueError`` subclass, so its arm MUST
+    precede ``except ValueError``; ``ProgrammingError`` is a ``SQLAlchemyError``,
+    so it precedes its base.
+    """
+    try:
+        async with session.begin():
+            return await process()
+    except SsoProvisioningDeniedError as exc:
+        _log.warning("%s join denied: %s", log_context, sanitise_log_value(exc), exc_info=True)
+        slug = await _resolve_org_slug_for_error(session, exc.org_id)
+        raise SsoCallbackError(SSO_ERROR_NOT_INVITED, slug) from exc
+    except ValueError as exc:
+        _log.warning("%s failed: %s", log_context, sanitise_log_value(exc), exc_info=True)
+        raise SsoCallbackError(SSO_ERROR_AUTH_FAILED) from exc
+    except ProgrammingError as exc:
+        _log.warning("%s failed — DB table missing: %s", log_context, exc, exc_info=True)
+        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, contract_tag)
+        _log.warning("%s DB error: %s", log_context, exc, exc_info=True)
+        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.exception("%s.unexpected_error", contract_tag)
+        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
 
 
 class OidcProviderInfo(BaseModel):
@@ -345,41 +391,12 @@ async def oidc_callback(
     public_url = get_public_url(settings).rstrip("/")
     redirect_uri = f"{public_url}/api/v1/auth/oidc/{provider}/callback"
 
-    try:
-        async with session.begin():
-            tokens = await oidc_process_callback(code, state, settings, system_session, session, redirect_uri)
-    except SsoProvisioningDeniedError as exc:
-        # FAR-855 join gate: authenticated at the IdP but not authorised for the
-        # org. Exception ordering matters — this is a ValueError subclass, so it
-        # MUST precede the ``except ValueError`` arm below.
-        _log.warning(
-            "OIDC callback join denied for provider %s: %s",
-            sanitise_log_value(provider),
-            sanitise_log_value(exc),
-            exc_info=True,
-        )
-        slug = await _resolve_org_slug_for_error(session, exc.org_id)
-        raise SsoCallbackError(SSO_ERROR_NOT_INVITED, slug) from exc
-    except ValueError as exc:
-        _log.warning(
-            "OIDC callback failed for provider %s: %s",
-            sanitise_log_value(provider),
-            sanitise_log_value(exc),
-            exc_info=True,
-        )
-        raise SsoCallbackError(SSO_ERROR_AUTH_FAILED) from exc
-    except ProgrammingError as exc:
-        _log.warning("OIDC callback failed — DB table missing: %s", exc, exc_info=True)
-        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
-    except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "sso.oidc_callback")
-        _log.warning("OIDC callback DB error: %s", exc, exc_info=True)
-        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
-    except HTTPException:
-        raise
-    except Exception as exc:
-        _log.exception("sso.oidc_callback.unexpected_error")
-        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
+    tokens = await _run_sso_callback_process(
+        session,
+        partial(oidc_process_callback, code, state, settings, system_session, session, redirect_uri),
+        log_context=f"OIDC callback for provider {sanitise_log_value(provider)}",
+        contract_tag="sso.oidc_callback",
+    )
 
     return _redirect_to_frontend(tokens, settings)
 
@@ -612,40 +629,12 @@ async def saml_acs_provider(
             )
             raise SsoCallbackError(SSO_ERROR_AUTH_FAILED)
 
-    try:
-        async with session.begin():
-            tokens = await saml_process_response(raw_saml, settings, system_session, session, provider_id=provider_id)
-    except SsoProvisioningDeniedError as exc:
-        # FAR-855 join gate — MUST precede the ``except ValueError`` arm (this
-        # is a ValueError subclass), so a denied identity maps to ``not_invited``.
-        _log.warning(
-            "SAML ACS join denied for provider %s: %s",
-            sanitise_log_value(provider_id),
-            sanitise_log_value(exc),
-            exc_info=True,
-        )
-        slug = await _resolve_org_slug_for_error(session, exc.org_id)
-        raise SsoCallbackError(SSO_ERROR_NOT_INVITED, slug) from exc
-    except ValueError as exc:
-        _log.warning(
-            "SAML ACS failed for provider %s: %s",
-            sanitise_log_value(provider_id),
-            sanitise_log_value(exc),
-            exc_info=True,
-        )
-        raise SsoCallbackError(SSO_ERROR_AUTH_FAILED) from exc
-    except ProgrammingError as exc:
-        _log.warning("SAML ACS failed — DB table missing: %s", exc, exc_info=True)
-        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
-    except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "sso.saml_acs_provider")
-        _log.warning("SAML ACS DB error: %s", exc, exc_info=True)
-        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
-    except HTTPException:
-        raise
-    except Exception as exc:
-        _log.exception("sso.saml_acs_provider.unexpected_error")
-        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
+    tokens = await _run_sso_callback_process(
+        session,
+        partial(saml_process_response, raw_saml, settings, system_session, session, provider_id=provider_id),
+        log_context=f"SAML ACS for provider {sanitise_log_value(provider_id)}",
+        contract_tag="sso.saml_acs_provider",
+    )
 
     return _redirect_to_frontend(tokens, settings)
 
@@ -819,29 +808,12 @@ async def saml_acs(
         # per-provider ACS route for the 303-over-POST rationale).
         raise SsoCallbackError(SSO_ERROR_AUTH_FAILED)
 
-    try:
-        async with session.begin():
-            tokens = await saml_process_response(raw_saml, settings, system_session, session)
-    except SsoProvisioningDeniedError as exc:
-        # FAR-855 join gate — MUST precede ``except ValueError`` (subclass).
-        _log.warning("SAML ACS join denied: %s", exc, exc_info=True)
-        slug = await _resolve_org_slug_for_error(session, exc.org_id)
-        raise SsoCallbackError(SSO_ERROR_NOT_INVITED, slug) from exc
-    except ValueError as exc:
-        _log.warning("SAML ACS failed: %s", exc, exc_info=True)
-        raise SsoCallbackError(SSO_ERROR_AUTH_FAILED) from exc
-    except ProgrammingError as exc:
-        _log.warning("SAML ACS failed — DB table missing: %s", exc, exc_info=True)
-        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
-    except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "sso.saml_acs")
-        _log.warning("SAML ACS DB error: %s", exc, exc_info=True)
-        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
-    except HTTPException:
-        raise
-    except Exception as exc:
-        _log.exception("sso.saml_acs.unexpected_error")
-        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
+    tokens = await _run_sso_callback_process(
+        session,
+        partial(saml_process_response, raw_saml, settings, system_session, session),
+        log_context="SAML ACS",
+        contract_tag="sso.saml_acs",
+    )
 
     return _redirect_to_frontend(tokens, settings)
 

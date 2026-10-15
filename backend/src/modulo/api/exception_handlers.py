@@ -164,7 +164,7 @@ def sso_error_redirect(settings: Settings, code: str, slug: str | None) -> Redir
     )
 
 
-async def sso_callback_error_handler(request: Request, exc: SsoCallbackError) -> RedirectResponse:
+def sso_callback_error_handler(_request: Request, exc: SsoCallbackError) -> RedirectResponse:
     """Render a raised :class:`SsoCallbackError` as the login-page 303 redirect.
 
     Registered for ``SsoCallbackError`` in ``main.py``. The callback routes
@@ -172,8 +172,9 @@ async def sso_callback_error_handler(request: Request, exc: SsoCallbackError) ->
     ``audited_system("saml_acs_attempted", ...)`` dependency observes the
     failure and records an honest ``outcome="error"``; this handler is the
     single place the redirect is built, over the shared
-    :func:`sso_error_redirect` mapping. ``request`` is part of the handler
-    signature FastAPI requires; the target derives only from server settings
-    and the exception, never from the request.
+    :func:`sso_error_redirect` mapping. ``_request`` is part of the handler
+    signature Starlette requires but is unused: the target derives only from
+    server settings and the exception, never from the request. The handler is
+    deliberately synchronous — it performs no I/O and awaits nothing.
     """
     return sso_error_redirect(get_settings(), exc.code, exc.slug)
