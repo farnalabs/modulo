@@ -58,8 +58,10 @@ def _mk_install(*, community_sourced: bool = False, agents_granted: bool = False
     The install/uninstall/grant routes read ``install_id`` / ``collection_id`` /
     ``collection_version`` / ``organisation_id`` / ``status`` /
     ``community_sourced`` / ``agents_granted`` / ``resolved_manifest`` /
-    ``connector_checklist`` / ``installed_entities`` / ``created_at`` off the
-    object before shaping the pydantic response.
+    ``connector_checklist`` / ``created_at`` off the object before shaping the
+    pydantic response. (FAR-1754: the entity list is NOT read off this object —
+    the response derives ``installed_entities`` from the
+    ``collection_install_entity`` child rows.)
     """
     inst = MagicMock()
     inst.install_id = uuid.uuid4()
@@ -75,10 +77,6 @@ def _mk_install(*, community_sourced: bool = False, agents_granted: bool = False
         "pipelines": {"main": str(uuid.uuid4())},
     }
     inst.connector_checklist = [{"connector_type_id": "github", "status": "pending"}]
-    inst.installed_entities = [
-        {"id": str(uuid.uuid4()), "entity_type": "schema"},
-        {"id": str(uuid.uuid4()), "entity_type": "agent"},
-    ]
     inst.created_at = datetime(2025, 1, 1, tzinfo=UTC)
     return inst
 

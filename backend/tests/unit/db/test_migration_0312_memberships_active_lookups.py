@@ -3,7 +3,7 @@
 Structural contract (no Postgres needed):
 
 * **Revision chain** — 0312 revises ``0311_library_cluster_schema_hygiene``; the
-  migrations directory has exactly one head (``0312_memberships_active_lookups``,
+  migrations directory has exactly one head (``0313_collection_install_drop_installed_entities``,
   pinned by all sibling chain tests), the revision id matches the filename, and
   neither ``branch_labels`` nor ``depends_on`` is set (the pre-commit
   check-migration-heads hook and every ``test_single_head_*`` pin depend on
@@ -38,7 +38,7 @@ from modulo.db.models.team_membership import TeamMembership
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATION_REVISION = "0312_memberships_active_lookups"
 _MIGRATION_DOWN_REVISION = "0311_library_cluster_schema_hygiene"
-_CHAIN_HEAD_MIGRATION = "0312_memberships_active_lookups"
+_CHAIN_HEAD_MIGRATION = "0313_collection_install_drop_installed_entities"
 
 _INDEX_NAME = "ix_org_memberships_org_role_active"
 _INDEX_TABLE = "org_memberships"
@@ -94,7 +94,7 @@ def _only(calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]], name: str) -
 
 
 class TestChain:
-    def test_single_head_is_0312_memberships_active_lookups(self) -> None:
+    def test_single_head_is_0313_collection_install_drop_installed_entities(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
