@@ -710,6 +710,10 @@ describe('AdminConnectorsView — FAR-617 add/delete/error-state coverage', () =
 
     expect(mockPost).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('Credentials must be valid JSON')
+    // The offending field is announced to assistive tech (parity with the
+    // operational-config sibling above).
+    expect(wrapper.find('[data-testid="admin-connectors-credentials-input"]').attributes('aria-invalid')).toBe('true')
+    expect(wrapper.find('#adminconnectors-add-form-error').attributes('role')).toBe('alert')
   })
 
   it('add flow (generic connector): a bare token (non-JSON) is accepted as credentials', async () => {
@@ -1177,5 +1181,8 @@ describe('AdminConnectorsView — FAR-617 add/delete/error-state coverage', () =
     expect(mockPatch).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('Credentials must be valid JSON')
     expect(wrapper.find('[data-testid="admin-connectors-edit-credentials-input"]').attributes('aria-invalid')).toBe('true')
+    // The error region is announced to assistive tech (parity with the
+    // operational-config sibling above).
+    expect(wrapper.find('#adminconnectors-edit-form-error').attributes('role')).toBe('alert')
   })
 })
