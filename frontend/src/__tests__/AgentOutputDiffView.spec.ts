@@ -228,6 +228,33 @@ describe('AgentOutputDiffView', () => {
     expect(wrapper.text()).not.toContain('diff backend down')
   })
 
+  it('renders an empty recent-runs list when the summary fetch fails (nullish fallback)', async () => {
+    // FAR-1836: exercise the `?? []` fallback on
+    // `summaryResp.value?.recent_runs ?? []`. The summary fetch fails, so
+    // `summaryResp.value` is undefined: the optional chain short-circuits and
+    // the view must still render with an empty recent-runs list (no crash).
+    vi.mocked(fetch as unknown as () => Promise<unknown>).mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+      json: () => Promise.resolve({ detail: 'summary unavailable' }),
+    })
+
+    router.push('/runs/diff')
+    await router.isReady()
+    const wrapper = mount(AgentOutputDiffView, {
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.exists()).toBe(true)
+    const selects = wrapper.findAllComponents({ name: 'Select' })
+    expect(selects.length).toBeGreaterThanOrEqual(2)
+    expect(selects[0].props('options')).toEqual([])
+    expect(wrapper.text()).toContain('Select recent run')
+  })
+
   it('renders pure-return node outputs with no telemetry keys', async () => {
     vi.mocked(api.POST as unknown as () => Promise<unknown>).mockResolvedValue({
       data: {
