@@ -12,8 +12,8 @@ overrides:
   '@redocly/openapi-core>js-yaml': 4.3.2
   postcss>nanoid: ^6.0.0
   rollup: 4.64.5
-  '@tanstack/query-core': 5.104.1
-  '@tanstack/vue-query': 5.104.1
+  '@tanstack/query-core': 5.104.2
+  '@tanstack/vue-query': 5.104.2
 
 importers:
 
@@ -27,7 +27,7 @@ importers:
         version: 5.3.0
       '@lucide/vue':
         specifier: ^1.41.0
-        version: 1.56.0(vue@3.5.43(@typescript/typescript6@6.0.2))
+        version: 1.57.0(vue@3.5.43(@typescript/typescript6@6.0.2))
       '@primeuix/styled':
         specifier: ^1.0.0
         version: 1.0.0
@@ -36,10 +36,10 @@ importers:
         version: 3.0.1
       '@sentry/vue':
         specifier: ^10.74.0
-        version: 10.76.2(pinia@4.0.3(@typescript/typescript6@6.0.2)(@vue/devtools-api@8.2.1)(vue@3.5.43(@typescript/typescript6@6.0.2)))(vue@3.5.43(@typescript/typescript6@6.0.2))
+        version: 10.76.2(pinia@4.1.0(@typescript/typescript6@6.0.2)(@vue/devtools-api@8.2.1)(vue@3.5.43(@typescript/typescript6@6.0.2)))(vue@3.5.43(@typescript/typescript6@6.0.2))
       '@tanstack/vue-query':
-        specifier: 5.104.1
-        version: 5.104.1(vue@3.5.43(@typescript/typescript6@6.0.2))
+        specifier: 5.104.2
+        version: 5.104.2(vue@3.5.43(@typescript/typescript6@6.0.2))
       '@vue-flow/background':
         specifier: ^1.3.2
         version: 1.3.2(@vue-flow/core@1.48.2(vue@3.5.43(@typescript/typescript6@6.0.2)))(vue@3.5.43(@typescript/typescript6@6.0.2))
@@ -72,7 +72,7 @@ importers:
         version: 0.5.10(overlayscrollbars@2.16.0)(vue@3.5.43(@typescript/typescript6@6.0.2))
       pinia:
         specifier: ^4.0.0
-        version: 4.0.3(@typescript/typescript6@6.0.2)(@vue/devtools-api@8.2.1)(vue@3.5.43(@typescript/typescript6@6.0.2))
+        version: 4.1.0(@typescript/typescript6@6.0.2)(@vue/devtools-api@8.2.1)(vue@3.5.43(@typescript/typescript6@6.0.2))
       primevue:
         specifier: ^5.0.1
         version: 5.0.2(vue@3.5.43(@typescript/typescript6@6.0.2))
@@ -96,7 +96,7 @@ importers:
         version: 2.6.0(vue@3.5.43(@typescript/typescript6@6.0.2))
       vue-router:
         specifier: ^5.0.0
-        version: 5.4.0(@vue/compiler-sfc@3.5.43)(pinia@4.0.3(@typescript/typescript6@6.0.2)(@vue/devtools-api@8.2.1)(vue@3.5.43(@typescript/typescript6@6.0.2)))(rolldown@1.2.13)(rollup@4.64.5)(vite@8.3.4(@types/node@26.6.5)(jiti@2.7.0))(vue@3.5.43(@typescript/typescript6@6.0.2))
+        version: 5.4.0(@vue/compiler-sfc@3.5.43)(pinia@4.1.0(@typescript/typescript6@6.0.2)(@vue/devtools-api@8.2.1)(vue@3.5.43(@typescript/typescript6@6.0.2)))(rolldown@1.2.13)(rollup@4.64.5)(vite@8.3.4(@types/node@26.6.5)(jiti@2.7.0))(vue@3.5.43(@typescript/typescript6@6.0.2))
       web-vitals:
         specifier: 6.2.3
         version: 6.2.3
@@ -221,10 +221,10 @@ importers:
     optionalDependencies:
       '@datadog/browser-logs':
         specifier: ^7.12.0
-        version: 7.15.0(@datadog/browser-rum@7.15.0)
+        version: 7.16.0(@datadog/browser-rum@7.16.0)
       '@datadog/browser-rum':
         specifier: ^7.12.0
-        version: 7.15.0(@datadog/browser-logs@7.15.0)
+        version: 7.16.0(@datadog/browser-logs@7.16.0)
       '@grafana/faro-web-sdk':
         specifier: ^2.8.2
         version: 2.12.1
@@ -550,30 +550,30 @@ packages:
     resolution: {integrity: sha512-OoKoR0f76dCY666JlcbhmVTs2drYj1GUXZTYTcbUgJjh9Nv41aFfZ21bPQTERm5+L5cBDo466NltB2lplS5GBw==}
     engines: {node: '>=20.19.0'}
 
-  '@datadog/browser-core@7.15.0':
-    resolution: {integrity: sha512-htDnhCpWiP/dKItxi0unTp7j7m9X1+Bxh1PjLY3gTn6U+oWa1wo42UqnPt5Vmje5wHMmmuuNRxnr9zXH61xyag==}
+  '@datadog/browser-core@7.16.0':
+    resolution: {integrity: sha512-Yw3IqMOPxRBpxa2w0VKQjjkiK/YptR4o7f2ROTtFzljvomzlJcnqMeUhSDOVoltJOe4cJxPXjjrbkAThrcj3wg==}
 
-  '@datadog/browser-logs@7.15.0':
-    resolution: {integrity: sha512-zGjWwJ6YYABP3rZHVkllq5ui9IjOH5zFU5qWUeXQrUj76SYgNRgzLcBbnskKZMF4CBuOqUaT8ica0T+C1qcnhQ==}
+  '@datadog/browser-logs@7.16.0':
+    resolution: {integrity: sha512-DLKrdfT4TpfLBOC4iAPzaEbBLA+zIn86+OHpW2fg8nt3AZOwFq4lPkPsSzlOYu7wqz6l1KRgCo4LWG8MUOeN8g==}
     peerDependencies:
-      '@datadog/browser-rum': 7.15.0
+      '@datadog/browser-rum': 7.16.0
     peerDependenciesMeta:
       '@datadog/browser-rum':
         optional: true
 
-  '@datadog/browser-rum-core@7.15.0':
-    resolution: {integrity: sha512-ReTr9t5Nx6ZCPlyN2f+weh6wzd9bi+l0+NKka0uswV8vC0/AnyAaKANW+49763LxBMtn4L+jrKHc5DfvXHiZAA==}
+  '@datadog/browser-rum-core@7.16.0':
+    resolution: {integrity: sha512-Dl0RNjRSr48nWDL/jrzb7tBdnGFMiG0cad5VvJ7lmzjRzpCeyABneQPFXA9qPD1wvLRzyLBDD7gx5yWrfFEBgA==}
 
-  '@datadog/browser-rum@7.15.0':
-    resolution: {integrity: sha512-pnyu2fbEKOcTLhJvggHOKKOquXQaYpnY4AWiZArQ4ygsSKEbUG9QVSIl/dgZwzJ6VF0zWxt88SrSVhbxH3LWZg==}
+  '@datadog/browser-rum@7.16.0':
+    resolution: {integrity: sha512-WXN+p0mik6sJIf1A7bxJ6CJJBL7+kehny59Q/sql9poenrIr6t89EmS86Fqe7YRKLYMhijVAWEpig2P7A6hv6Q==}
     peerDependencies:
-      '@datadog/browser-logs': 7.15.0
+      '@datadog/browser-logs': 7.16.0
     peerDependenciesMeta:
       '@datadog/browser-logs':
         optional: true
 
-  '@datadog/js-core@0.0.16':
-    resolution: {integrity: sha512-JHDE2CrVWz3kpS2SwZij4/NjFB1vvYtG4qtQTmnXVtVKabgQoane1XqRc4FiITYsZkrGdABfETTJJVEPW0xVpQ==}
+  '@datadog/js-core@0.0.17':
+    resolution: {integrity: sha512-UQGmCVybuvigrI8KhE4IZpCkg6uPbeBd7317DA5UnfvoWzeBPMldhVBAGsO8J4v0e3r2Rb0833s44lTVQVS1qg==}
 
   '@epic-web/invariant@1.0.0':
     resolution: {integrity: sha512-lrTPqgvfFQtR/eY/qkIzp98OGdNJu0m5ji3q/nJI8v3SXkRKEnWiOxMmbvcSoAIzv/cGiuvRy57k4suKQSAdwA==}
@@ -831,8 +831,8 @@ packages:
   '@keyv/serialize@1.1.1':
     resolution: {integrity: sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA==}
 
-  '@lucide/vue@1.56.0':
-    resolution: {integrity: sha512-IA7xSJwb5NQ6zamA1+zUmbVrWeX8TFPxCeqTRKJGLjb7jJmR2+USChuVRy+Opf9T545xkCSz/UJT2g44zyGgng==}
+  '@lucide/vue@1.57.0':
+    resolution: {integrity: sha512-l/D9mr+8Wb8uHl2vzHfcGVRkunJnq0NDmv8HFwXAL3UiYYxuNpDSd1uaCVqeR8+I1XY70dWA+R5W/pSpXWilMw==}
     peerDependencies:
       vue: '>=3.0.1'
 
@@ -1386,11 +1386,11 @@ packages:
     resolution: {integrity: sha512-DIpUSOhPfQ7u/qfUi/Wgm0wBO56MyBYXGvnlI0NcauDRPqdBUlAZZjW2Dxm92m+k1UWVhKw8YJ4f47+75Aujyw==}
     engines: {node: '>=20'}
 
-  '@tanstack/query-core@5.104.1':
-    resolution: {integrity: sha512-TiRghcrGkUTE+M4JBxvpPSpBhxvIzQairw+cksrHYGr+2uwC77yW1SY9nYxnYRYOppvucf8rEg6b5byoz4rTpw==}
+  '@tanstack/query-core@5.104.2':
+    resolution: {integrity: sha512-/qbsxJK5c3Ve1aFIULWYNcT2jeRUAiD4HME6Eu2ZdpofHoVgAjpkQhLg5xHuOoBkTPQUJLfP7zOxy0qsBcqROA==}
 
-  '@tanstack/vue-query@5.104.1':
-    resolution: {integrity: sha512-3858wOmIoIazR9mZ2g8/QsKNccQlzxIY+4/g55OHbhhMeBEi+ig/8vne2e5N+Xx9g5MXuB7Nscfb6B4REPDWlw==}
+  '@tanstack/vue-query@5.104.2':
+    resolution: {integrity: sha512-xTJpUMYenXuFstlgRSug10HPcc2TgAfughAxr7ftvaxsuHIZ4jfHQy/uzk99ejJWbrzpPdXiGC9VWtNd/Qvfew==}
     peerDependencies:
       '@vue/composition-api': ^1.1.2
       vue: ^2.6.0 || ^3.3.0
@@ -2902,10 +2902,10 @@ packages:
     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
     engines: {node: '>=12'}
 
-  pinia@4.0.3:
-    resolution: {integrity: sha512-XMQqpvjgG7LMqVhhFUzKLT4KEbsYbfZZ0CZU9PgdFm1O2VKBmIkykL8+SfNhOaT7sR0wT6BEgKT0YNDYWgmVRA==}
+  pinia@4.1.0:
+    resolution: {integrity: sha512-+5/HMuVjYQfKlCD5xQ7zfXn1xUzYFEa7pd0DQK5SaMfZCaFRTHlaH/c02N1FoGOdlzSiwf5EOPgJx//1QDw6gw==}
     peerDependencies:
-      '@vue/devtools-api': ^8.1.5
+      '@vue/devtools-api': ^8.2.1
       typescript: '>=5.6.0'
       vue: ^3.5.11
     peerDependenciesMeta:
@@ -3933,35 +3933,35 @@ snapshots:
 
   '@csstools/css-tokenizer@4.0.2': {}
 
-  '@datadog/browser-core@7.15.0':
+  '@datadog/browser-core@7.16.0':
     dependencies:
-      '@datadog/js-core': 0.0.16
+      '@datadog/js-core': 0.0.17
     optional: true
 
-  '@datadog/browser-logs@7.15.0(@datadog/browser-rum@7.15.0)':
+  '@datadog/browser-logs@7.16.0(@datadog/browser-rum@7.16.0)':
     dependencies:
-      '@datadog/browser-core': 7.15.0
-      '@datadog/js-core': 0.0.16
+      '@datadog/browser-core': 7.16.0
+      '@datadog/js-core': 0.0.17
     optionalDependencies:
-      '@datadog/browser-rum': 7.15.0(@datadog/browser-logs@7.15.0)
+      '@datadog/browser-rum': 7.16.0(@datadog/browser-logs@7.16.0)
     optional: true
 
-  '@datadog/browser-rum-core@7.15.0':
+  '@datadog/browser-rum-core@7.16.0':
     dependencies:
-      '@datadog/browser-core': 7.15.0
-      '@datadog/js-core': 0.0.16
+      '@datadog/browser-core': 7.16.0
+      '@datadog/js-core': 0.0.17
     optional: true
 
-  '@datadog/browser-rum@7.15.0(@datadog/browser-logs@7.15.0)':
+  '@datadog/browser-rum@7.16.0(@datadog/browser-logs@7.16.0)':
     dependencies:
-      '@datadog/browser-core': 7.15.0
-      '@datadog/browser-rum-core': 7.15.0
-      '@datadog/js-core': 0.0.16
+      '@datadog/browser-core': 7.16.0
+      '@datadog/browser-rum-core': 7.16.0
+      '@datadog/js-core': 0.0.17
     optionalDependencies:
-      '@datadog/browser-logs': 7.15.0(@datadog/browser-rum@7.15.0)
+      '@datadog/browser-logs': 7.16.0(@datadog/browser-rum@7.16.0)
     optional: true
 
-  '@datadog/js-core@0.0.16':
+  '@datadog/js-core@0.0.17':
     optional: true
 
   '@epic-web/invariant@1.0.0': {}
@@ -4202,7 +4202,7 @@ snapshots:
 
   '@keyv/serialize@1.1.1': {}
 
-  '@lucide/vue@1.56.0(vue@3.5.43(@typescript/typescript6@6.0.2))':
+  '@lucide/vue@1.57.0(vue@3.5.43(@typescript/typescript6@6.0.2))':
     dependencies:
       vue: 3.5.43(@typescript/typescript6@6.0.2)
 
@@ -4530,14 +4530,14 @@ snapshots:
       '@sentry/browser-utils': 10.76.2
       '@sentry/core': 10.76.2
 
-  '@sentry/vue@10.76.2(pinia@4.0.3(@typescript/typescript6@6.0.2)(@vue/devtools-api@8.2.1)(vue@3.5.43(@typescript/typescript6@6.0.2)))(vue@3.5.43(@typescript/typescript6@6.0.2))':
+  '@sentry/vue@10.76.2(pinia@4.1.0(@typescript/typescript6@6.0.2)(@vue/devtools-api@8.2.1)(vue@3.5.43(@typescript/typescript6@6.0.2)))(vue@3.5.43(@typescript/typescript6@6.0.2))':
     dependencies:
       '@sentry/browser': 10.76.2
       '@sentry/conventions': 0.16.0
       '@sentry/core': 10.76.2
       vue: 3.5.43(@typescript/typescript6@6.0.2)
     optionalDependencies:
-      pinia: 4.0.3(@typescript/typescript6@6.0.2)(@vue/devtools-api@8.2.1)(vue@3.5.43(@typescript/typescript6@6.0.2))
+      pinia: 4.1.0(@typescript/typescript6@6.0.2)(@vue/devtools-api@8.2.1)(vue@3.5.43(@typescript/typescript6@6.0.2))
 
   '@sindresorhus/merge-streams@4.0.0': {}
 
@@ -4682,12 +4682,12 @@ snapshots:
     dependencies:
       remove-accents: 0.5.0
 
-  '@tanstack/query-core@5.104.1': {}
+  '@tanstack/query-core@5.104.2': {}
 
-  '@tanstack/vue-query@5.104.1(vue@3.5.43(@typescript/typescript6@6.0.2))':
+  '@tanstack/vue-query@5.104.2(vue@3.5.43(@typescript/typescript6@6.0.2))':
     dependencies:
       '@tanstack/match-sorter-utils': 9.2.6
-      '@tanstack/query-core': 5.104.1
+      '@tanstack/query-core': 5.104.2
       '@vue/devtools-api': 6.6.4
       vue: 3.5.43(@typescript/typescript6@6.0.2)
       vue-demi: 0.14.10(vue@3.5.43(@typescript/typescript6@6.0.2))
@@ -6136,7 +6136,7 @@ snapshots:
 
   picomatch@4.0.7: {}
 
-  pinia@4.0.3(@typescript/typescript6@6.0.2)(@vue/devtools-api@8.2.1)(vue@3.5.43(@typescript/typescript6@6.0.2)):
+  pinia@4.1.0(@typescript/typescript6@6.0.2)(@vue/devtools-api@8.2.1)(vue@3.5.43(@typescript/typescript6@6.0.2)):
     dependencies:
       '@vue/devtools-api': 8.2.1
       nostics: 1.3.0
@@ -6604,7 +6604,7 @@ snapshots:
     dependencies:
       vue: 3.5.43(@typescript/typescript6@6.0.2)
 
-  vue-router@5.4.0(@vue/compiler-sfc@3.5.43)(pinia@4.0.3(@typescript/typescript6@6.0.2)(@vue/devtools-api@8.2.1)(vue@3.5.43(@typescript/typescript6@6.0.2)))(rolldown@1.2.13)(rollup@4.64.5)(vite@8.3.4(@types/node@26.6.5)(jiti@2.7.0))(vue@3.5.43(@typescript/typescript6@6.0.2)):
+  vue-router@5.4.0(@vue/compiler-sfc@3.5.43)(pinia@4.1.0(@typescript/typescript6@6.0.2)(@vue/devtools-api@8.2.1)(vue@3.5.43(@typescript/typescript6@6.0.2)))(rolldown@1.2.13)(rollup@4.64.5)(vite@8.3.4(@types/node@26.6.5)(jiti@2.7.0))(vue@3.5.43(@typescript/typescript6@6.0.2)):
     dependencies:
       '@vue-macros/common': 3.1.4(vue@3.5.43(@typescript/typescript6@6.0.2))
       '@vue/devtools-api': 8.2.1
@@ -6625,7 +6625,7 @@ snapshots:
       vue: 3.5.43(@typescript/typescript6@6.0.2)
     optionalDependencies:
       '@vue/compiler-sfc': 3.5.43
-      pinia: 4.0.3(@typescript/typescript6@6.0.2)(@vue/devtools-api@8.2.1)(vue@3.5.43(@typescript/typescript6@6.0.2))
+      pinia: 4.1.0(@typescript/typescript6@6.0.2)(@vue/devtools-api@8.2.1)(vue@3.5.43(@typescript/typescript6@6.0.2))
       vite: 8.3.4(@types/node@26.6.5)(jiti@2.7.0)
     transitivePeerDependencies:
       - '@farmfe/core'
