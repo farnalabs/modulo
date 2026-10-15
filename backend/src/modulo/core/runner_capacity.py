@@ -28,7 +28,13 @@ the atomic replacement:
   ``script_executing`` fence components or runs ``dispatcher_reconcile``
   considers recoverable (checked with the reconciler's OWN SQL predicates —
   parity by construction), and asserts the live count ≤ cap (the D8 rollback
-  signal). Every per-row clear/transition UPDATE is CAS-guarded on the
+  signal). FAR-1808: a node-STARTED ``running`` run
+  (``dispatch_phase='first_node_dispatched'``) is excluded from the
+  reconciler's re-dispatch set, so instead of waiting the 25h cap it is
+  reclaimed (``failed`` / ``worker_lost``, NEVER re-dispatched) as soon as its
+  marker exceeds ``node_started_stale_seconds`` AND its ``updated_at`` has gone
+  stale (both conditions — a live node refreshes ``updated_at``). Every
+  per-row clear/transition UPDATE is CAS-guarded on the
   classified marker text (a concurrent fresh-marker commit makes the UPDATE
   match 0 rows — the sweep never clobbers a marker it did not classify), the
   candidate scan is batched with a cursor, recoverability is evaluated lazily
@@ -81,6 +87,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.db.models.run import TERMINAL_STATUSES
 from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 from modulo.settings import get_settings
@@ -713,6 +720,17 @@ async def mark_runner_dispatch_cleared_at_hitl(
 # marker's written_at (legacy tier-less markers fall back to runs.updated_at).
 DEFAULT_MARKER_STALE_SECONDS = 25 * 3600
 
+# FAR-1808: the per-row reclaim bound for a NODE-STARTED running run. A run
+# whose ``dispatch_phase`` is ``first_node_dispatched`` is excluded from the
+# reconciler's re-dispatch set (a re-dispatch would re-execute the started
+# node — FAR-1649), so its leaked sandbox slot could previously only be
+# reclaimed by the 25h marker-stale cap. This bound (2x the 3300s max node
+# timeout + provisioning / sweep margin, mirroring Settings'
+# ``node_started_stale_seconds`` default) tightens that window for this shape.
+# The authoritative value is ``Settings.node_started_stale_seconds``; this
+# constant is the module-level fallback for callers that do not pass one.
+DEFAULT_NODE_STARTED_STALE_SECONDS = 7200
+
 # The candidate-scan batch size (F8). A per-org scan without a LIMIT degrades
 # to an unbounded row materialisation on an org with a large marker backlog;
 # the sweep pages with a cursor instead. Default 500. (An env-tunable knob
@@ -720,7 +738,7 @@ DEFAULT_MARKER_STALE_SECONDS = 25 * 3600
 SWEEP_CANDIDATE_BATCH = 500
 
 _SWEEP_CANDIDATE_SQL = text(
-    "SELECT id, status, error_code, sandbox_dispatch_state, updated_at "
+    "SELECT id, status, error_code, sandbox_dispatch_state, updated_at, dispatch_phase "
     "FROM runs "
     "WHERE organisation_id = :oid AND sandbox_dispatch_state IS NOT NULL "
     "AND (CAST(:after AS uuid) IS NULL OR id > CAST(:after AS uuid)) "
@@ -761,7 +779,8 @@ _TRANSITION_STALE_RUNNING_SQL = text(
 )
 
 _SWEEP_STALE_DETAIL = (
-    "Runner marker reconciliation: dispatch marker stale past threshold; "
+    "Runner marker reconciliation: dispatch marker stale past threshold "
+    "(or a node-started run whose executor died — FAR-1808); "
     "slot reclaimed and run terminalised (FAR-594 D8)."
 )
 
@@ -788,6 +807,8 @@ def classify_sweep_action(
     stale_seconds: int,
     recoverable: bool,
     row_fresh: bool = False,
+    node_started: bool = False,
+    node_started_stale_seconds: int | None = None,
 ) -> str:
     """The sweep's per-row decision (pure function — heavily unit-tested).
 
@@ -806,6 +827,22 @@ def classify_sweep_action(
     freshly-resumed long-parked run whose tombstone marker is old but whose
     heartbeat/updated_at is live): a fresh row is alive, so the sweep only
     clears the stale marker, never terminalises over a live attempt.
+
+    FAR-1808 ``node_started``: a RUNNING run whose ``dispatch_phase`` is
+    ``first_node_dispatched`` is excluded from the reconciler's re-dispatch
+    set (a re-dispatch would re-execute the started node), so it can only be
+    reclaimed by this sweep. For that shape the single ``stale_seconds`` (25h)
+    cap is REPLACED by a tighter two-condition rule: reclaim
+    (``transition_stale_running`` — always WITHOUT re-dispatch) only when BOTH
+    (1) the marker age reference is older than ``node_started_stale_seconds``
+    (beyond any legitimate single-node dispatch window) AND (2) the row is
+    STALE (``not row_fresh`` — the heartbeat stopped, so the executor died).
+    Either condition failing keeps it live: a fresh row is a live attempt the
+    sweep must never terminalise over, and an in-window marker is still within
+    a legitimate node's execution. ``node_started_stale_seconds`` is the
+    Settings value (``DEFAULT_NODE_STARTED_STALE_SECONDS`` as a fallback); a
+    ``None`` bound disables the rule. Fence and recoverable still outrank it
+    (rules a/b), and a ``None`` age reference keeps the row live.
     """
     if status in TERMINAL_STATUSES:
         # Terminal rows: anomaly exemption BEFORE the fence rule (qa F14) —
@@ -829,6 +866,15 @@ def classify_sweep_action(
         return "keep_fence"
     if recoverable:
         return "keep_recoverable"
+    # FAR-1808: the node-STARTED running shape uses its own two-condition
+    # reclaim rule (see the docstring) INSTEAD of the single staleness cap.
+    if status == "running" and node_started:
+        if node_started_stale_seconds is None or stale_reference is None:
+            return "keep_live"
+        beyond_node_window = (now - stale_reference).total_seconds() > node_started_stale_seconds
+        if beyond_node_window and not row_fresh:
+            return "transition_stale_running"
+        return "keep_live"
     # Non-terminal: only a STALE non-fence marker is cleared. A stale clear on
     # a RUNNING run also transitions it terminal (no zombie) — unless the row
     # itself is FRESH (a freshly-resumed long-parked run: its tombstone /
@@ -1068,6 +1114,7 @@ async def _process_sweep_row(
     now: datetime,
     fresh_window: float,
     stale_window: int,
+    node_started_stale_seconds: int | None,
 ) -> _SweepOutcome | None:
     """Classify and apply one sweep-row action; return the outcome or ``None``.
 
@@ -1087,6 +1134,10 @@ async def _process_sweep_row(
     else:
         recoverable = await _run_recoverable(session, row.id, recovery_or, exclusion)
     row_fresh = row.updated_at is not None and ((now - row.updated_at).total_seconds() <= fresh_window)
+    # FAR-1808: the candidate SQL selects ``dispatch_phase``; a row double that
+    # does not expose it degrades to node_started=False (the safe direction —
+    # no reclaim), never a false termination.
+    node_started = getattr(row, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED
     action = classify_sweep_action(
         status=row.status,
         error_code=row.error_code,
@@ -1096,6 +1147,8 @@ async def _process_sweep_row(
         stale_seconds=stale_window,
         recoverable=recoverable,
         row_fresh=row_fresh,
+        node_started=node_started,
+        node_started_stale_seconds=node_started_stale_seconds,
     )
     # keep_* actions are no-ops — the marker stays and the row is skipped.
     if action in ("keep_fence", "keep_recoverable", "keep_anomaly", "keep_live"):
@@ -1133,6 +1186,7 @@ async def _scan_org_markers(
     now: datetime,
     fresh_window: float,
     stale_window: int,
+    node_started_stale_seconds: int | None,
     scanned_slot: list[int],
 ) -> tuple[int, bool, list[_SweepOutcome]]:
     """Scan all marker-carrying runs for one org and apply sweep actions.
@@ -1182,6 +1236,7 @@ async def _scan_org_markers(
                     now=now,
                     fresh_window=fresh_window,
                     stale_window=stale_window,
+                    node_started_stale_seconds=node_started_stale_seconds,
                 )
                 if outcome is not None:
                     committed_outcomes.append(outcome)
@@ -1299,6 +1354,12 @@ async def reconcile_runner_dispatch_markers(
     """
     settings = get_settings()
     stale_window = stale_seconds if stale_seconds is not None else settings.runner_marker_stale_seconds
+    # FAR-1808: the node-started reclaim bound. The authoritative value is the
+    # Settings knob; a double that does not expose it falls back to the module
+    # default so the sweep still runs (the fallback equals the shipped default).
+    node_started_stale_seconds = int(
+        getattr(settings, "node_started_stale_seconds", DEFAULT_NODE_STARTED_STALE_SECONDS)
+    )
     # The "fresh row" window for the d2 exemption (qa F14): a run whose row
     # was written more recently than the reconciler's stale-heartbeat window
     # is alive (heartbeat writes refresh updated_at) — the sweep clears its
@@ -1375,6 +1436,7 @@ async def reconcile_runner_dispatch_markers(
                         now=now,
                         fresh_window=fresh_window,
                         stale_window=stale_window,
+                        node_started_stale_seconds=node_started_stale_seconds,
                         scanned_slot=org_scanned_slot,
                     )
                     scanned += org_scanned

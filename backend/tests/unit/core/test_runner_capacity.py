@@ -15,6 +15,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
+from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.core.runner_capacity import (
     HOST_RESOURCE_PROVIDERS,
     MARKER_STATE_CLEARED_AT_HITL,
@@ -52,6 +53,8 @@ class _FakeGateSettings:
     runner_capacity_gate_enabled = False
     runner_capacity_lock_timeout_ms = 2000
     runner_marker_sweep_lock_timeout_seconds = 5
+    # FAR-1808: the node-started reclaim bound the sweep resolves from Settings.
+    node_started_stale_seconds = 7200
 
 
 def _fake_session(factory_results: dict[str, Any] | None = None) -> Any:
@@ -1063,6 +1066,162 @@ def test_sweep_e_live_long_running_marker_kept() -> None:
     assert action == "keep_live"
 
 
+# ---------------------------------------------------------------------------
+# FAR-1808: the node-STARTED running reclaim rule (tighter than the 25h cap)
+# ---------------------------------------------------------------------------
+
+_NODE_STARTED_STALE = 7200  # 2h — the Settings default
+
+
+def test_sweep_far1808_node_started_leak_reclaimed() -> None:
+    """A node-STARTED running run whose marker is older than the window AND
+    whose row is stale (executor died) is reclaimed WITHOUT re-dispatch."""
+    action = classify_sweep_action(
+        **_sweep_kwargs(
+            status="running",
+            stale_reference=_NOW - timedelta(hours=10),
+            row_fresh=False,
+            node_started=True,
+            node_started_stale_seconds=_NODE_STARTED_STALE,
+        )
+    )
+    assert action == "transition_stale_running"
+
+
+def test_sweep_far1808_node_started_fresh_row_protected() -> None:
+    """The SAME old marker with a FRESH row (live heartbeat) is kept — a live
+    long-running node refreshes updated_at and must never be terminalised."""
+    action = classify_sweep_action(
+        **_sweep_kwargs(
+            status="running",
+            stale_reference=_NOW - timedelta(hours=10),
+            row_fresh=True,
+            node_started=True,
+            node_started_stale_seconds=_NODE_STARTED_STALE,
+        )
+    )
+    assert action == "keep_live"
+
+
+def test_sweep_far1808_node_started_in_window_kept() -> None:
+    """A marker still inside the node window (1h < 2h) is kept even with a
+    stale row — the node could legitimately still be executing."""
+    action = classify_sweep_action(
+        **_sweep_kwargs(
+            status="running",
+            stale_reference=_NOW - timedelta(hours=1),
+            row_fresh=False,
+            node_started=True,
+            node_started_stale_seconds=_NODE_STARTED_STALE,
+        )
+    )
+    assert action == "keep_live"
+
+
+def test_sweep_far1808_node_started_rule_does_not_apply_without_bound() -> None:
+    """A missing bound (or age reference) disables the reclaim — every failure
+    mode degrades to keep_live, never a false termination."""
+    assert (
+        classify_sweep_action(
+            **_sweep_kwargs(
+                status="running",
+                stale_reference=_NOW - timedelta(hours=30),
+                node_started=True,
+                node_started_stale_seconds=None,
+            )
+        )
+        == "keep_live"
+    )
+    assert (
+        classify_sweep_action(
+            **_sweep_kwargs(
+                status="running",
+                stale_reference=None,
+                node_started=True,
+                node_started_stale_seconds=_NODE_STARTED_STALE,
+            )
+        )
+        == "keep_live"
+    )
+
+
+def test_sweep_far1808_node_started_legacy_marker_uses_updated_at_reference() -> None:
+    """A legacy tier-less marker (no written_at) falls back to updated_at as
+    the age reference — a node-started leak with a stale updated_at is still
+    reclaimed past the bound."""
+    legacy = json.dumps({"state": "dispatching", "attempt_key": "k"})
+    action = classify_sweep_action(
+        **_sweep_kwargs(
+            status="running",
+            marker_json=legacy,
+            stale_reference=_NOW - timedelta(hours=10),
+            row_fresh=False,
+            node_started=True,
+            node_started_stale_seconds=_NODE_STARTED_STALE,
+        )
+    )
+    assert action == "transition_stale_running"
+
+
+def test_sweep_far1808_fence_and_recovery_still_outrank_node_started() -> None:
+    """Precedence unchanged: a fence component (rule a) and a recoverable run
+    (rule b) survive even when the node-started rule would otherwise reclaim."""
+    fence = json.dumps({"state": MARKER_STATE_SCRIPT_EXECUTING, "attempt_key": "k"})
+    assert (
+        classify_sweep_action(
+            **_sweep_kwargs(
+                status="running",
+                marker_json=fence,
+                stale_reference=_NOW - timedelta(hours=30),
+                node_started=True,
+                node_started_stale_seconds=_NODE_STARTED_STALE,
+            )
+        )
+        == "keep_fence"
+    )
+    assert (
+        classify_sweep_action(
+            **_sweep_kwargs(
+                status="running",
+                stale_reference=_NOW - timedelta(hours=30),
+                recoverable=True,
+                node_started=True,
+                node_started_stale_seconds=_NODE_STARTED_STALE,
+            )
+        )
+        == "keep_recoverable"
+    )
+
+
+def test_sweep_far1808_node_started_rule_only_for_running() -> None:
+    """The reclaim rule is scoped to RUNNING; a node-started parked run keeps
+    its lifecycle and only has its stale marker cleared."""
+    action = classify_sweep_action(
+        **_sweep_kwargs(
+            status="awaiting_human",
+            stale_reference=_NOW - timedelta(hours=30),
+            row_fresh=False,
+            node_started=True,
+            node_started_stale_seconds=_NODE_STARTED_STALE,
+        )
+    )
+    assert action == "clear_stale"
+
+
+def test_sweep_far1808_non_node_started_running_keeps_25h_rule() -> None:
+    """Prove-the-fix counterpart: a running run that has NOT started a node
+    keeps the ORIGINAL 25h threshold (10h marker is still inside it)."""
+    action = classify_sweep_action(
+        **_sweep_kwargs(
+            status="running",
+            stale_reference=_NOW - timedelta(hours=10),
+            stale_seconds=25 * 3600,
+            node_started=False,
+        )
+    )
+    assert action == "keep_live"
+
+
 def test_sweep_staleness_reference_falls_back_to_updated_at() -> None:
     legacy_marker = json.dumps({"state": "dispatching", "attempt_key": "k"})  # tier-less, no written_at
     updated = _NOW - timedelta(hours=30)
@@ -1141,6 +1300,8 @@ class _Row:
         self.error_code = kw.get("error_code")
         self.sandbox_dispatch_state = kw.get("sandbox_dispatch_state")
         self.updated_at = kw.get("updated_at", _NOW - timedelta(hours=30))
+        # FAR-1808: the candidate SQL selects ``dispatch_phase``.
+        self.dispatch_phase = kw.get("dispatch_phase")
 
 
 class _FakeLockConn:
@@ -1303,6 +1464,60 @@ async def test_sweep_clears_terminal_and_stale_markers_and_transitions_running(
     assert fence.id not in factory.cleared
     assert anomaly.id not in factory.cleared
     assert fence.id not in factory.transitioned
+
+
+async def test_sweep_far1808_reclaims_node_started_leak_and_protects_fresh_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-1808 end-to-end through the sweep orchestration: a node-started
+    running run with an old marker AND a stale updated_at is transitioned
+    (``failed`` / ``worker_lost``), while the identical run with a FRESH
+    updated_at is kept live."""
+    _patch_gate(monkeypatch, flag_on=False)
+
+    class _S(_FakeGateSettings):
+        runner_marker_stale_seconds = 25 * 3600
+        saq_job_heartbeat = 30
+        saq_reenqueue_window = 600
+        saq_claimed_nodeless_minutes = 20
+        node_started_stale_seconds = _NODE_STARTED_STALE
+
+    import modulo.core.runner_capacity as rc
+
+    monkeypatch.setattr(rc, "get_settings", lambda: _S())
+    monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
+    monkeypatch.setattr(rc, "_run_recoverable", AsyncMock(return_value=False))
+
+    old_marker = json.dumps(
+        {
+            "state": MARKER_STATE_DISPATCHING,
+            "attempt_key": "run:x:node:n1:1",
+            "provider": RUNNER_PROVIDER_E2B,
+            "written_at": (_NOW - timedelta(hours=10)).isoformat(),
+        }
+    )
+    leaked = _Row(
+        status="running",
+        sandbox_dispatch_state=old_marker,
+        updated_at=_NOW - timedelta(hours=9),
+        dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
+    )
+    protected = _Row(
+        status="running",
+        sandbox_dispatch_state=old_marker,
+        updated_at=_NOW,  # fresh heartbeat — the executor is alive
+        dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
+    )
+    factory = _FakeSweepFactory([leaked, protected])
+
+    result = await reconcile_runner_dispatch_markers(factory)  # type: ignore[arg-type]
+
+    assert result["scanned"] == 2
+    assert result["transitioned"] == 1
+    assert set(factory.transitioned) == {leaked.id}
+    assert leaked.id not in factory.cleared, "the leak is terminalised via the transition branch, not a plain clear"
+    assert protected.id not in factory.transitioned, "a fresh-heartbeat node-started run must never be killed"
+    assert protected.id not in factory.cleared, "its live marker must survive"
 
 
 async def test_sweep_cas_guards_against_concurrent_fresh_marker(monkeypatch: pytest.MonkeyPatch) -> None:

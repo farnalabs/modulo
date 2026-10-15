@@ -21,6 +21,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 import modulo.core.runner_capacity as _rc
+from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.core.runner_capacity import (
     RUNNER_PROVIDER_DOCKER,
     RunnerCapacityDeniedError,
@@ -28,6 +29,7 @@ from modulo.core.runner_capacity import (
     build_dispatch_marker,
     mark_runner_dispatch_cleared_at_hitl,
     reconcile_runner_dispatch_markers,
+    resolve_runner_capacity_decision,
     runner_capacity_lock_keys,
 )
 from modulo.db.rls import set_rls_org
@@ -147,6 +149,8 @@ async def _seed_run(
     heartbeat_at: datetime | None = None,
     dispatcher: str | None = None,
     started_at: datetime | None = None,
+    dispatch_phase: str | None = None,
+    updated_at: datetime | None = None,
 ) -> uuid.UUID:
     run_id = uuid.uuid4()
     factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
@@ -170,6 +174,8 @@ async def _seed_run(
         ("heartbeat_at", heartbeat_at),
         ("dispatcher", dispatcher),
         ("started_at", started_at),
+        ("dispatch_phase", dispatch_phase),
+        ("updated_at", updated_at),
     ):
         if value is not None:
             values[col] = value
@@ -1040,3 +1046,237 @@ async def test_sweep_no_violation_below_cap(
         result = await _sweep(db_engine)
     assert result["violations"] == 0, "an org below cap must not be counted as a breach"
     assert not any("runner.capacity.violation" in m for m in caplog.messages)
+
+
+# ---------------------------------------------------------------------------
+# FAR-1808: reclaim node-started running runs whose executor died
+# ---------------------------------------------------------------------------
+
+
+def _node_started_marker(age_hours: float) -> str:
+    """A live non-fence dispatch marker whose ``written_at`` is ``age_hours`` old.
+
+    The provider is e2b so it counts against an EXPLICIT cap (all tiers).
+    """
+    return json.dumps(
+        {
+            "state": "dispatching",
+            "attempt_key": "run:x:node:n1:1",
+            "provider": "e2b",
+            "written_at": (datetime.now(UTC) - timedelta(hours=age_hours)).isoformat(),
+        }
+    )
+
+
+async def _live_capacity(db_engine: AsyncEngine, org_id: uuid.UUID) -> tuple[int | None, int]:
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        decision = await resolve_runner_capacity_decision(session, org_id)
+        return decision.cap, decision.active
+
+
+async def test_sweep_far1808_reclaims_node_started_leak_frees_slot(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Leak case (must fail without the change): a ``running`` +
+    ``first_node_dispatched`` run carrying a live marker whose ``written_at``
+    is 10h old AND whose ``updated_at`` is 9h stale is reclaimed in ONE sweep
+    (``failed`` / ``worker_lost``, marker nulled) — freeing the org sandbox
+    slot it had leaked."""
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+    _gate_flags(monkeypatch, flag_on=True)
+
+    org_id, user_id = await _seed_org_account(db_engine, "Far1808Leak", cap=1)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeFar1808Leak", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
+
+    run_id = await _seed_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        status="running",
+        marker=_node_started_marker(10),
+        dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
+        updated_at=datetime.now(UTC) - timedelta(hours=9),
+    )
+
+    cap_before, active_before = await _live_capacity(db_engine, org_id)
+    assert cap_before == 1
+    assert active_before == 1, "the leaked run occupies the org's single slot"
+
+    result = await _sweep(db_engine)
+    assert result["transitioned"] == 1, "the leaked node-started run must be reclaimed"
+
+    row = await _run_row(db_engine, org_id, run_id)
+    assert row["status"] == "failed"
+    assert row["error_code"] == "worker_lost"
+    assert row["marker"] is None, "the reclaimed run's marker must be nulled"
+
+    _cap_after, active_after = await _live_capacity(db_engine, org_id)
+    assert active_after == 0, "the reclaimed run must no longer hold a slot"
+    assert active_after < cap_before
+
+    # The freed slot admits a new dispatch (never re-dispatched the reclaimed run).
+    new_run = await _seed_run(db_engine, org_id, pipe, snap)
+    slot = await acquire_runner_dispatch_slot(
+        factory,
+        org_id=org_id,
+        run_id=str(new_run),
+        claim_token=f"tok-{new_run.hex[:12]}",
+        node_id="n1",
+        provider="e2b",
+    )
+    assert slot.status == "acquired"
+
+
+async def test_sweep_far1808_protects_live_node_started_run(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Protect case: the SAME old marker with a FRESH ``updated_at`` (a live
+    long-running node refreshing its heartbeat) is kept live — still running,
+    marker intact."""
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+    _gate_flags(monkeypatch, flag_on=True)
+
+    org_id, user_id = await _seed_org_account(db_engine, "Far1808Live", cap=1)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeFar1808Live", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe)
+
+    marker = _node_started_marker(10)
+    run_id = await _seed_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        status="running",
+        marker=marker,
+        dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
+        updated_at=datetime.now(UTC),
+    )
+
+    await _sweep(db_engine)
+    row = await _run_row(db_engine, org_id, run_id)
+    assert row["status"] == "running", "a fresh-heartbeat node-started run must never be reclaimed"
+    assert row["marker"] == marker
+
+
+async def test_sweep_far1808_keeps_in_window_node_started_marker(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """In-window case: a marker only 1h old (< the 2h bound) with a STALE
+    ``updated_at`` is kept live — the node may still legitimately be running."""
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+    _gate_flags(monkeypatch, flag_on=True)
+
+    org_id, user_id = await _seed_org_account(db_engine, "Far1808Window", cap=1)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeFar1808Window", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe)
+
+    marker = _node_started_marker(1)
+    run_id = await _seed_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        status="running",
+        marker=marker,
+        dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
+        updated_at=datetime.now(UTC) - timedelta(hours=9),
+    )
+
+    await _sweep(db_engine)
+    row = await _run_row(db_engine, org_id, run_id)
+    assert row["status"] == "running", "an in-window node-started marker must not be reclaimed"
+    assert row["marker"] == marker
+
+
+async def test_sweep_far1808_watchdog_write_noops_after_reclaim(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Watchdog race: after the sweep reclaims the run, a claim-fenced,
+    ``status='running'``-guarded terminal write on the same row no-ops (0 rows)
+    — the dead executor can never resurrect or overwrite the terminal state."""
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+    _gate_flags(monkeypatch, flag_on=True)
+
+    org_id, user_id = await _seed_org_account(db_engine, "Far1808Race", cap=1)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeFar1808Race", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
+
+    claim = "tok-race-1"
+    run_id = await _seed_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        status="running",
+        marker=_node_started_marker(10),
+        claim_token=claim,
+        dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
+        updated_at=datetime.now(UTC) - timedelta(hours=9),
+    )
+
+    await _sweep(db_engine)
+    row = await _run_row(db_engine, org_id, run_id)
+    assert row["status"] == "failed"
+
+    # The watchdog's late, claim-fenced, status-guarded terminal write.
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        result = await session.execute(
+            text(
+                "UPDATE runs SET status = 'complete', completed_at = now() "
+                "WHERE id = :rid AND organisation_id = :oid "
+                "AND claim_token = :tok AND status = 'running' "
+                "RETURNING id"
+            ),
+            {"rid": str(run_id), "oid": str(org_id), "tok": claim},
+        )
+        assert result.fetchone() is None, "the status guard must make the late write a no-op"
+
+    row = await _run_row(db_engine, org_id, run_id)
+    assert row["status"] == "failed", "the reclaimed terminal state must survive the late write"
+
+
+async def test_sweep_far1808_fence_marker_untouched(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fence case: a node-started marker carrying the ``script_executing``
+    exactly-once fence is NEVER reclaimed — rule (a) keeps highest precedence."""
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+    _gate_flags(monkeypatch, flag_on=True)
+
+    org_id, user_id = await _seed_org_account(db_engine, "Far1808Fence", cap=1)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeFar1808Fence", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe)
+
+    fence_marker = json.dumps({"state": "script_executing", "attempt_key": "k"})
+    run_id = await _seed_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        status="running",
+        marker=fence_marker,
+        dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
+        updated_at=datetime.now(UTC) - timedelta(hours=9),
+    )
+
+    await _sweep(db_engine)
+    row = await _run_row(db_engine, org_id, run_id)
+    assert row["marker"] == fence_marker, "the exactly-once fence must survive the sweep"
+    assert row["status"] == "running"

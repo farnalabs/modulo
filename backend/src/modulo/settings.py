@@ -516,6 +516,25 @@ class Settings(BaseSettings):
     # back to runs.updated_at) is cleared, and a stale non-terminal RUNNING run
     # is terminalised with it. Default 25h.
     runner_marker_stale_seconds: int = Field(default=90000, alias="RUNNER_MARKER_STALE_SECONDS", ge=3600, le=604800)
+    # FAR-1808: the per-row reclaim bound for a NODE-STARTED running run whose
+    # executor died. A run that is ``status='running'`` +
+    # ``dispatch_phase='first_node_dispatched'`` + a live non-fence dispatch
+    # marker is excluded from the reconciler's re-dispatch set (a re-dispatch
+    # would re-execute the started node — FAR-1649), so before FAR-1808 the
+    # only sweep that could reclaim its sandbox slot was the 25h
+    # ``runner_marker_stale_seconds`` cap: up to ~25h of a leaked org sandbox
+    # slot that starves every other pipeline (observed: 18 leaked Branch-Fixer
+    # runs saturating the org sandbox cap → PR Reviewer 429s).
+    #
+    # A node may legitimately execute at most ``MAX_NODE_TIMEOUT_SECONDS``
+    # (3300s) after the marker write that starts it, so a marker older than
+    # the default 7200s (2x the max node timeout, with provisioning /
+    # sweep-cadence margin) PLUS a stale ``updated_at`` (heartbeat stopped —
+    # 2x SAQ_JOB_HEARTBEAT) proves the executor is dead. BOTH conditions must
+    # hold: a live long-running node refreshes ``updated_at`` and is never
+    # reclaimed. The load-time ``_node_started_stale_invariant`` below rejects
+    # a pin below a legitimate single-node dispatch window.
+    node_started_stale_seconds: int = Field(default=7200, alias="NODE_STARTED_STALE_SECONDS", ge=1, le=604800)
     # FAR-767: per-org lock_timeout for the runner-marker sweep's transactional
     # statements (candidate scan + CAS updates). A sweep org pass that blocks on
     # a row lock held by an in-flight sandbox-run transaction must NOT wedge the
@@ -1312,6 +1331,36 @@ class Settings(BaseSettings):
                 f"({MAX_NODE_TIMEOUT_SECONDS}) = {required}s: the FAR-1088 in-flight shield would expire "
                 "before the node deadline, letting the nodeless backstop claim a live attempt. "
                 f"Raise it to >= {required}, or unset it to derive from the grace."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _node_started_stale_invariant(self) -> "Settings":
+        """FAIL (never warn): the node-started reclaim bound must never sit
+        below a legitimate single-node dispatch window.
+
+        FAR-1808: ``node_started_stale_seconds`` is the marker-age bound past
+        which a node-STARTED (``dispatch_phase='first_node_dispatched'``)
+        RUNNING run whose heartbeat ALSO went stale is reclaimed
+        (``failed`` / ``worker_lost``) WITHOUT re-dispatch — the sandbox slot
+        it leaked is freed. A node may legitimately execute for up to
+        ``MAX_NODE_TIMEOUT_SECONDS`` (the GraphValidator cap on a node's
+        ``timeout_seconds``) after the marker write that starts it, so a bound
+        below that window would reclaim (and kill) a live node
+        mid-execution — a false failure of a run that is still working, the
+        same class the ``_nodeless_in_flight_floor_invariant`` guard exists to
+        prevent. The requirement therefore mirrors that guard's floor
+        (``saq_setup_grace_seconds`` + ``MAX_NODE_TIMEOUT_SECONDS``), so the
+        two safety bounds cannot silently diverge.
+        """
+        required = self.saq_setup_grace_seconds + MAX_NODE_TIMEOUT_SECONDS
+        if self.node_started_stale_seconds < required:
+            raise ValueError(
+                f"NODE_STARTED_STALE_SECONDS={self.node_started_stale_seconds} does not cover the "
+                f"worst-case legitimate single-node window SAQ_SETUP_GRACE_SECONDS "
+                f"({self.saq_setup_grace_seconds}) + max node timeout ({MAX_NODE_TIMEOUT_SECONDS}) = "
+                f"{required}s: the node-started reclaim sweep would kill a live node mid-execution. "
+                f"Raise it to >= {required}."
             )
         return self
 
