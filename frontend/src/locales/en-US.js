@@ -626,6 +626,7 @@ export default {
       "clear_filters": "Clear filters",
       "apply_filters": "Apply Filters",
       "failed_to_dismiss_notification": "Failed to dismiss notification",
+      "loading_notifications": "Loading notifications",
       "request_timed_out": "Notifications request timed out after 30s"
     },
     "EnvironmentProfileForm": {
