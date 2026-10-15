@@ -22,9 +22,18 @@ These tests pin:
 import logging
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 from modulo.core.graph_validator import GraphValidator
+from tests.unit.graph_validator._helpers import (
+    codes_of as _codes,
+)
+from tests.unit.graph_validator._helpers import (
+    schema_version_row as _schema_row,
+)
+from tests.unit.graph_validator._helpers import (
+    schema_version_session as _session_returning,
+)
 
 _PRE_CUTOVER = datetime(2026, 7, 21, 12, 0, 0, tzinfo=UTC)
 _POST_CUTOVER = datetime(2026, 7, 23, 12, 0, 0, tzinfo=UTC)
@@ -48,38 +57,6 @@ def _snapshot(graph_json: dict, *, created_at: datetime):
     return snap
 
 
-def _schema_row(schema_id: uuid.UUID, definition_json: dict) -> MagicMock:
-    row = MagicMock()
-    row.schema_id = schema_id
-    row.version = "1.0"
-    row.definition_json = definition_json
-    return row
-
-
-def _session_returning(rows: list[MagicMock]) -> AsyncMock:
-    """Session whose ``scalar_one_or_none`` yields *rows* in call order.
-
-    Degrades to ``None``/``[]`` once the rows are consumed instead of raising
-    ``StopIteration``, so a later check that legitimately queries the session
-    does not turn a green run into a confusing harness failure.
-    """
-    queue = list(rows)
-
-    def _execute(_stmt):
-        row = queue.pop(0) if queue else None
-        scalar_result = MagicMock()
-        scalar_result.scalar_one_or_none.return_value = row
-        scalar_result.scalar_one.return_value = row
-        scalars = MagicMock()
-        scalars.all.return_value = [row] if row is not None else []
-        scalar_result.scalars.return_value = scalars
-        return scalar_result
-
-    session = AsyncMock()
-    session.execute = AsyncMock(side_effect=_execute)
-    return session
-
-
 def _incompatible_graph(*, extra_unreachable_node: bool = False) -> tuple[dict, list[MagicMock]]:
     out_id = uuid.uuid4()
     in_id = uuid.uuid4()
@@ -95,10 +72,6 @@ def _incompatible_graph(*, extra_unreachable_node: bool = False) -> tuple[dict, 
     }
     rows = [_schema_row(out_id, _STRING_VS_INT[0]), _schema_row(in_id, _STRING_VS_INT[1])]
     return graph, rows
-
-
-def _codes(result) -> set[str]:
-    return {i.code for i in result.issues}
 
 
 async def test_pre_existing_incompatibility_returns_degraded_marker(caplog):
