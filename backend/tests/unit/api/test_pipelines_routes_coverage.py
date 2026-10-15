@@ -1755,8 +1755,9 @@ def test_rollback_snapshot_guardrail_strip_denial_maps_403(client: tuple[TestCli
 
 def test_rollback_snapshot_happy_path(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
+    new_snapshot = _make_snapshot(snapshot_version=4)
     with (
-        patch(f"{_PREFIX}rollback_to_snapshot", new=AsyncMock(return_value=_make_snapshot())),
+        patch(f"{_PREFIX}rollback_to_snapshot", new=AsyncMock(return_value=new_snapshot)),
     ):
         _rls_started = _start_rls()
         try:
@@ -1765,7 +1766,13 @@ def test_rollback_snapshot_happy_path(client: tuple[TestClient, AsyncMock]) -> N
             _stop_all(_rls_started)
 
     assert resp.status_code == 200, resp.text
-    assert resp.json()["id"] == str(_SNAP_ID)
+    body = resp.json()
+    assert body["id"] == str(new_snapshot.id)
+    # FAR-1811: a restore caller must be able to navigate to the NEWLY created
+    # snapshot (read it back, link to it), so the rollback response has to
+    # carry that snapshot's version number - it already did (SnapshotResponse
+    # serialises ``snapshot_version``), and this pins it so it stays true.
+    assert body["snapshot_version"] == new_snapshot.snapshot_version
 
 
 def test_delete_snapshot_non_admin_denied(operator_client: tuple[TestClient, AsyncMock]) -> None:
