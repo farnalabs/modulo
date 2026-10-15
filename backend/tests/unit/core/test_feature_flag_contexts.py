@@ -28,6 +28,7 @@ from modulo.core.feature_flags import (
     DbPlanContext,
     FeatureFlagRegistry,
     LicenseKeyTier,
+    effective_feature_flags,
     get_registry,
     resolve_plan_context,
 )
@@ -577,3 +578,55 @@ class TestGoldenPins:
                 assert flag.currently_active is False, f"{flag.name} is forced OFF"
             else:
                 assert flag.currently_active is True, f"{flag.name} should be active on team"
+
+
+class TestEffectiveFeatureFlags:
+    """FAR-1806: the caller-scoped effective flag payload (full set + org overlay).
+
+    These tests run against the REAL hardcoded catalog (no mocked registry), so
+    the default-ON / default-OFF pins below are what prove the overlay flips
+    each direction rather than merely echoing the input.
+    """
+
+    def test_list_all_features_includes_inactive_flags(self) -> None:
+        ctx = CommunityTier()
+        all_names = {f.name for f in ctx.list_all_features()}
+        active_names = {f.name for f in ctx.list_enabled_features()}
+        assert "mobile_sidebar_rail" in all_names
+        assert "mobile_sidebar_rail" not in active_names
+        assert active_names.issubset(all_names)
+
+    def test_list_all_features_folds_licence_features(self) -> None:
+        ctx = LicenseKeyTier(_license(tier="community", features=["sso"]))
+        by_name = {f.name: f.currently_active for f in ctx.list_all_features()}
+        # Licence-named feature reads active in the full set (parity with
+        # ``list_enabled_features``) while default-OFF flags stay present.
+        assert by_name["sso"] is True
+        assert by_name["mobile_sidebar_rail"] is False
+
+    def test_effective_flags_flips_both_directions_without_mutating_context(self) -> None:
+        ctx = CommunityTier()
+        flags = effective_feature_flags(ctx, {"analytics_page": False, "mobile_sidebar_rail": True})
+        by_name = {f.name: f.currently_active for f in flags}
+        # analytics_page is community-tier default-ON; mobile_sidebar_rail is
+        # DEFAULT_OFF — the overlay must flip BOTH.
+        assert by_name["analytics_page"] is False
+        assert by_name["mobile_sidebar_rail"] is True
+        # The plan context's own registry state is untouched (copies only).
+        assert ctx.feature_enabled("analytics_page") is True
+        assert ctx.feature_enabled("mobile_sidebar_rail") is False
+
+    def test_effective_flags_without_overrides_returns_full_set(self) -> None:
+        ctx = CommunityTier()
+        flags = effective_feature_flags(ctx)
+        assert len(flags) == len(ctx.list_all_features())
+        inactive_names = {f.name for f in flags if not f.currently_active}
+        assert "user_scoped_mcp_keys" in inactive_names
+        assert "eval_system" not in inactive_names
+
+    def test_effective_flags_ignores_unknown_flag_names(self) -> None:
+        ctx = CommunityTier()
+        flags = effective_feature_flags(ctx, {"no_such_flag": True})
+        names = {f.name for f in flags}
+        assert "no_such_flag" not in names
+        assert len(flags) == len(ctx.list_all_features())

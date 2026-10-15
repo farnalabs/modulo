@@ -2,6 +2,7 @@
 
 GET /api/v1/me       — current user info (canonical; auth/me also works)
 GET /api/v1/viewmodel/current — single-request aggregate for the frontend
+GET /api/v1/plan     — caller-scoped effective plan/flag bootstrap (any member)
 """
 
 import logging
@@ -21,7 +22,7 @@ from modulo.api.db_error_handling import handle_db_errors, raise_session_contrac
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.feature_flags import PlanContext, resolve_plan_context
+from modulo.core.feature_flags import PlanContext, effective_feature_flags, resolve_plan_context
 from modulo.db.crud.account import get_account_by_id
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.organisation import get_organisation
@@ -167,6 +168,49 @@ class FeatureFlagInfo(BaseModel):
 class PlanInfo(BaseModel):
     tier: str
     daily_spend_limit: float | None = None
+
+
+class PlanLicenseInfo(BaseModel):
+    """Effective-licence view served by ``GET /api/v1/plan`` (FAR-1806).
+
+    ``tier`` is the plan context's resolved tier; ``expires_at`` / ``org_id``
+    come from the same licence-ladder rung the admin ``/api/v1/admin/license``
+    resolver walks, so a member reads the licence view without hitting an
+    admin-permission-gated endpoint.
+    """
+
+    tier: str
+    expires_at: str | None = None
+    org_id: str | None = None
+
+
+class PlanFlagInfo(BaseModel):
+    """One effective feature flag in the ``/api/v1/plan`` payload.
+
+    Mirrors the admin feature-flag list's ``flags[]`` vocabulary
+    (``currently_active`` / ``depends_on`` included) so a client reading
+    either endpoint maps the same field names.
+    """
+
+    name: str
+    description: str
+    tier: str
+    currently_active: bool
+    depends_on: list[str] | None = None
+
+
+class PlanBootstrapResponse(BaseModel):
+    """Caller-scoped effective plan + feature bootstrap (FAR-1806).
+
+    Readable by ANY authenticated member of their own org (no instance-admin
+    permission), with the org ``feature_overrides`` overlay applied and the
+    FULL known flag set present — inactive flags carry
+    ``currently_active: false`` rather than being omitted.
+    """
+
+    license: PlanLicenseInfo
+    dev_mode: bool
+    flags: list[PlanFlagInfo]
 
 
 class ViewModelCurrent(BaseModel):
@@ -332,7 +376,12 @@ async def viewmodel_current(
         ) from None
 
     org = fetched.org
-    enabled_features = fetched.plan_ctx.list_enabled_features()
+    # FAR-1806: the full known flag set with the org ``feature_overrides``
+    # overlay — NOT ``list_enabled_features()`` (active-only, no overlay),
+    # which disagreed with the admin endpoint on the same org and dropped
+    # default-OFF flags the client needs to resolve chrome. Shared helper:
+    # ``core.feature_flags.effective_feature_flags``.
+    effective_features = effective_feature_flags(fetched.plan_ctx, _org_feature_overrides(org))
     feature_flags = [
         FeatureFlagInfo(
             name=flag.name,
@@ -340,7 +389,7 @@ async def viewmodel_current(
             tier=flag.tier,
             active=flag.currently_active,
         )
-        for flag in enabled_features
+        for flag in effective_features
     ]
 
     pipelines_page = fetched.pipelines_page
@@ -373,6 +422,74 @@ async def viewmodel_current(
         views=fetched.all_views,
         current_view=fetched.current_view,
         is_system_admin=current_user.is_system_admin,
+    )
+
+
+@router.get("/api/v1/plan")
+@handle_db_errors("viewmodel.plan_bootstrap")
+async def plan_bootstrap(
+    session: AsyncSession = Depends(get_db_session),
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+) -> PlanBootstrapResponse:
+    """Caller-scoped effective plan bootstrap, readable by any authenticated member.
+
+    FAR-1806: the client's plan/tier/feature bootstrap previously read the
+    instance-admin-only ``/api/v1/admin/feature-flags`` (and
+    ``/api/v1/admin/license``), so every non-admin ran the app on permanently
+    wrong defaults (tier ``community``, ``dev_mode`` false, no flags). This
+    endpoint serves the same caller-scoped truth — effective tier, dev mode,
+    licence view, and the FULL effective flag set with the org
+    ``feature_overrides`` overlay — with no permission beyond authentication
+    against the caller's own org. The admin endpoints keep their
+    system-admin/permission gates for the inspection and toggle UI.
+
+    Failure ladder mirrors ``viewmodel_current``: ProgrammingError -> 501,
+    SQLAlchemyError -> 503, HTTPException re-raised, Exception -> 500.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role or "")
+            org = await _resolve_viewmodel_org(session, current_user)
+            plan_ctx = await resolve_plan_context(settings, session, org=org)
+    except ProgrammingError:
+        logger.exception("viewmodel.plan_bootstrap")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "viewmodel.plan_bootstrap")
+        logger.exception("viewmodel.plan_failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while loading plan data.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("viewmodel.plan_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to load plan data.",
+        ) from None
+
+    flags = effective_feature_flags(plan_ctx, _org_feature_overrides(org))
+    expires_at, license_org_id = _resolve_license_expiry(settings, org)
+    return PlanBootstrapResponse(
+        license=PlanLicenseInfo(tier=plan_ctx.tier(), expires_at=expires_at, org_id=license_org_id),
+        dev_mode=bool(settings.modulo_dev_mode),
+        flags=[
+            PlanFlagInfo(
+                name=flag.name,
+                description=flag.description,
+                tier=flag.tier,
+                currently_active=flag.currently_active,
+                depends_on=flag.depends_on,
+            )
+            for flag in flags
+        ],
     )
 
 
@@ -427,6 +544,60 @@ def _enrich_view(view: SavedView, user_id: uuid.UUID) -> ViewInfo:
     info = ViewInfo.model_validate(view)
     info.created_by_me = view.account_id == user_id
     return info
+
+
+def _org_feature_overrides(org: Organisation | None) -> dict[str, bool]:
+    """The org's ``feature_overrides`` map (bool entries only); ``{}`` without an org.
+
+    Mirrors the admin feature-flag list's overlay reader: only ``bool``
+    entries count as an override (``1``/``0`` and other truthy junk are
+    ignored), so a malformed settings entry can never flip a flag's reported
+    state. The read is in-memory — the caller already loaded the org row —
+    so no extra DB round-trip.
+    """
+    if org is None:
+        return {}
+    settings_json = getattr(org, "settings_json", None)
+    if not isinstance(settings_json, dict):
+        return {}
+    overrides = settings_json.get("feature_overrides")
+    if not isinstance(overrides, dict):
+        return {}
+    return {key: bool(value) for key, value in overrides.items() if isinstance(value, bool)}
+
+
+def _resolve_license_expiry(settings: Settings, org: Organisation | None) -> tuple[str | None, str | None]:
+    """``(expires_at, org_id)`` of the effective licence for ``GET /api/v1/plan``.
+
+    Walks the same rungs, in the same order, as the admin
+    ``/api/v1/admin/license`` resolver (``admin_license._resolve_effective_license``)
+    and rungs 1-3 of ``core.feature_flags._resolve_paid_plan``: org-level key,
+    then the in-memory licence, then the env-var key — every key verified via
+    ``verify_license_key``, never trusted on mere presence (FAR-1733).
+    Returns ``(None, None)`` when no valid licence resolves.
+
+    Display-only: the payload's ``license.tier`` comes from the plan context,
+    which walks the identical rungs, so tier and expiry always describe the
+    same licence.
+    """
+    from modulo.core.license import get_license, verify_license_key
+
+    if org is not None:
+        org_settings = getattr(org, "settings_json", None)
+        org_key = org_settings.get("license_key") if isinstance(org_settings, dict) else None
+        if org_key:
+            data = verify_license_key(str(org_key))
+            if data is not None:
+                return data.expires_at or None, data.org_id or None
+
+    lic = get_license()
+    if lic is not None:
+        return lic.expires_at or None, lic.org_id or None
+
+    data = verify_license_key(getattr(settings, "modulo_license_key", "") or "")
+    if data is not None:
+        return data.expires_at or None, data.org_id or None
+    return None, None
 
 
 def _resolve_tier(settings: Settings, org: Any | None = None) -> str:

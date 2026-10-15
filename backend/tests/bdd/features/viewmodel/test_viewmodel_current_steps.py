@@ -184,7 +184,13 @@ def _get_viewmodel(client: Any, ctx: dict[str, Any], params: dict[str, str] | No
         patch(
             "modulo.api.routes.viewmodel.resolve_plan_context",
             new_callable=AsyncMock,
-            return_value=MagicMock(list_enabled_features=MagicMock(return_value=plan_flags)),
+            # FAR-1806: the viewmodel reads ``list_all_features`` (full set +
+            # org overlay via effective_feature_flags), not the active-only
+            # ``list_enabled_features``.
+            return_value=MagicMock(
+                list_enabled_features=MagicMock(return_value=plan_flags),
+                list_all_features=MagicMock(return_value=plan_flags),
+            ),
         ),
         patch("modulo.api.routes.viewmodel._resolve_tier", return_value="team"),
     ):

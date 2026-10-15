@@ -10,8 +10,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import asdict, dataclass, replace
 from typing import Any, ClassVar, Protocol
 
 from modulo.core.license import LicenseData
@@ -298,6 +298,10 @@ class CommunityTier:
     def list_enabled_features(self) -> list[FeatureFlag]:
         return [f for f in self._registry.list_flags() if f.currently_active]
 
+    def list_all_features(self) -> list[FeatureFlag]:
+        """Every known flag (active and inactive) for this context's tier state."""
+        return self._registry.list_flags()
+
     def tier(self) -> str:
         return self._registry.current_tier
 
@@ -324,6 +328,13 @@ class LicenseKeyTier:
     def list_enabled_features(self) -> list[FeatureFlag]:
         return [f for f in self._registry.list_flags() if f.currently_active or f.name in self._features]
 
+    def list_all_features(self) -> list[FeatureFlag]:
+        """Every known flag; licence-named features read active regardless of tier state."""
+        return [
+            replace(flag, currently_active=True) if flag.name in self._features else flag
+            for flag in self._registry.list_flags()
+        ]
+
     def tier(self) -> str:
         return self._registry.current_tier
 
@@ -337,6 +348,8 @@ class PlanContext(Protocol):
     def feature_enabled(self, name: str) -> bool: ...
 
     def list_enabled_features(self) -> list[FeatureFlag]: ...
+
+    def list_all_features(self) -> list[FeatureFlag]: ...
 
     def tier(self) -> str: ...
 
@@ -381,6 +394,10 @@ class DbPlanContext:
 
     def list_enabled_features(self) -> list[FeatureFlag]:
         return [f for f in self._registry.list_flags() if f.currently_active]
+
+    def list_all_features(self) -> list[FeatureFlag]:
+        """Every known flag (active and inactive); licence features are folded in by ``from_db``."""
+        return self._registry.list_flags()
 
 
 async def _context_from_license_key(session: Any, raw_key: str, error_log: str) -> PlanContext | None:
@@ -494,6 +511,47 @@ async def resolve_plan_context(settings: Any, session: Any, org: Any | None = No
     if licensed is not None:
         return licensed
     return await _resolve_trial_state(session, org)
+
+
+def effective_feature_flags(
+    plan_ctx: PlanContext,
+    org_overrides: Mapping[str, bool] | None = None,
+) -> list[FeatureFlag]:
+    """The full known flag set with the org ``feature_overrides`` overlay applied.
+
+    FAR-1806: the caller-scoped effective flag payload served to any
+    authenticated org member (``GET /api/v1/plan`` and, there,
+    ``/viewmodel/current``'s ``feature_flags``). Two gaps make
+    ``PlanContext.list_enabled_features()`` unusable as a bootstrap payload:
+
+    1. It is active-only — inactive flags are dropped entirely, so the client
+       cannot tell "off" from "unknown" and default-OFF chrome never resolves.
+    2. No resolution step overlays the org's ``feature_overrides``; only the
+       admin feature-flag list applied that overlay (manually), which is why
+       the admin endpoint and ``viewmodel/current`` disagreed on the same org.
+
+    This helper closes both: it starts from ``list_all_features()`` (the full
+    known set with tier state computed by the plan context) and overlays
+    ``org_overrides`` exactly as the admin list endpoint does, so this payload
+    and the admin endpoint report the same effective state for an org.
+    Overlay entries naming unknown flags are ignored (matching the admin
+    list); inactive flags stay present with ``currently_active=False``.
+
+    Precedence note: the org overlay lands ON TOP of the plan context's state,
+    mirroring the admin list — any system-level registry override
+    (``FeatureFlagRegistry.set_override``) is already folded into each flag's
+    ``currently_active`` by the registry before this overlay applies.
+
+    Returns copies (``dataclasses.replace``) for overlaid flags so the plan
+    context's own registry state is never mutated.
+    """
+    flags = plan_ctx.list_all_features()
+    if not org_overrides:
+        return flags
+    return [
+        replace(flag, currently_active=org_overrides[flag.name]) if flag.name in org_overrides else flag
+        for flag in flags
+    ]
 
 
 class FeatureFlagRegistry:
