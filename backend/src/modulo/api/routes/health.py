@@ -57,6 +57,7 @@ from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import get_or_create_engine
 from modulo.core.bundled_runner.runner_reconciler import docker_endpoint_skip_reason
 from modulo.core.cron_helpers import DISPATCHER_RECONCILE_TICK_SECONDS, read_dispatcher_reconcile_stats
+from modulo.core.health_alerts import report_event_loop_stall_attribution
 from modulo.db.migration_guard import DivergenceCheckResult, check_migration_divergence
 from modulo.settings import Settings, break_glass_boot_findings, get_settings, resolve_instance_identity
 from modulo.version import get_version
@@ -180,6 +181,16 @@ _RUNNER_HEALTH_PROBE_STALE_SECONDS = 3 * 60
 # key warns without gating readiness.
 _DECISION_RECORD_RECONCILE_STATS_KEY = "saq:cron:stats:decision_record_reconcile"
 _DECISION_RECORD_RECONCILE_STALE_SECONDS = 3 * 60 * 60
+
+# legacy_agent_return_sweep (FAR-132): the read-only Agent-Return-split
+# legacy-shape straggler sweep runs daily on the system worker and persists its
+# outcome (``legacy_count`` + ``last_run_at``) to this Redis key. Same advisory
+# contract as its siblings, with the stale window tuned to the daily cadence
+# (72h — two missed ticks before it alerts): a dead sweep means the strip-gating
+# invariant has silently stopped being evaluated, so a missing or stale key
+# warns without gating readiness.
+_LEGACY_AGENT_RETURN_SWEEP_STATS_KEY = "saq:cron:stats:legacy_agent_return_sweep"
+_LEGACY_AGENT_RETURN_SWEEP_STALE_SECONDS = 3 * 24 * 60 * 60
 
 # System-cron liveness watchdog (plan F8): fire_due_triggers runs every 60s
 # (SAQ system cron, cron="* * * * *"); a machine whose heartbeat is older than
@@ -1037,7 +1048,10 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
     counters. FAR-1649 adds the node-started counters: ``node_started_deferred``
     (row-level belt hits) and ``node_started_terminalized`` (node-started rows
     that reached the terminaliser) - both regression alarms that must never be
-    read as ``claimed_but_never_dispatched``. Every counter defaults to 0 so a
+    read as ``claimed_but_never_dispatched``. FAR-1803 adds
+    ``node_started_executor_lost`` (node-started rows whose executor heartbeat
+    is stale - the zero-node class that used to be invisible to every counter).
+    Every counter defaults to 0 so a
     pre-D worker's payload renders without error.
 
     FAR-1621: the per-org counters are included so an alert email can tell the
@@ -1060,6 +1074,12 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
         f"claimed_but_never_dispatched={stats.get('claimed_but_never_dispatched', 0)}, "
         f"node_started_terminalized={stats.get('node_started_terminalized', 0)}, "
         f"node_started_deferred={stats.get('node_started_deferred', 0)}, "
+        # FAR-1803: the node-started / executor-lost gauge — a running row with
+        # a durable first-node-start phase whose executor heartbeat is stale.
+        # Rendered unconditionally so the readiness detail can NEVER report 0
+        # for every reconcile counter while such runs exist (the observed
+        # defect this counter exists for).
+        f"node_started_executor_lost={stats.get('node_started_executor_lost', 0)}, "
         f"claim_cap_terminalized={stats.get('claim_cap_terminalized', 0)}, "
         f"age_terminalized={stats.get('age_terminalized', 0)}, "
         f"dispatch_failed_terminalized={stats.get('dispatch_failed_terminalized', 0)}, "
@@ -1279,7 +1299,12 @@ async def _check_runner_workspace_reconcile() -> CheckResult:
     take the unchanged stats path, so configured-but-unreachable engines
     keep reporting degraded.
     """
-    skip_reason = docker_endpoint_skip_reason()
+    # FAR-1771 audit: docker_endpoint_skip_reason() does SYNCHRONOUS
+    # filesystem work (docker-context config.json read + json parse,
+    # Path.is_socket() stats) — the FAR-1439 class. It runs on every probe,
+    # so it must not run ON the loop; asyncio.to_thread moves it off-thread
+    # (behaviour identical, just no longer a stall source).
+    skip_reason = await asyncio.to_thread(docker_endpoint_skip_reason)
     return await _check_sweep_stats_advisory(
         _RUNNER_WORKSPACE_RECONCILE_STATS_KEY,
         _RUNNER_WORKSPACE_RECONCILE_STALE_SECONDS,
@@ -1346,6 +1371,25 @@ async def _check_decision_record_reconcile() -> CheckResult:
         _DECISION_RECORD_RECONCILE_STATS_KEY,
         _DECISION_RECORD_RECONCILE_STALE_SECONDS,
         "scanned",
+    )
+
+
+async def _check_legacy_agent_return_sweep() -> CheckResult:
+    """ADVISORY — last legacy_agent_return_sweep outcome (never gates readiness).
+
+    The FAR-132 read-only Agent-Return-split legacy-shape straggler sweep
+    (``saq_worker.legacy_agent_return_sweep``) runs daily in the SYSTEM WORKER
+    process and persists its outcome (``legacy_count`` + ``last_run_at``) to
+    ``saq:cron:stats:legacy_agent_return_sweep``. A dead sweep means the
+    invariant that gates stripping the legacy tolerance has silently stopped;
+    the sweep itself never mutates a row, so this is alert-only — a missing or
+    >72h-stale key reports "degraded" while the app stays healthy. Fail-open on
+    Redis read errors.
+    """
+    return await _check_sweep_stats_advisory(
+        _LEGACY_AGENT_RETURN_SWEEP_STATS_KEY,
+        _LEGACY_AGENT_RETURN_SWEEP_STALE_SECONDS,
+        "legacy_count",
     )
 
 
@@ -1445,10 +1489,22 @@ async def _check_system_crons() -> CheckResult:
 # worst scheduling delay (oversleep) it observes; the result is surfaced as
 # the advisory ``event_loop_lag`` check so a regression is visible directly
 # in the readiness payload.
+#
+# FAR-1771: when an oversleep wins the "worst" race, the sampler also
+# records the stall WINDOW (scheduled-wake -> actual-wake, monotonic), and
+# the degraded branch below hands that window to
+# ``core.health_alerts.report_event_loop_stall_attribution`` so the log line
+# names the blocking callback (file:line) — the attribution sampler it reads
+# from is opt-in via MODULO_SLOW_CALLBACK_WARN_MS and absent otherwise, in
+# which case the log is exactly the pre-FAR-1771 line.
 _LOOP_LAG_TICK_SECONDS = 0.01
 #: A tick that overslept by at least this much is a STALLED loop, not
 #: scheduling jitter: a healthy loop oversleeps a 10ms tick by single-digit
-#: milliseconds, while the FAR-1439 stall measured ~2400ms.
+#: milliseconds, while the FAR-1439 stall measured ~2400ms. This is the
+#: sub-second/ok boundary of the FAR-1771 three-band contract; the severe
+#: (alert-triggering) band starts at
+#: ``core.health_alerts.SEVERE_EVENT_LOOP_STALL_MS`` (1000ms) on the
+#: same ``latency_ms`` value.
 _LOOP_LAG_DEGRADED_MS = 250.0
 
 
@@ -1460,12 +1516,21 @@ async def _track_event_loop_lag(state: dict[str, float], stop: asyncio.Event) ->
     the task; a synchronous call anywhere on the loop shows up as one
     oversized tick.  ``state`` is shared with the caller so the recorded
     worst value survives task completion and can be read after the fact.
+
+    FAR-1771: the state also carries the WINDOW of the worst oversleep
+    (``worst_start``/``worst_end``, monotonic seconds — scheduled wake ->
+    actual wake) so attribution can read the stack samples covering exactly
+    that span.
     """
     while not stop.is_set():
         started = time.monotonic()
         await asyncio.sleep(_LOOP_LAG_TICK_SECONDS)
-        lag_ms = (time.monotonic() - started - _LOOP_LAG_TICK_SECONDS) * 1000.0
-        state["worst_ms"] = max(state["worst_ms"], lag_ms)
+        finished = time.monotonic()
+        lag_ms = (finished - started - _LOOP_LAG_TICK_SECONDS) * 1000.0
+        if lag_ms > state["worst_ms"]:
+            state["worst_ms"] = lag_ms
+            state["worst_start"] = started + _LOOP_LAG_TICK_SECONDS
+            state["worst_end"] = finished
 
 
 @router.get("/healthz")
@@ -1493,7 +1558,7 @@ async def evaluate_readiness() -> ReadinessResponse:
     a plain await — never a cancel — so a tick that became due DURING a
     stall still runs and records it before the handler reads the state.
     """
-    lag_state: dict[str, float] = {"worst_ms": 0.0}
+    lag_state: dict[str, float] = {"worst_ms": 0.0, "worst_start": 0.0, "worst_end": 0.0}
     lag_stop = asyncio.Event()
     lag_task = asyncio.create_task(_track_event_loop_lag(lag_state, lag_stop))
     try:
@@ -1513,6 +1578,7 @@ async def evaluate_readiness() -> ReadinessResponse:
             rms_check,
             rhp_check,
             drr_check,
+            lars_check,
         ) = await asyncio.gather(
             _check_database(),
             _check_redis(),
@@ -1529,6 +1595,7 @@ async def evaluate_readiness() -> ReadinessResponse:
             _check_runner_marker_sweep(),
             _check_runner_health_probe(),
             _check_decision_record_reconcile(),
+            _check_legacy_agent_return_sweep(),
         )
     finally:
         lag_stop.set()
@@ -1543,9 +1610,34 @@ async def evaluate_readiness() -> ReadinessResponse:
     worst_lag_ms = lag_state["worst_ms"]
     lag_degraded = worst_lag_ms >= _LOOP_LAG_DEGRADED_MS
     if lag_degraded:
+        # FAR-1771: name the blocking callback (file:line) when stall
+        # attribution is installed (MODULO_SLOW_CALLBACK_WARN_MS). Returns
+        # None when the knob is off, no sample covers the window, or the
+        # window holds nothing of ours to blame (an idle/parked loop) — the
+        # log then reads exactly as it did before FAR-1771.
+        #
+        # FAIL-OPEN (FAR-1771 review m5): this sits on the Fly/service-
+        # health-gated /healthz/ready path, so an attribution failure must
+        # never break the readiness probe — log and continue without an
+        # attribution (the same contract as the two install sites).
+        try:
+            attribution = report_event_loop_stall_attribution(
+                window_start=lag_state["worst_start"],
+                window_end=lag_state["worst_end"],
+            )
+        except Exception:
+            _log.exception("health.readiness.stall_attribution_failed")
+            attribution = None
+        stall_message = "health.readiness event-loop stall detected (FAR-1439)"
+        if attribution is not None:
+            stall_message = stall_message + " blocking_callback=" + attribution
+        # The ONE warning per detected stall (FAR-1771 review m4):
+        # report_event_loop_stall_attribution deliberately does not log, so
+        # this line — carrying the attribution when there is one — is the
+        # single WARNING for the event (the lag magnitude rides in `extra`).
         _log.warning(
-            "health.readiness event-loop stall detected (FAR-1439)",
-            extra={"worst_lag_ms": worst_lag_ms},
+            stall_message,
+            extra={"worst_lag_ms": worst_lag_ms, "blocking_callback": attribution},
         )
     lag_check = CheckResult(
         status="degraded" if lag_degraded else "ok",
@@ -1583,8 +1675,11 @@ async def evaluate_readiness() -> ReadinessResponse:
         # FAR-1439 ADVISORY only — excluded from the aggregate (never gates
         # readiness): the worst event-loop scheduling delay seen during this
         # probe.  A value >= _LOOP_LAG_DEGRADED_MS means a synchronous call
-        # blocked the loop mid-probe; it alerts here without blocking a
-        # deploy.
+        # blocked the loop mid-probe; it surfaces here without blocking a
+        # deploy.  FAR-1771 three bands via this check's latency_ms:
+        # <250ms ok (quiet), 250ms-1s degraded (visible here, does NOT page),
+        # >=1s degraded AND alert-triggering (core.health_alerts'
+        # SEVERE_EVENT_LOOP_STALL_MS magnitude gate).
         "event_loop_lag": lag_check,
         # FAR-199: dispatcher_reconcile gates readiness at its "unavailable"
         # tier only (see the aggregation below); its "degraded" tier stays
@@ -1620,6 +1715,11 @@ async def evaluate_readiness() -> ReadinessResponse:
         # the decision-record corruption-detection surface has silently
         # stopped; the sweep mutates nothing, so it stays alert-only.
         "decision_record_reconcile": drr_check,
+        # ADVISORY only — excluded from the aggregate (never gates readiness).
+        # FAR-132: a dead legacy-shape straggler sweep means the invariant that
+        # gates stripping the Agent-Return legacy tolerance has silently
+        # stopped; the sweep mutates nothing, so it stays alert-only.
+        "legacy_agent_return_sweep": lars_check,
     }
 
     # Aggregate over the NON-advisory checks only.

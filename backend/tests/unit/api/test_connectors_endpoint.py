@@ -19,7 +19,10 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
 
 import modulo.api.routes.connectors as connectors_module
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
@@ -27,7 +30,14 @@ from modulo.api.main import app
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.connectors.base import ConnectorACL
+from modulo.connectors.base import ConnectorACL, HealthResult
+from modulo.connectors.ci_runner import GitHubActionsCIRunner
+from modulo.connectors.github import GitHubNetworkError
+from modulo.db.crud.connector_instance import get_connector_instance as _real_get_connector_instance
+from modulo.db.models.account import Account
+from modulo.db.models.base import Base
+from modulo.db.models.connector_instance import ConnectorInstance
+from modulo.db.models.organisation import Organisation
 from modulo.settings import Settings, get_settings
 
 _FERNET_KEY = Fernet.generate_key().decode()
@@ -275,12 +285,12 @@ def test_create_connector_does_not_expose_credentials(client: TestClient) -> Non
     assert body["has_credentials"] is True
 
 
-def _make_github_body(token: str) -> dict[str, str]:
+def _make_github_body(token: str, config_json: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "name": "GitHub Connector",
         "connector_type_id": "github",
         "credentials": token,
-        "config_json": {},
+        "config_json": config_json if config_json is not None else {},
     }
 
 
@@ -1682,6 +1692,145 @@ def test_list_connector_types(client: TestClient) -> None:
     assert "rest" in ids
 
 
+# ── FAR-1764: /types offers only hub-buildable ids ────────────────────────
+
+
+def test_list_connector_types_includes_ci_runners_and_drops_unbuildable_labels(client: TestClient) -> None:
+    """The hub-native CI ids are offered; the abstract labels the hub cannot
+    build (ci-runner, custom) are not."""
+    resp = client.get("/api/v1/connectors/types")
+    assert resp.status_code == 200
+    ids = [item["id"] for item in resp.json()["items"]]
+    assert "github_actions_ci" in ids
+    assert "gitlab_ci" in ids
+    assert "ci-runner" not in ids
+    assert "custom" not in ids
+
+
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+def test_list_connector_types_offers_only_hub_buildable_ids(client: TestClient) -> None:
+    """Every id the endpoint offers is one ``_build_connector`` can build.
+
+    The fixed expectation is the shared build-case matrix plus the hub arms it
+    does not cover (rest / ticket-tracker / linear); a plugin-registered id is
+    trusted to the registry's own build contract. An offered id with no
+    fixture fails loudly — the fixture table must grow with the catalogue.
+    """
+    from modulo.core.connector_hub import _build_connector
+    from modulo.core.plugin_registry import get_plugin_registry
+    from tests.unit.connector_hub._fixtures import BUILD_CASES
+
+    resp = client.get("/api/v1/connectors/types")
+    assert resp.status_code == 200
+    ids = [item["id"] for item in resp.json()["items"]]
+    assert ids
+    fixtures = {row[0]: (row[1], row[2]) for row in BUILD_CASES}
+    fixtures["rest"] = ({"base_url": "https://api.example.com"}, {"auth_mode": "bearer", "token": "rest_token"})
+    fixtures["ticket-tracker"] = ({"provider": "github"}, {"token": "tt_token"})
+    fixtures["linear"] = ({}, {"token": "linear_token"})
+    plugin_types = get_plugin_registry().connector_types
+    for type_id in ids:
+        if type_id in plugin_types:
+            continue
+        fixture = fixtures.get(type_id)
+        assert fixture is not None, f"/types offered {type_id!r} with no buildable fixture"
+        config, creds = fixture
+        assert _build_connector(type_id, config, creds) is not None
+
+
+# ── FAR-1772: MCP list_connector_types agrees with GET /types ─────────────
+
+
+async def test_mcp_list_connector_types_matches_rest_surface() -> None:
+    """The MCP tool and ``GET /api/v1/connectors/types`` advertise the SAME
+    buildable id set — a drift on either surface fails here.
+
+    Both surfaces must reuse ``buildable_connector_type_ids()`` (FAR-1764's
+    helper). Before FAR-1772 the MCP tool iterated the raw ``ConnectorType``
+    enum: it advertised the unbuildable abstract labels ``ci-runner`` /
+    ``custom`` and omitted the hub-native CI ids ``github_actions_ci`` /
+    ``gitlab_ci``, disagreeing with the REST surface.
+    """
+    from modulo.api.mcp_server import _ctx_role
+    from modulo.api.mcp_server import list_connector_types as mcp_list_connector_types
+    from modulo.api.routes.connectors import list_connector_types as rest_list_connector_types
+
+    rest = await rest_list_connector_types()
+    rest_ids = [item.id for item in rest.items]
+
+    # Real scope gate runs (connector.list resolves to viewer); only the
+    # per-event credential re-validation is stubbed — no live credential exists
+    # in a unit test, and authz denial is covered by the MCP tool's own tests.
+    role_token = _ctx_role.set("operator")
+    try:
+        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+            mcp_result = await mcp_list_connector_types()
+    finally:
+        _ctx_role.reset(role_token)
+
+    assert "error" not in mcp_result, mcp_result
+    mcp_ids = [item["id"] for item in mcp_result["data"]]
+    assert mcp_ids == rest_ids, f"MCP/REST connector-type surfaces drifted: {mcp_ids!r} vs {rest_ids!r}"
+    # The FAR-1772 defect class, pinned explicitly on the MCP side too.
+    assert "ci-runner" not in mcp_ids
+    assert "custom" not in mcp_ids
+    assert "github_actions_ci" in mcp_ids
+    assert "gitlab_ci" in mcp_ids
+
+
+def test_create_and_health_check_github_actions_ci_connector(client: TestClient) -> None:
+    """FAR-1764: a CI-runner connector can be created AND health-checked.
+
+    The create accepts ``github_actions_ci`` (previously un-offered in the UI)
+    and the health endpoint's REAL ``ConnectorHub`` builds it — before this,
+    the only CI id the UI offered was the abstract ``ci-runner`` label, whose
+    health check always failed with ``Unknown connector type``.
+    """
+    ci_row = _make_connector()
+    ci_row.connector_type_id = "github_actions_ci"
+
+    class _RecordingSecretsBackend:
+        def __init__(self, **kwargs: object) -> None:
+            self.get_secret_keys: list[str] = []
+
+        async def get_secret(self, key: str) -> str:
+            self.get_secret_keys.append(key)
+            return '{"token": "ghp_ci_token"}'
+
+        async def set_secret(self, key: str, value: str) -> None:
+            return None
+
+        async def delete_secret(self, key: str) -> None:
+            return None
+
+    def fake_create_secrets_backend(**kwargs: object) -> _RecordingSecretsBackend:
+        return _RecordingSecretsBackend(**kwargs)
+
+    health_probe = AsyncMock(return_value=HealthResult(ok=True, detail="connected"))
+    with (
+        patch("modulo.api.routes.connectors.create_connector_instance", return_value=ci_row),
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=ci_row),
+        patch("modulo.api.routes.connectors.create_secrets_backend", fake_create_secrets_backend),
+        patch.object(GitHubActionsCIRunner, "health_check", health_probe),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        create_resp = client.post(
+            "/api/v1/connectors",
+            json={
+                "name": "GH Actions CI",
+                "connector_type_id": "github_actions_ci",
+                "credentials": "ghp_ci_token",
+            },
+        )
+        assert create_resp.status_code == 201, create_resp.text
+        health_resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}/health")
+
+    assert health_resp.status_code == 200, health_resp.text
+    assert health_resp.json()["ok"] is True
+    health_probe.assert_awaited_once()
+
+
 def test_decrypt_credentials_returns_empty_for_none() -> None:
     """_decrypt_credentials returns {} when ciphertext is None/empty."""
     from modulo.api.routes.connectors import _decrypt_credentials
@@ -2038,6 +2187,150 @@ def test_patch_github_missing_scopes_returns_422(client: TestClient) -> None:
     assert "missing required" in resp.json()["detail"]
 
 
+# ── FAR-1762: GHES instance-aware verification ────────────────────────────
+
+_GHE_BASE_URL = "https://ghe.example.com/api/v3"
+_VERIFICATION_WARNING_HEADER = "X-Modulo-Verification-Warning"
+
+
+def test_create_github_verifies_against_configured_ghes_base(client: TestClient) -> None:
+    """A GHES connector's token is verified on the GHES instance, not github.com."""
+    seen: dict[str, Any] = {}
+
+    async def fake_verify_scopes(self: Any) -> set[str]:
+        seen["base_url"] = self._base_url
+        return set()
+
+    with (
+        patch("modulo.api.routes.connectors.GitHubConnector.verify_scopes", new=fake_verify_scopes),
+        patch("modulo.api.routes.connectors.create_connector_instance", return_value=_make_connector()),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.post(
+            "/api/v1/connectors",
+            json=_make_github_body("ghp_test123", config_json={"base_url": _GHE_BASE_URL}),
+        )
+    assert resp.status_code == 201, resp.text
+    assert seen["base_url"] == _GHE_BASE_URL
+
+
+def test_create_github_without_base_url_verifies_against_default(client: TestClient) -> None:
+    """No configured base_url keeps verifying against github.com."""
+    seen: dict[str, Any] = {}
+
+    async def fake_verify_scopes(self: Any) -> set[str]:
+        seen["base_url"] = self._base_url
+        return set()
+
+    with (
+        patch("modulo.api.routes.connectors.GitHubConnector.verify_scopes", new=fake_verify_scopes),
+        patch("modulo.api.routes.connectors.create_connector_instance", return_value=_make_connector()),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/connectors", json=_make_github_body("ghp_test123"))
+    assert resp.status_code == 201, resp.text
+    assert seen["base_url"] == "https://api.github.com"
+
+
+def test_create_github_unreachable_instance_is_non_fatal_with_warning_header(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """FAR-1762: an unreachable instance must NOT block creation, and must NOT
+    be silent — the connector is created and the response carries the
+    ``X-Modulo-Verification-Warning`` header saying the token was not verified.
+    A typed transport failure (``GitHubNetworkError``) is the "instance
+    unreachable" signal; an unclassified ``ValueError`` stays a 422 (see
+    ``test_github_scope_verification_error_on_create``)."""
+    with (
+        patch(
+            "modulo.api.routes.connectors.GitHubConnector.verify_scopes",
+            new=AsyncMock(side_effect=GitHubNetworkError("connection refused")),
+        ),
+        patch("modulo.api.routes.connectors.create_connector_instance", return_value=_make_connector()),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        caplog.at_level(logging.WARNING, logger="modulo.api.routes.connectors"),
+    ):
+        resp = client.post(
+            "/api/v1/connectors",
+            json=_make_github_body("ghp_test123", config_json={"base_url": _GHE_BASE_URL}),
+        )
+    assert resp.status_code == 201, resp.text
+    warning = resp.headers.get(_VERIFICATION_WARNING_HEADER)
+    assert warning is not None
+    assert _GHE_BASE_URL in warning
+    assert "NOT verified" in warning
+    assert any("verification_unreachable" in record.message for record in caplog.records)
+
+
+def test_patch_github_unreachable_instance_is_non_fatal_with_warning_header(client: TestClient) -> None:
+    """The PATCH rotation path degrades the same way as create (FAR-1762)."""
+    existing = _make_github_patch_connector()
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("modulo.api.routes.connectors.update_connector_instance", return_value=existing),
+        patch(
+            "modulo.api.routes.connectors.GitHubConnector.verify_scopes",
+            new=AsyncMock(side_effect=GitHubNetworkError("connection refused")),
+        ),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"credentials": "ghp_newtoken"})
+    assert resp.status_code == 200, resp.text
+    warning = resp.headers.get(_VERIFICATION_WARNING_HEADER)
+    assert warning is not None
+    assert "NOT verified" in warning
+
+
+def test_patch_github_verifies_against_merged_config_base_url(client: TestClient) -> None:
+    """A PATCH that rotates credentials AND sets a GHES base_url verifies on the
+    GHES instance — the MERGED config wins over the stored one."""
+    existing = _make_github_patch_connector()
+    seen: dict[str, Any] = {}
+
+    async def fake_verify_scopes(self: Any) -> set[str]:
+        seen["base_url"] = self._base_url
+        return set()
+
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("modulo.api.routes.connectors.update_connector_instance", return_value=existing),
+        patch("modulo.api.routes.connectors.GitHubConnector.verify_scopes", new=fake_verify_scopes),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/connectors/{_CONNECTOR_ID}",
+            json={"credentials": "ghp_newtoken", "config_json": {"base_url": _GHE_BASE_URL}},
+        )
+    assert resp.status_code == 200, resp.text
+    assert seen["base_url"] == _GHE_BASE_URL
+
+
+def test_create_github_non_string_verification_result_does_not_break_create(client: TestClient) -> None:
+    """Only a real string warning is ever written to the response header.
+
+    A test double standing in for ``_verify_github_credentials`` may return a
+    non-str truthy value (the BDD step patches it with ``return_value=True``);
+    that must not crash the route nor land as a bogus header.
+    """
+    with (
+        patch(
+            "modulo.api.routes.connectors._verify_github_credentials",
+            new=AsyncMock(return_value=True),
+        ),
+        patch("modulo.api.routes.connectors.create_connector_instance", return_value=_make_connector()),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/connectors", json=_make_github_body("ghp_test123"))
+    assert resp.status_code == 201, resp.text
+    assert _VERIFICATION_WARNING_HEADER not in resp.headers
+
+
 async def test_verify_github_token_defensive_missing_payload_raises_500() -> None:
     """FAR-532: the GitHub scope check must fail loudly (500) rather than hand
     ``None`` to ``GitHubConnector`` when it is reached with no credential
@@ -2218,3 +2511,104 @@ def test_update_connector_missing_vault_key_fails_closed(client: TestClient) -> 
     assert "credential_reference_error" in detail
     assert "vault/missing" in detail
     update_mock.assert_not_awaited()
+
+
+async def test_patch_connector_returns_2xx_persists_row_and_get_reflects_change(client: TestClient) -> None:
+    """FAR-1792 regression: a successful PATCH must answer 2xx, not 500.
+
+    The CRUD ``update_connector_instance`` flush expires the server-populated
+    ``updated_at`` column (``onupdate=func.current_timestamp()``). Building
+    the response AFTER the ``session.begin()`` block has committed — on the
+    ``expire_on_commit=False, autobegin=False`` DI session — reloaded that
+    expired attribute outside any transaction and raised
+    ``InvalidRequestError: Autobegin is disabled on this Session``, which
+    ``handle_db_errors`` maps to a 500 even though the write had already
+    committed: the caller saw "update failed" for a change that took effect.
+
+    Asserts the full contract the bug violated, not just the write: the 2xx
+    status, the persisted row read back in a fresh session, and a subsequent
+    GET reflecting the change. A write-only assertion would have passed both
+    before and after the fix.
+    """
+    engine = create_async_engine(
+        "sqlite+aiosqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+    connector_id = uuid.uuid4()
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda sync_conn: Base.metadata.create_all(
+                    sync_conn,
+                    tables=[Organisation.__table__, Account.__table__, ConnectorInstance.__table__],
+                )
+            )
+        async with factory() as session, session.begin():
+            session.add(Organisation(id=_ORG_ID, name="FAR-1792 Test Org", slug="far1792-test-org"))
+            session.add(
+                ConnectorInstance(
+                    id=connector_id,
+                    organisation_id=_ORG_ID,
+                    name="Original Name",
+                    connector_type_id="filesystem",
+                    account_id=_USER_ID,
+                    credentials_ciphertext=b"encrypted",
+                    config_json={},
+                    allowed_operations=[],
+                )
+            )
+
+        async def override_session() -> AsyncGenerator[AsyncSession, None]:
+            async with factory() as session:
+                yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+
+        # The module-level autouse fixture stubs this CRUD read with a
+        # MagicMock; the real-DB route under test needs the real function.
+        with patch("modulo.api.routes.connectors.get_connector_instance", _real_get_connector_instance):
+            resp = client.patch(f"/api/v1/connectors/{connector_id}", json={"name": "Renamed"})
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["name"] == "Renamed"
+
+        async with factory() as verify_session, verify_session.begin():
+            stored = (
+                await verify_session.execute(select(ConnectorInstance).where(ConnectorInstance.id == connector_id))
+            ).scalar_one()
+        assert stored.name == "Renamed"
+
+        with patch("modulo.api.routes.connectors.get_connector_instance", _real_get_connector_instance):
+            got = client.get(f"/api/v1/connectors/{connector_id}")
+        assert got.status_code == 200, got.text
+        assert got.json()["name"] == "Renamed"
+    finally:
+        await engine.dispose()
+
+
+def test_patch_connector_row_gone_at_write_time_returns_404(client: TestClient) -> None:
+    """FAR-1792: the row vanishing between the ownership read and the write is a 404.
+
+    ``_apply_connector_update`` reads the connector once for the IDOR/ownership
+    check and again (inside the transaction) through
+    ``update_connector_instance``; a concurrent DELETE between the two reads
+    makes that write return ``None``. The helper must surface this as
+    ``(None, warning)`` so ``update_connector_endpoint`` maps it to 404 — a
+    test that only makes the ownership read return ``None`` (the existing
+    ``update_not_found`` CRUD case) raises inside the helper and never reaches
+    this arm, leaving the ``updated is None`` branch and the route's
+    ``payload is None`` arm uncovered.
+    """
+    connector = _make_connector()
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=connector),
+        patch("modulo.api.routes.connectors.update_connector_instance", return_value=None),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"name": "Renamed"})
+
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"] == "Connector not found"

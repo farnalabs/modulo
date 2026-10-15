@@ -604,6 +604,13 @@ markers = [
 
 [tool.coverage.run]
 branch = true
+# SQLAlchemy's async engine runs statements through greenlets
+# (``greenlet_spawn``). Without ``greenlet`` here, coverage's line tracer loses
+# the lines that follow a greenlet switch, so genuinely-executed statements
+# (e.g. a synchronous assignment between two awaits in an async route) are
+# reported as uncovered — a false negative that fails the changed-lines gate on
+# correct code (FAR-247). ``thread`` is retained for the TestClient portal.
+concurrency = ["thread", "greenlet"]
 source = ["src/modulo"]
 omit = ["*/tests/*", "*/migrations/*", "*/stub/*"]
 

@@ -24,11 +24,11 @@ from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
-from modulo.api.mcp_server import _get_run_status_impl, _run_status_detail
+from modulo.api.mcp_server import _get_run_status_impl, _load_run_for_status, _run_status_detail
 from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
 from modulo.db.crud.run_node_outputs import RunBlobs
 from modulo.db.models.run import Run
-from tests.unit.mcp.helpers import AuthContext, make_session_context
+from tests.unit.mcp.helpers import ORG_ID, AuthContext, make_session_context
 
 _RUN_ID = uuid.UUID("00000000-0000-0000-0000-000000000009")
 _PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-00000000000a")
@@ -219,3 +219,19 @@ class TestGetRunStatusImplParity(_McpCtx):
         result = await self._call(_run_row(input_payload=None), _blobs(markers=None), detail=True)
 
         assert result["input_payload"] is None
+
+    async def test_load_run_for_status_forwards_org_predicate(self) -> None:
+        """The loader must carry the defence-in-depth org predicate (FAR-328).
+
+        RLS is the production backstop; this pins that the MCP caller passes
+        the org it already resolved so a cross-tenant read is impossible even
+        if RLS were misconfigured (the BYPASSRLS variant has an integration
+        test in tests/integration/test_run_org_scoping_bypassrls.py).
+        """
+        mock_get_run = AsyncMock(return_value=None)
+        with patch("modulo.api.mcp_server.get_run", mock_get_run):
+            loaded = await _load_run_for_status(AsyncMock(), _RUN_ID, ORG_ID)
+
+        assert loaded is None
+        mock_get_run.assert_awaited_once()
+        assert mock_get_run.await_args.kwargs["organisation_id"] == ORG_ID

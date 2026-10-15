@@ -399,6 +399,15 @@ class Settings(BaseSettings):
     # is ready for production use.  Consumed in node_runner before host-side
     # ref resolution.
     modulo_workspace_inputs_enabled: bool = Field(False, alias="MODULO_WORKSPACE_INPUTS_ENABLED")
+    # FAR-1743 / ADR 037 rev 2 (EXPERIMENTAL): path to the devtools-owned
+    # model-management.json registry the sandbox_agent ``model_class`` seam
+    # resolves through at snapshot mint. None (default) = no registry: nodes
+    # without ``model_class`` resolve nothing (existing pipelines unchanged),
+    # while a node that DECLARES ``model_class`` fails closed pre-dispatch
+    # (ModelClassResolutionError, ADR 037 D3). When set, the file must stay
+    # readable — a configured-but-broken registry rejects sandbox runs loudly
+    # instead of silently shipping them on the wrong model.
+    model_class_registry_path: str | None = Field(default=None, alias="MODEL_CLASS_REGISTRY_PATH")
     # FAR-1050 R6 (E2B provider-conformance rewire): the
     # ``MODULO_E2B_VIA_PROVIDER`` flag is RETIRED. The legacy direct E2B path
     # was deleted in R6 — every sandbox dispatch runs through the
@@ -507,6 +516,28 @@ class Settings(BaseSettings):
     # back to runs.updated_at) is cleared, and a stale non-terminal RUNNING run
     # is terminalised with it. Default 25h.
     runner_marker_stale_seconds: int = Field(default=90000, alias="RUNNER_MARKER_STALE_SECONDS", ge=3600, le=604800)
+    # FAR-1808: the per-row reclaim bound for a NODE-STARTED running run whose
+    # executor died. A run that is ``status='running'`` +
+    # ``dispatch_phase='first_node_dispatched'`` + a live non-fence dispatch
+    # marker is excluded from the reconciler's re-dispatch set (a re-dispatch
+    # would re-execute the started node — FAR-1649), so before FAR-1808 the
+    # only sweep that could reclaim its sandbox slot was the 25h
+    # ``runner_marker_stale_seconds`` cap: up to ~25h of a leaked org sandbox
+    # slot that starves every other pipeline (observed: 18 leaked Branch-Fixer
+    # runs saturating the org sandbox cap → PR Reviewer 429s).
+    #
+    # A node may legitimately execute at most ``MAX_NODE_TIMEOUT_SECONDS``
+    # (3300s) after the marker write that starts it, so a marker older than
+    # the default 7200s (2x the max node timeout, with provisioning /
+    # sweep-cadence margin) PLUS a stale ``heartbeat_at`` (the executor stopped
+    # beating — 2x SAQ_JOB_HEARTBEAT) proves the executor is dead. BOTH
+    # conditions must hold: a live long-running node refreshes ``heartbeat_at``
+    # and is never reclaimed. ``runs.updated_at`` is NOT the liveness signal —
+    # it is a static insert-time default nothing refreshes, so keying on it
+    # would make the second condition vacuously true. The load-time
+    # ``_node_started_stale_invariant`` below rejects a pin below a legitimate
+    # single-node dispatch window.
+    node_started_stale_seconds: int = Field(default=7200, alias="NODE_STARTED_STALE_SECONDS", ge=1, le=604800)
     # FAR-767: per-org lock_timeout for the runner-marker sweep's transactional
     # statements (candidate scan + CAS updates). A sweep org pass that blocks on
     # a row lock held by an in-flight sandbox-run transaction must NOT wedge the
@@ -930,6 +961,19 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
+    # FAR-1771 — event-loop stall ATTRIBUTION (opt-in, off by default).
+    # ------------------------------------------------------------------
+    # When > 0 (milliseconds), process startup installs stall attribution on
+    # the process's event loop: asyncio's slow-callback warning is armed at
+    # this threshold (loop.set_debug + loop.slow_callback_duration), and a
+    # low-frequency sampler thread records the loop thread's stack so the
+    # readiness stall log can NAME the blocking callback (file:line) when a
+    # synchronous call freezes the loop — the FAR-1439 class that starves
+    # every async DB op at once. 0 (the default) = off: no sampler thread,
+    # no loop debug flags, no per-tick work — zero cost, exactly as today.
+    modulo_slow_callback_warn_ms: int = Field(default=0, alias="MODULO_SLOW_CALLBACK_WARN_MS", ge=0, le=60_000)
+
+    # ------------------------------------------------------------------
     # In-process worker-liveness watchdog (postmortem 2026-08-09, FAR-121)
     # ------------------------------------------------------------------
     # A plain asyncio task in the WEB-process FastAPI lifespan (NOT an SAQ
@@ -1290,6 +1334,36 @@ class Settings(BaseSettings):
                 f"({MAX_NODE_TIMEOUT_SECONDS}) = {required}s: the FAR-1088 in-flight shield would expire "
                 "before the node deadline, letting the nodeless backstop claim a live attempt. "
                 f"Raise it to >= {required}, or unset it to derive from the grace."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _node_started_stale_invariant(self) -> "Settings":
+        """FAIL (never warn): the node-started reclaim bound must never sit
+        below a legitimate single-node dispatch window.
+
+        FAR-1808: ``node_started_stale_seconds`` is the marker-age bound past
+        which a node-STARTED (``dispatch_phase='first_node_dispatched'``)
+        RUNNING run whose heartbeat ALSO went stale is reclaimed
+        (``failed`` / ``worker_lost``) WITHOUT re-dispatch — the sandbox slot
+        it leaked is freed. A node may legitimately execute for up to
+        ``MAX_NODE_TIMEOUT_SECONDS`` (the GraphValidator cap on a node's
+        ``timeout_seconds``) after the marker write that starts it, so a bound
+        below that window would reclaim (and kill) a live node
+        mid-execution — a false failure of a run that is still working, the
+        same class the ``_nodeless_in_flight_floor_invariant`` guard exists to
+        prevent. The requirement therefore mirrors that guard's floor
+        (``saq_setup_grace_seconds`` + ``MAX_NODE_TIMEOUT_SECONDS``), so the
+        two safety bounds cannot silently diverge.
+        """
+        required = self.saq_setup_grace_seconds + MAX_NODE_TIMEOUT_SECONDS
+        if self.node_started_stale_seconds < required:
+            raise ValueError(
+                f"NODE_STARTED_STALE_SECONDS={self.node_started_stale_seconds} does not cover the "
+                f"worst-case legitimate single-node window SAQ_SETUP_GRACE_SECONDS "
+                f"({self.saq_setup_grace_seconds}) + max node timeout ({MAX_NODE_TIMEOUT_SECONDS}) = "
+                f"{required}s: the node-started reclaim sweep would kill a live node mid-execution. "
+                f"Raise it to >= {required}."
             )
         return self
 

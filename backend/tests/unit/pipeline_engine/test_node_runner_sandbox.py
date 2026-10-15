@@ -2148,6 +2148,81 @@ async def test_agent_command_empty_after_render_fails():
 
 
 # ---------------------------------------------------------------------------
+# FAR-1743 / ADR 037 rev 2 — the top-level `{{ model }}` template variable
+# ---------------------------------------------------------------------------
+
+
+async def test_agent_command_renders_baked_model_class_value():
+    """PROVE-THE-FIX (replay): `--model {{ model }}` renders the SNAPSHOT's
+    baked `_resolved_model` — render only interpolates, it never consults a
+    registry, so replaying this snapshot uses exactly this model no matter how
+    the registry changes afterwards."""
+    node_def = _model_node_def(
+        "opencode run --model {{ model }} --auto --format json < /home/user/prompt.md",
+        model_class="builder",
+        _resolved_model="opencode-go/mimo-v2.6-flash",
+        _model_origin="node_model_class",
+    )
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    wrapped = sandbox.commands.run.call_args.args[0]
+    assert "--model opencode-go/mimo-v2.6-flash" in wrapped
+    assert "{{" not in wrapped
+
+
+async def test_agent_command_run_override_beats_baked_model_value():
+    """Precedence rung 1: the run's frozen `_run_overrides.model` (variant /
+    A-B system) folds in pre-dispatch and OVERRIDES the baked value for that
+    run — resolution still never happens inside the sandbox."""
+    node_def = _model_node_def(
+        "opencode run --model {{ model }} --auto --format json < /home/user/prompt.md",
+        model_class="builder",
+        _resolved_model="opencode-go/mimo-v2.6-flash",
+        _model_origin="node_model_class",
+    )
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+    state = _run_state()
+    state["run_context"]["_run_overrides"] = {"model": "opencode-go/variant-choice"}
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(state)
+
+    assert result["output"]["status"] == "completed"
+    wrapped = sandbox.commands.run.call_args.args[0]
+    assert "--model opencode-go/variant-choice" in wrapped
+    assert "opencode-go/mimo-v2.6-flash" not in wrapped
+
+
+async def test_model_class_without_resolved_model_fails_before_any_sandbox_work():
+    """PROVE-THE-FIX (fail closed, D3): an opted-in node with no baked model
+    and no run override must NOT dispatch — the ValueError fires during
+    template-var construction, BEFORE AsyncSandbox.create and any command, so
+    a blank `--model` can never reach the sandbox."""
+    node_def = _model_node_def(
+        "opencode run --model {{ model }} --auto --format json < /home/user/prompt.md",
+        model_class="builder",
+    )
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+    create = AsyncMock(return_value=sandbox)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=create),
+        pytest.raises(ValueError, match="no model was resolved at snapshot mint"),
+    ):
+        await fn(_run_state())
+
+    create.assert_not_called()
+    sandbox.commands.run.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # FAR-306: opt-in stall detectors — _StallDetector + _delta_ratio unit tests
 # ---------------------------------------------------------------------------
 

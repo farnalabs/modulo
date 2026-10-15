@@ -1,7 +1,7 @@
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Integer, String, Uuid
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, Integer, String, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped, SoftDeleteMixin
@@ -17,6 +17,20 @@ class VariantGroup(SoftDeleteMixin, OrgScoped):
         CheckConstraint(
             "selection_strategy IN ('weighted', 'single')",
             name="ck_variant_groups_selection_strategy",
+        ),
+        # Partial unique from migration 0156_add_soft_delete_partial_uniques —
+        # one live variant group per (org, name); a soft-deleted row no longer
+        # blocks a re-create. Declared on the model so the ORM metadata matches
+        # the DB.
+        Index(
+            "uq_variant_groups_org_name",
+            "organisation_id",
+            "name",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            # sqlite_where as well: postgresql_where is ignored on SQLite, so
+            # create_all'd schemas would otherwise build a FULL unique index.
+            sqlite_where=text("deleted_at IS NULL"),
         ),
     )
 

@@ -148,7 +148,7 @@ def _make_collection_primitive(
     p.author = _USER_ID.hex
     p.version = "1.0"
     p.tags = []
-    p.content_json = {"pins": manifest_pins or []}
+    p.content_json = {"manifest_pins": manifest_pins or []}
     p.source_url = None
     p.forked_from = None
     p.checksum = None
@@ -247,7 +247,11 @@ class TestCreateCollectionEndpoint:
         mock_prim = _make_collection_primitive()
         with (
             patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
-            patch("modulo.api.routes.library.create_library_primitive", new_callable=AsyncMock, return_value=mock_prim),
+            patch(
+                "modulo.api.routes.library.create_library_primitive",
+                new_callable=AsyncMock,
+                return_value=mock_prim,
+            ) as create_mock,
         ):
             resp = client.post(
                 "/api/v1/libraries/collections",
@@ -261,6 +265,11 @@ class TestCreateCollectionEndpoint:
         data = resp.json()
         assert data["status"] == "draft"
         assert data["manifest_pins"] == [{"slug": "my-schema", "version": "1.0"}]
+        # The pins must be persisted under the CANONICAL ``manifest_pins`` key —
+        # the one the install/upgrade readers look for — not the legacy ``pins``.
+        assert create_mock.call_args.kwargs["content_json"] == {
+            "manifest_pins": [{"slug": "my-schema", "version": "1.0"}]
+        }
 
     def test_create_collection_duplicate_slug(self, client: TestClient) -> None:
         existing = _make_collection_primitive()
@@ -742,8 +751,10 @@ def _make_install_record(
     rec.status = status
     rec.resolved_manifest = {"schemas": {}, "agents": {}}
     rec.connector_checklist = []
-    rec.installed_entities = []
     rec.created_at = _NOW
+    # Explicit None: a bare MagicMock auto-creates deleted_at as a truthy mock,
+    # which the endpoint's retired-install (soft-delete) guard would 404.
+    rec.deleted_at = None
     return rec
 
 
@@ -1095,6 +1106,19 @@ class TestGetCollectionInstallEndpoint:
         )
         assert resp.status_code == 404
 
+    def test_get_install_retired_returns_404(self, client: TestClient) -> None:
+        """A soft-deleted (uninstalled) install is retired history: the get
+        endpoint 404s it exactly like an absent row (0308 guard — a row can
+        reach here from the session identity map, bypassing the global
+        soft-delete filter)."""
+        mock_install = _make_install_record()
+        mock_install.deleted_at = _NOW
+        client.mock_session.get = AsyncMock(return_value=mock_install)
+        resp = client.get(
+            f"/api/v1/libraries/collections/{mock_install.collection_id}/installs/{mock_install.install_id}",
+        )
+        assert resp.status_code == 404
+
     def test_get_install_programming_error(self, client: TestClient) -> None:
         client.mock_session.get = AsyncMock(
             side_effect=ProgrammingError("stmt", {}, RuntimeError("missing table")),
@@ -1298,7 +1322,79 @@ class TestInstallCollectionService:
             "entity_fingerprints": {},
         }
         assert not install.connector_checklist
-        assert not install.installed_entities
+        # FAR-1754: the duplicate JSON copy is gone — install never writes it
+        # (the collection_install_entity child rows are the sole record).
+        assert not hasattr(install, "installed_entities")
+
+
+class TestInstalledEntitiesSingleSourceOfTruth:
+    """FAR-1754: ``collection_install_entity`` is the single source of truth.
+
+    The install API response's ``installed_entities`` list is loaded from the
+    child rows by the endpoint INSIDE its org-RLS transaction (the child
+    table's FORCE-RLS policy fails closed outside it) and threaded into the
+    response builder — the parent JSON column that used to duplicate the same
+    fact no longer exists, so what the API reports can never diverge from what
+    uninstall acts on.
+    """
+
+    def test_collection_install_model_has_no_installed_entities_column(self) -> None:
+        from modulo.db.models.collection_install import CollectionInstall
+
+        assert "installed_entities" not in CollectionInstall.__table__.columns
+
+    def test_load_installed_entities_reads_the_child_rows(self) -> None:
+        from modulo.api.routes.library import _load_installed_entities
+
+        install_id = uuid.uuid4()
+        schema_id = uuid.uuid4()
+        agent_id = uuid.uuid4()
+        child_rows = []
+        for entity_type, entity_id in (("schema", schema_id), ("agent", agent_id)):
+            row = MagicMock()
+            row.entity_type = entity_type
+            row.entity_id = entity_id
+            child_rows.append(row)
+
+        child_result = MagicMock()
+        child_result.scalars.return_value.all.return_value = child_rows
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=child_result)
+
+        loaded = asyncio.run(_load_installed_entities(session, install_id))
+
+        assert loaded == [
+            {"entity_type": "schema", "entity_id": str(schema_id)},
+            {"entity_type": "agent", "entity_id": str(agent_id)},
+        ]
+
+    def test_install_response_carries_the_caller_preloaded_entity_list(self) -> None:
+        from modulo.api.routes.library import _install_response
+
+        install = _make_install_record()
+        # A stale JSON copy on the record: the response must carry the list
+        # the CALLER loaded inside the RLS transaction, never anything read
+        # off the record (the JSON column no longer exists). A revert that
+        # re-reads the record reports THIS instead and fails the assertion.
+        install.installed_entities = [{"entity_type": "pipeline", "entity_id": str(uuid.uuid4())}]
+
+        preloaded = [
+            {"entity_type": "schema", "entity_id": str(uuid.uuid4())},
+            {"entity_type": "agent", "entity_id": str(uuid.uuid4())},
+        ]
+
+        session = AsyncMock()
+        with (
+            patch(
+                "modulo.api.routes.library.compute_runnable",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            _patch_no_newer_version(),
+        ):
+            resp = asyncio.run(_install_response(session, install, preloaded))
+
+        assert resp.installed_entities == preloaded
 
 
 class TestUninstallCollectionService:
@@ -1313,6 +1409,7 @@ class TestUninstallCollectionService:
             install = MagicMock()
             install.organisation_id = _ORG_ID
             install.collection_id = uuid.uuid4()
+            install.deleted_at = None
             mock_session.get = AsyncMock(return_value=install)
             await uninstall_collection(
                 mock_session,
@@ -1332,6 +1429,7 @@ class TestUninstallCollectionService:
             install = MagicMock()
             install.organisation_id = _ORG_ID
             install.collection_id = uuid.uuid4()
+            install.deleted_at = None
             mock_session.get = AsyncMock(return_value=install)
 
             # Tracking row points at an entity that no longer exists.
@@ -1390,6 +1488,7 @@ class TestGrantCollectionAgents:
             mock_install.organisation_id = _ORG_ID
             mock_install.community_sourced = True
             mock_install.agents_granted = False
+            mock_install.deleted_at = None
             mock_session.get = AsyncMock(return_value=mock_install)
             result = await grant_collection_agents(mock_session, _ORG_ID, mock_install.install_id)
             assert result.agents_granted is True
@@ -1405,6 +1504,7 @@ class TestGrantCollectionAgents:
             mock_install.organisation_id = _ORG_ID
             mock_install.community_sourced = True
             mock_install.agents_granted = True
+            mock_install.deleted_at = None
             mock_session.get = AsyncMock(return_value=mock_install)
             result = await grant_collection_agents(mock_session, _ORG_ID, mock_install.install_id)
             assert result.agents_granted is True
@@ -1420,6 +1520,7 @@ class TestGrantCollectionAgents:
             mock_install.organisation_id = _ORG_ID
             mock_install.community_sourced = False
             mock_install.agents_granted = False
+            mock_install.deleted_at = None
             mock_session.get = AsyncMock(return_value=mock_install)
             await grant_collection_agents(mock_session, _ORG_ID, mock_install.install_id)
 
@@ -1433,6 +1534,24 @@ class TestGrantCollectionAgents:
             mock_session = AsyncMock()
             mock_session.get = AsyncMock(return_value=None)
             await grant_collection_agents(mock_session, _ORG_ID, uuid.uuid4())
+
+        with pytest.raises(InstallNotFoundError):
+            asyncio.run(run())
+
+    def test_grant_soft_deleted_install_is_not_found(self) -> None:
+        """A retired (uninstalled) install must never be grantable — 0308
+        soft-delete guard on the grant path."""
+        from modulo.core.library_service.grant import InstallNotFoundError, grant_collection_agents
+
+        async def run() -> None:
+            mock_session = AsyncMock()
+            mock_install = MagicMock()
+            mock_install.organisation_id = _ORG_ID
+            mock_install.community_sourced = True
+            mock_install.agents_granted = False
+            mock_install.deleted_at = _NOW
+            mock_session.get = AsyncMock(return_value=mock_install)
+            await grant_collection_agents(mock_session, _ORG_ID, mock_install.install_id)
 
         with pytest.raises(InstallNotFoundError):
             asyncio.run(run())
@@ -1600,7 +1719,7 @@ def _make_published_collection(
     prim.description = "desc"
     prim.author = "test"
     prim.tags = []
-    prim.content_json = {"pins": []}
+    prim.content_json = {"manifest_pins": []}
     prim.manifest_pins = [{"slug": "my-schema", "version": "1.0"}]
     prim.owner_team_id = None
     prim.visibility = "org"

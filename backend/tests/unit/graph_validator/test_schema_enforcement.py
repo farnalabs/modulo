@@ -2,8 +2,8 @@
 
 Covers proof-of-brokenness regression, type promotion, nullable handling,
 additionalProperties, required fields, nested objects, array items,
-version pinning, deletion protection, grace period degradation,
-schema pins map parsing, and backward compatibility.
+version pinning, deletion protection, pre-existing snapshot blocking
+(FAR-1760), schema pins map parsing, and backward compatibility.
 
 All pure validation tests call _check_schema_fields directly (no DB).
 Tests needing DB interaction use mocked AsyncSession.
@@ -18,6 +18,12 @@ import pytest
 
 from modulo.core.graph_validator import GraphValidator, ValidationResult
 from modulo.db.crud.schema import SchemaDeletionProtectedError, delete_schema
+from tests.unit.graph_validator._helpers import (
+    schema_version_row as _schema_version_row,
+)
+from tests.unit.graph_validator._helpers import (
+    schema_version_session as _schema_version_session,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -44,39 +50,42 @@ def _snapshot(**kw):
     return snap
 
 
-def _schema_version_row(schema_id, definition_json, *, version="1.0"):
-    sv = MagicMock()
-    sv.schema_id = schema_id
-    sv.version = version
-    sv.definition_json = definition_json
-    return sv
+def _deletion_session(
+    *,
+    get_schema_row,
+    agent_count: int = 0,
+    pin_count: int = 0,
+    library_count: int = 0,
+):
+    """Mock session for ``delete_schema`` keyed by each query's OWN FROM table.
 
-
-def _mock_session_for_schema_versions(rows, *, use_scalar_one=False):
+    ``delete_schema`` issues four distinct SELECTs (the schema lookup, then the
+    Agent / SnapshotSchemaPin / LibraryPrimitive reference counts). Keying by
+    the statement's final FROM clause instead of call order means reordering
+    the queries inside the CRUD function cannot silently break these tests:
+    each query always answers with its own table's result, and any NEW query
+    fails loudly instead of scavenging a positional slot.
+    """
+    counts = {
+        "agents": agent_count,
+        "snapshot_schema_pins": pin_count,
+        "library_primitives": library_count,
+    }
     session = AsyncMock()
-    exc_result = MagicMock()
-    if use_scalar_one:
-        if len(rows) > 1:
-            _rows = list(rows)
 
-            def _make_call(_row):
-                r = MagicMock()
-                r.scalar_one_or_none.return_value = _row
-                r.scalar_one.return_value = _row
-                return r
-
-            results = [_make_call(r) for r in _rows]
-            session.execute = AsyncMock(side_effect=results)
+    def _exec(stmt, *_a, **_kw):
+        tables = [f.name for f in stmt.get_final_froms() if hasattr(f, "name")]
+        table = tables[0] if tables else None
+        result = MagicMock()
+        if table == "schemas":
+            result.scalar_one_or_none.return_value = get_schema_row
+        elif table in counts:
+            result.scalar_one.return_value = counts[table]
         else:
-            rv = rows[0] if rows else None
-            exc_result.scalar_one_or_none.return_value = rv
-            exc_result.scalar_one.return_value = rv
-            session.execute = AsyncMock(return_value=exc_result)
-    else:
-        scalars = MagicMock()
-        scalars.all.return_value = rows
-        exc_result.scalars.return_value = scalars
-        session.execute = AsyncMock(return_value=exc_result)
+            raise AssertionError(f"Unexpected query in delete_schema test: FROM {tables}")
+        return result
+
+    session.execute = AsyncMock(side_effect=_exec)
     return session
 
 
@@ -345,7 +354,7 @@ async def test_version_pinning_resolves_pinned_not_latest():
             version="1.0",
         ),
     ]
-    session = _mock_session_for_schema_versions(rows, use_scalar_one=True)
+    session = _schema_version_session(rows)
 
     definitions = await GraphValidator()._resolve_schema_definitions(
         {(schema_id, "1.0"): None},
@@ -359,7 +368,7 @@ async def test_version_pinning_resolves_pinned_not_latest():
 async def test_version_pinning_returns_empty_for_missing_version():
     """Pinned to a version that doesn't exist → empty dict (no crash)."""
     schema_id = uuid.uuid4()
-    session = _mock_session_for_schema_versions([], use_scalar_one=True)
+    session = _schema_version_session([])
 
     definitions = await GraphValidator()._resolve_schema_definitions(
         {(schema_id, "99.0"): None},
@@ -381,27 +390,12 @@ async def test_schema_deletion_blocked_when_pinned():
     schema_mock.id = schema_id
     schema_mock.system = False
 
-    # Mock session to simulate SnapshotSchemaPin count > 0
-    session = AsyncMock()
-
-    get_schema_result = MagicMock()
-    get_schema_result.scalar_one_or_none.return_value = schema_mock
-
-    agent_count_result = MagicMock()
-    agent_count_result.scalar_one.return_value = 0
-
-    pin_count_result = MagicMock()
-    pin_count_result.scalar_one.return_value = 1
-
-    lib_count_result = MagicMock()
-    lib_count_result.scalar_one.return_value = 0
-
-    session.execute.side_effect = [
-        get_schema_result,
-        agent_count_result,
-        pin_count_result,
-        lib_count_result,
-    ]
+    session = _deletion_session(
+        get_schema_row=schema_mock,
+        agent_count=0,
+        pin_count=1,
+        library_count=0,
+    )
 
     with pytest.raises(SchemaDeletionProtectedError) as exc_info:
         await delete_schema(session, schema_id)
@@ -416,42 +410,30 @@ async def test_schema_deletion_allowed_when_not_pinned():
     schema_mock.id = schema_id
     schema_mock.system = False
 
-    session = AsyncMock()
-
-    get_schema_result = MagicMock()
-    get_schema_result.scalar_one_or_none.return_value = schema_mock
-
-    agent_count_result = MagicMock()
-    agent_count_result.scalar_one.return_value = 0
-
-    pin_count_result = MagicMock()
-    pin_count_result.scalar_one.return_value = 0
-
-    lib_count_result = MagicMock()
-    lib_count_result.scalar_one.return_value = 0
-
-    session.execute.side_effect = [
-        get_schema_result,
-        agent_count_result,
-        pin_count_result,
-        lib_count_result,
-    ]
+    session = _deletion_session(
+        get_schema_row=schema_mock,
+        agent_count=0,
+        pin_count=0,
+        library_count=0,
+    )
 
     result = await delete_schema(session, schema_id)
     assert result is True
 
 
 # ===================================================================
-# Test 10 — Grace period degradation
+# Test 10 — Pre-existing snapshot schema blocking (FAR-1760)
 # ===================================================================
 
 
 async def test_pre_existing_pipeline_logs_degraded_mode(caplog: pytest.LogCaptureFixture):
-    """Pre-Phase-1 snapshot with incompatible schemas does not block early.
+    """Pre-Phase-1 snapshot with a field-level incompatibility is INVALID (blocked).
 
-    The degraded-mode signal is a WARNING-level log record (the ``SCHEMA_DEGRADED``
-    issue is stripped by ``_strip_warnings`` before ``validate_for_run`` returns),
-    so it is pinned here via ``caplog``.
+    FAR-1760 removed the legacy degraded-mode path for pre-existing snapshots:
+    this regression test is updated in place to assert the inverse of the old
+    degraded-mode signal. The run stays blocked, the log and the surfaced error
+    both say the run is blocked, and no ``proceeds in degraded mode`` text is
+    emitted in either channel.
     """
     caplog.set_level(logging.WARNING)
     out_id = uuid.uuid4()
@@ -475,13 +457,66 @@ async def test_pre_existing_pipeline_logs_degraded_mode(caplog: pytest.LogCaptur
         _schema_version_row(out_id, {"type": "object", "properties": {"x": {"type": "string"}}}),
         _schema_version_row(in_id, {"type": "object", "properties": {"x": {"type": "integer"}}}),
     ]
-    session = _mock_session_for_schema_versions(rows, use_scalar_one=True)
+    session = _schema_version_session(rows)
 
     result = await GraphValidator().validate_for_run(snap, {}, session)
 
     assert not result.is_valid
     assert any(i.code == "SCHEMA_FIELD_INCOMPATIBLE" for i in result.issues)
-    assert any("Schema incompatibility in pipeline" in r.getMessage() for r in caplog.records)
+    blocked = [i for i in result.issues if i.code == "SCHEMA_PRE_EXISTING_BLOCKED"]
+    assert blocked
+    assert "Run is blocked" in blocked[0].message
+    assert not any(i.code == "SCHEMA_DEGRADED" for i in result.issues)
+    blocked_logs = [r.getMessage() for r in caplog.records if "Run is blocked" in r.getMessage()]
+    assert any("Schema incompatibility in pipeline" in msg for msg in blocked_logs)
+    surfaced = " ".join(r.getMessage() for r in caplog.records)
+    surfaced += " " + " ".join(f"{i.code} {i.message}" for i in result.issues)
+    assert "proceeds in degraded mode" not in surfaced
+
+
+async def test_pre_existing_pipeline_input_mismatch_blocked_with_truthful_message(caplog: pytest.LogCaptureFixture):
+    """Pre-Phase-1 snapshot with an input-payload mismatch is INVALID (blocked).
+
+    The input-schema carve-out mirrors the field-level one: blocked with a
+    truthful message, no ``proceeds in degraded mode`` signal on any channel.
+    """
+    caplog.set_level(logging.WARNING)
+    entry_id = uuid.uuid4()
+
+    graph = {
+        "nodes": [
+            {"id": "a", "input_schema_pin": {"schema_id": str(entry_id), "schema_version": "1.0"}},
+            {"id": "b"},
+        ],
+        "edges": [{"source": "a", "target": "b", "type": "normal"}],
+    }
+
+    snap = _snapshot(
+        graph_json=graph,
+        created_at=datetime(2026, 7, 21, 12, 0, 0, tzinfo=UTC),
+        schema_pins_json=[],
+    )
+
+    rows = [
+        _schema_version_row(
+            entry_id, {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+        ),
+    ]
+    session = _schema_version_session(rows)
+
+    result = await GraphValidator().validate_for_run(snap, {}, session)
+
+    assert not result.is_valid
+    assert any(i.code == "INPUT_SCHEMA_MISMATCH" for i in result.issues)
+    blocked = [i for i in result.issues if i.code == "SCHEMA_PRE_EXISTING_BLOCKED"]
+    assert blocked
+    assert "Run is blocked" in blocked[0].message
+    assert not any(i.code == "SCHEMA_DEGRADED" for i in result.issues)
+    blocked_logs = [r.getMessage() for r in caplog.records if "Run is blocked" in r.getMessage()]
+    assert any("Input schema incompatibility in pipeline" in msg for msg in blocked_logs)
+    surfaced = " ".join(r.getMessage() for r in caplog.records)
+    surfaced += " " + " ".join(f"{i.code} {i.message}" for i in result.issues)
+    assert "proceeds in degraded mode" not in surfaced
 
 
 async def test_non_pre_existing_pipeline_blocks_on_incompatible():
@@ -507,7 +542,7 @@ async def test_non_pre_existing_pipeline_blocks_on_incompatible():
         _schema_version_row(out_id, {"type": "object", "properties": {"x": {"type": "string"}}}),
         _schema_version_row(in_id, {"type": "object", "properties": {"x": {"type": "integer"}}}),
     ]
-    session = _mock_session_for_schema_versions(rows, use_scalar_one=True)
+    session = _schema_version_session(rows)
 
     result = await GraphValidator().validate_for_run(snap, {}, session)
 

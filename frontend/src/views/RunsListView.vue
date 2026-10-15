@@ -68,13 +68,24 @@
           :row-clickable="false"
         >
           <template #cell-pipeline_name="{ row }">
-            <router-link
-              :to="`/runs/${row.run_id}`"
-              class="font-medium hover:underline"
-              :data-testid="`runs-list-view-${row.run_id}`"
-            >
-              {{ row.pipeline_name || $t('views.RunsListView.deleted_pipeline') }}
-            </router-link>
+            <div class="flex flex-wrap items-center gap-1">
+              <!-- FAR-1813: the pipeline name opens the VERSION this run
+                   executed (?snapshot= from the run's own snapshot_id). The
+                   run itself stays reachable through the adjacent link — the
+                   name cell no longer carries run-detail navigation. -->
+              <RunPipelineVersionLink
+                :pipeline-id="(row as RunListItem).pipeline_id"
+                :pipeline-name="(row as RunListItem).pipeline_name"
+                :snapshot-id="snapshotIdOf(row)"
+                class="font-medium"
+                :data-testid="`runs-list-view-${row.run_id}`"
+              >{{ row.pipeline_name || $t('views.RunsListView.deleted_pipeline') }}</RunPipelineVersionLink>
+              <router-link
+                :to="`/runs/${row.run_id}`"
+                class="text-xs text-muted-foreground hover:text-foreground hover:underline"
+                :data-testid="`runs-list-open-${row.run_id}`"
+              >{{ $t('views.RunsListView.view_run') }}</router-link>
+            </div>
           </template>
           <template #cell-status="{ value, row }">
             <div class="flex flex-wrap items-center gap-1">
@@ -261,6 +272,7 @@ import { formatApiError } from '../lib/api/formatError'
 import { DataTable, type Column } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 import TableSkeleton from '../components/shared/TableSkeleton.vue'
+import RunPipelineVersionLink from '../components/runs/RunPipelineVersionLink.vue'
 import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, triggerTypeLabel, runStatusDescription, isDispatchedRun, isSupersededRun, queuedCapacityReason } from '../utils/runUtils'
 import { RUN_STATUS, TRIGGER_TYPE } from '../constants/filters'
 import { isNonTerminalStatus, isTerminalStatus } from '../constants/runStatuses'
@@ -289,6 +301,18 @@ const runColumns = computed<Column[]>(() => [
   { key: 'warnings', label: t('views.RunsListView.warnings'), sortable: false },
   { key: 'actions', label: '', sortable: false },
 ])
+
+/**
+ * FAR-1813: the run's OWN snapshot id, narrowed from the list item's
+ * `Record<string, unknown>` shape (the field rides the payload but is not
+ * declared on `RunListItem`). Returns null — never a placeholder — for a
+ * missing/legacy snapshot so the pipeline link falls back to the live editor
+ * instead of building a dead `?snapshot=null` target.
+ */
+function snapshotIdOf(row: unknown): string | null {
+  const snap = (row as { snapshot_id?: unknown }).snapshot_id
+  return typeof snap === 'string' && snap.length > 0 ? snap : null
+}
 
 const confirmingIds = ref(new Set<string>())
 const cancellingIds = ref(new Set<string>())

@@ -19,4 +19,4 @@ class TeamMembership(OrgScoped):
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    role: Mapped[str] = mapped_column(String(20), nullable=False, default="viewer")
+    role: Mapped[str] = mapped_column(String(20), nullable=False, server_default="viewer")

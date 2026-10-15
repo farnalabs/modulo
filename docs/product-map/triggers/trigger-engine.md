@@ -127,14 +127,14 @@ rate-limited by the `TriggerEngine`.
       boundary, `streak_status` returns real values for a covered cron (never
       the unconfigured base), and a cron trip NOTIFIES and SURFACES
       (append-only `cron_trigger.no_delivery_streak_alert` record + sweep
-      "tripped" count) WITHOUT auto-deactivating — deactivation is opt-in per
+      "tripped" count) WITHOUT auto-deactivating - deactivation is opt-in per
       cron via `config_json no_delivery_auto_deactivate` (default OFF), cron
       applies its own 48h minimum wall-clock window
       (MODULO_CRON_STREAK_MIN_WINDOW_HOURS override), and cron audit records
       use `cron_trigger.*` event types, never the `ongoing_trigger.*` stream
       (`core/trigger_streak.py`, `test_trigger_streak_engine.py`)
 - [x] The streak badge in `SettingsTriggersView` renders for every trigger type
-      the engine covers — ongoing AND cron — via ONE mirrored constant
+      the engine covers - ongoing AND cron - via ONE mirrored constant
       (`STREAK_COVERED_TRIGGER_TYPES`, pointing at the backend
       `STREAK_TRIGGER_TYPES` in `core/trigger_streak.py`), and the "Deactivated"
       badge + re-enable action are driven by `streak_status.state ===
@@ -146,7 +146,7 @@ rate-limited by the `TriggerEngine`.
       `frontend/src/__tests__/SettingsTriggersView.spec.ts`)
 - [x] Trigger mutation against a team-private pipeline enforces the team gate
       (FAR-1513): access derives from the trigger's owning pipeline (triggers
-      carry no team columns of their own — same derivation as runs, ADR 038) via
+      carry no team columns of their own - same derivation as runs, ADR 038) via
       `resolve_trigger_team_scope`, which INNER JOINs pipelines so RLS parity is
       free (a non-member of a team-private pipeline sees the trigger as absent →
       404, never a boundary/enumeration signal). The single `evaluate_team_gate`
@@ -154,12 +154,12 @@ rate-limited by the `TriggerEngine`.
       and the MCP per-row trigger guards) evaluates absent row → 404, org admin
       → allowed, org/team-private row → allowed, a team-scoped API-key bound to
       the wrong team → 403 boundary, and a user principal with no membership row
-      in the owning team → 403 membership (an unset identity denies — it cannot
+      in the owning team → 403 membership (an unset identity denies - it cannot
       prove membership, matching the RLS unknown-user posture). The check is
       re-run INSIDE the mutation transaction with the row FOR UPDATE (no TOCTOU)
       and a bounded `set_mutation_row_lock_timeout` row-lock wait. A soft-deleted
       PIPELINE denies; a soft-deleted TRIGGER still resolves so
-      `POST /triggers/{id}/restore` reaches the gate — a team-private trigger
+      `POST /triggers/{id}/restore` reaches the gate - a team-private trigger
       must not become restorable by deletion (`api/team_scope.py`
       `evaluate_team_gate` / `resolve_trigger_team_scope`,
       `db/crud/team_scope.py`, `db/crud/row_lock.py`;
@@ -169,7 +169,7 @@ rate-limited by the `TriggerEngine`.
       `bdd: features/teams/team_pipeline_visibility.feature`)
 - [x] A polling trigger's connector reference is team-scoped at BOTH save and
       read (FAR-1595): a trigger's `config_json.connector_instance_id` was never
-      team-validated — the fire job reads the connector row team-blind
+      team-validated - the fire job reads the connector row team-blind
       (`cron_helpers` sets the execution context) with only the allowlist gate,
       so a team-A trigger could name and poll a team-B connector and read its
       team-private credentials. SAVE-time: the shared
@@ -209,8 +209,8 @@ rate-limited by the `TriggerEngine`.
 ## QA History
 - 2026-10-09: **Improve Architecture product-map walk** – closed the untracked
   FAR-1595 sub-surface (polling connector team-scope gate, merged in PR #1451):
-  the middle of the connector team-scope rule — a polling trigger naming a
-  team-private connector from another team — shipped with NO coverage in either
+  the middle of the connector team-scope rule - a polling trigger naming a
+  team-private connector from another team - shipped with NO coverage in either
   product-map layer. The manifest `feat-triggers` registry and this tracker
   carried the FAR-1513 team-gate-but-not-connector half but not the FAR-1595
   save-time (`_validate_connector_instance_team_scope` over REST create/update/
@@ -224,7 +224,7 @@ rate-limited by the `TriggerEngine`.
 - 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
   FAR-1513 sub-surface (team-gate trigger create/update/delete/toggle/restore
   against a team-private pipeline, merged in PR #1376): the trigger team-gate
-  shipped with NO coverage in either product-map layer — the manifest
+  shipped with NO coverage in either product-map layer - the manifest
   `feat-triggers` registry and this tracker both predated it. Added the checked
   behaviour line (owning-pipeline derivation, the single `evaluate_team_gate`
   matrix, the in-transaction FOR UPDATE re-check, the restore-resolution rule)
@@ -238,11 +238,11 @@ rate-limited by the `TriggerEngine`.
   shipped cron-streak behaviour and the badge rendering rule, but the
   human-readable graph entry lagged behind (no behaviour line for either,
   and the `SettingsTriggersView.spec.ts` unit citation was absent from the
-  frontmatter). Added the two checked behaviours — the notify-only-by-default
+  frontmatter). Added the two checked behaviours - the notify-only-by-default
   cron streak trip (opt-in `no_delivery_auto_deactivate`, the 48h minimum
   window, `cron_trigger.*` audit event types) and the
   `STREAK_COVERED_TRIGGER_TYPES` badge rule where "Deactivated" wording is
-  driven by backend state, never trigger type — plus the
+  driven by backend state, never trigger type - plus the
   `core/trigger_streak.py` code citation and the
   `SettingsTriggersView.spec.ts` unit citation.
   `_ORPHANED_BDD_FEATURES` stays empty.

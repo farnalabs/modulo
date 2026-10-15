@@ -8,6 +8,7 @@ import logging
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -18,6 +19,8 @@ from httpx import Response
 from modulo.core.reports.scheduler import (
     _REPORT_HTTP_TIMEOUT,
     _SIGNATURE_HEADER,
+    ReportFireLeaseUnavailableError,
+    _acquire_report_fire_lease,
     _coerce_timeout,
     _deliver_slack_webhook,
     _deliver_to_urls,
@@ -25,7 +28,11 @@ from modulo.core.reports.scheduler import (
     _deliver_webhook,
     _fire_scheduled_report,
     _get_engine,
+    _lease_epoch,
+    _lease_value,
+    _parse_epoch,
     _parse_retry_after,
+    _release_report_fire_lease,
     _serialize_json_body,
     _sign_payload,
     _webhook_url_error,
@@ -39,6 +46,7 @@ from tests.unit.reports.helpers import (
     SLACK_URL,
     SLACK_URL_2,
     MockSession,
+    MockSessionFactory,
     make_http_client,
     make_http_response,
     make_report_mock,
@@ -257,7 +265,11 @@ class TestFireScheduledReport:
         assert result["status"] == "sent"
         assert result["next_send_at"] == "2026-07-08T09:00:00+00:00"
 
-        update_params = session.execute.await_args_list[1].args[0].compile().params
+        # FAR-1822: the terminal stamp is now the LAST statement (the first
+        # write is the short-lock claim/stamp of next_send_at before generation).
+        sent = [call.args[0] for call in session.execute.await_args_list if "last_sent_at" in str(call.args[0])]
+        assert sent, "a successful send must stamp last_sent_at"
+        update_params = sent[-1].compile().params
         assert "last_sent_at" in update_params
         assert isinstance(update_params["last_sent_at"], datetime.datetime)
         assert update_params["last_sent_at"].tzinfo is not None
@@ -286,6 +298,642 @@ class TestFireScheduledReport:
             pytest.raises(asyncio.CancelledError),
         ):
             await _fire_scheduled_report(report_id=report_id, org_id=org_id)
+
+
+# ---------------------------------------------------------------------------
+# FAR-1822: lock-scope + concurrent-fire fencing
+# ---------------------------------------------------------------------------
+
+
+class _LockTrackingBegin:
+    """Async context manager that flips the session's lock-transaction flag."""
+
+    def __init__(self, session: _LockTrackingSession) -> None:
+        self._session = session
+
+    async def __aenter__(self) -> _LockTrackingSession:
+        self._session.open_txns += 1
+        return self._session
+
+    async def __aexit__(self, *args: object) -> bool:
+        self._session.open_txns -= 1
+        # The FOR UPDATE transaction has ended (commit/rollback).
+        self._session.lock_txn_open = False
+        return False
+
+
+class _LockTrackingSession:
+    """Session double recording whether a ``FOR UPDATE`` txn is open.
+
+    ``lock_txn_open`` is set True when a ``SELECT … FOR UPDATE`` runs inside an
+    open ``begin()`` block and reset False the moment that block exits — so a
+    generator that reads it observes whether the report row lock is still held
+    while it runs.
+    """
+
+    def __init__(self, report: MagicMock) -> None:
+        self.report = report
+        self.open_txns = 0
+        self.lock_txn_open = False
+        self.executed: list[object] = []
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    def begin(self) -> _LockTrackingBegin:
+        return _LockTrackingBegin(self)
+
+    async def execute(self, stmt: object, params: object = None) -> MagicMock:
+        self.executed.append(stmt)
+        if "FOR UPDATE" in str(stmt) and self.open_txns > 0:
+            self.lock_txn_open = True
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = self.report
+        return result
+
+    def add(self, obj: object) -> None:
+        return None
+
+    async def flush(self) -> None:
+        return None
+
+
+class _LeaseRedis:
+    """Minimal in-memory Redis double implementing SET NX, GET and compare-and-delete."""
+
+    def __init__(self) -> None:
+        self._values: dict[str, str] = {}
+
+    async def set(self, key: str, value: str, *, nx: bool = False, ex: int | None = None) -> bool | None:
+        if nx and key in self._values:
+            return None
+        self._values[key] = value
+        return True
+
+    async def get(self, key: str) -> str | None:
+        return self._values.get(key)
+
+    async def eval(self, script: str, numkeys: int, key: str, *args: object) -> int:
+        if "del" in script:
+            # Release: compare-and-delete on the whole stored value.
+            if self._values.get(key) == args[0]:
+                del self._values[key]
+                return 1
+            return 0
+        # Steal: compare-and-set on the exact value the caller observed.
+        if self._values.get(key) == args[0]:
+            self._values[key] = args[1]  # type: ignore[assignment]
+            return 1
+        return 0
+
+
+class _RaceLostLeaseRedis:
+    """Models the LOSING attempt of a concurrent same-epoch steal.
+
+    Another attempt replaced the lease between our ``GET`` and our
+    compare-and-set, so the CAS must miss — the old check-then-set path would
+    have let both attempts overwrite the lease and both generate.
+    """
+
+    def __init__(self, observed: str, current: str) -> None:
+        self._observed = observed
+        self._current = current
+
+    async def set(self, key: str, value: str, *, nx: bool = False, ex: int | None = None) -> bool | None:
+        return None  # the dead predecessor still holds the key
+
+    async def get(self, key: str) -> str:
+        return self._observed
+
+    async def eval(self, script: str, numkeys: int, key: str, *args: object) -> int:
+        return 1 if self._current == args[0] else 0
+
+
+class _BytesLeaseRedis(_LeaseRedis):
+    """Like ``_LeaseRedis`` but stores/returns ``bytes``, as the production
+    redis client (no ``decode_responses``) does."""
+
+    def __init__(self) -> None:
+        self._values: dict[str, object] = {}
+
+    async def set(self, key: str, value: str, *, nx: bool = False, ex: int | None = None) -> bool | None:
+        if nx and key in self._values:
+            return None
+        self._values[key] = value.encode() if isinstance(value, str) else value
+        return True
+
+    async def get(self, key: str) -> object:
+        return self._values.get(key)
+
+    async def eval(self, script: str, numkeys: int, key: str, *args: object) -> int:
+        if "del" in script:
+            if self._values.get(key) == args[0]:
+                del self._values[key]
+                return 1
+            return 0
+        if self._values.get(key) == args[0]:
+            self._values[key] = args[1]
+            return 1
+        return 0
+
+
+class TestFireScheduledReportLockScope:
+    """FAR-1822: generation runs OUTSIDE the report row lock, and concurrent
+    fires of the same report cannot both run."""
+
+    async def test_generation_runs_after_the_row_lock_is_released(self) -> None:
+        report = make_report_mock(report_type="lock_probe", cron_expression="0 9 * * *")
+        observed: dict[str, object] = {}
+
+        async def generator(session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
+            observed["lock_held"] = getattr(session, "lock_txn_open", None)
+            return {"rows": 1}
+
+        session = _LockTrackingSession(report)
+        with (
+            patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock) as rls,
+            patch(
+                "modulo.core.reports.scheduler._acquire_report_fire_lease",
+                new_callable=AsyncMock,
+                return_value="tok",
+            ),
+            patch("modulo.core.reports.scheduler._release_report_fire_lease", new_callable=AsyncMock),
+            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+            patch("modulo.core.reports.scheduler.get_formatter", return_value=None),
+            patch("modulo.core.reports.scheduler.get_deliverer", return_value=AsyncMock(return_value=[])),
+            patch(
+                "modulo.core.reports.scheduler.compute_next_send",
+                return_value=datetime.datetime(2026, 7, 1, tzinfo=datetime.UTC),
+            ),
+        ):
+            result = await _fire_scheduled_report(
+                report_id=report.id,
+                org_id=report.organisation_id,
+                session_factory=lambda: session,
+            )
+
+        # The old locked-across-generation body would have observed True here.
+        assert observed["lock_held"] is False
+        assert result["status"] == "sent"
+        # RLS is (re-)applied in every phase's own transaction, including the
+        # out-of-lock generation transaction.
+        assert rls.await_count == 3
+
+    async def test_concurrent_fires_cannot_double_run(self) -> None:
+        report = make_report_mock(report_type="concurrency_probe", cron_expression="0 9 * * *")
+        select_result = MagicMock()
+        select_result.scalar_one_or_none.return_value = report
+        session = MockSession([select_result, MagicMock(), MagicMock()])
+        redis = _LeaseRedis()
+
+        gen_calls: list[int] = []
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def generator(gen_session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
+            gen_calls.append(1)
+            started.set()
+            await release.wait()
+            return {"rows": 1}
+
+        async def fire() -> dict[str, object]:
+            return await _fire_scheduled_report(
+                report_id=report.id,
+                org_id=report.organisation_id,
+                session_factory=lambda: session,
+                redis_client=redis,  # type: ignore[arg-type]
+            )
+
+        with (
+            patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
+            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+            patch("modulo.core.reports.scheduler.get_formatter", return_value=None),
+            patch("modulo.core.reports.scheduler.get_deliverer", return_value=AsyncMock(return_value=[])),
+            patch(
+                "modulo.core.reports.scheduler.compute_next_send",
+                return_value=datetime.datetime(2026, 7, 1, tzinfo=datetime.UTC),
+            ),
+        ):
+            first = asyncio.create_task(fire())
+            try:
+                await asyncio.wait_for(started.wait(), timeout=5)
+                second_result = await asyncio.wait_for(asyncio.create_task(fire()), timeout=5)
+            finally:
+                release.set()
+            first_result = await asyncio.wait_for(first, timeout=5)
+
+        assert first_result["status"] == "sent"
+        assert second_result == {"status": "skipped", "reason": "already_firing"}
+        assert len(gen_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# FAR-1822 review fixes: epoch idempotency, lease failure/recovery, guarded
+# terminal stamp
+# ---------------------------------------------------------------------------
+
+
+def _recurring_report(last_sent_at: datetime.datetime | None = None) -> MagicMock:
+    report = make_report_mock(
+        report_type="epoch_probe",
+        cron_expression="0 9 * * *",
+        config_json={"schedule_type": "recurring"},
+    )
+    report.last_sent_at = last_sent_at
+    return report
+
+
+def _one_time_report(last_sent_at: datetime.datetime | None = None) -> MagicMock:
+    report = make_report_mock(
+        report_type="epoch_probe",
+        cron_expression="0 9 * * *",
+        config_json={"schedule_type": "one_time"},
+    )
+    report.last_sent_at = last_sent_at
+    return report
+
+
+def _select_returns(report: MagicMock) -> MagicMock:
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = report
+    return result
+
+
+def _statements(session: MockSession) -> list[object]:
+    return [call.args[0] for call in session.execute.await_args_list]
+
+
+def _updates(session: MockSession) -> list[object]:
+    return [stmt for stmt in _statements(session) if str(stmt).lstrip().startswith("UPDATE")]
+
+
+class _ExplodingRedis:
+    """Redis double whose every operation fails — an infrastructure outage."""
+
+    async def set(self, *args: object, **kwargs: object) -> None:
+        raise RuntimeError("redis down")
+
+    async def get(self, *args: object, **kwargs: object) -> None:
+        raise RuntimeError("redis down")
+
+
+class TestReportFireEpochIdempotency:
+    """Finding 1: a retry of an already-delivered epoch must never re-deliver."""
+
+    async def test_post_delivery_terminal_stamp_failure_does_not_redeliver(self) -> None:
+        delivered: list[int] = []
+
+        async def generator(session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
+            return {"rows": 1}
+
+        async def deliverer(payload: object, config: dict[str, object]) -> list[dict[str, object]]:
+            delivered.append(1)
+            return [{"status": "delivered"}]
+
+        report = _recurring_report()
+        session = MockSession(
+            [_select_returns(report)],
+            raise_on=lambda stmt: str(stmt).lstrip().startswith("UPDATE") and "last_sent_at" in str(stmt),
+        )
+
+        with (
+            report_firing_env(session),
+            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+            patch("modulo.core.reports.scheduler.get_formatter", return_value=None),
+            patch("modulo.core.reports.scheduler.get_deliverer", return_value=deliverer),
+        ):
+            result = await _fire_scheduled_report(
+                report_id=report.id,
+                org_id=report.organisation_id,
+                epoch="2026-07-01T09:00:00+00:00",
+            )
+
+        # The send happened, so the fire reports success rather than raising —
+        # SAQ must NOT retry the whole job and deliver again.
+        assert result["status"] == "sent"
+        assert len(delivered) == 1
+
+    async def test_already_delivered_epoch_is_skipped(self) -> None:
+        epoch = "2026-07-01T09:00:00+00:00"
+        report = _recurring_report(last_sent_at=datetime.datetime(2026, 7, 1, 9, 0, tzinfo=datetime.UTC))
+        session = MockSession([_select_returns(report)])
+
+        with report_firing_env(session):
+            result = await _fire_scheduled_report(
+                report_id=report.id,
+                org_id=report.organisation_id,
+                epoch=epoch,
+            )
+
+        assert result == {"status": "skipped", "reason": "already_delivered"}
+
+    async def test_newer_epoch_proceeds_after_an_earlier_delivery(self) -> None:
+        async def generator(session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
+            return {"rows": 1}
+
+        report = _recurring_report(last_sent_at=datetime.datetime(2026, 7, 1, 9, 0, tzinfo=datetime.UTC))
+        session = MockSession([_select_returns(report)])
+
+        with (
+            report_firing_env(session),
+            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+        ):
+            result = await _fire_scheduled_report(
+                report_id=report.id,
+                org_id=report.organisation_id,
+                epoch="2026-07-02T09:00:00+00:00",
+            )
+
+        assert result["status"] == "sent"
+
+
+class TestReportFireLeaseOutcome:
+    """Findings 3 + 4: an unavailable lease FAILS (never a benign skip) and a
+    re-queued same-epoch attempt recovers a dead holder's lease."""
+
+    async def test_no_redis_client_raises_lease_unavailable(self) -> None:
+        with pytest.raises(ReportFireLeaseUnavailableError):
+            await _acquire_report_fire_lease(None, uuid.uuid4(), "epoch-E")
+
+    async def test_redis_error_raises_lease_unavailable(self) -> None:
+        with pytest.raises(ReportFireLeaseUnavailableError):
+            await _acquire_report_fire_lease(_ExplodingRedis(), uuid.uuid4(), "epoch-E")  # type: ignore[arg-type]
+
+    async def test_lease_unavailable_is_a_failure_not_a_skip(self) -> None:
+        result = await _fire_scheduled_report(
+            report_id=uuid.uuid4(),
+            org_id=uuid.uuid4(),
+            epoch="epoch-E",
+            session_factory=lambda: MockSession([]),
+            redis_client=_ExplodingRedis(),  # type: ignore[arg-type]
+        )
+
+        assert result == {"status": "failed", "reason": "lease_unavailable"}
+
+    async def test_same_epoch_requeue_steals_a_dead_holders_lease(self) -> None:
+        redis = _LeaseRedis()
+        report_id = uuid.uuid4()
+        first = await _acquire_report_fire_lease(redis, report_id, "epoch-E")
+        assert first is not None
+
+        # The first attempt crashed without releasing. SAQ re-queues the same
+        # job with the SAME epoch — it must be able to re-acquire, not wait out
+        # the 900s TTL.
+        requeued = await _acquire_report_fire_lease(redis, report_id, "epoch-E")
+        assert requeued is not None
+
+        # A DIFFERENT epoch is a genuine concurrent fire — still blocked.
+        assert await _acquire_report_fire_lease(redis, report_id, "epoch-F") is None
+
+    async def test_concurrent_same_epoch_steal_only_one_attempt_wins(self) -> None:
+        # Two re-queued attempts of the same epoch race to steal a dead holder's
+        # lease. The loser reads the dead value but another attempt overwrote it
+        # before its compare-and-set, so the CAS must MISS — the old
+        # check-then-set path would have let both steal and both generate.
+        report_id = uuid.uuid4()
+        dead = _lease_value("dead-token", "epoch-E")
+        winner = _lease_value("winner-token", "epoch-E")
+        redis = _RaceLostLeaseRedis(observed=dead, current=winner)
+
+        assert await _acquire_report_fire_lease(redis, report_id, "epoch-E") is None  # type: ignore[arg-type]
+
+    async def test_same_epoch_steal_matches_a_bytes_valued_lease(self) -> None:
+        # The production redis client does not decode responses, so the observed
+        # lease value is bytes — the compare-and-set must match it byte-for-byte.
+        redis = _BytesLeaseRedis()
+        report_id = uuid.uuid4()
+        assert await _acquire_report_fire_lease(redis, report_id, "epoch-E") is not None  # type: ignore[arg-type]
+        assert await _acquire_report_fire_lease(redis, report_id, "epoch-E") is not None  # type: ignore[arg-type]
+
+    async def test_holding_lease_without_epoch_is_not_stealable(self) -> None:
+        redis = _LeaseRedis()
+        report_id = uuid.uuid4()
+        assert await _acquire_report_fire_lease(redis, report_id) is not None
+        # No epoch to match -> a second anonymous fire is a genuine skip.
+        assert await _acquire_report_fire_lease(redis, report_id) is None
+
+    async def test_fire_recovers_a_lease_left_by_a_crashed_same_epoch_attempt(self) -> None:
+        redis = _LeaseRedis()
+        report = _recurring_report()
+        # Pre-seed the lease exactly as a crashed attempt would leave it.
+        await _acquire_report_fire_lease(redis, report.id, "epoch-E")
+
+        delivered: list[int] = []
+
+        async def generator(session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
+            return {"rows": 1}
+
+        async def deliverer(payload: object, config: dict[str, object]) -> list[dict[str, object]]:
+            delivered.append(1)
+            return [{"status": "delivered"}]
+
+        session = MockSession([_select_returns(report)])
+        with (
+            patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
+            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+            patch("modulo.core.reports.scheduler.get_formatter", return_value=None),
+            patch("modulo.core.reports.scheduler.get_deliverer", return_value=deliverer),
+        ):
+            result = await _fire_scheduled_report(
+                report_id=report.id,
+                org_id=report.organisation_id,
+                epoch="epoch-E",
+                session_factory=MockSessionFactory(session),
+                redis_client=redis,  # type: ignore[arg-type]
+            )
+
+        assert result["status"] == "sent"
+        assert len(delivered) == 1
+
+    async def test_held_lease_for_another_epoch_is_a_benign_skip(self) -> None:
+        redis = _LeaseRedis()
+        report = _recurring_report()
+        await _acquire_report_fire_lease(redis, report.id, "epoch-A")
+        session = MockSession([_select_returns(report)])
+
+        result = await _fire_scheduled_report(
+            report_id=report.id,
+            org_id=report.organisation_id,
+            epoch="epoch-B",
+            session_factory=MockSessionFactory(session),
+            redis_client=redis,  # type: ignore[arg-type]
+        )
+
+        assert result == {"status": "skipped", "reason": "already_firing"}
+
+    def test_lease_values_carry_their_epoch(self) -> None:
+        stored = _lease_value("tok", "epoch-E")
+        assert "epoch-E" in stored
+        assert _lease_value("tok", None) != stored
+
+
+class _CancellingRedis:
+    """Redis double whose every awaited operation raises ``CancelledError``.
+
+    Models a task cancelled mid-lease-operation: the scheduler must re-raise
+    the cancellation (never swallow it) so SAQ surfaces the cancellation.
+    """
+
+    async def set(self, *args: object, **kwargs: object) -> None:
+        raise asyncio.CancelledError
+
+    async def get(self, *args: object, **kwargs: object) -> None:
+        raise asyncio.CancelledError
+
+    async def eval(self, *args: object, **kwargs: object) -> None:
+        raise asyncio.CancelledError
+
+
+class _CancelledOnUpdateSession(MockSession):
+    """Session double whose terminal UPDATE raises ``CancelledError``."""
+
+    async def _next_result(self, *args: object, **kwargs: object) -> MagicMock:
+        if args and str(args[0]).lstrip().startswith("UPDATE"):
+            raise asyncio.CancelledError
+        return await super()._next_result(*args, **kwargs)
+
+
+class TestReportFireLeasePrimitives:
+    """FAR-1822 lease/epoch primitives: malformed stored leases, naive epochs,
+    and cancellation on the lease operations and terminal stamp."""
+
+    def test_lease_epoch_decodes_bytes(self) -> None:
+        assert _lease_epoch(b'{"token":"t","epoch":"epoch-E"}') == "epoch-E"
+
+    def test_lease_epoch_returns_none_on_undecodable_bytes(self) -> None:
+        assert _lease_epoch(b"\xff\xfe\x00") is None
+
+    def test_lease_epoch_returns_none_for_non_string(self) -> None:
+        assert _lease_epoch(123) is None
+
+    def test_lease_epoch_returns_none_for_invalid_json(self) -> None:
+        assert _lease_epoch("{not json") is None
+
+    def test_lease_epoch_returns_none_for_non_dict_payload(self) -> None:
+        assert _lease_epoch("[1, 2, 3]") is None
+
+    def test_lease_epoch_returns_none_for_non_string_epoch(self) -> None:
+        assert _lease_epoch('{"epoch": 123}') is None
+
+    def test_parse_epoch_treats_naive_as_utc(self) -> None:
+        parsed = _parse_epoch("2026-07-02T09:00:00")
+        assert parsed == datetime.datetime(2026, 7, 2, 9, 0, tzinfo=datetime.UTC)
+
+    async def test_acquire_lease_propagates_cancellation(self) -> None:
+        with pytest.raises(asyncio.CancelledError):
+            await _acquire_report_fire_lease(_CancellingRedis(), uuid.uuid4(), "epoch-E")  # type: ignore[arg-type]
+
+    async def test_release_lease_is_a_noop_without_client_or_lease(self) -> None:
+        assert await _release_report_fire_lease(None, uuid.uuid4(), "tok") is None
+        assert await _release_report_fire_lease(_LeaseRedis(), uuid.uuid4(), None) is None  # type: ignore[arg-type]
+
+    async def test_release_lease_propagates_cancellation(self) -> None:
+        with pytest.raises(asyncio.CancelledError):
+            await _release_report_fire_lease(_CancellingRedis(), uuid.uuid4(), "tok")  # type: ignore[arg-type]
+
+    async def test_terminal_stamp_cancellation_is_not_swallowed(self) -> None:
+        async def generator(session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
+            return {"rows": 1}
+
+        report = _recurring_report()
+        session = _CancelledOnUpdateSession([_select_returns(report)])
+
+        with (
+            report_firing_env(session),
+            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+            patch("modulo.core.reports.scheduler.get_formatter", return_value=None),
+            patch("modulo.core.reports.scheduler.get_deliverer", return_value=AsyncMock(return_value=[])),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await _fire_scheduled_report(
+                report_id=report.id,
+                org_id=report.organisation_id,
+                epoch="2026-07-01T09:00:00+00:00",
+            )
+
+
+class TestOneTimeReportNotStranded:
+    """Finding 2: a one-time report's next_send_at must never be nulled before
+    the terminal stamp, so a never-completed fire stays re-selectable."""
+
+    async def test_one_time_fire_leaves_next_send_at_untouched_on_failure(self) -> None:
+        async def generator(session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
+            raise RuntimeError("crashed before the terminal stamp")
+
+        report = _one_time_report()
+        session = MockSession([_select_returns(report)])
+
+        with (
+            report_firing_env(session),
+            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+        ):
+            result = await _fire_scheduled_report(
+                report_id=report.id,
+                org_id=report.organisation_id,
+                epoch="2026-07-01T09:00:00+00:00",
+            )
+
+        assert result == {"status": "failed", "reason": "generation_or_delivery_failed"}
+        # No write at all on the pre-terminal failure path — in particular
+        # nothing nulls next_send_at, so the due-scan's `next_send_at IS NOT
+        # NULL` predicate can still re-select the report.
+        assert not _updates(session)
+
+
+class TestTerminalStampDoesNotClobber:
+    """Finding 5: phase 3 must not restate state it did not observe."""
+
+    async def test_recurring_terminal_stamp_writes_only_last_sent_at(self) -> None:
+        async def generator(session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
+            return {"rows": 1}
+
+        report = _recurring_report()
+        session = MockSession([_select_returns(report)])
+
+        with (
+            report_firing_env(session),
+            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+        ):
+            result = await _fire_scheduled_report(
+                report_id=report.id,
+                org_id=report.organisation_id,
+                epoch="2026-07-01T09:00:00+00:00",
+            )
+
+        assert result["status"] == "sent"
+        terminal = [stmt for stmt in _updates(session) if "last_sent_at" in str(stmt)][-1]
+        params = terminal.compile().params
+        assert "next_send_at" not in params
+        assert "active" not in params
+
+    async def test_one_time_terminal_stamp_deactivates_and_never_reactivates(self) -> None:
+        async def generator(session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
+            return {"rows": 1}
+
+        report = _one_time_report()
+        session = MockSession([_select_returns(report)])
+
+        with (
+            report_firing_env(session),
+            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+        ):
+            result = await _fire_scheduled_report(
+                report_id=report.id,
+                org_id=report.organisation_id,
+                epoch="2026-07-01T09:00:00+00:00",
+            )
+
+        assert result["status"] == "sent"
+        terminal = [stmt for stmt in _updates(session) if "last_sent_at" in str(stmt)][-1]
+        params = terminal.compile().params
+        assert params["active"] is False
+        assert params["next_send_at"] is None
+        # The retirement is guarded on the row still being active, so a row a
+        # concurrent operator deactivated is never resurrected.
+        assert "active is true" in str(terminal).lower()
 
 
 # ---------------------------------------------------------------------------

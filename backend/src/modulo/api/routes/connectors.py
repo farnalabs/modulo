@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from cryptography.fernet import Fernet, InvalidToken
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from httpx import HTTPStatusError, RequestError
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
@@ -30,12 +30,16 @@ from modulo.api.team_scope import validate_owner_team_for_create, validate_team_
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.connectors.base import ON_UNKNOWN_MODES, ConnectorPermissionError, ConnectorType
-from modulo.connectors.github import REQUIRED_FINE_GRAINED_PERMISSIONS as GITHUB_REQUIRED_FINE_GRAINED_PERMISSIONS
+from modulo.connectors.github import DEFAULT_BASE_URL as GITHUB_DEFAULT_BASE_URL
+from modulo.connectors.github import (
+    REQUIRED_FINE_GRAINED_PERMISSIONS as GITHUB_REQUIRED_FINE_GRAINED_PERMISSIONS,
+)
 from modulo.connectors.github import REQUIRED_SCOPES as GITHUB_REQUIRED_SCOPES
-from modulo.connectors.github import GitHubConnector, is_fine_grained_pat
+from modulo.connectors.github import GitHubConnector, GitHubNetworkError, is_fine_grained_pat
 from modulo.connectors.rest import RestConnector
 from modulo.core.audit_coverage import audited
-from modulo.core.connector_hub import ConnectorDecryptError, ConnectorHub
+from modulo.core.connector_hub import ConnectorDecryptError, ConnectorHub, buildable_connector_type_ids
+from modulo.core.sanitize_log import sanitise_log_value
 from modulo.core.secrets_backend import (
     CredentialReferenceError,
     create_secrets_backend,
@@ -72,6 +76,18 @@ _PERM_CONNECTOR_LIST = "connector.list"
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/connectors", tags=["connectors"])
+
+#: Response header carrying the non-fatal GitHub-verification warning (FAR-1762):
+#: the connector was created/updated, but its token could NOT be verified
+#: because the configured instance was unreachable. A header (not a body field)
+#: keeps the OpenAPI schema untouched; the warning is ALSO logged server-side so
+#: it is never silent on either side of the wire.
+_VERIFICATION_WARNING_HEADER = "X-Modulo-Verification-Warning"
+#: Header values are one line and bounded — a transport error string can be long.
+_VERIFICATION_WARNING_MAX_LEN = 512
+#: Bound for the 422 verification-failure detail (the upstream reason is useful,
+#: but an unbounded upstream body must not be echoed whole into the response).
+_VERIFY_FAILURE_DETAIL_MAX_LEN = 300
 
 
 def _github_missing_scope_detail(token: str, missing: set[str]) -> str:
@@ -381,10 +397,29 @@ class ConnectorTypeListResponse(BaseModel):
     items: list[ConnectorTypeItem]
 
 
+# FAR-1764: the Admin UI builds its create-form type dropdown from this
+# endpoint, so it must offer only ids ``_build_connector`` can actually build
+# (``buildable_connector_type_ids()`` — the hub's own ``match`` arms plus
+# plugin-registered types). Before this, the endpoint returned the raw
+# ``ConnectorType`` enum: the abstract labels ``ci-runner`` and ``custom``
+# were offered but the hub has no arm for them (a connector created from them
+# failed every health check with ``Unknown connector type``), while the
+# hub-native CI-runner ids ``github_actions_ci`` / ``gitlab_ci`` — the only
+# way to create a GitHub Actions CI connector — were not offered at all.
+#
+# Ordering: enum declaration order first (keeps the existing dropdown order
+# stable), then any hub-native/plugin id absent from the enum, alphabetically.
+# Rationale lives in a comment, not a docstring: a route docstring lands in
+# the OpenAPI schema (schema.ts), and this behaviour change alone must not
+# force a frontend type regen.
 @router.get("/types")
 async def list_connector_types() -> ConnectorTypeListResponse:
-    items = [ConnectorTypeItem(id=t.value, display_name=t.value.replace("_", " ").title()) for t in ConnectorType]
-    return ConnectorTypeListResponse(items=items)
+    buildable = buildable_connector_type_ids()
+    ordered: list[str] = [t.value for t in ConnectorType if t.value in buildable]
+    ordered += sorted(buildable - set(ordered))
+    return ConnectorTypeListResponse(
+        items=[ConnectorTypeItem(id=type_id, display_name=type_id.replace("_", " ").title()) for type_id in ordered]
+    )
 
 
 def _to_response(ci: Any) -> ConnectorResponse:
@@ -406,6 +441,27 @@ def _to_response(ci: Any) -> ConnectorResponse:
         last_skip_error=ci.last_skip_error,
         validation_level=getattr(ci, "validation_level", None),
     )
+
+
+async def _response_in_tx(session: AsyncSession, ci: ConnectorInstance) -> ConnectorResponse:
+    """Serialize *ci* to its response model while its transaction is OPEN (FAR-1792).
+
+    MUST be awaited from inside the route's ``async with session.begin():``
+    block, before the block exits — never after it commits. The UPDATE flush
+    expires the server-populated ``updated_at`` column
+    (``onupdate=func.current_timestamp()``); reading that attribute after the
+    commit — on the ``expire_on_commit=False, autobegin=False`` DI session,
+    which cannot begin an implicit transaction for the refresh SELECT — raises
+    ``InvalidRequestError: Autobegin is disabled on this Session`` and
+    ``handle_db_errors`` maps it to a 500 even though the write applied.
+
+    The refresh is explicitly awaited (greenlet-side) because a sync attribute
+    read of an expired column from a plain async context would attempt IO
+    outside ``greenlet_spawn``; after it, every attribute ``_to_response``
+    touches is in memory, so the serialization itself performs no IO.
+    """
+    await session.refresh(ci)
+    return _to_response(ci)
 
 
 @router.get("", responses={401: {"description": "Unauthorized"}})
@@ -468,21 +524,89 @@ async def list_connectors_endpoint(
     )
 
 
-async def _verify_github_credentials(credentials: str) -> None:
-    """Verify a GitHub token's scopes at the create boundary (422 on failure)."""
-    temp = GitHubConnector(token=credentials)
+def _github_base_url(config_json: dict[str, Any]) -> str | None:
+    """The configured GitHub API base (GHES: ``https://<host>/api/v3``), or None.
+
+    FAR-1762: both the create and PATCH verification paths must verify against
+    the INSTANCE the connector will actually talk to. A present-but-empty /
+    non-string value resolves to ``None`` (github.com default) here — build-time
+    type validation for a non-string lives in the connector hub, which fails
+    loudly on it.
+    """
+    value = config_json.get("base_url")
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _verification_warning_header_value(warning: str) -> str:
+    """Sanitise a verification warning for a single-line bounded HTTP header."""
+    return " ".join(warning.split())[:_VERIFICATION_WARNING_MAX_LEN]
+
+
+def _set_verification_warning_header(response: Response, warning: str | None) -> None:
+    """Surface the non-fatal GitHub-verification warning on a response (FAR-1762).
+
+    Only a real, non-empty string is ever written: a non-str value (for
+    example a test double standing in for ``_verify_github_credentials``) must
+    never crash the route or land as a bogus header.
+    """
+    if isinstance(warning, str) and warning:
+        response.headers[_VERIFICATION_WARNING_HEADER] = _verification_warning_header_value(warning)
+
+
+async def _verify_github_credentials(credentials: str, base_url: str | None = None) -> str | None:
+    """Verify a GitHub token's scopes AGAINST THE INSTANCE IT TARGETS (FAR-1762).
+
+    *base_url* is the connector's configured API base (a GHES instance's
+    ``https://<host>/api/v3``); ``None`` verifies against github.com. A
+    GHES-only token must be checked on its own instance — previously the
+    connector was always built with the github.com default, so a GHES-only
+    token could never pass and locked GHES deployments out at the create
+    boundary (422).
+
+    Returns ``None`` when the token was verified and holds every required
+    scope.
+
+    Returns a NON-FATAL warning string when the instance could not be REACHED
+    (a typed transport failure, or a raw ``httpx.RequestError``): the token was
+    never verified, so the caller surfaces the warning — the
+    ``X-Modulo-Verification-Warning`` response header plus a server-side log —
+    instead of treating verification as passed. The connector is created with
+    an explicitly-unverified credential; verification is never silently skipped.
+
+    Raises HTTPException 422 whenever a verdict WAS reached (missing scopes, an
+    invalid/expired token, an HTTP failure) or the configured ``base_url``
+    itself is invalid (SSRF/URL validation) — those are not "unreachable
+    instance" cases and fail closed.
+    """
+    target = base_url or GITHUB_DEFAULT_BASE_URL
+    temp = GitHubConnector(token=credentials, base_url=target)
     try:
         missing = await temp.verify_scopes()
-    except (HTTPStatusError, RequestError, ValueError):
+    except (GitHubNetworkError, RequestError) as exc:
+        warning = (
+            f"GitHub instance {target} could not be reached; the token was NOT verified ({type(exc).__name__}: {exc})"
+        )
+        logger.warning(
+            "connectors.github.verification_unreachable base_url=%s error=%s",
+            sanitise_log_value(target),
+            sanitise_log_value(exc),
+        )
+        return warning
+    except (HTTPStatusError, ValueError) as exc:
+        # GitHub's typed errors (auth/rate-limit/API) subclass ValueError, so
+        # this arm keeps the historical 422 — now carrying the upstream reason
+        # (already credential-redacted by the connector) instead of a generic
+        # message that could not distinguish a bad token from a bad URL.
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Cannot verify GitHub token — API call failed",
+            detail=f"Cannot verify GitHub token — API call failed ({exc})"[:_VERIFY_FAILURE_DETAIL_MAX_LEN],
         ) from None
     if missing:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=_github_missing_scope_detail(credentials, missing),
         )
+    return None
 
 
 async def _resolve_create_credentials(
@@ -560,13 +684,17 @@ async def _create_connector_tx(
     req: ConnectorCreate,
     principal: TenantPrincipal,
     ciphertext: bytes,
-) -> ConnectorInstance:
-    """Create the connector instance in one transaction with RLS context."""
+) -> ConnectorResponse:
+    """Create the connector instance in one transaction with RLS context.
+
+    Returns the response model built inside the transaction (FAR-1792): a
+    mutation response is never serialized from a just-committed ORM object.
+    """
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.account_id, principal.org_role)
         await validate_owner_team_for_create(session, principal, req.owner_team_id)
-        return await create_connector_instance(
+        ci = await create_connector_instance(
             session,
             org_id=principal.organisation_id,
             name=req.name,
@@ -579,6 +707,7 @@ async def _create_connector_tx(
             owner_team_id=req.owner_team_id,
             tier=req.tier,
         )
+        return await _response_in_tx(session, ci)
 
 
 async def _create_connector(
@@ -586,7 +715,7 @@ async def _create_connector(
     req: ConnectorCreate,
     principal: TenantPrincipal,
     ciphertext: bytes,
-) -> ConnectorInstance:
+) -> ConnectorResponse:
     """Create the connector, mapping DB errors to the route's HTTP error contract."""
     try:
         return await _create_connector_tx(session, req, principal, ciphertext)
@@ -633,6 +762,7 @@ async def _create_connector(
 @handle_db_errors(_CODE_CONNECTORS_CREATE_CONNECTOR_ENDPOINT)
 async def create_connector_endpoint(
     req: ConnectorCreate,
+    response: Response,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("connector.create"),
     settings: Settings = Depends(get_settings),
@@ -642,15 +772,21 @@ async def create_connector_endpoint(
     # verification and REST payload checks run against the RESOLVED credential.
     resolved_credentials = await _resolve_create_credentials(session, req.credentials, principal, settings)
 
+    verification_warning: str | None = None
     if req.connector_type_id == "github":
-        await _verify_github_credentials(resolved_credentials)
+        # FAR-1762: verify against the connector's configured instance (GHES),
+        # not the github.com default.
+        verification_warning = await _verify_github_credentials(
+            resolved_credentials, base_url=_github_base_url(req.config_json)
+        )
 
     if req.connector_type_id == "rest":
         _validate_rest_connector_payload(resolved_credentials, req.config_json)
 
     ciphertext = _encrypt(resolved_credentials, settings.fernet_key)
-    ci = await _create_connector(session, req, principal, ciphertext)
-    return _to_response(ci)
+    payload = await _create_connector(session, req, principal, ciphertext)
+    _set_verification_warning_header(response, verification_warning)
+    return payload
 
 
 @router.get("/{connector_id}")
@@ -932,23 +1068,35 @@ async def _verify_github_token_for_update(
     existing: ConnectorInstance,
     credentials_updated: bool,
     new_credentials: str | None,
-) -> None:
-    """Verify a GitHub token's scopes when the PATCH rotates credentials.
+    *,
+    base_url: str | None = None,
+) -> str | None:
+    """Verify a GitHub token's scopes when the PATCH rotates credentials (FAR-1762).
 
     Non-GitHub connectors and updates that do not rotate credentials skip
-    entirely. ``new_credentials is None`` here is unreachable in practice — the
-    rotation step above clears the flag when no payload was supplied — but a
-    bare ``assert`` is stripped under ``python -O`` and would then hand ``None``
-    to ``GitHubConnector`` (FAR-532). Fail loudly instead.
+    entirely and return ``None``. *base_url* is the connector's EFFECTIVE
+    configured API base — the merged ``config_json`` when this PATCH also
+    changes it, else the stored one — so a rotated token is verified against
+    the instance the connector will talk to (GHES), never the github.com
+    default.
+
+    Returns the same non-fatal warning string as
+    :func:`_verify_github_credentials` when the instance is unreachable (the
+    update proceeds, the warning is surfaced on the response); ``None`` when
+    verification passed or was not applicable. ``new_credentials is None`` here
+    is unreachable in practice — the rotation step above clears the flag when
+    no payload was supplied — but a bare ``assert`` is stripped under
+    ``python -O`` and would then hand ``None`` to ``GitHubConnector``
+    (FAR-532). Fail loudly instead.
     """
     if existing.connector_type_id != "github" or not credentials_updated:
-        return
+        return None
     if new_credentials is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Credential payload missing during GitHub token verification.",
         )
-    await _verify_github_credentials(new_credentials)
+    return await _verify_github_credentials(new_credentials, base_url=base_url)
 
 
 async def _validate_team_scope_update(
@@ -993,8 +1141,18 @@ async def _apply_connector_update(
     principal: TenantPrincipal,
     settings: Settings,
     connector_id: uuid.UUID,
-) -> ConnectorInstance | None:
+) -> tuple[ConnectorResponse | None, str | None]:
     """Apply a PATCH to a connector inside one transaction (S3776 extraction).
+
+    Returns ``(response, verification_warning)``. The response model is built
+    INSIDE the transaction (FAR-1792): the UPDATE flush expires the
+    server-populated ``updated_at``, so serializing after the block commits
+    would reload it outside any transaction on the ``autobegin=False`` DI
+    session and 500 a write that had already applied. The warning is the
+    non-fatal "GitHub instance unreachable, token NOT verified" signal from
+    FAR-1762 (``None`` when verification passed or did not apply); the caller
+    surfaces it on the response header. A ``None`` response means the row was
+    gone at write time (the route maps it to 404).
 
     The route-convention error-to-status mapping (501/503/409/500 plus the
     HTTPException re-raise) stays in ``update_connector_endpoint``'s exception
@@ -1002,7 +1160,9 @@ async def _apply_connector_update(
     unchanged through that ladder. Ordering is load-bearing: the secret-ref
     resolution runs before reconciliation/encryption, config masking merges
     before the credential rotation, and the GitHub scope check reads the
-    rotation flag AFTER it may have been cleared.
+    rotation flag AFTER it may have been cleared and the MERGED config (this
+    PATCH's own ``config_json`` change wins over the stored one) for the
+    instance to verify against.
     """
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
@@ -1019,9 +1179,20 @@ async def _apply_connector_update(
         credentials_updated = _apply_credential_rotation(
             existing, updates, credentials_updated, new_credentials, settings
         )
-        await _verify_github_token_for_update(existing, credentials_updated, new_credentials)
+        effective_config = updates.get("config_json")
+        if not isinstance(effective_config, dict):
+            effective_config = existing.config_json or {}
+        verification_warning = await _verify_github_token_for_update(
+            existing,
+            credentials_updated,
+            new_credentials,
+            base_url=_github_base_url(effective_config),
+        )
         await _validate_team_scope_update(session, principal, existing, updates)
-        return await update_connector_instance(session, connector_id, updates)
+        updated = await update_connector_instance(session, connector_id, updates)
+        if updated is None:
+            return None, verification_warning
+        return await _response_in_tx(session, updated), verification_warning
 
 
 @router.patch(
@@ -1035,6 +1206,7 @@ async def _apply_connector_update(
 async def update_connector_endpoint(
     connector_id: uuid.UUID,
     req: ConnectorUpdate,
+    response: Response,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("connector.update"),
     settings: Settings = Depends(get_settings),
@@ -1046,7 +1218,7 @@ async def update_connector_endpoint(
         new_credentials = updates.pop("credentials")
 
     try:
-        ci = await _apply_connector_update(
+        payload, verification_warning = await _apply_connector_update(
             session,
             updates=updates,
             credentials_updated=credentials_updated,
@@ -1085,9 +1257,10 @@ async def update_connector_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while updating connector.",
         ) from None
-    if ci is None or ci.organisation_id != principal.organisation_id:
+    if payload is None or payload.organisation_id != principal.organisation_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_CONNECTOR_NOT_FOUND)
-    return _to_response(ci)
+    _set_verification_warning_header(response, verification_warning)
+    return payload
 
 
 @router.delete(

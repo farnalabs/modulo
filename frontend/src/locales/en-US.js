@@ -466,6 +466,8 @@ export default {
       "run_b": "Run B",
       "paste_run_id": "Paste a run ID (or select from dropdown)",
       "select_recent_run": "Select recent run...",
+      "select_run_a": "Select run A",
+      "select_run_b": "Select run B",
       "loading": "Loading...",
       "compare": "Compare",
       "outputs_identical": "Outputs are identical",
@@ -624,6 +626,7 @@ export default {
       "clear_filters": "Clear filters",
       "apply_filters": "Apply Filters",
       "failed_to_dismiss_notification": "Failed to dismiss notification",
+      "loading_notifications": "Loading notifications",
       "request_timed_out": "Notifications request timed out after 30s"
     },
     "EnvironmentProfileForm": {
@@ -1442,6 +1445,7 @@ export default {
       "queued": "queued",
       "empty_state_description": "Try adjusting your filters or trigger a pipeline run.",
       "deleted_pipeline": "(deleted pipeline)",
+      "view_run": "View run",
       "run_count": "1 run | {count} runs",
       "previous": "Previous",
       "next": "Next",
@@ -2240,7 +2244,15 @@ export default {
       "delete_self_reported_warning": "Soft-deleting the last enabled self_reported component means the org loses self-report routing until a component with this report_key is recreated.",
       "component_created": "Component created.",
       "component_updated": "Component updated.",
-      "component_deleted": "Component deleted."
+      "component_deleted": "Component deleted.",
+      "save_failed": "Failed to save: {detail}",
+      "toggle_failed": "Failed to toggle: {detail}",
+      "delete_failed": "Failed to delete: {detail}",
+      "placeholder_name": "e.g. sandbox_infra",
+      "placeholder_display_name": "Sandbox Infra",
+      "placeholder_formula": "wall_clock_hours * rate",
+      "placeholder_report_key": "model_cost_usd",
+      "loading_components": "Loading cost components"
     },
     "AdminNotificationDeliveryLogView": {
       "retry_all_request_failed": "Retry all request failed:",
@@ -2857,6 +2869,12 @@ export default {
       "type": "Type",
       "description": "Description",
       "configuration_json": "Configuration (JSON)",
+      "operational_config": "Operational config (JSON)",
+      "operational_config_help": "Settings the connector reads at run time, e.g. base_url for a self-hosted service. Saved as config_json and preserved when you edit.",
+      "credentials_json": "Credentials (JSON)",
+      "credentials_help": "Secrets for this connector, e.g. a JSON object with a token key. Leave blank when editing to keep the credentials already stored.",
+      "invalid_operational_config_json": "Operational config must be valid JSON, such as an object with a base_url key.",
+      "invalid_credentials_json": "Credentials must be valid JSON, such as an object with a token key, or a plain token value.",
       "name_placeholder": "My connector",
       "type_placeholder": "PostgreSQL",
       "description_placeholder": "Optional description",
@@ -3792,6 +3810,7 @@ export default {
       "mcp_detail": "OAuth clients: {clients} - API keys: {keys}",
       "commands_detail": "Composite templates: {composites} - Library primitives: {primitives}",
       "autonomy_detail": "Manual approval: {manual} - Notify on complete: {notify} - Fully autonomous: {autonomous}",
+      "autonomy_detail_partial": "Manual approval: {manual} - Notify on complete: {notify} - Fully autonomous: {autonomous} (first {sampled} of {total} pipelines)",
       "telemetry_detail": "OpenTelemetry export: {otel} - Error groups: {errors} - Notification endpoints: {endpoints}",
       "telemetry_otel_configured": "configured",
       "telemetry_otel_not_configured": "not configured",
@@ -3854,6 +3873,10 @@ export default {
       "seed_error_detail": "Error detail:\n{detail}",
       "seed_failing_node": "Failing node: {node}",
       "seed_request": "Work out the most likely root cause of this failure, cite the evidence in the run, and suggest concrete fixes."
+    },
+    "RunPipelineVersionLink": {
+      "version_title": "Open the pipeline version this run executed",
+      "current_title": "Open the pipeline (this run has no recorded version)"
     },
     "ViewToggle": {
       "saved_views": "Saved Views",
@@ -4361,7 +4384,9 @@ export default {
       "view_all": "View all notifications"
     },
     "PageTabs": {
-      "section_navigation": "Section navigation"
+      "section_navigation": "Section navigation",
+      "available_on_plan": "Available on the {plan} plan",
+      "locked_aria": "{label} (Available on the {plan} plan)"
     },
     "FeatureGate": {
       "team_feature": "Team Feature",

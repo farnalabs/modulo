@@ -4,6 +4,25 @@ Do NOT put connector-specific fixtures here; they belong in
 ``tests/connectors/conftest.py``.
 """
 
+import os
+
+# Settings-critical env default (FAR-1751). pytest imports this conftest FIRST
+# for every command-line anchor (ancestor chains load outermost-first), so a
+# setdefault here wins over the ``setdefault`` calls in the unit/integration
+# subconftests, which import later during collection. Order matters: unit
+# subconftests set an INVALID placeholder key ("a" * 32 — it satisfies the
+# Settings validator's length check but ``cryptography.Fernet`` rejects it), so
+# a mixed ``tests/unit tests/integration`` run in ONE process previously cached
+# a ``Settings`` carrying that invalid key before the integration conftest's
+# valid ``setdefault`` could apply. Every consumer constructing ``Fernet`` from
+# the lru-cached ``settings.fernet_key`` (e.g. the executor's
+# ``ModuloPostgresSaver``) then raised ``Fernet key must be 32 url-safe
+# base64-encoded bytes`` — a failure each suite never shows alone. Put the
+# default at the earliest load point instead of special-casing a cached
+# ``Settings``. ``setdefault`` still lets CI / the caller supply an explicit
+# value (the workflow exports FERNET_KEY, which therefore always wins).
+os.environ.setdefault("FERNET_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+
 # pydantic.root_model residency guard — WHY this import exists:
 #
 # pytest-cov starts coverage during ``pytest_load_initial_conftests``, BEFORE

@@ -26,7 +26,13 @@
             >{{ $t('common.execution_origin.dispatched') }}</span>
           </div>
           <p class="mt-1 text-sm text-muted-foreground">
-            {{ $t('views.RunDetailView.pipeline_label') }} <span class="font-medium text-foreground">{{ formatRun(run) }}</span>
+            {{ $t('views.RunDetailView.pipeline_label') }} <RunPipelineVersionLink
+              :pipeline-id="run.pipeline_id"
+              :pipeline-name="run.pipeline_name"
+              :snapshot-id="run.snapshot_id ?? null"
+              class="font-medium text-foreground"
+              data-testid="run-detail-pipeline-version-link"
+            >{{ formatRun(run) }}</RunPipelineVersionLink>
           </p>
           <p class="text-xs text-muted-foreground">
             {{ $t('views.RunDetailView.run_id_label') }} <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{{ shortId(run.run_id) }}</code>
@@ -916,6 +922,7 @@ import JsonViewer from '../components/shared/JsonViewer.vue'
 import HitlReviewCard from '../components/hitl/HitlReviewCard.vue'
 import KnownFixesPanel from '../components/shared/KnownFixesPanel.vue'
 import AnalyzeRunButton from '../components/runs/AnalyzeRunButton.vue'
+import RunPipelineVersionLink from '../components/runs/RunPipelineVersionLink.vue'
 import { isAnalyzableFailure, type AnalyzeRunInfo } from '../components/runs/analyzeRun'
 import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'

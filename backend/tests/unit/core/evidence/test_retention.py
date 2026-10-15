@@ -49,6 +49,7 @@ from modulo.db.models import Base
 from modulo.db.models.evidence import Evidence
 from modulo.db.models.organisation import Organisation
 from modulo.db.repositories.locks import LockAcquireError
+from modulo.db.rls import set_rls_org
 
 _RETENTION_LOGGER = "modulo.core.evidence_retention"
 
@@ -195,7 +196,11 @@ async def test_save_policy_roundtrip_preserves_sibling_settings(session: AsyncSe
     org.settings_json = {"theme": "dark"}
     await session.commit()
 
-    await save_policy(session, org_id, EvidenceRetentionPolicy(max_age_days=14, max_rows=200))
+    # FAR-1830: save_policy now writes via the atomic patch helper, whose
+    # tenant guard requires the caller to have bound the org RLS context.
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        await save_policy(session, org_id, EvidenceRetentionPolicy(max_age_days=14, max_rows=200))
 
     loaded = await load_policy(session, org_id)
     assert loaded == EvidenceRetentionPolicy(max_age_days=14, max_rows=200)
@@ -206,8 +211,44 @@ async def test_save_policy_roundtrip_preserves_sibling_settings(session: AsyncSe
 
 
 async def test_save_policy_missing_org_raises(session: AsyncSession) -> None:
-    with pytest.raises(ValueError, match="not found"):
-        await save_policy(session, uuid.uuid4(), EvidenceRetentionPolicy())
+    missing = uuid.uuid4()
+    async with session.begin():
+        await set_rls_org(session, missing)
+        with pytest.raises(ValueError, match="not found"):
+            await save_policy(session, missing, EvidenceRetentionPolicy())
+
+
+async def test_save_policy_emits_only_its_own_top_level_key(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FAR-1830: save_policy must patch ONLY ``evidence_retention``.
+
+    A revert to a whole-column write would either not call the helper or pass
+    extra keys — both fail this assertion.
+    """
+    org_id = await _seed_org(session)
+    captured: dict[str, Any] = {}
+
+    async def _fake_patch(
+        _session: AsyncSession,
+        organisation_id: Any,
+        patch: dict[str, Any] | None = None,
+        delete_keys: list[str] | None = None,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured["organisation_id"] = organisation_id
+        captured["patch"] = patch
+        return patch or {}
+
+    monkeypatch.setattr(evidence_retention, "update_org_settings_patch", _fake_patch)
+
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        await save_policy(session, org_id, EvidenceRetentionPolicy(max_age_days=3))
+
+    assert captured["organisation_id"] == org_id
+    assert set(captured["patch"]) == {evidence_retention._POLICY_KEY}
+    assert captured["patch"][evidence_retention._POLICY_KEY]["max_age_days"] == 3
 
 
 # ---------------------------------------------------------------------------
@@ -502,10 +543,15 @@ async def test_save_policy_missing_org_raises_value_error(session: AsyncSession)
 
     The route (admin_evidence_retention) must catch this and map to 404,
     not 500.  This test verifies the ValueError contract that the route
-    relies on.
+    relies on — including the exact message it surfaces.
     """
-    with pytest.raises(ValueError, match="not found"):
-        await save_policy(session, uuid.uuid4(), EvidenceRetentionPolicy())
+    missing = uuid.uuid4()
+    async with session.begin():
+        await set_rls_org(session, missing)
+        # Match the org id specifically (not just "not found"): this pins the
+        # exact message the route surfaces in its 404 body.
+        with pytest.raises(ValueError, match=str(missing)):
+            await save_policy(session, missing, EvidenceRetentionPolicy())
 
 
 # ---------------------------------------------------------------------------

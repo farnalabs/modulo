@@ -30,12 +30,19 @@ from modulo.settings import Settings
 def _make_app(
     settings: Settings | None = None,
     rate_limiter: AuthRateLimiterCls | None = None,
+    *,
+    method: str = "POST",
+    path: str = "/api/v1/auth/login",
 ) -> FastAPI:
     app = FastAPI()
 
-    @app.post("/api/v1/auth/login")
     async def login():
         return {"token": "dummy"}
+
+    # Registered dynamically (instead of a fixed @app.post) so tests for
+    # other methods/paths (GET reads, non-auth paths, the demo exemption)
+    # reuse this builder instead of hand-rolling bespoke FastAPI apps.
+    app.api_route(path, methods=[method])(login)
 
     resolved = settings or make_settings()
     app.add_middleware(
@@ -173,22 +180,15 @@ class TestAuthRateLimitMiddlewareEnabled:
 
     def test_get_not_rate_limited(self, mock_redis):
         """GET requests to auth paths should not be rate limited."""
-        app = FastAPI()
-
-        @app.get("/api/v1/auth/login")
-        async def login_get():
-            return {"token": "dummy"}
-
         limiter = AuthRateLimiterCls(
             redis_client=mock_redis,
             max_attempts=0,
             window_s=60,
         )
-
-        app.add_middleware(
-            AuthRateLimitMiddleware,
+        app = _make_app(
             settings=make_settings(modulo_auth_rate_limit_enabled=True),
             rate_limiter=limiter,
+            method="GET",
         )
 
         with TestClient(app) as client:
@@ -197,29 +197,58 @@ class TestAuthRateLimitMiddlewareEnabled:
         assert resp.status_code == 200
 
     def test_non_auth_path_not_rate_limited(self, mock_redis):
-        """POSTs to non-auth paths should pass through untouched."""
-        app = FastAPI()
+        """POSTs to non-auth paths must pass through without touching the limiter.
 
-        @app.post("/api/v1/other")
-        async def other():
-            return {"ok": True}
-
+        A non-``/api/v1/auth/`` POST must never reach the shared
+        ``AuthRateLimiter``. Asserting the 200 alone would still pass if the
+        ``/api/v1/auth/`` prefix gate in ``_should_rate_limit`` regressed —
+        ``check_login`` on this mock returns allowed — so the zero-Redis
+        assertions below bind the gate (mirroring the demo-exemption test).
+        """
         limiter = AuthRateLimiterCls(
             redis_client=mock_redis,
             max_attempts=0,
             window_s=60,
         )
-
-        app.add_middleware(
-            AuthRateLimitMiddleware,
+        app = _make_app(
             settings=make_settings(modulo_auth_rate_limit_enabled=True),
             rate_limiter=limiter,
+            path="/api/v1/other",
         )
 
         with TestClient(app) as client:
             resp = client.post("/api/v1/other")
 
         assert resp.status_code == 200
+        mock_redis.ttl.assert_not_awaited()
+        mock_redis.pipeline.assert_not_called()
+
+    def test_demo_path_never_touches_auth_limiter(self, mock_redis):
+        """FAR-535: /api/v1/auth/demo is exempt from the shared AuthRateLimiter.
+
+        Even with a limiter that blocks everything (max_attempts=0 plus an
+        active lockout TTL), a demo POST must pass through without a single
+        Redis call — it can neither inherit a /login lockout (429) nor
+        re-arm lockout keys.
+        """
+        mock_redis.ttl = AsyncMock(return_value=30)
+        limiter = AuthRateLimiterCls(
+            redis_client=mock_redis,
+            max_attempts=0,
+            window_s=60,
+        )
+        app = _make_app(
+            settings=make_settings(modulo_auth_rate_limit_enabled=True),
+            rate_limiter=limiter,
+            path="/api/v1/auth/demo",
+        )
+
+        with TestClient(app) as client:
+            resp = client.post("/api/v1/auth/demo")
+
+        assert resp.status_code == 200
+        mock_redis.ttl.assert_not_awaited()
+        mock_redis.pipeline.assert_not_called()
 
     def test_valid_bypass_token_skips_rate_limit(self, mock_redis):
         """A valid MODULO_RATELIMIT_BYPASS_TOKEN should skip the auth rate limit."""

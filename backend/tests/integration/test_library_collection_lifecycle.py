@@ -15,9 +15,11 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
+from sqlalchemy import inspect, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from modulo.api.routes.library import _install_response, _load_installed_entities, get_collection_install_endpoint
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.library_service._seed_data import MODULO_ORG_ID
 from modulo.core.library_service.grant import grant_collection_agents
 from modulo.core.library_service.install import CollectionInstallError, install_collection
@@ -29,12 +31,21 @@ from modulo.core.library_service.upgrade import (
     detect_collection_update,
     upgrade_collection,
 )
-from modulo.db.models.collection_install import CollectionInstall
+from modulo.db.models.collection_install import CollectionInstall, CollectionInstallEntity
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.organisation import Organisation
 from modulo.db.rls import set_rls_org
+from modulo.db.soft_delete import include_soft_deleted, register_soft_delete_filter
 
 pytestmark = pytest.mark.integration
+
+# Uninstall SOFT-deletes the ``CollectionInstall`` row (0308), so every claim
+# this module makes about a retired install — hidden from plain reads, able to
+# coexist with a reinstall — depends on the global ``deleted_at IS NULL``
+# listener being registered. In the app that happens at ``modulo.db.session``
+# import; this module never imports it, so register it explicitly here (the
+# same house pattern as test_soft_delete_filter.py / test_viewmodel_soft_deleted_team.py).
+register_soft_delete_filter()
 
 
 async def _seed_org(db_engine: AsyncEngine, name: str) -> uuid.UUID:
@@ -322,7 +333,8 @@ async def test_full_install_verify_uninstall_round_trip(
     model_backend: uuid.UUID,
 ) -> None:
     """Install a collection with 2 schemas + 1 agent → verify all entities
-    stamped → compute_runnable → uninstall → entities + record deleted.
+    stamped → compute_runnable → uninstall → entities deleted, install row
+    RETIRED (soft-deleted, children retained).
     """
     pins = [
         {"slug": "input-schema", "version": "1.0"},
@@ -346,6 +358,8 @@ async def test_full_install_verify_uninstall_round_trip(
     assert "agent" in entity_counts
     assert entity_counts["schema"] == 2
     assert entity_counts["agent"] == 1
+    # Total tracked entities BEFORE the uninstall — the rows must survive it.
+    pre_uninstall_entity_count = sum(entity_counts.values())
 
     # Verify installed entities have collection_install_id stamped
     # Schemas created by materialize_import get new UUIDs; use the resolved manifest
@@ -391,17 +405,27 @@ async def test_full_install_verify_uninstall_round_trip(
     assert result["deleted"]
     assert not result["detached"]
 
-    # Verify install record deleted
-    install_check = await db_session.get(CollectionInstall, install_id)
-    assert install_check is None
+    # Verify the install record is RETIRED, not destroyed (0308): a plain
+    # read is hidden by the global soft-delete filter (deleted_at IS NULL).
+    visible = await db_session.scalar(select(CollectionInstall).where(CollectionInstall.install_id == install_id))
+    assert visible is None
 
-    # Verify entity tracking rows deleted (CASCADE)
+    # ...while the row itself SURVIVES with a deleted_at stamp (the
+    # collection_install_entity children below must survive with it).
+    retired = await db_session.scalar(
+        include_soft_deleted(select(CollectionInstall).where(CollectionInstall.install_id == install_id))
+    )
+    assert retired is not None
+    assert retired.deleted_at is not None
+
+    # Verify entity tracking rows are RETAINED (the install is soft-deleted,
+    # so its provenance children are never cascade-removed).
     async with db_engine.connect() as conn:
         row = await conn.execute(
             text("SELECT count(*) FROM collection_install_entity WHERE install_id = :iid"),
             {"iid": str(install_id)},
         )
-        assert row.scalar_one() == 0
+        assert row.scalar_one() == pre_uninstall_entity_count
 
         # Verify schemas deleted
         for new_sid in schema_id_map.values():
@@ -425,6 +449,117 @@ async def test_full_install_verify_uninstall_round_trip(
             {"id": str(pipeline_id)},
         )
         assert row.first() is None
+
+
+# ---------------------------------------------------------------------------
+# Test 1b: FAR-1754 — the install API entity list matches the child rows
+# ---------------------------------------------------------------------------
+
+
+async def test_install_response_entity_list_matches_child_rows(
+    db_engine: AsyncEngine,
+    db_session: AsyncSession,
+    modulo_app_engine: AsyncEngine,
+    org: uuid.UUID,
+    user: uuid.UUID,
+    schemas: list[uuid.UUID],
+    agent_prim: uuid.UUID,
+    model_backend: uuid.UUID,
+) -> None:
+    """FAR-1754: ``collection_install_entity`` is the single source of truth.
+
+    The install API entity list is loaded inside the org-RLS transaction and
+    threaded into the response, so it must equal the child rows exactly — and
+    it must do so under ENFORCED row-level security. The suite's normal
+    ``db_engine`` runs as the testcontainer SUPERUSER (BYPASSRLS), which
+    cannot catch a derivation that silently returns zero rows when the
+    transaction-scoped ``app.organisation_id`` GUC is unset, so the load is
+    exercised on the real ``modulo_app`` (NOBYPASSRLS) role here: visible
+    with the owning org's context set (the fix), hidden without it (proof the
+    policy is genuinely enforced on this connection). The GET endpoint
+    function is then driven DIRECTLY on that role so the endpoint's own
+    in-transaction load + threading is pinned, not just the helpers. The
+    migrated schema must also no longer carry the duplicate JSON column
+    (migration 0313).
+    """
+    pins = [
+        {"slug": "input-schema", "version": "1.0"},
+        {"slug": "output-schema", "version": "1.0"},
+        {"slug": "test-agent", "version": "1.0"},
+    ]
+    collection_id = await _seed_collection(db_engine, org, pins)
+
+    install = await install_collection(db_session, org, user, collection_id)
+    await db_session.commit()
+    install_id = install.install_id
+
+    # Ground truth: the child rows as read by the BYPASSRLS superuser.
+    child_result = await db_session.execute(
+        select(CollectionInstallEntity).where(CollectionInstallEntity.install_id == install_id)
+    )
+    child_rows = child_result.scalars().all()
+    # 2 schemas + 1 agent + 1 materialised pipeline, each stamped by
+    # ``_stamp_install_id`` (proven by the round-trip test above) — a
+    # non-empty expectation keeps every comparison below from passing
+    # vacuously.
+    assert len(child_rows) == 4
+    expected = sorted((row.entity_type, str(row.entity_id)) for row in child_rows)
+
+    app_factory = async_sessionmaker(modulo_app_engine, expire_on_commit=False)
+
+    # Negative control: NO org context on the RLS-enforced role — the
+    # parent-derived policy fails closed and hides every child row. This is
+    # exactly what a post-transaction (context-expired) load would see, and
+    # proves the policy is genuinely enforced on this connection.
+    async with app_factory() as unscoped_session, unscoped_session.begin():
+        unscoped = await _load_installed_entities(unscoped_session, install_id)
+    assert not unscoped
+
+    # The fix: with the owning org's RLS context live inside the transaction,
+    # the derivation returns every child row.
+    async with app_factory() as app_session, app_session.begin():
+        await set_rls_org(app_session, org)
+        scoped = await _load_installed_entities(app_session, install_id)
+
+    reported_scoped = sorted((entry["entity_type"], entry["entity_id"]) for entry in scoped)
+    assert reported_scoped == expected
+
+    # Drive the REAL endpoint function (not the helpers) on the RLS-enforced
+    # role: ``get_collection_install_endpoint`` sets the org context itself,
+    # loads the child rows INSIDE its ``session.begin()`` block (the fix),
+    # and threads them into the response. A revert that moves the load
+    # outside the transaction would see zero rows here — the unscoped leg
+    # above proves that failure mode is live on this connection.
+    principal = TenantPrincipal(
+        username="testuser",
+        organisation_id=org,
+        account_id=user,
+        org_role="admin",
+    )
+    async with app_factory() as endpoint_session:
+        endpoint_response = await get_collection_install_endpoint(
+            primitive_id=collection_id,
+            install_id=install_id,
+            session=endpoint_session,
+            principal=principal,
+        )
+    endpoint_reported = sorted(
+        (entry["entity_type"], entry["entity_id"]) for entry in endpoint_response.installed_entities or []
+    )
+    assert endpoint_reported
+    assert endpoint_reported == expected
+
+    # The API response carries exactly that list (threaded by the endpoint
+    # from the in-transaction load).
+    response = await _install_response(db_session, install, scoped)
+    reported = sorted((entry["entity_type"], entry["entity_id"]) for entry in response.installed_entities or [])
+    assert reported == expected
+
+    # Migration 0313 dropped the duplicate JSON column from the migrated schema.
+    async with db_engine.connect() as conn:
+        columns = await conn.run_sync(lambda sync_conn: inspect(sync_conn).get_columns("collection_install"))
+    column_names = [column["name"] for column in columns]
+    assert "installed_entities" not in column_names
 
 
 # ---------------------------------------------------------------------------

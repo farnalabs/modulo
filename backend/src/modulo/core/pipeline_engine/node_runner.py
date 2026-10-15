@@ -108,6 +108,7 @@ from modulo.core.credential_issuer import (
 )
 from modulo.core.eval_engine import EvalEngine, EvalResult
 from modulo.core.guardrails.loop_intercept import LoopInterceptConfig
+from modulo.core.model_class_registry import effective_model_template_value
 from modulo.core.node_output_split import (
     DEFAULT_NODE_TYPE,
     DISPATCH_PROVENANCE_FIELDS,
@@ -9633,6 +9634,31 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         resolved = node_def.get("_resolved_parameters")
         if isinstance(resolved, dict):
             template_vars["parameter"] = resolved
+
+        # FAR-1743 / ADR 037 rev 2 (EXPERIMENTAL): the top-level `{{ model }}`
+        # template variable — the dedicated resolution channel. The value is
+        # interpolated from the SNAPSHOT (baked `_resolved_model`), with the
+        # run's frozen `_run_overrides.model` folded in pre-dispatch (run
+        # override wins). Render is interpolation, NEVER resolution: no
+        # registry read here, and `input.model` is neither read nor written
+        # (caller input keeps its own meaning; provenance stays intact).
+        # Reads the full run_context, not the context_scope-filtered view —
+        # the fold-in is a product mechanism, not a user template key.
+        _model_value = effective_model_template_value(node_def, run_context)
+        if _model_value is not None:
+            template_vars["model"] = _model_value
+        elif node_def.get("model_class"):
+            # Fail closed (D3) BEFORE any sandbox work: an opted-in node with
+            # no resolved model must not render `{{ model }}` as empty and
+            # dispatch a sandbox on a blank --model. The normal path bakes at
+            # mint (fail-closed there); this backstop catches a snapshot whose
+            # bake is missing (e.g. an edit-kind snapshot consumed by a run).
+            raise ValueError(
+                f"sandbox_agent node '{node_id}' declares model_class "
+                f"{node_def.get('model_class')!r} but no model was resolved at snapshot mint "
+                "(no baked _resolved_model and no run-override model) — refusing to dispatch "
+                "pre-sandbox (ADR 037 D3)"
+            )
 
         try:
             rendered_prompt = template.render(**template_vars)

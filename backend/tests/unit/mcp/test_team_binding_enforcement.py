@@ -267,12 +267,19 @@ class TestBindConnectorToNodeEnforcement:
         session.execute = AsyncMock(return_value=execute_result)
         mock_session.return_value.__aenter__.return_value = session
 
-        result = await bind_connector_to_node(
-            pipeline_id=str(pipeline_id),
-            node_id=str(node_id),
-            connector_type="test",
-            connector_instance_id=str(connector_id),
-        )
+        # FAR-1810: a successful bind now mints an edit snapshot, and snapshot
+        # minting needs a real engine (advisory lock). The subject of this test
+        # is the TEAM gate, so only the mint is stubbed.
+        with patch(
+            "modulo.db.crud.pipeline_snapshot.create_snapshot_edit",
+            new=AsyncMock(return_value=AsyncMock(snapshot_version=1)),
+        ):
+            result = await bind_connector_to_node(
+                pipeline_id=str(pipeline_id),
+                node_id=str(node_id),
+                connector_type="test",
+                connector_instance_id=str(connector_id),
+            )
 
         assert result.get("status") == "bound"
         assert result.get("error") is None
@@ -311,14 +318,20 @@ class TestBindConnectorToNodeEnforcement:
         session.execute = AsyncMock(return_value=execute_result)
         mock_session.return_value.__aenter__.return_value = session
 
-        result = await bind_connector_to_node(
-            pipeline_id=str(pipeline_id),
-            node_id=str(node_id),
-            connector_type="github_actions_ci",
-            connector_instance_id=str(connector_id),
-            operation="dispatch",
-            dispatch_action="get_run_status",
-        )
+        # FAR-1810: the bind's edit-snapshot mint is stubbed (it needs a real
+        # engine); this test is about the echoed verb/action, not the mint.
+        with patch(
+            "modulo.db.crud.pipeline_snapshot.create_snapshot_edit",
+            new=AsyncMock(return_value=AsyncMock(snapshot_version=1)),
+        ):
+            result = await bind_connector_to_node(
+                pipeline_id=str(pipeline_id),
+                node_id=str(node_id),
+                connector_type="github_actions_ci",
+                connector_instance_id=str(connector_id),
+                operation="dispatch",
+                dispatch_action="get_run_status",
+            )
 
         assert result["status"] == "bound"
         assert result["operation"] == "dispatch"

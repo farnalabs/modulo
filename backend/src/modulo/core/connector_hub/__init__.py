@@ -1077,6 +1077,25 @@ def _require_config(config: dict[str, Any] | None, key: str, label: str) -> str:
     return value
 
 
+def _optional_base_url(config: dict[str, Any], label: str) -> str | None:
+    """Optional ``base_url`` config (GHES / self-hosted instances), FAR-1762.
+
+    Returns ``None`` when the key is absent, null, or blank — the caller then
+    builds the connector with its own default (github.com). Raises ``TypeError``
+    when present but not a string: a mis-typed ``base_url`` must fail loudly at
+    build time rather than be stored verbatim and blow up inside the pinned
+    transport at request time.
+    """
+    if "base_url" not in config:
+        return None
+    value = config["base_url"]
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"{label} config key 'base_url' must be a string, got {type(value).__name__}")
+    return value.strip() or None
+
+
 def _core_security_guard() -> SecurityGuard:
     """Wire the production ``modulo.core`` SSRF + output-injection guards at the root.
 
@@ -1105,6 +1124,77 @@ def _core_security_guard() -> SecurityGuard:
     return SecurityGuard(validate_url=validate_url, filter_strings=filter_strings)
 
 
+#: The connector-type ids ``_build_connector`` handles in its OWN ``match``
+#: arms (before the plugin-registry fallback). Deliberately NOT the
+#: ``ConnectorType`` enum: ``github_actions_ci`` / ``gitlab_ci`` are hub-native
+#: (they have no enum member — see ``connectors/base.py``), while enum members
+#: ``ci-runner`` and ``custom`` are abstract labels the hub cannot build and
+#: therefore must NOT be listed here. ``buildable_connector_type_ids`` is the
+#: public view of this set; ``tests/unit/connector_hub/test_buildable_type_ids.py``
+#: pins it to the ``case`` literals in ``_build_connector``'s source, so adding
+#: or removing an arm without updating this set fails the suite.
+_HUB_BUILT_TYPE_IDS: frozenset[str] = frozenset(
+    {
+        "filesystem",
+        "gitea",
+        "azure_repos",
+        "bitbucket",
+        "github",
+        "github_actions_ci",
+        "gitlab_ci",
+        "gitlab",
+        "shell",
+        "jira",
+        "linear",
+        "slack",
+        "sharepoint",
+        "shortcut",
+        "trello",
+        "asana",
+        "monday",
+        "youtrack",
+        "notion",
+        "npm",
+        "pypi",
+        "dropbox_paper",
+        "buildkite",
+        "circleci",
+        "jenkins",
+        "confluence",
+        "teamcity",
+        "azure_key_vault",
+        "azure_pipelines",
+        "datadog",
+        "sentry",
+        "pagerduty",
+        "grafana",
+        "microsoft_teams",
+        "discord",
+        "onepassword",
+        "opsgenie",
+        "sonarqube",
+        "codeclimate",
+        "snyk",
+        "n8n",
+        "rest",
+        "ticket-tracker",
+    }
+)
+
+
+def buildable_connector_type_ids() -> frozenset[str]:
+    """Every connector-type id ``_build_connector`` can actually build.
+
+    The hub's own ``match`` arms plus any plugin-registered connector type —
+    the two things the ``case _`` fallback consults. This is the set the
+    ``GET /api/v1/connectors/types`` endpoint must offer (FAR-1764): the
+    Admin UI builds its create-form type dropdown from that endpoint, so an id
+    outside this set is a type a user can select but the hub can never
+    instantiate (``Unknown connector type`` at health-check/run time).
+    """
+    return _HUB_BUILT_TYPE_IDS | get_plugin_registry().connector_types
+
+
 def _build_connector(
     type_id: str,
     config: dict[str, Any] | None,
@@ -1129,9 +1219,17 @@ def _build_connector(
         case "bitbucket":
             return BitbucketConnector(token=_get_cred(creds, "token", type_id))
         case "github":
-            return GitHubConnector(token=_get_cred(creds, "token", type_id))
+            token = _get_cred(creds, "token", type_id)
+            ghes_base_url = _optional_base_url(config, "GitHubConnector")
+            if ghes_base_url is not None:
+                return GitHubConnector(token=token, base_url=ghes_base_url)
+            return GitHubConnector(token=token)
         case "github_actions_ci":
-            return GitHubActionsCIRunner(token=_get_cred(creds, "token", type_id))
+            token = _get_cred(creds, "token", type_id)
+            ghes_base_url = _optional_base_url(config, "GitHubActionsCIRunner")
+            if ghes_base_url is not None:
+                return GitHubActionsCIRunner(token=token, base_url=ghes_base_url)
+            return GitHubActionsCIRunner(token=token)
         case "gitlab_ci":
             base_url = config.get("base_url", "https://gitlab.com/api/v4")
             return GitLabCIRunner(token=_get_cred(creds, "token", type_id), base_url=base_url)
