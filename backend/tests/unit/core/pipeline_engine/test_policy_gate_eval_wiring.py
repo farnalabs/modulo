@@ -538,7 +538,7 @@ def test_unpinned_gate_has_mode_none() -> None:
 
 
 def test_legacy_stand_in_without_the_field_reads_automatic() -> None:
-    """Production rows always carry the NOT NULL column (migration 0308);
+    """Production rows always carry the NOT NULL column (migration 0314);
     a legacy ORM stand-in without the attribute still reads today's
     behaviour — automatic — instead of crashing the run build."""
     eval_row = _eval_row()
