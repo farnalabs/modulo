@@ -245,3 +245,31 @@ class TestFar1803Regression:
         _sql, params = session.calls[0]
         expected = RECONCILE_STALE_HEARTBEAT_FACTOR * int(get_settings().saq_job_heartbeat)
         assert params["heartbeat_fresh"] == expected
+
+    def test_non_saq_row_is_not_the_executor_lost_class(self) -> None:
+        """The saq scope guard: a running node-started row owned by a
+        non-'saq' dispatcher is NOT this class. The stale_run_recovery
+        sweep's ``worker_lost`` arm owns those rows, so the reconcile
+        classification must never claim (and hold) them."""
+        row = _class_row()
+        row.dispatcher = "arq"
+        assert ch._is_node_started_executor_lost_row(row, STALE_WINDOW_SECONDS) is False
+
+    def test_null_heartbeat_row_is_the_executor_lost_class(self) -> None:
+        """A node-started row with NO heartbeat evidence at all is this
+        class: nothing alive is writing a heartbeat, so the SQL leg's
+        NULL-heartbeat staleness verdict applies — the row is counted
+        (held back, never re-dispatched), matching ``heartbeat_at IS NULL``
+        in the scan leg."""
+        row = _class_row()
+        row.heartbeat_at = None
+        assert ch._is_node_started_executor_lost_row(row, STALE_WINDOW_SECONDS) is True
+
+    def test_unverifiable_heartbeat_fails_closed_into_the_belt(self) -> None:
+        """A heartbeat value that is not a ``datetime`` cannot have its
+        staleness verified, so the classification fails CLOSED: the row is
+        NOT claimed as executor-lost and keeps the belt's fail-closed hold
+        (``node_started_deferred``) rather than being re-dispatched."""
+        row = _class_row()
+        row.heartbeat_at = "not-a-timestamp"
+        assert ch._is_node_started_executor_lost_row(row, STALE_WINDOW_SECONDS) is False
