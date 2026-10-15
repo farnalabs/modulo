@@ -1135,6 +1135,9 @@ elements:
       - testid: admin-connectors-config-input
         type: textarea
         dynamic_testid: false
+      - testid: admin-connectors-credentials-input
+        type: textarea
+        dynamic_testid: false
       - testid: admin-connectors-submit
         type: button
         dynamic_testid: false
@@ -1148,6 +1151,9 @@ elements:
         type: input
         dynamic_testid: false
       - testid: admin-connectors-edit-config
+        type: textarea
+        dynamic_testid: false
+      - testid: admin-connectors-edit-credentials-input
         type: textarea
         dynamic_testid: false
       - testid: admin-connectors-save
