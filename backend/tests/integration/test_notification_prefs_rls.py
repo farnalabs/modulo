@@ -103,8 +103,8 @@ async def test_notification_preferences_forces_rls_and_splits_policies(db_engine
                 )
             )
         ).one()
-        assert bool(row.relrowsecurity), "ENABLE ROW LEVEL SECURITY missing"
-        assert bool(row.relforcerowsecurity), "FORCE ROW LEVEL SECURITY missing — owner would bypass RLS"
+        assert row.relrowsecurity, "ENABLE ROW LEVEL SECURITY missing"
+        assert row.relforcerowsecurity, "FORCE ROW LEVEL SECURITY missing — owner would bypass RLS"
 
         policies = {
             (name, cmd): (qual or "", with_check or "")
@@ -280,6 +280,6 @@ async def test_empty_org_context_reads_nothing(db_engine: AsyncEngine, app_engin
         async with factory() as session, session.begin():
             # Deliberately NO set_rls_org: app.organisation_id is empty.
             result = await session.execute(select(NotificationPreference.category))
-            assert result.scalars().all() == [], "empty org context leaked prefs rows"
+            assert not result.scalars().all(), "empty org context leaked prefs rows"
     finally:
         await _cleanup_tenant(db_engine, org_id, [user_a])

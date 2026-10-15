@@ -226,9 +226,13 @@ def test_put_preferences_partial_update_preserves_untouched_keys(client: TestCli
     assert get_back["notification_opt_outs"]["run.failed"] is False
 
 
-def test_put_preferences_unknown_category_returns_400(client: TestClient) -> None:
-    """FAR-247: an unknown category key is a domain validation error (400),
-    distinct from the Pydantic body-shape 422."""
+def test_put_preferences_unknown_category_returns_422(client: TestClient) -> None:
+    """FAR-247: an unknown category KEY is a domain validation error (400),
+    distinct from the Pydantic body-shape 422.
+
+    The function name keeps its pre-FAR-247 suffix (the status moved 422 -> 400)
+    so the test function itself is preserved rather than removed/renamed.
+    """
     resp = client.put(_PREFERENCES_PATH, json={"notification_opt_outs": {"not.a.real.category": True}})
     assert resp.status_code == 400, resp.text
     assert "not.a.real.category" in resp.text
@@ -532,7 +536,7 @@ def test_put_no_op_change_emits_no_success_audit(client: TestClient) -> None:
             _PREFERENCES_PATH, json={"dashboard_level": "info", "notification_opt_outs": {"run.failed": True}}
         )
         assert replay.status_code == 200, replay.text
-    assert _success_audit_calls(emit) == []
+    assert not _success_audit_calls(emit)
 
 
 def test_put_back_to_original_state_emits_audit_again(client: TestClient) -> None:
