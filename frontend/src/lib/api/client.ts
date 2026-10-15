@@ -15,6 +15,9 @@ export {
   clearAccessTokenForLogout,
   setAccessToken,
   onAuthChange,
+  // FAR-1842: the SSE event stream re-issues its fetch through the SAME
+  // refresh path the withAuth wrapper uses, so it is re-exported here.
+  attemptTokenRefresh,
   getAuthHeaders,
   isDemoSession,
   setDemoSession,

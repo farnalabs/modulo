@@ -10,6 +10,8 @@ vi.mock('../../lib/api/client', () => ({
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
   clearAccessToken: vi.fn(),
   isDemoSession: vi.fn().mockReturnValue(false),
+  // useEventStream registers a module-scope re-arm listener on import (FAR-1842).
+  onAuthChange: vi.fn(() => vi.fn()),
 }))
 
 vi.mock('vue-router', async () => {

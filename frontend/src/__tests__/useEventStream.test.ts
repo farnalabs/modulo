@@ -1,9 +1,24 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { EventBusEvent } from '../types/events'
 
+// FAR-1842: shared handles for the client-mock internals the composable now
+// touches at import time (onAuthChange re-arm) and on a 401 (refresh).
+const h = vi.hoisted(() => ({
+  authListeners: [] as Array<(token: string | null) => void>,
+  attemptTokenRefresh: vi.fn<() => Promise<boolean>>(),
+}))
+
 vi.mock('@/lib/api/client', () => ({
   getAccessToken: vi.fn(() => 'test-token'),
   getAuthHeaders: vi.fn(() => ({ Authorization: 'Bearer test-token' })),
+  attemptTokenRefresh: h.attemptTokenRefresh,
+  onAuthChange: vi.fn((cb: (token: string | null) => void) => {
+    h.authListeners.push(cb)
+    return () => {
+      const i = h.authListeners.indexOf(cb)
+      if (i >= 0) h.authListeners.splice(i, 1)
+    }
+  }),
 }))
 
 /**
@@ -24,6 +39,9 @@ let endStream: () => void
 
 beforeEach(() => {
   vi.resetModules()
+  h.authListeners.length = 0
+  h.attemptTokenRefresh.mockReset()
+  h.attemptTokenRefresh.mockResolvedValue(false)
 
   const queue: Array<{ done: boolean; value: Uint8Array }> = []
   let resolveNext: ((value: { done: boolean; value: Uint8Array }) => void) | null = null
@@ -234,7 +252,7 @@ describe('classified reconnect (FAR-250)', () => {
     vi.restoreAllMocks()
   })
 
-  it.each([401, 403, 429])('stops retrying on %i and surfaces the reconnect banner', async (status: number) => {
+  it.each([401, 403])('stops retrying on %i and surfaces the reconnect banner', async (status: number) => {
     vi.useFakeTimers()
     mockRandomFraction(0)
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -249,7 +267,7 @@ describe('classified reconnect (FAR-250)', () => {
     expect(eventBus.reconnectRequired).toBe(true)
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Stopping stream'))
 
-    // No retries ever — a fresh token / freed connection cap is required.
+    // No retries ever — a fresh token is required.
     await vi.advanceTimersByTimeAsync(600_000)
     expect(fetch).toHaveBeenCalledTimes(1)
 
@@ -258,6 +276,72 @@ describe('classified reconnect (FAR-250)', () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(fetch).toHaveBeenCalledTimes(1)
     unsub()
+  })
+
+  it('treats 429 as transient: retries with backoff instead of the terminal banner (FAR-1842)', async () => {
+    // Regression for the FAR-1842 defect: 429 (rate-limit / connection cap)
+    // used to classify as terminal auth_failed and demand a fresh sign-in.
+    // It must retry with capped backoff like 5xx.
+    vi.useFakeTimers()
+    mockRandomFraction(0)
+    vi.mocked(fetch).mockResolvedValue({ ok: false, status: 429, body: null } as unknown as Response)
+
+    const { eventBus } = await import('../composables/useEventStream')
+    const unsub = eventBus.subscribe('run', vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(eventBus.state).toBe('reconnecting')
+    expect(eventBus.reconnectRequired).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(fetch).toHaveBeenCalledTimes(2)
+    unsub()
+  })
+
+  it('recovers a 401 via attemptTokenRefresh instead of raising the terminal banner (FAR-1842)', async () => {
+    // A normal access-token expiry: the stream does not ride the API
+    // client's withAuth refresh loop, so it must serialise through the same
+    // attemptTokenRefresh() and re-issue the fetch once with the fresh token.
+    vi.useFakeTimers()
+    h.attemptTokenRefresh.mockResolvedValue(true)
+    vi.mocked(fetch)
+      .mockResolvedValueOnce({ ok: false, status: 401, body: null } as unknown as Response)
+      .mockResolvedValue({
+        ok: true,
+        body: {
+          getReader: () => ({
+            read: () => new Promise(() => {}),
+            cancel: vi.fn().mockResolvedValue(undefined),
+          }),
+        },
+      } as unknown as Response)
+
+    const { eventBus } = await import('../composables/useEventStream')
+    eventBus.subscribe('run', vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(h.attemptTokenRefresh).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(eventBus.state).toBe('connected')
+    expect(eventBus.reconnectRequired).toBe(false)
+  })
+
+  it('raises the terminal banner when a 401 cannot be refreshed', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // attemptTokenRefresh defaults to resolving false in beforeEach.
+    vi.mocked(fetch).mockResolvedValue({ ok: false, status: 401, body: null } as unknown as Response)
+
+    const { eventBus } = await import('../composables/useEventStream')
+    eventBus.subscribe('run', vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(h.attemptTokenRefresh).toHaveBeenCalledTimes(1)
+    // No re-fetch after the failed refresh — straight to the terminal stop.
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(eventBus.state).toBe('auth_failed')
+    expect(eventBus.reconnectRequired).toBe(true)
   })
 
   it('reconnect() restarts the stream after a 4xx stop with a fresh token', async () => {
@@ -281,6 +365,127 @@ describe('classified reconnect (FAR-250)', () => {
     expect(fetch).toHaveBeenCalledTimes(2)
     expect(eventBus.state).toBe('connected')
     expect(eventBus.reconnectRequired).toBe(false)
+  })
+
+  it('reconnect() exposes attempting feedback and clears it when the restart succeeds (FAR-1842)', async () => {
+    vi.useFakeTimers()
+    mockRandomFraction(0)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(fetch).mockResolvedValue({ ok: false, status: 401, body: null } as unknown as Response)
+
+    const { eventBus } = await import('../composables/useEventStream')
+    eventBus.subscribe('run', vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    expect(eventBus.reconnectRequired).toBe(true)
+    expect(eventBus.reconnectFeedback).toBe('idle')
+
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: () => new Promise(() => {}),
+          cancel: vi.fn().mockResolvedValue(undefined),
+        }),
+      },
+    } as unknown as Response)
+    eventBus.reconnect()
+    // Synchronous acknowledgement before the async restart settles.
+    expect(eventBus.reconnectFeedback).toBe('attempting')
+
+    await vi.advanceTimersByTimeAsync(0)
+    expect(eventBus.state).toBe('connected')
+    expect(eventBus.reconnectFeedback).toBe('idle')
+  })
+
+  it('reconnect() reports failed feedback when the restart hits a terminal auth stop again (FAR-1842)', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(fetch).mockResolvedValue({ ok: false, status: 401, body: null } as unknown as Response)
+
+    const { eventBus } = await import('../composables/useEventStream')
+    eventBus.subscribe('run', vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    expect(eventBus.reconnectRequired).toBe(true)
+
+    eventBus.reconnect()
+    expect(eventBus.reconnectFeedback).toBe('attempting')
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(eventBus.reconnectFeedback).toBe('failed')
+    expect(eventBus.reconnectRequired).toBe(true)
+  })
+
+  it('clears attempting feedback when the restart lands on a retry-classified failure (FAR-1842)', async () => {
+    // A manual restart that gets a 5xx/429 is self-healing (automatic
+    // backoff) — the banner must not linger over the retry loop.
+    vi.useFakeTimers()
+    mockRandomFraction(0)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(fetch).mockResolvedValue({ ok: false, status: 401, body: null } as unknown as Response)
+
+    const { eventBus } = await import('../composables/useEventStream')
+    eventBus.subscribe('run', vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    expect(eventBus.reconnectRequired).toBe(true)
+
+    vi.mocked(fetch).mockResolvedValue({ ok: false, status: 500, body: null } as unknown as Response)
+    eventBus.reconnect()
+    expect(eventBus.reconnectFeedback).toBe('attempting')
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(eventBus.state).toBe('reconnecting')
+    expect(eventBus.reconnectFeedback).toBe('idle')
+    expect(eventBus.reconnectRequired).toBe(false)
+  })
+
+  it('auto-restarts the stream when a fresh token lands after an auth stop (FAR-1842)', async () => {
+    // Banner re-arm: auth_failed is only valid for as long as the session
+    // that hit it. A fresh non-null token (re-login / refresh) must re-arm
+    // the stream so the banner cannot outlive the condition that raised it.
+    vi.useFakeTimers()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(fetch).mockResolvedValue({ ok: false, status: 401, body: null } as unknown as Response)
+
+    const { eventBus } = await import('../composables/useEventStream')
+    eventBus.subscribe('run', vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    expect(eventBus.reconnectRequired).toBe(true)
+
+    // The module registered an onAuthChange listener at import time.
+    expect(h.authListeners.length).toBeGreaterThan(0)
+
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: () => new Promise(() => {}),
+          cancel: vi.fn().mockResolvedValue(undefined),
+        }),
+      },
+    } as unknown as Response)
+    for (const listener of h.authListeners) listener('fresh-token')
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(eventBus.state).toBe('connected')
+    expect(eventBus.reconnectRequired).toBe(false)
+  })
+
+  it('does NOT auto-restart on a token clear (null) while auth-stopped (FAR-1842)', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(fetch).mockResolvedValue({ ok: false, status: 401, body: null } as unknown as Response)
+
+    const { eventBus } = await import('../composables/useEventStream')
+    eventBus.subscribe('run', vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    expect(eventBus.reconnectRequired).toBe(true)
+
+    for (const listener of h.authListeners) listener(null)
+    await vi.advanceTimersByTimeAsync(0)
+
+    // Logout / token clear must not trigger a reconnect attempt.
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(eventBus.reconnectRequired).toBe(true)
   })
 
   it('keeps retrying after network errors forever', async () => {
