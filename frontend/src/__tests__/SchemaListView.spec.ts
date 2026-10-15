@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
+import { setActivePinia, createPinia } from 'pinia'
 
 vi.mock('../lib/api/client', () => {
   const schemas = [
@@ -110,6 +111,8 @@ function findMenuItem(label: string): HTMLElement | null {
 describe('SchemaListView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // PageTabs resolves tier-locked state via the plan store (FAR-47).
+    setActivePinia(createPinia())
     mockPush.mockClear()
     document.body.innerHTML = ''
   })

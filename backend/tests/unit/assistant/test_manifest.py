@@ -170,12 +170,27 @@ class TestManifestLoad:
                 )
 
     def test_admin_routes_require_admin_role(self):
+        """Team-tier /admin routes require the admin org-role, except system_admin_only routes.
+
+        A `system_admin_only: true` route is an INSTANCE-level gate; its
+        org-ROLE requirement does not apply (FAR-1795). `/admin/product-analytics`
+        uses `<<: *team` (which injects `required_roles: [admin]`) and then
+        overrides it to null, so the explicit key must win and the route is
+        gated by `system_admin_only` alone. The frontend
+        `manifestGating.spec.ts` pins the same contract.
+        """
         _reset_manifest()
         from modulo.core.manifest import load_manifest
 
         manifest = load_manifest()
         for path, route in manifest["routes"].items():
-            if path.startswith("/admin/") and route["required_tier"] == "team":
+            if not (path.startswith("/admin/") and route["required_tier"] == "team"):
+                continue
+            if route.get("system_admin_only") is True:
+                assert route["required_roles"] is None, (
+                    f"system_admin_only route {path} must not carry an org-role gate"
+                )
+            else:
                 assert route["required_roles"] == ["admin"], f"Route {path} should require admin role"
 
 

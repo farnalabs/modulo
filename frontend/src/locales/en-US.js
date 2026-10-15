@@ -4376,7 +4376,9 @@ export default {
       "view_all": "View all notifications"
     },
     "PageTabs": {
-      "section_navigation": "Section navigation"
+      "section_navigation": "Section navigation",
+      "available_on_plan": "Available on the {plan} plan",
+      "locked_aria": "{label} (Available on the {plan} plan)"
     },
     "FeatureGate": {
       "team_feature": "Team Feature",

@@ -52,8 +52,10 @@ Lenses:
     0306_trigger_secret_encryption chains onto 0305_guardrail_escalate_action, and
     0307_runs_guardrail_override_resume_pending chains onto 0306_trigger_secret_encryption, and
     0308_runs_dispatch_phase_history chains onto 0307_runs_guardrail_override_resume_pending, and
-    0313_service_accounts_lifecycle chains onto 0308_runs_dispatch_phase_history as the
-    single linear head (0259's test documents the run-up through 0288).
+    0313_collection_install_drop_installed_entities chains onto
+    0312_memberships_active_lookups, and 0314_service_accounts_lifecycle chains onto
+    0313_collection_install_drop_installed_entities as the single linear head
+    (0259's test documents the run-up through 0288).
 * **Structure (mocked ``op``)** - upgrade emits THREE statements IN ORDER: the
   existence-gated ``ADD ... NOT VALID`` FIRST (so its ACCESS EXCLUSIVE is taken
   before any DML and held for the whole single-transaction upgrade - see the
@@ -88,7 +90,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0264_pipelines_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0263_evidence_layer"
-_HEAD_MIGRATION = "0313_service_accounts_lifecycle"
+_HEAD_MIGRATION = "0314_service_accounts_lifecycle"
 _CONSTRAINT = "ck_pipelines_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - a

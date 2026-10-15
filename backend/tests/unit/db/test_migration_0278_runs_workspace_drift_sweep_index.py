@@ -44,7 +44,7 @@ index and dropping the sweep back to a full-table scan of ``runs`` every
 ``0303_feedback_records_lookup_indexes``, then
 ``0305_guardrail_escalate_action`` then ``0306_trigger_secret_encryption`` then
 ``0307_runs_guardrail_override_resume_pending`` then ``0308_runs_dispatch_phase_history`` then
-``0313_service_accounts_lifecycle`` as the
+``0314_service_accounts_lifecycle`` as the
 single linear head) and the
 ``ORDER BY id`` / ``LIMIT 200`` access shape
 the ``(id)`` key is chosen to serve.
@@ -72,7 +72,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0278_runs_workspace_drift_sweep_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0277_run_daily_facts_trigger_dispatch_phase"
-_CHAIN_HEAD_MIGRATION = "0313_service_accounts_lifecycle"
+_CHAIN_HEAD_MIGRATION = "0314_service_accounts_lifecycle"
 _INDEX_NAME = "ix_runs_workspace_drift_sweep"
 _KEY_COLUMNS = ("id",)
 
