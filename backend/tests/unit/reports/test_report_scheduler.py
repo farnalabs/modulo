@@ -28,8 +28,11 @@ from modulo.core.reports.scheduler import (
     _deliver_webhook,
     _fire_scheduled_report,
     _get_engine,
+    _lease_epoch,
     _lease_value,
+    _parse_epoch,
     _parse_retry_after,
+    _release_report_fire_lease,
     _serialize_json_body,
     _sign_payload,
     _webhook_url_error,
@@ -688,6 +691,91 @@ class TestReportFireLeaseOutcome:
         stored = _lease_value("tok", "epoch-E")
         assert "epoch-E" in stored
         assert _lease_value("tok", None) != stored
+
+
+class _CancellingRedis:
+    """Redis double whose every awaited operation raises ``CancelledError``.
+
+    Models a task cancelled mid-lease-operation: the scheduler must re-raise
+    the cancellation (never swallow it) so SAQ surfaces the cancellation.
+    """
+
+    async def set(self, *args: object, **kwargs: object) -> None:
+        raise asyncio.CancelledError
+
+    async def get(self, *args: object, **kwargs: object) -> None:
+        raise asyncio.CancelledError
+
+    async def eval(self, *args: object, **kwargs: object) -> None:
+        raise asyncio.CancelledError
+
+
+class _CancelledOnUpdateSession(MockSession):
+    """Session double whose terminal UPDATE raises ``CancelledError``."""
+
+    async def _next_result(self, *args: object, **kwargs: object) -> MagicMock:
+        if args and str(args[0]).lstrip().startswith("UPDATE"):
+            raise asyncio.CancelledError
+        return await super()._next_result(*args, **kwargs)
+
+
+class TestReportFireLeasePrimitives:
+    """FAR-1822 lease/epoch primitives: malformed stored leases, naive epochs,
+    and cancellation on the lease operations and terminal stamp."""
+
+    def test_lease_epoch_decodes_bytes(self) -> None:
+        assert _lease_epoch(b'{"token":"t","epoch":"epoch-E"}') == "epoch-E"
+
+    def test_lease_epoch_returns_none_on_undecodable_bytes(self) -> None:
+        assert _lease_epoch(b"\xff\xfe\x00") is None
+
+    def test_lease_epoch_returns_none_for_non_string(self) -> None:
+        assert _lease_epoch(123) is None
+
+    def test_lease_epoch_returns_none_for_invalid_json(self) -> None:
+        assert _lease_epoch("{not json") is None
+
+    def test_lease_epoch_returns_none_for_non_dict_payload(self) -> None:
+        assert _lease_epoch("[1, 2, 3]") is None
+
+    def test_lease_epoch_returns_none_for_non_string_epoch(self) -> None:
+        assert _lease_epoch('{"epoch": 123}') is None
+
+    def test_parse_epoch_treats_naive_as_utc(self) -> None:
+        parsed = _parse_epoch("2026-07-02T09:00:00")
+        assert parsed == datetime.datetime(2026, 7, 2, 9, 0, tzinfo=datetime.UTC)
+
+    async def test_acquire_lease_propagates_cancellation(self) -> None:
+        with pytest.raises(asyncio.CancelledError):
+            await _acquire_report_fire_lease(_CancellingRedis(), uuid.uuid4(), "epoch-E")  # type: ignore[arg-type]
+
+    async def test_release_lease_is_a_noop_without_client_or_lease(self) -> None:
+        assert await _release_report_fire_lease(None, uuid.uuid4(), "tok") is None
+        assert await _release_report_fire_lease(_LeaseRedis(), uuid.uuid4(), None) is None  # type: ignore[arg-type]
+
+    async def test_release_lease_propagates_cancellation(self) -> None:
+        with pytest.raises(asyncio.CancelledError):
+            await _release_report_fire_lease(_CancellingRedis(), uuid.uuid4(), "tok")  # type: ignore[arg-type]
+
+    async def test_terminal_stamp_cancellation_is_not_swallowed(self) -> None:
+        async def generator(session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
+            return {"rows": 1}
+
+        report = _recurring_report()
+        session = _CancelledOnUpdateSession([_select_returns(report)])
+
+        with (
+            report_firing_env(session),
+            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+            patch("modulo.core.reports.scheduler.get_formatter", return_value=None),
+            patch("modulo.core.reports.scheduler.get_deliverer", return_value=AsyncMock(return_value=[])),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await _fire_scheduled_report(
+                report_id=report.id,
+                org_id=report.organisation_id,
+                epoch="2026-07-01T09:00:00+00:00",
+            )
 
 
 class TestOneTimeReportNotStranded:
