@@ -68,6 +68,10 @@ _PROGRAMMING_COLUMN_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Pattern for ``FROM <table>`` / ``JOIN <table>`` references in an error string.
+# One capturing group, so ``findall`` yields the bare table names.
+_FROM_JOIN_TABLE_RE = re.compile(r"(?:FROM|JOIN)\s+(?:(?:\")?(\w+)(?:\")?)", re.IGNORECASE)
+
 
 def _extract_column_info(exc: BaseException) -> tuple[str | None, str | None]:
     """Extract (table, column) from a DB-driver ProgrammingError.
@@ -103,16 +107,10 @@ def _extract_tables_from_query(exc: BaseException) -> list[str] | None:
     """
     try:
         text = str(exc) or ""
-        # Match ``FROM <table>`` and ``JOIN <table>`` patterns (case-insensitive).
-        tables = re.findall(r"(?:FROM|JOIN)\s+(?:(?:\")?(\w+)(?:\")?)", text, re.IGNORECASE)
+        tables = _FROM_JOIN_TABLE_RE.findall(text)
         if tables:
-            seen: set[str] = set()
-            unique: list[str] = []
-            for t in tables:
-                if t not in seen:
-                    seen.add(t)
-                    unique.append(t)
-            return unique
+            # dict.fromkeys dedupes while preserving first-seen order.
+            return list(dict.fromkeys(tables))
     except Exception:  # noqa: S110 — intentional fail-open
         pass
     return None
