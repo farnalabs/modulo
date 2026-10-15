@@ -70,7 +70,7 @@ _PROGRAMMING_COLUMN_RE = re.compile(
 
 # Pattern for ``FROM <table>`` / ``JOIN <table>`` references in an error string.
 # One capturing group, so ``findall`` yields the bare table names.
-_FROM_JOIN_TABLE_RE = re.compile(r"(?:FROM|JOIN)\s+(?:(?:\")?(\w+)(?:\")?)", re.IGNORECASE)
+_FROM_JOIN_TABLE_RE = re.compile(r"(?:FROM|JOIN)\s+\"?(\w+)\"?", re.IGNORECASE)
 
 
 def _extract_column_info(exc: BaseException) -> tuple[str | None, str | None]:
