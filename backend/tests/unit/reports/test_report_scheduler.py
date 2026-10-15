@@ -376,9 +376,66 @@ class _LeaseRedis:
     async def get(self, key: str) -> str | None:
         return self._values.get(key)
 
-    async def eval(self, script: str, numkeys: int, key: str, token: str) -> int:
-        if self._values.get(key) == token:
-            del self._values[key]
+    async def eval(self, script: str, numkeys: int, key: str, *args: object) -> int:
+        if "del" in script:
+            # Release: compare-and-delete on the whole stored value.
+            if self._values.get(key) == args[0]:
+                del self._values[key]
+                return 1
+            return 0
+        # Steal: compare-and-set on the exact value the caller observed.
+        if self._values.get(key) == args[0]:
+            self._values[key] = args[1]  # type: ignore[assignment]
+            return 1
+        return 0
+
+
+class _RaceLostLeaseRedis:
+    """Models the LOSING attempt of a concurrent same-epoch steal.
+
+    Another attempt replaced the lease between our ``GET`` and our
+    compare-and-set, so the CAS must miss — the old check-then-set path would
+    have let both attempts overwrite the lease and both generate.
+    """
+
+    def __init__(self, observed: str, current: str) -> None:
+        self._observed = observed
+        self._current = current
+
+    async def set(self, key: str, value: str, *, nx: bool = False, ex: int | None = None) -> bool | None:
+        return None  # the dead predecessor still holds the key
+
+    async def get(self, key: str) -> str:
+        return self._observed
+
+    async def eval(self, script: str, numkeys: int, key: str, *args: object) -> int:
+        return 1 if self._current == args[0] else 0
+
+
+class _BytesLeaseRedis(_LeaseRedis):
+    """Like ``_LeaseRedis`` but stores/returns ``bytes``, as the production
+    redis client (no ``decode_responses``) does."""
+
+    def __init__(self) -> None:
+        self._values: dict[str, object] = {}
+
+    async def set(self, key: str, value: str, *, nx: bool = False, ex: int | None = None) -> bool | None:
+        if nx and key in self._values:
+            return None
+        self._values[key] = value.encode() if isinstance(value, str) else value
+        return True
+
+    async def get(self, key: str) -> object:
+        return self._values.get(key)
+
+    async def eval(self, script: str, numkeys: int, key: str, *args: object) -> int:
+        if "del" in script:
+            if self._values.get(key) == args[0]:
+                del self._values[key]
+                return 1
+            return 0
+        if self._values.get(key) == args[0]:
+            self._values[key] = args[1]
             return 1
         return 0
 
@@ -630,6 +687,26 @@ class TestReportFireLeaseOutcome:
 
         # A DIFFERENT epoch is a genuine concurrent fire — still blocked.
         assert await _acquire_report_fire_lease(redis, report_id, "epoch-F") is None
+
+    async def test_concurrent_same_epoch_steal_only_one_attempt_wins(self) -> None:
+        # Two re-queued attempts of the same epoch race to steal a dead holder's
+        # lease. The loser reads the dead value but another attempt overwrote it
+        # before its compare-and-set, so the CAS must MISS — the old
+        # check-then-set path would have let both steal and both generate.
+        report_id = uuid.uuid4()
+        dead = _lease_value("dead-token", "epoch-E")
+        winner = _lease_value("winner-token", "epoch-E")
+        redis = _RaceLostLeaseRedis(observed=dead, current=winner)
+
+        assert await _acquire_report_fire_lease(redis, report_id, "epoch-E") is None  # type: ignore[arg-type]
+
+    async def test_same_epoch_steal_matches_a_bytes_valued_lease(self) -> None:
+        # The production redis client does not decode responses, so the observed
+        # lease value is bytes — the compare-and-set must match it byte-for-byte.
+        redis = _BytesLeaseRedis()
+        report_id = uuid.uuid4()
+        assert await _acquire_report_fire_lease(redis, report_id, "epoch-E") is not None  # type: ignore[arg-type]
+        assert await _acquire_report_fire_lease(redis, report_id, "epoch-E") is not None  # type: ignore[arg-type]
 
     async def test_holding_lease_without_epoch_is_not_stealable(self) -> None:
         redis = _LeaseRedis()

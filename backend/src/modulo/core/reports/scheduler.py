@@ -201,6 +201,17 @@ _RELEASE_REPORT_FIRE_LEASE_LUA = (
     "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
 )
 
+#: Steal a lease left by a dead SAME-epoch predecessor (compare-and-set on the
+#: whole observed value). The compare-and-set — not a plain ``SET`` after a
+#: check-then-read — is what makes the steal atomic: two concurrent re-queues of
+#: the same epoch both observe the dead holder's value, but only the first SET
+#: wins; the loser's CAS misses and it treats the lease as a genuine live fire.
+_STEAL_REPORT_FIRE_LEASE_LUA = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then "
+    "redis.call('set', KEYS[1], ARGV[2], 'EX', ARGV[3]) return 1 "
+    "else return 0 end"
+)
+
 
 class ReportFireLeaseUnavailableError(RuntimeError):
     """The per-report fire lease could NOT be established (no Redis client, or a
@@ -256,6 +267,13 @@ async def _acquire_report_fire_lease(
     the dead attempt, so a same-epoch claim is safe and recovery is immediate
     rather than waiting out ``_REPORT_FIRE_LEASE_TTL_SECONDS`` (finding 4). A
     DIFFERENT epoch never steals — that is a genuine concurrent fire.
+
+    The steal is a Lua compare-and-set on the exact value the ``GET`` observed,
+    never a bare ``SET`` after a check: two concurrent re-queues of the same
+    epoch both see the dead holder's value, but only the first ``SET`` wins —
+    the loser's CAS misses and it reports a genuine live fire. Without the CAS
+    both would steal and both would generate (the concurrency invariant would
+    have a hole exactly on the steal path).
     """
     if redis_client is None:
         raise ReportFireLeaseUnavailableError(f"no redis client for report {report_id}")
@@ -270,8 +288,19 @@ async def _acquire_report_fire_lease(
         current = await redis_client.get(key)
         if current is not None and _lease_epoch(current) == epoch:
             # Same epoch, held by the dead predecessor SAQ re-queued -> steal it.
-            await redis_client.set(key, value, ex=_REPORT_FIRE_LEASE_TTL_SECONDS)
-            return value
+            # Compare-and-set on the EXACT value we just read (not merely the
+            # epoch): a concurrent same-epoch re-queue reads the same dead
+            # holder's value, so only the first SET wins and the loser falls
+            # through to ``None`` (a genuine live fire).
+            stolen = await redis_client.eval(
+                _STEAL_REPORT_FIRE_LEASE_LUA,
+                1,
+                key,
+                current,
+                value,
+                _REPORT_FIRE_LEASE_TTL_SECONDS,
+            )
+            return value if stolen else None
         return None
     except asyncio.CancelledError:
         raise
@@ -340,7 +369,13 @@ async def _fire_scheduled_report(
 
     A failure of the terminal stamp AFTER a successful send is caught and the
     fire reports success — the send happened, so SAQ must not retry the whole
-    fire and deliver AGAIN.
+    fire and deliver AGAIN. This send-then-stamp ordering is at-least-once: if
+    the stamp is lost, ``last_sent_at`` is never recorded, so the *next*
+    due-scan (``next_send_at IS NOT NULL``) re-selects the report — a one-time
+    report keeps ``active=True`` and its due ``next_send_at`` — and re-delivers
+    it under a NEW epoch the idempotency guard cannot see. A pre-send durable
+    record would be the only exact fix; the catch-as-success protects against
+    SAQ retrying the SAME epoch, not against the due-scan's next one.
 
     Callers own the failure policy: on a ``failed`` result the SAQ fire job backs
     ``next_send_at`` off so ``fire_due_triggers`` cannot re-enqueue every 30s.
