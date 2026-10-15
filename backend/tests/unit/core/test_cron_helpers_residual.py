@@ -893,6 +893,39 @@ async def test_suite_run_trigger_build_skip_propagates():
     assert outcome is skip
 
 
+async def test_suite_run_trigger_judge_suite_without_backend_skips_at_fire():
+    """A judge suite whose org has NO ACTIVE backend is skipped at the fire boundary.
+
+    FAR-1742: the fire boundary no longer blanket-refuses judge suites, but a
+    suite that cannot be judged (no ACTIVE backend) must still be skipped up
+    front rather than built into a run the runner will hard-fail.
+    """
+    trigger = _make_trigger(
+        run_kind="suite_run",
+        eval_suite_id=uuid.uuid4(),
+        config_json={"dataset_id": str(uuid.uuid4()), "model_backend_id": str(uuid.uuid4())},
+    )
+    judge_def = MagicMock()
+    judge_def.eval_type = "llm_judge"
+    backend_none = MagicMock()
+    backend_none.first.return_value = None
+    session = _MockSession([_lock_result(True), _trigger_result(trigger), backend_none])
+    with (
+        patch.object(ch, "_open_factory", return_value=_factory_for(session)),
+        patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+        patch.object(ch, "_suite_run_fire_gates", new_callable=AsyncMock, return_value=None),
+        patch(
+            "modulo.core.eval_engine.execute_suite_run.load_suite_definitions",
+            return_value=[judge_def],
+        ),
+        patch.object(ch, "_build_suite_run_or_skip", new_callable=AsyncMock) as build,
+    ):
+        outcome = await ch.fire_suite_run_trigger(trigger_id=TRIGGER_A, org_id=ORG, pipeline_id=PIPELINE)
+    assert outcome["status"] == "skipped"
+    assert outcome["reason"] == "llm_judge_backend_unavailable"
+    build.assert_not_awaited()
+
+
 def test_resolve_suite_run_config_missing_ids():
     dataset_id, model_backend_id, skip = ch._resolve_suite_run_config({})
     assert dataset_id is None

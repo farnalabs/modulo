@@ -2887,32 +2887,54 @@ async def _suite_run_llm_judge_guard(
     org_id: uuid.UUID,
     eval_suite_id: uuid.UUID,
 ) -> dict[str, Any] | None:
-    """Reject an ``llm_judge`` suite_run fire up front; ``skip`` when unsupported.
+    """Skip a judge suite fire only when the org has NO ACTIVE model backend (FAR-1742).
 
-    ``llm_judge`` suites are not yet supported on the scheduled path: the SAQ
-    ``execute_suite_run`` job does not wire a judge callable, so any
-    ``llm_judge`` definition would hard-fail the run at execution time
-    (``suite contains llm_judge definitions but no judge callable was
-    provided``). Reject the fire up front (a clear, observable skip) rather
-    than letting the run build and then fail — config must not promise a run it
-    cannot deliver. This is the fire-boundary guard that mirrors "reject
-    llm_judge suite_run triggers" (FAR-377 reviewer finding).
+    FAR-1712 wired an org-scoped judge callable into the SAQ ``execute_suite_run``
+    job, so a suite containing an ``llm_judge`` definition now fires normally and
+    reaches that wired job whenever the org has at least one ACTIVE
+    ``ModelBackend``. The former blanket refusal (skip reason
+    ``llm_judge_unsupported``) is gone: it rejected the fire before the run was
+    ever built, so the scheduled path never reached the job FAR-1742 exists to
+    reach.
+
+    A judge suite whose org has NO ACTIVE backend still cannot be judged — the
+    runner would raise ``suite contains llm_judge definitions but no judge
+    callable was provided`` and terminalise the whole run as failed. Skip the
+    fire up front instead (a clear, observable skip) so config never promises a
+    run it cannot deliver. Non-judge suites are unaffected: the ACTIVE-backend
+    probe runs only for a suite that actually carries an ``llm_judge`` definition.
     """
+    from sqlalchemy import select
+
     from modulo.core.eval_engine.execute_suite_run import load_suite_definitions
+    from modulo.db.models.model_backend import ModelBackend
 
     suite_defs = await load_suite_definitions(session, org_id, eval_suite_id)
-    if any(str(getattr(d, "eval_type", "")) == "llm_judge" for d in suite_defs):
-        _log.warning(
-            "fire_suite_run_trigger: suite %s contains llm_judge definitions which are not "
-            "supported on the scheduled path; skipping fire (run would hard-fail at execution)",
-            eval_suite_id,
+    if not any(str(getattr(d, "eval_type", "")) == "llm_judge" for d in suite_defs):
+        return None
+    active_backend_id = (
+        await session.execute(
+            select(ModelBackend.id)
+            .where(
+                ModelBackend.organisation_id == org_id,
+                ModelBackend.status == "active",
+            )
+            .limit(1)
         )
-        return {
-            "status": "skipped",
-            "reason": "llm_judge_unsupported",
-            "suite_id": str(eval_suite_id),
-        }
-    return None
+    ).first()
+    if active_backend_id is not None:
+        return None
+    _log.warning(
+        "fire_suite_run_trigger: suite %s contains llm_judge definitions but org %s has no "
+        "ACTIVE model backend; skipping fire (the run would hard-fail at execution)",
+        eval_suite_id,
+        org_id,
+    )
+    return {
+        "status": "skipped",
+        "reason": "llm_judge_backend_unavailable",
+        "suite_id": str(eval_suite_id),
+    }
 
 
 async def _build_suite_run_or_skip(
