@@ -28,6 +28,7 @@ from modulo.core.feature_flags import (
     DbPlanContext,
     FeatureFlagRegistry,
     LicenseKeyTier,
+    PlanContext,
     effective_feature_flags,
     get_registry,
     resolve_plan_context,
@@ -630,3 +631,27 @@ class TestEffectiveFeatureFlags:
         names = {f.name for f in flags}
         assert "no_such_flag" not in names
         assert len(flags) == len(ctx.list_all_features())
+
+    def test_db_plan_context_list_all_features_returns_full_registry(self) -> None:
+        """The DB-backed context's full-set member returns every known flag.
+
+        The other two contexts' ``list_all_features`` are covered above; this
+        pins DbPlanContext's implementation against the real catalog rather
+        than leaving it unexercised.
+        """
+        ctx = DbPlanContext(FeatureFlagRegistry(current_tier="community", has_license_key=False))
+        flags = ctx.list_all_features()
+        names = {f.name for f in flags}
+        assert "mobile_sidebar_rail" in names
+        inactive = {f.name for f in flags if not f.currently_active}
+        assert "mobile_sidebar_rail" in inactive
+        assert "eval_system" not in inactive
+
+    def test_plan_context_protocol_declares_list_all_features(self) -> None:
+        """The PlanContext protocol declares the member the bootstrap reads.
+
+        Calling the ``...`` stub exercises the protocol declaration itself —
+        implementations must override it, and removing it would break
+        ``effective_feature_flags``' static contract.
+        """
+        assert PlanContext.list_all_features(MagicMock()) is None
