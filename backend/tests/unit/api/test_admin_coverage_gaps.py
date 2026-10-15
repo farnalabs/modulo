@@ -360,7 +360,10 @@ def test_update_org_logo_and_plan(api: tuple[TestClient, AsyncMock], monkeypatch
         org.plan_id = updates.get("plan_id", org.plan_id)
         return org
 
+    patches: list[dict[str, Any]] = []
+
     async def _patch_settings(session: Any, org_id: Any, patch: Any = None, delete_keys: Any = None) -> dict[str, Any]:
+        patches.append(dict(patch or {}))
         settings = dict(org.settings_json or {})
         settings.update(patch or {})
         org.settings_json = settings
@@ -376,6 +379,8 @@ def test_update_org_logo_and_plan(api: tuple[TestClient, AsyncMock], monkeypatch
     data = resp.json()
     assert data["logo_url"] == "https://new/l.png"
     assert data["plan_id"] == "pro"
+    # FAR-1830: the writer patches ONLY logo_url — not the whole settings_json.
+    assert patches == [{"logo_url": "https://new/l.png"}]
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
@@ -1435,6 +1440,27 @@ def test_update_retention_org_missing_returns_404(api: tuple[TestClient, AsyncMo
     session.execute = AsyncMock(return_value=_result(scalar_one_or_none=None))
     resp = client.put("/api/v1/admin/runs/retention", json={"retention_days": 180})
     assert resp.status_code == 404
+
+
+def test_update_retention_patches_only_retention_days(
+    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FAR-1830: the retention writer emits ONLY ``retention_days``.
+
+    A revert to a whole-column ``settings_json`` write would not call the patch
+    helper at all, so this assertion fails.
+    """
+    client, _ = api
+    patches: list[dict[str, Any]] = []
+
+    async def _patch_settings(session: Any, org_id: Any, patch: Any = None, delete_keys: Any = None) -> dict[str, Any]:
+        patches.append(dict(patch or {}))
+        return patch or {}
+
+    monkeypatch.setattr(admin, "update_org_settings_patch", _patch_settings)
+    resp = client.put("/api/v1/admin/runs/retention", json={"retention_days": 180})
+    assert resp.status_code == 200
+    assert patches == [{"retention_days": 180}]
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)

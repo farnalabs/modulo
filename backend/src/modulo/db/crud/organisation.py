@@ -17,10 +17,14 @@ from modulo.db.models.organisation import (
     SYSTEM_ORG_ID,
     Organisation,
 )
-from modulo.db.rls import read_rls_org
 from modulo.db.seed import seed_system_schemas
 
 _log = logging.getLogger(__name__)
+
+# The RLS tenant key generic backends (SQLite/MariaDB) store in ``session.info``
+# — mirrors ``modulo.db.rls._TENANT_KEY`` (kept local so the strict read here
+# does not depend on the module-private constant).
+_RLS_TENANT_KEY = "org_id"
 
 
 class OrgSettingsPatchOrgMismatch(RuntimeError):  # noqa: N818  # matches the OutputsRlsMismatch sibling naming
@@ -29,9 +33,35 @@ class OrgSettingsPatchOrgMismatch(RuntimeError):  # noqa: N818  # matches the Ou
     ``organisations`` is not itself RLS-scoped, so a caller bound to one org
     could otherwise issue a settings patch for another. This is a programming
     error (wrong org bound, or a route that failed to set ``set_rls_org``): the
-    write is refused rather than silently mutating the wrong tenant. A session
-    with NO bound org (boot seeds / system context) is allowed — there is no
-    cross-org boundary to violate.
+    write is refused rather than silently mutating the wrong tenant.
+    """
+
+
+class OrgSettingsPatchContextError(RuntimeError):
+    """Base class for a settings patch whose RLS org context cannot be trusted.
+
+    FAR-1830: the tenant guard must FAIL CLOSED. ``db.rls.read_rls_org``
+    degrades every failure to ``None`` (a deliberate public contract with many
+    callers), so it cannot distinguish "no org bound" from "the bound context
+    could not be read". Either way the tenant boundary is unknown, so the patch
+    refuses to write. The two cases are distinct subclasses so a caller can tell
+    them apart.
+    """
+
+
+class OrgSettingsPatchContextAbsentError(OrgSettingsPatchContextError):
+    """No org RLS context is bound and the caller did not opt out.
+
+    A user-facing writer that forgot ``set_rls_org`` lands here rather than
+    silently writing across the tenant boundary.
+    """
+
+
+class OrgSettingsPatchContextUnreadableError(OrgSettingsPatchContextError):
+    """The session's bound org context could not be read.
+
+    The context READ failed (e.g. the GUC read raised) — not the same as an
+    unbound context, and never treated as "unbound / allowed".
     """
 
 
@@ -173,33 +203,47 @@ async def update_org_settings_patch(
     organisation_id: uuid.UUID,
     patch: dict[str, Any] | None = None,
     delete_keys: list[str] | None = None,
+    *,
+    allow_unbound_context: bool = False,
 ) -> dict[str, Any]:
     """Atomically merge (and/or remove) top-level keys of ``settings_json`` (FAR-1830).
 
     Several independent concerns persist their state in
     ``organisations.settings_json`` under their own top-level key (email config,
     ``logo_url``, ``cost_controls``, ``run_concurrency_limit``, ``demo``,
-    ``license_key``, ...). The old write pattern — read the whole column, merge
-    one key in Python, write the WHOLE column back via
-    :func:`update_organisation` — takes no lock, so any two writers overlapping
-    in their read→write window silently drop each other's keys. This helper
-    replaces that read-modify-write with a single atomic statement:
+    ``license_key``, ``feature_overrides``, ``retention_days``, ``evidence_retention``...).
+    The old write pattern — read the whole column, merge one key in Python,
+    write the WHOLE column back via :func:`update_organisation` — takes no lock,
+    so any two writers overlapping in their read→write window silently drop each
+    other's keys. This helper replaces that read-modify-write with a single
+    atomic statement:
 
     - Postgres (the supported backend): ``UPDATE organisations SET
       settings_json = (COALESCE(settings_json, '{}'::jsonb) || :patch::jsonb) -
-      :delete_keys::text[] WHERE id = :org_id RETURNING settings_json`` — the
-      read and write are one statement, so no interleaving writer can be lost.
+      :delete_keys::text[] WHERE id = :org_id AND deleted_at IS NULL RETURNING
+      settings_json`` — the read and write are one statement, so no interleaving
+      writer can be lost.
     - Generic backends (SQLite / MariaDB, tests + legacy): an equivalent
       read-merge-write under ``SELECT ... FOR UPDATE``. Dialect-gated so the
       JSONB operators never reach a backend that lacks them.
 
     Contract:
 
+    - A soft-deleted org (``deleted_at IS NOT NULL``) is refused with
+      :class:`LookupError` on BOTH paths — the raw Postgres statement carries the
+      same ``deleted_at IS NULL`` predicate the generic ORM read applies via the
+      global soft-delete filter. (A raw statement does not pass through the ORM
+      listener, so the predicate is explicit.)
     - The caller owns the transaction and MUST have set the org RLS context
       (``set_rls_org``) for this org — the same contract as every other
-      ``settings_json`` writer. A session bound to a DIFFERENT org is refused
-      (:class:`OrgSettingsPatchOrgMismatch`) rather than mutating the wrong
-      tenant; an unbound session (boot seeds / system context) is allowed.
+      ``settings_json`` writer. The tenant guard FAILS CLOSED: a session bound to
+      a DIFFERENT org is refused (:class:`OrgSettingsPatchOrgMismatch`), and a
+      session with NO readable org context is refused too —
+      :class:`OrgSettingsPatchContextAbsentError` when genuinely unbound,
+      :class:`OrgSettingsPatchContextUnreadableError` when the context read itself
+      failed. Only a genuine boot-seed / system caller may pass
+      ``allow_unbound_context=True`` to permit a genuinely-unbound (but
+      readable) context; a failed read is ALWAYS refused.
     - The lock wait is bounded via ``set_mutation_row_lock_timeout``.
     - Any in-session ``Organisation`` for this id is refreshed to the merged
       value WITHOUT dirtying it (``set_committed_value``), so callers read the
@@ -212,20 +256,81 @@ async def update_org_settings_patch(
     patch = patch or {}
     delete_keys = list(delete_keys or [])
 
+    # Normalise the target to a ``UUID``: callers occasionally pass the id as a
+    # string, and both the tenant-mismatch comparison and the bound SQL /
+    # ORM predicate must compare like-for-like (a ``UUID`` never equals its
+    # ``str`` form).
+    target_org_id = _coerce_org_uuid(organisation_id)
+    if target_org_id is None:
+        raise ValueError(f"update_org_settings_patch requires a UUID organisation id, got {organisation_id!r}")
+
     await _take_settings_patch_lock_wait(session)
-    bound_org = await read_rls_org(session)
-    if bound_org is not None and bound_org != organisation_id:
+    dialect = await _settings_patch_dialect(session)
+    bound_org = await _strict_read_rls_org(session, dialect)
+    if bound_org is None:
+        if not allow_unbound_context:
+            raise OrgSettingsPatchContextAbsentError(
+                "no org RLS context bound for a settings_json patch; call set_rls_org() first "
+                "(only genuine boot-seed/system callers may pass allow_unbound_context=True)"
+            )
+    elif bound_org != target_org_id:
         raise OrgSettingsPatchOrgMismatch(
-            f"settings_json patch org mismatch: session org {bound_org} != target org {organisation_id}"
+            f"settings_json patch org mismatch: session org {bound_org} != target org {target_org_id}"
         )
 
-    if await _settings_patch_dialect(session) == "postgresql":
-        settings = await _apply_settings_patch_postgres(session, organisation_id, patch, delete_keys)
+    if dialect == "postgresql":
+        settings = await _apply_settings_patch_postgres(session, target_org_id, patch, delete_keys)
     else:
-        settings = await _apply_settings_patch_generic(session, organisation_id, patch, delete_keys)
+        settings = await _apply_settings_patch_generic(session, target_org_id, patch, delete_keys)
 
     _invalidate_settings_derived_caches()
     return settings
+
+
+async def _strict_read_rls_org(session: AsyncSession, dialect: str) -> uuid.UUID | None:
+    """Read the session's bound RLS org, NEVER swallowing a genuine read failure.
+
+    ``db.rls.read_rls_org`` degrades every failure to ``None`` (its public
+    contract, relied on by many callers). The tenancy guard here needs to tell
+    "no org bound" apart from "the bound context could not be read", so it uses
+    this strict local read instead: a real failure raises
+    :class:`OrgSettingsPatchContextUnreadableError`; only a genuinely-absent context
+    returns ``None``.
+
+    Generic backends store the org in ``session.info['org_id']`` and have no
+    ``app.organisation_id`` GUC, so on a non-Postgres dialect the info lookup is
+    authoritative and its absence is genuinely-unbound (not a read error). On
+    Postgres the ``current_setting`` read is authoritative.
+    """
+    info = getattr(session, "info", None)
+    if isinstance(info, dict):
+        value = info.get(_RLS_TENANT_KEY)
+        if value is not None:
+            parsed = _coerce_org_uuid(value)
+            if parsed is not None:
+                return parsed
+    if dialect != "postgresql":
+        return None
+    try:
+        result = await session.execute(text("SELECT current_setting('app.organisation_id', true)"))
+    except Exception as exc:
+        raise OrgSettingsPatchContextUnreadableError(
+            "could not read the session's app.organisation_id RLS context"
+        ) from exc
+    raw: object = result.scalar()
+    if raw is None:
+        return None
+    if isinstance(raw, str) and raw.strip() == "":
+        return None
+    return _coerce_org_uuid(raw)
+
+
+def _coerce_org_uuid(value: object) -> uuid.UUID | None:
+    """Return a ``UUID`` when *value* is a valid UUID/str, else ``None``."""
+    try:
+        return uuid.UUID(str(value).strip())
+    except (ValueError, AttributeError, TypeError):
+        return None
 
 
 async def _take_settings_patch_lock_wait(session: AsyncSession) -> None:
@@ -252,7 +357,7 @@ async def _apply_settings_patch_postgres(
         "SET settings_json = "
         "(COALESCE(settings_json, '{}'::jsonb) || CAST(:patch AS jsonb)) "
         "- CAST(:delete_keys AS text[]) "
-        "WHERE id = :org_id "
+        "WHERE id = :org_id AND deleted_at IS NULL "
         "RETURNING settings_json"
     ).bindparams(
         bindparam("patch", value=json.dumps(patch)),
@@ -261,6 +366,9 @@ async def _apply_settings_patch_postgres(
     result = await session.execute(stmt, {"org_id": str(organisation_id)})
     row = result.first()
     if row is None:
+        # No row matched: either the org does not exist OR it is soft-deleted.
+        # The generic path (get_organisation) applies the global soft-delete
+        # filter, so this matches its behaviour (both refuse a soft-deleted org).
         raise LookupError(f"organisation not found: {organisation_id}")
     raw = row[0]
     settings = json.loads(raw) if isinstance(raw, str) else dict(raw)

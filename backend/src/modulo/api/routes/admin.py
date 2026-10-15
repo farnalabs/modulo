@@ -231,13 +231,6 @@ def _raise_unexpected(detail: str) -> NoReturn:
     ) from None
 
 
-def _update_org_setting(org: Organisation, key: str, value: object) -> None:
-    """Merge ``value`` into ``org.settings_json`` under ``key`` without dropping other keys."""
-    settings = dict(org.settings_json) if org.settings_json else {}
-    settings[key] = value
-    org.settings_json = settings
-
-
 def _to_user_list_item(account: Account, org_role: str, org_membership: OrgMembership | None = None) -> "UserListItem":
     """Serialise an account for the caller's org view.
 
@@ -3886,18 +3879,17 @@ async def admin_update_retention(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            # FAR-1025: opt out of the global soft-delete filter — a
-            # pending-deletion org is still operationally live.
-            result = await session.execute(
-                include_soft_deleted(
-                    select(Organisation).where(Organisation.id == current_user.organisation_id).limit(1)
+            try:
+                # FAR-1830: emit ONLY the ``retention_days`` key via the atomic
+                # patch. A whole-column write from a stale read would drop every
+                # other concern's key committed in the read→write window. A
+                # soft-deleted org is refused (LookupError) — matching the patch
+                # helper's generic path.
+                await update_org_settings_patch(
+                    session, current_user.organisation_id, {"retention_days": req.retention_days}
                 )
-            )
-            org = result.scalar_one_or_none()
-            if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
-            _update_org_setting(org, "retention_days", req.retention_days)
-            await session.flush()
+            except LookupError:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND) from None
     except asyncio.CancelledError:
         raise
     except IntegrityError:

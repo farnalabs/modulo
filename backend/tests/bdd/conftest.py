@@ -159,6 +159,11 @@ def make_mock_session() -> AsyncMock:
     # MagicMock(return_value=False) — see tests/bdd/steps/test_auth.py.
     session.in_transaction = MagicMock(return_value=True)
     session.add = MagicMock()
+    # A real AsyncSession exposes ``info`` as a plain dict; ``set_rls_org`` on a
+    # generic backend writes the org id there and the FAR-1830 settings-patch
+    # tenant guard reads it back. A bare AsyncMock child is not a dict, so the
+    # guard would see an unbound context.
+    session.info = {}
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

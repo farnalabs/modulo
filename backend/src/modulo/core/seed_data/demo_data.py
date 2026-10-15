@@ -253,10 +253,15 @@ async def seed_demo_org(
         # FAR-1830: emit ONLY this seeder's top-level keys via the atomic patch.
         # A whole-column write from the read above would drop every key another
         # settings_json writer committed between this read and the write.
+        # ``allow_unbound_context=True``: this is the boot seeder — it runs
+        # outside any request/RLS-bound session (``seed_demo_orgs`` opens a bare
+        # factory transaction), so there is no org context to bind and no
+        # cross-tenant boundary the write could violate.
         await update_org_settings_patch(
             session,
             org.id,
             {"license_key": new_key, "demo": new_settings["demo"]},
+            allow_unbound_context=True,
         )
 
 

@@ -17,11 +17,20 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.db.crud.organisation import (
+    OrgSettingsPatchContextAbsentError,
+    OrgSettingsPatchContextUnreadableError,
     OrgSettingsPatchOrgMismatch,
+    _apply_settings_patch_generic,
     get_organisation,
     update_org_settings_patch,
 )
 from modulo.db.rls import read_rls_org, set_rls_org
+from modulo.db.soft_delete import register_soft_delete_filter
+
+# FAR-1830: the generic patch path relies on the global soft-delete filter,
+# which is installed by an import side effect. Register it explicitly so this
+# module's soft-delete assertions run against the production filter.
+register_soft_delete_filter()
 
 pytestmark = [
     pytest.mark.integration,
@@ -194,3 +203,92 @@ async def test_org_lookup_returns_merged_value_and_syncs_identity_map(db_engine:
     assert org.settings_json["logo_url"] == "https://x/l.png"
     await session.commit()
     await session.close()
+
+
+async def _soft_delete_org(db_engine: AsyncEngine, org_id: uuid.UUID) -> None:
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text("UPDATE organisations SET deleted_at = now() WHERE id = :oid"),
+            {"oid": str(org_id)},
+        )
+
+
+async def test_soft_deleted_org_is_refused_on_both_paths(db_engine: AsyncEngine) -> None:
+    """A soft-deleted org is refused identically on the Postgres and generic paths.
+
+    The raw Postgres statement carries an explicit ``deleted_at IS NULL``
+    predicate; the generic path gets it via the global ORM filter. Before the
+    fix the Postgres path patched the soft-deleted row while the generic path
+    raised — silent prod-vs-test divergence.
+    """
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    await _soft_delete_org(db_engine, org_id)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    session = factory()
+    await session.begin()
+    await set_rls_org(session, org_id)
+    # Postgres path (the default dialect on this engine).
+    with pytest.raises(LookupError):
+        await update_org_settings_patch(session, org_id, {"k": 1})
+    # Generic path, driven directly against the same engine.
+    with pytest.raises(LookupError):
+        await _apply_settings_patch_generic(session, org_id, {"k": 1}, [])
+    await session.rollback()
+    await session.close()
+
+    # Neither path mutated the soft-deleted row.
+    assert not await _read_settings(db_engine, org_id)
+
+
+async def test_unbound_context_is_refused_by_default(db_engine: AsyncEngine) -> None:
+    """A session with no org context is refused — the guard fails CLOSED."""
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    session = factory()
+    await session.begin()
+
+    with pytest.raises(OrgSettingsPatchContextAbsentError):
+        await update_org_settings_patch(session, org_id, {"k": 1})
+    await session.rollback()
+    await session.close()
+
+    assert not await _read_settings(db_engine, org_id)
+
+
+async def test_allow_unbound_context_permits_a_boot_seed_write(db_engine: AsyncEngine) -> None:
+    """Only an explicit opt-in lets a genuinely-unbound context write."""
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    session = factory()
+    await session.begin()
+
+    returned = await update_org_settings_patch(session, org_id, {"k": 1}, allow_unbound_context=True)
+    await session.commit()
+    await session.close()
+
+    assert returned["k"] == 1
+    assert await _read_settings(db_engine, org_id) == {"k": 1}
+
+
+async def test_context_read_failure_fails_closed(db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed READ of the bound context is never treated as 'unbound / allowed'."""
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    session = factory()
+    await session.begin()
+
+    real_execute = session.execute
+
+    async def _boom(statement: object, *args: object, **kwargs: object) -> object:
+        if "current_setting('app.organisation_id'" in str(statement):
+            raise RuntimeError("guc read failed")
+        return await real_execute(statement, *args, **kwargs)
+
+    monkeypatch.setattr(session, "execute", _boom)
+    with pytest.raises(OrgSettingsPatchContextUnreadableError):
+        await update_org_settings_patch(session, org_id, {"k": 1}, allow_unbound_context=True)
+    await session.rollback()
+    await session.close()
+
+    assert not await _read_settings(db_engine, org_id)
