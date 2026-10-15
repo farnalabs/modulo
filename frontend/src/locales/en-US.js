@@ -1444,6 +1444,7 @@ export default {
       "queued": "queued",
       "empty_state_description": "Try adjusting your filters or trigger a pipeline run.",
       "deleted_pipeline": "(deleted pipeline)",
+      "view_run": "View run",
       "run_count": "1 run | {count} runs",
       "previous": "Previous",
       "next": "Next",
@@ -3871,6 +3872,10 @@ export default {
       "seed_error_detail": "Error detail:\n{detail}",
       "seed_failing_node": "Failing node: {node}",
       "seed_request": "Work out the most likely root cause of this failure, cite the evidence in the run, and suggest concrete fixes."
+    },
+    "RunPipelineVersionLink": {
+      "version_title": "Open the pipeline version this run executed",
+      "current_title": "Open the pipeline (this run has no recorded version)"
     },
     "ViewToggle": {
       "saved_views": "Saved Views",
