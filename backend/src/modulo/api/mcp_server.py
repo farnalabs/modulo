@@ -3144,6 +3144,7 @@ async def _list_runs_impl(
                 return _team_scope_error("pipeline", str(pid))
         result = await db_list_runs(
             s,
+            organisation_id=org_id,
             pipeline_id=pid,
             status=status,
             page=1,
@@ -4617,8 +4618,11 @@ async def trigger_pipeline(
         return _tool_exception_error("Failed to trigger pipeline", exc, "mcp.trigger_pipeline")
 
 
-async def _load_run_for_status(s: AsyncSession, rid: uuid.UUID) -> Any | None:
-    run = await get_run(s, rid)
+async def _load_run_for_status(s: AsyncSession, rid: uuid.UUID, org_id: uuid.UUID) -> Any | None:
+    # Defence-in-depth org predicate (FAR-328): the MCP session already applies
+    # RLS via ``_session(org_id)``; the explicit filter makes cross-tenant
+    # access impossible even if RLS were misconfigured.
+    run = await get_run(s, rid, organisation_id=org_id)
     if run is None:
         return None
     # The run carries its own owner_team_id (snapshot at creation) — that
@@ -4739,7 +4743,7 @@ async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
         return rid_err
     assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
     async with _session(org_id) as s:
-        run = await _load_run_for_status(s, rid)
+        run = await _load_run_for_status(s, rid, org_id)
         if run is _TEAM_SCOPE_ERROR:
             return _team_scope_error("run", run_id)
         if run is None:
@@ -4829,7 +4833,7 @@ async def _get_run_output_impl(run_id: str, node_id: str) -> dict[str, Any]:
         return rid_err
     assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
     async with _session(org_id) as s:
-        run = await get_run(s, rid)
+        run = await get_run(s, rid, organisation_id=org_id)
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
         run_owner_team_id = await _run_owner_team_id(s, run)
@@ -4890,7 +4894,7 @@ async def _get_run_evals_impl(run_id: str) -> dict[str, Any]:
     assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
 
     async with _session(org_id) as s:
-        run = await get_run(s, rid)
+        run = await get_run(s, rid, organisation_id=org_id)  # defence-in-depth org predicate (FAR-328)
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
         if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
@@ -5542,7 +5546,7 @@ async def _cancel_run_impl(run_id: str) -> dict[str, Any]:
         # ``_RETRY_DB`` retry multiplying the wait and then collapsing into a
         # generic ``database_unavailable``.
         await set_mutation_row_lock_timeout(s)
-        run = await get_run(s, rid)
+        run = await get_run(s, rid, organisation_id=org_id)  # defence-in-depth org predicate (FAR-328)
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
         if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
@@ -5822,7 +5826,7 @@ async def _get_hitl_review_impl(run_id: str, review_id: str) -> dict[str, Any]:
         return rid_err
     assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
     async with _session(org_id) as s:
-        run = await _load_hitl_run(s, rid)
+        run = await _load_hitl_run(s, rid, org_id)
         if run is _TEAM_SCOPE_ERROR:
             return _team_scope_error("run", run_id)
         if run is None:
@@ -5950,14 +5954,19 @@ def _parse_hitl_action(
 async def _load_hitl_run(
     s: AsyncSession,
     rid: uuid.UUID,
+    org_id: uuid.UUID,
 ) -> Any | None:
     """Load the HITL gate's run, enforcing the team boundary.
+
+    The read also carries the defence-in-depth org predicate (FAR-328): RLS
+    is the backstop; the explicit filter makes cross-tenant access impossible
+    even if RLS were misconfigured.
 
     Returns the run ORM object on success, ``_TEAM_SCOPE_ERROR`` when a
     team-scoped key must not act on the run, or ``None`` when the run is not
     found.
     """
-    run = await get_run(s, rid)
+    run = await get_run(s, rid, organisation_id=org_id)
     if run is None:
         return None
     if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
@@ -6453,7 +6462,7 @@ async def _review_hitl_impl(
         return {"error": "insufficient_scope", "detail": str(exc)}
 
     async with _session(org_id) as s:
-        run = await _load_hitl_run(s, rid)
+        run = await _load_hitl_run(s, rid, org_id)
         if run is _TEAM_SCOPE_ERROR:
             return _team_scope_error("run", run_id)
         if run is None:
@@ -11809,7 +11818,9 @@ async def resource_pipeline_runs(pipeline_id: str) -> str:
             return f"Pipeline {pipeline_id} not found."
         if _team_scoped_key_mismatch(pipeline.owner_team_id):
             return _team_scope_error_str("pipeline", pipeline_id)
-        result = await list_runs(s, pipeline_id=pid, page=1, page_size=50, team_id=_ctx_team_id_val())
+        result = await list_runs(
+            s, organisation_id=org_id, pipeline_id=pid, page=1, page_size=50, team_id=_ctx_team_id_val()
+        )
         # Child-run cost+count rollup: ONE GROUP BY query for the whole page,
         # joined in Python — never a per-row aggregate (avoids N+1).
         run_ids = [r.id for r in result.items]
@@ -11993,7 +12004,7 @@ async def resource_run(run_id: str) -> str:
     except ValueError:
         return f"error: Invalid UUID format: {run_id}"
     async with _session(org_id) as s:
-        run = await get_run(s, rid)
+        run = await get_run(s, rid, organisation_id=org_id)  # defence-in-depth org predicate (FAR-328)
         if run is None:
             return f"Run {run_id} not found."
         if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
@@ -12044,9 +12055,14 @@ async def _get_hitl_review(s: AsyncSession, rid: uuid.UUID, review_id: str, org_
     return result.scalar_one_or_none()
 
 
-async def _hitl_review_scope_error(s: AsyncSession, rid: uuid.UUID, gate: HitlClaim) -> str | None:
+async def _hitl_review_scope_error(
+    s: AsyncSession,
+    rid: uuid.UUID,
+    gate: HitlClaim,
+    org_id: uuid.UUID,
+) -> str | None:
     """Return a team-scope error string when the caller's key cannot read this gate."""
-    run = await get_run(s, rid)
+    run = await get_run(s, rid, organisation_id=org_id)  # defence-in-depth org predicate (FAR-328)
     owner_team_id = (
         await _run_owner_team_id(s, run) if run is not None else await _pipeline_owner_team_id(s, gate.pipeline_id)
     )
@@ -12161,7 +12177,7 @@ async def resource_hitl_review(run_id: str, review_id: str) -> str:
         if gate is not None:
             # A team-scoped key must not read another team's gate even when
             # the gate itself is org-level (required_team_id IS NULL).
-            scope_error = await _hitl_review_scope_error(s, rid, gate)
+            scope_error = await _hitl_review_scope_error(s, rid, gate, org_id)
             if scope_error is not None:
                 return scope_error
             required_team_name = await _hitl_required_team_name(s, gate)

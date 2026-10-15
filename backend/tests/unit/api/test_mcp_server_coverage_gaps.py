@@ -2426,7 +2426,7 @@ class TestEvalDefinitionTools(_AdminContext):
 class TestHitlHelpers(_AuthContext):
     async def test_load_hitl_run_missing(self) -> None:
         with patch.object(ms, "get_run", new=AsyncMock(return_value=None)):
-            assert await _load_hitl_run(_mock_session(), uuid.uuid4()) is None
+            assert await _load_hitl_run(_mock_session(), uuid.uuid4(), uuid.uuid4()) is None
 
     async def test_dispatch_hitl_action_reject_with_reason(self) -> None:
         mgr = MagicMock()
