@@ -244,7 +244,11 @@ function seedPagedSnapshots(versions: number[], opts: { drop?: number[] } = {}) 
   apiPatchMock.mockResolvedValue({ data: {}, error: undefined })
 }
 
-async function mountEditor(query: Record<string, string> = {}, afterSeed?: () => void) {
+async function mountEditor(
+  query: Record<string, string> = {},
+  afterSeed?: () => void,
+  features: Record<string, boolean> = { pipeline_delete: true, pipeline_diff_rollback: true },
+) {
   seedRoute(query)
   seedApi()
   afterSeed?.()
@@ -252,7 +256,7 @@ async function mountEditor(query: Record<string, string> = {}, afterSeed?: () =>
   setActivePinia(pinia)
   const store = usePlanStore()
   store.currentTier = 'team'
-  store.features = { pipeline_delete: true, pipeline_diff_rollback: true }
+  store.features = features
   const wrapper = mount(PipelineEditorView, {
     global: {
       plugins: [pinia, router],
@@ -681,6 +685,547 @@ describe('PipelineEditorView — historic version view (FAR-1812)', () => {
     expect(writeText).toHaveBeenCalledTimes(1)
     expect(String(writeText.mock.calls[0][0])).toContain('snapshot=snap-4')
     expect(wrapper.find('[data-testid="pipeline-editor-historic-copy-link"]').text()).toContain('Link copied')
+    wrapper.unmount()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// FAR-1812 follow-up: branch/line coverage for the historic-version seam.
+// The suite above covers the happy paths; this one pins the defensive arms
+// (superseded requests, load failures, absent pages, author/date fallbacks,
+// restore failure, copy-link failure + reset, all write-guard early returns,
+// and the read-only inspector authoring surfaces in latest mode).
+// ---------------------------------------------------------------------------
+
+const AGENT_NODE_ID = 'node-agent'
+const AGENT_GRAPH = {
+  nodes: [
+    {
+      id: AGENT_NODE_ID,
+      node_type: 'sandbox_agent',
+      label: 'Agent Node',
+      agent_id: 'agent-1',
+      position: { x: 0, y: 0 },
+      capability_scope: {
+        allowed_connectors: [],
+        allowed_tools: ['tool-x'],
+        context_scope: ['ctx-y'],
+      },
+      parameter_set_id: 'ps-1',
+      parameter_overrides: { alpha: 'v' },
+    },
+  ],
+  edges: [],
+}
+
+/** A two-node graph carrying one edge, for the edge-inspector panel. */
+const EDGE_GRAPH = {
+  nodes: [
+    { id: 'node-a', node_type: 'agent', label: 'A', position: { x: 0, y: 0 } },
+    { id: 'node-b', node_type: 'agent', label: 'B', position: { x: 40, y: 0 } },
+  ],
+  edges: [{ id: 'edge-1', source_node_id: 'node-a', target_node_id: 'node-b', edge_type: 'normal' }],
+}
+
+/** A detail/snapshot-list override injected via the `afterSeed` hook. */
+function seedApiWith(overrides: {
+  detail?: (init?: any) => unknown
+  snapshots?: (init?: any) => unknown
+  graph?: TestGraph
+} = {}) {
+  apiGetMock.mockImplementation((url: string, init?: any) => {
+    if (url.includes('/snapshots/{snapshot_id}')) {
+      if (overrides.detail) return overrides.detail(init)
+      return Promise.resolve({
+        data: { ...structuredClone(SNAPSHOT_DETAIL), graph_json: structuredClone(FROZEN_GRAPH) },
+        error: undefined,
+        response: { status: 200 },
+      })
+    }
+    if (url.endsWith('/snapshots')) {
+      if (overrides.snapshots) return overrides.snapshots(init)
+      return Promise.resolve({ data: { items: structuredClone(SNAPSHOT_LIST) }, error: undefined })
+    }
+    if (url.includes('/pipelines/{pipeline_id}/graph')) {
+      return Promise.resolve({ data: structuredClone(overrides.graph ?? LIVE_GRAPH), error: undefined })
+    }
+    if (url.includes('/pipelines/{pipeline_id}')) {
+      return Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline' }, error: undefined })
+    }
+    return Promise.resolve({ data: { items: [] }, error: undefined })
+  })
+  apiPostMock.mockResolvedValue({ data: {}, error: undefined })
+  apiPatchMock.mockResolvedValue({ data: {}, error: undefined })
+}
+
+/** A deferred promise the test resolves at will (controls request ordering). */
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+describe('PipelineEditorView — FAR-1812 defensive arms', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('keeps every write entry point a no-op while a historic version is shown', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    const vm = wrapper.vm as any
+
+    vm.syncNodeToFlow()
+    vm.addNode('agent')
+    await vm.handleSaveAsComposite()
+    await vm.convertToAgent()
+    await vm.triggerRun()
+
+    expect(apiPostMock).not.toHaveBeenCalled()
+    expect(apiPatchMock).not.toHaveBeenCalled()
+    expect(vm.rawNodes.map((n: any) => n.id)).toEqual([LIVE_NODE_ID])
+    wrapper.unmount()
+  })
+
+  it('renders the capability-scope and parameter-set authoring surfaces in latest mode', async () => {
+    const wrapper = await mountEditor({}, () => seedApi({ liveGraph: AGENT_GRAPH }))
+    const vm = wrapper.vm as any
+
+    vm.onNodeClick({ node: { id: AGENT_NODE_ID } })
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="pipeline-editor-capability-scope"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-scope-tool-remove-tool-x"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-scope-tool-input"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-save-param-set"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('hides those authoring controls when the same agent node is frozen in a historic version', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' }, () =>
+      seedApiWith({
+        detail: () =>
+          Promise.resolve({
+            data: { ...structuredClone(SNAPSHOT_DETAIL), graph_json: structuredClone(AGENT_GRAPH) },
+            error: undefined,
+            response: { status: 200 },
+          }),
+      }),
+    )
+    const vm = wrapper.vm as any
+    expect(vm.isViewing).toBe(true)
+    vm.onNodeClick({ node: { id: AGENT_NODE_ID } })
+    await nextTick()
+
+    // The panels still render (the frozen config is inspectable) …
+    expect(wrapper.find('[data-testid="pipeline-editor-capability-scope"]').exists()).toBe(true)
+    // … but every authoring control is absent, not merely disabled.
+    expect(wrapper.find('[data-testid="pipeline-editor-scope-tool-remove-tool-x"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="pipeline-editor-scope-tool-input"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="pipeline-editor-scope-context-remove-ctx-y"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="pipeline-save-param-set"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('shows the save-edge action only when an edge is selected in latest mode', async () => {
+    const wrapper = await mountEditor({}, () => seedApi({ liveGraph: EDGE_GRAPH }))
+    const vm = wrapper.vm as any
+    expect(wrapper.find('[data-testid="pipeline-editor-save-edge"]').exists()).toBe(false)
+
+    vm.onEdgeClick({ edge: { id: 'edge-1' } })
+    await nextTick()
+    // The edge write controls live behind the HITL-gate section.
+    vm.edgeForm.hitl_enabled = true
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-save-edge"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('hides the restore action when the rollback feature is disabled', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' }, undefined, {
+      pipeline_delete: true,
+      pipeline_diff_rollback: false,
+    })
+    expect(wrapper.find('[data-testid="pipeline-editor-historic-banner"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-historic-restore"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('reports a clipboard failure inline instead of a silent no-op', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) },
+      configurable: true,
+    })
+
+    await wrapper.find('[data-testid="pipeline-editor-historic-copy-link"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="pipeline-editor-historic-copy-link-error"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('resets the copied label after the reset window and clears the prior timer', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    const vm = wrapper.vm as any
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+      configurable: true,
+    })
+
+    vi.useFakeTimers()
+    try {
+      await vm.copyHistoricLink()
+      expect(vm.linkCopied).toBe(true)
+      await vm.copyHistoricLink()
+      expect(vm.linkCopied).toBe(true)
+      vi.advanceTimersByTime(2100)
+      await nextTick()
+      expect(vm.linkCopied).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+    wrapper.unmount()
+  })
+
+  it('builds the share link without a snapshot id when none is resolved', async () => {
+    const wrapper = await mountEditor()
+    const vm = wrapper.vm as any
+    const link = vm.historicShareLink()
+    expect(link).not.toContain('?')
+    expect(link).toContain('/editor')
+    wrapper.unmount()
+  })
+
+  it('resolves a pending unsaved-changes prompt to "decline" on unmount', async () => {
+    const wrapper = await mountEditor()
+    const vm = wrapper.vm as any
+    vm.rawNodes.push({ id: 'node-edited', node_type: 'agent', label: 'Edited' })
+    await nextTick()
+    expect(vm.isGraphDirty).toBe(true)
+
+    const pending = vm.requestViewSnapshot('snap-4')
+    await nextTick()
+    expect(vm.unsavedConfirmVisible).toBe(true)
+
+    wrapper.unmount()
+    await expect(pending).resolves.toBeUndefined()
+  })
+
+  it('routes the display nodes/edges v-model setters to the frozen refs while viewing', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    const vm = wrapper.vm as any
+
+    vm.displayNodes = [{ id: 'frozen-node' }]
+    vm.displayEdges = [{ id: 'frozen-edge' }]
+    expect(vm.viewFlowNodes).toEqual([{ id: 'frozen-node' }])
+    expect(vm.viewFlowEdges).toEqual([{ id: 'frozen-edge' }])
+    // Reading the inspector sources while viewing must take the frozen arm.
+    expect(vm.inspectSourceNodes.map((n: any) => n.id)).toEqual([FROZEN_NODE_ID])
+    expect(vm.inspectSourceEdges).toEqual([])
+    wrapper.unmount()
+
+    const latest = await mountEditor()
+    const latestVm = latest.vm as any
+    latestVm.displayNodes = [{ id: 'live-node' }]
+    latestVm.displayEdges = [{ id: 'live-edge' }]
+    expect(latestVm.flowNodes).toEqual([{ id: 'live-node' }])
+    expect(latestVm.flowEdges).toEqual([{ id: 'live-edge' }])
+    latest.unmount()
+  })
+
+  it('treats a malformed ?version= alias as the graceful miss', async () => {
+    const wrapper = await mountEditor({ version: 'abc' })
+    const vm = wrapper.vm as any
+    expect(vm.versionMissing).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-version-missing"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('accepts an array-valued query param and strips both version params (keeping others)', async () => {
+    const wrapper = await mountEditor({ snapshot: ['snap-4'] as unknown as string })
+    const vm = wrapper.vm as any
+    expect(vm.isViewing).toBe(true)
+    wrapper.unmount()
+
+    const mixed = await mountEditor({ snapshot: 'snap-4', version: '4', foo: 'bar' })
+    await mixed.find('[data-testid="pipeline-editor-historic-view-latest"]').trigger('click')
+    expect(router.push).toHaveBeenCalledWith({
+      path: '/pipelines/test-pipeline-id/editor',
+      query: { foo: 'bar' },
+    })
+    mixed.unmount()
+  })
+
+  it('renders the unknown-author and missing-date fallbacks for a snapshot without them', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' }, () =>
+      seedApiWith({
+        detail: () =>
+          Promise.resolve({
+            data: {
+              ...structuredClone(SNAPSHOT_DETAIL),
+              created_at: null,
+              created_by: null,
+              graph_json: structuredClone(FROZEN_GRAPH),
+            },
+            error: undefined,
+            response: { status: 200 },
+          }),
+      }),
+    )
+    const banner = wrapper.find('[data-testid="pipeline-editor-historic-banner"]')
+    expect(banner.exists()).toBe(true)
+    // Unknown author renders the i18n label, not the raw `null`.
+    expect(banner.text()).not.toContain('null')
+    wrapper.unmount()
+  })
+
+  it('reports the graceful miss when the pipeline has no snapshots at all', async () => {
+    const wrapper = await mountEditor({ version: '5' }, () => seedPagedSnapshots([]))
+    const vm = wrapper.vm as any
+    expect(vm.versionMissing).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-version-missing"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('reports the graceful miss for a version inside page 1 that is absent', async () => {
+    const wrapper = await mountEditor(
+      { version: '15' },
+      () => seedPagedSnapshots(versionRange(30), { drop: [15] }),
+    )
+    const vm = wrapper.vm as any
+    expect(vm.versionMissing).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('searches upward in the snapshot history (version above the landed page)', async () => {
+    const wrapper = await mountEditor(
+      { version: '895' },
+      () => seedPagedSnapshots(versionRange(1000), { drop: [895] }),
+    )
+    const vm = wrapper.vm as any
+    // v895 was admin-deleted: the search must terminate on the graceful miss,
+    // never a false hit.
+    expect(vm.isViewing).toBe(false)
+    expect(vm.versionMissing).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('treats a lookup page that omits its items array as an empty page', async () => {
+    const wrapper = await mountEditor({ version: '5' }, () =>
+      seedApiWith({ snapshots: () => Promise.resolve({ data: { total: 1 }, error: undefined }) }),
+    )
+    const vm = wrapper.vm as any
+    expect(vm.versionMissing).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('fails the alias resolution loudly when the lookup page cannot be loaded', async () => {
+    const wrapper = await mountEditor({ version: '5' }, () =>
+      seedApiWith({
+        snapshots: () => Promise.resolve({ data: undefined, error: { detail: 'list down' } }),
+      }),
+    )
+    const vm = wrapper.vm as any
+    // A failed search is NOT the graceful miss — otherwise "no longer
+    // available" would be a lie.
+    expect(vm.versionMissing).toBe(false)
+    expect(vm.isViewing).toBe(false)
+    expect(wrapper.text()).toContain('could not be loaded')
+    wrapper.unmount()
+  })
+
+  it('abandons a bounded search whose pages are empty (probe budget)', async () => {
+    const wrapper = await mountEditor({ version: '5' }, () =>
+      seedApiWith({
+        snapshots: (init?: any) => {
+          const page = init?.params?.query?.page ?? 1
+          if (page === 1) {
+            return Promise.resolve({
+              data: { items: [{ ...structuredClone(SNAPSHOT_LIST[0]), snapshot_version: 1000000 }], total: 10000000 },
+              error: undefined,
+            })
+          }
+          return Promise.resolve({ data: { items: [], total: 10000000 }, error: undefined })
+        },
+      }),
+    )
+    const vm = wrapper.vm as any
+    // The search refuses to guess "missing": an exhausted budget is a load error.
+    expect(vm.versionMissing).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('abandons a bounded search that keeps landing below the target (probe budget)', async () => {
+    const wrapper = await mountEditor({ version: '5' }, () =>
+      seedApiWith({
+        snapshots: (init?: any) => {
+          const page = init?.params?.query?.page ?? 1
+          if (page === 1) {
+            return Promise.resolve({
+              data: { items: [{ ...structuredClone(SNAPSHOT_LIST[0]), snapshot_version: 1000000 }], total: 10000000 },
+              error: undefined,
+            })
+          }
+          return Promise.resolve({
+            data: { items: [{ ...structuredClone(SNAPSHOT_LIST[0]), snapshot_version: 1 }], total: 10000000 },
+            error: undefined,
+          })
+        },
+      }),
+    )
+    const vm = wrapper.vm as any
+    expect(vm.versionMissing).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('surfaces a non-404 snapshot-detail error as a load failure', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' }, () =>
+      seedApiWith({
+        detail: () =>
+          Promise.resolve({ data: undefined, error: { detail: 'detail down' }, response: { status: 500 } }),
+      }),
+    )
+    const vm = wrapper.vm as any
+    expect(vm.isViewing).toBe(false)
+    expect(vm.versionMissing).toBe(false)
+    expect(wrapper.text()).toContain('detail down')
+    wrapper.unmount()
+  })
+
+  it('treats a snapshot-detail response with no body as the graceful miss', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' }, () =>
+      seedApiWith({
+        detail: () => Promise.resolve({ data: undefined, error: undefined, response: { status: 200 } }),
+      }),
+    )
+    const vm = wrapper.vm as any
+    expect(vm.versionMissing).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('treats a snapshot without a graph object as the graceful miss', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' }, () =>
+      seedApiWith({
+        detail: () =>
+          Promise.resolve({
+            data: { ...structuredClone(SNAPSHOT_DETAIL), graph_json: 'not-an-object' },
+            error: undefined,
+            response: { status: 200 },
+          }),
+      }),
+    )
+    const vm = wrapper.vm as any
+    expect(vm.versionMissing).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('defaults missing node/edge arrays in a snapshot graph to empty lists', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' }, () =>
+      seedApiWith({
+        detail: () =>
+          Promise.resolve({
+            data: { ...structuredClone(SNAPSHOT_DETAIL), graph_json: { nodes: 'x', edges: 'y' } },
+            error: undefined,
+            response: { status: 200 },
+          }),
+      }),
+    )
+    const vm = wrapper.vm as any
+    expect(vm.isViewing).toBe(true)
+    expect(vm.viewRawNodes).toEqual([])
+    expect(vm.viewRawEdges).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('ignores a snapshot-detail response superseded by newer navigation', async () => {
+    const gate = deferred<any>()
+    const wrapper = await mountEditor({}, () => seedApiWith({ detail: () => gate.promise }))
+    const vm = wrapper.vm as any
+
+    sharedRoute.query = { snapshot: 'snap-4' }
+    await flushPromises()
+    await nextTick()
+
+    // Leave for latest before the detail request settles.
+    sharedRoute.query = {}
+    await flushPromises()
+    await nextTick()
+
+    gate.resolve({
+      data: { ...structuredClone(SNAPSHOT_DETAIL), graph_json: structuredClone(FROZEN_GRAPH) },
+      error: undefined,
+      response: { status: 200 },
+    })
+    await flushPromises()
+
+    expect(vm.isViewing).toBe(false)
+    expect(vm.viewSnapshot).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('surfaces a thrown snapshot-detail request as a load failure', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' }, () =>
+      seedApiWith({ detail: () => Promise.reject(new Error('socket down')) }),
+    )
+    const vm = wrapper.vm as any
+    expect(vm.isViewing).toBe(false)
+    expect(vm.versionMissing).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('surfaces a rollback error returned by the endpoint inside the dialog', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    const vm = wrapper.vm as any
+    apiPostMock.mockResolvedValueOnce({ data: undefined, error: { detail: 'rollback-refused' } })
+
+    await wrapper.find('[data-testid="pipeline-editor-historic-restore"]').trigger('click')
+    await nextTick()
+    await vm.confirmRestore()
+
+    expect(vm.restoreError).toBeTruthy()
+    expect(vm.showRestoreConfirm).toBe(true)
+    expect(document.body.textContent).toContain('rollback-refused')
+    wrapper.unmount()
+  })
+
+  it('surfaces a thrown rollback request inside the dialog', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    const vm = wrapper.vm as any
+    apiPostMock.mockRejectedValueOnce(new Error('socket down'))
+
+    await wrapper.find('[data-testid="pipeline-editor-historic-restore"]').trigger('click')
+    await nextTick()
+    await vm.confirmRestore()
+
+    expect(vm.restoreError).toBeTruthy()
+    wrapper.unmount()
+  })
+
+  it('does nothing when restore is confirmed with no resolved snapshot', async () => {
+    const wrapper = await mountEditor()
+    const vm = wrapper.vm as any
+    await vm.confirmRestore()
+    expect(apiPostMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('renders the restore dialog body with an empty version when the snapshot vanishes', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    const vm = wrapper.vm as any
+    vm.openRestoreConfirm()
+    await nextTick()
+
+    sharedRoute.query = {}
+    await flushPromises()
+    await nextTick()
+
+    expect(vm.showRestoreConfirm).toBe(true)
+    expect(vm.viewSnapshot).toBeNull()
     wrapper.unmount()
   })
 })

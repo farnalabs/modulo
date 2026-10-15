@@ -29,11 +29,11 @@
     >
       v{{ snapshot.snapshot_version }}
     </button>
-    <div
+    <dialog
       v-if="open"
-      role="dialog"
+      open
       :aria-label="$t('components.PipelineVersionChip.popover_aria', { version: snapshot.snapshot_version })"
-      class="absolute left-0 top-full z-30 mt-1 w-64 rounded-lg border bg-card p-3 text-xs shadow-lg"
+      class="absolute left-0 top-full z-30 mt-1 block w-64 rounded-lg border bg-card p-3 text-xs shadow-lg"
       data-testid="pipeline-editor-version-chip-popover"
     >
       <dl class="space-y-1">
@@ -66,7 +66,7 @@
       >
         {{ $t('components.PipelineVersionChip.open_timeline') }}
       </button>
-    </div>
+    </dialog>
   </div>
 </template>
 

@@ -546,13 +546,13 @@
         <!-- FAR-1812: persistent historical-version banner. Amber/warning tint
              (NOT destructive red — nothing here is being destroyed), always
              visible while a historic version is on screen, with BOTH actions
-             inside it so they are reachable without scrolling. role="status"
-             makes it a status region (see the paused-banner note below: never
-             combine role="status" with aria-live on the same element). -->
-        <div
+             inside it so they are reachable without scrolling. <output> gives
+             it the implicit status role (see the paused-banner note below:
+             never combine an explicit status role with aria-live). -->
+        <output
           v-if="viewSnapshot && isViewing"
-          class="border-b bg-warning/10 px-3 py-2 text-xs text-warning-text"
-          role="status"
+          class="block border-b bg-warning/10 px-3 py-2 text-xs text-warning-text"
+          :aria-label="$t('views.PipelineEditorView.historic_banner_title', { version: viewSnapshot.snapshot_version })"
           data-testid="pipeline-editor-historic-banner"
         >
           <p class="font-medium">
@@ -593,7 +593,7 @@
               data-testid="pipeline-editor-historic-copy-link-error"
             >{{ copyLinkError }}</span>
           </div>
-        </div>
+        </output>
         <!-- FAR-1530: persistent Paused banner. Deliberately NOT dismissible -
              while it holds, no run of any origin (trigger, manual, REST, MCP)
              will start, so the state must stay announced. aria-live (NOT
