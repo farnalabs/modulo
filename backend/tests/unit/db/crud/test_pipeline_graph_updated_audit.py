@@ -131,7 +131,7 @@ async def _patch_graph(
     account_id: uuid.UUID | None = _ACCOUNT_ID,
 ) -> Any:
     """Drive the REAL ``replace_pipeline_graph`` CRUD function (shared by the
-    REST ``PATCH /{id}/graph`` route and the MCP ``update_pipeline_graph`` tool).
+    REST ``PUT /{id}/graph`` route and the MCP ``update_pipeline_graph`` tool).
 
     The default mirrors the MCP call: it carries a real actor id but skips the
     live-role re-read, which ``resolve_role_from_membership`` performs with
@@ -277,7 +277,7 @@ class TestGraphUpdatedAuditEvent:
         assert not payload["removed_node_ids"]
 
     async def test_rest_caller_shape_emits_the_event(self, session: AsyncSession) -> None:
-        """The REST ``PATCH /{id}/graph`` shape (no live-role re-read) emits too."""
+        """The REST ``PUT /{id}/graph`` shape (no live-role re-read) emits too."""
         await _seed_graph(session, [_node(_NODE_A, agent_commands=["run --v1"])], with_edge=False)
         result = await _patch_graph(
             session,
@@ -311,6 +311,57 @@ class TestGraphUpdatedAuditEvent:
         )
         assert result is None
         assert not await _graph_events(session), "no graph mutation must produce no event"
+
+    async def test_patched_fields_records_names_never_values(self, session: AsyncSession) -> None:
+        """FAR-1829: a node-targeted patch records WHICH node fields it set.
+
+        Sorted field NAMES only. A value could be a secret — ``env_vars`` on the
+        very node being patched holds one — so the payload must never carry one:
+        both halves (the names are there, the values are not) are pinned here.
+        """
+        await _seed_graph(
+            session,
+            [_node(_NODE_A, agent_commands=["run"], env_vars={"API_TOKEN": _SECRET_VALUE})],
+            with_edge=False,
+        )
+        await replace_pipeline_graph(
+            session,
+            pipeline_id=_PIPELINE_ID,
+            org_id=_ORG_ID,
+            nodes=[
+                _node(
+                    _NODE_A,
+                    agent_commands=["run"],
+                    env_vars={"API_TOKEN": _SECRET_VALUE},
+                    timeout_seconds=900,
+                )
+            ],
+            edges=[],
+            is_privileged=True,
+            caller_type="rest",
+            account_id=None,
+            is_guardrail_admin=True,
+            patched_fields=["timeout_seconds", "label"],
+        )
+        await session.flush()
+
+        events = await _graph_events(session)
+        assert len(events) == 1, f"expected exactly one pipeline.graph_updated event, got {len(events)}"
+        payload = events[0].payload_json
+        assert payload["patched_fields"] == ["label", "timeout_seconds"]
+        serialised = json.dumps(payload)
+        assert _SECRET_VALUE not in serialised, "the audit payload must never carry secret material"
+        assert "900" not in serialised, "patched_fields carries field NAMES only, never their values"
+
+    async def test_full_replace_carries_no_patched_fields_key(self, session: AsyncSession) -> None:
+        """The pre-existing full-graph writers pass no ``patched_fields``, so
+        their payload shape is unchanged — the key is ABSENT, not null."""
+        await _seed_graph(session, [_node(_NODE_A, agent_commands=["run --v1"])], with_edge=False)
+        await _patch_graph(session, [_node(_NODE_A, agent_commands=["run --v2"])], [])
+
+        events = await _graph_events(session)
+        assert len(events) == 1
+        assert "patched_fields" not in events[0].payload_json
 
 
 # ---------------------------------------------------------------------------

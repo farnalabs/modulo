@@ -185,7 +185,7 @@ def test_pipeline_graph_duplicate_node_ids(client: TestClient) -> None:
         {"id": dup_id, "node_type": "agent", "agent_id": str(uuid.uuid4()), "position": {"x": 0, "y": 0}},
         {"id": dup_id, "node_type": "agent", "agent_id": str(uuid.uuid4()), "position": {"x": 100, "y": 0}},
     ]
-    resp = client.patch(
+    resp = client.put(
         f"/api/v1/pipelines/{uuid.uuid4()}/graph",
         json={
             "nodes": nodes,

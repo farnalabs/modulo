@@ -6,7 +6,7 @@ persist node-level commands to ``graph_nodes_json`` only, so an operator's
 PATCH read back correctly but every run silently executed the stale Agent-row
 command. These tests pin the sync ("what you PATCH is what runs") at three
 levels: the pure extractor, the DB sync helper against a mocked session, and
-the PATCH /graph endpoint wiring.
+the PUT /graph endpoint wiring.
 """
 
 import uuid
@@ -282,8 +282,8 @@ def client() -> TestClient:
     app.dependency_overrides.clear()
 
 
-def test_patch_graph_endpoint_invokes_agent_commands_sync(client: TestClient) -> None:
-    """Wiring: the PATCH /graph endpoint calls the sync inside its transaction
+def test_put_graph_endpoint_invokes_agent_commands_sync(client: TestClient) -> None:
+    """Wiring: the PUT /graph endpoint calls the sync inside its transaction
     with the incoming node data."""
     node_id = uuid.uuid4()
     agent_id = uuid.uuid4()
@@ -302,7 +302,7 @@ def test_patch_graph_endpoint_invokes_agent_commands_sync(client: TestClient) ->
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": nodes, "edges": []},
         )
@@ -367,9 +367,9 @@ async def test_sync_allows_pinned_git_ref_from_agent_type_node() -> None:
     assert agent.agent_commands == [_PINNED_REF]
 
 
-def test_patch_graph_endpoint_maps_unpinned_ref_sync_to_422(client: TestClient) -> None:
+def test_put_graph_endpoint_maps_unpinned_ref_sync_to_422(client: TestClient) -> None:
     """Wiring: when the Agent-row sync fails closed on an unpinned git content
-    ref, the PATCH /graph endpoint surfaces HTTP 422 (not the decorator's 500)
+    ref, the PUT /graph endpoint surfaces HTTP 422 (not the decorator's 500)
     and the enclosing transaction rolls back the graph write."""
     node_id = uuid.uuid4()
     agent_id = uuid.uuid4()
@@ -389,7 +389,7 @@ def test_patch_graph_endpoint_maps_unpinned_ref_sync_to_422(client: TestClient) 
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": nodes, "edges": []},
         )

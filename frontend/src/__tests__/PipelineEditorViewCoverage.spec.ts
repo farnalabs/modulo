@@ -445,7 +445,7 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     await vm.saveGraph()
     await flushPromises()
 
-    const patch = vi.mocked(api.PATCH).mock.calls[0]
+    const patch = vi.mocked(api.PUT).mock.calls[0]
     const savedEdges = (patch[1] as any).body.edges
     const loopEdge = savedEdges.find((e: any) => e.id === 'e1')
     expect(loopEdge.max_iterations).toBe(3)
@@ -831,9 +831,9 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     const vm = wrapper.vm as any
     vm.selectedEdgeData = null
 
-    const callsBefore = vi.mocked(api.PATCH).mock.calls.length
+    const callsBefore = vi.mocked(api.PUT).mock.calls.length
     await vm.saveEdgeConfig()
-    expect(vi.mocked(api.PATCH).mock.calls.length).toBe(callsBefore)
+    expect(vi.mocked(api.PUT).mock.calls.length).toBe(callsBefore)
     wrapper.unmount()
   })
 
@@ -1347,7 +1347,7 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     await vm.saveGraph()
     await flushPromises()
 
-    const patch = vi.mocked(api.PATCH).mock.calls[0]
+    const patch = vi.mocked(api.PUT).mock.calls[0]
     const savedNode = (patch[1] as any).body.nodes[0]
     expect(savedNode.parameter_set_id).toBeNull()
     expect(savedNode.parameter_overrides).toBeNull()
@@ -1692,7 +1692,7 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     const vm = wrapper.vm as any
     vm.rawNodes = [{ id: 'n1', node_type: 'agent', label: 'A', description: '', position: { x: 0, y: 0 } }]
 
-    ;(api.PATCH as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('save_failed'))
+    ;(api.PUT as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('save_failed'))
     await vm.saveGraph()
     await flushPromises()
     expect(vm.saveGraphError).toContain('save_failed')
@@ -1742,11 +1742,11 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     vm.onEdgeClick({ edge: { id: 'edge-1' } })
     await nextTick()
 
-    ;(api.PATCH as ReturnType<typeof vi.fn>).mockClear()
+    ;(api.PUT as ReturnType<typeof vi.fn>).mockClear()
     await vm.saveEdgeConfig()
     await flushPromises()
     expect(vm.edgeSaveError).toBeTruthy()
-    expect(vi.mocked(api.PATCH).mock.calls.length).toBe(0)
+    expect(vi.mocked(api.PUT).mock.calls.length).toBe(0)
     wrapper.unmount()
   })
 })
@@ -1819,7 +1819,7 @@ describe('PipelineEditorView — coverage: edge slot + non-selected edge mapping
     ]
     vm.selectedEdgeData = vm.rawEdges[0]
     vm.edgeForm.edge_type = 'normal'
-    ;(api.PATCH as ReturnType<typeof vi.fn>).mockResolvedValue({ data: {}, error: undefined })
+    ;(api.PUT as ReturnType<typeof vi.fn>).mockResolvedValue({ data: {}, error: undefined })
 
     await vm.saveEdgeConfig()
     await flushPromises()
@@ -1827,7 +1827,7 @@ describe('PipelineEditorView — coverage: edge slot + non-selected edge mapping
     // The map ran over the two non-selected edges: one with a gate config
     // (truthy arm) and one without (|| null arm).
     expect(vm.savingEdge).toBe(false)
-    const patched = vi.mocked(api.PATCH).mock.calls.at(-1)?.[1] as { body?: { edges?: unknown[] } } | undefined
+    const patched = vi.mocked(api.PUT).mock.calls.at(-1)?.[1] as { body?: { edges?: unknown[] } } | undefined
     expect(patched?.body?.edges?.length).toBe(3)
     wrapper.unmount()
   })

@@ -188,7 +188,7 @@ def bind_cross_team_connector(connector_name: str, pipeline_name: str, request, 
             return_value=[make_connector_row(cpdata, connector_name)],
         ),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{uuid.UUID(ppdata['id'])}/graph",
             json={
                 "nodes": [

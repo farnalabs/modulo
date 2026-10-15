@@ -907,7 +907,7 @@ def test_replace_pipeline_graph_returns_soft_validation_issues(client: TestClien
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": nodes, "edges": []},
         )
@@ -927,7 +927,7 @@ def test_replace_pipeline_graph_rejects_duplicate_paths(client: TestClient) -> N
         "edge_type": "normal",
         "hitl_review_config": None,
     }
-    resp = client.patch(
+    resp = client.put(
         f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
         json={"nodes": [], "edges": [edge, edge]},
     )
@@ -970,7 +970,7 @@ def test_replace_pipeline_graph_accepts_manual_node_contract(client: TestClient)
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": nodes, "edges": []},
         )
@@ -1263,7 +1263,7 @@ def test_replace_pipeline_graph_round_trips_delivery_sentinel(client: TestClient
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": [node], "edges": []},
         )
@@ -1323,7 +1323,7 @@ def test_replace_pipeline_graph_round_trips_correction_target(client: TestClient
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": nodes, "edges": edges},
         )
@@ -1400,7 +1400,7 @@ def test_replace_pipeline_graph_rejects_short_gate_description(client: TestClien
         }
     ]
 
-    resp = client.patch(
+    resp = client.put(
         f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
         json={"nodes": nodes, "edges": edges},
     )
@@ -1503,7 +1503,7 @@ def test_replace_pipeline_graph_blocks_redact_correct_422(client: TestClient) ->
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": nodes, "edges": edges},
         )
@@ -1559,7 +1559,7 @@ def test_replace_pipeline_graph_blocks_undescribed_node_level_hitl_review_422(cl
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": nodes, "edges": edges},
         )
@@ -1627,7 +1627,7 @@ def test_nonadmin_cannot_strip_guardrail_binding(operator_client: TestClient) ->
             return_value=[_guardrail_row(bound_node_id)],
         ),
     ):
-        resp = operator_client.patch(
+        resp = operator_client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": nodes, "edges": edges},
         )
@@ -1657,7 +1657,7 @@ def test_admin_can_strip_guardrail_binding(client: TestClient) -> None:
             return_value=[_guardrail_row(bound_node_id)],
         ),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": nodes, "edges": edges},
         )
@@ -1830,7 +1830,7 @@ def test_nonadmin_unrelated_graph_changes_allowed(operator_client: TestClient) -
             return_value=[_guardrail_row(bound_node_id)],
         ),
     ):
-        resp = operator_client.patch(
+        resp = operator_client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": nodes, "edges": edges},
         )
@@ -1860,7 +1860,7 @@ def test_nonadmin_removing_unbound_node_allowed(operator_client: TestClient) -> 
             return_value=[_guardrail_row(kept_node_id)],
         ),
     ):
-        resp = operator_client.patch(
+        resp = operator_client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": nodes, "edges": edges},
         )
@@ -1872,7 +1872,7 @@ def test_replace_pipeline_graph_rejects_excessive_node_count(client: TestClient)
     nodes = [
         {"id": str(uuid.uuid4()), "agent_id": str(uuid.uuid4()), "position": {"x": i * 10, "y": 0}} for i in range(501)
     ]
-    resp = client.patch(
+    resp = client.put(
         f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
         json={"nodes": nodes, "edges": []},
     )
@@ -1886,7 +1886,7 @@ def test_replace_pipeline_graph_rejects_excessive_edge_count(client: TestClient)
     node_a = uuid.uuid4()
     node_b = uuid.uuid4()
     edges = [{"source_node_id": str(node_a), "target_node_id": str(node_b), "edge_type": "normal"} for _ in range(1001)]
-    resp = client.patch(
+    resp = client.put(
         f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
         json={
             "nodes": [
@@ -1925,7 +1925,7 @@ def test_replace_pipeline_graph_rejects_node_type_conflicts(client: TestClient, 
         **node,
     }
 
-    resp = client.patch(
+    resp = client.put(
         f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
         json={"nodes": [body], "edges": []},
     )
@@ -1973,7 +1973,7 @@ def test_replace_graph_blocks_cross_team_connector_binding(client: TestClient) -
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": [node], "edges": []},
         )
@@ -2010,7 +2010,7 @@ def test_replace_graph_allows_same_team_connector_binding(client: TestClient) ->
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": [node], "edges": []},
         )
@@ -2081,7 +2081,7 @@ def test_replace_graph_org_pipeline_pinning_team_private_model_backend_is_409(cl
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": [node], "edges": []},
         )
@@ -2101,7 +2101,7 @@ def test_replace_graph_missing_pipeline_returns_404(client: TestClient) -> None:
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": [node], "edges": []},
         )

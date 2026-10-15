@@ -2502,13 +2502,48 @@ export interface paths {
         };
         /** Get Pipeline Graph Endpoint */
         get: operations["get_pipeline_graph_endpoint_api_v1_pipelines__pipeline_id__graph_get"];
+        /** Replace Pipeline Graph Endpoint */
+        put: operations["replace_pipeline_graph_endpoint_api_v1_pipelines__pipeline_id__graph_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pipelines/{pipeline_id}/graph/nodes/{node_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        /** Replace Pipeline Graph Endpoint */
-        patch: operations["replace_pipeline_graph_endpoint_api_v1_pipelines__pipeline_id__graph_patch"];
+        /**
+         * Patch Pipeline Graph Node Endpoint
+         * @description FAR-1829: patch ONE node's allowlisted scalar fields, atomically.
+         *
+         *     Same permission (``pipeline.graph.update``) and team-scope gate as the
+         *     sibling graph writes, plus the same in-transaction team re-check. The
+         *     handler itself is deliberately tiny: the read/merge/validation adapter
+         *     (:func:`_build_node_patch_graph`) runs under the locked pipeline row, and
+         *     the write is delegated to :func:`_apply_graph_update` — the SAME function
+         *     the ``PATCH /{pipeline_id}`` payload's ``graph_json`` path uses — so every
+         *     guard, the row lock, the Agent-row ``agent_commands`` sync, the save-time
+         *     graph validation and the ``pipeline.graph_updated`` audit fire through one
+         *     shared write path rather than a second, parallel one.
+         *
+         *     Unknown ``node_id`` → 404 (a missing pipeline already 404s in the team
+         *     gate). A body key outside :class:`PipelineGraphNodePatch`'s allowlist → 422
+         *     with a typed ``body.<field>`` path. No precondition token, no 409: the
+         *     merge happens under the row lock, so there is nothing to race.
+         */
+        patch: operations["patch_pipeline_graph_node_endpoint_api_v1_pipelines__pipeline_id__graph_nodes__node_id__patch"];
         trace?: never;
     };
     "/api/v1/pipelines/{pipeline_id}/autonomy/demote": {
@@ -16690,6 +16725,105 @@ export interface components {
             wait_timeout?: number | null;
         };
         /**
+         * PipelineGraphNodePatch
+         * @description Partial node body for the node-targeted graph patch (FAR-1829).
+         *
+         *     A CLOSED allowlist of scalar node fields — anything the model does not
+         *     declare is rejected by ``extra="forbid"`` with a typed 422 field path
+         *     naming the offending key (``body.env_vars: Extra inputs are not
+         *     permitted``), so a partial body can never be an arbitrary-key passthrough.
+         *
+         *     Two classes of field are deliberately NOT declared here:
+         *
+         *     * the credential-bearing dicts (``env_vars``, ``context_files``,
+         *       ``composite_parameter_values``, ``parameter_overrides``) — a partial body
+         *       must never be able to drop or half-write a secret, so those fields are
+         *       unpatchable rather than validated;
+         *     * the structural / topology fields (``id``, ``node_type``, ``agent_id``,
+         *       ``position``, and every edge) — the path's ``node_id`` addresses the node
+         *       and is never a body field, and a node patch changes no topology.
+         *
+         *     Field annotations and constraints MIRROR the same fields on
+         *     :class:`PipelineGraphNode` (pinned by
+         *     ``tests/unit/api/test_pipeline_graph_node_patch.py``), so a value the body
+         *     accepts is a value the merged node's own field validator accepts.
+         *
+         *     ``None`` is a real value here: it is supplied (present in
+         *     ``model_fields_set``) it clears the stored field; an ABSENT key leaves the
+         *     stored value untouched.
+         */
+        PipelineGraphNodePatch: {
+            /** Label */
+            label?: string | null;
+            /** Description */
+            description?: string | null;
+            /**
+             * Timeout Seconds
+             * @description Per-node timeout override (60-604800s). Overrides pipeline node_timeout_seconds.
+             */
+            timeout_seconds?: number | null;
+            /**
+             * Stall Timeout Seconds
+             * @description Stall window (seconds) before the idle watchdog treats the agent as stalled. Validated against the MERGED node's timeout_seconds at save time.
+             */
+            stall_timeout_seconds?: number | null;
+            /**
+             * Enable Heartbeat
+             * @description Enable the connection-liveness (heartbeat) stall channel.
+             */
+            enable_heartbeat?: boolean | null;
+            /**
+             * Idempotent
+             * @description Whether the node is logically safe to re-run.
+             */
+            idempotent?: boolean | null;
+            /**
+             * Single Pr Per Run
+             * @description Install the run-scoped one-PR-per-run gh shim in the node's sandbox (sandbox_agent only).
+             */
+            single_pr_per_run?: boolean | null;
+            /**
+             * Await Completion
+             * @description dispatch nodes only: poll get_run_status to a terminal status after firing once.
+             */
+            await_completion?: boolean | null;
+            /**
+             * Egress Policy
+             * @description Sandbox egress control (sandbox_agent only).
+             */
+            egress_policy?: ("default" | "deny_all" | "selected") | null;
+            /**
+             * Wallclock Budget Seconds
+             * @description Wall-clock spend budget in seconds for the node's sandbox.
+             */
+            wallclock_budget_seconds?: number | null;
+            /**
+             * Stdout Max Bytes
+             * @description Max retained stdout/stderr bytes when stdout_retention_mode=='full'.
+             */
+            stdout_max_bytes?: number | null;
+            /**
+             * Stdout Retention Mode
+             * @description Per-node stdout/stderr retention mode (sandbox_agent only).
+             */
+            stdout_retention_mode?: ("tail" | "full") | null;
+            /**
+             * Stdout Percentage Delta
+             * @description stdout-delta stall detector: fraction of new stdout that must differ to count as activity.
+             */
+            stdout_percentage_delta?: number | null;
+            /**
+             * Agent Commands
+             * @description sandbox_agent node command list; the whole list replaces the stored one and is synced to the bound Agent row in the same transaction.
+             */
+            agent_commands?: string[] | null;
+            /**
+             * Script Command
+             * @description sandbox_agent script-mode command, run verbatim (mutually exclusive with agent_commands).
+             */
+            script_command?: string | null;
+        };
+        /**
          * PipelineGraphPolicyGate
          * @description Node-attached policy-gate configuration (FAR-1109).
          *
@@ -26482,7 +26616,7 @@ export interface operations {
             };
         };
     };
-    replace_pipeline_graph_endpoint_api_v1_pipelines__pipeline_id__graph_patch: {
+    replace_pipeline_graph_endpoint_api_v1_pipelines__pipeline_id__graph_put: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -26496,6 +26630,44 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["PipelineGraphUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelineGraphResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    patch_pipeline_graph_node_endpoint_api_v1_pipelines__pipeline_id__graph_nodes__node_id__patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                pipeline_id: string;
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PipelineGraphNodePatch"];
             };
         };
         responses: {

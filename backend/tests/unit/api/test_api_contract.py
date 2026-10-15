@@ -657,3 +657,23 @@ class TestErrorResponseShapes:
 
         assert resp.status_code == 403
         validate_shape(resp.json(), ProblemDetail)
+
+
+def test_graph_write_route_verbs() -> None:
+    """FAR-1829: full replace is ``PUT``; the only ``PATCH`` under ``/graph``
+    is the node-targeted one.
+
+    ``PATCH /{pipeline_id}/graph`` was always a full replace, so it moved to the
+    verb that means "replace this resource"; the collection-level ``PATCH`` is
+    deliberately left vacant for a possible future multi-node op-list. Both
+    halves are pinned because a regression that re-registers the old ``PATCH``
+    alongside the ``PUT`` would break every API client that migrated.
+    """
+    keys = {
+        (method, route.path)
+        for route in _get_all_apiroutes()
+        for method in (route.methods or set()) - {"HEAD", "OPTIONS"}
+    }
+    assert ("PUT", "/api/v1/pipelines/{pipeline_id}/graph") in keys
+    assert ("PATCH", "/api/v1/pipelines/{pipeline_id}/graph/nodes/{node_id}") in keys
+    assert ("PATCH", "/api/v1/pipelines/{pipeline_id}/graph") not in keys

@@ -362,12 +362,12 @@ async def _patch_graph(
     label: str,
     output_schema_id: uuid.UUID,
 ) -> None:
-    resp = await client.patch(
+    resp = await client.put(
         f"/api/v1/pipelines/{pipeline_id}/graph",
         json=_graph_payload(label, output_schema_id),
         headers=_auth_headers(org_id, account_id),
     )
-    assert resp.status_code == 200, f"PATCH /graph ({label}) failed: {resp.status_code} {resp.text}"
+    assert resp.status_code == 200, f"PUT /graph ({label}) failed: {resp.status_code} {resp.text}"
 
 
 # ---------------------------------------------------------------------------

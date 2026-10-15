@@ -39,7 +39,7 @@ def change_node_type(node_id: str, from_type: str, to_type: str, ctx, client, re
             },
         ),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{ctx['pipeline'].id}/graph",
             json={
                 "nodes": [{"id": node_id, "node_type": to_type}],
@@ -64,7 +64,7 @@ def assign_schema_to_node(schema_name: str, ctx, client, request):
             },
         ),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{ctx['pipeline'].id}/graph",
             json={
                 "nodes": [{"id": ctx["node_id"], "output_schema_id": str(schema_id)}],
@@ -93,7 +93,7 @@ def bind_connector(connector_name: str, ctx, client, request):
             },
         ),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{ctx['pipeline'].id}/graph",
             json={
                 "nodes": [
