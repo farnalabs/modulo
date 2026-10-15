@@ -400,31 +400,71 @@ class DbPlanContext:
         return self._registry.list_flags()
 
 
-async def _context_from_license_key(session: Any, raw_key: str, error_log: str) -> PlanContext | None:
-    """Parse and verify ``raw_key`` into a licensed plan context.
+def _verified_license_key(raw_key: str, error_log: str) -> LicenseData | None:
+    """Verify one key rung of the licence ladder; ``None`` when absent or invalid.
 
-    Returns ``None`` when verification fails or the payload carries no license
-    data, so the caller continues the resolution ladder. Cancellation
-    propagates; any other parse failure is logged under ``error_log`` and
-    treated as absent — the exact fall-through behaviour of the inline license
-    steps this was extracted from.
+    Session-free. An absent key resolves to ``None`` without touching the
+    verifier; an unexpected parse failure is logged under ``error_log`` and
+    treated as absent — the exact fall-through behaviour (and per-rung
+    observability) of the ladder rungs this extracts from
+    ``_context_from_license_key``. Cancellation propagates (``CancelledError``
+    is a ``BaseException``, never swallowed by the ``except Exception``).
     """
     from modulo.core.license import parse_and_verify
 
+    if not raw_key:
+        return None
     try:
         validation = parse_and_verify(raw_key)
-        if validation.valid and validation.license_data is not None:
-            return await DbPlanContext.from_db(
-                session,
-                validation.license_data.tier,
-                has_license_key=True,
-                license_features=set(validation.license_data.features),
-            )
-    except asyncio.CancelledError:
-        raise
     except Exception:
         logger.warning(error_log, exc_info=True)
+        return None
+    if validation.valid and validation.license_data is not None:
+        return validation.license_data
     return None
+
+
+def resolve_effective_license(settings: Any, org: Any | None) -> LicenseData | None:
+    """The canonical licence ladder, session-free — first valid rung wins.
+
+    Rungs (absent/invalid falls through; a key is verified via
+    ``parse_and_verify``, never trusted on mere presence — FAR-1733):
+
+    1. Org-level key (``org.settings_json["license_key"]``)
+    2. System-level in-memory licence (``store_license()``)
+    3. System-level env-var key (``settings.modulo_license_key``)
+
+    ONE walk, shared by ``_resolve_paid_plan`` (the plan context built here),
+    ``admin_license._resolve_effective_license`` (the admin licence view) and
+    ``viewmodel._resolve_license_expiry`` / ``_resolve_tier`` /
+    ``_resolve_license_info`` (the member-facing plan bootstrap), so a future
+    rung change cannot silently drift between the copies. Returns ``None`` when
+    no valid licence resolves.
+
+    Local imports keep ``modulo.core.license.{get_license,parse_and_verify}``
+    patchable at call time (tests patch the source module, not this one).
+    """
+    from modulo.core.license import get_license
+
+    # 1. Org-level license key
+    if org is not None:
+        org_settings = getattr(org, "settings_json", None)
+        org_key = org_settings.get("license_key") if isinstance(org_settings, dict) else None
+        if org_key:
+            data = _verified_license_key(str(org_key), "Failed to parse org-level license key")
+            if data is not None:
+                return data
+
+    # 2. System-level in-memory license (stored pre-verified; expiry re-checked by get_license)
+    lic = get_license()
+    if lic is not None:
+        return lic
+
+    # 3. System-level env-var license
+    return _verified_license_key(
+        getattr(settings, "modulo_license_key", "") or "",
+        "Failed to parse env-var license key",
+    )
 
 
 async def _resolve_paid_plan(settings: Any, session: Any, org: Any | None) -> PlanContext | None:
@@ -434,37 +474,20 @@ async def _resolve_paid_plan(settings: Any, session: Any, org: Any | None) -> Pl
     1. Org-level license key (from ``org.settings_json["license_key"]``)
     2. System-level in-memory license (``store_license()``)
     3. System-level env-var license (``settings.modulo_license_key``)
+
+    The rung WALK is the shared session-free ``resolve_effective_license`` —
+    only the session-backed context build is local to this function — so this
+    ladder cannot drift from the admin licence view or ``GET /api/v1/plan``.
     """
-    from modulo.core.license import get_license
-
-    # 1. Org-level license key
-    org_license_key = None
-    if org is not None:
-        org_settings = getattr(org, "settings_json", None)
-        org_license_key = org_settings.get("license_key") if isinstance(org_settings, dict) else None
-    if org_license_key:
-        licensed = await _context_from_license_key(session, org_license_key, "Failed to parse org-level license key")
-        if licensed is not None:
-            return licensed
-
-    # 2. System-level in-memory license
-    lic = get_license()
-    if lic is not None:
-        return await DbPlanContext.from_db(
-            session,
-            lic.tier,
-            has_license_key=True,
-            license_features=set(lic.features),
-        )
-
-    # 3. System-level env-var license
-    raw_key: str = getattr(settings, "modulo_license_key", "") or ""
-    if raw_key:
-        licensed = await _context_from_license_key(session, raw_key, "Failed to parse env-var license key")
-        if licensed is not None:
-            return licensed
-
-    return None
+    data = resolve_effective_license(settings, org)
+    if data is None:
+        return None
+    return await DbPlanContext.from_db(
+        session,
+        data.tier,
+        has_license_key=True,
+        license_features=set(data.features),
+    )
 
 
 async def _resolve_trial_state(session: Any, org: Any | None) -> PlanContext:
@@ -511,6 +534,24 @@ async def resolve_plan_context(settings: Any, session: Any, org: Any | None = No
     if licensed is not None:
         return licensed
     return await _resolve_trial_state(session, org)
+
+
+def feature_overrides_from_settings(settings_json: Any) -> dict[str, bool]:
+    """The org ``feature_overrides`` map (bool entries only) from a settings dict.
+
+    Shared by the admin feature-flag list (``admin_feature_flags._read_org_overrides``)
+    and the member-facing plan bootstrap (``viewmodel._org_feature_overrides``)
+    so the bool-only rule cannot drift between them: only ``bool`` entries count
+    as an override (``1``/``0`` and other truthy junk are ignored), and a
+    missing or malformed settings / ``feature_overrides`` value resolves to
+    ``{}`` — junk settings can never flip a flag's reported state.
+    """
+    if not isinstance(settings_json, dict):
+        return {}
+    overrides = settings_json.get("feature_overrides")
+    if not isinstance(overrides, dict):
+        return {}
+    return {key: bool(value) for key, value in overrides.items() if isinstance(value, bool)}
 
 
 def effective_feature_flags(

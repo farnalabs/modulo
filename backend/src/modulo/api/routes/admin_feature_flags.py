@@ -26,7 +26,7 @@ from modulo.api.dependencies import get_db_session, require_system_permission, r
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event_isolated
-from modulo.core.feature_flags import FeatureFlagRegistry, resolve_plan_context
+from modulo.core.feature_flags import FeatureFlagRegistry, feature_overrides_from_settings, resolve_plan_context
 from modulo.core.license import get_license, verify_license_key
 from modulo.db.crud.organisation import get_organisation
 from modulo.settings import Settings, get_settings
@@ -146,19 +146,19 @@ async def _invalidate_cache(settings: Settings, org_id: str | uuid.UUID) -> None
 async def _read_org_overrides(session: AsyncSession, org_id: uuid.UUID) -> dict[str, bool]:
     """Read the org's ``feature_overrides`` map (bool entries only).
 
-    Returns ``{}`` when the org or its settings are missing. Callers own the
-    error policy: both GET endpoints treat a failed read as best-effort and
-    fall back to the registry defaults.
+    Returns ``{}`` when the org or its settings are missing. The bool-only /
+    malformed-settings rule is the shared
+    ``core.feature_flags.feature_overrides_from_settings`` reader (the same
+    one the member-facing plan bootstrap uses), so the admin list and
+    ``GET /api/v1/plan`` cannot drift. Callers own the error policy: both GET
+    endpoints treat a failed read as best-effort and fall back to the registry
+    defaults.
     """
     async with session.begin():
         org = await get_organisation(session, org_id)
-    if org is None or not isinstance(getattr(org, "settings_json", None), dict):
+    if org is None:
         return {}
-    return {
-        key: bool(value)
-        for key, value in org.settings_json.get("feature_overrides", {}).items()
-        if isinstance(value, bool)
-    }
+    return feature_overrides_from_settings(getattr(org, "settings_json", None))
 
 
 async def _write_org_override(session: AsyncSession, org_id: uuid.UUID, flag_name: str, enabled: bool) -> None:

@@ -22,7 +22,13 @@ from modulo.api.db_error_handling import handle_db_errors, raise_session_contrac
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.feature_flags import PlanContext, effective_feature_flags, resolve_plan_context
+from modulo.core.feature_flags import (
+    PlanContext,
+    effective_feature_flags,
+    feature_overrides_from_settings,
+    resolve_effective_license,
+    resolve_plan_context,
+)
 from modulo.db.crud.account import get_account_by_id
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.organisation import get_organisation
@@ -256,8 +262,8 @@ def _resolve_license_info(settings: Settings) -> LicenseInfo:
     """Resolve the public licence view from the deployment-level licence ladder.
 
     FAR-1720: this endpoint is unauthenticated and org-less, so it mirrors
-    rungs 2 and 3 of ``core.feature_flags._resolve_paid_plan`` (the canonical
-    ladder) exactly — the org-level rung does not apply:
+    rungs 2 and 3 of the shared ``core.feature_flags.resolve_effective_license``
+    walk (called with no org, so the org-level rung does not apply):
 
     1. System-level in-memory licence (``store_license()``) — its tier and
        features are reported, ``is_valid=True``.
@@ -270,23 +276,10 @@ def _resolve_license_info(settings: Settings) -> LicenseInfo:
     The response shape stays ``LicenseInfo`` (tier / features / is_valid);
     neither the raw key nor org-scoped fields are exposed.
     """
-    from modulo.core.license import get_license, parse_and_verify
-
-    lic = get_license()
-    if lic is not None:
-        return LicenseInfo(tier=lic.tier, features=list(lic.features), is_valid=True)
-
-    raw_key: str = getattr(settings, "modulo_license_key", "") or ""
-    if raw_key:
-        validation = parse_and_verify(raw_key)
-        if validation.valid and validation.license_data is not None:
-            return LicenseInfo(
-                tier=validation.license_data.tier,
-                features=list(validation.license_data.features),
-                is_valid=True,
-            )
-
-    return LicenseInfo(tier="community", features=[], is_valid=False)
+    data = resolve_effective_license(settings, None)
+    if data is None:
+        return LicenseInfo(tier="community", features=[], is_valid=False)
+    return LicenseInfo(tier=data.tier, features=list(data.features), is_valid=True)
 
 
 @router.get("/api/v1/me")
@@ -549,85 +542,52 @@ def _enrich_view(view: SavedView, user_id: uuid.UUID) -> ViewInfo:
 def _org_feature_overrides(org: Organisation | None) -> dict[str, bool]:
     """The org's ``feature_overrides`` map (bool entries only); ``{}`` without an org.
 
-    Mirrors the admin feature-flag list's overlay reader: only ``bool``
-    entries count as an override (``1``/``0`` and other truthy junk are
-    ignored), so a malformed settings entry can never flip a flag's reported
-    state. The read is in-memory — the caller already loaded the org row —
-    so no extra DB round-trip.
+    The read is in-memory — the caller already loaded the org row — so no
+    extra DB round-trip. The bool-only / malformed-settings rule itself lives
+    in the shared ``core.feature_flags.feature_overrides_from_settings`` —
+    the same reader the admin feature-flag list uses — so this payload and the
+    admin endpoint cannot drift: only ``bool`` entries count as an override
+    (``1``/``0`` and other truthy junk are ignored), so a malformed settings
+    entry can never flip a flag's reported state.
     """
     if org is None:
         return {}
-    settings_json = getattr(org, "settings_json", None)
-    if not isinstance(settings_json, dict):
-        return {}
-    overrides = settings_json.get("feature_overrides")
-    if not isinstance(overrides, dict):
-        return {}
-    return {key: bool(value) for key, value in overrides.items() if isinstance(value, bool)}
+    return feature_overrides_from_settings(getattr(org, "settings_json", None))
 
 
 def _resolve_license_expiry(settings: Settings, org: Organisation | None) -> tuple[str | None, str | None]:
     """``(expires_at, org_id)`` of the effective licence for ``GET /api/v1/plan``.
 
-    Walks the same rungs, in the same order, as the admin
-    ``/api/v1/admin/license`` resolver (``admin_license._resolve_effective_license``)
-    and rungs 1-3 of ``core.feature_flags._resolve_paid_plan``: org-level key,
-    then the in-memory licence, then the env-var key — every key verified via
-    ``verify_license_key``, never trusted on mere presence (FAR-1733).
-    Returns ``(None, None)`` when no valid licence resolves.
+    Delegates the rung walk to the shared session-free
+    ``core.feature_flags.resolve_effective_license`` — the same walk
+    ``admin_license._resolve_effective_license`` and rungs 1-3 of
+    ``core.feature_flags._resolve_paid_plan`` use: org-level key, then the
+    in-memory licence, then the env-var key — every key verified, never
+    trusted on mere presence (FAR-1733). Returns ``(None, None)`` when no
+    valid licence resolves.
 
     Display-only: the payload's ``license.tier`` comes from the plan context,
     which walks the identical rungs, so tier and expiry always describe the
     same licence.
     """
-    from modulo.core.license import get_license, verify_license_key
-
-    if org is not None:
-        org_settings = getattr(org, "settings_json", None)
-        org_key = org_settings.get("license_key") if isinstance(org_settings, dict) else None
-        if org_key:
-            data = verify_license_key(str(org_key))
-            if data is not None:
-                return data.expires_at or None, data.org_id or None
-
-    lic = get_license()
-    if lic is not None:
-        return lic.expires_at or None, lic.org_id or None
-
-    data = verify_license_key(getattr(settings, "modulo_license_key", "") or "")
-    if data is not None:
-        return data.expires_at or None, data.org_id or None
-    return None, None
+    data = resolve_effective_license(settings, org)
+    if data is None:
+        return None, None
+    return data.expires_at or None, data.org_id or None
 
 
 def _resolve_tier(settings: Settings, org: Any | None = None) -> str:
     """Resolve the deployment tier for ``/viewmodel/current``'s ``plan.tier``.
 
-    Mirrors the canonical licence ladder (``core.feature_flags._resolve_paid_plan``):
-    org-level key, then the in-memory licence, then the env-var key — each key
-    trusted only after verification (``parse_and_verify`` / the shared
-    ``verify_license_key`` wrapper, never on mere presence) so this resolver
-    cannot disagree with ``_resolve_license_info`` for the same deployment
-    state. Falls back to ``community``.
+    Delegates to the shared canonical licence ladder
+    (``core.feature_flags.resolve_effective_license``): org-level key, then
+    the in-memory licence, then the env-var key — each key trusted only after
+    verification (never on mere presence, FAR-1733) so this resolver cannot
+    disagree with ``_resolve_license_info`` / ``_resolve_license_expiry`` for
+    the same deployment state. Falls back to ``community``.
     """
-    from modulo.core.license import get_license, parse_and_verify, verify_license_key
-
-    if org is not None:
-        org_key = org.settings_json.get("license_key") if hasattr(org, "settings_json") else None
-        if org_key:
-            validation = parse_and_verify(org_key)
-            if validation.valid and validation.license_data is not None:
-                return validation.license_data.tier
-
-    lic = get_license()
-    if lic is not None:
-        return lic.tier
-    # FAR-1733: the env-var key is only trusted after verification — an
-    # unverifiable key falls through to community (never "team" on presence).
-    env_data = verify_license_key(getattr(settings, "modulo_license_key", "") or "")
-    if env_data is not None:
-        return env_data.tier
-    return "community"
+    data = resolve_effective_license(settings, org)
+    return data.tier if data is not None else "community"
 
 
 # ---------------------------------------------------------------------------

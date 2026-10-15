@@ -17,13 +17,12 @@ from modulo.api.dependencies import get_db_session, require_permission, require_
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
+from modulo.core.feature_flags import resolve_effective_license
 from modulo.core.license import (
     LicenseData,
     LicenseError,
-    get_license,
     parse_and_verify,
     store_license,
-    verify_license_key,
 )
 from modulo.core.license_signing import TEAM_FEATURES, generate_team_license
 from modulo.core.stripe_fulfilment import email_team_license
@@ -91,37 +90,19 @@ def _license_status(data: LicenseData, *, has_license: bool = True) -> LicenseSt
     )
 
 
-def _resolve_license_key(raw_key: str) -> LicenseStatusResponse | None:
-    """Validate ``raw_key`` via the shared verifier and return its status, or ``None``.
-
-    Delegates to ``core.license.verify_license_key`` (the session-free form of
-    the canonical licence-ladder check) so the absent/bad-signature/expired/
-    parse-error rule lives in exactly one place.
-    """
-    data = verify_license_key(raw_key)
-    if data is None:
-        return None
-    return _license_status(data)
-
-
 def _resolve_effective_license(settings: Settings, org: Organisation | None = None) -> LicenseStatusResponse:
-    """Resolve the effective license, checking org-level, then in-memory, then system-level (env var)."""
-    if org is not None:
-        org_key = org.settings_json.get("license_key") if org.settings_json else None
-        resolved = _resolve_license_key(str(org_key) if org_key else "")
-        if resolved is not None:
-            return resolved
+    """Resolve the effective license, checking org-level, then in-memory, then system-level (env var).
 
-    lic = get_license()
-    if lic is not None:
-        return _license_status(lic)
-
-    # 3. System-level env var
-    resolved = _resolve_license_key(getattr(settings, "modulo_license_key", "") or "")
-    if resolved is not None:
-        return resolved
-
-    return LicenseStatusResponse(has_license=False, tier="community")
+    Delegates the rung WALK to the shared session-free
+    ``core.feature_flags.resolve_effective_license`` — the same walk
+    ``core.feature_flags._resolve_paid_plan`` (the plan context) and
+    ``GET /api/v1/plan`` use — so this admin view cannot drift from the tier
+    the app actually runs on for the same deployment state.
+    """
+    data = resolve_effective_license(settings, org)
+    if data is None:
+        return LicenseStatusResponse(has_license=False, tier="community")
+    return _license_status(data)
 
 
 async def _read_license_cache(settings: Settings, org_id: str) -> LicenseStatusResponse | None:
