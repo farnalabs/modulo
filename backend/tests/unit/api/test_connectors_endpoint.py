@@ -2546,3 +2546,29 @@ async def test_patch_connector_returns_2xx_persists_row_and_get_reflects_change(
         assert got.json()["name"] == "Renamed"
     finally:
         await engine.dispose()
+
+
+def test_patch_connector_row_gone_at_write_time_returns_404(client: TestClient) -> None:
+    """FAR-1792: the row vanishing between the ownership read and the write is a 404.
+
+    ``_apply_connector_update`` reads the connector once for the IDOR/ownership
+    check and again (inside the transaction) through
+    ``update_connector_instance``; a concurrent DELETE between the two reads
+    makes that write return ``None``. The helper must surface this as
+    ``(None, warning)`` so ``update_connector_endpoint`` maps it to 404 — a
+    test that only makes the ownership read return ``None`` (the existing
+    ``update_not_found`` CRUD case) raises inside the helper and never reaches
+    this arm, leaving the ``updated is None`` branch and the route's
+    ``payload is None`` arm uncovered.
+    """
+    connector = _make_connector()
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=connector),
+        patch("modulo.api.routes.connectors.update_connector_instance", return_value=None),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"name": "Renamed"})
+
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"] == "Connector not found"
