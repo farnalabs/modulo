@@ -1121,6 +1121,7 @@ async def _seed_saq_running_run(
     started_at: datetime | None = None,
     node_attempt_count: int = 0,
     dispatch_phase: str | None = None,
+    sandbox_dispatch_state: str | None = None,
 ) -> uuid.UUID:
     from sqlalchemy import insert
 
@@ -1147,6 +1148,10 @@ async def _seed_saq_running_run(
         # FAR-1649: optional durable first-node-start phase; NULL by default
         # (a run that never dispatched a node carries no phase until claimed).
         "dispatch_phase": dispatch_phase,
+        # FAR-1803: optional dispatch marker — the observed class carries a
+        # LIVE ``{"state": "dispatching"}`` marker written when the first node
+        # was dispatched into the sandbox.
+        "sandbox_dispatch_state": sandbox_dispatch_state,
     }
     values.update(
         {col: value for col, value in (("heartbeat_at", heartbeat_at), ("started_at", started_at)) if value is not None}
@@ -1513,6 +1518,220 @@ async def test_mid_graph_wedge_spares_recently_started_run(
     count = await _terminalize_count(app_engine, org_id, _terminalize_mid_graph_wedges, max_age_minutes=135)
     assert count == 0
 
+    status, _code = await _run_state(db_engine, org_id, run)
+    assert status == "running"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1803 — the observed zero-node class: node-STARTED + live dispatch marker
+# + STALE heartbeat (the executor is gone) sat ``running`` for hours, invisible
+# to every reconcile counter. Observed on prod 2026-10-14/15 (runs 36255,
+# 36269, 36274, 36278, 36283, 36325-36327: ``dispatch_phase=
+# 'first_node_dispatched'``, marker ``{"state": "dispatching", "provider:
+# "e2b"}``, heartbeat stale ~7h, ``nodes: []``).
+# ---------------------------------------------------------------------------
+
+_FAR1803_LIVE_MARKER = json.dumps(
+    {
+        "state": "dispatching",
+        "attempt_key": "run:far1803:node:sandbox-1:1",
+        "provider": "e2b",
+        "written_at": "2026-10-15T00:34:31+00:00",
+    }
+)
+
+
+async def _seed_far1803_run(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    pipe: uuid.UUID,
+    snap: uuid.UUID,
+    *,
+    heartbeat_at: datetime,
+) -> uuid.UUID:
+    """The observed FAR-1803 shape: node dispatched (phase + LIVE marker),
+    ``node_attempt_count=1`` (so NOT zero-progress — the nodeless router
+    cannot claim it), started far past the ~135 min age bound."""
+    from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+
+    return await _seed_saq_running_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        started_at=datetime.now(UTC) - timedelta(hours=3),
+        heartbeat_at=heartbeat_at,
+        node_attempt_count=1,
+        dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
+        sandbox_dispatch_state=_FAR1803_LIVE_MARKER,
+    )
+
+
+async def test_far1803_repro_dead_executor_node_started_row_now_collected(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+) -> None:
+    """FAR-1803 REPRO — observed pre-fix on this very test (2026-10-15, real
+    Postgres): the observed shape survived BOTH collectors the code says own
+    it — the B4 age gate's live-marker shield (FAR-1740 (3)) ignored the dead
+    heartbeat (``count == 0``, still ``running``) and the reconcile scan's
+    phase exclusion meant the row was never even selected (0 rows). The
+    assertions below are the FIXED behaviour — they FAIL on the pre-fix tree
+    with ``assert 0 == 1``.
+
+    Uses the DEFAULT stale bound (no ``stale_seconds`` kwarg), proving the
+    settings-derived ``2 * SAQ_JOB_HEARTBEAT`` resolution works on the real
+    statement too."""
+    from modulo.core.cron_helpers import _terminalize_mid_graph_wedges
+
+    org_id, user_id = await _seed_org_account(db_engine, "Far1803ReproOrg", cap=None)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeFar1803Repro", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+    run = await _seed_far1803_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        heartbeat_at=datetime.now(UTC) - timedelta(hours=6),
+    )
+
+    count = await _terminalize_count(app_engine, org_id, _terminalize_mid_graph_wedges, max_age_minutes=135)
+    assert count == 1
+    status, code = await _run_state(db_engine, org_id, run)
+    assert status == "failed"
+    assert code == "no_progress"
+
+
+async def test_far1803_class_is_never_mislabelled_as_never_dispatched(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+) -> None:
+    """FAR-1649 boundary PRESERVED for the new class: the nodeless router's
+    zero-progress shape carries the phase leg, so a node-STARTED row is NEVER
+    failed through the zero-node chokepoint — it must never wear the FALSE
+    "Claimed by SAQ but dispatched no node" label (the FAR-1318/FAR-1649
+    misdiagnosis). Guard on both sides of the fix."""
+    from modulo.core import cron_helpers as ch
+    from modulo.core.cron_helpers import _terminalize_aged_nodeless_zombies
+
+    org_id, user_id = await _seed_org_account(db_engine, "Far1803LabelOrg", cap=None)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeFar1803Label", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+    run = await _seed_far1803_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        heartbeat_at=datetime.now(UTC) - timedelta(hours=6),
+    )
+
+    factory = async_sessionmaker(app_engine, expire_on_commit=False)
+    summary = ch._dispatcher_summary()
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        routed = await _terminalize_aged_nodeless_zombies(
+            session, org_id, max_age_minutes=135, summary=summary, max_rows=None
+        )
+    assert routed == []
+    assert summary["claimed_but_never_dispatched"] == 0
+    status, _code = await _run_state(db_engine, org_id, run)
+    assert status == "running"
+
+
+async def test_far1803_age_gate_collects_dead_executor_node_started_row(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+) -> None:
+    """FAR-1803 REGRESSION — FAILS without the fix (pre-fix: ``count == 0`` /
+    TypeError on the new ``stale_seconds`` kwarg), passes with it.
+
+    With a STALE heartbeat the owning executor is provably gone, so the
+    FAR-1740 live-marker shield must lift and the age gate terminalises the
+    row ``no_progress`` at the bound — releasing its concurrency slot — and
+    the reconcile scan now admits the class under its own leg."""
+    from sqlalchemy import select as sa_select
+
+    from modulo.core import cron_helpers as ch
+    from modulo.core.cron_helpers import _terminalize_mid_graph_wedges
+    from modulo.db.models.run import Run
+
+    org_id, user_id = await _seed_org_account(db_engine, "Far1803FixOrg", cap=None)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeFar1803Fix", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+    run = await _seed_far1803_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        heartbeat_at=datetime.now(UTC) - timedelta(hours=6),
+    )
+
+    count = await _terminalize_count(
+        app_engine,
+        org_id,
+        _terminalize_mid_graph_wedges,
+        max_age_minutes=135,
+        stale_seconds=600,
+    )
+    assert count == 1
+    status, code = await _run_state(db_engine, org_id, run)
+    assert status == "failed"
+    assert code == "no_progress"
+
+    # The scan now admits a STILL-STUCK row of the class (re-seeded: the one
+    # above is terminal now), so the reconciler can count it instead of
+    # reporting 0 for the population.
+    stuck = await _seed_far1803_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        heartbeat_at=datetime.now(UTC) - timedelta(hours=6),
+    )
+    predicate = ch._build_re_dispatch_predicate(
+        reenqueue_window=600,
+        stale_window=600,
+        capacity_redispatch_seconds=120,
+    )
+    factory = async_sessionmaker(app_engine, expire_on_commit=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        selected = (await session.execute(sa_select(Run).where(Run.id == stuck, predicate))).scalars().all()
+    assert len(selected) == 1
+
+
+async def test_far1803_age_gate_still_shields_live_attempt_with_fresh_heartbeat(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+) -> None:
+    """FAR-1740 intent PRESERVED: a node-started row whose heartbeat is FRESH
+    is a live attempt — the shield must still keep the age gate off it (the
+    in-process node-deadline watchdog owns it), however old the row is."""
+    from modulo.core.cron_helpers import _terminalize_mid_graph_wedges
+
+    org_id, user_id = await _seed_org_account(db_engine, "Far1803LiveOrg", cap=None)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeFar1803Live", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+    run = await _seed_far1803_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        heartbeat_at=datetime.now(UTC) - timedelta(seconds=5),
+    )
+
+    count = await _terminalize_count(
+        app_engine,
+        org_id,
+        _terminalize_mid_graph_wedges,
+        max_age_minutes=135,
+        stale_seconds=600,
+    )
+    assert count == 0
     status, _code = await _run_state(db_engine, org_id, run)
     assert status == "running"
 
