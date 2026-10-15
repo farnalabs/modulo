@@ -46,8 +46,14 @@ rules:
       # `type(...).__name__` is always safe — the value really is a type.
       - pattern-not: type(...).__name__
       - pattern-not: type(...).__qualname__
-      - pattern-not: $X.__class__.__name__
-      - pattern-not: $X.__class__.__qualname__
+      # `obj.__class__.__name__` is always safe — `obj.__class__` really is a
+      # type, so the `__name__` read cannot raise. NOTE: the receiver here must
+      # be a DIFFERENT metavariable from `$X`; reusing `$X` binds it to the
+      # receiver of the positive pattern (`obj.__class__`), so the negative
+      # pattern resolves to `obj.__class__.__class__.__name__` and never
+      # matches, silently disabling the exclusion.
+      - pattern-not: $SAFE.__class__.__name__
+      - pattern-not: $SAFE.__class__.__qualname__
       # A parameter annotated `type` / `type[...]` is provably a class. NOTE: `$Y`
       # must be a DIFFERENT metavariable from `$X` — reusing `$X` silently
       # suppresses every match rather than excluding the safe ones.
