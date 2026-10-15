@@ -721,7 +721,9 @@ async def test_oidc_callback_is_reachable_without_authorization_header(oidc_app)
 
     assert resp.status_code == 303, f"expected the route's own 303, got {resp.status_code}: {resp.text}"
     location = resp.headers["location"]
-    assert "sso_error=auth_failed" in location, location
-    assert "authenticated" not in location.lower(), (
-        "a pre-auth browser redirect target surfaced an HTTP authentication error"
-    )
+    # The redirect target is the login page carrying the whitelisted code — not an
+    # HTTP authentication error page (the FAR-847 regression this test exists to
+    # catch) and not a raw JSON body. The base is resolved from the process-level
+    # settings the 303 handler reads directly (not the DI override this client
+    # installs), so assert the path+suffix rather than a fixed origin.
+    assert location.endswith("/login?sso_error=auth_failed"), location

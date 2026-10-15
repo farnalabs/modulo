@@ -3176,6 +3176,29 @@ class TestPerProviderSamlRouteErrorPaths:
         assert resp.status_code == 303
         assert resp.headers["location"].endswith("/login?sso_error=auth_failed")
 
+    def test_acs_malformed_form_body_redirects_auth_failed(self, client: TestClient) -> None:
+        """FAR-1791: a malformed multipart ACS body 303s, never an opaque JSON 500.
+
+        ``request.form()`` raises the BASE ``starlette.exceptions.HTTPException``
+        for a body the multipart parser rejects; ``handle_db_errors`` only passes
+        through the ``fastapi`` subclass, so before the fix the parse fault
+        escaped the redirect mapping and surfaced as 500
+        ``{"detail": "An unexpected error occurred."}`` (observed). A body that
+        cannot be parsed carries no ``SAMLResponse`` — the same case as the
+        missing-response test above, so it maps to the same ``auth_failed`` 303.
+        """
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
+        with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
+            mock_lookup.return_value = self._provider()
+            resp = client.post(
+                "/api/v1/auth/saml/acs/okta-saml",
+                content=b"not a multipart body",
+                headers={"content-type": "multipart/form-data; boundary=----x"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=auth_failed")
+
     def test_acs_denied_redirects_to_org_login(self, client: TestClient) -> None:
         """FAR-1791 Fix 4: a SAML join denial carries its org to /login/{slug}.
 
@@ -3817,6 +3840,23 @@ def test_legacy_acs_denied_without_org_uses_base_login(client: TestClient) -> No
 
     assert resp.status_code == 303
     assert resp.headers["location"].endswith("/login?sso_error=not_invited")
+
+
+def test_legacy_acs_malformed_form_body_redirects_auth_failed(client: TestClient) -> None:
+    """FAR-1791: the legacy /saml/acs maps a malformed body to the 303 too.
+
+    Same parse-fault class as the per-provider route: the body cannot carry a
+    ``SAMLResponse``, so the browser gets the login-page code, not a JSON 500.
+    """
+    _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
+    resp = client.post(
+        "/api/v1/auth/saml/acs",
+        content=b"not a multipart body",
+        headers={"content-type": "multipart/form-data; boundary=----x"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"].endswith("/login?sso_error=auth_failed")
 
 
 # ---------------------------------------------------------------------------

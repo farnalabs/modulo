@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.datastructures import FormData
 
 from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
@@ -491,6 +492,26 @@ async def _saml_login_redirect(
     return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
 
 
+async def _read_acs_form(request: Request) -> FormData:
+    """Read a SAML ACS POST form, mapping a parse failure to the login redirect.
+
+    FAR-1791: the IdP navigates the BROWSER to the ACS, so a body the parser
+    rejects must not escape as an opaque JSON page. ``request.form()`` raises
+    the BASE ``starlette.exceptions.HTTPException`` for a malformed multipart
+    body, which ``handle_db_errors`` does not pass through (its arm catches the
+    ``fastapi`` subclass), so an unguarded parse surfaces as a 500
+    ``{"detail": "An unexpected error occurred."}`` — the very outcome this
+    contract exists to avoid. A body we cannot parse carries no
+    ``SAMLResponse``, which is exactly the missing-response case the callers
+    already map to ``SSO_ERROR_AUTH_FAILED``; both now take the same 303 path.
+    """
+    try:
+        return await request.form()
+    except Exception as exc:
+        _log.warning("sso.saml_acs_form_parse_failed", exc_info=True)
+        raise SsoCallbackError(SSO_ERROR_AUTH_FAILED) from exc
+
+
 # FAR-1516: PRE-AUTH route — the browser posts the IdP's SAML response with no
 # session, and the identity is established inside the handler, so
 # audited(principal_dep=...) has nothing to resolve. The actor-less variant
@@ -563,7 +584,7 @@ async def saml_acs_provider(
     # unknown slug redirects above and keeps the sentinel).
     bind_audit_org(request, provider.organisation_id)
 
-    form = await request.form()
+    form = await _read_acs_form(request)
     raw_saml: object = form.get("SAMLResponse", "")
     if not isinstance(raw_saml, str) or not raw_saml:
         # FAR-1791: the IdP POSTs the browser here, so a failure redirects to
@@ -791,7 +812,7 @@ async def saml_acs(
             raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
         if legacy_provider is not None:
             bind_audit_org(request, legacy_provider.organisation_id)
-    form = await request.form()
+    form = await _read_acs_form(request)
     raw_saml: object = form.get("SAMLResponse", "")
     if not isinstance(raw_saml, str) or not raw_saml:
         # FAR-1791: browser-facing callback failure -> login page (see the
