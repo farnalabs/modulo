@@ -198,6 +198,30 @@ async def test_strict_read_postgres_read_failure_raises() -> None:
         await _strict_read_rls_org(session, "postgresql")
 
 
+async def test_strict_read_postgres_ignores_session_info_entirely() -> None:
+    """FAR-1832 QA F4: on Postgres the GUC is authoritative — a planted
+    ``session.info['org_id']`` must NOT satisfy the guard.
+
+    ``set_rls_org`` on Postgres writes only the GUC, so an info value there is
+    unrelated to the transaction's actual RLS context. Before the fix the info
+    lookup ran FIRST (before any dialect check), so this session read as
+    bound-to-``value`` and the tenant guard passed against a context the
+    database never saw.
+    """
+    value = uuid.uuid4()
+    # rows=[None] is the GUC read returning "unset"; info claims ``value``.
+    session = _FakeSession(info={"org_id": str(value)}, rows=[None])
+    assert await _strict_read_rls_org(session, "postgresql") is None
+
+
+async def test_strict_read_postgres_guc_wins_over_conflicting_session_info() -> None:
+    """On Postgres the bound org comes from the GUC even when info disagrees."""
+    guc_org = uuid.uuid4()
+    info_org = uuid.uuid4()
+    session = _FakeSession(info={"org_id": str(info_org)}, rows=[str(guc_org)])
+    assert await _strict_read_rls_org(session, "postgresql") == guc_org
+
+
 # ---------------------------------------------------------------------------
 # _apply_settings_patch_postgres
 # ---------------------------------------------------------------------------

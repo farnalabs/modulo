@@ -294,6 +294,53 @@ async def test_context_read_failure_fails_closed(db_engine: AsyncEngine, monkeyp
     assert not await _read_settings(db_engine, org_id)
 
 
+async def test_pg_session_info_cannot_satisfy_the_guard_without_the_guc(db_engine: AsyncEngine) -> None:
+    """FAR-1832 QA F4: on a real Postgres session, ``session.info['org_id']``
+    must NOT satisfy the tenant guard — only the GUC does.
+
+    ``set_rls_org`` on Postgres writes the ``app.organisation_id`` GUC, never
+    ``session.info``. Before the fix, ``_strict_read_rls_org`` consulted
+    ``session.info`` first (before any dialect check), so a session carrying a
+    planted info value passed the guard while the transaction's actual RLS
+    context was unset — exactly the bypass this test pins shut. With the GUC
+    unset the guard must refuse with the ABSENT-context error (fail closed).
+    """
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    session = factory()
+    await session.begin()
+    # The pre-fix bypass shape: info claims the org, the GUC was never set.
+    session.info["org_id"] = str(org_id)
+    with pytest.raises(OrgSettingsPatchContextAbsentError):
+        await update_org_settings_patch(session, org_id, {"k": 1})
+    await session.rollback()
+    await session.close()
+
+    assert not await _read_settings(db_engine, org_id)
+
+
+async def test_pg_guc_binding_satisfies_the_guard_even_when_info_differs(db_engine: AsyncEngine) -> None:
+    """The GUC is authoritative on Postgres: a bound GUC passes the guard even
+    when ``session.info`` carries a DIFFERENT (stale) org — and the write lands
+    on the GUC's target org, not info's."""
+    org_target = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    org_info = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    session = factory()
+    await session.begin()
+    await set_rls_org(session, org_target)
+    session.info["org_id"] = str(org_info)  # stale/planted; must be ignored
+    returned = await update_org_settings_patch(session, org_target, {"k": 1})
+    await session.commit()
+    await session.close()
+
+    assert returned["k"] == 1
+    assert await _read_settings(db_engine, org_target) == {"k": 1}
+    assert not await _read_settings(db_engine, org_info)
+
+
 # ---------------------------------------------------------------------------
 # FAR-1832 (Land 1b): converted locked writers — same-concern composition,
 # deletion-FSM exclusivity, and the licence path driven through the real route.

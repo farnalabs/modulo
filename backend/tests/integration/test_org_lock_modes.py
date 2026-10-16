@@ -77,12 +77,31 @@ class _MissingOrgResult:
         return None
 
 
+class _GucResult:
+    """Result for the ``current_setting('app.organisation_id')`` read.
+
+    FAR-1832 QA F4: the settings patch's tenant guard is dialect-FIRST on
+    Postgres — it reads the GUC and ignores ``session.info`` entirely — so a
+    Postgres-dialect session double must answer the GUC read with the bound
+    org (exactly what ``set_rls_org``'s ``set_config`` write produces in
+    production) for the guard to pass.
+    """
+
+    def __init__(self, org_id: str) -> None:
+        self._org_id = org_id
+
+    def scalar(self) -> str:
+        return self._org_id
+
+
 class _CapturingSession:
     """Minimal AsyncSession double that records the statements issued to it.
 
     Presents the postgresql dialect (so the writers take their production
     single-statement path) and a bound org RLS context (so the settings patch's
-    fail-closed tenant guard passes).
+    fail-closed tenant guard passes): the GUC read answers with the org id the
+    way a real ``set_rls_org``-bound Postgres session would, and
+    ``info['org_id']`` mirrors it (harmless on Postgres — the guard ignores it).
     """
 
     def __init__(self) -> None:
@@ -92,8 +111,10 @@ class _CapturingSession:
     def get_bind(self) -> _PgBind:
         return _PgBind()
 
-    async def execute(self, statement: Any, *_args: Any, **_kwargs: Any) -> _MissingOrgResult:
+    async def execute(self, statement: Any, *_args: Any, **_kwargs: Any) -> Any:
         self.statements.append(statement)
+        if "current_setting('app.organisation_id'" in str(statement):
+            return _GucResult(str(_ORG_ID))
         return _MissingOrgResult()
 
 

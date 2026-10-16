@@ -315,11 +315,31 @@ async def _strict_read_rls_org(session: AsyncSession, dialect: str) -> uuid.UUID
     :class:`OrgSettingsPatchContextUnreadableError`; only a genuinely-absent context
     returns ``None``.
 
-    Generic backends store the org in ``session.info['org_id']`` and have no
-    ``app.organisation_id`` GUC, so on a non-Postgres dialect the info lookup is
-    authoritative and its absence is genuinely-unbound (not a read error). On
-    Postgres the ``current_setting`` read is authoritative.
+    FAR-1832 QA F4: the branch is on the DIALECT FIRST. On Postgres the
+    ``current_setting('app.organisation_id', true)`` GUC read is the ONLY
+    authoritative source — ``set_rls_org`` sets the GUC, never
+    ``session.info``, so an ``info['org_id']`` value on a Postgres session is
+    unrelated to the transaction's actual RLS context and must not satisfy the
+    guard (a session carrying a stale/planted info value would otherwise pass
+    the tenant check while the GUC — the real boundary — is unset or different,
+    defeating :class:`OrgSettingsPatchContextUnreadableError` entirely). A
+    failed GUC read always raises (fail closed); ``session.info`` is consulted
+    ONLY on non-Postgres dialects, where it is what ``set_rls_org`` writes and
+    its absence is genuinely-unbound (not a read error).
     """
+    if dialect == "postgresql":
+        try:
+            result = await session.execute(text("SELECT current_setting('app.organisation_id', true)"))
+        except Exception as exc:
+            raise OrgSettingsPatchContextUnreadableError(
+                "could not read the session's app.organisation_id RLS context"
+            ) from exc
+        raw: object = result.scalar()
+        if raw is None:
+            return None
+        if isinstance(raw, str) and raw.strip() == "":
+            return None
+        return _coerce_org_uuid(raw)
     info = getattr(session, "info", None)
     if isinstance(info, dict):
         value = info.get(_RLS_TENANT_KEY)
@@ -327,20 +347,7 @@ async def _strict_read_rls_org(session: AsyncSession, dialect: str) -> uuid.UUID
             parsed = _coerce_org_uuid(value)
             if parsed is not None:
                 return parsed
-    if dialect != "postgresql":
-        return None
-    try:
-        result = await session.execute(text("SELECT current_setting('app.organisation_id', true)"))
-    except Exception as exc:
-        raise OrgSettingsPatchContextUnreadableError(
-            "could not read the session's app.organisation_id RLS context"
-        ) from exc
-    raw: object = result.scalar()
-    if raw is None:
-        return None
-    if isinstance(raw, str) and raw.strip() == "":
-        return None
-    return _coerce_org_uuid(raw)
+    return None
 
 
 def _coerce_org_uuid(value: object) -> uuid.UUID | None:
