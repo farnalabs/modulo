@@ -19,6 +19,9 @@ production engine, that a release-channel-tagged snapshot inside the would-be
 delete band survives (never selected), and that a run-referenced snapshot in
 the delete band makes the REAL cleanup fail loudly via the ``runs.snapshot_id``
 RESTRICT FK (IntegrityError → per-item error) — observed, not merely asserted.
+The trigger-pin test pins the Python-canonicalised exclusion (``uuid.UUID``)
+of verbatim non-canonical stored pins (uppercase / braced) on the production
+jsonb/asyncpg dialect.
 """
 
 import uuid
@@ -34,6 +37,7 @@ from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
+from modulo.db.models.trigger import Trigger
 
 pytestmark = pytest.mark.integration
 
@@ -269,5 +273,86 @@ async def test_channel_tagged_and_run_referenced_rows_shape_the_delete_set(
         second_results = await scan_all(db_session, org_id)
         second_result = {r.category: r for r in second_results}[_CATEGORY]
         assert {c.id for c in second_result.candidates} == {str(by_version[6])}
+    finally:
+        await _cleanup(db_session, org_id=org_id, pipeline_id=pipeline_id)
+
+
+async def test_non_canonical_trigger_pins_are_excluded_on_postgres(
+    db_session: AsyncSession,
+    test_user: uuid.UUID,
+) -> None:
+    """FAR-1815 re-gate: verbatim non-canonical trigger pins exclude on Postgres.
+
+    REST stores ``config_json.snapshot_id`` verbatim and unvalidated, and the
+    fire path accepts anything ``uuid.UUID(str(...))`` accepts — uppercase,
+    braced, ``urn:`` forms. The exclusion therefore canonicalises in Python
+    (``uuid.UUID``) instead of comparing raw SQL strings; this test pins that
+    behaviour on the production dialect (jsonb ``config_json``, asyncpg), the
+    path a dash-normalised string comparison used to cover and the one with no
+    Postgres coverage before. The pinned rows must both stay out of the
+    candidate set and survive the real cleanup.
+    """
+    org_id = uuid.uuid4()
+    pipeline_id = uuid.uuid4()
+    try:
+        by_version = await _seed_history(db_session, org_id=org_id, pipeline_id=pipeline_id, account_id=test_user)
+        db_session.add_all(
+            [
+                Trigger(
+                    id=uuid.uuid4(),
+                    organisation_id=org_id,
+                    pipeline_id=pipeline_id,
+                    name="pin-upper",
+                    trigger_type="manual",
+                    account_id=test_user,
+                    config_json={"snapshot_id": str(by_version[5]).upper()},
+                ),
+                Trigger(
+                    id=uuid.uuid4(),
+                    organisation_id=org_id,
+                    pipeline_id=pipeline_id,
+                    name="pin-braced",
+                    trigger_type="manual",
+                    account_id=test_user,
+                    config_json={"snapshot_id": f"{{{by_version[6]}}}"},
+                ),
+            ]
+        )
+        await db_session.commit()
+
+        results = await scan_all(db_session, org_id)
+        result = {r.category: r for r in results}[_CATEGORY]
+        candidate_ids = {c.id for c in result.candidates}
+        assert str(by_version[5]) not in candidate_ids
+        assert str(by_version[6]) not in candidate_ids
+        # Pool is 205 rows (both pins excluded) → the five oldest remaining
+        # plain edits are surfaced, nothing else.
+        assert candidate_ids == {str(by_version[version]) for version in (2, 3, 4, 7, 8)}
+
+        # Real cleanup deletes exactly the unpinned band rows; both pinned
+        # snapshots survive.
+        await db_session.commit()
+        principal = _principal(org_id, test_user)
+        response = await perform_cleanup(
+            CleanupRequest(items=[CleanupItem(id=cid, entity_type="pipeline_snapshot") for cid in candidate_ids]),
+            db_session,
+            principal,
+            principal,
+        )
+        assert response.deleted_count == 5
+        assert not response.errors
+        remaining = {
+            str(snapshot_id)
+            for snapshot_id in (
+                await db_session.execute(
+                    select(PipelineSnapshot.id).where(PipelineSnapshot.pipeline_id == pipeline_id),
+                )
+            ).scalars()
+        }
+        assert str(by_version[5]) in remaining
+        assert str(by_version[6]) in remaining
+        assert remaining == set(map(str, by_version.values())) - {
+            str(by_version[version]) for version in (2, 3, 4, 7, 8)
+        }
     finally:
         await _cleanup(db_session, org_id=org_id, pipeline_id=pipeline_id)

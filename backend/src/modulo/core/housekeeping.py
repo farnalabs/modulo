@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import ColumnElement, String, exists, func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.graph_validator.mask_sentinel import find_mask_sentinel_values
@@ -418,12 +418,15 @@ async def _scan_edit_snapshot_retention(session: AsyncSession, org_id: uuid.UUID
       ``config_json.snapshot_id``; a missing pin produces an explicit
       ``no_pipeline`` event and a skip (never a silent auto-create), i.e. a
       silently broken trigger — so any snapshot a trigger pins is excluded from
-      the pool. The exclusion reads the Core ``triggers`` table rather than the
-      ORM entity so the global soft-delete filter cannot hide a
-      soft-deleted-but-restorable trigger's pin (``/triggers/{id}/restore``);
-      both sides of the comparison are dash-normalised to 32-hex because the
-      pin stores the dashed ``str(uuid)`` form while the ``Uuid`` column binds
-      as hex on SQLite and dashed text on Postgres.
+      the pool. REST stores the pin verbatim and unvalidated (the fire path
+      accepts anything ``uuid.UUID(str(...))`` accepts — uppercase, braced and
+      ``urn:`` forms), so the exclusion canonicalises each stored pin in
+      Python with ``uuid.UUID`` (case- and format-insensitive) and matches on
+      canonical id equality; a raw SQL string comparison would miss
+      non-canonical stored forms. The exclusion reads the Core ``triggers``
+      table rather than the ORM entity so the global soft-delete filter cannot
+      hide a soft-deleted-but-restorable trigger's pin
+      (``/triggers/{id}/restore``).
     * variant-referenced snapshots. A variant group pins one snapshot per
       variant via the ``variant_groups.variants`` JSON array (an ``entry``
       carrying ``snapshot_id``) — a non-FK reference; deleting the row breaks
@@ -449,15 +452,27 @@ async def _scan_edit_snapshot_retention(session: AsyncSession, org_id: uuid.UUID
     propagates to :func:`scan_all`, which logs it with the stack trace and
     still returns the other categories.
     """
-    # C1 (FAR-1815 review): release-channel rows are routing state — only
-    # untagged ('none') rows are save history eligible for retention.
     # M1: a trigger's pinned ``config_json.snapshot_id`` is a non-FK reference;
-    # deleting the row silently breaks the trigger at fire time. Core table on
-    # purpose (soft-delete filter must not hide a restorable trigger's pin),
-    # ``replace``-normalise both sides for the dashed/hex dialect difference.
+    # deleting the row silently breaks the trigger at fire time. REST stores
+    # the pin verbatim and unvalidated (the fire path accepts anything
+    # ``uuid.UUID(str(...))`` accepts — uppercase, braced, ``urn:`` forms), so
+    # pins are canonicalised in Python (``uuid.UUID`` — case- and
+    # format-insensitive) rather than compared as raw SQL strings; a string
+    # comparison misses non-canonical stored forms. Core table so the
+    # soft-delete filter cannot hide a restorable trigger's pin.
     trigger_pins = Trigger.__table__
-    _pinned_hex = func.replace(trigger_pins.c.config_json["snapshot_id"].as_string(), "-", "")
-    _snapshot_hex = func.replace(PipelineSnapshot.id.cast(String), "-", "")
+    trigger_rows = (
+        await session.execute(select(trigger_pins.c.config_json).where(trigger_pins.c.organisation_id == org_id))
+    ).scalars()
+    trigger_pinned: set[uuid.UUID] = set()
+    for config in trigger_rows:
+        raw = (config or {}).get("snapshot_id")
+        if raw is None:
+            continue
+        try:
+            trigger_pinned.add(uuid.UUID(str(raw)))
+        except (ValueError, TypeError):
+            continue
     # M1 (variant leg): ``variant_groups.variants`` is a JSON array of variant
     # dicts, each optionally carrying ``snapshot_id`` — a non-FK reference.
     # Core table so the soft-delete filter cannot hide a soft-deleted group's
@@ -481,15 +496,16 @@ async def _scan_edit_snapshot_retention(session: AsyncSession, org_id: uuid.UUID
                 continue
     # Pool predicates: the (a) channel + (b) trigger + (c) variant exclusions
     # from the docstring, applied BEFORE ranking so the newest-200 bound counts
-    # only genuinely deletable rows. The variant predicate joins only when the
-    # org has pins (empty ``in_``/``not_in`` sets carry no useful SQL).
+    # only genuinely deletable rows. Each not-in predicate joins only when its
+    # set is non-empty (empty ``in_``/``not_in`` sets carry no useful SQL).
     pool_predicates: list[ColumnElement[bool]] = [
         PipelineSnapshot.organisation_id == org_id,
         PipelineSnapshot.version_kind == "edit",
         PipelineSnapshot.created_kind == "edit",
         PipelineSnapshot.channel == "none",
-        ~exists(select(trigger_pins.c.id).where(_pinned_hex == _snapshot_hex)),
     ]
+    if trigger_pinned:
+        pool_predicates.append(PipelineSnapshot.id.not_in(trigger_pinned))
     if variant_pinned:
         pool_predicates.append(PipelineSnapshot.id.not_in(variant_pinned))
     ranked = (

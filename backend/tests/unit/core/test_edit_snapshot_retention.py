@@ -228,6 +228,51 @@ class TestEditSnapshotRetentionReferenceSafety:
         assert str(by_version[pinned_version]) not in candidate_ids
         assert candidate_ids == {str(by_version[version]) for version in (2, 3, 4, 6, 7, 8)}
 
+    async def test_non_canonical_trigger_pins_in_the_delete_band_are_never_surfaced(
+        self,
+        session: AsyncSession,
+    ) -> None:
+        pipeline, by_version = await _seed_history(session)
+        # Re-gate Major: REST stores the pin VERBATIM and unvalidated
+        # (api/routes/triggers.py writes ``req.snapshot_id: str | None``
+        # straight into config_json) and the fire path accepts anything
+        # ``uuid.UUID(str(...))`` accepts — uppercase, braced, urn: forms. A
+        # SQL string comparison against such a stored form matches nothing, so
+        # the pinned snapshot would re-enter the pool; the exclusion must
+        # canonicalise in Python instead.
+        session.add_all(
+            [
+                Trigger(
+                    id=uuid.uuid4(),
+                    organisation_id=_ORG,
+                    pipeline_id=pipeline.id,
+                    name="pin-v5-uppercase",
+                    trigger_type="manual",
+                    account_id=_ACCOUNT,
+                    config_json={"snapshot_id": str(by_version[5]).upper()},
+                ),
+                Trigger(
+                    id=uuid.uuid4(),
+                    organisation_id=_ORG,
+                    pipeline_id=pipeline.id,
+                    name="pin-v6-braced",
+                    trigger_type="manual",
+                    account_id=_ACCOUNT,
+                    config_json={"snapshot_id": f"{{{by_version[6]}}}"},
+                ),
+            ]
+        )
+        await session.commit()
+
+        candidates = await _scan_edit_snapshot_retention(session, _ORG)
+        candidate_ids = {c.id for c in candidates}
+
+        assert str(by_version[5]) not in candidate_ids
+        assert str(by_version[6]) not in candidate_ids
+        # Pool is now 205 rows (both pins excluded); newest 200 kept → the five
+        # oldest remaining plain edits are surfaced.
+        assert candidate_ids == {str(by_version[version]) for version in (2, 3, 4, 7, 8)}
+
     async def test_variant_pinned_snapshot_in_the_delete_band_is_never_surfaced(
         self,
         session: AsyncSession,

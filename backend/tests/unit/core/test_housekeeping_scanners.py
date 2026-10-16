@@ -101,6 +101,11 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
     async with eng.begin() as conn:
         tables = [t for name, t in Base.metadata.tables.items() if name in _TABLE_NAMES]
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+    # PRAGMA foreign_keys is a no-op inside a transaction — issue it on the
+    # bare pooled connection instead (StaticPool → one in-memory connection;
+    # the default is already OFF on this stack, same as
+    # test_edit_snapshot_retention.py's fixture).
+    async with eng.connect() as conn:
         await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
     yield eng
     await eng.dispose()
