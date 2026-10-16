@@ -95,19 +95,26 @@ def test_w2_boundary_exact_key_without_suffix_is_rejected() -> None:
         assert_write_authorisation("eval", "eval")
 
 
-@pytest.mark.parametrize("producer_type", ["policy_gate", "derived"])
-def test_w2_reserved_producers_write_nothing(producer_type: str) -> None:
-    """A producer writes nothing outside the namespace it owns.
-
-    ``policy_gate`` is still reserved-empty (owns no keys); ``derived`` owns
-    the ``changed_set_`` prefix (FAR-1691). Both reject a key outside their
-    namespace; the ``derived`` positive case is covered by
-    ``test_w1_authorised_write_accepted``.
+def test_w2_derived_namespace_owns_changed_set_prefix_only() -> None:
+    """``derived`` owns the ``changed_set_`` prefix (FAR-1691) and nothing
+    else: any other key is unauthorised. ``policy_gate`` — opened to the
+    ``gate_`` prefix by FAR-939 chunk 12 (CO-6) — is asserted by
+    ``test_w2_policy_gate_namespace_opened_to_the_gate_prefix_only``; its
+    positive case is covered by ``test_w1_every_registered_prefix_is_accepted_for_its_owner``.
     """
-    owned = {"policy_gate": set(), "derived": {"changed_set_"}}[producer_type]
-    assert KEY_NAMESPACE_OWNERSHIP[producer_type] == owned
+    assert KEY_NAMESPACE_OWNERSHIP["derived"] == {"changed_set_"}
     with pytest.raises(EvidenceWriteAuthorisationError):
-        assert_write_authorisation(producer_type, "eval_passed")
+        assert_write_authorisation("derived", "eval_passed")
+
+
+def test_w2_policy_gate_namespace_opened_to_the_gate_prefix_only() -> None:
+    """FAR-939 chunk 12 (CO-6): ``policy_gate`` was opened — but ONLY to the
+    ``gate_`` prefix, for the human-decision grounding rows (§3.4 key
+    ``gate_decision_<policy_gate_id>``, shipped with the opening). Any other
+    key for this producer is still unauthorised."""
+    assert KEY_NAMESPACE_OWNERSHIP["policy_gate"] == {"gate_"}
+    with pytest.raises(EvidenceWriteAuthorisationError):
+        assert_write_authorisation("policy_gate", "eval_passed")
 
 
 # ---------------------------------------------------------------------------

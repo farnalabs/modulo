@@ -873,3 +873,306 @@ def test_get_or_compile_recompiles_when_eval_defs_change():
     assert compiled2 != compiled1
     # Replay with UNCHANGED eval defs: same key -> cached graph.
     assert get_or_compile(pid, sid, lambda: "should-not-run", graph_struct_hash=h1) is compiled1
+
+
+# ---------------------------------------------------------------------------
+# FAR-939 chunk 12 (M7) — the dispatch classifier, the validator and the
+# compiler agree on "which edges compile a gate"
+# ---------------------------------------------------------------------------
+
+
+def _predicted_gate_nodes(graph_json: dict[str, Any]) -> set[str]:
+    """Predicted gate node ids from the SHARED classifier.
+
+    This is the exact predicate the chunk-12 human-mode validation reads
+    (``_effective_gate_edges_for_source`` delegates to
+    ``classify_source_dispatch``), grouped exactly as ``_assemble_edges``
+    groups the compile — so it must equal what the compiler actually
+    inserts, otherwise a desync silently reopens the no-pause hole §3.3
+    exists to close.
+    """
+    from modulo.core.pipeline_engine.graph_cache import (
+        _group_forwarding_edges,
+        _make_review_id,
+        classify_source_dispatch,
+    )
+
+    nodes_by_id = {str(n["id"]): n for n in graph_json["nodes"]}
+    predicted: set[str] = set()
+    for source, src_edges in _group_forwarding_edges(graph_json["edges"]).items():
+        dispatch = classify_source_dispatch(src_edges, nodes_by_id.get(source, {}))
+        for gate_edge in dispatch.gate_edges:
+            target = str(gate_edge.get("target") or gate_edge.get("target_node_id"))
+            predicted.add(_make_review_id(source, target))
+    return predicted
+
+
+def _compiled_gate_nodes(graph_json: dict[str, Any]) -> set[str]:
+    compiled = build_graph_from_json(graph_json)
+    return {name for name in compiled.get_graph().nodes if name.startswith("hitl_review_")}
+
+
+_HTL_EDGE = {"source": "node-a", "target": "node-b", "type": "normal", "hitl_review_config": {"human_only": True}}
+
+_M7_CASES: dict[str, dict[str, Any]] = {
+    "normal_with_hitl_config": {
+        "nodes": [{"id": "node-a", "role": None}, {"id": "node-b", "role": None}],
+        "edges": [dict(_HTL_EDGE)],
+    },
+    "normal_without_config": {
+        "nodes": [{"id": "node-a", "role": None}, {"id": "node-b", "role": None}],
+        "edges": [{"source": "node-a", "target": "node-b", "type": "normal"}],
+    },
+    "hitl_node_stamps_its_normal_edges": {
+        "nodes": [
+            {"id": "node-a", "node_type": "hitl", "hitl_config": {"label": "review", "human_only": True}},
+            {"id": "node-b", "role": None},
+            {"id": "node-c", "role": None},
+        ],
+        "edges": [
+            {"source": "node-a", "target": "node-b", "type": "normal"},
+            {"source": "node-a", "target": "node-c", "type": "normal"},
+        ],
+    },
+    "router_branch_never_compiles_gates": {
+        "nodes": [
+            {
+                "id": "node-a",
+                "node_type": "router",
+                "router_config": {"rules": [{"default": True, "target": "node-b"}]},
+            },
+            {"id": "node-b", "role": None},
+        ],
+        "edges": [dict(_HTL_EDGE)],
+    },
+    "loop_branch_never_compiles_gates": {
+        "nodes": [{"id": "node-a", "role": None}, {"id": "node-b", "role": None}],
+        "edges": [
+            {"source": "node-a", "target": "node-b", "type": "loop", "max_iterations": 3},
+            dict(_HTL_EDGE),
+        ],
+    },
+    "llm_branch_never_compiles_gates": {
+        "nodes": [{"id": "node-a", "role": None, "routing_mode": "llm"}, {"id": "node-b", "role": None}],
+        "edges": [dict(_HTL_EDGE)],
+    },
+    "conditional_branch_never_compiles_gates": {
+        "nodes": [{"id": "node-a", "role": None}, {"id": "node-b", "role": None}],
+        "edges": [
+            {
+                "source": "node-a",
+                "target": "node-b",
+                "type": "conditional",
+                "condition_expression": "true",
+                "hitl_review_config": {"human_only": True},
+            }
+        ],
+    },
+}
+
+
+@pytest.mark.parametrize("case_name", sorted(_M7_CASES))
+def test_dispatch_classifier_gate_edges_match_the_compiled_gates(case_name: str) -> None:
+    """M7 lockstep: for EVERY dispatch branch, the shared classifier's
+    ``gate_edges`` predict exactly the gate nodes the compiler inserts.
+
+    The chunk-12 human-mode validation reads the classifier; the compiler
+    runs ``_link_sources``. Before M7 these were two independent copies of
+    the precedence — a change to one would silently desync the other and a
+    human-mode gate could compile with no pause edge at all.
+    """
+    graph_json = _M7_CASES[case_name]
+    predicted = _predicted_gate_nodes(graph_json)
+    actual = _compiled_gate_nodes(graph_json)
+    assert predicted == actual, (
+        f"{case_name}: classifier predicted {sorted(predicted)}, compiler built {sorted(actual)}"
+    )
+
+
+def test_classifier_pinned_expected_gate_counts_per_branch() -> None:
+    """Pin the per-branch expectations themselves (not only their agreement)
+    so a change that removes gates from BOTH sides still fails here."""
+    expectations = {
+        "normal_with_hitl_config": 1,
+        "normal_without_config": 0,
+        "hitl_node_stamps_its_normal_edges": 2,
+        "router_branch_never_compiles_gates": 0,
+        "loop_branch_never_compiles_gates": 0,
+        "llm_branch_never_compiles_gates": 0,
+        "conditional_branch_never_compiles_gates": 0,
+    }
+    for case_name, expected in expectations.items():
+        predicted = _predicted_gate_nodes(_M7_CASES[case_name])
+        assert len(predicted) == expected, case_name
+
+
+def test_effective_gate_edges_delegates_to_the_shared_classifier() -> None:
+    """M7 structural pin: the validator's edge selection must CALL the shared
+    classifier (not re-state the precedence). If a future edit re-implements
+    the dispatch chain inside ``_effective_gate_edges_for_source``, this fails
+    and the two sources of truth are forced back together."""
+    from modulo.core.pipeline_engine.graph_cache import (
+        SourceDispatch,
+        _effective_gate_edges_for_source,
+    )
+
+    sentinel_edge = {"source": "node-a", "target": "node-b", "hitl_review_config": {}}
+    dispatch = SourceDispatch(
+        branch="normal",
+        conditional=[],
+        loop_edges=[],
+        normal=[sentinel_edge],
+        gate_edges=[sentinel_edge],
+    )
+    with patch(
+        "modulo.core.pipeline_engine.graph_cache.classify_source_dispatch",
+        return_value=dispatch,
+    ) as classifier:
+        result = _effective_gate_edges_for_source([sentinel_edge], {"node_type": "agent"})
+
+    classifier.assert_called_once()
+    assert result == [sentinel_edge]
+
+
+# ---------------------------------------------------------------------------
+# FAR-939 chunk 12 §3.3 — human-mode pause-edge validation
+# ---------------------------------------------------------------------------
+
+
+def _human_mode_dto(node_id: str, *, mode: str = "human") -> Any:
+    """A governed EvalDefDTO whose governing gate carries *mode*."""
+    from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
+
+    return EvalDefDTO(
+        id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        node_id=node_id,
+        name="human-gate-eval",
+        eval_type="regex",
+        config={},
+        failure_behaviour="block",
+        policy_gate_id=uuid.uuid4(),
+        policy_gate_version=1,
+        policy_gate_node_id=uuid.uuid4(),
+        policy_gate_evaluation_mode=mode,
+    )
+
+
+_TWO_NODES: list[dict[str, Any]] = [{"id": "node-a", "role": None}, {"id": "node-b", "role": None}]
+
+
+def test_validate_human_mode_returns_when_no_eval_is_human_governed() -> None:
+    """An automatic-mode (or ungoverned) eval places NO pause-edge
+    constraint on its node — a plain agent edge compiles without a gate and
+    without a validation error. A validator that wrongly demanded a pause
+    edge for automatic evals would refuse this graph at run start."""
+    automatic = _human_mode_dto("node-a", mode="automatic")
+    graph_json = {
+        "nodes": list(_TWO_NODES),
+        "edges": [{"source": "node-a", "target": "node-b", "type": "normal"}],
+    }
+
+    compiled = build_graph_from_json(graph_json, eval_definitions_by_node={"node-a": [automatic]})
+
+    gate_nodes = {name for name in compiled.get_graph().nodes if name.startswith("hitl_review_")}
+    assert not gate_nodes
+
+
+def test_validate_human_mode_rejects_a_human_eval_with_no_gate_edge() -> None:
+    """A human-governed eval whose node has no edge compiling an HITL gate
+    would never be decided (the silent no-decision hole) — fail closed."""
+    from modulo.core.pipeline_engine.graph_cache import _validate_human_mode_pause_edges
+
+    human = _human_mode_dto("node-a", mode="human")
+
+    with pytest.raises(ValueError, match="EXACTLY ONE"):
+        _validate_human_mode_pause_edges(
+            nodes=list(_TWO_NODES),
+            edges=[{"source": "node-a", "target": "node-b", "type": "normal"}],
+            eval_definitions_by_node={"node-a": [human]},
+        )
+
+
+def test_validate_human_mode_rejects_two_gate_edges() -> None:
+    """An HITL-typed source with two normal edges compiles TWO gates for one
+    evaluation — two interrupts for a single decision. Fail closed."""
+    from modulo.core.pipeline_engine.graph_cache import _validate_human_mode_pause_edges
+
+    human = _human_mode_dto("node-a", mode="human")
+    nodes = [
+        {"id": "node-a", "node_type": "hitl", "hitl_config": {"human_only": True}},
+        {"id": "node-b", "role": None},
+        {"id": "node-c", "role": None},
+    ]
+    edges = [
+        {"source": "node-a", "target": "node-b", "type": "normal"},
+        {"source": "node-a", "target": "node-c", "type": "normal"},
+    ]
+
+    with pytest.raises(ValueError, match="EXACTLY ONE"):
+        _validate_human_mode_pause_edges(
+            nodes=nodes,
+            edges=edges,
+            eval_definitions_by_node={"node-a": [human]},
+        )
+
+
+def test_validate_human_mode_accepts_exactly_one_human_only_gate_edge() -> None:
+    """The legal shape: one outgoing edge whose review config is
+    human-only — the gate is the eval's pause point, and the graph compiles
+    with exactly that gate. A validator that rejected the legal shape would
+    refuse this graph at run start."""
+    human = _human_mode_dto("node-a", mode="human")
+    graph_json = {
+        "nodes": list(_TWO_NODES),
+        "edges": [dict(_HTL_EDGE)],
+    }
+
+    compiled = build_graph_from_json(graph_json, eval_definitions_by_node={"node-a": [human]})
+
+    gate_nodes = {name for name in compiled.get_graph().nodes if name.startswith("hitl_review_")}
+    assert gate_nodes == {"hitl_review_node-a_node-b"}
+
+
+def test_validate_human_mode_rejects_a_falsy_human_only_opt_out() -> None:
+    """``human_only`` resolved falsy (``""`` here — the runtime's
+    ``human_only_effective`` treats any falsy value as opt-out) is
+    definitionally incompatible with a human-decided gate — fail closed."""
+    from modulo.core.pipeline_engine.graph_cache import _validate_human_mode_pause_edges
+
+    human = _human_mode_dto("node-a", mode="human")
+    opted_out_edge = {
+        "source": "node-a",
+        "target": "node-b",
+        "type": "normal",
+        "hitl_review_config": {"human_only": ""},
+    }
+
+    with pytest.raises(ValueError, match="human_only"):
+        _validate_human_mode_pause_edges(
+            nodes=list(_TWO_NODES),
+            edges=[opted_out_edge],
+            eval_definitions_by_node={"node-a": [human]},
+        )
+
+
+def test_validate_human_mode_reads_node_level_config_when_the_edge_has_none() -> None:
+    """An HITL-typed source stamps its node-level ``hitl_config`` onto its
+    edges at compile time; when the edge carries no config the validator must
+    validate the STAMP SOURCE — a node-level falsy ``human_only`` (the
+    Pydantic-model bypass) is rejected the same way."""
+    from modulo.core.pipeline_engine.graph_cache import _validate_human_mode_pause_edges
+
+    human = _human_mode_dto("node-a", mode="human")
+    nodes = [
+        {"id": "node-a", "node_type": "hitl", "hitl_config": {"human_only": False}},
+        {"id": "node-b", "role": None},
+    ]
+    edges = [{"source": "node-a", "target": "node-b", "type": "normal"}]
+
+    with pytest.raises(ValueError, match="human_only"):
+        _validate_human_mode_pause_edges(
+            nodes=nodes,
+            edges=edges,
+            eval_definitions_by_node={"node-a": [human]},
+        )

@@ -66,6 +66,7 @@ def _gate_row(
     action: str = "block",
     enabled: bool = True,
     gate_id: uuid.UUID | None = None,
+    evaluation_mode: str = "automatic",
 ) -> SimpleNamespace:
     return SimpleNamespace(
         id=gate_id or uuid.uuid4(),
@@ -76,6 +77,9 @@ def _gate_row(
         version=3,
         deleted_at=None,
         organisation_id=eval_row.organisation_id,
+        # FAR-939 chunk 12: the live gate's evaluation mode, read by
+        # ``_resolve_governed_gate`` when the gate governs.
+        evaluation_mode=evaluation_mode,
     )
 
 
@@ -466,6 +470,84 @@ async def test_loader_passes_disabled_gate_rows_through_to_the_build() -> None:
     dto = _only(rows, None)
     assert dto.failure_behaviour == "warn"
     assert dto.policy_gate_id is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-939 chunk 12 — the governing gate's evaluation mode reaches the DTO
+# ---------------------------------------------------------------------------
+
+
+def test_human_mode_gate_reaches_the_dto() -> None:
+    """A live ``evaluation_mode='human'`` gate that governs marks the DTO
+    ``policy_gate_evaluation_mode='human'`` (the shared-helper skip keys on
+    exactly this field)."""
+    eval_row = _eval_row()
+    gate_row = _gate_row(eval_row, action="block", evaluation_mode="human")
+
+    dto = _only([(eval_row, gate_row)], None)
+
+    assert dto.policy_gate_evaluation_mode == "human"
+    assert dto.policy_gate_id == gate_row.id
+
+
+def test_automatic_mode_gate_reaches_the_dto() -> None:
+    """The default mode is carried verbatim."""
+    eval_row = _eval_row()
+    gate_row = _gate_row(eval_row, action="block", evaluation_mode="automatic")
+
+    dto = _only([(eval_row, gate_row)], None)
+
+    assert dto.policy_gate_evaluation_mode == "automatic"
+
+
+def test_disabled_human_gate_is_ungoverned_so_mode_is_none() -> None:
+    """Operator control still wins: a disabled human-mode gate is excluded
+    from evaluation entirely, so the DTO is ungoverned (mode None — the
+    eval keeps today's no-gate automatic behaviour)."""
+    eval_row = _eval_row()
+    gate_row = _gate_row(eval_row, action="block", enabled=False, evaluation_mode="human")
+
+    dto = _only([(eval_row, gate_row)], None)
+
+    assert dto.policy_gate_id is None
+    assert dto.policy_gate_evaluation_mode is None
+
+
+def test_pinned_universe_carries_the_live_gate_mode() -> None:
+    """``policy_gate_pins`` do not carry ``evaluation_mode`` (named
+    foreclosure, chunk 12 §10): in a pinned universe the PIN governs the
+    action, and the LIVE row's mode marks the DTO."""
+    eval_row = _eval_row()
+    gate_row = _gate_row(eval_row, action="warn", evaluation_mode="human")
+    pins = [_pin(eval_row, gate_row, action="block")]
+
+    dto = _only([(eval_row, gate_row)], pins)
+
+    assert dto.failure_behaviour == "block"  # the pin governs the action
+    assert dto.policy_gate_evaluation_mode == "human"  # the live row governs the mode
+
+
+def test_unpinned_gate_has_mode_none() -> None:
+    """An eval with no pin in a pinned run is ungoverned — mode None."""
+    eval_row = _eval_row()
+    gate_row = _gate_row(eval_row, action="block", evaluation_mode="human")
+
+    dto = _only([(eval_row, gate_row)], [])
+
+    assert dto.policy_gate_evaluation_mode is None
+
+
+def test_legacy_stand_in_without_the_field_reads_automatic() -> None:
+    """Production rows always carry the NOT NULL column (migration 0316);
+    a legacy ORM stand-in without the attribute still reads today's
+    behaviour — automatic — instead of crashing the run build."""
+    eval_row = _eval_row()
+    gate_row = _gate_row(eval_row, action="block")
+    del gate_row.evaluation_mode
+
+    dto = _only([(eval_row, gate_row)], None)
+
+    assert dto.policy_gate_evaluation_mode == "automatic"
 
 
 # ---------------------------------------------------------------------------

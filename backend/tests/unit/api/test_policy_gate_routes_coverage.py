@@ -181,6 +181,10 @@ def _gate_row(*, action: str = "warn", version: int | None = 1, node_id: uuid.UU
     row.organisation_id = _ORG_ID
     row.node_id = node_id
     row.action = action
+    # FAR-939 chunk 12: the routes read the gate's evaluation mode (response
+    # construction + the update snapshot); the stand-in must carry a real
+    # string, not an auto-spied MagicMock child.
+    row.evaluation_mode = "automatic"
     row.version = version
     row.pre_version_raw = None
     row.deleted_at = None
@@ -477,7 +481,70 @@ def test_update_gate_success_bumps_version(client: tuple[TestClient, AsyncMock])
     body = resp.json()
     assert body["action"] == "block"
     assert body["version"] == 2
-    assert body["pre_version_raw"] == {"action": "warn"}
+    # FAR-939 chunk 12: the snapshot key set equals the mutable set
+    # ({action, evaluation_mode}); the pre-edit values are captured.
+    assert body["pre_version_raw"] == {"action": "warn", "evaluation_mode": "automatic"}
+
+
+def test_update_gate_omitting_evaluation_mode_preserves_human(client: tuple[TestClient, AsyncMock]) -> None:
+    """§3.1 preserve-on-omit: a PUT without ``evaluation_mode`` keeps the
+    live mode.
+
+    The frontend gate write tracks only ``action`` (EvalEditorView), so a
+    route that defaulted an omitted field to ``'automatic'`` silently
+    reset a ``human`` gate back to ``automatic`` with no audit — the
+    defect this pins.  The ``pre_version_raw`` snapshot still captures
+    BOTH mutable fields at their pre-edit values.
+    """
+    http, session = client
+    gate = _gate_row(action="warn", version=1)
+    gate.evaluation_mode = "human"
+    _queue_execute(
+        session,
+        [
+            _result(scalar_one_or_none=_eval_row()),
+            _result(scalar_one_or_none=gate),
+        ],
+    )
+
+    resp = http.put(_GATE_URL, json={"action": "block"})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # The omitted field PRESERVED the live human mode (pre-fix this
+    # asserted 'automatic' — the silent reset).
+    assert body["evaluation_mode"] == "human"
+    assert gate.evaluation_mode == "human"
+    # The snapshot key set equals the mutable set, at pre-edit values.
+    assert body["pre_version_raw"] == {"action": "warn", "evaluation_mode": "human"}
+
+
+def test_update_gate_explicit_automatic_resets_human_gate(client: tuple[TestClient, AsyncMock]) -> None:
+    """An explicit ``evaluation_mode="automatic"`` still WRITES.
+
+    Preserve-on-omit must not become preserve-always: an explicit value —
+    including ``'automatic'`` — is how a caller clears a human gate back
+    to automatic mode.
+    """
+    http, session = client
+    gate = _gate_row(action="warn", version=1)
+    gate.evaluation_mode = "human"
+    _queue_execute(
+        session,
+        [
+            _result(scalar_one_or_none=_eval_row()),
+            _result(scalar_one_or_none=gate),
+        ],
+    )
+
+    resp = http.put(_GATE_URL, json={"action": "block", "evaluation_mode": "automatic"})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["evaluation_mode"] == "automatic"
+    assert gate.evaluation_mode == "automatic"
+    # Snapshot captured the pre-edit HUMAN value before the reset.
+    assert body["pre_version_raw"] == {"action": "warn", "evaluation_mode": "human"}
 
 
 def test_update_gate_version_none_defaults_to_one(client: tuple[TestClient, AsyncMock]) -> None:

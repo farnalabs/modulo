@@ -66,6 +66,7 @@ from modulo.core.eval_engine.coverage_gap import (
     compute_coverage_gap,
 )
 from modulo.core.eval_engine.eval_definition_write import (
+    EvalWriteOptions,
     create_or_update_eval,
     validate_guardrail_request,
 )
@@ -119,6 +120,8 @@ _CODE_EVALS_POLICY_GATE_DELETE = "evals.policy_gate.delete"
 _CODE_EVALS_POLICY_GATE_GET = "evals.policy_gate.get"
 _EVAL_TYPE_PATTERN = r"^(llm_judge|regex|json_schema|custom_function|guardrail|human_set)$"
 _POLICY_GATE_ACTION_PATTERN = r"^(warn|block)$"
+# FAR-939 chunk 12 — gate evaluation-mode vocabulary (migration 0316 CHECK).
+_POLICY_GATE_EVALUATION_MODE_PATTERN = r"^(automatic|human)$"
 _MSG_EVAL_SUITE_NOT_FOUND = "Eval suite not found"
 _MSG_POLICY_GATE_NOT_FOUND = "Policy gate not found for this eval"
 _MSG_POLICY_GATE_CONFLICT = "A policy gate for this eval was created concurrently. Please retry."
@@ -287,6 +290,12 @@ class PolicyGateCreateRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
     action: str = Field(pattern=_POLICY_GATE_ACTION_PATTERN)
+    # FAR-939 chunk 12: 'automatic' (default — current behaviour) or 'human'
+    # (the HITL decision is the gate's evaluation result). OPTIONAL on the
+    # wire (omitted → 'automatic') so a caller that does not know about the
+    # field keeps today's behaviour and the generated OpenAPI types leave
+    # the field optional for existing clients.
+    evaluation_mode: str | None = Field(None, pattern=_POLICY_GATE_EVALUATION_MODE_PATTERN)
 
 
 class PolicyGateUpdateRequest(BaseModel):
@@ -295,6 +304,13 @@ class PolicyGateUpdateRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
     action: str = Field(pattern=_POLICY_GATE_ACTION_PATTERN)
+    # FAR-939 chunk 12 — PUT is a full replace of the mutable config (like
+    # ``action``), so this field joins the mutable set and the
+    # ``pre_version_raw`` snapshot key set. Optional on the wire: omitted
+    # PRESERVES the live gate's mode (a caller that sends only ``action``
+    # never resets a ``human`` gate); an explicit value — including
+    # ``'automatic'`` — writes it.
+    evaluation_mode: str | None = Field(None, pattern=_POLICY_GATE_EVALUATION_MODE_PATTERN)
 
 
 class PolicyGateToggleRequest(BaseModel):
@@ -316,6 +332,9 @@ class PolicyGateResponse(BaseModel):
     id: uuid.UUID
     eval_id: uuid.UUID
     action: str
+    # FAR-939 chunk 12: surfaced on every gate read so a write is verifiable
+    # through the same surface (contract round-trip).
+    evaluation_mode: str = "automatic"
     version: int
     pre_version_raw: dict[str, Any] | None = None
     warnings: list[dict[str, str]] = Field(default_factory=list)
@@ -396,6 +415,9 @@ async def _create_or_replace_gate(
             eval_id=eval_id,
             node_id=gate_fields["node_id"],
             action=gate_fields["action"],
+            # FAR-939 chunk 12: carried exactly as ``action`` is; the default
+            # keeps a fields-dict that predates the field byte-identical.
+            evaluation_mode=gate_fields.get("evaluation_mode", "automatic"),
             version=1,
             enabled=enabled,
             enabled_at=enabled_at,
@@ -592,6 +614,7 @@ async def create_policy_gate(
 
             gate_fields = {
                 "action": req.action,
+                "evaluation_mode": req.evaluation_mode or "automatic",
                 "node_id": eval_row.node_id,
             }
 
@@ -615,6 +638,7 @@ async def create_policy_gate(
                     payload_json={
                         "eval_id": str(eval_id),
                         "action": gate.action,
+                        "evaluation_mode": gate.evaluation_mode,
                         "version": gate.version,
                         # FAR-967 F6: enforcement state is part of what the
                         # event records — an auditor must see whether the
@@ -669,6 +693,7 @@ async def create_policy_gate(
         id=gate.id,
         eval_id=gate.eval_id,
         action=gate.action,
+        evaluation_mode=gate.evaluation_mode,
         version=gate.version,
         pre_version_raw=gate.pre_version_raw,
         warnings=author_warnings,
@@ -704,8 +729,13 @@ async def update_policy_gate(
     check is performed (criterion 14).
 
     Version increments on each edit (1→2→3).  ``pre_version_raw`` captures
-    ALL currently-mutable fields as ``{"action": <value>}`` — the snapshot
-    key set equals the set of mutable fields (criteria 17/18).
+    ALL currently-mutable fields as ``{"action": <value>,
+    "evaluation_mode": <value>}`` — the snapshot key set equals the set of
+    mutable fields (criteria 17/18). PUT is a full replace of the mutable
+    config: a caller that sends only ``action`` PRESERVES the live
+    gate's ``evaluation_mode`` (an omitted field never resets a
+    ``human`` gate), while an explicit ``evaluation_mode`` — including
+    ``'automatic'`` — writes it.
 
     ``validate_binding`` is called to verify the gate-to-eval binding is
     still valid after the update.  Violations are logged at WARNING with
@@ -757,12 +787,18 @@ async def update_policy_gate(
             author_warnings = await _collect_author_warnings(session, principal, eval_row, eval_id)
 
             # Snapshot pre_version_raw: KEY SET must equal the set of mutable
-            # fields (currently `action` only) — not a hardcoded list (criteria 17/18).
-            mutable_fields = {"action"}
+            # fields (`action` + `evaluation_mode`, FAR-939 chunk 12) — not a
+            # hardcoded list (criteria 17/18).
+            mutable_fields = {"action", "evaluation_mode"}
             snapshot = {field: getattr(gate, field) for field in mutable_fields}
             gate.pre_version_raw = snapshot
             gate.version = (gate.version or 1) + 1
             gate.action = req.action
+            # §3.1 preserve-on-omit: an omitted field PRESERVES the live
+            # mode (the frontend gate write tracks only ``action``, so it
+            # must never reset a ``human`` gate); an explicit value —
+            # including ``"automatic"`` — writes it (the clear path).
+            gate.evaluation_mode = req.evaluation_mode or gate.evaluation_mode or "automatic"
 
             # Audit log (best-effort)
             try:
@@ -776,6 +812,7 @@ async def update_policy_gate(
                     payload_json={
                         "eval_id": str(eval_id),
                         "action": gate.action,
+                        "evaluation_mode": gate.evaluation_mode,
                         "version": gate.version,
                         "pre_version_raw": snapshot,
                         # FAR-967 F6: record whether the gate this event
@@ -820,6 +857,7 @@ async def update_policy_gate(
         id=gate.id,
         eval_id=gate.eval_id,
         action=gate.action,
+        evaluation_mode=gate.evaluation_mode,
         version=gate.version,
         pre_version_raw=gate.pre_version_raw,
         warnings=author_warnings,
@@ -1110,6 +1148,7 @@ async def toggle_policy_gate(
         id=gate.id,
         eval_id=gate.eval_id,
         action=gate.action,
+        evaluation_mode=gate.evaluation_mode,
         version=gate.version,
         pre_version_raw=gate.pre_version_raw,
         enabled=gate.enabled,
@@ -1173,6 +1212,7 @@ async def get_policy_gate(
         id=gate.id,
         eval_id=gate.eval_id,
         action=gate.action,
+        evaluation_mode=gate.evaluation_mode,
         version=gate.version,
         pre_version_raw=gate.pre_version_raw,
         enabled=gate.enabled,
@@ -1244,6 +1284,12 @@ async def create_eval_definition(
                     failure_behaviour="warn",
                     pass_threshold=req.pass_threshold,
                     suite_id=req.suite_id,
+                    write_options=EvalWriteOptions(
+                        # FAR-939 chunk 12: fresh create — automatic (current
+                        # behaviour). The mode is authored via the dedicated
+                        # gate routes.
+                        evaluation_mode="automatic",
+                    ),
                 )
             except PolicyGateBindingViolationError as exc:
                 raise HTTPException(
@@ -2587,6 +2633,11 @@ async def update_eval_definition(
             )
             current_gate = current_gate_result.scalar_one_or_none()
             current_failure_behaviour = current_gate.action if current_gate is not None else "warn"
+            # FAR-939 chunk 12: preserve the live gate's evaluation mode
+            # across an eval update — mirrors the failure_behaviour
+            # preservation above (an eval edit must not silently reset a
+            # human-mode gate to automatic).
+            current_evaluation_mode = current_gate.evaluation_mode if current_gate is not None else "automatic"
 
             new_config = updates.get("config_json", eval_row.config_json)
             _validate_guardrail_request(
@@ -2608,8 +2659,11 @@ async def update_eval_definition(
                     failure_behaviour=current_failure_behaviour,
                     pass_threshold=updates.get("pass_threshold", eval_row.pass_threshold),
                     suite_id=updates.get("suite_id", eval_row.suite_id),
-                    eval_suite_id=updates.get("eval_suite_id", getattr(eval_row, "eval_suite_id", None)),
-                    existing_eval_id=eval_row.id,
+                    write_options=EvalWriteOptions(
+                        eval_suite_id=updates.get("eval_suite_id", getattr(eval_row, "eval_suite_id", None)),
+                        existing_eval_id=eval_row.id,
+                        evaluation_mode=current_evaluation_mode,
+                    ),
                 )
             except PolicyGateBindingViolationError as exc:
                 raise HTTPException(
@@ -3301,6 +3355,11 @@ async def _insert_eval_definition(
                     failure_behaviour="warn",
                     pass_threshold=None,
                     suite_id=None,
+                    write_options=EvalWriteOptions(
+                        # FAR-939 chunk 12: fresh create from a run sample —
+                        # automatic (current behaviour).
+                        evaluation_mode="automatic",
+                    ),
                 )
             except PolicyGateBindingViolationError as exc:
                 raise HTTPException(

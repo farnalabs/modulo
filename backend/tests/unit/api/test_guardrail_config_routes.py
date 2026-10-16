@@ -647,5 +647,5 @@ async def test_apply_guardrail_upserts_updates_existing_config_row() -> None:
         )
 
     mock_upsert.assert_awaited_once()
-    assert mock_upsert.call_args.kwargs["existing_eval_id"] == existing.id
+    assert mock_upsert.call_args.kwargs["write_options"].existing_eval_id == existing.id
     assert mock_upsert.call_args.kwargs["eval_type"] == "guardrail"

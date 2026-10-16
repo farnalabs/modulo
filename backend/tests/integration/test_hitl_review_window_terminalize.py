@@ -443,3 +443,106 @@ class TestParkMarginOrdering:
 
         status, _code = await _run_state(db_engine, org_id, run_id)
         assert status == "hitl_parked"
+
+
+# ---------------------------------------------------------------------------
+# FAR-939 chunk 12 — criteria 16/17: human-mode gates are covered by the
+# SAME shipped chain (no parallel timeout path). The sweep is mode-agnostic;
+# these tests prove the coverage against a run whose gate carries a live
+# evaluation_mode='human' PolicyGate row.
+# ---------------------------------------------------------------------------
+
+
+async def _seed_human_mode_awaiting_run(
+    db_engine: AsyncEngine,
+    label: str,
+) -> tuple[uuid.UUID, uuid.UUID]:
+    """Seed an ``awaiting_human`` run whose pipeline has a human-mode gate."""
+    from tests.integration.test_policy_gate_evaluation_mode import _seed_human_gate_run
+
+    ctx = await _seed_human_gate_run(db_engine, label)
+    run_id = ctx["run_id"]
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text("UPDATE runs SET status = 'awaiting_human' WHERE id = :rid"),
+            {"rid": str(run_id)},
+        )
+    return ctx["org_id"], run_id  # type: ignore[return-value]
+
+
+class TestHumanModeGateCoverage:
+    """Chunk 12 §3.6 — timeout is the shipped FAR-648/FAR-1257 chain,
+    verified; no new error code, sweep, or knob."""
+
+    async def test_c16_unanswered_human_mode_gate_is_terminalised(
+        self,
+        app_engine: AsyncEngine,
+        db_engine: AsyncEngine,
+        migrated_db_url: str,
+    ) -> None:
+        """Criterion 16: a human-mode gate left unanswered past its absolute
+        deadline (unclaimed) is collected exactly like any other HITL gate —
+        ``cancelled`` / ``hitl_review_expired``."""
+        from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
+
+        org_id, run_id = await _seed_human_mode_awaiting_run(db_engine, "C16HumanTimeout")
+        # The claim row the gate firing would stamp; unclaimed, deadline past.
+        await _seed_claim(
+            db_engine,
+            org_id,
+            run_id,
+            (await _pipeline_id_for_run(db_engine, run_id)),
+            "hitl_review-c16-pending",
+            expires_at=datetime.now(UTC) + timedelta(hours=24),
+            terminalize_at=datetime.now(UTC) - timedelta(seconds=30),
+        )
+
+        count = await _terminalize_count(
+            app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=_GRACE_SECONDS
+        )
+        assert count == 1
+
+        status, code = await _run_state(db_engine, org_id, run_id)
+        assert status == "cancelled"
+        assert code == "hitl_review_expired"
+
+    async def test_c17_committed_decision_wins_the_timeout_race(
+        self,
+        app_engine: AsyncEngine,
+        db_engine: AsyncEngine,
+        migrated_db_url: str,
+    ) -> None:
+        """Criterion 17: a decision committed BEFORE the sweep's guarded
+        UPDATE excludes the gate (``decision IS NULL`` predicate) — the run
+        is NOT terminalised and carries no ``hitl_review_expired``."""
+        from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
+
+        org_id, run_id = await _seed_human_mode_awaiting_run(db_engine, "C17HumanDecided")
+        await _seed_claim(
+            db_engine,
+            org_id,
+            run_id,
+            (await _pipeline_id_for_run(db_engine, run_id)),
+            "hitl_review-c17-decided",
+            expires_at=datetime.now(UTC) - timedelta(hours=2),
+            terminalize_at=datetime.now(UTC) - timedelta(seconds=30),
+            decision="approved",
+        )
+
+        count = await _terminalize_count(
+            app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=_GRACE_SECONDS
+        )
+        assert count == 0
+
+        status, code = await _run_state(db_engine, org_id, run_id)
+        assert status == "awaiting_human"
+        assert code != "hitl_review_expired"
+
+
+async def _pipeline_id_for_run(db_engine: AsyncEngine, run_id: uuid.UUID) -> uuid.UUID:
+    async with db_engine.connect() as conn:
+        row = (
+            await conn.execute(text("SELECT pipeline_id FROM runs WHERE id = :rid"), {"rid": str(run_id)})
+        ).fetchone()
+    assert row is not None
+    return uuid.UUID(str(row[0]))

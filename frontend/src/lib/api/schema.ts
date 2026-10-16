@@ -7486,8 +7486,13 @@ export interface paths {
          *     check is performed (criterion 14).
          *
          *     Version increments on each edit (1→2→3).  ``pre_version_raw`` captures
-         *     ALL currently-mutable fields as ``{"action": <value>}`` — the snapshot
-         *     key set equals the set of mutable fields (criteria 17/18).
+         *     ALL currently-mutable fields as ``{"action": <value>,
+         *     "evaluation_mode": <value>}`` — the snapshot key set equals the set of
+         *     mutable fields (criteria 17/18). PUT is a full replace of the mutable
+         *     config: a caller that sends only ``action`` PRESERVES the live
+         *     gate's ``evaluation_mode`` (an omitted field never resets a
+         *     ``human`` gate), while an explicit ``evaluation_mode`` — including
+         *     ``'automatic'`` — writes it.
          *
          *     ``validate_binding`` is called to verify the gate-to-eval binding is
          *     still valid after the update.  Violations are logged at WARNING with
@@ -17653,6 +17658,8 @@ export interface components {
         PolicyGateCreateRequest: {
             /** Action */
             action: string;
+            /** Evaluation Mode */
+            evaluation_mode?: string | null;
         };
         /**
          * PolicyGateResponse
@@ -17671,6 +17678,11 @@ export interface components {
             eval_id: string;
             /** Action */
             action: string;
+            /**
+             * Evaluation Mode
+             * @default automatic
+             */
+            evaluation_mode: string;
             /** Version */
             version: number;
             /** Pre Version Raw */
@@ -17707,6 +17719,8 @@ export interface components {
         PolicyGateUpdateRequest: {
             /** Action */
             action: string;
+            /** Evaluation Mode */
+            evaluation_mode?: string | null;
         };
         /**
          * PollingConfigUpdate
