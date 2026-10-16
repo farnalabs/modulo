@@ -205,21 +205,19 @@ async function preparePage(page: Page, route: string, env: TestEnv): Promise<Pag
 
   await waitForAppMount(page, route, response)
 
-  // No content settle here (FAR-1876, FAR-1889). A blanket
+  // No content settle here (FAR-1876). A blanket
   // `waitForSelector('[data-loading="false"]')` only matches on the two routes
   // that render the marker (AnalyticsView and SettingsLicenseView); on every
   // other route the wait burned its full 15s timeout and was then discarded by
   // `.catch(() => {})`. Two of those (32.3s incl. navigation) overran the 30s
-  // local test budget, the deadline fired mid-wait, and the discarded rejection
-  // let the test limp into checkViewportMeta() during teardown — reported as a
-  // viewport-meta failure (`Received string: ""`) with no trace of the real
-  // cause. A route stuck mid-load was therefore indistinguishable from a
-  // settled one and surfaced later as a misleading audit measurement. There is
-  // no universal content marker to wait on; `waitForAppMount` above is the
-  // readiness signal, and a future settle MUST throw on timeout rather than
-  // swallow — a swallowed settle failure is indistinguishable from the page
-  // being wrong. (The dead swallowed `waitForURL('**/*')` no-op is removed
-  // too.)
+  // local test budget, the deadline fired mid-wait,
+  // and the discarded rejection let the test limp into checkViewportMeta()
+  // during teardown — reported as a viewport-meta failure (`Received string:
+  // ""`) with no trace of the real cause. There is no universal content marker
+  // to wait on; `waitForAppMount` above is the readiness signal. A future
+  // settle MUST throw on timeout rather than swallow — a swallowed settle
+  // failure is indistinguishable from the page being wrong.
+
   if (env.name === 'local') {
     // Local CI: mock all /api/v1 traffic and seed the auth tokens so
     // authenticated routes render with mocked data (mirrors loginAsAdmin's
