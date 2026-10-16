@@ -273,6 +273,41 @@ def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
         ) from None
 
 
+def raise_lock_timeout_conflict_if(exc: SQLAlchemyError, log_key: str) -> None:
+    """Re-raise *exc* as an attributable 409 when it is a bounded lock timeout.
+
+    SQLSTATE 55P03 (``lock_not_available`` — the bounded ``lock_timeout`` from
+    ``set_mutation_row_lock_timeout`` expiring on a contended row lock) is a
+    busy-row CONFLICT, not a database outage: the engine is healthy and
+    re-issuing the request once the other change completes may succeed.
+    Mapping it to the generic 503 ("Database temporarily unavailable") would
+    read as "retry now" and invite a client retry storm against the very lock
+    that is busy — see the ``_MSG_LOCK_TIMEOUT`` rationale at the top of this
+    module, which is exactly the 409 this helper raises.
+
+    FAR-1832 QA F2: the org-settings patch helper bounds every converted
+    writer's row-lock wait, so 55P03 became REACHABLE on the admin /
+    admin-orgs / product-analytics routes whose local ``except
+    SQLAlchemyError`` / ``except Exception`` arms collapsed it into a generic
+    503 or 500. Each of those arms calls this shared classifier FIRST (the
+    same pattern ``hitl.py`` ``_raise_lock_timeout_if`` and
+    ``product_analytics_identity`` already use), so the 409 mapping has ONE
+    source of truth alongside the ``handle_db_errors`` backstop above.
+
+    For every other ``SQLAlchemyError`` this RETURNS (a no-op) so the caller's
+    existing 503 / 500 handling continues unchanged. Callers invoke it from an
+    ``except SQLAlchemyError`` arm (or an arm that has already narrowed to it).
+    ``log_key`` is the route key; the record is ``<log_key>.lock_timeout``.
+    """
+    if sqlstate_of(exc) != LOCK_NOT_AVAILABLE_SQLSTATE:
+        return
+    _log.warning("%s.lock_timeout", log_key, exc_info=exc)
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=_MSG_LOCK_TIMEOUT,
+    ) from None
+
+
 def raise_session_contract_error(exc: Exception, log_key: str) -> None:
     """Raise HTTP 500 for a client-side session-contract violation
     (``InvalidRequestError`` / ``MissingGreenlet``); RETURN for any other

@@ -28,7 +28,7 @@ from modulo.api.constants import (
     MSG_THIS_FEATURE_NOT_AVAILABLE,
     MSG_UNEXPECTED_ERROR,
 )
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import handle_db_errors, raise_lock_timeout_conflict_if, raise_session_contract_error
 from modulo.api.dependencies import (
     deny_break_glass_mint,
     get_db_session,
@@ -1041,6 +1041,9 @@ async def admin_update_org(
         logger.exception("admin_update_org ProgrammingError", extra={"org_id": str(current_user.organisation_id)})
         _raise_feature_not_available()
     except SQLAlchemyError as exc:
+        # FAR-1832 QA F2: 55P03 (bounded lock timeout) is a 409 conflict, not
+        # an outage — classify before the generic 503.
+        raise_lock_timeout_conflict_if(exc, "admin.admin_update_org")
         raise_session_contract_error(exc, "admin.admin_update_org")
         logger.exception("admin_update_org SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         _raise_db_unavailable("Database error while updating org profile.")
@@ -3944,6 +3947,9 @@ async def admin_update_retention(
 
         _raise_this_feature_not_available()
     except SQLAlchemyError as exc:
+        # FAR-1832 QA F2: 55P03 (bounded lock timeout) is a 409 conflict, not
+        # an outage — classify before the generic 503.
+        raise_lock_timeout_conflict_if(exc, "admin.admin_update_retention")
         raise_session_contract_error(exc, "admin.admin_update_retention")
         logger.exception(_CODE_ROUTES_ADMIN)
 
@@ -4020,6 +4026,10 @@ async def _run_admin_rls_txn(
             detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
+        # FAR-1832 QA F2: a bounded lock timeout (55P03) on the settings
+        # patch's row lock is a 409 conflict, not an outage — classify it
+        # BEFORE the generic 503 below.
+        raise_lock_timeout_conflict_if(exc, "admin._run_admin_rls_txn")
         raise_session_contract_error(exc, "admin._run_admin_rls_txn")
         logger.exception(_CODE_ROUTES_ADMIN)
         raise HTTPException(

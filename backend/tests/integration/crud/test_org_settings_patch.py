@@ -794,3 +794,197 @@ async def test_product_analytics_concurrent_subfield_writers_both_survive(
         f"pre-fix the whole-block replace clobbered it: {block!r}"
     )
     assert block["level_changed_at"] is not None
+
+
+# ---------------------------------------------------------------------------
+# FAR-1832 QA F2: a real in-flight lock holder + the bounded lock wait makes
+# SQLSTATE 55P03 reachable on the converted routes — it must surface as a 409
+# conflict (not the old 503/500), while a genuine DB-unavailable error stays
+# 503.
+# ---------------------------------------------------------------------------
+
+
+async def _hold_org_row_lock(factory: Any, org_id: uuid.UUID) -> Any:
+    """Open a transaction holding ``FOR UPDATE`` on the org row (the lock a
+    concurrent settings write must wait on)."""
+    holder = factory()
+    await holder.begin()
+    await holder.execute(
+        text("SELECT id FROM organisations WHERE id = :i FOR UPDATE"),
+        {"i": str(org_id)},
+    )
+    return holder
+
+
+async def test_post_consent_lock_timeout_is_409_not_500(
+    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real in-flight lock holder + real consent handler: the bounded wait
+    expires (55P03) and the route answers 409 — pre-F2 it collapsed to 500."""
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    from modulo.api.routes.product_analytics import ConsentRequest, post_consent
+    from modulo.auth.jwt import TenantPrincipal
+
+    monkeypatch.setattr(
+        "modulo.db.crud.row_lock.get_settings",
+        lambda: SimpleNamespace(mutation_row_lock_timeout_ms=300),
+    )
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    principal = TenantPrincipal(username="w", organisation_id=org_id, account_id=uuid.uuid4(), org_role="admin")
+
+    holder = await _hold_org_row_lock(factory, org_id)
+    session = factory()
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await post_consent(ConsentRequest(action="accept"), principal, session)
+        assert exc_info.value.status_code == 409, f"expected 409, got {exc_info.value}"
+        assert "another change is in progress" in str(exc_info.value.detail)
+    finally:
+        await holder.rollback()
+        await holder.close()
+    assert not await _read_settings(db_engine, org_id), "the blocked write must not land"
+
+
+async def test_admin_set_org_license_lock_timeout_is_409_not_503(
+    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real in-flight lock holder + real licence-set handler: 55P03 surfaces
+    as 409 — pre-F2 the admin_orgs arm collapsed it to a 503 outage reply."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException
+
+    from modulo.api.routes.admin_orgs import SetOrgLicenseRequest, admin_set_org_license
+    from modulo.auth.jwt import AuthenticatedPrincipal
+    from modulo.settings import get_settings
+
+    monkeypatch.setattr(
+        "modulo.db.crud.row_lock.get_settings",
+        lambda: SimpleNamespace(mutation_row_lock_timeout_ms=300),
+    )
+    monkeypatch.setattr(
+        "modulo.core.license.parse_and_verify",
+        MagicMock(
+            return_value=SimpleNamespace(
+                valid=True,
+                error=None,
+                license_data=SimpleNamespace(tier="team", features=[], expires_at=None, org_id=None),
+            )
+        ),
+    )
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    principal = AuthenticatedPrincipal(
+        username="admin",
+        organisation_id=org_id,
+        account_id=uuid.uuid4(),
+        org_role="admin",
+    )
+
+    holder = await _hold_org_row_lock(factory, org_id)
+    session = factory()
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await admin_set_org_license(
+                org_id, SetOrgLicenseRequest(license_key="new.key"), principal, session, get_settings()
+            )
+        assert exc_info.value.status_code == 409, f"expected 409, got {exc_info.value}"
+        assert "another change is in progress" in str(exc_info.value.detail)
+    finally:
+        await holder.rollback()
+        await holder.close()
+    assert "license_key" not in await _read_settings(db_engine, org_id)
+
+
+async def test_admin_sandbox_concurrency_lock_timeout_is_409(
+    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The admin.py ``_run_admin_rls_txn`` boundary (sandbox concurrency
+    writer) answers 409 for the same real-lock shape."""
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    from modulo.api.routes.admin import (
+        UpdateSandboxConcurrencyRequest,
+        admin_update_sandbox_concurrency,
+    )
+    from modulo.auth.jwt import TenantPrincipal
+
+    monkeypatch.setattr(
+        "modulo.db.crud.row_lock.get_settings",
+        lambda: SimpleNamespace(mutation_row_lock_timeout_ms=300),
+    )
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    principal = TenantPrincipal(username="a", organisation_id=org_id, account_id=uuid.uuid4(), org_role="admin")
+
+    holder = await _hold_org_row_lock(factory, org_id)
+    session = factory()
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await admin_update_sandbox_concurrency(
+                UpdateSandboxConcurrencyRequest(sandbox_concurrency_limit=3), principal, session
+            )
+        assert exc_info.value.status_code == 409, f"expected 409, got {exc_info.value}"
+        assert "another change is in progress" in str(exc_info.value.detail)
+    finally:
+        await holder.rollback()
+        await holder.close()
+
+
+async def test_genuine_db_outage_stays_503_on_the_admin_orgs_boundary(
+    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A genuine connection-class failure (NOT 55P03) keeps the pre-existing
+    503 on the admin_orgs boundary."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException
+    from sqlalchemy.exc import OperationalError
+
+    from modulo.api.routes.admin_orgs import SetOrgLicenseRequest, admin_set_org_license
+    from modulo.auth.jwt import AuthenticatedPrincipal
+    from modulo.settings import get_settings
+
+    monkeypatch.setattr(
+        "modulo.core.license.parse_and_verify",
+        MagicMock(
+            return_value=SimpleNamespace(
+                valid=True,
+                error=None,
+                license_data=SimpleNamespace(tier="team", features=[], expires_at=None, org_id=None),
+            )
+        ),
+    )
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    principal = AuthenticatedPrincipal(
+        username="admin",
+        organisation_id=org_id,
+        account_id=uuid.uuid4(),
+        org_role="admin",
+    )
+
+    session = factory()
+    real_execute = session.execute
+    calls = {"n": 0}
+
+    async def _fail_on_patch(statement: object, *args: object, **kwargs: object) -> object:
+        calls["n"] += 1
+        if "UPDATE organisations" in str(statement):
+            raise OperationalError(str(statement), {}, Exception("server closed the connection unexpectedly"))
+        return await real_execute(statement, *args, **kwargs)
+
+    monkeypatch.setattr(session, "execute", _fail_on_patch)
+    with pytest.raises(HTTPException) as exc_info:
+        await admin_set_org_license(
+            org_id, SetOrgLicenseRequest(license_key="new.key"), principal, session, get_settings()
+        )
+    assert exc_info.value.status_code == 503, f"a genuine outage must stay 503, got {exc_info.value}"

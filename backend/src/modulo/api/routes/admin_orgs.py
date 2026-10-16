@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from sqlalchemy.engine import CursorResult
 
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR, MSG_ORGANISATION_NOT_FOUND
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import handle_db_errors, raise_lock_timeout_conflict_if, raise_session_contract_error
 from modulo.api.dependencies import (
     deny_break_glass_mint,
     get_db_session,
@@ -86,7 +86,16 @@ def _raise_programming_error(code: str, detail: str, exc: ProgrammingError) -> N
 
 
 def _raise_db_unavailable(code: str, detail: str, exc: SQLAlchemyError) -> NoReturn:
-    """503 -- database error while servicing the request."""
+    """503 -- database error while servicing the request.
+
+    FAR-1832 QA F2: a bounded lock timeout (SQLSTATE 55P03 — the settings
+    patch's ``set_mutation_row_lock_timeout`` expiring on a contended org
+    row) is classified FIRST through the shared canonical classifier and
+    raised as a 409 conflict — it is a busy-row contention, not an outage,
+    and a generic 503 would invite a retry storm against the busy lock.
+    Genuine connection/unavailability errors keep the 503 below.
+    """
+    raise_lock_timeout_conflict_if(exc, code)
     logger.error(code, exc_info=exc)
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

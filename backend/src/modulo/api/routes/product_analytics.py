@@ -17,10 +17,11 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import delete, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_lock_timeout_conflict_if
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -227,6 +228,15 @@ async def post_consent(
         raise
     except asyncio.CancelledError:
         raise
+    except SQLAlchemyError as exc:
+        # FAR-1832 QA F2: the settings patch bounds its row-lock wait, so a
+        # 55P03 lock timeout is reachable here. Classify it (409 conflict)
+        # via the shared classifier, then re-raise every other DB error so
+        # ``handle_db_errors`` maps it — genuine connection/unavailability
+        # errors stay 503, session-contract violations stay 500 — instead of
+        # the old blanket 500 below.
+        raise_lock_timeout_conflict_if(exc, "product_analytics.consent")
+        raise
     except Exception:
         _log.exception("product_analytics.consent unexpected error")
         raise HTTPException(
@@ -332,6 +342,12 @@ async def update_product_analytics_level(
     except HTTPException:
         raise
     except asyncio.CancelledError:
+        raise
+    except SQLAlchemyError as exc:
+        # FAR-1832 QA F2: same contract as the consent POST — 55P03 is a 409
+        # conflict via the shared classifier; other DB errors re-raise to
+        # ``handle_db_errors`` (503 for outages) instead of a blanket 500.
+        raise_lock_timeout_conflict_if(exc, "product_analytics.update_level")
         raise
     except Exception:
         _log.exception("product_analytics.update_level unexpected error")
