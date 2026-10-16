@@ -99,7 +99,6 @@ def test_reference_copies_match_seed_definitions() -> None:
     for data in refs:
         seed = seeds.get(data["name"])
         assert seed is not None, f"Reference copy {data['name']} has no matching seed schema"
-        assert data["name"] == seed["name"]
         assert data["description"] == seed["description"]
         assert data["definition"] == seed["definition"]
 
