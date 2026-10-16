@@ -1393,6 +1393,70 @@ class TestListFeatureFlagsErrorArms(AuthContext):
         assert "error" not in result
         assert not result["flags"]
 
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.core.license.get_license", return_value=None)
+    @patch("modulo.core.feature_flags.FeatureFlagRegistry.from_db", new_callable=AsyncMock)
+    @patch("modulo.api.mcp_server.resolve_plan_context", new_callable=AsyncMock)
+    @patch("modulo.db.crud.organisation.get_organisation", new_callable=AsyncMock)
+    @patch("modulo.core.feature_flags.resolve_effective_license")
+    async def test_is_valid_comes_from_shared_ladder(
+        self,
+        mock_ladder: MagicMock,
+        mock_org: AsyncMock,
+        mock_plan: AsyncMock,
+        mock_from_db: AsyncMock,
+        mock_license: MagicMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        """FAR-1849: ``is_valid`` is the OUTCOME of the one canonical ladder
+        (``core.feature_flags.resolve_effective_license``), not an inline
+        re-verification of its rungs — a licence from the helper reports
+        ``True`` even when no key present in this call would verify — while
+        ``has_license_key`` stays the independent presence aggregate the REST
+        registry input uses (the env rung there still requires verification).
+        """
+        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
+        from modulo.core.license import LicenseData
+
+        mock_ladder.return_value = LicenseData(
+            tier="team",
+            features=["sso"],
+            expires_at="2099-01-01T00:00:00+00:00",
+            org_id="test-org",
+            raw_payload={},
+            raw_key="x.y",
+        )
+        mock_org.return_value = MagicMock(settings_json={})
+        plan_ctx = MagicMock()
+        plan_ctx.tier.return_value = "team"
+        mock_plan.return_value = plan_ctx
+        registry = MagicMock()
+        registry.current_tier = "team"
+        registry.has_license_key = False
+        registry.list_flags.return_value = []
+        registry.tier_gap_flags.return_value = []
+        mock_from_db.return_value = registry
+        mock_session.return_value = make_session_context(AsyncMock())
+        _ctx_role.set("admin")
+        _ctx_is_system_admin.set(True)
+        try:
+            settings = MagicMock()
+            settings.modulo_license_key = "not-a-valid-key"
+            settings.modulo_dev_mode = False
+            with patch("modulo.api.mcp_server.get_settings", return_value=settings):
+                result = await list_feature_flags()
+        finally:
+            _ctx_is_system_admin.set(False)
+
+        # The shared helper resolved a licence, so is_valid follows it even
+        # though the env key held by this call cannot verify.
+        assert result["license"]["is_valid"] is True
+        # has_license_key does NOT follow the ladder: the env rung counts only
+        # a verified key, so this one still does not count.
+        assert mock_from_db.call_args.kwargs["has_license_key"] is False
+
 
 class TestGetAuditLogErrorArms(AuthContext):
     def setup_method(self) -> None:

@@ -406,9 +406,11 @@ def _verified_license_key(raw_key: str, error_log: str) -> LicenseData | None:
     Session-free. An absent key resolves to ``None`` without touching the
     verifier; an unexpected parse failure is logged under ``error_log`` and
     treated as absent — the exact fall-through behaviour (and per-rung
-    observability) of the ladder rungs this extracts from
-    ``_context_from_license_key``. Cancellation propagates (``CancelledError``
-    is a ``BaseException``, never swallowed by the ``except Exception``).
+    observability: each rung passes its own ``error_log``) of the key rungs of
+    ``resolve_effective_license``, the shared ladder helper, which resolves
+    both key rungs through ``_verified_license_key`` (this per-key verifier).
+    Cancellation propagates (``CancelledError`` is a ``BaseException``, never
+    swallowed by the ``except Exception``).
     """
     from modulo.core.license import parse_and_verify
 

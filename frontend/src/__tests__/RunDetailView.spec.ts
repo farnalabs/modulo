@@ -2202,15 +2202,76 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
-  it('keeps the label gap when the heartbeat value is the terminal placeholder (FAR-726)', async () => {
+  it('renders the kept absolute last-heartbeat on a terminal run instead of a dash (FAR-1839)', async () => {
+    const heartbeatAt = new Date(Date.now() - 5 * 60_000).toISOString() // nosemgrep: new-date-without-guard
     const wrapper = await mountWithDetail({
       ...baseDetail(),
       status: 'complete',
-      heartbeat_at: new Date(Date.now() - 30_000).toISOString(), // nosemgrep: new-date-without-guard
+      heartbeat_at: heartbeatAt,
+    })
+
+    const el = wrapper.find('[data-testid="run-detail-heartbeat"]')
+    // Label gap (FAR-624) preserved, and the value is the heartbeat's own
+    // local time — the backend keeps heartbeat_at on a terminal run, so "—"
+    // would discard a value the server still holds.
+    expect(el.text()).toMatch(/Last heartbeat\s/)
+    const absoluteLocalTime = new Date(heartbeatAt).toLocaleString('en-US', { // nosemgrep: new-date-without-guard
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+    })
+    expect(el.text()).toContain(absoluteLocalTime)
+    expect(el.text()).not.toContain('—')
+    // Staleness is a LIVE-run signal only: a finished run never wears the
+    // "(stale)" marker, however old its last heartbeat is...
+    expect(el.text()).not.toContain('(stale)')
+    // ...and never raises the warnings-strip entry either.
+    expect(wrapper.find('[data-testid="run-detail-warnings-strip-stale-heartbeat"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('keeps the label gap and the dash when a terminal run has no heartbeat at all (FAR-726)', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      status: 'complete',
+      heartbeat_at: null,
     })
 
     const el = wrapper.find('[data-testid="run-detail-heartbeat"]')
     expect(el.text()).toMatch(/Last heartbeat\s+—/)
+    wrapper.unmount()
+  })
+
+  it('renders the metadata as an aligned definition list with one label column (FAR-1839)', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      created_at: '2026-08-01T10:00:00Z',
+      started_at: '2026-08-01T10:00:05Z',
+      completed_at: '2026-08-01T10:05:00Z',
+      trigger_type: 'manual',
+      trigger_actor: 'Duncan (GitHub)',
+      heartbeat_at: null,
+    })
+
+    // Locate OUR list (other components on the page may render their own dl).
+    const dl = wrapper
+      .findAll('dl')
+      .find((candidate) => candidate.find('[data-testid="run-detail-heartbeat"]').exists())
+    expect(dl).toBeTruthy()
+    const list = dl!
+    expect(list.findAll('dt').length).toBe(5)
+    expect(list.findAll('dd').length).toBe(5)
+    // The two contract testids stay on their label+value row, inside the list.
+    expect(list.find('[data-testid="run-detail-trigger-actor"]').text()).toContain('Triggered by')
+    expect(list.find('[data-testid="run-detail-trigger-actor"]').text()).toContain('Duncan (GitHub)')
+    expect(list.find('[data-testid="run-detail-heartbeat"]').text()).toContain('Last heartbeat')
+    // Every label shares ONE column definition — that shared width is what
+    // makes "Started" and "Triggered by" line up; the pre-FAR-1839 inline
+    // wrapping list had no label column at all.
+    const labelClasses = list.findAll('dt').map((dt) => dt.classes().join(' '))
+    expect(new Set(labelClasses).size).toBe(1)
+    expect(labelClasses[0]).toContain('w-28')
+    // Each label/value pair sits in its own row (labels never flow inline).
+    expect(list.findAll('div').length).toBe(5)
+    expect(list.findAll('div').every((row) => row.classes().includes('flex'))).toBe(true)
     wrapper.unmount()
   })
 
@@ -3309,6 +3370,7 @@ describe('RunDetailView pipeline-version link (FAR-1813)', () => {
   // the preceding test left behind.
   let pipelineName: string | null = null
   let snapshotId: string | null = null
+  let snapshotVersion: number | null = null
   let restoreGet: ((url: string) => unknown) | undefined
 
   type GetMock = {
@@ -3321,6 +3383,7 @@ describe('RunDetailView pipeline-version link (FAR-1813)', () => {
     restoreGet = getMock.getMockImplementation()
     pipelineName = null
     snapshotId = null
+    snapshotVersion = null
     getMock.mockImplementation((url: string) => {
       if (url === '/api/v1/runs/{run_id}') {
         return Promise.resolve({
@@ -3329,6 +3392,7 @@ describe('RunDetailView pipeline-version link (FAR-1813)', () => {
             pipeline_id: 'test-pipeline',
             pipeline_name: pipelineName,
             snapshot_id: snapshotId,
+            snapshot_version: snapshotVersion,
             status: 'complete',
             total_cost_usd: 1.23,
           },
@@ -3397,6 +3461,48 @@ describe('RunDetailView pipeline-version link (FAR-1813)', () => {
     expect(wrapper.find('a[href^="/pipelines/"]').exists()).toBe(false)
     // The header still names the run.
     expect(wrapper.text()).toContain('Run #test-run')
+    wrapper.unmount()
+  })
+
+  it('passes the run snapshot_version through: the header shows the v{n} chip inside the link', async () => {
+    // Proves the VIEW forwards RunResponse.snapshot_version — a view-level
+    // regression would otherwise leave the chip permanently absent while every
+    // component-level test stayed green.
+    pipelineName = 'Data Sync'
+    snapshotId = 'snap-42'
+    snapshotVersion = 3
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+
+    const chip = wrapper.find('[data-testid="run-pipeline-version-chip"]')
+    expect(chip.exists()).toBe(true)
+    expect(chip.text()).toBe('v3')
+    // One tab stop, one accessible name: the chip lives INSIDE the link.
+    const link = wrapper.find('[data-testid="run-detail-pipeline-version-link"]')
+    expect(link.exists()).toBe(true)
+    expect(link.find('[data-testid="run-pipeline-version-chip"]').exists()).toBe(true)
+    expect(link.text()).toContain('v3')
+    wrapper.unmount()
+  })
+
+  it('a legacy run with snapshot_version NULL renders NO chip — never a placeholder', async () => {
+    pipelineName = 'Data Sync'
+    snapshotId = null
+    snapshotVersion = null
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+
+    const chip = wrapper.find('[data-testid="run-pipeline-version-chip"]')
+    expect(chip.exists()).toBe(false)
+    const link = wrapper.find('[data-testid="run-detail-pipeline-version-link"]')
+    expect(link.exists()).toBe(true)
+    expect(link.text()).not.toContain('v0')
     wrapper.unmount()
   })
 })

@@ -107,7 +107,11 @@ from modulo.core.credential_issuer import (
     default_credential_issuer,
 )
 from modulo.core.eval_engine import EvalEngine, EvalResult
-from modulo.core.guardrails.loop_intercept import LoopInterceptConfig
+from modulo.core.guardrails.loop_intercept import (
+    BRIDGE_ESCALATED_EXIT_CODE,
+    LoopInterceptConfig,
+    parse_bridge_escalation_marker,
+)
 from modulo.core.model_class_registry import effective_model_template_value
 from modulo.core.node_output_split import (
     DEFAULT_NODE_TYPE,
@@ -707,6 +711,32 @@ SANDBOX_AGENT_FAILED_SUMMARY = "Sandbox agent execution failed"
 # carries the runner's internal marker) can never collide. Single source of
 # truth so runner and executor cannot drift.
 MODULO_SYNTHETIC_FAILURE_MARKER = "modulo_synthetic_failure"
+
+
+def _bridge_escalation_failure_detail(exit_code: int, stdout_raw: str) -> str | None:
+    """Failure detail for a loop stopped by an in-loop escalation (FAR-1694 S2).
+
+    The sandbox bridge client refuses an ``escalate``-verdict call, prints a
+    ``MODULO_BRIDGE_ESCALATED:<json>`` marker and exits with
+    ``BRIDGE_ESCALATED_EXIT_CODE``. Returns a summary-only descriptor of the
+    escalation (tool / guardrail / reason — never raw args), or ``None`` when
+    the run was not stopped by an escalation. The mid-loop suspension that turns
+    this into ``interrupt()``/``awaiting_human`` is a later FAR-1694 slice; here
+    it only explains the failure.
+
+    UNTRUSTED CHANNEL (FAR-1694 S2 security note): both *exit_code* and the
+    marker inside *stdout_raw* come from the wrapped agent's process, which can
+    forge them. This helper therefore produces a human-readable failure
+    EXPLANATION only — it must never gate a control decision. S3 must
+    authenticate the escalation channel (a host-recorded decision the agent
+    cannot write) before turning it into ``interrupt()``/``awaiting_human``.
+    """
+    if exit_code != BRIDGE_ESCALATED_EXIT_CODE:
+        return None
+    escalation = parse_bridge_escalation_marker(stdout_raw)
+    if escalation is None:
+        return None
+    return f"Agent loop escalation requested — human decision required ({escalation.describe()})"
 
 
 async def _resolve_egress_allowlist(
@@ -11121,7 +11151,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # watchdog fired, FAR-98) carries a distinct stall_reason so the
         # two failure modes are distinguishable.
         command_error: str = ""
-        if cmd_result is None:
+        # FAR-1694 S2 (bridge protocol): detect an in-loop escalation marker and
+        # surface its typed context. No control-flow change — a non-zero exit
+        # still fails the node (fail-closed) until the suspension slice lands.
+        _bridge_escalation_error = _bridge_escalation_failure_detail(exit_code, agent_stdout_raw)
+        if _bridge_escalation_error is not None:
+            command_error = _bridge_escalation_error
+        elif cmd_result is None:
             if stall_reason:
                 command_error = stall_reason
             else:

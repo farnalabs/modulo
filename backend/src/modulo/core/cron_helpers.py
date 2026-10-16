@@ -5562,8 +5562,13 @@ def _build_re_dispatch_predicate(
             # ingestion edge BEFORE any dispatch, so also pre-node; the slot
             # sweep's heartbeat-stale reset clears ``dispatched_at``/
             # ``dispatcher`` AND excludes node-started rows — see
-            # ``run_admission.reconcile_pipeline_slots``). All THREE reset
-            # call sites are gated on ``_graph_is_idempotent``:
+            # ``run_admission.reconcile_pipeline_slots``; the FAR-1627
+            # worker-shutdown handback — ``worker_handoff`` — ALSO clears
+            # both, so it lands on the capacity-deferred leg BELOW instead,
+            # and gates its node-started requeue on graph idempotency +
+            # the run's retry policy at the producer). All THREE
+            # ``_fenced_pending_reset`` call sites are gated on
+            # ``_graph_is_idempotent``:
             # ``_can_fenced_requeue`` (in-execute transient retry),
             # ``_retry_policy_applies`` (retry_policy re-dispatch), and
             # watchdog_retry's ``not graph_idempotent`` stand-down. So such a
@@ -5608,11 +5613,18 @@ def _build_re_dispatch_predicate(
             # RUNNING rows in one tick) enqueues ZERO re-execution jobs — the
             # flood the old nodeless-cap of 50/tick used to bound; its
             # terminalisation drains through the age gate's own per-tick
-            # ``max_rows`` cap. The only ``execute_run`` leg that can still
-            # enqueue a node-started row is the pending reenqueue-window leg
-            # ABOVE — but that matches only the fenced pending-reset shape
-            # (one row per confirmed reset, and only once its SAQ job is
-            # genuinely lost), never the RUNNING burst. The F6a leg below
+            # ``max_rows`` cap. The PENDING ``execute_run`` legs that can
+            # still enqueue a node-started row are the two idempotency-gated
+            # producers above: the pending reenqueue-window leg (the fenced
+            # pending-reset shape — one row per confirmed reset, and only once
+            # its SAQ job is genuinely lost) and the capacity-deferred leg
+            # (``pending`` + ``dispatched_at IS NULL``) once the FAR-1627
+            # worker-shutdown handback has reset such a row — the handback is
+            # gated on graph idempotency + the run's retry policy at the
+            # producer (``worker_handoff._handback_decision``), so a
+            # NON-idempotent node-started run is terminal-failed in place and
+            # never reaches either leg (FAR-1649's guarantee, preserved).
+            # Neither matches the RUNNING burst. The F6a leg below
             # enqueues ``resume_run`` only (checkpoint resume, no
             # re-execution; see its comment), and so does the FAR-1728
             # guardrail-override resume leg (also ``resume_run`` only). The
@@ -6864,6 +6876,14 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         run's CREATION path (SAQ mode only), NOT ``dispatcher='saq'``, because
         ``dispatch_run`` returns deferred BEFORE recording dispatched_at/
         dispatcher. NO staleness gate (re-dispatch when capacity frees).
+        SECOND producer (FAR-1627): the worker-shutdown handback
+        (``worker_handoff``) resets an abandoned run by clearing
+        ``dispatched_at``/``dispatcher`` — including a durably node-STARTED
+        one — and this leg is its only re-dispatch route. That is safe
+        because the handback gate (``worker_handoff._handback_decision``)
+        refuses the reset for a non-idempotent graph or a never-retry
+        ``retry_policy`` and terminal-fails the run in place instead, so a
+        non-idempotent node-started run can never reach this leg.
       * pending + capacity marker (``org_capacity_limited``/
         ``pipeline_capacity``) + stale or NULL heartbeat (FAR-108): a
         stranded capacity-blocked run is re-dispatched on the 60s cadence once
@@ -9388,11 +9408,14 @@ async def _reconcile_one_row(
     # guardrail-override resume class exits through its own leg ABOVE and
     # never reaches this belt; every other RUNNING node-started row is held
     # back here. RUNNING-ONLY by
-    # design: a ``pending`` node-started row is the fenced pending-reset
-    # signature and is DELIBERATELY re-dispatched by the reenqueue-window leg
-    # (idempotency-gated producer — see ``_build_re_dispatch_predicate``), so
-    # widening this belt back to ``pending`` would strand it again (iteration
-    # 2's regression). A pending row also has no phase race for this belt to
+    # design: a ``pending`` node-started row has exactly two producers, BOTH
+    # idempotency-gated and both DELIBERATELY re-dispatchable — the fenced
+    # pending-reset (reenqueue-window leg) and the FAR-1627 worker-shutdown
+    # handback (capacity-deferred leg; its gate terminal-fails a
+    # non-idempotent node-started run instead of resetting it — see
+    # ``worker_handoff._handback_decision``), so widening this belt back to
+    # ``pending`` would strand those rows again (iteration 2's regression). A
+    # pending row also has no phase race for this belt to
     # close: the only transition out of ``pending`` is a claim, which
     # atomically stamps ``dispatch_phase='claimed'`` in the same UPDATE.
     #

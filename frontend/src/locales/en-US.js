@@ -3896,7 +3896,8 @@ export default {
     },
     "RunPipelineVersionLink": {
       "version_title": "Open the pipeline version this run executed",
-      "current_title": "Open the pipeline (this run has no recorded version)"
+      "current_title": "Open the pipeline (this run has no recorded version)",
+      "version_chip": "v{version}"
     },
     "ViewToggle": {
       "saved_views": "Saved Views",
@@ -4388,6 +4389,7 @@ export default {
     },
     "NotificationBell": {
       "notifications": "Notifications",
+      "notifications_with_unread": "Notifications, {count} unread",
       "reconnect_banner": "Live updates stopped. Reconnect with a fresh sign-in to resume them.",
       "reconnect_action": "Reconnect",
       "reconnect_attempting": "Reconnecting…",

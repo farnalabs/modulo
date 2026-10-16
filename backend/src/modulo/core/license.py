@@ -178,12 +178,13 @@ _log = logging.getLogger(__name__)
 def verify_license_key(key: str) -> LicenseData | None:
     """Return the parsed licence when ``key`` verifies, else ``None``.
 
-    The synchronous, session-free form of the canonical licence-ladder check
-    (``core.feature_flags._resolve_paid_plan`` rung 3, mirroring
-    ``admin_license._resolve_license_key``): an absent key, a bad signature,
-    an expired licence, or any unexpected parse failure all resolve to
-    ``None`` so the caller falls through to the next rung (or the
-    unlicensed default). A key is NEVER trusted on mere presence.
+    The synchronous, session-free per-key form of the canonical
+    licence-ladder check (``core.feature_flags.resolve_effective_license``,
+    whose key rungs share this fall-through contract via
+    ``_verified_license_key``): an absent key, a bad signature, an expired
+    licence, or any unexpected parse failure all resolve to ``None`` so the
+    caller falls through to the next rung (or the unlicensed default). A key
+    is NEVER trusted on mere presence.
     """
     if not key:
         return None

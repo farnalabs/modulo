@@ -547,6 +547,394 @@ class TestFireAgentSignal:
 
 
 # ---------------------------------------------------------------------------
+# FAR-131 — the child-pipeline node_output shape (pure return, not envelope)
+# ---------------------------------------------------------------------------
+
+#: A realistic legacy ``sandbox_agent`` envelope: the agent's real structured
+#: return is buried at ``artifacts[0].output.output_json`` and runtime telemetry
+#: is flattened around it. The child pipeline must NEVER receive this shape.
+_SANDBOX_AGENT_ENVELOPE: dict[str, Any] = {
+    "output": {"status": "complete", "summary": "done", "cost_estimate_usd": 0.5},
+    "artifacts": [
+        {
+            "status": "complete",
+            "output": {
+                "output_json": {"pr_url": "https://example/1", "changed_files": ["a.py"]},
+                "cost_estimate_usd": 0.5,
+            },
+        }
+    ],
+}
+
+
+class TestFireAgentSignalChildPayloadShape:
+    """FAR-131: fire_agent_signal embeds the node's PURE RETURN — never the
+    legacy mixed envelope — and persists node outputs into the CHILD input
+    payload only (never the source run's node-output store)."""
+
+    async def test_splittable_type_embeds_pure_return(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """A sandbox_agent node hands the child pipeline its contract output,
+        not the envelope that carries status/summary/cost telemetry."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+            node_output=_SANDBOX_AGENT_ENVELOPE,
+            node_type="sandbox_agent",
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "fired"
+        payload = mock_create_run.call_args[1]["input_payload"]
+        assert payload["node_output"] == {"pr_url": "https://example/1", "changed_files": ["a.py"]}
+        # The legacy envelope telemetry never reaches the child.
+        assert "artifacts" not in payload["node_output"]
+        assert "output" not in payload["node_output"]
+
+    async def test_unknown_node_type_embeds_value_verbatim(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """An unsplittable/unknown node type keeps the value verbatim."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
+        legacy_value = {"artifacts": [{"x": 1}], "output": {"result": "ok"}}
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+            node_output=legacy_value,
+            node_type="router",
+        )
+
+        assert len(results) == 1
+        payload = mock_create_run.call_args[1]["input_payload"]
+        assert payload["node_output"] == legacy_value
+
+    async def test_omitted_node_type_embeds_value_verbatim(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """A caller that supplies no node type (the pre-FAR-131 contract) keeps
+        the legacy verbatim behaviour — even for a splittable-looking value."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+            node_output=_SANDBOX_AGENT_ENVELOPE,
+        )
+
+        assert len(results) == 1
+        payload = mock_create_run.call_args[1]["input_payload"]
+        assert payload["node_output"] == _SANDBOX_AGENT_ENVELOPE
+
+    async def test_default_agent_type_embeds_pure_return(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """The common ``agent`` node type hands the child its pure return (the
+        outer ``output`` key) — never the surrounding envelope."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
+        agent_envelope = {"output": {"result": "ok"}, "status": "complete", "summary": "done"}
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+            node_output=agent_envelope,
+            node_type="agent",
+        )
+
+        assert len(results) == 1
+        payload = mock_create_run.call_args[1]["input_payload"]
+        assert payload["node_output"] == {"result": "ok"}
+
+    async def test_empty_string_node_type_resolves_as_default_agent(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """A graph node that declares no ``node_type`` compiles as the default
+        ``agent`` type, but the derived type map records it as ``""``. The
+        empty string must resolve exactly like ``agent`` so the node hands the
+        child its pure return, not the legacy envelope (FAR-131)."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
+        agent_envelope = {"output": {"result": "ok"}, "status": "complete"}
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+            node_output=agent_envelope,
+            node_type="",
+        )
+
+        assert len(results) == 1
+        payload = mock_create_run.call_args[1]["input_payload"]
+        assert payload["node_output"] == {"result": "ok"}
+
+    async def test_does_not_write_node_outputs_to_source_run(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """FAR-131 split invariant: fire_agent_signal writes the completed
+        node's output ONLY into the child run's ``input_payload`` — it never
+        writes to the source run's node-output store (``run_node_outputs`` /
+        the dropped ``runs.outputs_json`` blob).
+
+        This also pins the discriminating pure-return contract: the child
+        payload carries the sandbox_agent's pure return, not the envelope
+        (``test_splittable_type_embeds_pure_return`` asserts the same shape from
+        the other direction), so it cannot pass on a verbatim-envelope
+        regression.
+        """
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        source_run_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
+
+        # Record every statement the fire path executes.
+        statements: list[str] = []
+        original_execute = mock_session.execute
+
+        async def _recording_execute(*args: Any, **kwargs: Any) -> Any:
+            statements.append(str(args[0]) if args else "")
+            return await original_execute(*args, **kwargs)
+
+        mock_session.execute = _recording_execute
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=source_run_id,
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+            node_output=_SANDBOX_AGENT_ENVELOPE,
+            node_type="sandbox_agent",
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "fired"
+        joined = " ".join(statements).lower()
+        assert "run_node_outputs" not in joined
+        assert "outputs_json" not in joined
+        assert "update runs" not in joined
+        # The ONLY node-output persistence is the CHILD run's input payload —
+        # create_run takes no outputs_json/node_outputs kwarg at all.
+        assert mock_create_run.await_count == 1
+        call_kwargs = mock_create_run.call_args[1]
+        assert call_kwargs["pipeline_id"] == trigger.pipeline_id
+        assert call_kwargs["parent_run_id"] == source_run_id
+        assert call_kwargs["input_payload"]["node_output"] == {"pr_url": "https://example/1", "changed_files": ["a.py"]}
+        assert "outputs_json" not in call_kwargs
+        assert "node_outputs" not in call_kwargs
+
+
+# ---------------------------------------------------------------------------
+# FAR-131 (MAJOR 1) — a SPLITTABLE type is resolved to its PURE RETURN whatever
+# the return's shape (scalar / list / absent), never the mixed envelope.
+# ---------------------------------------------------------------------------
+
+
+class TestFireAgentSignalNonDictPureReturn:
+    """A splittable node whose pure return is not a dict must STILL hand the
+    child the pure value — the envelope leak FAR-131 exists to remove."""
+
+    async def test_manual_scalar_return_embeds_scalar(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """A ``manual`` node's scalar pure return reaches the child as a scalar,
+        not the surrounding envelope."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
+        envelope = {"manual_output": 42, "status": "recovered"}
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+            node_output=envelope,
+            node_type="manual",
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "fired"
+        payload = mock_create_run.call_args[1]["input_payload"]
+        assert payload["node_output"] == 42
+
+    async def test_connector_list_return_embeds_list(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """A ``connector`` node's list pure return reaches the child as a list."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
+        envelope = {"output": [1, 2, 3], "status": "complete"}
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+            node_output=envelope,
+            node_type="connector",
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "fired"
+        payload = mock_create_run.call_args[1]["input_payload"]
+        assert payload["node_output"] == [1, 2, 3]
+
+    async def test_sandbox_agent_without_dict_output_omits_node_output_key(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """A splittable type whose split yields no contract output OMITS the
+        ``node_output`` key — the child never receives the envelope, and never
+        a bare ``None``."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
+        envelope = {"output": {"status": "complete", "summary": "done"}}
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+            node_output=envelope,
+            node_type="sandbox_agent",
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "fired"
+        payload = mock_create_run.call_args[1]["input_payload"]
+        assert "node_output" not in payload
+
+    async def test_gate_type_embeds_human_data_pure_return(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """A ``gate`` node's pure return (its human decision ``human_data``)
+        reaches the child — gate nodes resolve by type, never to the envelope."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="hitl_review_a_b",
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
+        envelope = {
+            "artifacts": [{"status": "approved", "human_data": {"decision": "ok"}}],
+            "status": "complete",
+        }
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="hitl_review_a_b",
+            node_output=envelope,
+            node_type="gate",
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "fired"
+        payload = mock_create_run.call_args[1]["input_payload"]
+        assert payload["node_output"] == {"decision": "ok"}
+
+
+# ---------------------------------------------------------------------------
 # _log_signal_event — trigger_event.error_detail sanitization (FAR-163)
 # ---------------------------------------------------------------------------
 

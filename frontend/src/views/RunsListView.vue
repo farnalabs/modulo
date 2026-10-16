@@ -77,6 +77,7 @@
                 :pipeline-id="(row as RunListItem).pipeline_id"
                 :pipeline-name="(row as RunListItem).pipeline_name"
                 :snapshot-id="snapshotIdOf(row)"
+                :snapshot-version="snapshotVersionOf(row)"
                 class="font-medium"
                 :data-testid="`runs-list-view-${row.run_id}`"
               >{{ row.pipeline_name || $t('views.RunsListView.deleted_pipeline') }}</RunPipelineVersionLink>
@@ -136,7 +137,7 @@
               :data-testid="`runs-list-heartbeat-${row.run_id}`"
               :class="isListHeartbeatStale(row as RunListItem) ? 'text-warning-text font-medium' : 'text-muted-foreground'"
               class="text-xs whitespace-nowrap"
-            >{{ formatHeartbeat(heartbeatAgeFor(row as RunListItem, now)) }}</span>
+            >{{ heartbeatTextFor(row as RunListItem, now) }}</span>
           </template>
           <template #cell-run_number="{ value }">
             <span class="tabular-nums">{{ value ?? '—' }}</span>
@@ -273,7 +274,7 @@ import { DataTable, type Column } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 import TableSkeleton from '../components/shared/TableSkeleton.vue'
 import RunPipelineVersionLink from '../components/runs/RunPipelineVersionLink.vue'
-import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, triggerTypeLabel, runStatusDescription, isDispatchedRun, isSupersededRun, queuedCapacityReason } from '../utils/runUtils'
+import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, heartbeatDisplayText, isHeartbeatStale, triggerTypeLabel, runStatusDescription, isDispatchedRun, isSupersededRun, queuedCapacityReason } from '../utils/runUtils'
 import { RUN_STATUS, TRIGGER_TYPE } from '../constants/filters'
 import { isNonTerminalStatus, isTerminalStatus } from '../constants/runStatuses'
 import { formatMoney } from '../lib/money'
@@ -312,6 +313,19 @@ const runColumns = computed<Column[]>(() => [
 function snapshotIdOf(row: unknown): string | null {
   const snap = (row as { snapshot_id?: unknown }).snapshot_id
   return typeof snap === 'string' && snap.length > 0 ? snap : null
+}
+
+/**
+ * FAR-1813: the run's OWN snapshot version, narrowed from the list item's
+ * `Record<string, unknown>` shape (the field rides the payload but is not
+ * declared on `RunListItem`). Only a numeric payload value is forwarded; a
+ * missing/legacy version is null — the component then renders NO chip rather
+ * than a placeholder like `v0`. The chip's accept/reject rule (integer >= 1)
+ * lives in the component so every run surface applies exactly one rule.
+ */
+function snapshotVersionOf(row: unknown): number | null {
+  const ver = (row as { snapshot_version?: unknown }).snapshot_version
+  return typeof ver === 'number' ? ver : null
 }
 
 const confirmingIds = ref(new Set<string>())
@@ -606,8 +620,12 @@ function isListHeartbeatStale(run: RunListItem): boolean {
   return isHeartbeatStale(heartbeatAgeFor(run, now.value))
 }
 
-function formatHeartbeat(age: number | null): string {
-  return formatHeartbeatAge(age, t)
+// FAR-1839: the heartbeat cell renders the absolute last-heartbeat time for a
+// terminal run (the backend keeps heartbeat_at; only a re-dispatch clears it)
+// and the humanized age for a live one, via the same shared formatter the run
+// detail uses — a terminal run must not read as "—".
+function heartbeatTextFor(run: RunListItem, nowMs: number): string {
+  return heartbeatDisplayText(run.heartbeat_at, run.status, nowMs, t, formatRunDate)
 }
 
 </script>

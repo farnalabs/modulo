@@ -225,6 +225,36 @@ def test_compute_sandbox_cost_non_finite_total_returns_zero(monkeypatch: pytest.
 
 
 # ---------------------------------------------------------------------------
+# _bridge_escalation_failure_detail — FAR-1694 S2 escalate marker parse
+# ---------------------------------------------------------------------------
+
+
+def test_bridge_escalation_failure_detail_parses_marker():
+    """A stopped loop (dedicated exit code + marker) yields a summary-only
+    escalation detail; other exits / missing markers yield None."""
+    from modulo.core.guardrails.loop_intercept import BRIDGE_ESCALATED_EXIT_CODE, BRIDGE_ESCALATED_MARKER
+
+    marker = BRIDGE_ESCALATED_MARKER + json.dumps(
+        {
+            "tool": "git push",
+            "direction": "before",
+            "guardrail": "gr-esc",
+            "reason": "needs a human",
+            "args_sha256": "deadbeef",
+        }
+    )
+    stdout = f"agent working\n{marker}\n"
+    detail = nr._bridge_escalation_failure_detail(BRIDGE_ESCALATED_EXIT_CODE, stdout)
+    assert detail is not None
+    assert "git push" in detail
+    assert "gr-esc" in detail
+    # A successful exit is never an escalation.
+    assert nr._bridge_escalation_failure_detail(0, stdout) is None
+    # The escalation exit code without a marker is not an escalation.
+    assert nr._bridge_escalation_failure_detail(BRIDGE_ESCALATED_EXIT_CODE, "no marker here") is None
+
+
+# ---------------------------------------------------------------------------
 # _read_log_tail_via_provider - key resolution (FAR-1159 override -> provider)
 # ---------------------------------------------------------------------------
 
