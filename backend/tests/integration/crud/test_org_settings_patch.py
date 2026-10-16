@@ -807,6 +807,40 @@ async def test_product_analytics_concurrent_subfield_writers_both_survive(
 
 
 # ---------------------------------------------------------------------------
+# FAR-1832 QA F13b: a stored NON-OBJECT block is healed before the nested
+# sub-field compose, identically to the generic path's isinstance(existing, dict)
+# ---------------------------------------------------------------------------
+
+
+async def test_nested_patch_heals_a_non_object_stored_block(db_engine: AsyncEngine) -> None:
+    """A stored JSON ``null`` block is healed to an object before the compose.
+
+    A bare ``COALESCE(base->key, '{}')`` catches only SQL NULL, so a JSON
+    ``null`` (or any non-object) is fed straight to ``jsonb || jsonb`` and
+    corrupts into an array; the ``jsonb_typeof(...) = 'object'`` CASE heals it
+    the same way the generic path's ``isinstance(existing, dict)`` does.
+    """
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text("UPDATE organisations SET settings_json = CAST(:s AS jsonb) WHERE id = :oid"),
+            {"s": '{"product_analytics": null}', "oid": str(org_id)},
+        )
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    session = factory()
+    await session.begin()
+    await set_rls_org(session, org_id)
+    returned = await update_org_settings_patch(session, org_id, nested_patch={"product_analytics": {"level": "all"}})
+    await session.commit()
+    await session.close()
+
+    assert returned["product_analytics"] == {"level": "all"}
+    settings = await _read_settings(db_engine, org_id)
+    assert settings["product_analytics"] == {"level": "all"}
+
+
+# ---------------------------------------------------------------------------
 # FAR-1832 QA F2: a real in-flight lock holder + the bounded lock wait makes
 # SQLSTATE 55P03 reachable on the converted routes — it must surface as a 409
 # conflict (not the old 503/500), while a genuine DB-unavailable error stays

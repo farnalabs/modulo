@@ -346,12 +346,79 @@ async def test_nested_patch_rejects_overlap_with_top_level_patch(monkeypatch: py
 
 def test_nested_patch_settings_postgres_statement_shape() -> None:
     """The nested settings statement is a jsonb_set sub-field compose — not a
-    whole-block replace."""
+    whole-block replace — that HEALS a non-object stored value (QA F13b)."""
     sql = str(_pg_patch_statement("settings_json", True, nested=True)).lower()
     assert "jsonb_set" in sql
     assert ":nested_patch" in sql
     assert ":nested_key" in sql
     assert "deleted_at is null" in sql
+    # QA F13b: the stored key is coerced to an object with a CASE, not a bare
+    # COALESCE (which catches only SQL NULL and would corrupt a JSON null or a
+    # non-object block into an array through ``jsonb || jsonb``).
+    assert "jsonb_typeof" in sql
+    assert "case when" in sql
+    assert "= 'object'" in sql
+
+
+async def test_update_org_json_column_patch_rejects_forbidden_column_live_row_pair() -> None:
+    """QA F13a: the (column, require_live_row) policy table is enforced ONCE in
+    the shared entry point, so the generic path can no longer accept the
+    forbidden ``("settings_json", require_live_row=False)`` — the soft-deleted
+    org settings write FAR-1830 forbids. Refused before any dialect branch."""
+    with pytest.raises(ValueError, match="unsupported org JSON patch configuration"):
+        await update_org_json_column_patch(
+            _FakeSession(),
+            uuid.uuid4(),
+            patch={},
+            delete_keys=[],
+            column="settings_json",
+            require_live_row=False,
+        )
+    with pytest.raises(ValueError, match="unsupported org JSON patch configuration"):
+        await update_org_json_column_patch(
+            _FakeSession(),
+            uuid.uuid4(),
+            patch={},
+            delete_keys=[],
+            column="otel_config_json",
+            require_live_row=True,
+        )
+
+
+async def test_delete_keys_overlapping_patch_is_refused() -> None:
+    """QA F13c: a key in delete_keys AND patch is an ambiguous compose — refused
+    rather than silently resolved delete-wins."""
+    with pytest.raises(ValueError, match="appear in both delete_keys and patch/nested_patch"):
+        await update_org_settings_patch(_FakeSession(), uuid.uuid4(), {"block": 1}, delete_keys=["block"])
+
+
+async def test_delete_keys_overlapping_nested_patch_is_refused() -> None:
+    """QA F13c: the same refusal applies to a nested_patch key."""
+    with pytest.raises(ValueError, match="appear in both delete_keys and patch/nested_patch"):
+        await update_org_settings_patch(
+            _FakeSession(),
+            uuid.uuid4(),
+            nested_patch={"block": {"sub": 1}},
+            delete_keys=["block"],
+        )
+
+
+async def test_strict_read_postgres_non_uuid_guc_fails_closed() -> None:
+    """QA F13d: a NON-EMPTY GUC that is not a UUID is a corrupt context, not
+    'genuinely unbound' — it must fail closed, never read as None."""
+    session = _FakeSession(info={}, rows=["not-a-uuid"])
+    with pytest.raises(OrgSettingsPatchContextUnreadableError):
+        await _strict_read_rls_org(session, "postgresql")
+
+
+async def test_non_uuid_guc_fails_closed_even_with_allow_unbound(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QA F13d: ``allow_unbound_context=True`` must NOT permit a write on a
+    corrupt (non-empty, uncoercible) GUC context."""
+    monkeypatch.setattr(organisation_mod, "_take_settings_patch_lock_wait", AsyncMock())
+    monkeypatch.setattr(organisation_mod, "_settings_patch_dialect", AsyncMock(return_value="postgresql"))
+    session = _FakeSession(info={}, rows=["not-a-uuid"])
+    with pytest.raises(OrgSettingsPatchContextUnreadableError):
+        await update_org_settings_patch(session, uuid.uuid4(), {"k": 1}, allow_unbound_context=True)
 
 
 async def test_apply_postgres_otel_path_patches_the_otel_column_without_live_predicate() -> None:

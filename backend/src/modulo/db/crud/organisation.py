@@ -68,6 +68,18 @@ class OrgSettingsPatchContextUnreadableError(OrgSettingsPatchContextError):
 # Sentinel org IDs that must never resolve a login page.
 _SENTINEL_ORG_IDS: frozenset[uuid.UUID] = frozenset({SYSTEM_ORG_ID, MODULO_REGISTRY_ORG_ID})
 
+# The (column, require_live_row) POLICY TABLE (FAR-1832 QA F13a) — ONE source
+# of truth shared by both dialects. ``settings_json`` MUST refuse a soft-deleted
+# org (require_live_row=True); the FAR-1025 OTel column MUST stay writable
+# during the pending-deletion window (require_live_row=False). Validating the
+# pair here means the generic path can no longer accept the forbidden
+# ``("settings_json", False)`` combination that writes through
+# ``include_soft_deleted`` — exactly the soft-deleted-org settings write
+# FAR-1830 forbids.
+_VALID_JSON_COLUMN_LIVE_ROW: frozenset[tuple[str, bool]] = frozenset(
+    {("settings_json", True), ("otel_config_json", False)}
+)
+
 
 async def get_organisation(
     session: AsyncSession,
@@ -338,9 +350,26 @@ async def update_org_json_column_patch(
     arguments above deliberately diverge; in particular the tenant guard is
     NOT opt-out-able per column — every writer must bind the org RLS context
     (or pass ``allow_unbound_context`` for genuine boot-seed/system callers).
+
+    WARNING: ``allow_unbound_context=True`` is for boot-seed / system callers
+    ONLY — an organisation must normally have ``set_rls_org`` bound before its
+    settings are patched. It never masks a *corrupt* context: a non-empty
+    ``app.organisation_id`` that fails UUID coercion fails closed
+    (:class:`OrgSettingsPatchContextUnreadableError`) regardless of this flag.
     """
     if column not in ("settings_json", "otel_config_json"):
         raise ValueError(f"unsupported organisation JSON column: {column!r}")
+    if (column, require_live_row) not in _VALID_JSON_COLUMN_LIVE_ROW:
+        # QA F13a: the (column, require_live_row) pairing is a fixed policy, not
+        # a free cross-product. Validating it HERE — before any dialect branch —
+        # closes the generic path's acceptance of ("settings_json", False),
+        # which would write a soft-deleted org's settings via
+        # ``include_soft_deleted``: the exact write FAR-1830 forbids.
+        raise ValueError(
+            f"unsupported org JSON patch configuration: column={column!r} "
+            f"require_live_row={require_live_row!r} — settings_json requires "
+            f"require_live_row=True and otel_config_json requires require_live_row=False"
+        )
     nested = dict(nested_patch or {})
     if len(nested) > 1:
         raise ValueError(f"nested_patch supports at most one top-level key per call, got {sorted(nested)!r}")
@@ -348,6 +377,16 @@ async def update_org_json_column_patch(
     if overlap:
         raise ValueError(
             f"nested_patch key(s) {sorted(overlap)!r} also appear in patch — the compose order would be ambiguous"
+        )
+    # QA F13c: a key in BOTH delete_keys and patch/nested_patch is equally
+    # ambiguous (delete-wins was never a documented contract), so it is refused
+    # for the same reason the patch/nested overlap is — rather than silently
+    # letting the delete win.
+    delete_overlap = set(delete_keys) & (set(patch) | set(nested))
+    if delete_overlap:
+        raise ValueError(
+            f"key(s) {sorted(delete_overlap)!r} appear in both delete_keys and patch/nested_patch — "
+            "the compose order would be ambiguous"
         )
 
     # Normalise the target to a ``UUID``: callers occasionally pass the id as a
@@ -429,7 +468,16 @@ async def _strict_read_rls_org(session: AsyncSession, dialect: str) -> uuid.UUID
             return None
         if isinstance(raw, str) and raw.strip() == "":
             return None
-        return _coerce_org_uuid(raw)
+        coerced = _coerce_org_uuid(raw)
+        if coerced is None:
+            # QA F13d: a NON-EMPTY value that fails UUID coercion is a CORRUPT
+            # context, not "genuinely unbound". Treating it as unbound let
+            # ``allow_unbound_context=True`` permit the write against an unknown
+            # tenant boundary — fail closed instead, regardless of the flag.
+            raise OrgSettingsPatchContextUnreadableError(
+                f"the session's app.organisation_id RLS context is not a valid UUID: {raw!r}"
+            )
+        return coerced
     info = getattr(session, "info", None)
     if isinstance(info, dict):
         value = info.get(_RLS_TENANT_KEY)
@@ -476,10 +524,15 @@ def _pg_patch_statement(column: str, require_live_row: bool, *, nested: bool = F
     ``jsonb_set`` that composes the single nested key at the SUB-FIELD level:
     ``COALESCE(col->key, '{}') || :nested_patch`` — so a writer of one
     sub-field of a shared block never replaces the sibling sub-fields another
-    writer committed. The base expression is repeated inside ``jsonb_set``
-    because every reference on the right-hand side of an UPDATE sees the OLD
-    row value; the nested compose therefore starts from the same base document
-    the top-level ``||`` produces.
+    writer committed. QA F13b: the key's stored value is healed through
+    ``jsonb_typeof(...) = 'object'`` (a CASE), not a bare ``COALESCE`` — a bare
+    ``COALESCE`` catches only SQL NULL, so a stored JSON ``null`` or any
+    non-object block fell through to ``jsonb || jsonb`` and corrupted into an
+    array. The heal now matches the generic path's ``isinstance(existing, dict)``.
+    The base expression is repeated inside ``jsonb_set`` because every reference
+    on the right-hand side of an UPDATE sees the OLD row value; the nested
+    compose therefore starts from the same base document the top-level ``||``
+    produces.
     """
     if column == "settings_json" and require_live_row:
         if nested:
@@ -494,8 +547,12 @@ def _pg_patch_statement(column: str, require_live_row: bool, *, nested: bool = F
                 "SET settings_json = jsonb_set("
                 "(COALESCE(settings_json, '{}'::jsonb) || CAST(:patch AS jsonb)), "
                 "ARRAY[:nested_key]::text[], "
-                "COALESCE((COALESCE(settings_json, '{}'::jsonb) || CAST(:patch AS jsonb)) "
-                "-> CAST(:nested_key AS text), '{}'::jsonb) "
+                "CASE WHEN jsonb_typeof("
+                "(COALESCE(settings_json, '{}'::jsonb) || CAST(:patch AS jsonb)) "
+                "-> CAST(:nested_key AS text)) = 'object' "
+                "THEN (COALESCE(settings_json, '{}'::jsonb) || CAST(:patch AS jsonb)) "
+                "-> CAST(:nested_key AS text) "
+                "ELSE '{}'::jsonb END "
                 "|| CAST(:nested_patch AS jsonb)) "
                 "- CAST(:delete_keys AS text[]) "
                 "WHERE id = :org_id AND deleted_at IS NULL "
