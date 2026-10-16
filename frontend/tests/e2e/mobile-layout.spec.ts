@@ -548,8 +548,8 @@ if (target !== 'local') {
 // Config integrity: the only allowed skip category must name ROUTES that still
 // exist and carry a real gate reason — otherwise the sweep would silently
 // accumulate a stale, unreasoned exclusion list over time.
-test.describe('Mobile layout audit — exclusion config integrity', () => {
-  test('DEACTIVATED_ROUTES lists only live manifest routes, each with a reason', () => {
+test.describe('Mobile layout audit — exclusion config integrity', { tag: ['@regression', '@mobile'] }, () => {
+  test('DEACTIVATED_ROUTES lists only live manifest routes, each with a reason', { tag: ['@regression', '@mobile'] }, () => {
     const stale = [...DEACTIVATED_ROUTES_SET].filter(r => !ROUTES.includes(r))
     expect(
       stale.length,

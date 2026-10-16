@@ -52,6 +52,15 @@ export async function setupLocalMockApi(page: Page) {
       // e2e mirrors staging, which also runs with dev mode on.
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ flags: [], license: { tier: 'enterprise' }, dev_mode: true }) })
     }
+    if (url.includes('/api/v1/plan')) {
+      // FAR-1809: the caller-scoped plan bootstrap (`GET /api/v1/plan`) that
+      // replaced the instance-admin `/admin/feature-flags` + `/admin/license`
+      // pair the app's planStore used to read. Same vocabulary (tier, licence
+      // view, dev_mode, effective flag map) — dev_mode: true so private_preview
+      // routes resolve on the local mock-API target instead of redirecting to
+      // the dashboard (local e2e mirrors staging, which also runs dev mode on).
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ flags: [], license: { tier: 'enterprise', org_id: '1', expires_at: null }, dev_mode: true }) })
+    }
     if (url.includes('/api/v1/admin/license')) {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ expires_at: null, org_id: '1', tier: 'enterprise' }) })
     }

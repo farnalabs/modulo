@@ -8,8 +8,9 @@ import { getTarget, type TestEnv } from './setup/env'
 // (`mobile-nav-flash.spec.ts`) and viewport layout invariants
 // (`mobile-layout.spec.ts`). Neither proves that the chrome a mobile session
 // actually gets settles to exactly one nav component AND can be used to
-// navigate. On staging the feature-flags read currently returns 403 until
-// FAR-1806 lands; FAR-1805's terminal fallback (flagsSource 'unavailable' →
+// navigate. The flags read (the caller-scoped `GET /api/v1/plan` bootstrap
+// since FAR-1809) is not guaranteed readable for the e2e identity on every
+// target; FAR-1805's terminal fallback (flagsSource 'unavailable' →
 // hamburger drawer) is what makes the mobile nav workable there, so this spec
 // is written chrome-agnostic: it derives the chrome from the DOM and accepts
 // either the drawer or the icon rail, asserting against the LIVE claim (the
@@ -185,10 +186,12 @@ function isFlagsPayload(body: unknown): body is FlagsPayload {
 }
 
 /**
- * Read the mobile_sidebar_rail flag through an in-page fetch (a page-context
- * request, so Playwright route interception still applies on the local mock
- * target) using the app's own Bearer header convention. Never throws —
- * every failure path returns an unreadable FlagRead with a reason.
+ * Read the mobile_sidebar_rail flag from the caller-scoped plan bootstrap
+ * (`GET /api/v1/plan`, the app's flag source since FAR-1809 — it replaced the
+ * instance-admin `/admin/feature-flags` read) through an in-page fetch (a
+ * page-context request, so Playwright route interception still applies on the
+ * local mock target) using the app's own Bearer header convention. Never
+ * throws — every failure path returns an unreadable FlagRead with a reason.
  */
 async function readRailFlag(page: Page): Promise<FlagRead> {
   try {
@@ -201,7 +204,7 @@ async function readRailFlag(page: Page): Promise<FlagRead> {
       }
       if (!token) return { status: 0, bodyText: '', error: 'no modulo_access_token in localStorage' }
       try {
-        const response = await fetch('/api/v1/admin/feature-flags', {
+        const response = await fetch('/api/v1/plan', {
           headers: { Authorization: `Bearer ${token}` },
         })
         const bodyText = await response.text()
@@ -214,16 +217,16 @@ async function readRailFlag(page: Page): Promise<FlagRead> {
 
     if (result.status !== 200) {
       const hint = result.status === 403
-        ? ' — the e2e identity cannot read feature flags, so this check stays skipped until FAR-1806 ships'
+        ? ' — the e2e identity cannot read the plan bootstrap, so this check stays skipped until it is readable'
         : ''
-      return { readable: false, reason: `feature-flags returned HTTP ${result.status}${hint}` }
+      return { readable: false, reason: `plan bootstrap returned HTTP ${result.status}${hint}` }
     }
     let body: unknown = null
     try { body = JSON.parse(result.bodyText) } catch { body = null }
     if (!isFlagsPayload(body)) {
       return {
         readable: false,
-        reason: `feature-flags body was not a flags payload (first 120 chars: ${result.bodyText.slice(0, 120)})`,
+        reason: `plan bootstrap body was not a flags payload (first 120 chars: ${result.bodyText.slice(0, 120)})`,
       }
     }
     const flag = body.flags?.find((f) => f?.name === FLAG_NAME)
