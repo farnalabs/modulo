@@ -21,10 +21,11 @@ import { usePlanStore } from '../../stores/planStore'
 
 /**
  * NotificationBell is stubbed so this spec can observe WHICH size the rail
- * hands it — the rail's half of the contract. NotificationBell's own rendering
- * of `size="touch"` (h-11 w-11) is asserted by NotificationBell's own spec;
- * the stub mirrors that contract as `data-bell-size` so a touch/default
- * difference is visible here without re-testing the bell's internals.
+ * forwards — the rail's half of the contract. The bell's own 44px touch
+ * rendering depends on the `size` prop introduced by the separate
+ * NotificationBell change and is NOT asserted here; the stub mirrors the
+ * forwarded value as `data-bell-size` so a touch/default difference is visible
+ * at the seam without re-testing the bell's internals.
  */
 const NotificationBellStub = {
   name: 'NotificationBell',
@@ -155,7 +156,7 @@ describe('SidebarRail touch targets', () => {
       expect(avatar.classes()).toContain('w-11')
     })
 
-    it('renders the notification bell in its touch size', () => {
+    it('forwards the touch size to the notification bell', () => {
       const wrapper = mountRail('touch')
       const bell = wrapper.find(BELL_SELECTOR)
       expect(bell.exists()).toBe(true)
