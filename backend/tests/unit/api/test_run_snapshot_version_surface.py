@@ -30,12 +30,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.dialects import postgresql
 
 from modulo.api.routes.runs import (
+    _attached_snapshot_version,
     _build_list_item,
     _build_run_response,
     _coerce_snapshot_version,
     _do_list_runs,
     _ListPageContext,
     _ListRunsQuery,
+    _load_snapshot_versions,
 )
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -375,6 +377,87 @@ async def test_do_list_runs_issues_no_snapshot_query_for_legacy_only_page() -> N
 
     assert result["items"][0]["snapshot_version"] is None
     assert not _snapshot_statements(session)
+
+
+# ---------------------------------------------------------------------------
+# _load_snapshot_versions — id-shape handling (UUID str vs non-UUID str)
+# ---------------------------------------------------------------------------
+
+
+async def test_load_snapshot_versions_parses_uuid_string_ids() -> None:
+    """A run whose ``snapshot_id`` is a UUID STRING is widened, not skipped.
+
+    Production list fakes can surface the id as ``str``; the loader must parse
+    it to ``uuid.UUID`` before the batched IN, or the version silently never
+    resolves. Exercises the ``isinstance(raw_id, str)`` arm.
+    """
+    snapshot_id = uuid.uuid4()
+    session = _RecordingSession([(snapshot_id, 5)])
+
+    versions = await _load_snapshot_versions(session, [_make_run(snapshot_id=str(snapshot_id))])
+
+    assert versions == {str(snapshot_id): 5}
+    statements = _snapshot_statements(session)
+    assert len(statements) == 1
+    rendered = str(statements[0].compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert str(snapshot_id) in rendered
+
+
+async def test_load_snapshot_versions_skips_non_uuid_string_ids() -> None:
+    """A non-UUID string id degrades to a skip, never a 500.
+
+    ``uuid.UUID("not-a-uuid")`` raises ``ValueError`` — the loader must swallow
+    it and keep the rest of the batch. Exercises the ``except ValueError``
+    fallback.
+    """
+    good_id = uuid.uuid4()
+    runs = [_make_run(snapshot_id="not-a-uuid"), _make_run(snapshot_id=good_id)]
+    session = _RecordingSession([(good_id, 9)])
+
+    versions = await _load_snapshot_versions(session, runs)
+
+    assert versions == {str(good_id): 9}
+
+
+async def test_load_snapshot_versions_returns_empty_for_only_bad_string_ids() -> None:
+    """Only non-UUID strings → no ids collected → no query, no version."""
+    session = _RecordingSession([])
+
+    versions = await _load_snapshot_versions(session, [_make_run(snapshot_id="nope")])
+
+    assert versions == {}
+    assert not _snapshot_statements(session)
+
+
+async def test_load_snapshot_versions_omits_uncoercible_version_rows() -> None:
+    """A row whose version is not a real int is dropped, never fabricated.
+
+    ``_coerce_snapshot_version`` returns None for a bool/non-int (which would
+    otherwise serialise as the fabricated 0/1) — the loader must skip that row
+    while keeping the valid ones. Exercises the ``coerced is None`` branch.
+    """
+    good_id, bad_id = uuid.uuid4(), uuid.uuid4()
+    session = _RecordingSession([(good_id, 3), (bad_id, None)])
+
+    versions = await _load_snapshot_versions(session, [_make_run(snapshot_id=good_id)])
+
+    assert versions == {str(good_id): 3}
+
+
+# ---------------------------------------------------------------------------
+# _attached_snapshot_version — instance-state reading
+# ---------------------------------------------------------------------------
+
+
+def test_attached_snapshot_version_none_for_mapped_object_without_snapshot_attr() -> None:
+    """A mapped instance with no ``snapshot`` attribute reads as None.
+
+    The reader keys off the instance state's own attributes — an object whose
+    mapper has no ``snapshot`` relationship (not a Run) must degrade to None
+    rather than raise ``KeyError``. Exercises the ``"snapshot" not in
+    state.attrs`` arm.
+    """
+    assert _attached_snapshot_version(_make_orm_snapshot()) is None
 
 
 # ---------------------------------------------------------------------------
