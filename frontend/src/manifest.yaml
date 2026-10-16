@@ -6404,7 +6404,7 @@ features:
             - "[x] The polling scheduler fires only when the condition matches (TriggerEvent condition_met) and records no_match otherwise; a poll respects max_concurrent_runs (concurrency_limit_reached) and the daily spend limit (spend_limit_reached); with no limit it always fires; invalid JMESPath or connector failure records poll_error; inactive triggers are skipped"
 
             # Agent signal
-            - "[x] An agent_signal trigger fires a child pipeline run when its watched node completes, passing node_output and source_run_id into the child input payload, and records a TriggerEvent for every attempt"
+            - "[x] An agent_signal trigger fires a child pipeline run when its watched node completes, passing node_output and source_run_id into the child input payload, and records a TriggerEvent for every attempt; the child's node_output is the watched node's PURE RETURN (never the legacy mixed envelope) for any splittable type — whatever the return's shape (dict, scalar, list, or absent) — resolved through the SAME split_node_output the write-side splitter uses, with the node-type map EXTENDED from the snapshot edges so an edge-synthesized HITL gate resolves as 'gate'; an unknown/unsplittable type (or a caller that supplies no type) keeps the value verbatim, and a splittable type with no contract output OMITS the key (FAR-131)"
             - "[x] agent_signal respects max_concurrent_runs (skip + concurrency_limit_reached event), ignores inactive triggers and invalid snapshot_id configs (skip), and is org-isolated (a watched node in one org never fires another org)"
 
             # Trigger event log

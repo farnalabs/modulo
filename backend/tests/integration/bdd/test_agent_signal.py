@@ -462,3 +462,61 @@ class TestFireAgentSignalIntegration:
 
         assert len(results) == 2
         assert all(r["status"] == "fired" for r in results)
+
+    async def test_child_receives_pure_return_and_source_store_untouched(
+        self,
+        db_engine: AsyncEngine,
+        org_id: uuid.UUID,
+        source_pipeline_id: uuid.UUID,
+        source_run_id: uuid.UUID,
+        snapshot_id: uuid.UUID,
+        trigger_id: uuid.UUID,
+    ) -> None:
+        """FAR-131: a splittable node's child run receives the PURE RETURN in
+        its ``input_payload`` — and the source run's ``run_node_outputs`` store
+        is never written (the node output is not persisted by the fire path)."""
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        envelope = {
+            "output": {"status": "complete", "summary": "done"},
+            "artifacts": [
+                {
+                    "status": "complete",
+                    "output": {"output_json": {"pr_url": "https://example/1"}, "cost_estimate_usd": 0.1},
+                }
+            ],
+        }
+
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            results = await fire_agent_signal(
+                session,
+                org_id=org_id,
+                source_run_id=source_run_id,
+                source_pipeline_id=source_pipeline_id,
+                completed_node_id="extract",
+                node_output=envelope,
+                node_type="sandbox_agent",
+            )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "fired"
+        child_run_id = results[0]["run_id"]
+
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            # The child run's input payload carries the PURE RETURN only.
+            payload = (
+                await session.execute(
+                    text("SELECT input_payload FROM runs WHERE id = :rid"),
+                    {"rid": str(child_run_id)},
+                )
+            ).scalar_one()
+            assert payload["node_output"] == {"pr_url": "https://example/1"}
+            # The source run's node-output store is untouched by the fire path.
+            count = (
+                await session.execute(
+                    text("SELECT count(*) FROM run_node_outputs WHERE run_id = :rid"),
+                    {"rid": str(source_run_id)},
+                )
+            ).scalar_one()
+            assert count == 0
