@@ -3877,8 +3877,7 @@ export default {
     "RunPipelineVersionLink": {
       "version_title": "Open the pipeline version this run executed",
       "current_title": "Open the pipeline (this run has no recorded version)",
-      "version_chip": "v{version}",
-      "version_chip_title": "Pipeline version {version} — the version this run executed"
+      "version_chip": "v{version}"
     },
     "ViewToggle": {
       "saved_views": "Saved Views",

@@ -154,19 +154,19 @@ describe('RunPipelineVersionLink (FAR-1813)', () => {
     const chip = wrapper.find('[data-testid="run-pipeline-version-chip"]')
     expect(chip.exists()).toBe(true)
     expect(chip.text()).toBe('v3')
-    // Label and tooltip both come from locale keys — no hardcoded string.
+    // Label comes from a locale key — no hardcoded string.
     expect(chip.text()).toBe(t('components.RunPipelineVersionLink.version_chip', { version: 3 }))
-    expect(chip.attributes('title')).toBe(
-      t('components.RunPipelineVersionLink.version_chip_title', { version: 3 }),
-    )
+    // No NESTED title: the chip's title would shadow the link's own title (the
+    // UA shows the nearest titled element on hover), masking the honest
+    // "what will this open" tooltip.
+    expect(chip.attributes('title')).toBeUndefined()
     wrapper.unmount()
   })
 
-  it('the chip label and its title are real locale keys (plain {version} interpolation, no JS expression)', async () => {
-    // Pins requirement 5 independently of rendering: if the keys are dropped
+  it('the chip label is a real locale key (plain {version} interpolation, no JS expression)', async () => {
+    // Pins requirement 5 independently of rendering: if the key is dropped
     // from en-US.js, vue-i18n returns the raw key path and this fails.
     expect(t('components.RunPipelineVersionLink.version_chip', { version: 3 })).toBe('v3')
-    expect(t('components.RunPipelineVersionLink.version_chip_title', { version: 3 })).toContain('3')
   })
 
   it('renders NO chip for a legacy run (snapshotVersion null) — absence, never v0 or a placeholder shell', async () => {
@@ -229,8 +229,11 @@ describe('RunPipelineVersionLink (FAR-1813)', () => {
     const links = wrapper.findAll('a')
     expect(links).toHaveLength(1)
     const link = links[0]
-    expect(link.text()).toContain('Data Sync')
-    expect(link.text()).toContain('v3')
+    // EXACT accessible name, separator included: a `toContain('Data Sync')` +
+    // `toContain('v3')` pair passes equally on "Data Syncv3" (the
+    // whitespace-condensed baseline) and could never catch a missing
+    // separator, so pin the whole string.
+    expect(link.text()).toBe('Data Sync v3')
     // The chip is INSIDE the link — never a sibling focusable element.
     expect(link.find('[data-testid="run-pipeline-version-chip"]').exists()).toBe(true)
     wrapper.unmount()
@@ -249,6 +252,11 @@ describe('RunPipelineVersionLink (FAR-1813)', () => {
     expect(chip.exists()).toBe(true)
     expect(chip.text()).toBe('v3')
     expect(chip.element.tagName).toBe('SPAN')
+    // No nested title in THIS branch either (it has no outer link to shadow),
+    // and the separator is exact here too: "(deleted pipeline) v3", never
+    // "(deleted pipeline)v3".
+    expect(chip.attributes('title')).toBeUndefined()
+    expect(wrapper.text()).toBe('(deleted pipeline) v3')
     expect(wrapper.find('a [data-testid="run-pipeline-version-chip"]').exists()).toBe(false)
     wrapper.unmount()
   })

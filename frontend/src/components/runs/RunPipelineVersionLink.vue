@@ -12,13 +12,21 @@
     <slot>{{ pipelineName }}</slot>
     <!-- FAR-1813: the `v{n}` version chip lives INSIDE the link so the whole
          thing is one tab stop with one accessible name ("my-pipeline v3"),
-         never a focusable chip or orphan version text after the link. -->
+         never a focusable chip or orphan version text after the link.
+         chipSeparator is a LITERAL U+0020 emitted as an interpolation:
+         template-level whitespace between </slot> and the chip — and leading
+         whitespace inside the chip — is condensed away at COMPILE time in
+         condense mode (both `&#32;` and a plain space are dropped), which gave
+         the anchor the accessible name "my-pipelinev3". An expression is not
+         touched by the compiler, so the space reaches the DOM; it renders at
+         the start of the chip's inline-block formatting context where a
+         leading space collapses visually — the visible gap stays the `ml-1`
+         margin, while assistive tech reads "my-pipeline v3". -->
     <span
       v-if="versionLabel"
       data-testid="run-pipeline-version-chip"
-      :title="versionChipTitle ?? undefined"
-      class="ml-1 inline-block rounded bg-muted px-1 align-middle font-mono text-[0.65em] leading-relaxed text-muted-foreground no-underline"
-    >{{ versionLabel }}</span>
+      class="ml-1 inline-block rounded bg-muted px-1 align-middle font-mono text-[10px] leading-relaxed text-muted-foreground no-underline"
+    >{{ chipSeparator }}{{ versionLabel }}</span>
   </router-link>
   <!-- No editor to open: a deleted pipeline (pipeline_name NULL) or a run with
        no pipeline id renders the caller's text as plain content — never a dead
@@ -27,12 +35,13 @@
        gone. -->
   <span v-else>
     <slot>{{ pipelineName }}</slot>
+    <!-- Same runtime chipSeparator as the link branch — this branch condenses
+         template whitespace identically. -->
     <span
       v-if="versionLabel"
       data-testid="run-pipeline-version-chip"
-      :title="versionChipTitle ?? undefined"
-      class="ml-1 inline-block rounded bg-muted px-1 align-middle font-mono text-[0.65em] leading-relaxed text-muted-foreground no-underline"
-    >{{ versionLabel }}</span>
+      class="ml-1 inline-block rounded bg-muted px-1 align-middle font-mono text-[10px] leading-relaxed text-muted-foreground no-underline"
+    >{{ chipSeparator }}{{ versionLabel }}</span>
   </span>
 </template>
 
@@ -83,16 +92,24 @@ function coerceVersion(value: unknown): number | null {
 
 const version = computed<number | null>(() => coerceVersion(props.snapshotVersion))
 
+/**
+ * The separator between the pipeline name and the `v{n}` chip — a literal
+ * U+0020, emitted as an INTERPOLATION because template-level whitespace does
+ * not survive the compiler: in condense mode a whitespace-only text node and
+ * leading whitespace before an interpolation are both dropped at compile time
+ * (`&#32;` and a plain space compile away identically), which left the anchor
+ * with the accessible name "my-pipelinev3" and a `toContain` pair in the test
+ * that could never notice. As an expression the space reaches the DOM, so the
+ * anchor's text is exactly "my-pipeline v3". No visible change: the chip is an
+ * inline-block whose leading space collapses in its own formatting context —
+ * the gap the eye sees is still the `ml-1` margin.
+ */
+const chipSeparator = ' '
+
 const versionLabel = computed<string | null>(() =>
   version.value === null
     ? null
     : t('components.RunPipelineVersionLink.version_chip', { version: version.value }),
-)
-
-const versionChipTitle = computed<string | null>(() =>
-  version.value === null
-    ? null
-    : t('components.RunPipelineVersionLink.version_chip_title', { version: version.value }),
 )
 
 const linkTo = computed<string | null>(() => {
