@@ -1016,4 +1016,39 @@ describe('RunsListView pipeline-version link (FAR-1813)', () => {
     expect(wrapper.find('[data-testid="runs-list-open-run1"]').attributes('href')).toBe('/runs/run1')
     wrapper.unmount()
   })
+
+  it('passes the run snapshot_version through: the row shows the v{n} chip INSIDE the pipeline link', async () => {
+    // Proves the VIEW forwards RunResponse.snapshot_version — a view-level
+    // regression would otherwise leave the chip permanently absent while every
+    // component-level test stayed green.
+    mockResponses['/api/v1/runs'] = listWith([
+      { ...baseRun, snapshot_id: 'snap-42', snapshot_version: 3 },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const chip = wrapper.find('[data-testid="run-pipeline-version-chip"]')
+    expect(chip.exists()).toBe(true)
+    expect(chip.text()).toBe('v3')
+    // One tab stop: the chip lives inside the pipeline link, not beside it.
+    const versionLink = wrapper.find('[data-testid="runs-list-view-run1"]')
+    expect(versionLink.find('[data-testid="run-pipeline-version-chip"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('a legacy run with no snapshot_version renders NO chip — absence, never a placeholder', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, snapshot_id: 'snap-42' }])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const chip = wrapper.find('[data-testid="run-pipeline-version-chip"]')
+    expect(chip.exists()).toBe(false)
+    // Scoped to the name cell — nowhere can a placeholder like v0 appear.
+    const nameCell = wrapper.find('[data-testid="runs-list-view-run1"]')
+    expect(nameCell.exists()).toBe(true)
+    expect(nameCell.text()).not.toContain('v0')
+    wrapper.unmount()
+  })
 })

@@ -77,6 +77,7 @@
                 :pipeline-id="(row as RunListItem).pipeline_id"
                 :pipeline-name="(row as RunListItem).pipeline_name"
                 :snapshot-id="snapshotIdOf(row)"
+                :snapshot-version="snapshotVersionOf(row)"
                 class="font-medium"
                 :data-testid="`runs-list-view-${row.run_id}`"
               >{{ row.pipeline_name || $t('views.RunsListView.deleted_pipeline') }}</RunPipelineVersionLink>
@@ -312,6 +313,19 @@ const runColumns = computed<Column[]>(() => [
 function snapshotIdOf(row: unknown): string | null {
   const snap = (row as { snapshot_id?: unknown }).snapshot_id
   return typeof snap === 'string' && snap.length > 0 ? snap : null
+}
+
+/**
+ * FAR-1813: the run's OWN snapshot version, narrowed from the list item's
+ * `Record<string, unknown>` shape (the field rides the payload but is not
+ * declared on `RunListItem`). Only a numeric payload value is forwarded; a
+ * missing/legacy version is null — the component then renders NO chip rather
+ * than a placeholder like `v0`. The chip's accept/reject rule (integer >= 1)
+ * lives in the component so every run surface applies exactly one rule.
+ */
+function snapshotVersionOf(row: unknown): number | null {
+  const ver = (row as { snapshot_version?: unknown }).snapshot_version
+  return typeof ver === 'number' ? ver : null
 }
 
 const confirmingIds = ref(new Set<string>())
