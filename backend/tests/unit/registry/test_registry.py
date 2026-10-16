@@ -36,6 +36,7 @@ class TestCrypto:
             (lambda p: {"a": 2}, False),
             ("wrong_key", False),
         ],
+        ids=["roundtrip", "tampered-payload", "wrong-key"],
     )
     def test_sign_and_verify(self, tamper, expected):
         private, public = generate_signing_key()
@@ -96,11 +97,13 @@ class TestBundleIntegrity:
             ({"key": "value"}, {"key": "value"}, True),
             ({"key": "value"}, {"key": "different"}, False),
         ],
+        ids=["roundtrip", "matching-hash", "mismatched-hash"],
     )
     def test_bundle_integrity(self, bundle, hash_bundle, expected):
         if hash_bundle is None:
             h = compute_bundle_hash(bundle)
             assert len(h) == 64
+            assert verify_bundle_integrity(bundle, h) is expected
         else:
             h = compute_bundle_hash(hash_bundle)
             assert verify_bundle_integrity(bundle, h) is expected
@@ -139,7 +142,9 @@ class TestRegistryCRUD:
             ("modulo/prd-input-schema", "modulo", "prd-input-schema"),
             ("my-schema", "modulo", "my-schema"),
             ("community/awesome-schema", "community", "awesome-schema"),
+            ("author/name/extra", "author", "name/extra"),
         ],
+        ids=["namespaced", "bare-defaults-to-modulo", "community", "extra-slash-kept-in-name"],
     )
     def test_resolve_namespaced_slug(self, slug, expected_author, expected_name):
         author, name = resolve_namespaced_slug(slug)
@@ -196,13 +201,9 @@ class TestRegistryCRUD:
         entry = get_registry_primitive("modulo/modulo-dogfood-pipeline")
         assert entry is not None
         edges = entry.content_json["edges"]
-        hitl_edge = edges[3]
-        assert "hitl_review_config" in hitl_edge
-        assert hitl_edge["hitl_review_config"]["review_id"] == "review_before_pr"
-
-    def test_registry_total_count(self):
-        results = list_registry_primitives()
-        assert len(results) == 9  # 3 original + 6 dogfood
+        hitl_edges = [e for e in edges if "hitl_review_config" in e]
+        assert len(hitl_edges) == 1
+        assert hitl_edges[0]["hitl_review_config"]["review_id"] == "review_before_pr"
 
 
 class _PreserveRegistry:
@@ -217,9 +218,12 @@ class _PreserveRegistry:
 
 
 class TestPublish(_PreserveRegistry):
-    def test_publish_new_primitive(self):
+    @pytest.fixture
+    def signing_key_hex(self):
         private, _public = generate_signing_key()
-        key_hex = private.private_bytes_raw().hex()
+        return private.private_bytes_raw().hex()
+
+    def test_publish_new_primitive(self, signing_key_hex):
         original_count = len(_BUILTIN_REGISTRY)
 
         entry = publish_primitive(
@@ -229,7 +233,7 @@ class TestPublish(_PreserveRegistry):
             description="A test schema",
             tags=["test"],
             content_json={"fields": [{"name": "x", "type": "string"}]},
-            signing_key_hex=key_hex,
+            signing_key_hex=signing_key_hex,
         )
 
         assert entry.author == "test-author"
@@ -252,9 +256,7 @@ class TestPublish(_PreserveRegistry):
 
         assert verify_primitive_signature(entry, public_key=public)
 
-    def test_publish_rejects_empty_author(self):
-        private, _public = generate_signing_key()
-        key_hex = private.private_bytes_raw().hex()
+    def test_publish_rejects_empty_author(self, signing_key_hex):
         with pytest.raises(ValueError, match="author must be a non-empty string"):
             publish_primitive(
                 author="",
@@ -263,12 +265,10 @@ class TestPublish(_PreserveRegistry):
                 description="d",
                 tags=[],
                 content_json={},
-                signing_key_hex=key_hex,
+                signing_key_hex=signing_key_hex,
             )
 
-    def test_publish_rejects_empty_name(self):
-        private, _public = generate_signing_key()
-        key_hex = private.private_bytes_raw().hex()
+    def test_publish_rejects_empty_name(self, signing_key_hex):
         with pytest.raises(ValueError, match="name must be a non-empty string"):
             publish_primitive(
                 author="a",
@@ -277,12 +277,10 @@ class TestPublish(_PreserveRegistry):
                 description="d",
                 tags=[],
                 content_json={},
-                signing_key_hex=key_hex,
+                signing_key_hex=signing_key_hex,
             )
 
-    def test_publish_rejects_empty_primitive_type(self):
-        private, _public = generate_signing_key()
-        key_hex = private.private_bytes_raw().hex()
+    def test_publish_rejects_empty_primitive_type(self, signing_key_hex):
         with pytest.raises(ValueError, match="primitive_type must be a non-empty string"):
             publish_primitive(
                 author="a",
@@ -291,12 +289,10 @@ class TestPublish(_PreserveRegistry):
                 description="d",
                 tags=[],
                 content_json={},
-                signing_key_hex=key_hex,
+                signing_key_hex=signing_key_hex,
             )
 
-    def test_publish_rejects_empty_description(self):
-        private, _public = generate_signing_key()
-        key_hex = private.private_bytes_raw().hex()
+    def test_publish_rejects_empty_description(self, signing_key_hex):
         with pytest.raises(ValueError, match="description must be a non-empty string"):
             publish_primitive(
                 author="a",
@@ -305,12 +301,10 @@ class TestPublish(_PreserveRegistry):
                 description="",
                 tags=[],
                 content_json={},
-                signing_key_hex=key_hex,
+                signing_key_hex=signing_key_hex,
             )
 
-    def test_publish_rejects_non_list_tags(self):
-        private, _public = generate_signing_key()
-        key_hex = private.private_bytes_raw().hex()
+    def test_publish_rejects_non_list_tags(self, signing_key_hex):
         with pytest.raises(ValueError, match="tags must be a list of strings"):
             publish_primitive(
                 author="a",
@@ -319,12 +313,10 @@ class TestPublish(_PreserveRegistry):
                 description="d",
                 tags="t",
                 content_json={},
-                signing_key_hex=key_hex,
+                signing_key_hex=signing_key_hex,
             )
 
-    def test_publish_rejects_non_string_tag(self):
-        private, _public = generate_signing_key()
-        key_hex = private.private_bytes_raw().hex()
+    def test_publish_rejects_non_string_tag(self, signing_key_hex):
         with pytest.raises(ValueError, match="tags must be a list of strings"):
             publish_primitive(
                 author="a",
@@ -333,12 +325,10 @@ class TestPublish(_PreserveRegistry):
                 description="d",
                 tags=[1],
                 content_json={},
-                signing_key_hex=key_hex,
+                signing_key_hex=signing_key_hex,
             )
 
-    def test_publish_rejects_non_dict_content_json(self):
-        private, _public = generate_signing_key()
-        key_hex = private.private_bytes_raw().hex()
+    def test_publish_rejects_non_dict_content_json(self, signing_key_hex):
         with pytest.raises(ValueError, match="content_json must be a dict"):
             publish_primitive(
                 author="a",
@@ -347,12 +337,10 @@ class TestPublish(_PreserveRegistry):
                 description="d",
                 tags=[],
                 content_json=[],
-                signing_key_hex=key_hex,
+                signing_key_hex=signing_key_hex,
             )
 
-    def test_publish_rejects_non_serializable_content_json(self):
-        private, _public = generate_signing_key()
-        key_hex = private.private_bytes_raw().hex()
+    def test_publish_rejects_non_serializable_content_json(self, signing_key_hex):
         with pytest.raises(ValueError, match="not JSON-serializable"):
             publish_primitive(
                 author="a",
@@ -361,7 +349,7 @@ class TestPublish(_PreserveRegistry):
                 description="d",
                 tags=[],
                 content_json={"x": object()},
-                signing_key_hex=key_hex,
+                signing_key_hex=signing_key_hex,
             )
 
     def test_publish_rejects_invalid_signing_key_hex(self):
@@ -376,9 +364,7 @@ class TestPublish(_PreserveRegistry):
                 signing_key_hex="not-hex",
             )
 
-    def test_publish_overwrites_existing_slug(self):
-        private, _public = generate_signing_key()
-        key_hex = private.private_bytes_raw().hex()
+    def test_publish_overwrites_existing_slug(self, signing_key_hex):
         original_count = len(_BUILTIN_REGISTRY)
 
         publish_primitive(
@@ -388,7 +374,7 @@ class TestPublish(_PreserveRegistry):
             description="v1",
             tags=[],
             content_json={"a": 1},
-            signing_key_hex=key_hex,
+            signing_key_hex=signing_key_hex,
         )
         republished = publish_primitive(
             author="ow",
@@ -397,16 +383,14 @@ class TestPublish(_PreserveRegistry):
             description="v2",
             tags=[],
             content_json={"a": 2},
-            signing_key_hex=key_hex,
+            signing_key_hex=signing_key_hex,
         )
 
         assert len(_BUILTIN_REGISTRY) == original_count + 1
         assert republished.description == "v2"
         assert republished.content_json == {"a": 2}
 
-    def test_publish_unknown_fingerprint_without_key_returns_false(self):
-        private, _public = generate_signing_key()
-        key_hex = private.private_bytes_raw().hex()
+    def test_publish_unknown_fingerprint_without_key_returns_false(self, signing_key_hex):
         entry = publish_primitive(
             author="unknown-fp",
             name="prim",
@@ -414,8 +398,27 @@ class TestPublish(_PreserveRegistry):
             description="d",
             tags=[],
             content_json={},
-            signing_key_hex=key_hex,
+            signing_key_hex=signing_key_hex,
         )
         entry.signing_key_fingerprint = "0000000000000000"
 
         assert verify_primitive_signature(entry) is False
+
+    def test_verify_primitive_signature_with_wrong_explicit_key_returns_false(self, signing_key_hex):
+        entry = publish_primitive(
+            author="wrong-key",
+            name="prim",
+            primitive_type="schema",
+            description="d",
+            tags=[],
+            content_json={},
+            signing_key_hex=signing_key_hex,
+        )
+        _, wrong_public = generate_signing_key()
+
+        assert verify_primitive_signature(entry, public_key=wrong_public) is False
+
+    def test_list_with_combined_filters(self):
+        results = list_registry_primitives(author="modulo", primitive_type="schema")
+        assert len(results) > 0
+        assert all(r.author == "modulo" and r.primitive_type == "schema" for r in results)

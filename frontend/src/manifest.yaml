@@ -2899,6 +2899,12 @@ elements:
       - testid: feedback-inbox-empty
         type: element
         dynamic_testid: false
+      - testid: feedback-inbox-loading
+        type: element
+        dynamic_testid: false
+      - testid: feedback-inbox-detail-loading
+        type: element
+        dynamic_testid: false
       - testid: feedback-inbox-toggle-expand
         type: button
         dynamic_testid: false
@@ -3667,6 +3673,15 @@ elements:
         type: button
         dynamic_testid: false
       - testid: pipeline-editor-fit-view
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-root
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-node-props-close
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-edge-props-close
         type: button
         dynamic_testid: false
       - testid: pipeline-node-scope-badge
