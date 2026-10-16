@@ -11,6 +11,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "farnalabs-modulo"
+# SINGLE SOURCE OF TRUTH for the product version. Mirrored by
+# scripts/bump-version.py into frontend/package.json and
+# deploy/helm/modulo/Chart.yaml (version + appVersion). Files carry X.Y.Z only;
+# -rcN prerelease suffixes live in git tags only. See docs/upgrade-process.md.
 version = "0.3.323"
 description = "Agent governance for your agentic SDLC"
 license = "BUSL-1.1"
