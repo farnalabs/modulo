@@ -34,6 +34,7 @@ from modulo.connectors.base import (
     connector_type_supports_dispatch,
     node_routes_binding_to_connector,
 )
+from modulo.connectors.rest import _DEFAULT_MAX_FANOUT_CARDINALITY, _DEFAULT_TIMEOUT
 from modulo.core.graph_validator._types import (
     ValidationIssue,
     ValidationResult,
@@ -131,7 +132,7 @@ _RETRY_POLICY_MAX_RETRIES = 5
 # key — the timeout is a constructor parameter defaulted to ``_DEFAULT_TIMEOUT``
 # that the production composition root never overrides, so the connector ALWAYS
 # executes 30.0s per item in production. The send-budget reconcile applies the
-# SAME defaults, imported in _check_node_send_budget directly from the connector
+# SAME defaults, imported in _resolve_fanout_budget directly from the connector
 # module as the single source of truth, so it cannot diverge from what the
 # connector actually executes.
 
@@ -1600,7 +1601,8 @@ class GraphValidator:
 
         pre_existing = _is_pre_existing(snapshot)
 
-        # Topology: hard errors block immediately.
+        # Topology: hard errors block immediately (no grace period — the cutover
+        # covers schema enforcement only).
         self._check_topology(snapshot.graph_json, result)
         if not result.is_valid:
             return self._strip_warnings(result)
@@ -3359,80 +3361,16 @@ class GraphValidator:
 
     # ------------------------------------------------------------------
 
-    # Node send budget reconcile — FAR-410 flat node-key path.
-    # Kept so the branch's direct unit tests (GraphValidator._check_node_send_budget)
-    # still exercise the flat-key reconcile; the validate path uses the
-    # connector-config reconcile in :meth:`_check_node_send_budget_bindings`.
-    @staticmethod
-    def _node_send_budget_values(node: dict[str, Any]) -> tuple[float, float] | None:
-        """Resolve a fan-out node's (fanout_cardinality, per_item_budget) pair; None to skip.
-
-        A node without both keys — or with keys that do not parse as positive
-        numbers — contributes no send-budget warning.
-        """
-        fanout = node.get("fanout_cardinality")
-        per_item = node.get("per_item_budget")
-        if fanout is None and per_item is None:
-            return None
-        fanout_val = _as_positive_number(fanout)
-        per_item_val = _as_positive_number(per_item)
-        if fanout_val is None or per_item_val is None:
-            return None
-        return fanout_val, per_item_val
-
-    @staticmethod
-    def _resolve_node_wait_for(node: dict[str, Any]) -> float | None:
-        """The node's total budget: explicit ``node_wait_for`` else ``timeout_seconds``."""
-        wait_for = _as_positive_number(node.get("node_wait_for"))
-        if wait_for is None:
-            return _as_positive_number(node.get("timeout_seconds"))
-        return wait_for
-
-    @staticmethod
-    def _node_send_budget_inputs(node: dict[str, Any]) -> tuple[str, float, float, float] | None:
-        """Resolve (nid, fanout, per_item, wait_for) for a fan-out node; None to skip."""
-        resolved = GraphValidator._node_send_budget_values(node)
-        if resolved is None:
-            return None
-        wait_for = GraphValidator._resolve_node_wait_for(node)
-        if wait_for is None:
-            return None
-        return _string_or_default(node.get("id")), resolved[0], resolved[1], wait_for
-
-    @staticmethod
-    def _check_node_send_budget(graph_json: dict[str, Any], result: ValidationResult) -> None:
-        """Warn when a fan-out node's send budget exceeds its wait_for budget (FAR-410).
-
-        A connector node may fan out over ``fanout_cardinality`` items and run
-        each with a ``per_item_budget`` — but all of that must fit inside the
-        node's total ``wait_for`` budget (``node_wait_for`` or ``timeout_seconds``
-        when no explicit wait_for is set). When the per-item sends cannot
-        sequentially fit in the budget, retries collide with the node deadline
-        and every attempt gets cancelled mid-send (UNKNOWN outcomes). This is a
-        save-time warning, not a hard error: nodes without these config keys
-        (every existing graph) are unaffected, and it is advisory rather than
-        a blocker so an operator can still save while they reconcile.
-        """
-        for node in graph_json.get("nodes", []) or []:
-            if not isinstance(node, dict):
-                continue
-            resolved = GraphValidator._node_send_budget_inputs(node)
-            if resolved is None:
-                continue
-            nid, fanout_val, per_item_val, wait_for = resolved
-            total = fanout_val * per_item_val
-            if total > wait_for:
-                result.warning(
-                    "NODE_SEND_BUDGET_OVERSUBSCRIBED",
-                    f"Node '{nid}': fanout_cardinality={fanout_val} x per_item_budget={per_item_val} "
-                    f"({total:.1f}s) exceeds node wait_for budget {wait_for:.1f}s — retries will be "
-                    "cancelled mid-send, producing UNKNOWN outcomes. Raise node_wait_for or lower "
-                    "per_item_budget.",
-                    node_id=nid,
-                )
-
-    # Node send budget reconcile (FAR-410 / FAR-411)
+    # Node send budget reconcile (FAR-411)
     # ------------------------------------------------------------------
+    #
+    # The original FAR-410 flat-node-key path (``_check_node_send_budget`` and
+    # its ``_node_send_budget_values`` / ``_resolve_node_wait_for`` /
+    # ``_node_send_budget_inputs`` helpers) read ``fanout_cardinality`` /
+    # ``per_item_budget`` / ``node_wait_for`` off the node — a namespace no
+    # production writer populates — and had no production caller, only its own
+    # direct unit tests. It was removed rather than kept as test-only
+    # production code. The live reconcile is the connector-config path below.
 
     async def _check_node_send_budget_bindings(
         self,
@@ -3495,9 +3433,9 @@ class GraphValidator:
     ) -> None:
         """Emit NODE_SEND_BUDGET_OVERSUBSCRIBED for a single fan-out binding.
 
-        Mirrors :meth:`_check_node_send_budget`: a binding only counts when its
-        node resolves, its connector instance is found, and the instance's
-        ``fan_out`` config is genuinely fan-out-active (``items_path`` truthy).
+        A binding only counts when its node resolves, its connector instance is
+        found, and the instance's ``fan_out`` config is genuinely fan-out-active
+        (``items_path`` truthy).
         """
         node_id = str(binding.get("node_id")) if binding.get("node_id") else None
         if node_id is None:
@@ -3554,16 +3492,12 @@ class GraphValidator:
             if max_cardinality is None:
                 return None
         else:
-            from modulo.connectors.rest import _DEFAULT_MAX_FANOUT_CARDINALITY
-
             max_cardinality = float(_DEFAULT_MAX_FANOUT_CARDINALITY)
         if "per_item_timeout" in fanout:
             per_item_timeout = _as_positive_number(fanout.get("per_item_timeout"))
             if per_item_timeout is None:
                 return None
         else:
-            from modulo.connectors.rest import _DEFAULT_TIMEOUT
-
             per_item_timeout = _DEFAULT_TIMEOUT
         max_retries_raw = fanout.get("max_retries")
         if isinstance(max_retries_raw, int) and not isinstance(max_retries_raw, bool) and max_retries_raw >= 0:
