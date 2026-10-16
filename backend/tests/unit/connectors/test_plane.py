@@ -362,6 +362,14 @@ async def test_query_422_reports_status_without_a_hint(plane: PlaneConnector) ->
 
 
 @respx.mock
+async def test_transport_error_is_normalised_to_value_error(plane: PlaneConnector) -> None:
+    """A raw httpx transport failure never escapes as an httpx type."""
+    respx.get(PROJECTS).mock(side_effect=httpx.ConnectError("no route"))
+    with pytest.raises(ValueError, match="Plane API HTTP error"):
+        await plane.query(ConnectorQuery(resource="projects"))
+
+
+@respx.mock
 async def test_query_projects_accepts_a_bare_list_body(plane: PlaneConnector) -> None:
     """A list body is a valid page (non-object records are dropped)."""
     respx.get(PROJECTS).mock(return_value=httpx.Response(200, json=[{"id": "1"}, "not-a-dict", {"id": "2"}]))

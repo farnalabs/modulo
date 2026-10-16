@@ -47,10 +47,18 @@ def _b64(text: str) -> str:
     return base64.b64encode(text.encode()).decode()
 
 
-def _mock_lookup(repo_id: int = 7, branch: str = "main") -> Any:
-    """The slug->numeric-id lookup every operation starts with."""
+def _mock_lookup(repo_id: int = 7, default_branch: str = "main") -> Any:
+    """The slug->numeric-id lookup every operation starts with.
+
+    The body mirrors the real ``model.Repo`` shape (``id`` / ``full_name`` /
+    ``default_branch``) — a mock that invents a ``branch`` key would encode a
+    key the API never sends and let a wrong-key read pass untested.
+    """
     return respx.get(f"{API}/repos/lookup/acme/widget").mock(
-        return_value=httpx.Response(200, json={"id": repo_id, "slug": "acme/widget", "branch": branch}),
+        return_value=httpx.Response(
+            200,
+            json={"id": repo_id, "full_name": "acme/widget", "default_branch": default_branch},
+        ),
     )
 
 
@@ -172,7 +180,7 @@ async def test_trigger_run_defaults_to_the_repository_branch(runner: WoodpeckerC
     it cannot — so the connector never sends an empty/unknown branch while a
     usable default exists.
     """
-    _mock_lookup(branch="master")
+    _mock_lookup(default_branch="master")
     trigger = respx.post(f"{API}/repos/7/pipelines").mock(
         return_value=httpx.Response(200, json=_pipeline_payload()),
     )
@@ -244,11 +252,24 @@ async def test_get_run_status_round_trip(runner: WoodpeckerCIRunner) -> None:
         ("canceled", CIRunStatus.CANCELLED),
         ("declined", CIRunStatus.CANCELLED),
         ("blocked", CIRunStatus.PENDING),
+        ("created", CIRunStatus.QUEUED),
         ("pending", CIRunStatus.QUEUED),
         ("running", CIRunStatus.IN_PROGRESS),
         ("nonsense-status", CIRunStatus.UNKNOWN),
     ],
-    ids=["success", "failure", "error", "killed", "canceled", "declined", "blocked", "pending", "running", "unknown"],
+    ids=[
+        "success",
+        "failure",
+        "error",
+        "killed",
+        "canceled",
+        "declined",
+        "blocked",
+        "created",
+        "pending",
+        "running",
+        "unknown",
+    ],
 )
 @respx.mock
 async def test_get_run_status_maps_statuses(runner: WoodpeckerCIRunner, api_status: str, expected: CIRunStatus) -> None:

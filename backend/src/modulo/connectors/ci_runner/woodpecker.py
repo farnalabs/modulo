@@ -82,14 +82,14 @@ _MAX_PAGE_SIZE = 50
 #: traversal segments).
 _SLUG_SEGMENT_RE = re.compile(r"[A-Za-z0-9_.\-]+")
 
-#: Woodpecker pipeline status -> CIRunStatus. The value set is the
-#: ``PipelineStatus`` union the API documents (pending / running / started /
-#: success / failure / error / killed / canceled / declined / blocked /
-#: skipped); anything else degrades to UNKNOWN rather than being guessed.
+#: Woodpecker pipeline status -> CIRunStatus. The value set the API documents
+#: is created / pending / running / success / failure / error / killed /
+#: canceled / declined / blocked / skipped; anything else degrades to UNKNOWN
+#: rather than being guessed.
 _STATUS_MAP: dict[str, CIRunStatus] = {
+    "created": CIRunStatus.QUEUED,
     "pending": CIRunStatus.QUEUED,
     "running": CIRunStatus.IN_PROGRESS,
-    "started": CIRunStatus.IN_PROGRESS,
     "success": CIRunStatus.SUCCESS,
     "failure": CIRunStatus.FAILURE,
     "error": CIRunStatus.FAILURE,
@@ -428,8 +428,9 @@ class WoodpeckerCIRunner(CIRunnerBase):
                 # Woodpecker resolves the trigger branch server-side against
                 # the forge, and an unresolvable branch fails the request — so
                 # an empty caller branch falls back to the repository default
-                # (from the lookup we already made) before the "main" default.
-                default_branch = str(repo.get("branch") or "")
+                # (the lookup returns ``model.Repo``, whose default-branch field
+                # is JSON-tagged ``default_branch``) before the "main" default.
+                default_branch = str(repo.get("default_branch") or "")
                 body: dict[str, Any] = {"branch": branch or default_branch or "main"}
                 if variables:
                     body["variables"] = dict(variables)

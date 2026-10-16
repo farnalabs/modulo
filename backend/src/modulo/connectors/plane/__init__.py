@@ -187,12 +187,19 @@ class PlaneConnector(ConnectorBase):
         Transient statuses (429/502/503/504 — ``RETRYABLE_STATUSES``) are
         retried with the upstream ``Retry-After`` honoured (clamped) or an
         exponential backoff; everything else fails loud as a credential-redacted
-        ``ValueError`` carrying the status-specific hint. A success with a
-        non-JSON body also fails loud (never a silent empty result).
+        ``ValueError`` carrying the status-specific hint, and transport failures
+        (``httpx.HTTPError``) are normalised to the same contract. A success
+        with a non-JSON body also fails loud (never a silent empty result).
         """
         for attempt in range(_MAX_RETRIES + 1):
-            async with self._client() as client:
-                response = await client.request(method, path, params=params, json=json)
+            try:
+                async with self._client() as client:
+                    response = await client.request(method, path, params=params, json=json)
+            except httpx.HTTPError as exc:
+                # A transport failure (connect/timeout/…) is normalised to the
+                # same credential-redacted ValueError contract as every other
+                # connector error, so a caller never sees a raw httpx type.
+                raise ValueError(self._redacted_detail(f"Plane API HTTP error for {path}: {exc}")) from exc
             if response.status_code in RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                 delay = _retry_delay(attempt, response)
                 logger.warning(
