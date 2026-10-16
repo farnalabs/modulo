@@ -1,30 +1,36 @@
-"""Integration test for migration 0316_drop_retired_pipeline_diff_rollback_flag (FAR-1875).
+"""Integration test for migration 0317_drop_retired_pipeline_diff_rollback_flag (FAR-1875).
 
 Against REAL Postgres (testcontainers; the private-database harness from
 ``test_migration_0315_service_accounts_lifecycle.py`` /
 ``test_migration_0262_hitl_gate_to_review_vocabulary.py``) — a substring-routed
-mock proves nothing about SQL semantics. FAR-1819 retired the
-``pipeline_diff_rollback`` tier gate but the boot seeder only upserts
-(``INSERT ... ON CONFLICT (name) DO NOTHING``), so already-seeded databases
-(staging, production) keep a stale ``feature_flag_catalog`` row that the
-DB-backed admin Feature Flags listing still surfaces. This test proves, on real
-Postgres:
+mock proves nothing about SQL semantics. The migration deletes the
+``feature_flag_catalog`` row for every flag retired from the code registry
+(the revision is still named for ``pipeline_diff_rollback``, the FAR-1819
+retirement that prompted the sweep). Because the boot seeder only upserts
+(``INSERT ... ON CONFLICT (name) DO NOTHING``), already-seeded databases
+(staging, production) keep a stale row for every flag ever removed from
+``_KNOWN_FLAGS`` that the DB-backed admin Feature Flags listing still surfaces.
+This test proves, on real Postgres:
 
-* the REAL alembic ``upgrade`` of 0316 DELETES that stale row while leaving a
-  sibling flag row untouched, and the DB-backed registry
+* the REAL alembic ``upgrade`` of 0317 DELETES the retired ``pipeline_diff_rollback``
+  row while leaving a live sibling flag row untouched, and the DB-backed registry
   (``FeatureFlagRegistry.from_db`` -> ``_load_catalog`` -> ``list_feature_flags``,
   the listing ``admin_feature_flags.list_feature_flags`` builds) STOPS
   reporting it — the actual admin-UI symptom;
-* re-executing the migration's delete SQL is a no-op (idempotent);
+* re-running the REAL migration ``upgrade()`` a second time is a no-op (idempotent);
+* the structural invariant the admin listing depends on — every remaining
+  ``feature_flag_catalog`` row corresponds to a name in the current code
+  registry — holds after the sweep;
 * on a database where the row was never seeded the upgrade completes with no
   error and leaves the catalog table intact;
-* on a database where the episode table itself is absent the guarded SQL
-  (delete AND restore) is a no-op rather than an error;
-* ``downgrade`` restores the retired row (the pre-FAR-1819 definition).
+* on a database where the catalog table (or its ``name`` column) is absent, or
+  where ``tier_catalog`` is absent, the guarded SQL (delete AND restore) is a
+  no-op rather than an error, and pre-existing state is left unchanged;
+* ``downgrade`` restores the retired rows.
 
-The ~316-migration chain is applied ONCE to a private template database and
+The ~317-migration chain is applied ONCE to a private template database and
 each test clones it (``CREATE DATABASE ... WITH TEMPLATE``), so every test still
-runs the real migration without paying the whole-chain cost five times.
+runs the real migration without paying the whole-chain cost on every test.
 """
 
 from __future__ import annotations
@@ -44,7 +50,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from modulo.core.feature_flags import FeatureFlagRegistry
+from modulo.core.feature_flags import _KNOWN_FLAGS, FeatureFlagRegistry
+from modulo.core.seed_data.catalog import FLAGS
 
 pytestmark = [pytest.mark.integration]
 
@@ -54,6 +61,9 @@ MIGRATION_REV = "0317_drop_retired_pipeline_diff_rollback_flag"
 PREV_REV = "0316_policy_gate_evaluation_mode"
 RETIRED_FLAG = "pipeline_diff_rollback"
 SIBLING_FLAG = "email_config"
+
+#: The live code registry — the invariant source of truth for the structural test.
+LIVE_FLAG_NAMES: frozenset[str] = frozenset(str(flag["name"]) for flag in FLAGS)
 
 _MIGRATION_PATH = BACKEND_ROOT / "src" / "modulo" / "db" / "migrations" / "versions" / f"{MIGRATION_REV}.py"
 
@@ -115,8 +125,9 @@ def _run_alembic(iso_url: str, cmd: str, target: str) -> None:
 
 @pytest_asyncio.fixture(scope="session")
 async def _prev_rev_template(db_url: str) -> AsyncGenerator[str, None]:
-    """A private Postgres TEMPLATE database migrated once to PREV_REV (0315)."""
-    db_name, iso_url = await _fresh_db(db_url, "m0316_tmpl")
+    """A private Postgres TEMPLATE database migrated once to PREV_REV
+    (``0316_policy_gate_evaluation_mode``)."""
+    db_name, iso_url = await _fresh_db(db_url, "m0317_tmpl")
     _run_alembic(iso_url, "upgrade", PREV_REV)
     admin = create_async_engine(db_url, poolclass=NullPool, execution_options={"isolation_level": "AUTOCOMMIT"})
     async with admin.connect() as conn:
@@ -136,7 +147,7 @@ async def _prev_rev_template(db_url: str) -> AsyncGenerator[str, None]:
 @pytest_asyncio.fixture
 async def prev_rev_db_url(db_url: str, _prev_rev_template: str) -> AsyncGenerator[str, None]:
     """A per-test clone of the PREV_REV template, so no test observes another's writes."""
-    db_name = f"m0316_t_{uuid.uuid4().hex[:10]}"
+    db_name = f"m0317_t_{uuid.uuid4().hex[:10]}"
     admin = create_async_engine(db_url, poolclass=NullPool, execution_options={"isolation_level": "AUTOCOMMIT"})
     async with admin.connect() as conn:
         await conn.execute(text(f'CREATE DATABASE "{db_name}" WITH TEMPLATE "{_prev_rev_template}"'))
@@ -148,14 +159,15 @@ async def prev_rev_db_url(db_url: str, _prev_rev_template: str) -> AsyncGenerato
 
 
 async def _seed_catalog(iso_url: str, flags: tuple[str, ...]) -> None:
-    """Seed the ``team`` tier (the FK target) and the given flag rows."""
+    """Seed both tiers (the FK targets the retired rows reference) and the given flag rows."""
     engine = create_async_engine(iso_url, poolclass=NullPool)
     try:
         async with engine.begin() as conn:
             await conn.execute(
                 text(
-                    "INSERT INTO tier_catalog (tier_id, label, rank, requires_license, description) "
-                    "VALUES ('team', 'Team', 1, true, 'Paid tier') ON CONFLICT (tier_id) DO NOTHING"
+                    "INSERT INTO tier_catalog (tier_id, label, rank, requires_license, description) VALUES "
+                    "('community', 'Community', 0, false, 'Free tier'), "
+                    "('team', 'Team', 1, true, 'Paid tier') ON CONFLICT (tier_id) DO NOTHING"
                 )
             )
             for name in flags:
@@ -192,7 +204,28 @@ async def _registry_flag_names(iso_url: str) -> set[str]:
         await engine.dispose()
 
 
-async def test_upgrade_deletes_only_the_retired_flag_row(prev_rev_db_url: str) -> None:
+async def _set_alembic_version(iso_url: str, revision: str) -> None:
+    """Rewind the version marker so a subsequent ``upgrade`` re-runs the migration."""
+    engine = create_async_engine(iso_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("UPDATE alembic_version SET version_num = :rev"), {"rev": revision})
+    finally:
+        await engine.dispose()
+
+
+def test_retired_flag_names_are_absent_from_the_live_registry() -> None:
+    """The sweep's safety precondition: no swept name may be a live code flag.
+
+    Deleting a catalog row for a name still in ``_KNOWN_FLAGS`` would gate that
+    feature off (``get_flag`` -> ``None`` -> ``feature_enabled`` is ``False``).
+    """
+    live = {flag.name for flag in _KNOWN_FLAGS}
+    overlap = live & set(_migration_module().RETIRED_FLAG_NAMES)
+    assert not overlap, f"live flags must never be swept: {sorted(overlap)}"
+
+
+async def test_upgrade_deletes_the_retired_flag_row(prev_rev_db_url: str) -> None:
     await _seed_catalog(prev_rev_db_url, flags=(RETIRED_FLAG, SIBLING_FLAG))
 
     # Prove the fix is meaningful: before the migration, the DB-backed registry
@@ -213,23 +246,41 @@ async def test_upgrade_deletes_only_the_retired_flag_row(prev_rev_db_url: str) -
     assert SIBLING_FLAG in registry_names
 
 
-async def test_repeated_migration_sql_is_idempotent(prev_rev_db_url: str) -> None:
-    await _seed_catalog(prev_rev_db_url, flags=(RETIRED_FLAG,))
+async def test_after_upgrade_every_catalog_row_is_a_live_code_flag(prev_rev_db_url: str) -> None:
+    """Structural invariant: the catalog may only contain live code-flag names.
+
+    The admin Feature Flags listing is built straight from the catalog, so any
+    row whose name is absent from the current registry is a dead flag. Seed the
+    live names alongside the known-stale set and assert the sweep leaves exactly
+    the live names.
+    """
+    seeded = tuple(sorted(LIVE_FLAG_NAMES | set(_migration_module().RETIRED_FLAG_NAMES)))
+    await _seed_catalog(prev_rev_db_url, flags=seeded)
+
+    before = await _table_flag_names(prev_rev_db_url)
+    assert set(_migration_module().RETIRED_FLAG_NAMES) <= before
+
     _run_alembic(prev_rev_db_url, "upgrade", MIGRATION_REV)
 
-    # Re-run the migration's OWN delete statement twice; neither may raise and
-    # the row must stay gone (the guard matches nothing on an empty/exhausted
-    # catalog).
-    engine = create_async_engine(prev_rev_db_url, poolclass=NullPool)
-    try:
-        delete_sql = _migration_module()._DELETE_RETIRED_FLAG_SQL
-        async with engine.begin() as conn:
-            await conn.execute(text(delete_sql))
-            await conn.execute(text(delete_sql))
-    finally:
-        await engine.dispose()
+    remaining = await _table_flag_names(prev_rev_db_url)
+    assert remaining <= LIVE_FLAG_NAMES
+    assert remaining == set(LIVE_FLAG_NAMES)
 
+
+async def test_repeated_migration_upgrade_is_idempotent(prev_rev_db_url: str) -> None:
+    await _seed_catalog(prev_rev_db_url, flags=(RETIRED_FLAG, SIBLING_FLAG))
+    _run_alembic(prev_rev_db_url, "upgrade", MIGRATION_REV)
     assert RETIRED_FLAG not in await _table_flag_names(prev_rev_db_url)
+
+    # Rewind the version marker so the REAL migration ``upgrade()`` runs a
+    # SECOND time against a catalog where the row is already gone; it must
+    # neither raise nor disturb a live sibling row.
+    await _set_alembic_version(prev_rev_db_url, PREV_REV)
+    _run_alembic(prev_rev_db_url, "upgrade", MIGRATION_REV)
+
+    names = await _table_flag_names(prev_rev_db_url)
+    assert RETIRED_FLAG not in names
+    assert SIBLING_FLAG in names
 
 
 async def test_upgrade_is_noop_when_retired_row_absent(prev_rev_db_url: str) -> None:
@@ -244,32 +295,103 @@ async def test_upgrade_is_noop_when_retired_row_absent(prev_rev_db_url: str) -> 
     assert RETIRED_FLAG not in table_names
 
 
-async def test_guarded_sql_is_noop_when_table_absent(db_url: str) -> None:
-    db_name, iso_url = await _fresh_db(db_url, "m0316_notable")
+async def test_guarded_sql_is_noop_when_catalog_table_absent(db_url: str) -> None:
+    db_name, iso_url = await _fresh_db(db_url, "m0317_notable")
     try:
         engine = create_async_engine(iso_url, poolclass=NullPool)
         try:
             module = _migration_module()
             async with engine.begin() as conn:
-                # No ``feature_flag_catalog`` table exists yet — both directions
-                # must short-circuit on the information_schema guard.
-                await conn.execute(text(module._DELETE_RETIRED_FLAG_SQL))
-                await conn.execute(text(module._RESTORE_RETIRED_FLAG_SQL))
+                # A pre-existing, unrelated row the guarded SQL must not touch,
+                # plus no ``feature_flag_catalog`` table at all.
+                await conn.execute(
+                    text("CREATE TABLE public.tier_catalog (tier_id text PRIMARY KEY, label text NOT NULL)")
+                )
+                await conn.execute(text("INSERT INTO public.tier_catalog (tier_id, label) VALUES ('team', 'Team')"))
+            async with engine.begin() as conn:
+                # No ``feature_flag_catalog`` table exists — both directions must
+                # short-circuit on the information_schema guard rather than raise.
+                await conn.execute(text(module._DELETE_RETIRED_FLAGS_SQL))
+                await conn.execute(text(module._RESTORE_RETIRED_FLAGS_SQL))
+            async with engine.connect() as conn:
                 catalog_oid = (
                     await conn.execute(text("SELECT to_regclass('public.feature_flag_catalog')"))
                 ).scalar_one()
+                tiers = (await conn.execute(text("SELECT tier_id, label FROM public.tier_catalog"))).all()
         finally:
             await engine.dispose()
+        # Guard held: no catalog table was created AND the pre-existing state is
+        # exactly as seeded (an unguarded statement would have raised 42P01).
         assert catalog_oid is None
+        assert [tuple(row) for row in tiers] == [("team", "Team")]
     finally:
         await _drop_db(db_url, db_name)
 
 
-async def test_downgrade_restores_the_retired_row(prev_rev_db_url: str) -> None:
-    await _seed_catalog(prev_rev_db_url, flags=(RETIRED_FLAG,))
+async def test_guarded_sql_is_noop_when_name_column_absent(db_url: str) -> None:
+    db_name, iso_url = await _fresh_db(db_url, "m0317_nocol")
+    try:
+        engine = create_async_engine(iso_url, poolclass=NullPool)
+        try:
+            module = _migration_module()
+            async with engine.begin() as conn:
+                # A ``feature_flag_catalog`` table WITHOUT its ``name`` column,
+                # carrying one sentinel row. The column guard must short-circuit
+                # both directions; an unguarded DELETE/INSERT would raise 42703.
+                await conn.execute(text('CREATE TABLE public."feature_flag_catalog" (legacy_id integer)'))
+                await conn.execute(text('INSERT INTO public."feature_flag_catalog" (legacy_id) VALUES (42)'))
+            async with engine.begin() as conn:
+                await conn.execute(text(module._DELETE_RETIRED_FLAGS_SQL))
+                await conn.execute(text(module._RESTORE_RETIRED_FLAGS_SQL))
+            async with engine.connect() as conn:
+                sentinels = (
+                    (await conn.execute(text('SELECT legacy_id FROM public."feature_flag_catalog"'))).scalars().all()
+                )
+        finally:
+            await engine.dispose()
+        assert list(sentinels) == [42]
+    finally:
+        await _drop_db(db_url, db_name)
+
+
+async def test_restore_is_noop_when_tier_catalog_table_absent(db_url: str) -> None:
+    db_name, iso_url = await _fresh_db(db_url, "m0317_notier")
+    try:
+        engine = create_async_engine(iso_url, poolclass=NullPool)
+        try:
+            module = _migration_module()
+            async with engine.begin() as conn:
+                # A present catalog table with its ``name`` column but NO
+                # ``tier_catalog`` table: the restore's tier-table guard must
+                # short-circuit (an unguarded INSERT would raise 42P01).
+                await conn.execute(
+                    text(
+                        'CREATE TABLE public."feature_flag_catalog" ('
+                        "name text PRIMARY KEY, description text, tier_id text, depends_on json, is_active boolean)"
+                    )
+                )
+            async with engine.begin() as conn:
+                await conn.execute(text(module._RESTORE_RETIRED_FLAGS_SQL))
+            async with engine.connect() as conn:
+                tier_oid = (await conn.execute(text("SELECT to_regclass('public.tier_catalog')"))).scalar_one()
+                restored = (await conn.execute(text('SELECT count(*) FROM public."feature_flag_catalog"'))).scalar_one()
+        finally:
+            await engine.dispose()
+        assert tier_oid is None
+        assert restored == 0
+    finally:
+        await _drop_db(db_url, db_name)
+
+
+async def test_downgrade_restores_the_retired_rows(prev_rev_db_url: str) -> None:
+    module = _migration_module()
+    retired = tuple(sorted(module.RETIRED_FLAG_NAMES))
+    await _seed_catalog(prev_rev_db_url, flags=retired)
     _run_alembic(prev_rev_db_url, "upgrade", MIGRATION_REV)
     assert RETIRED_FLAG not in await _table_flag_names(prev_rev_db_url)
+    assert not await _table_flag_names(prev_rev_db_url)
 
     _run_alembic(prev_rev_db_url, "downgrade", PREV_REV)
 
-    assert RETIRED_FLAG in await _table_flag_names(prev_rev_db_url)
+    restored = await _table_flag_names(prev_rev_db_url)
+    assert restored == set(retired)
