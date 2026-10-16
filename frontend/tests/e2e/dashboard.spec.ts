@@ -19,9 +19,10 @@ test.describe('Dashboard', () => {
     // FAR-92: the rolling-window toggle is gated behind the analytics_page
     // feature flag. Mock the plan fetch so the flag resolves enabled for this
     // regression run (mirrors the sibling DashboardView unit specs, which turn
-    // analytics_page on). FAR-1809: the flag map now arrives from the
-    // caller-scoped GET /api/v1/plan. Registered after loginAsAdmin so it takes
-    // precedence over the local-target catch-all API mock.
+    // analytics_page on). Registered after loginAsAdmin so it takes precedence
+    // over the local-target catch-all API mock. FAR-1809 repointed the plan
+    // bootstrap at the caller-scoped GET /api/v1/plan, so the mock owns that
+    // endpoint.
     await page.route('**/api/v1/plan*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ license: { tier: 'community' }, flags: [{ name: 'analytics_page', currently_active: true }] }) })
     })

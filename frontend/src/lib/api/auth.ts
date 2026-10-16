@@ -77,6 +77,15 @@ function getAuthChannel(): BroadcastChannel | null {
     // which the browser shares across tabs automatically — there is no longer
     // a localStorage token for a sibling tab to adopt. The message stays as a
     // wake-up signal for tabs listening on auth state changes.
+    //
+    // FAR-1852: make the wake-up real — a sibling tab that refreshed has
+    // already written the fresh access token to localStorage (shared across
+    // same-origin tabs), so re-firing this tab's auth listeners (which
+    // re-read storage) lets consumers like the SSE stream re-arm (FAR-1842)
+    // react in EVERY open tab, not only the one that refreshed.
+    // BroadcastChannel never delivers to the posting tab, so the refresher
+    // cannot double-fire its own listeners through this path.
+    notifyListeners()
   })
   return _authChannel
 }
@@ -123,6 +132,13 @@ function notifyListeners(): void {
 }
 
 export function onAuthChange(fn: (token: string | null) => void): () => void {
+  // FAR-1852: open the cross-tab auth channel (idempotent; a no-op when
+  // BroadcastChannel is unavailable) so THIS tab receives sibling-tab
+  // refresh broadcasts. Every tab that registers an auth listener —
+  // including the SSE stream's module-scope re-arm — is then reachable
+  // cross-tab; previously only tabs that refreshed themselves ever opened
+  // the channel, so the broadcast had no receiver.
+  getAuthChannel()
   _authListeners.push(fn)
   fn(localStorage.getItem(TOKEN_KEY))
   return () => {

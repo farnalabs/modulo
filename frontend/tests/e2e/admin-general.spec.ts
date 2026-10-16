@@ -24,8 +24,9 @@ test.describe('Admin Notification Delivery', { tag: "@regression" }, () => {
     // FAR-656: the webhook delivery log is gated behind the
     // webhook_notification_log flag (default OFF) — mock the plan fetch so the
     // router guard resolves the flag as enabled for this regression run.
-    // FAR-1809: plan flags now arrive from the caller-scoped GET /api/v1/plan
-    // (the old instance-admin /admin/feature-flags read is gone).
+    // FAR-1809 repointed the plan bootstrap at the caller-scoped GET
+    // /api/v1/plan, so the mock must own that endpoint (the old instance-admin
+    // /api/v1/admin/feature-flags is no longer read by the store).
     await page.route('**/api/v1/plan*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ license: { tier: 'team' }, flags: [{ name: 'webhook_notification_log', currently_active: true }] }) })
     })
