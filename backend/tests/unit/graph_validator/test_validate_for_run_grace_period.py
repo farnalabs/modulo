@@ -2,21 +2,22 @@
 
 ``validate_for_run`` returns error-severity issues only. A snapshot that
 pre-dates the Phase 1 cutover and hits a schema incompatibility blocks the run
-like any other — but it also carries a distinct ``SCHEMA_PRE_EXISTING_BLOCKED``
-error on the returned result (FAR-1760). That marker is the ONLY thing on the
-result path that separates a pre-existing block from a plain block: the
-accompanying "Run is blocked" log line is not on the result path, so without
-the marker a caller saw two byte-identical blocking results and had no way to
-tell them apart. There is no degraded-mode proceed.
+like any other, and carries a distinct ``SCHEMA_PRE_EXISTING_BLOCKED`` error on
+the returned result (FAR-1760). That marker is the ONLY thing on the result path
+that separates a pre-existing block from a plain block: the accompanying "Run is
+blocked" log line is not on the result path, so without the marker a caller saw
+two byte-identical blocking results and had no way to tell them apart.
 
-These tests pin:
+``test_schema_enforcement.py`` (FAR-1760 section) already pins the base cases —
+the marker is present for a pre-cutover block and absent for a post-cutover one.
+The tests here pin the properties that distinguish the marker from an ordinary
+advisory warning and that a naive implementation could break:
 
-* the marker is present for a pre-existing snapshot with incompatible schemas,
-* it is absent for a post-cutover snapshot (the same graph, same schemas),
-* it is absent when nothing was incompatible,
 * it is error-severity and survives the warning strip, while ordinary advisory
   warnings are still stripped,
 * a schema block does not also fabricate an "input schema" block,
+* a clean pre-cutover snapshot carries no marker (the marker means "pre-existing
+  block", not "old"),
 * the marker reaches the caller when the payload is ``None``.
 """
 
@@ -37,7 +38,6 @@ from tests.unit.graph_validator._helpers import (
 )
 
 _PRE_CUTOVER = datetime(2026, 7, 21, 12, 0, 0, tzinfo=UTC)
-_POST_CUTOVER = datetime(2026, 7, 23, 12, 0, 0, tzinfo=UTC)
 
 _STRING_VS_INT = (
     {"type": "object", "properties": {"x": {"type": "string"}}},
@@ -73,38 +73,6 @@ def _incompatible_graph(*, extra_unreachable_node: bool = False) -> tuple[dict, 
     }
     rows = [_schema_row(out_id, _STRING_VS_INT[0]), _schema_row(in_id, _STRING_VS_INT[1])]
     return graph, rows
-
-
-async def test_pre_existing_incompatibility_returns_blocked_marker(caplog):
-    """A pre-cutover snapshot blocks AND carries SCHEMA_PRE_EXISTING_BLOCKED on the result."""
-    caplog.set_level(logging.WARNING)
-    graph, rows = _incompatible_graph()
-    snap = _snapshot(graph, created_at=_PRE_CUTOVER)
-
-    result = await GraphValidator().validate_for_run(snap, {}, _session_returning(rows))
-
-    # The invalid/valid outcome: schema errors still block.
-    assert not result.is_valid
-    assert "SCHEMA_FIELD_INCOMPATIBLE" in _codes(result)
-    # The pre-existing distinction is now observable to the caller.
-    assert "SCHEMA_PRE_EXISTING_BLOCKED" in _codes(result)
-    assert any("Schema incompatibility in pipeline" in r.getMessage() for r in caplog.records)
-
-
-async def test_post_cutover_incompatibility_has_no_blocked_marker():
-    """The identical graph on a post-cutover snapshot blocks WITHOUT the marker.
-
-    This is the other half of the distinction: without a marker the two results
-    are indistinguishable to a caller.
-    """
-    graph, rows = _incompatible_graph()
-    snap = _snapshot(graph, created_at=_POST_CUTOVER)
-
-    result = await GraphValidator().validate_for_run(snap, {}, _session_returning(rows))
-
-    assert not result.is_valid
-    assert "SCHEMA_FIELD_INCOMPATIBLE" in _codes(result)
-    assert "SCHEMA_PRE_EXISTING_BLOCKED" not in _codes(result)
 
 
 async def test_clean_pre_existing_snapshot_has_no_blocked_marker(caplog):
@@ -182,33 +150,3 @@ async def test_marker_reaches_caller_when_payload_is_null():
 
     assert not result.is_valid
     assert "SCHEMA_PRE_EXISTING_BLOCKED" in _codes(result)
-
-
-async def test_input_schema_block_marker_on_pre_existing_snapshot(caplog):
-    """A pre-cutover snapshot whose INPUT schema is incompatible records the marker.
-
-    This is the input-schema half of the pre-existing carve-out, independent of
-    the field-level schema check: a graph with no output→input edges passes
-    schema compatibility, so the input check is the only source of errors. Its
-    block must still be observable to the caller as SCHEMA_PRE_EXISTING_BLOCKED,
-    and must be announced with the input-schema log line.
-    """
-    caplog.set_level(logging.WARNING)
-    in_id = uuid.uuid4()
-    graph = {
-        "nodes": [
-            {"id": "entry", "input_schema_pin": {"schema_id": str(in_id), "schema_version": "1.0"}},
-        ],
-        "edges": [],
-    }
-    schema = {"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]}
-    snap = _snapshot(graph, created_at=_PRE_CUTOVER)
-    # One row for the pin-definition resolve, one for the input-schema lookup.
-    rows = [_schema_row(in_id, schema), _schema_row(in_id, schema)]
-
-    result = await GraphValidator().validate_for_run(snap, {}, _session_returning(rows))
-
-    assert not result.is_valid
-    assert "INPUT_SCHEMA_MISMATCH" in _codes(result)
-    assert "SCHEMA_PRE_EXISTING_BLOCKED" in _codes(result)
-    assert any("Input schema incompatibility in pipeline" in r.getMessage() for r in caplog.records)
