@@ -193,7 +193,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for rule in .semgrep/no-raw-httpx-client.yml .semgrep/connector-egress-verify-required.yml; do
+          for rule in .semgrep/no-raw-httpx-client.yml .semgrep/connector-egress-verify-required.yml .semgrep/callable-dunder-name.yml; do
             base="$(basename "$rule" .yml)"
             if [ -f ".semgrep/tests/${base}.py" ]; then
               uv run --no-build --project backend --no-sync semgrep --config="$rule" --test ".semgrep/tests/${base}.py"
@@ -460,7 +460,7 @@ jobs:
             -e POSTGRES_DB=modulo_test \
             -p 5433:5432 \
             postgres:16-alpine
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             if docker exec modulo-ci-pg pg_isready -U modulo_test 2>/dev/null; then
               echo "Postgres ready"
               exit 0
@@ -476,7 +476,7 @@ jobs:
         run: |
           docker rm -f modulo-ci-redis 2>/dev/null || true
           docker run -d --name modulo-ci-redis -p 6379:6379 redis:7-alpine
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if docker exec modulo-ci-redis redis-cli ping 2>/dev/null | grep -q PONG; then
               echo "Redis ready"
               exit 0
@@ -1524,14 +1524,14 @@ jobs:
             BODY_RESP=$(echo "$RESPONSE" | sed '$d')
             LAST_HTTP="$HTTP_CODE"
             if [ "$HTTP_CODE" = "202" ]; then
-              RESP_STATUS=$(echo $BODY_RESP | jq -r '.status // "accepted"')
+              RESP_STATUS=$(echo "$BODY_RESP" | jq -r '.status // "accepted"')
               if [ "$RESP_STATUS" = "coalesced" ]; then
                 # FAR-1034 handled no-op: duplicate CI-failure for the same
                 # PR + head SHA within the coalesce window — intentionally no
                 # new run. Not an error, not retried.
                 echo "::notice::Modulo Branch Fixer coalesced (duplicate CI-failure for same PR + head SHA — suppressed)"
               else
-                echo "Modulo Branch Fixer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+                echo "Modulo Branch Fixer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
               fi
               DISPATCHED="true"
               break
@@ -1550,7 +1550,7 @@ jobs:
               echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
               sleep "$DELAY"
             else
-              echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
+              echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
               break
             fi
           done
@@ -1644,11 +1644,11 @@ jobs:
             BODY_RESP=$(echo "$RESPONSE" | sed '$d')
             LAST_HTTP="$HTTP_CODE"
             if [ "$HTTP_CODE" = "202" ]; then
-              RESP_STATUS=$(echo $BODY_RESP | jq -r '.status // "accepted"')
+              RESP_STATUS=$(echo "$BODY_RESP" | jq -r '.status // "accepted"')
               if [ "$RESP_STATUS" = "coalesced" ]; then
                 echo "::notice::Branch Fixer coalesced (duplicate CI-failure for same sha — suppressed)"
               else
-                echo "Branch Fixer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+                echo "Branch Fixer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
               fi
               DISPATCHED="true"
               break
@@ -1666,7 +1666,7 @@ jobs:
               echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
               sleep "$DELAY"
             else
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
+              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
               break
             fi
           done
@@ -1777,7 +1777,7 @@ jobs:
             BODY_RESP=$(echo "$RESPONSE" | sed '$d')
             LAST_HTTP="$HTTP_CODE"
             if [ "$HTTP_CODE" = "202" ]; then
-              echo "PR Reviewer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+              echo "PR Reviewer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
               DISPATCHED="true"
               break
             elif [ "$HTTP_CODE" = "400" ] && echo "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
@@ -1795,7 +1795,7 @@ jobs:
               echo "::warning::PR Reviewer returned HTTP $HTTP_CODE (attempt $i/5) retrying in ${DELAY}s"
               sleep "$DELAY"
             else
-              echo "::warning::PR Reviewer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
+              echo "::warning::PR Reviewer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
               break
             fi
           done

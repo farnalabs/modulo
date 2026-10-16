@@ -159,6 +159,9 @@ If a threshold fails, k6 exits with a non-zero code. Common causes:
 
 ### GitHub Actions
 
+No scheduled k6 workflow ships in `.github/workflows/` yet. To add one,
+commit a workflow like this (example - adapt the target URL secret):
+
 ```yaml
 name: Load Test
 

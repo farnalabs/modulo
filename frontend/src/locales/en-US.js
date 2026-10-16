@@ -626,6 +626,7 @@ export default {
       "clear_filters": "Clear filters",
       "apply_filters": "Apply Filters",
       "failed_to_dismiss_notification": "Failed to dismiss notification",
+      "loading_notifications": "Loading notifications",
       "request_timed_out": "Notifications request timed out after 30s"
     },
     "EnvironmentProfileForm": {
@@ -1388,7 +1389,27 @@ export default {
       "snapshot_lock_released_pids": "Terminated PIDs: {pids}",
       "snapshot_lock_load_failed": "Failed to load the snapshot lock status: {error}",
       "snapshot_lock_release_failed": "Failed to release the snapshot lock: {error}",
-      "snapshot_lock_release_forbidden": "Release refused: {error}"
+      "snapshot_lock_release_forbidden": "Release refused: {error}",
+      "historic_banner_title": "Viewing v{version} — a historical version",
+      "historic_banner_meta": "(saved {date} by {author})",
+      "historic_unknown_author": "unknown author",
+      "historic_banner_body": "This version is read-only. New runs always use the latest saved version, and edits here are not possible.",
+      "historic_restore": "Restore this version",
+      "historic_view_latest": "View latest",
+      "historic_copy_link": "Copy link",
+      "historic_copy_link_copied": "Link copied",
+      "historic_copy_link_failed": "Could not copy the link to this version",
+      "historic_restore_dialog_title": "Restore this version?",
+      "historic_restore_dialog_body": "Replace the current graph with version {version}? A new version is created from it, so nothing is deleted.",
+      "historic_restore_confirm": "Restore",
+      "historic_restore_failed": "Failed to restore this version: {error}",
+      "version_missing_title": "This version is no longer available",
+      "version_missing_body": "It may have been deleted, or this link may be out of date.",
+      "version_missing_open_latest": "Open the latest version",
+      "version_load_failed": "Failed to load this version: {error}",
+      "unsaved_changes_title": "Unsaved changes",
+      "unsaved_changes_body": "You have unsaved changes to this pipeline's graph. Open the historical version anyway? Your unsaved changes stay in the latest editor.",
+      "unsaved_changes_continue": "Open version"
     },
     "AdminPluginsView": {
       "manage_installed_modulo_plugins_and_extensions": "Manage installed Modulo plugins and extensions",
@@ -1444,6 +1465,7 @@ export default {
       "queued": "queued",
       "empty_state_description": "Try adjusting your filters or trigger a pipeline run.",
       "deleted_pipeline": "(deleted pipeline)",
+      "view_run": "View run",
       "run_count": "1 run | {count} runs",
       "previous": "Previous",
       "next": "Next",
@@ -3872,6 +3894,10 @@ export default {
       "seed_failing_node": "Failing node: {node}",
       "seed_request": "Work out the most likely root cause of this failure, cite the evidence in the run, and suggest concrete fixes."
     },
+    "RunPipelineVersionLink": {
+      "version_title": "Open the pipeline version this run executed",
+      "current_title": "Open the pipeline (this run has no recorded version)"
+    },
     "ViewToggle": {
       "saved_views": "Saved Views",
       "select_a_saved_view": "Select a saved view..."
@@ -4409,9 +4435,26 @@ export default {
       "select_base_snapshot": "Select base snapshot",
       "diff": "Diff",
       "rollback_to_selected": "Rollback to selected",
+      "view_version": "View",
+      "view_version_aria": "View version {version} as a historical version",
       "edit": "edit",
       "run": "run",
       "none": "none"
+    },
+    "PipelineVersionChip": {
+      "chip_aria": "Version {version} — show version details",
+      "popover_aria": "Details for version {version}",
+      "created_label": "Created",
+      "kind_label": "Type",
+      "author_label": "Saved by",
+      "tag_label": "Tag",
+      "notes_label": "Notes",
+      "no_value": "—",
+      "open_timeline": "Open in timeline",
+      "kind_initial": "initial",
+      "kind_edit": "edit",
+      "kind_rollback": "rollback",
+      "kind_run": "run"
     },
     "SidebarLink": {
       "preview": "Preview",
@@ -4540,6 +4583,13 @@ export default {
     "dismiss": "Dismiss",
     "seed_examples": "Seed example primitives",
     "dismiss_hint": "Click anywhere to dismiss this guide"
+  },
+  "auth": {
+    "ssoError": {
+      "not_invited": "You're signed in, but you haven't been invited to this organisation yet. Ask an organisation admin to send you an invite, then try again.",
+      "auth_failed": "We couldn't complete the sign-in. Please try again.",
+      "provider_unavailable": "Sign-in is temporarily unavailable. Please try again in a moment."
+    }
   },
   "errorCodes": {
     "_unknown": "Unknown error",

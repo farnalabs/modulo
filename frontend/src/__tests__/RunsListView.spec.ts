@@ -171,7 +171,7 @@ function mountView() {
         ErrorAlert: true,
         'router-link': {
           props: ['to'],
-          template: '<a :data-to="typeof to === \'string\' ? to : to.path"><slot /></a>',
+          template: '<a :href="typeof to === \'string\' ? to : to.path" :data-to="typeof to === \'string\' ? to : to.path"><slot /></a>',
         },
       },
     },
@@ -480,7 +480,13 @@ describe('RunsListView', () => {
 
     const viewLink = wrapper.find('[data-testid="runs-list-view-run1"]')
     expect(viewLink.exists()).toBe(true)
-    expect(viewLink.attributes('data-to')).toBe('/runs/run1')
+    // FAR-1813: the pipeline name opens the VERSION the run executed — baseRun
+    // carries no snapshot_id, so the honest target is the live editor — while
+    // the run itself stays reachable through the adjacent link.
+    expect(viewLink.attributes('data-to')).toBe('/pipelines/p1/editor')
+    const openRunLink = wrapper.find('[data-testid="runs-list-open-run1"]')
+    expect(openRunLink.exists()).toBe(true)
+    expect(openRunLink.attributes('data-to')).toBe('/runs/run1')
     wrapper.unmount()
   })
 
@@ -999,6 +1005,73 @@ describe('RunsListView', () => {
     const ariaLabel = badge.attributes('aria-label')
     expect(ariaLabel).toBeTruthy()
     expect(ariaLabel!.length).toBeGreaterThan(0)
+    wrapper.unmount()
+  })
+})
+
+describe('RunsListView pipeline-version link (FAR-1813)', () => {
+  it('renders the pipeline name as a link to the version the run executed', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, snapshot_id: 'snap-42' }])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const versionLink = wrapper.find('[data-testid="runs-list-view-run1"]')
+    expect(versionLink.exists()).toBe(true)
+    expect(versionLink.attributes('href')).toBe('/pipelines/p1/editor?snapshot=snap-42')
+    expect(versionLink.text()).toContain('Test Pipeline')
+    // The run itself stays reachable now the name opens the version.
+    const openRun = wrapper.find('[data-testid="runs-list-open-run1"]')
+    expect(openRun.exists()).toBe(true)
+    expect(openRun.attributes('href')).toBe('/runs/run1')
+    wrapper.unmount()
+  })
+
+  it('a legacy run with a NULL snapshot falls back to the live editor, never a dead ?snapshot=null link', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, snapshot_id: null }])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const versionLink = wrapper.find('[data-testid="runs-list-view-run1"]')
+    expect(versionLink.exists()).toBe(true)
+    const href = versionLink.attributes('href')
+    expect(href).toBe('/pipelines/p1/editor')
+    expect(href).not.toContain('snapshot')
+    expect(href).not.toContain('null')
+    wrapper.unmount()
+  })
+
+  it('a rerun links to the SOURCE snapshot it re-executed, not the pipeline head', async () => {
+    mockResponses['/api/v1/runs'] = listWith([
+      { ...baseRun, trigger_type: 'rerun', snapshot_id: 'snap-source-17' },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const versionLink = wrapper.find('[data-testid="runs-list-view-run1"]')
+    expect(versionLink.exists()).toBe(true)
+    const href = versionLink.attributes('href')
+    // Derived only from the run's own snapshot_id (what the rerun re-executed).
+    expect(href).toBe('/pipelines/p1/editor?snapshot=snap-source-17')
+    expect(href).not.toContain('snap-head')
+    expect(href).not.toContain('latest')
+    wrapper.unmount()
+  })
+
+  it('a deleted pipeline renders plain text — no dead editor link — and the run stays openable', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, pipeline_name: null, snapshot_id: 'snap-42' }])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const nameCell = wrapper.find('[data-testid="runs-list-view-run1"]')
+    expect(nameCell.exists()).toBe(true)
+    expect(nameCell.text()).toContain('(deleted pipeline)')
+    expect(nameCell.find('a').exists()).toBe(false)
+    expect(nameCell.attributes('href')).toBeUndefined()
+    expect(wrapper.find('[data-testid="runs-list-open-run1"]').attributes('href')).toBe('/runs/run1')
     wrapper.unmount()
   })
 })

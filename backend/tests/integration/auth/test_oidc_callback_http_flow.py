@@ -614,12 +614,16 @@ async def test_oidc_callback_redirect_base_falls_back_to_public_url_when_fronten
     assert resp.headers["location"].startswith(f"{_PUBLIC_BASE}/auth/callback#"), resp.headers["location"]
 
 
-async def test_oidc_callback_join_gate_denial_is_clean_401_and_leaves_no_orphan_account(
+async def test_oidc_callback_join_gate_denial_is_clean_redirect_and_leaves_no_orphan_account(
     db_engine: AsyncEngine,
     app_engine: AsyncEngine,
     oidc_app,
 ) -> None:
-    """FAR-855 denial over HTTP: clean user-facing 401, never a 500, no rows."""
+    """FAR-855 denial over HTTP: a clean user-facing 303, never a 500, no rows.
+
+    FAR-1791: the browser-facing callback no longer renders a raw JSON error
+    page — it 303-redirects to the login page with a whitelisted code.
+    """
     world = await _seed_provider(db_engine, allowed_domains=[_ALLOWLISTED_DOMAIN])
     denied_email = f"stranger-{world.org_id.hex[:8]}@notallowlisted.example.com"
     id_token = _make_id_token(sub=world.client_id, email=denied_email, issuer=world.issuer, audience=world.client_id)
@@ -637,11 +641,11 @@ async def test_oidc_callback_join_gate_denial_is_clean_401_and_leaves_no_orphan_
     finally:
         await client.aclose()
 
-    # Clean user-facing failure — the join-gate message, NOT a 500 / crash page.
-    assert resp.status_code == 401, resp.text
-    from modulo.auth.sso import Constants
-
-    assert resp.json()["detail"] == Constants.MSG_SSO_JOIN_DENIED
+    # Clean user-facing failure — a login-page redirect, NOT a 500 / crash page.
+    assert resp.status_code == 303, resp.text
+    location = resp.headers["location"]
+    assert "/login" in location, location
+    assert "sso_error=not_invited" in location, location
 
     # Fail-closed assertion against the REAL DB: no orphan Account row, no membership.
     assert await _get_account_id(db_engine, denied_email) is None, (
@@ -705,8 +709,9 @@ async def test_oidc_callback_is_reachable_without_authorization_header(oidc_app)
     """A browser redirect target must not 401 "Not authenticated" when unauthenticated (FAR-847).
 
     Exercises exactly what a browser does: a bare GET with NO Authorization
-    header. Missing code/state produces the route's own 400 — which proves the
-    request got past the auth/feature dependencies to the handler at all.
+    header. Missing code/state produces the route's own 303 login redirect
+    (FAR-1791) — which proves the request got past the auth/feature
+    dependencies to the handler at all.
     """
     client = await oidc_app()
     try:
@@ -714,8 +719,11 @@ async def test_oidc_callback_is_reachable_without_authorization_header(oidc_app)
     finally:
         await client.aclose()
 
-    assert resp.status_code == 400, f"expected the route's own 400, got {resp.status_code}: {resp.text}"
-    assert "code" in resp.json()["detail"]  # the route's own validation message
-    assert "authenticated" not in resp.json()["detail"].lower(), (
-        "a pre-auth browser redirect target surfaced an HTTP authentication error"
-    )
+    assert resp.status_code == 303, f"expected the route's own 303, got {resp.status_code}: {resp.text}"
+    location = resp.headers["location"]
+    # The redirect target is the login page carrying the whitelisted code — not an
+    # HTTP authentication error page (the FAR-847 regression this test exists to
+    # catch) and not a raw JSON body. The base is resolved from the process-level
+    # settings the 303 handler reads directly (not the DI override this client
+    # installs), so assert the path+suffix rather than a fixed origin.
+    assert location.endswith("/login?sso_error=auth_failed"), location

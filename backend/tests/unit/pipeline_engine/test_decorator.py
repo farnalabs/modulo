@@ -482,3 +482,59 @@ async def test_audit_hook_cancelled_error_propagates():
             await bad_node(_LIVE_STATE)
     finally:
         set_audit_hook(None)
+
+
+# ---------------------------------------------------------------------------
+# Callables without __name__
+#
+# `cancellable_node` is typed `Callable[[Callable[..., Any]], ...]`, so the
+# decorated node may be a callable object or a functools.partial. Neither
+# defines `__name__`, and the decorator read it five times per invocation — so
+# such a node raised AttributeError on its FIRST invocation, from inside the
+# pipeline execution path, instead of running.
+# ---------------------------------------------------------------------------
+
+
+class _CallableObjectNode:
+    """A node as a callable object — no ``__name__``."""
+
+    def __init__(self, result: dict[str, Any]) -> None:
+        self._result = result
+        self.calls = 0
+
+    async def __call__(self, state: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        self.calls += 1
+        return dict(self._result)
+
+
+async def test_cancellable_node_accepts_a_callable_object():
+    node = _CallableObjectNode({"out": 1})
+    wrapped = cancellable_node()(node)
+
+    result = await wrapped(_EMPTY_STATE)
+
+    assert result == {"out": 1}
+    assert node.calls == 1
+
+
+async def test_cancellable_node_reports_context_violation_for_a_callable_object():
+    set_audit_hook(AsyncMock())
+    try:
+        node = _CallableObjectNode({"run_context": {"x": 1}})
+        wrapped = cancellable_node(role=None)(node)
+
+        # The guard must still name the node in its error rather than blowing
+        # up on the missing __name__.
+        with pytest.raises(ContextSetterViolationError) as excinfo:
+            await wrapped(_LIVE_STATE)
+        assert "_CallableObjectNode" in str(excinfo.value)
+    finally:
+        set_audit_hook(None)
+
+
+async def test_cancellable_node_cancellation_is_enforced_for_a_callable_object():
+    node = _CallableObjectNode({"out": 1})
+    wrapped = cancellable_node()(node)
+
+    with pytest.raises(RunCancelledError):
+        await wrapped(_CANCELLED_STATE)

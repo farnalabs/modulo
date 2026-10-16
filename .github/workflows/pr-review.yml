@@ -47,10 +47,12 @@ jobs:
           HEAD_BRANCH_INPUT: ${{ inputs.head_branch }}
         run: |
           if [ "$EVENT_NAME" = "pull_request" ]; then
-            echo "pr_number=${PR_NUMBER_EVENT}" >> $GITHUB_OUTPUT
-            echo "repo=${REPO}" >> $GITHUB_OUTPUT
-            echo "head_sha=${HEAD_SHA_EVENT}" >> $GITHUB_OUTPUT
-            echo "head_branch=${HEAD_BRANCH_EVENT}" >> $GITHUB_OUTPUT
+            {
+              echo "pr_number=${PR_NUMBER_EVENT}"
+              echo "repo=${REPO}"
+              echo "head_sha=${HEAD_SHA_EVENT}"
+              echo "head_branch=${HEAD_BRANCH_EVENT}"
+            } >> "$GITHUB_OUTPUT"
           else
             PR_NUM="${PR_NUMBER_INPUT}"
             HEAD_SHA="${HEAD_SHA_INPUT}"
@@ -60,10 +62,12 @@ jobs:
               HEAD_SHA=$(printf '%s' "$PR_JSON" | jq -r '.head_sha')
               HEAD_BRANCH=$(printf '%s' "$PR_JSON" | jq -r '.head_branch')
             fi
-            echo "pr_number=${PR_NUM}" >> $GITHUB_OUTPUT
-            echo "repo=${REPO}" >> $GITHUB_OUTPUT
-            echo "head_sha=${HEAD_SHA}" >> $GITHUB_OUTPUT
-            echo "head_branch=${HEAD_BRANCH}" >> $GITHUB_OUTPUT
+            {
+              echo "pr_number=${PR_NUM}"
+              echo "repo=${REPO}"
+              echo "head_sha=${HEAD_SHA}"
+              echo "head_branch=${HEAD_BRANCH}"
+            } >> "$GITHUB_OUTPUT"
           fi
 
       # FAR-264: the same-repo author gate, shared with merge-queue.yml via the

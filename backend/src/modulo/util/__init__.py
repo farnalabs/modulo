@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 __all__ = [
     "DEFAULT_LOG_LIMIT",
     "WorkspaceNetworkValidationError",
+    "callable_label",
     "is_valid_http_url",
     "sanitise_log_value",
     "validate_workspace_network",
@@ -21,6 +22,29 @@ __all__ = [
 #: Default cap (in code points) for :func:`sanitise_log_value`. Overridable via
 #: the ``limit`` argument when a call site needs a tighter bound.
 DEFAULT_LOG_LIMIT = 200
+
+
+def callable_label(fn: object) -> str:
+    """Return a safe display label for an arbitrary callable.
+
+    ``fn`` is only *known* to be callable — it may be a plain function, a
+    callable object, a ``functools.partial``, or a class instance. Only plain
+    functions define ``__name__``, so reading it directly (``fn.__name__``)
+    raises ``AttributeError`` for everything else. That is harmless on a happy
+    path and actively harmful on an error path: an attribute read inside an
+    ``except`` block or a logging call makes the *handler itself* raise,
+    replacing the real failure with an opaque ``AttributeError`` and discarding
+    the original exception cause.
+
+    Falls back to the callable's type, which is always present. For a class
+    defined inside a function, ``type(fn).__qualname__`` includes a ``<locals>``
+    segment (e.g. ``outer.<locals>.Builder``); that is accepted as informative
+    diagnostic context for a label that is only ever logged, never parsed.
+    """
+    name = getattr(fn, "__name__", None)
+    if isinstance(name, str) and name:
+        return name
+    return type(fn).__qualname__
 
 
 def is_valid_http_url(value: object) -> bool:

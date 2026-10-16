@@ -186,7 +186,7 @@ def _when_put_timeout(timeout: int, email_ctx: dict[str, Any], request) -> None:
     org = _make_org(email_ctx.get("_settings_json"))
     with (
         patch("modulo.api.routes.admin_email.get_organisation", AsyncMock(return_value=org)),
-        patch("modulo.api.routes.admin_email.update_organisation", AsyncMock(return_value=org)),
+        patch("modulo.api.routes.admin_email.update_org_settings_patch", AsyncMock(return_value=org.settings_json)),
     ):
         _call(
             "PUT",
@@ -209,7 +209,7 @@ def _when_put_long_password(size: int, email_ctx: dict[str, Any], request) -> No
     org = _make_org(email_ctx.get("_settings_json"))
     with (
         patch("modulo.api.routes.admin_email.get_organisation", AsyncMock(return_value=org)),
-        patch("modulo.api.routes.admin_email.update_organisation", AsyncMock(return_value=org)),
+        patch("modulo.api.routes.admin_email.update_org_settings_patch", AsyncMock(return_value=org.settings_json)),
     ):
         _call(
             "PUT",
