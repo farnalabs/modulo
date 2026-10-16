@@ -52,7 +52,11 @@ export async function setupLocalMockApi(page: Page) {
     if (url.includes('/api/v1/pipelines') && method === 'GET') {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: '1', name: 'Test Pipeline', organisation_id: '1', description: 'A test pipeline', visibility: 'org', status: 'idle', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), archived_at: null }], total: 1 }) })
     }
-    if (url.includes('/api/v1/admin/feature-flags')) {
+    if (url.includes('/api/v1/plan') || url.includes('/api/v1/admin/feature-flags')) {
+      // planStore bootstraps from the caller-scoped GET /api/v1/plan (FAR-1809
+      // collapsed the old instance-admin /api/v1/admin/feature-flags reads into
+      // it); the instance-admin endpoint still backs the admin feature-flags
+      // page, so answer both with the plan payload shape.
       // dev_mode: true so private_preview routes (evals, runs-diff, feedback
       // inbox, saved views, node categories, feature flags, monitoring,
       // error forwarders, runtime config, rate limits, ...) resolve on the

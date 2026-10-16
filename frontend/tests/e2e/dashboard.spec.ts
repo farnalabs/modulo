@@ -20,8 +20,10 @@ test.describe('Dashboard', () => {
     // feature flag. Mock the plan fetch so the flag resolves enabled for this
     // regression run (mirrors the sibling DashboardView unit specs, which turn
     // analytics_page on). Registered after loginAsAdmin so it takes precedence
-    // over the local-target catch-all API mock.
-    await page.route('**/api/v1/admin/feature-flags*', (route) => {
+    // over the local-target catch-all API mock. FAR-1809 repointed the plan
+    // bootstrap at the caller-scoped GET /api/v1/plan, so the mock owns that
+    // endpoint.
+    await page.route('**/api/v1/plan*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ license: { tier: 'community' }, flags: [{ name: 'analytics_page', currently_active: true }] }) })
     })
     await page.reload()
