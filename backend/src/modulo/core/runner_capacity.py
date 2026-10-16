@@ -111,6 +111,12 @@ _RUNNER_CAPACITY_LOCK_NAMESPACE = "modulo:runner-capacity:org-v1"
 # string means a sweep tick can never contend with (or deadlock against) a
 # per-org gate key.
 _RUNNER_MARKER_SWEEP_LOCK_NAMESPACE = "modulo:runner-capacity:sweep-v1"
+# DISTINCT namespace for the per-org org-cost-state gate+accrual lock (FAR-1823
+# Land 2). A separate namespace string means the cost advisory can never
+# contend with, or deadlock against, the runner-capacity gate key or the sweep
+# dedup key — the migration off the ``organisations`` row lock must not
+# reintroduce a lock-ordering coupling through a shared key.
+_ORG_COST_STATE_LOCK_NAMESPACE = "modulo:org-cost-state:v1"
 
 _INT4_BYTES = 4
 
@@ -137,6 +143,35 @@ def runner_capacity_lock_keys(org_id: uuid.UUID) -> tuple[int, int]:
 def runner_marker_sweep_lock_keys() -> tuple[int, int]:
     """The sweep dedup lock keys — a DISTINCT suffix from the per-org keys."""
     return _namespace_lock_keys(_RUNNER_MARKER_SWEEP_LOCK_NAMESPACE, "sweep-dedup")
+
+
+def org_cost_state_lock_keys(org_id: uuid.UUID) -> tuple[int, int]:
+    """Per-org advisory-lock keys for the org cost-state gate+accrual (FAR-1833)."""
+    return _namespace_lock_keys(_ORG_COST_STATE_LOCK_NAMESPACE, str(org_id))
+
+
+async def lock_org_cost_state(session: AsyncSession, org_id: uuid.UUID) -> None:
+    """Take the per-org cost-state advisory lock for the rest of the transaction.
+
+    Serialises the ceiling set/clear path against the finalize gate+accrual path
+    so neither can interleave a read with the other's write (FAR-1823 Land 2).
+    The lock is transaction-scoped (``pg_advisory_xact_lock``), so it is
+    released on COMMIT/ROLLBACK and the caller never manages it.
+
+    The BLOCKING form is used deliberately, not ``pg_try_advisory_xact_lock``:
+    a contended wait must degrade through the transaction-scoped ``lock_timeout``
+    that :func:`~modulo.db.crud.row_lock.set_mutation_row_lock_timeout` sets on
+    the line above, raising SQLSTATE 55P03 (``lock_not_available``) rather than
+    hanging unbounded — the bounded-degradation contract FAR-1823 requires. The
+    lock wait itself takes no row lock, so it cannot couple with (or extend) any
+    ``organisations`` row lock. Callers treat 55P03 as a retryable degradation.
+    """
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    # Bound the wait FIRST (the helper takes no lock, so ordering is unaffected).
+    await set_mutation_row_lock_timeout(session)
+    k1, k2 = org_cost_state_lock_keys(org_id)
+    await session.execute(text("SELECT pg_advisory_xact_lock(:k1, :k2)"), {"k1": k1, "k2": k2})
 
 
 # ---------------------------------------------------------------------------
@@ -1578,8 +1613,10 @@ __all__ = [
     "build_dispatch_marker",
     "build_hitl_tombstone",
     "classify_sweep_action",
+    "lock_org_cost_state",
     "mark_runner_dispatch_cleared_at_hitl",
     "marker_is_fence_component",
+    "org_cost_state_lock_keys",
     "parse_marker_provider",
     "parse_marker_state",
     "parse_marker_written_at",
