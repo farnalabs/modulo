@@ -195,6 +195,18 @@ _EXCLUDE_PATTERNS: list[str] = [
     "backend/tools/**",
     "scripts/**",
     "frontend/scripts/**",
+    # Frontend build/tooling config files (``frontend/*.config.*``: vite,
+    # vitest, playwright, eslint, tailwind, stryker, ...) are Node-side build
+    # configuration, not client source. The vitest/v8 coverage scan never
+    # imports them during a test run, so they never appear in the frontend
+    # LCOV report and every changed line would otherwise register as
+    # "0% unmeasured". Observed on PR #1881 (FAR-1858): a licence-lift helper
+    # added to ``frontend/vite.config.ts`` failed this gate (28 unmeasured JS
+    # lines) AND the SonarCloud new_coverage quality gate (16 uncovered new
+    # lines), even though config code is never client-shipped and cannot be
+    # line-covered in CI. Same measurement-boundary class as
+    # ``frontend/scripts/**``.
+    "frontend/*.config.*",
     # CI/ops helper modules under ``.github/scripts/**`` are the same class as
     # the ``scripts/**`` and ``backend/scripts/**`` exclusions: the CI coverage
     # scan runs ``pytest --cov=src/modulo`` (see scripts/coverage-thresholds.sh),
