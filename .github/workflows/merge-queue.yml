@@ -370,6 +370,18 @@ jobs:
 
             if [ "$MERGEABLE" = "true" ]; then
               # Check CI status - only include PRs with passing CI
+              #
+              # INVARIANT (FAR-1843): this gate must reflect PRODUCT CI only.
+              # "CI: Fast Validation" may contain nothing but product-
+              # validation jobs whose failure genuinely invalidates the PR —
+              # never a webhook dispatch, notifier, or external-service ping.
+              # The PR-reviewer dispatch was moved OUT of ci.yml into
+              # pr-review.yml (workflow_run-triggered) precisely so a review-
+              # dispatch outage can never mark this run failed and block every
+              # merge (2026-10-15: five hours, 28+ PRs, self-amplifying
+              # sandbox-cap starvation). Do not re-couple any non-product job
+              # into ci.yml; give it its own workflow. Guarded by
+              # backend/tests/architecture/test_workflow_structure.py.
               CI_BRANCH=$(echo "$pr" | jq -r ".headRefName")
               CI_CONCLUSION=$(gh run list --branch "$CI_BRANCH" --workflow "CI: Fast Validation" --limit 1 --json conclusion --jq ".[0].conclusion" 2>/dev/null || echo "unknown")
               if [ "$CI_CONCLUSION" != "success" ]; then

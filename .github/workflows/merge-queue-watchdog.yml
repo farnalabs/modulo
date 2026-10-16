@@ -44,6 +44,12 @@ name: "Merge: Queue Watchdog"
 #      conclusion (success, failure, cancelled) still proves the machinery is
 #      alive FOR RE-ARM PURPOSES (#2) - it just must no longer suppress the
 #      stall alert.
+#   4. Escalate on a zero-merge window (::error:: annotation): fire when
+#      approved PRs are in a CLEAN (mergeable-now) state while NO PR has
+#      merged at all for > 90 min. This watches the OUTCOME, not queue-run
+#      success: a queue that keeps running while skipping every PR (FAR-1843,
+#      2026-10-15: five hours, 28+ PRs, reviewer-dispatch outage made product
+#      CI red everywhere) keeps the success age fresh and never trips #3.
 #
 # Division of labour with merge-queue.yml's in-job sweep:
 #   - merge-queue.yml in-job sweep = belt-and-braces: runs only when the lock
@@ -285,6 +291,54 @@ jobs:
             echo "No approved-and-mergeable PR waiting — not alerting (last success ${LAST_SUCCESS_AGE} min ago)."
           else
             echo "Last successful merge-queue run was ${LAST_SUCCESS_AGE} min ago with ${APPROVED_WAITING} approved PR(s) waiting — within alert threshold."
+          fi
+
+          # ---- 5. Zero-merge window alert (FAR-1843) ----
+          # The section-4 alert is keyed on queue-RUN success. A queue that
+          # keeps RUNNING and concluding while merging NOTHING keeps that age
+          # fresh and never alerts — exactly the FAR-1843 outage (2026-10-15):
+          # the PR-reviewer dispatch lived inside "CI: Fast Validation", so a
+          # dispatch outage marked CI red on every PR; the queue completed its
+          # passes while skipping all 28+ PRs for five hours and no alert
+          # fired. This check watches the OUTCOME instead: GitHub considers
+          # approved PRs with a CLEAN merge state mergeable right now, so if
+          # any such PR is waiting and NO PR has merged at all for
+          # ZERO_MERGE_MIN minutes, raise a loud ::error::. Bound: 90 min =
+          # six missed 15-min queue passes — long enough to absorb a burst of
+          # queue-cancelling merges elsewhere, short enough that a multi-hour
+          # starvation is always visible.
+          ZERO_MERGE_MIN=90
+          MERGEABLE_WAITING="$(echo "$OPEN_PRS" | jq '[.[] | select(.reviewDecision == "APPROVED") | select(.mergeStateStatus == "CLEAN")] | length' 2>/dev/null)" || MERGEABLE_WAITING="0"
+          case "$MERGEABLE_WAITING" in
+            ''|*[!0-9]*) MERGEABLE_WAITING="0" ;;
+          esac
+          LAST_MERGED="$(gh pr list --repo "$REPO" --state merged --limit 1 --json mergedAt 2>/dev/null)" || LAST_MERGED="[]"
+          LAST_MERGE_AGE="$(echo "$LAST_MERGED" | python3 -c '
+          import json, sys, datetime
+          try:
+              prs = json.loads(sys.stdin.read())
+          except Exception:
+              prs = []
+          if prs and prs[0].get("mergedAt"):
+              merged = prs[0]["mergedAt"].replace("Z", "+00:00")
+              dt = datetime.datetime.fromisoformat(merged)
+              now = datetime.datetime.now(datetime.timezone.utc)
+              print(int((now - dt).total_seconds() / 60))
+          else:
+              print(-1)
+          ' 2>/dev/null)" || LAST_MERGE_AGE="-1"
+          case "$LAST_MERGE_AGE" in
+            -1) : ;;
+            ''|*[!0-9]*) LAST_MERGE_AGE="-1" ;;
+          esac
+          if [ "$MERGEABLE_WAITING" -gt 0 ] && [ "$LAST_MERGE_AGE" -ge "$ZERO_MERGE_MIN" ]; then
+            echo "::error::merge-queue-watchdog: no PR merged for ${LAST_MERGE_AGE} min while ${MERGEABLE_WAITING} approved+mergeable (CLEAN) PR(s) wait — the queue is running but landing nothing (zero-merge window > ${ZERO_MERGE_MIN} min)."
+          elif [ "$LAST_MERGE_AGE" -lt 0 ]; then
+            echo "Zero-merge check: no merged PR found (merge age unmeasurable) — not alerting."
+          elif [ "$MERGEABLE_WAITING" -eq 0 ]; then
+            echo "Zero-merge check: no approved+mergeable (CLEAN) PR waiting — not alerting (last merge ${LAST_MERGE_AGE} min ago)."
+          else
+            echo "Zero-merge check: last merge ${LAST_MERGE_AGE} min ago with ${MERGEABLE_WAITING} approved+mergeable (CLEAN) PR(s) waiting — within the ${ZERO_MERGE_MIN}-min window."
           fi
 
           if [ "$SHOULD_DISPATCH" = "true" ]; then

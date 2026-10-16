@@ -1455,8 +1455,60 @@ jobs:
             echo "queue_in_flight=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Trigger Modulo Branch Fixer
+      - name: Check Branch Fixer in-flight cap
+        id: fanout-check
         if: (failure() || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted == 'false' && steps.queue-check.outputs.queue_in_flight != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+        run: |
+          # FAR-1843 D3: bound the Branch Fixer fan-out. When product CI goes
+          # red on many PRs at once (the self-amplifying outage of
+          # 2026-10-15: 28+ PRs), this job dispatched a Branch Fixer run for
+          # EVERY failing PR; ~17 concurrent runs saturated the org sandbox
+          # cap (20), demoting the PR Reviewer's own runs to `pending` with
+          # capacity.org and starving the reviewer. Cap deliberate, logged
+          # backpressure at BRANCH_FIXER_CAP in-flight runs: a capped skip is
+          # NOT a lost fix — the PR Housekeeper re-dispatches branch-fixer.yml
+          # for still-failing PRs on its own cadence, and the next push/CI
+          # failure re-fires this job. Never silent: the skip emits ::warning::
+          # naming the cap and the count.
+          #
+          # Cap = 5: the org sandbox cap is 20; Branch Fixer is the dominant
+          # concurrent consumer during a red-CI storm, and 5 concurrent fixers
+          # keep meaningful repair throughput while leaving headroom for the
+          # PR Reviewer and other pipelines (the reviewer starvation in the
+          # outage was the acute failure, not slow fixes).
+          BRANCH_FIXER_CAP=5
+          # In-flight = any run not yet `completed` (queued / pending /
+          # in_progress / requested / waiting). The pending state matters:
+          # capacity.org-demoted runs are exactly the ones holding sandbox
+          # slots. The latest 100 runs always cover the in-flight set (the
+          # org cap is 20).
+          if ! RUNS_JSON=$(gh api \
+            "/repos/${{ github.repository }}/actions/workflows/branch-fixer.yml/runs?per_page=100" \
+            2>/dev/null); then
+            echo "fanout_capped=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Could not query Branch Fixer runs (GitHub API error) — proceeding with dispatch (fail OPEN: the cap is a protective throttle, not a correctness guard; a lost dispatch here would be worse than a slightly-overshot cap)."
+            exit 0
+          fi
+          IN_FLIGHT=$(printf '%s' "$RUNS_JSON" | jq '[.workflow_runs[] | select(.status != "completed")] | length' 2>/dev/null) || IN_FLIGHT=""
+          if [ -z "$IN_FLIGHT" ]; then
+            echo "fanout_capped=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Could not parse Branch Fixer runs (jq failed) — proceeding with dispatch (fail OPEN, same rationale as the API-error branch)."
+            exit 0
+          fi
+          if [ "$IN_FLIGHT" -ge "$BRANCH_FIXER_CAP" ]; then
+            echo "fanout_capped=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Branch Fixer in-flight cap reached for PR #${PR_NUM}: ${IN_FLIGHT} run(s) in flight >= cap ${BRANCH_FIXER_CAP} — deliberately skipping this dispatch (logged backpressure; the PR Housekeeper re-drives the fix)."
+          else
+            echo "fanout_capped=false" >> "$GITHUB_OUTPUT"
+            echo "Branch Fixer in-flight: ${IN_FLIGHT} (cap ${BRANCH_FIXER_CAP}) — dispatching for PR #${PR_NUM}."
+          fi
+
+      - name: Trigger Modulo Branch Fixer
+        if: (failure() || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted == 'false' && steps.queue-check.outputs.queue_in_flight != 'true' && steps.fanout-check.outputs.fanout_capped != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
@@ -1676,139 +1728,16 @@ jobs:
             exit 1
           fi
 
-  notify-pr-review:
-    name: Trigger PR Reviewer
-    # Mirror the notify-pr-failure pattern above: a job-level `success()`
-    # surfaces this check as "skipped" in the check-runs API whenever any
-    # needed job fails or is cancelled (e.g. a runner outage), and the PR
-    # Reviewer flags that as a non-green signal. The check itself always
-    # reports success on pull_request events; the "only dispatch when all
-    # needed checks are green" logic lives on the webhook step below.
-    if: github.event_name == 'pull_request' && always()
-    # FAR-1429: `needs` must list EVERY job that can fail on a PR. failure() and
-    # success() in the steps below consider all ancestor jobs, so a failing job
-    # missing from this list (tier1b-light, sonarcloud-scan,
-    # migration-heads-check were) never reached the Branch Fixer / reviewer
-    # gate. A job that is merely SKIPPED is neither failure() nor cancelled();
-    # every job here either always runs (path gates are step-level) or is only
-    # skipped because an ancestor already failed, which is itself a failure.
-    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
-    runs-on: ubicloud-standard-2
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Skip PR Reviewer when head already reviewed or only merged since last review
-        id: review-check
-        if: success() && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
-        env:
-          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          # Guard the wiring: the dedup script is a no-op if the repo was not
-          # checked out (GitHub Actions runners start with an empty workspace),
-          # so the notify-pr-review job checks out the repo first. The
-          # deterministic path must fail LOUDLY, not fall through to the
-          # fail-open `|| echo "skip=false"` below, or a wiring bug silently
-          # dispatches every webhook and defeats the dedup feature.
-          test -f .github/scripts/pr-review-dedup.py || { echo "::error::pr-review-dedup.py not found - dedup disabled"; exit 1; }
-          # Fetch the PR's reviews and commits JSON, then run the versioned
-          # dedup decision script (.github/scripts/pr-review-dedup.py).
-          # The script handles multi-line bodies and pipe chars correctly
-          # (naive cut -d'|' is line-oriented and corrupts the SHA), and
-          # fails open (dispatch) on any load error or ambiguous state.
-          gh api "/repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" --paginate > /tmp/pr-reviews.json 2>/dev/null || echo "[]" > /tmp/pr-reviews.json
-          gh api "/repos/${REPO}/pulls/${PR_NUMBER}/commits?per_page=100" --paginate > /tmp/pr-commits.json 2>/dev/null || echo "[]" > /tmp/pr-commits.json
-          SKIP_OUTPUT=$(python3 .github/scripts/pr-review-dedup.py /tmp/pr-reviews.json /tmp/pr-commits.json "${HEAD_SHA}" 2>/tmp/pr-dedup-err || echo "skip=false")
-          echo "${SKIP_OUTPUT}" >> "$GITHUB_OUTPUT"
-          echo "PR Reviewer dedup: ${SKIP_OUTPUT}"
-          cat /tmp/pr-dedup-err
-      - name: Send webhook to Modulo PR Review Agent
-        if: success() && steps.review-check.outputs.skip != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
-        env:
-          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_URL }}
-          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_SECRET }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ github.event.pull_request.head.sha }}
-          BRANCH: ${{ github.event.pull_request.head.ref }}
-        run: |
-          # jq -n --arg/--argjson JSON-escapes every value, so a crafted branch
-          # name (legal in git refnames, e.g. containing '"') cannot inject
-          # keys or break the payload. See FAR-568.
-          BODY=$(jq -n \
-            --arg repo "${REPO}" \
-            --argjson prNumber "${PR_NUMBER}" \
-            --arg sha "${SHA}" \
-            --arg ref "${BRANCH}" \
-            '{action: "check_run", repository: {full_name: $repo}, pull_request: {number: $prNumber, head: {sha: $sha, ref: $ref}}}')
-
-          # Retry with exponential backoff on network failures (curl HTTP 000) and 429/5xx (max 5 attempts, ~5 min total)
-          # TIMESTAMP and HMAC are recomputed PER ATTEMPT: the server enforces a
-          # +/-300s replay window on X-Modulo-Timestamp, so a signature computed
-          # once (before a slow attempt) would fall outside the window after a
-          # 429/5xx retry and be rejected as a replay — silently losing the
-          # review. Recomputing each iteration keeps every signature fresh.
-          DISPATCHED="false"
-          LAST_HTTP=""
-          for i in 1 2 3 4 5; do
-            TIMESTAMP=$(date +%s)
-            HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
-            # `|| RESPONSE=""` stops the default `bash -e` (GitHub Actions adds
-            # it to `run:` steps) from aborting this retry loop on the FIRST
-            # curl failure. Without it a curl timeout (exit 28) killed the step
-            # immediately, so the HTTP 000 retry branch below (the whole point
-            # of the loop) never ran and a transient webhook blip permanently
-            # lost the review trigger.
-            RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST "${MODULO_WEBHOOK_URL}" \
-              -H "Content-Type: application/json" \
-              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-              -d "${BODY}") || RESPONSE=""
-            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-            # A failed curl writes no body, so tail -1 is empty; normalise it to
-            # the HTTP 000 sentinel the retry/no-op branches key off.
-            [ -n "$HTTP_CODE" ] || HTTP_CODE="000"
-            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
-            LAST_HTTP="$HTTP_CODE"
-            if [ "$HTTP_CODE" = "202" ]; then
-              echo "PR Reviewer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
-              DISPATCHED="true"
-              break
-            elif [ "$HTTP_CODE" = "400" ] && echo "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
-              # FAR-1097 follow-up: HTTP 400 "Duplicate webhook payload" is the
-              # engine's byte-level idempotency guard (DuplicateWebhookError) —
-              # the identical delivery was already ACCEPTED within the ~5-min
-              # dedup window (e.g. two concurrent CI runs both dispatching the
-              # same PR+SHA check_run). It is a handled no-op, NOT a dispatch
-              # failure; retrying would only re-hit the same window.
-              echo "::notice::PR Reviewer duplicate delivery suppressed (identical payload already accepted within the dedup window)"
-              DISPATCHED="true"
-              break
-            elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
-              DELAY=$((2 ** (i - 1) * 5))
-              echo "::warning::PR Reviewer returned HTTP $HTTP_CODE (attempt $i/5) retrying in ${DELAY}s"
-              sleep "$DELAY"
-            else
-              echo "::warning::PR Reviewer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
-              break
-            fi
-          done
-          if [ "$DISPATCHED" != "true" ]; then
-            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
-            echo "::error::PR Reviewer webhook dispatch failed (HTTP ${LAST_HTTP}: ${DETAIL}) — PR review was not triggered."
-            exit 1
-          fi
-          echo "PR Reviewer notified"
-
-      - name: Report PR Reviewer check status
-        if: success()
-        run: echo "PR Reviewer trigger check passed (all required checks green, webhook sent or suppressed by manual-delivery label)."
+  # FAR-1843: the PR-reviewer dispatch (former job `notify-pr-review`, name
+  # "Trigger PR Reviewer") has MOVED to .github/workflows/pr-review.yml,
+  # driven by a workflow_run completion trigger on this workflow. When the
+  # dispatch lived here with `always()` + `needs:` every failing-capable job,
+  # a dispatch outage (e.g. an app HTTP 429) concluded this whole run as
+  # failure — indistinguishable from product-CI failure to merge-queue.yml's
+  # merge gate — and blocked every merge while red CI fanned Branch Fixer runs
+  # into the org sandbox cap, starving the reviewer itself. A dispatch failure
+  # must never mark product CI red again. Guarded by
+  # backend/tests/architecture/test_workflow_structure.py.
 
   self-report-ci:
     name: Self-report CI stage to Modulo
