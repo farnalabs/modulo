@@ -188,13 +188,18 @@ type PageReadiness = 'rendered' | 'deactivated'
 
 async function preparePage(page: Page, route: string, env: TestEnv): Promise<PageReadiness> {
   const response = await page.goto(route)
-  await page.waitForURL('**/*', { timeout: 5000 }).catch(() => {})
 
   await waitForAppMount(page, route, response)
 
-  // Content settle — not every route renders a data-loading marker.
-  await page.waitForSelector('[data-loading="false"]', { timeout: 15000 }).catch(() => {})
-
+  // No content settle here (FAR-1889). A blanket
+  // `waitForSelector('[data-loading="false"]')` only matches on the two routes
+  // that render the marker (AnalyticsView and SettingsLicenseView); on every
+  // other route the wait burned its full 15s and was then discarded by
+  // `.catch(() => {})`, so a route stuck mid-load was indistinguishable from a
+  // settled one and surfaced later as a misleading audit measurement. There is
+  // no universal content marker to wait on; `waitForAppMount` above is the
+  // readiness signal, and a future settle MUST throw on timeout rather than
+  // swallow. (The dead swallowed `waitForURL('**/*')` no-op is removed too.)
   if (env.name === 'local') {
     // Local CI: mock all /api/v1 traffic and seed the auth tokens so
     // authenticated routes render with mocked data (mirrors loginAsAdmin's
@@ -208,7 +213,6 @@ async function preparePage(page: Page, route: string, env: TestEnv): Promise<Pag
       }, [MOCK_ACCESS_TOKEN, MOCK_REFRESH_TOKEN])
       const remount = await page.goto(route)
       await waitForAppMount(page, route, remount)
-      await page.waitForSelector('[data-loading="false"]', { timeout: 15000 }).catch(() => {})
     }
   } else if (page.url().includes('/login') && route !== '/login') {
     // storageState may have expired — fall back to a single real login, then
@@ -216,7 +220,6 @@ async function preparePage(page: Page, route: string, env: TestEnv): Promise<Pag
     await loginAsAdmin(page, env)
     const retry = await page.goto(route)
     await waitForAppMount(page, route, retry)
-    await page.waitForSelector('[data-loading="false"]', { timeout: 15000 }).catch(() => {})
   }
 
   const finalUrl = page.url()

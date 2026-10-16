@@ -245,9 +245,12 @@ async function settle(page: Page): Promise<void> {
   // would surface later as a misleading capture assertion.
   //
   // A single waitForFunction (rather than a count check followed by a
-  // waitForSelector) closes the race where a lazily route-mounted view renders
-  // its [data-loading] root just after the count reads 0 — the predicate is
-  // re-evaluated until no marker remains or every marker reports "false".
+  // waitForSelector) narrows the race where a lazily route-mounted view renders
+  // its [data-loading] root just after the count reads 0: the predicate is
+  // re-evaluated continuously rather than read once. It does not fully close
+  // the race — if no marker has rendered at the first poll, `every` over an
+  // empty set is vacuously true and the wait returns early — but it is strictly
+  // stronger than the swallowed waitForSelector it replaces.
   await page.waitForFunction(
     () =>
       Array.from(document.querySelectorAll('[data-loading]')).every(
