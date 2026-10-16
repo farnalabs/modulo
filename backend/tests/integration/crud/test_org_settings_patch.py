@@ -807,6 +807,78 @@ async def test_product_analytics_concurrent_subfield_writers_both_survive(
 
 
 # ---------------------------------------------------------------------------
+# FAR-1832 QA F17: the LEVEL_OFF purge must actually REMOVE the org's staged
+# rows end-to-end against real Postgres — not merely issue a DELETE at mock
+# level (``tests/unit/product_analytics/test_routes.py::TestStagingPurgeOnOptOut``
+# only asserts a ``Delete`` was ISSUED). Drive the REAL consent handler and
+# assert the SEEDED rows are gone.
+# ---------------------------------------------------------------------------
+
+
+async def _staged_row_count(db_engine: AsyncEngine, org_id: uuid.UUID) -> int:
+    async with db_engine.connect() as conn:
+        result = await conn.execute(
+            text("SELECT count(*) FROM metrics_staging WHERE organisation_id = :oid"),
+            {"oid": str(org_id)},
+        )
+    return int(result.scalar_one())
+
+
+async def _seed_staged_rows(db_engine: AsyncEngine, org_id: uuid.UUID, event_ids: list[str]) -> None:
+    async with db_engine.connect() as conn, conn.begin():
+        for event_id in event_ids:
+            await conn.execute(
+                text(
+                    "INSERT INTO metrics_staging (organisation_id, event_id, event_type, payload) "
+                    "VALUES (:oid, :eid, 'pipeline_created', '{}'::jsonb)"
+                ),
+                {"oid": str(org_id), "eid": event_id},
+            )
+
+
+async def test_consent_decline_purges_seeded_staged_rows_end_to_end(
+    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FAR-1832 QA F17: seed real ``metrics_staging`` rows, drive the real
+    consent handler with ``action="decline"`` (level -> off), and assert the
+    SEEDED rows are gone.
+
+    The purge decision (FAR-1717/F8) reads the block the patch RETURNED, so a
+    stale pre-read could purge a non-withdrawing org — or, on the code this
+    pins, skip the purge. The existing unit coverage only asserts a ``Delete``
+    was issued against a mocked session; this proves the delete actually lands.
+    """
+    from modulo.api.routes import product_analytics as pa_module
+    from modulo.api.routes.product_analytics import ConsentRequest, post_consent
+    from modulo.auth.jwt import TenantPrincipal
+
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    principal = TenantPrincipal(
+        username="decliner",
+        organisation_id=org_id,
+        account_id=uuid.uuid4(),
+        org_role="admin",
+    )
+
+    # The audit append needs a real account row (FK); it is not what this test
+    # pins — the purge is — so stub it as the sibling handler test does.
+    monkeypatch.setattr(pa_module, "append_audit_event", AsyncMock())
+
+    await _seed_staged_rows(db_engine, org_id, ["f17-a", "f17-b"])
+    assert await _staged_row_count(db_engine, org_id) == 2, (
+        "the seed must land before the purge assertion can be non-vacuous"
+    )
+
+    session = factory()
+    response = await post_consent(ConsentRequest(action="decline"), principal, session)
+
+    assert response.level == "off", f"declining consent must land level=off: {response!r}"
+    remaining = await _staged_row_count(db_engine, org_id)
+    assert remaining == 0, f"declining consent must purge the org's staged rows, but {remaining} remain"
+
+
+# ---------------------------------------------------------------------------
 # FAR-1832 QA F13b: a stored NON-OBJECT block is healed before the nested
 # sub-field compose, identically to the generic path's isinstance(existing, dict)
 # ---------------------------------------------------------------------------
