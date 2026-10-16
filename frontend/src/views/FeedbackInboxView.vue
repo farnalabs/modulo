@@ -47,7 +47,25 @@
       </template>
     </FilterBar>
     <ErrorAlert v-if="pipelinesError" :message="pipelinesError" :on-retry="loadPipelines" />
-    <LoadingSpinner v-if="loading" />
+    <div
+      v-if="loading"
+      class="space-y-2"
+      aria-busy="true"
+      :aria-label="$t('views.FeedbackInboxView.loading_feedback')"
+      data-testid="feedback-inbox-loading"
+    >
+      <div
+        v-for="n in 3"
+        :key="`feedback-inbox-skeleton-${n}`"
+        class="rounded-lg border bg-card p-4"
+      >
+        <div class="space-y-2">
+          <SkeletonBlock height-class="h-4 w-48" />
+          <SkeletonBlock height-class="h-3 w-72" />
+          <SkeletonBlock height-class="h-3 w-40" />
+        </div>
+      </div>
+    </div>
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadFeedback" />
     <template v-else>
       <EmptyState
@@ -76,10 +94,10 @@
               aria-hidden="true"
             />
             <span :class="statusBadgeClass(record.feedback_status)" class="capitalize">
-              {{ record.feedback_status }}
+              {{ statusLabel(record.feedback_status) }}
             </span>
             <span class="min-w-0 flex-1">
-              <span class="block truncate text-sm font-medium" v-tooltip.top="record.pipeline_name">{{ record.pipeline_name }}</span>
+              <span class="block truncate text-sm font-medium" v-tooltip.top="record.pipeline_name || '—'">{{ record.pipeline_name || '—' }}</span>
             </span>
             <span class="min-w-0 flex-1">
               <span class="block truncate text-sm text-muted-foreground" v-tooltip.top="record.rejection_reason || '-'">{{ record.rejection_reason || '-' }}</span>
@@ -95,8 +113,16 @@
             </span>
           </button>
           <div v-if="expandedId === record.id" class="border-t p-4">
-            <div v-if="detailLoading[record.id]" class="flex items-center justify-center py-8">
-              <div class="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            <div
+              v-if="detailLoading[record.id]"
+              class="space-y-2 p-4"
+              aria-busy="true"
+              :aria-label="$t('views.FeedbackInboxView.loading_detail')"
+              data-testid="feedback-inbox-detail-loading"
+            >
+              <SkeletonBlock height-class="h-4 w-56" />
+              <SkeletonBlock height-class="h-24 w-full" />
+              <SkeletonBlock height-class="h-3 w-40" />
             </div>
             <ErrorAlert
               v-else-if="detailError[record.id]"
@@ -177,7 +203,6 @@ import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import type { components } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
@@ -185,6 +210,7 @@ import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
+import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
 import { formatDateShortWithTime } from '../lib/formatDate'
 import { ChevronRight } from '@lucide/vue'
 
@@ -246,6 +272,24 @@ function handlerTypeLabel(type: string): string {
   const key = `views.FeedbackInboxView.handler_${type}`
   const label = t(key)
   return label !== key ? label : type
+}
+
+// I18N-1: row status badges render translated labels (same keys as the status
+// filter options) instead of raw English enum values; unknown statuses fall
+// back to the raw value. `dismissed` has its own label key because the
+// existing `dismissed` key holds a toast message ("Dismissed.").
+const STATUS_LABEL_KEYS: Record<string, string> = {
+  pending: 'views.FeedbackInboxView.pending',
+  routing: 'views.FeedbackInboxView.routing',
+  correcting: 'views.FeedbackInboxView.correcting',
+  resolved: 'views.FeedbackInboxView.resolved',
+  escalated: 'views.FeedbackInboxView.escalated',
+  dismissed: 'views.FeedbackInboxView.dismissed_label',
+}
+
+function statusLabel(status: string): string {
+  const key = STATUS_LABEL_KEYS[status]
+  return key ? t(key) : status
 }
 
 // Query data from vue-query is deep-readonly; keep a writable local copy so
