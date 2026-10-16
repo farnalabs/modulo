@@ -3147,16 +3147,22 @@ function onSheetKeydown(event: KeyboardEvent) {
   if (event.key !== 'Tab') return
   const panel = activeSheetElement()
   if (!panel) return
-  const focusable = panel.querySelectorAll<HTMLElement>(SHEET_FOCUSABLE_SELECTOR)
+  const focusables = panel.querySelectorAll<HTMLElement>(SHEET_FOCUSABLE_SELECTOR)
   // Drop the guard clauses an empty list would need: with no focusable
   // descendants both `first` and `last` are undefined, `document.activeElement`
   // can never equal them, and the trap below simply does nothing.
-  const first = focusable[0]
-  const last = focusable[focusable.length - 1]
-  if (event.shiftKey && document.activeElement === first) {
+  const first = focusables[0]
+  const last = focusables[focusables.length - 1]
+  // Focus can legitimately be on the panel container itself (the element
+  // `tabindex="-1"` is placed on when the sheet opens and after a reset), so
+  // treat the container as the start edge for a backwards wrap — otherwise
+  // Shift+Tab from the freshly-opened sheet would escape behind it.
+  const atStart = document.activeElement === first || document.activeElement === panel
+  const atEnd = document.activeElement === last
+  if (event.shiftKey && atStart) {
     event.preventDefault()
     last.focus()
-  } else if (!event.shiftKey && document.activeElement === last) {
+  } else if (!event.shiftKey && atEnd) {
     event.preventDefault()
     first.focus()
   }

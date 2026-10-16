@@ -469,20 +469,41 @@ describe('PipelineEditorView — mobile properties-sheet dialogs (FAR-1861)', ()
     const nodeSheet = sheetFor(wrapper, 'pipeline-editor-node-props-close')
     const focusable = nodeSheet.querySelectorAll<HTMLElement>(SHEET_FOCUSABLE_SELECTOR)
     const first = focusable[0]
+    const middle = focusable[1]
     const last = focusable[focusable.length - 1]
     expect(first).toBeTruthy()
     expect(last).toBeTruthy()
     expect(first).not.toBe(last)
+
+    // Shift+Tab on the first focusable wraps to the last.
+    first.focus()
+    nodeSheet.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }))
+    expect(document.activeElement).toBe(last)
+
+    // Shift+Tab with focus on the panel container itself also wraps (the
+    // freshly-opened sheet focuses the container, so this is the real path).
+    nodeSheet.focus()
+    nodeSheet.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }))
+    expect(document.activeElement).toBe(last)
+
+    // Shift+Tab from the last focusable is left to the browser (moves backwards).
+    last.focus()
+    const shiftAtEnd = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
+    nodeSheet.dispatchEvent(shiftAtEnd)
+    expect(shiftAtEnd.defaultPrevented).toBe(false)
+    expect(document.activeElement).toBe(last)
 
     // Tab off the last focusable wraps to the first.
     last.focus()
     nodeSheet.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }))
     expect(document.activeElement).toBe(first)
 
-    // Shift+Tab off the first focusable wraps to the last.
-    first.focus()
-    nodeSheet.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }))
-    expect(document.activeElement).toBe(last)
+    // Tab from a middle element is left to the browser.
+    middle.focus()
+    const tabAtMiddle = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    nodeSheet.dispatchEvent(tabAtMiddle)
+    expect(tabAtMiddle.defaultPrevented).toBe(false)
+    expect(document.activeElement).toBe(middle)
 
     // A non-Tab key is not intercepted.
     const other = new KeyboardEvent('keydown', { key: 'a', bubbles: true, cancelable: true })
