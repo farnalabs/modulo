@@ -686,7 +686,8 @@ def connector_binding_required_acl_operations(node: Any) -> list[str]:
       there is NO ``dispatch`` ACL capability), PLUS ``read`` when the NODE
       sets ``await_completion`` (the wait loop polls status/logs);
     * ``dispatch`` with a read-only action (``get_run_status`` /
-      ``get_run_logs`` / ``list_runs``) → ``read``.
+      ``get_run_logs`` / ``list_runs``) → ``read``;
+    * any other NON-EMPTY verb → ``read`` (the runtime fall-through: see below).
 
     ``await_completion`` is a NODE-level field, a SIBLING of
     ``connector_binding`` (the engine reads ``node_def["await_completion"]``,
@@ -697,12 +698,17 @@ def connector_binding_required_acl_operations(node: Any) -> list[str]:
     ``binding.get("dispatch_action") or "trigger_run"``), so the write gate is
     derived rather than skipped.
 
-    Returns ``[]`` when the engine NEVER routes the node's binding to a
+    An unrecognised NON-EMPTY verb is NOT skipped: ``node_runner``'s
+    ``_run_connector_action`` routes every op that is neither ``dispatch`` nor
+    ``write`` through ``connector.query()`` (read-gated), so an unknown verb
+    requires ``read`` exactly as ``query`` does.
+
+    Returns ``[]`` only when the engine NEVER routes the node's binding to a
     connector (dead configuration: an ``agent`` node with an ``agent_id``, a
-    ``sandbox_agent``, or a binding-less node) OR when the verb is unknown, or
-    a dispatch action is an unknown NON-EMPTY value — the engine raises on
-    those at graph build, so guessing an operation here would invent a
-    requirement the runtime never exercises.
+    ``sandbox_agent``, or a binding-less node) OR when a ``dispatch`` action is
+    an unknown NON-EMPTY value — the engine raises on the latter at graph
+    build, so guessing an operation there would invent a requirement the
+    runtime never exercises.
     """
     if not node_routes_binding_to_connector(node):
         return []
@@ -724,8 +730,12 @@ def connector_binding_required_acl_operations(node: Any) -> list[str]:
             return required
         if action in _DISPATCH_READ_ACTIONS:
             return [ACL_OPERATION_BY_CONNECTOR_METHOD[action]]
+        # Unknown NON-EMPTY dispatch action: the engine raises at graph build.
         return []
-    return []
+    # An UNRECOGNISED NON-EMPTY verb: the engine routes any op that is neither
+    # ``dispatch`` nor ``write`` through ``connector.query()`` (read-gated), so
+    # an unknown verb requires ``read`` exactly as ``query`` does.
+    return [ACL_OPERATION_BY_CONNECTOR_METHOD["query"]]
 
 
 def node_fires_dispatch_job(node: Any) -> bool:

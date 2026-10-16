@@ -249,15 +249,18 @@ async def test_malformed_allowlist_fails_closed():
     assert any(i.code == "CONNECTOR_MISSING_OPERATIONS" for i in result.issues)
 
 
-async def test_unknown_verb_derives_no_requirement():
-    """An unrecognised routed verb derives NO requirement: the engine raises on it.
+async def test_unknown_verb_requires_read():
+    """An unrecognised routed verb requires ``read``: the engine falls through to query.
 
-    A non-empty ``operation`` the engine never routes (it only routes
-    ``query`` / ``write`` / ``dispatch``) must not be guessed into a
-    requirement the runtime never exercises, so the binding validates.
+    ``node_runner._run_connector_action`` routes every op that is neither
+    ``dispatch`` nor ``write`` through ``connector.query()`` (read-gated), so a
+    hand-written / legacy graph with ``operation="frobnicate"`` requires
+    ``read`` exactly as ``query`` does. The instance allows ``write`` only, so
+    the derived ``read`` is the deciding failure — the test fails if an unknown
+    verb is skipped.
     """
     cid = uuid.uuid4()
-    instance = _connector_instance(cid, allowed_operations=["read"])
+    instance = _connector_instance(cid, allowed_operations=["write"])
     node = {
         "id": "a",
         "node_type": "agent",
@@ -265,7 +268,9 @@ async def test_unknown_verb_derives_no_requirement():
     }
     snap = _snapshot(graph_json=_node_graph(node), connector_bindings=[_binding(cid)])
     result = await GraphValidator().validate(snap, _session_returning([instance]))
-    assert result.is_valid
+    assert not result.is_valid
+    issue = next(i for i in result.issues if i.code == "CONNECTOR_MISSING_OPERATIONS")
+    assert "read" in issue.message
 
 
 async def test_dispatch_unknown_action_derives_no_requirement():
