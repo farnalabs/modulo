@@ -595,6 +595,15 @@ async def test_get_pipeline_non_object_body_fails_loud(runner: WoodpeckerCIRunne
         await runner.get_run_status("acme/widget/42")
 
 
+@respx.mock
+async def test_get_pipeline_non_json_body_fails_loud(runner: WoodpeckerCIRunner) -> None:
+    """A 200 with a non-JSON body fails loud (not a raw JSONDecodeError)."""
+    _mock_lookup()
+    respx.get(f"{API}/repos/7/pipelines/42").mock(return_value=httpx.Response(200, text="not json"))
+    with pytest.raises(ValueError, match="non-JSON pipeline body"):
+        await runner.get_run_status("acme/widget/42")
+
+
 # ---------------------------------------------------------------------------
 # Transport / HTTP-status failure paths
 # ---------------------------------------------------------------------------

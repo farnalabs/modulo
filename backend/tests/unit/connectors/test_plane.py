@@ -197,6 +197,21 @@ async def test_query_work_item_without_identifier_requires_ids(plane: PlaneConne
         await plane.query(ConnectorQuery(resource="work_item"))
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        ConnectorQuery(resource="project", filters={"project_id": "../escape"}),
+        ConnectorQuery(resource="work_item", filters={"project_id": PROJECT_ID, "work_item_id": "a/b"}),
+        ConnectorQuery(resource="work_item", filters={"identifier": "."}),
+    ],
+)
+async def test_query_rejects_unsafe_selectors(plane: PlaneConnector, query: ConnectorQuery) -> None:
+    """Every caller-supplied selector must be a single path segment (no traversal)."""
+    # no respx routes: _ws_path rejects before any HTTP is attempted.
+    with pytest.raises(ValueError, match="single non-empty path segment"):
+        await plane.query(query)
+
+
 @respx.mock
 async def test_query_search(plane: PlaneConnector) -> None:
     route = respx.get(f"{WS}/work-items/search/").mock(return_value=httpx.Response(200, json=_ENVELOPE))

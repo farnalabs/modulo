@@ -170,8 +170,19 @@ class PlaneConnector(ConnectorBase):
     # ------------------------------------------------------------------
 
     def _ws_path(self, *segments: str) -> str:
-        """A workspace-scoped API path (always trailing-slashed, per Plane's routes)."""
-        parts = ["workspaces", self._workspace_slug, *segments]
+        """A workspace-scoped API path (always trailing-slashed, per Plane's routes).
+
+        Every dynamic selector (``project_id`` / ``work_item_id`` / ``identifier``)
+        is a single path segment: reject ``/`` and ``.``/``..`` so a
+        caller-supplied filter cannot escape the workspace scope or traverse the
+        host's path space, matching the ``workspace_slug`` guard in ``__init__``.
+        """
+        parts = ["workspaces", self._workspace_slug]
+        for segment in segments:
+            value = str(segment).strip()
+            if not value or "/" in value or value in {".", ".."}:
+                raise ValueError(f"Plane path segment must be a single non-empty path segment, got {segment!r}")
+            parts.append(value)
         return "/".join(parts) + "/"
 
     async def _request(

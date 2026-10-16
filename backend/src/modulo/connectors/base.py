@@ -548,7 +548,8 @@ CI_RUNNER_CAPABILITIES: frozenset[Capability] = frozenset(
 #: Hub-native connector-type ids that build a CI runner but are NOT members of
 #: the ``ConnectorType`` enum (``connector_hub._build_connector`` matches them
 #: by literal), so ``ConnectorType(id)`` would raise. Keep in step with the
-#: hub's ``case`` arms for CI runners: ``github_actions_ci`` and ``gitlab_ci``.
+#: hub's ``case`` arms for CI runners: ``github_actions_ci``, ``gitlab_ci``
+#: and ``woodpecker``.
 #:
 #: The ids must be EXACTLY the ids the hub can build. ``ci_runner`` used to sit
 #: in here too, but it is the library's *family label* (the ``connector_type``

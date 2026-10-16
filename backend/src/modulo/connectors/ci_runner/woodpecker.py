@@ -381,7 +381,10 @@ class WoodpeckerCIRunner(CIRunnerBase):
         """Fetch one pipeline payload (status reads and log step enumeration)."""
         response = await client.get(f"/repos/{repo_id}/pipelines/{number}")
         response.raise_for_status()
-        body = response.json()
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise ValueError(f"Woodpecker returned a non-JSON pipeline body for build {number}") from exc
         if not isinstance(body, dict):
             raise ValueError(f"Woodpecker returned a non-object pipeline body for build {number}")
         return body
