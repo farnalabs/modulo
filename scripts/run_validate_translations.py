@@ -47,9 +47,14 @@ REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 # declared-group keys instead, which is what it resolves to at runtime).
 _RE_NAV_LABEL = re.compile(r"components\.SidebarNav\.(\w+)(?=['\"])")
 _RE_LOCALE_KEY = re.compile(r'"((?:item|group)_[^"]+)"')
-#: Manifest-shaped group nav label key (``group_build``), as opposed to the
-#: UI-hint keys (``group_collapsed_hint``) SidebarNav.vue consumes directly.
-_RE_GROUP_LABEL = re.compile(r"group_[a-z]+$")
+#: UI-hint keys SidebarNav.vue consumes directly. They share the ``group_*``
+#: namespace with real group ids, so they are excluded by name: a shape-only
+#: rule cannot tell a real underscored/hyphenated id (``group_run-queue``,
+#: ``group_run_queue``) from a hint (``group_collapsed_hint``).
+_GROUP_UI_HINT_KEYS = frozenset({"group_collapsed_hint", "group_expanded_hint"})
+#: Manifest-shaped group nav label key (``group_build``); ids may be hyphenated,
+#: underscored or numeric (``group_run-queue``, ``group_build_2``).
+_RE_GROUP_LABEL = re.compile(r"group_[\w-]+$")
 #: The locale file's SidebarNav block (4-space-indented keys inside it).
 #: Reverse-parity candidates are scoped to it: the flat file also carries
 #: unrelated keys such as ``group_by`` / ``item_count`` that would read as
@@ -188,7 +193,9 @@ def _orphan_group_problems(locale_content: str, manifest_keys: set[str], manifes
             file=sys.stderr,
         )
         return None
-    return sorted(k for k in sidebar_keys if _RE_GROUP_LABEL.match(k) and k not in manifest_keys)
+    return sorted(
+        k for k in sidebar_keys if _RE_GROUP_LABEL.match(k) and k not in _GROUP_UI_HINT_KEYS and k not in manifest_keys
+    )
 
 
 def _report_forward_missing(missing: list[str]) -> None:

@@ -31,7 +31,10 @@ referential sanity:**
   entries.
 
 Label-key/locale parity lives in ``run_validate_translations.py``; this gate
-does not duplicate it.
+does not duplicate it. The navigation.ts / manifest parsers and the invariants
+shared with ``backend/tests/architecture/test_product_map_consistency.py`` live
+in ``scripts/nav_config_shared.py``, so the gate and the architecture suite can
+never drift into enforcing different rules.
 
 Exit 0 clean, 1 violations found.
 """
@@ -39,13 +42,28 @@ Exit 0 clean, 1 violations found.
 from __future__ import annotations
 
 import argparse
-import re
+import importlib.util
 import sys
 from collections import Counter
 from pathlib import Path
+from types import ModuleType
 
 import yaml
 from yaml.nodes import MappingNode, ScalarNode, SequenceNode
+
+
+def _load_shared_module() -> ModuleType:
+    """Load the sibling ``nav_config_shared`` module without touching ``sys.path``."""
+    path = Path(__file__).resolve().with_name("nav_config_shared.py")
+    spec = importlib.util.spec_from_file_location("nav_config_shared", path)
+    if spec is None or spec.loader is None:  # pragma: no cover - import-machinery contract
+        raise ImportError(f"cannot load the shared nav helpers from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_nav = _load_shared_module()
 
 REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 
@@ -54,11 +72,6 @@ _NAV_PATH = str(Path("frontend") / "src" / "config" / "navigation.ts")
 
 #: Mapping keys whose duplicate entries are reported (nav-relevant scopes).
 _DUP_SCOPES = frozenset({"routes", "sidebar_groups"})
-
-#: Route-id keys inside ``routeConfigMap`` — two-space-indented ``key: {`` or
-#: ``'key': {`` entries. Comment lines start with ``//`` and never match, and
-#: the block is cut at ``groupLabelKeyMap`` so later entries are excluded.
-_ROUTE_CONFIG_RE = re.compile(r"^\s{2}['\"]?([A-Za-z][\w-]*)['\"]?:\s*\{", re.MULTILINE)
 
 
 def _read(path: str) -> str:
@@ -99,52 +112,31 @@ def _walk_duplicate_keys(node: object, path: tuple[str, ...], problems: list[str
             _walk_duplicate_keys(item, path, problems)
 
 
-def _duplicate_key_problems(manifest_text: str) -> list[str]:
-    """Report literal duplicate mapping keys under the nav-relevant scopes."""
+def _duplicate_key_problems(root: object) -> list[str]:
+    """Report literal duplicate mapping keys under the nav-relevant scopes.
+
+    ``root`` is the composed document root (``yaml.compose`` returns the root
+    node directly, not a wrapper — ``None`` means an empty document).
+    """
     problems: list[str] = []
-    # yaml.compose returns the document's ROOT node directly (not a wrapper),
-    # so walk it as-is; a None result means an empty document.
-    root = yaml.compose(manifest_text)
     if root is not None:
         _walk_duplicate_keys(root, (), problems)
     return problems
 
 
-def _route_config_keys(nav_text: str) -> set[str]:
-    """Extract the route-id keys declared in navigation.ts's routeConfigMap."""
-    if "const routeConfigMap" not in nav_text:
-        return set()
-    block = nav_text.split("const routeConfigMap", 1)[1]
-    if "const groupLabelKeyMap" in block:
-        block = block.split("const groupLabelKeyMap", 1)[0]
-    return set(_ROUTE_CONFIG_RE.findall(block))
-
-
-def _is_nav_entry(entry: object) -> bool:
-    """True for routes ``buildSidebarGroups()`` renders into the sidebar."""
-    if not isinstance(entry, dict):
-        return False
-    return bool(entry.get("sidebar_group")) and entry.get("type") != "detail_page"
-
-
 def _referential_problems(routes: dict, groups: dict) -> list[str]:
     """Every declared route sidebar_group resolves to a declared group id."""
-    problems: list[str] = []
-    for path, entry in routes.items():
-        if not isinstance(entry, dict):
-            continue
-        group = entry.get("sidebar_group")
-        if group and group not in groups:
-            problems.append(f"route {path!r} references undeclared sidebar_group {group!r}")
-    return problems
+    return [
+        f"route {path!r} references undeclared sidebar_group {group!r}"
+        for path, group in _nav.sidebar_group_references(routes, groups)
+    ]
 
 
 def _sidebar_order_problems(routes: dict) -> list[str]:
     """Presence + uniqueness of sidebar_order on the entries the sidebar renders."""
     problems: list[str] = []
-    seen_orders: dict[object, dict[object, str]] = {}
     for path, entry in routes.items():
-        if not isinstance(entry, dict) or not _is_nav_entry(entry):
+        if not _nav.is_sidebar_nav_entry(entry):
             continue
         order = entry.get("sidebar_order")
         if type(order) is not int:
@@ -152,15 +144,10 @@ def _sidebar_order_problems(routes: dict) -> list[str]:
                 f"nav entry {path!r} must carry an integer sidebar_order "
                 f"(got {order!r} — navigation.ts drops entries whose order is not a number)"
             )
-            continue
-        group_orders = seen_orders.setdefault(entry.get("sidebar_group"), {})
-        if order in group_orders:
-            problems.append(
-                f"duplicate sidebar_order {order} in group {entry.get('sidebar_group')!r}: "
-                f"{group_orders[order]!r} and {path!r}"
-            )
-        else:
-            group_orders[order] = path
+    problems.extend(
+        f"duplicate sidebar_order {order} in group {group!r}: {first!r} and {second!r}"
+        for group, order, first, second in _nav.sidebar_order_conflicts(routes)
+    )
     return problems
 
 
@@ -209,24 +196,21 @@ def _route_id_problems(manifest: object, nav_text: str) -> list[str]:
     if not isinstance(routes, dict):
         return problems  # the structure validator already reported this
 
-    config_keys = _route_config_keys(nav_text)
-    manifest_names = {entry.get("name") for entry in routes.values() if isinstance(entry, dict) and entry.get("name")}
-
-    for path, entry in routes.items():
-        if not isinstance(entry, dict) or not _is_nav_entry(entry):
-            continue
-        name = entry.get("name")
-        if not isinstance(name, str) or not name:
-            problems.append(f"nav entry {path!r} has no route 'name' (route id) to match routeConfigMap")
-        elif name not in config_keys:
-            problems.append(
-                f"nav route {path!r} (name {name!r}) has no routeConfigMap entry in navigation.ts "
-                "(the sidebar falls back to a generic icon and an unresolved 'nav.<name>' label)"
-            )
+    config_keys = _nav.route_config_keys(nav_text)
 
     problems.extend(
+        f"nav entry {path!r} has no route 'name' (route id) to match routeConfigMap"
+        for path, entry in routes.items()
+        if _nav.is_sidebar_nav_entry(entry) and not (isinstance(entry.get("name"), str) and entry["name"])
+    )
+    problems.extend(
+        f"nav route {path!r} (name {name!r}) has no routeConfigMap entry in navigation.ts "
+        "(the sidebar falls back to a generic icon and an unresolved 'nav.<name>' label)"
+        for path, name in _nav.nav_routes_missing_config(routes, config_keys)
+    )
+    problems.extend(
         f"routeConfigMap entry {key!r} has no corresponding manifest route (dead icon entry)"
-        for key in sorted(config_keys - manifest_names)
+        for key in _nav.dead_config_keys(routes, config_keys)
     )
     return problems
 
@@ -244,13 +228,22 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"FAIL: {_NAV_PATH} not found — cannot validate route-id parity", file=sys.stderr)
         return 1
 
-    problems = _duplicate_key_problems(manifest_text)
+    # One parse, one error path: the duplicate-key check needs the composed node
+    # tree and the structural checks need the loaded mapping, so both parses live
+    # under this guard. Malformed YAML must surface the controlled "invalid YAML"
+    # diagnostic, never a raw ParserError traceback.
+    problems: list[str] = []
+    manifest: object = None
     try:
+        root = yaml.compose(manifest_text)
         manifest = yaml.safe_load(manifest_text)
     except yaml.YAMLError as exc:
         problems.append(f"{_MANIFEST_PATH}: invalid YAML — {exc}")
-        manifest = None
-    if manifest is not None:
+    else:
+        # An empty / whitespace-only document loads as None; a scalar or list
+        # loads as a non-mapping. Both must fail hard rather than fall open —
+        # the missing-file path above already does.
+        problems.extend(_duplicate_key_problems(root))
         problems.extend(_structure_problems(manifest))
         problems.extend(_route_id_problems(manifest, nav_text))
 
@@ -265,10 +258,10 @@ def _main(argv: list[str] | None = None) -> int:
 
     routes = manifest.get("routes", {}) if isinstance(manifest, dict) else {}
     groups = manifest.get("sidebar_groups", {}) if isinstance(manifest, dict) else {}
-    nav_count = sum(1 for entry in routes.values() if _is_nav_entry(entry))
+    nav_count = sum(1 for entry in routes.values() if _nav.is_sidebar_nav_entry(entry))
     print(
         f"run_validate_nav_config: OK - {nav_count} nav entries across "
-        f"{len(groups)} sidebar groups, {len(_route_config_keys(nav_text))} routeConfigMap entries",
+        f"{len(groups)} sidebar groups, {len(_nav.route_config_keys(nav_text))} routeConfigMap entries",
         file=sys.stderr,
     )
     return 0

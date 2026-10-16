@@ -206,3 +206,27 @@ def test_detail_page_duplicate_order_is_not_a_conflict(tmp_path, monkeypatch, ca
 
     assert mod._main([]) == 0
     assert "run_validate_nav_config: OK" in capsys.readouterr().err
+
+
+def test_blank_manifest_fails_closed(tmp_path, monkeypatch, capsys):
+    """A whitespace-only manifest loads as None — the gate must FAIL, not fall open."""
+    _seed(tmp_path, monkeypatch, "\n\n", _VALID_NAV)
+
+    assert mod._main([]) == 1
+    assert "manifest root must be a mapping" in capsys.readouterr().err
+
+
+def test_non_mapping_manifest_fails_closed(tmp_path, monkeypatch, capsys):
+    """A list document is not a mapping — the gate must FAIL, not fall open."""
+    _seed(tmp_path, monkeypatch, "- just\n- a\n- list\n", _VALID_NAV)
+
+    assert mod._main([]) == 1
+    assert "manifest root must be a mapping" in capsys.readouterr().err
+
+
+def test_invalid_yaml_reports_controlled_failure(tmp_path, monkeypatch, capsys):
+    """Malformed YAML surfaces the controlled FAIL, never a raw ParserError."""
+    _seed(tmp_path, monkeypatch, "routes: [unclosed\n", _VALID_NAV)
+
+    assert mod._main([]) == 1
+    assert "invalid YAML" in capsys.readouterr().err

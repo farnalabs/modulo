@@ -271,3 +271,33 @@ def test_warning_for_unreferenced_item_keys(tmp_path, monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "WARNING" in err
     assert "item_stale" in err
+
+
+def test_orphan_hyphenated_group_key_fails(tmp_path, monkeypatch, capsys):
+    """A hyphenated / underscored orphan group key is flagged (was single-word only)."""
+    _seed_repo(
+        tmp_path,
+        monkeypatch,
+        "nav = [{ label: 'components.SidebarNav.item_home' }];\n",
+        _locale_with_block("item_home", "group_build", "group_run-queue"),
+        _MANIFEST_SEED,
+    )
+
+    assert mod._main([]) == 1
+    err = capsys.readouterr().err
+    assert "orphaned group key" in err
+    assert "group_run-queue" in err
+
+
+def test_ui_hint_group_keys_are_not_orphans(tmp_path, monkeypatch, capsys):
+    """SidebarNav.vue's group_collapsed_hint / group_expanded_hint are hints, not groups."""
+    _seed_repo(
+        tmp_path,
+        monkeypatch,
+        "nav = [{ label: 'components.SidebarNav.item_home' }];\n",
+        _locale_with_block("item_home", "group_build", "group_collapsed_hint", "group_expanded_hint"),
+        _MANIFEST_SEED,
+    )
+
+    assert mod._main([]) == 0
+    assert "orphaned group key" not in capsys.readouterr().err
