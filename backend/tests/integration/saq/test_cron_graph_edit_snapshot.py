@@ -10,7 +10,10 @@ Two hypotheses:
 
 * **H1 — expected:** the edit produced no new snapshot (the save endpoint is
   plan-gated), so the pipeline correctly points at its one snapshot and every
-  run uses it.
+  run uses it. *Superseded by FAR-1810:* an explicit graph save now records an
+  immutable ``version_kind='edit'`` snapshot in the same transaction, so the
+  edit DOES add a version — but the cron fire still resolves at fire time, so
+  the H2 defect it guards against is unchanged.
 * **H2 — defect:** the cron dispatch path resolves a different snapshot source
   than the manual path (latest EXISTING snapshot vs the live graph at run
   start), so a run pins a stale snapshot after an edit.
@@ -20,9 +23,10 @@ This module decides between them end to end, through the real HTTP routes
 scheduler dispatch (``fire_due_triggers`` -> ``fire_cron_trigger``) against a
 real Postgres + Redis (testcontainers):
 
-1. The graph edit creates NO snapshot — **even with every plan feature
-   enabled** (the ASGI client reports enterprise tier), so H1's plan-gate
-   story cannot be the cause: nothing in the edit path attempts a save.
+1. The graph edit records an edit snapshot (FAR-1810) — **with every plan
+   feature enabled** (the ASGI client reports enterprise tier), so the old H1
+   plan-gate story is ruled out: the edit path saves successfully and versions
+   the change rather than being blocked by a 402.
 2. Pre-fix, the second cron fire reuses run A's pre-edit snapshot while
    ``POST /runs`` at the same moment creates a fresh snapshot from the edited
    live graph — the divergence H2 predicts. Post-fix, the second cron fire
@@ -271,6 +275,24 @@ async def _snapshot_node_label(db_engine: AsyncEngine, snapshot_id: uuid.UUID) -
     return str(nodes[0].get("label")) if nodes else None
 
 
+async def _latest_snapshot_node_label(db_engine: AsyncEngine, pipeline_id: uuid.UUID) -> str | None:
+    """The version marker carried by a pipeline's highest-version snapshot."""
+    async with db_engine.connect() as conn:
+        result = await conn.execute(
+            text(
+                "SELECT graph_json FROM pipeline_snapshots "
+                "WHERE pipeline_id = :pid ORDER BY snapshot_version DESC LIMIT 1"
+            ),
+            {"pid": str(pipeline_id)},
+        )
+        row = result.scalar_one_or_none()
+    if row is None:
+        return None
+    graph = row if isinstance(row, dict) else json.loads(str(row))
+    nodes = graph.get("nodes") or []
+    return str(nodes[0].get("label")) if nodes else None
+
+
 async def _run_snapshot_id(db_engine: AsyncEngine, run_id: uuid.UUID) -> uuid.UUID | None:
     async with db_engine.connect() as conn:
         result = await conn.execute(
@@ -408,10 +430,16 @@ async def test_cron_fire_after_graph_edit_executes_the_edited_graph(
         await _patch_graph(integration_client, test_org, test_user, pipeline_id, "v2", schema_id)
         assert await _live_node_label(db_engine, pipeline_id) == "v2"
 
-        # H1 observation: the edit itself creates NO snapshot — with the plan
-        # feature enabled, so the 402 plan-gate story cannot be the cause.
-        assert await _snapshot_count(db_engine, pipeline_id) == 1, (
-            "graph edit unexpectedly created a snapshot — the H1 (plan-gated save) premise needs re-examination"
+        # FAR-1810 premise: an explicit graph save records an immutable
+        # `version_kind='edit'` snapshot in the same transaction, so the edit
+        # adds exactly one snapshot on top of the first fire's run snapshot —
+        # with every plan feature enabled, ruling out the old 402 plan-gate
+        # hypothesis. The edit snapshot must capture the edited (v2) graph.
+        assert await _snapshot_count(db_engine, pipeline_id) == 2, (
+            "the FAR-1810 edit save must record exactly one edit snapshot on top of the first run's snapshot"
+        )
+        assert await _latest_snapshot_node_label(db_engine, pipeline_id) == "v2", (
+            "the FAR-1810 edit snapshot must capture the edited graph"
         )
 
         # --- Second fire: the cron run must execute the EDITED graph.
