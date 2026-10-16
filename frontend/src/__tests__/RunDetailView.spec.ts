@@ -2202,15 +2202,76 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
-  it('keeps the label gap when the heartbeat value is the terminal placeholder (FAR-726)', async () => {
+  it('renders the kept absolute last-heartbeat on a terminal run instead of a dash (FAR-1839)', async () => {
+    const heartbeatAt = new Date(Date.now() - 5 * 60_000).toISOString() // nosemgrep: new-date-without-guard
     const wrapper = await mountWithDetail({
       ...baseDetail(),
       status: 'complete',
-      heartbeat_at: new Date(Date.now() - 30_000).toISOString(), // nosemgrep: new-date-without-guard
+      heartbeat_at: heartbeatAt,
+    })
+
+    const el = wrapper.find('[data-testid="run-detail-heartbeat"]')
+    // Label gap (FAR-624) preserved, and the value is the heartbeat's own
+    // local time — the backend keeps heartbeat_at on a terminal run, so "—"
+    // would discard a value the server still holds.
+    expect(el.text()).toMatch(/Last heartbeat\s/)
+    const absoluteLocalTime = new Date(heartbeatAt).toLocaleString('en-US', { // nosemgrep: new-date-without-guard
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+    })
+    expect(el.text()).toContain(absoluteLocalTime)
+    expect(el.text()).not.toContain('—')
+    // Staleness is a LIVE-run signal only: a finished run never wears the
+    // "(stale)" marker, however old its last heartbeat is...
+    expect(el.text()).not.toContain('(stale)')
+    // ...and never raises the warnings-strip entry either.
+    expect(wrapper.find('[data-testid="run-detail-warnings-strip-stale-heartbeat"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('keeps the label gap and the dash when a terminal run has no heartbeat at all (FAR-726)', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      status: 'complete',
+      heartbeat_at: null,
     })
 
     const el = wrapper.find('[data-testid="run-detail-heartbeat"]')
     expect(el.text()).toMatch(/Last heartbeat\s+—/)
+    wrapper.unmount()
+  })
+
+  it('renders the metadata as an aligned definition list with one label column (FAR-1839)', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      created_at: '2026-08-01T10:00:00Z',
+      started_at: '2026-08-01T10:00:05Z',
+      completed_at: '2026-08-01T10:05:00Z',
+      trigger_type: 'manual',
+      trigger_actor: 'Duncan (GitHub)',
+      heartbeat_at: null,
+    })
+
+    // Locate OUR list (other components on the page may render their own dl).
+    const dl = wrapper
+      .findAll('dl')
+      .find((candidate) => candidate.find('[data-testid="run-detail-heartbeat"]').exists())
+    expect(dl).toBeTruthy()
+    const list = dl!
+    expect(list.findAll('dt').length).toBe(5)
+    expect(list.findAll('dd').length).toBe(5)
+    // The two contract testids stay on their label+value row, inside the list.
+    expect(list.find('[data-testid="run-detail-trigger-actor"]').text()).toContain('Triggered by')
+    expect(list.find('[data-testid="run-detail-trigger-actor"]').text()).toContain('Duncan (GitHub)')
+    expect(list.find('[data-testid="run-detail-heartbeat"]').text()).toContain('Last heartbeat')
+    // Every label shares ONE column definition — that shared width is what
+    // makes "Started" and "Triggered by" line up; the pre-FAR-1839 inline
+    // wrapping list had no label column at all.
+    const labelClasses = list.findAll('dt').map((dt) => dt.classes().join(' '))
+    expect(new Set(labelClasses).size).toBe(1)
+    expect(labelClasses[0]).toContain('w-28')
+    // Each label/value pair sits in its own row (labels never flow inline).
+    expect(list.findAll('div').length).toBe(5)
+    expect(list.findAll('div').every((row) => row.classes().includes('flex'))).toBe(true)
     wrapper.unmount()
   })
 
