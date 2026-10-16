@@ -73,7 +73,9 @@
  *                               `measurements.json` to, instead of the default
  *                               in-tree `.mobile-captures/polish/<slug>/`.
  *                               Unset/empty ⇒ the default path (unchanged
- *                               behaviour). Parent dirs are created.
+ *                               behaviour). Parent dirs are created. A
+ *                               non-absolute value fails the run loud rather
+ *                               than resolving against Playwright's cwd.
  *   E2E_TARGET     (optional) Target selector — `local` (default, mock API),
  *                               `staging` (no real data) or `app`
  *                               (app.modulo.run — the real-data target).
@@ -353,6 +355,14 @@ test.describe('polish capture', () => {
     expect(
       POLISH_ROUTE.startsWith('/'),
       `POLISH_ROUTE must be a route path beginning with "/": got "${POLISH_ROUTE}"`,
+    ).toBe(true)
+
+    // Fail loud on a relative override instead of silently writing relative to
+    // Playwright's cwd (the header documents POLISH_OUT_DIR as ABSOLUTE). A
+    // capture landing somewhere unexpected is worse than a legible failure.
+    expect(
+      !POLISH_OUT_DIR || path.isAbsolute(POLISH_OUT_DIR),
+      `POLISH_OUT_DIR must be an absolute path: got "${POLISH_OUT_DIR}"`,
     ).toBe(true)
 
     // Absolute override wins verbatim (never joined/re-based); when unset the
