@@ -306,7 +306,24 @@ describe('NotificationBell (FAR-250)', () => {
     const banner = wrapper.find('[data-testid="sse-reconnect-banner"]')
     expect(banner.exists()).toBe(true)
     expect(banner.text()).toContain('Reconnect failed. Sign in again')
-    // The retry affordance stays enabled so the user can try again.
+    // The copy instructs a fresh sign-in, so the button must not contradict
+    // it by inviting an immediate retry: without a fresh token a click would
+    // only re-run the refresh+retry that just failed. The auth-change
+    // re-arm restarts the stream when the fresh sign-in lands (FAR-1861).
+    expect(wrapper.find('[data-testid="sse-reconnect-button"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('keeps the reconnect button enabled on the plain auth-stop banner (FAR-1861)', async () => {
+    // The base banner (no manual attempt yet, feedback idle) still offers the
+    // manual restart — only the terminal 'failed' feedback disables it.
+    const wrapper = await mountBell()
+    bannerFlag.value = true
+    feedbackFlag.value = 'idle'
+    await nextTick()
+
+    const banner = wrapper.find('[data-testid="sse-reconnect-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('Live updates stopped')
     expect(wrapper.find('[data-testid="sse-reconnect-button"]').attributes('disabled')).toBeUndefined()
   })
 

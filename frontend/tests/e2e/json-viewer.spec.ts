@@ -433,7 +433,52 @@ test.describe('JsonViewer design-token theming', { tag: '@regression' }, () => {
       // 4. The row does not force horizontal scrolling on the viewport.
       expect(metrics!.horizontalOverflow, 'no horizontal overflow in the viewer scroll container').toBe(0)
 
-      // 5. The expand control actually works at this viewport.
+      // 5. The value sits in the KEY's column (FAR-1861, FAR-1840 follow-up):
+      //    every wrapped line starts at the key's left edge, not the row's
+      //    edge (pre-fix measurement: value x58 vs key x73), and the indent
+      //    column spans the whole node so the guides keep covering it.
+      const geometry = await truncated.evaluate((el) => {
+        const node = el.closest('.vjs-tree-node')
+        const key = node?.querySelector('.vjs-key')
+        const indent = node?.querySelector('.vjs-indent')
+        if (!node || !key || !indent) return null
+        const keyBox = key.getBoundingClientRect()
+        const nodeBox = node.getBoundingClientRect()
+        const indentBox = indent.getBoundingClientRect()
+        return {
+          nodeLeft: Math.round(nodeBox.x),
+          keyLeft: Math.round(keyBox.x),
+          indentHeight: Math.round(indentBox.height),
+          nodeHeight: Math.round(nodeBox.height),
+        }
+      })
+      expect(geometry, 'key/indent geometry rendered').not.toBeNull()
+      // Per-line left edges (the helper groups Chromium's per-line rects —
+      // including the trailing-space rect each wrapped line emits — by y and
+      // takes the min x as that line's left edge).
+      const valueLefts = await truncated
+        .locator('.json-viewer-string-truncated-text')
+        .evaluate(collectLineLeftEdges)
+      console.log(`[far-1840] alignment: ${JSON.stringify({ ...geometry!, valueLefts })}`)
+      // The key must actually be indented past the row edge — otherwise
+      // "value aligned to key" would be vacuously true at x of the row.
+      expect(geometry!.keyLeft, 'key sits right of the row edge (indent > 0)').toBeGreaterThan(geometry!.nodeLeft + 2)
+      // Every wrapped line of the value shares the key's left edge...
+      expect(valueLefts.length, 'preview wraps to several lines').toBeGreaterThan(1)
+      for (const left of valueLefts) {
+        expect(
+          Math.abs(left - geometry!.keyLeft),
+          `value line at x${left} must align to key at x${geometry!.keyLeft} (lines: ${JSON.stringify(valueLefts)})`,
+        ).toBeLessThanOrEqual(1)
+      }
+      // ...and the indent column spans the node, so the guide lines cover
+      // the wrapped value's rows instead of stopping at the first line.
+      expect(
+        Math.abs(geometry!.indentHeight - geometry!.nodeHeight),
+        `indent ${geometry!.indentHeight}px must span node ${geometry!.nodeHeight}px`,
+      ).toBeLessThanOrEqual(2)
+
+      // 6. The expand control actually works at this viewport.
       await page.getByTestId('json-viewer-string-expand').first().click()
       const expanded = page.getByTestId('json-viewer-string-expanded').first()
       await expect(expanded).toContainText(longText.slice(0, 60))

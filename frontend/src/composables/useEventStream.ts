@@ -63,12 +63,50 @@ function scheduleReconnectBackfill(): void {
  *   retry with capped backoff like 5xx. Only a genuine auth rejection
  *   demands a fresh sign-in.
  * - 5xx and everything else -> retry forever with capped backoff + jitter.
+ *
+ * A likely-permanent non-auth 4xx keeps the 'retry' classification but is no
+ * longer silent — the call site warns through warnPersistentClientError
+ * (FAR-1861).
  */
 function classifyHttpFailure(status: number | undefined): 'auth' | 'retry' {
   if (status === 401 || status === 403) {
     return 'auth'
   }
   return 'retry'
+}
+
+/**
+ * Consecutive-retry signal for a NON-auth 4xx (FAR-1861). Classification is
+ * unchanged — only 401/403 are terminal, 429 stays transient, everything
+ * else retries forever — but a 400/404 that loops every backoff tick must not
+ * be SILENT: warn on the first occurrence of a status and then every 10th
+ * retry, so a permanently-rejected endpoint is visible in the console without
+ * a line per tick. Reset on every successful connect (and by the HMR reset).
+ * 429 is deliberately excluded — it is expected-transient rate limiting and
+ * must never read as a permanent client error.
+ */
+let clientErrorStatus = 0
+let clientErrorRetries = 0
+
+function warnPersistentClientError(status: number): void {
+  if (clientErrorStatus === status) {
+    clientErrorRetries++
+  } else {
+    clientErrorStatus = status
+    clientErrorRetries = 1
+  }
+  if (clientErrorRetries === 1 || clientErrorRetries % 10 === 0) {
+    console.warn(
+      `[EventBus] Reconnect received HTTP ${status}: a non-auth 4xx is usually permanent, ` +
+        `but the stream still retries by design (attempt ${clientErrorRetries}). ` +
+        `If this persists, fix the endpoint or token — 401/403 stop the stream instead.`,
+    )
+  }
+}
+
+/** True for a 4xx that signals a likely-permanent client error (not rate-limiting). */
+function isPersistentClientError(status: number | undefined): boolean {
+  return status !== undefined && status >= 400 && status < 500 && status !== 429
 }
 
 /**
@@ -172,7 +210,7 @@ async function doConnect(): Promise<void> {
   // connect() blocks while auth_failed and restartStream()/reconnect() clear
   // it, so doConnect is only ever reached from a non-auth-stopped state.
   connectionState.value = 'connecting'
-  const timeoutId = setTimeout(() => abortController?.abort(), FETCH_TIMEOUT_MS)
+  let timeoutId = setTimeout(() => abortController?.abort(), FETCH_TIMEOUT_MS)
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
 
   try {
@@ -186,8 +224,17 @@ async function doConnect(): Promise<void> {
     // token instead of raising the terminal banner. 403 is a permission
     // rejection, not an expiry — no refresh, straight to classification.
     if (response.status === 401) {
+      // The 30s connect timeout guards the SSE fetch itself; it must NOT fire
+      // while a token refresh is in flight (FAR-1861). The refresh runs on
+      // its own request (this abort signal is not passed to it), so a timeout
+      // landing mid-refresh could not stop the refresh — it could only flip
+      // `signal.aborted` and discard a refresh that was about to succeed,
+      // pushing a recoverable expiry onto the terminal banner. Clear the
+      // timeout for the refresh, re-arm it for the retried fetch.
+      clearTimeout(timeoutId)
       const refreshed = await attemptTokenRefresh()
       if (refreshed && !abortController.signal.aborted) {
+        timeoutId = setTimeout(() => abortController?.abort(), FETCH_TIMEOUT_MS)
         response = await fetch(SSE_URL, {
           headers: { ...getAuthHeaders() },
           signal: abortController.signal,
@@ -198,6 +245,11 @@ async function doConnect(): Promise<void> {
 
     if (!response.ok || !response.body) {
       const kind = classifyHttpFailure(response.status)
+      // A likely-permanent 4xx (400/404/... — not 429) retries forever, so
+      // say so loudly instead of looping silently (FAR-1861).
+      if (kind === 'retry' && isPersistentClientError(response.status)) {
+        warnPersistentClientError(response.status)
+      }
       scheduleReconnect(kind)
       return
     }
@@ -205,6 +257,10 @@ async function doConnect(): Promise<void> {
     const wasReconnect = _everConnected || reconnectAttempts > 0
     _everConnected = true
     reconnectAttempts = 0
+    // A healthy connect proves the endpoint answers again — restart the
+    // non-auth-4xx streak so the next outage warns from its first attempt.
+    clientErrorStatus = 0
+    clientErrorRetries = 0
     connected.value = true
     connectionState.value = 'connected'
     // Manual restart recovered: clear the feedback so the banner disappears
@@ -370,6 +426,8 @@ export function resetEventStreamState(): void {
   cleanup()
   clearAllHandlers()
   backfillSubscribers.clear()
+  clientErrorStatus = 0
+  clientErrorRetries = 0
   if (backfillTimer) {
     clearTimeout(backfillTimer)
     backfillTimer = null
