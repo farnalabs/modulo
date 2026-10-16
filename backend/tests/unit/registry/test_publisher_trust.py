@@ -14,6 +14,7 @@ from modulo.core.registry import (
     PUBLISHER_TRUST_VERIFIED,
     _publishers,
     compute_popularity_score,
+    get_publisher,
     get_publisher_status,
     list_registry_primitives_ranked,
     list_verified_publishers,
@@ -68,6 +69,25 @@ class TestPublisherTrust(_PreservePublishers):
     def test_list_verified_publishers(self):
         publishers = list_verified_publishers()
         assert any(p.author == "modulo" for p in publishers)
+
+    def test_get_publisher_returns_registered(self):
+        fp = "get-publisher-fingerprint"
+        register_publisher(fp, "getpub", "Get Publisher", website="https://example.com")
+        pub = get_publisher(fp)
+        assert pub is not None
+        assert pub.author == "getpub"
+        assert pub.website == "https://example.com"
+
+    def test_get_publisher_unknown_returns_none(self):
+        assert get_publisher("no-such-fingerprint") is None
+
+    def test_get_publisher_reflects_revocation(self):
+        fp = "get-publisher-revoked"
+        register_publisher(fp, "revpub", "Rev Publisher")
+        assert revoke_publisher(fp) is True
+        pub = get_publisher(fp)
+        assert pub is not None
+        assert pub.status == PUBLISHER_TRUST_REVOKED
 
 
 class TestSearchRanking:

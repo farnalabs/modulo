@@ -24,7 +24,10 @@ test.describe('Admin Notification Delivery', { tag: "@regression" }, () => {
     // FAR-656: the webhook delivery log is gated behind the
     // webhook_notification_log flag (default OFF) — mock the plan fetch so the
     // router guard resolves the flag as enabled for this regression run.
-    await page.route('**/api/v1/admin/feature-flags*', (route) => {
+    // FAR-1809 repointed the plan bootstrap at the caller-scoped GET
+    // /api/v1/plan, so the mock must own that endpoint (the old instance-admin
+    // /api/v1/admin/feature-flags is no longer read by the store).
+    await page.route('**/api/v1/plan*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ license: { tier: 'team' }, flags: [{ name: 'webhook_notification_log', currently_active: true }] }) })
     })
     await page.goto('/admin/notification-delivery')
@@ -68,7 +71,7 @@ test.describe('Admin Plugins', { tag: "@regression" }, () => {
   test('renders the Plugins page', { tag: "@regression" }, async ({ page, env }) => {
     test.skip(!isDevModeTarget(env), 'Route is dev-mode-gated (private_preview); only runs on a dev-mode target')
     await loginAsAdmin(page, env)
-    await page.route('**/api/v1/admin/feature-flags*', (route) => {
+    await page.route('**/api/v1/plan*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ license: { tier: 'v2' }, flags: [{ name: 'plugin_management', currently_active: true }, { name: 'model_backend_management', currently_active: true }, { name: 'team_rbac', currently_active: true }] }) })
     })
     await page.route('**/api/v1/plugins*', (route) => {
