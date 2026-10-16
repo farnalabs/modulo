@@ -131,8 +131,8 @@ unrelated writer or is held across non-lock work.
 | # | file:line | function | lock | txn | hold / blocking scope | over-serialises |
 |---|---|---|---|---|---|---|
 | C4 | `api/routes/model_backends.py:658` | `create_model_backend_endpoint` | FOR UPDATE | mutation txn | Locks existing same-name `ModelBackend` row for creation uniqueness (409 on clash). | no. |
-| C5 | `db/crud/organisation.py:89` | `get_organisation` | FOR UPDATE (opt-in) | caller txn | Generic org row lock used by org-updating callers. Marks itself FAR-1624: intentionally plain `FOR UPDATE`, not `FOR NO KEY UPDATE`. Since FAR-1830/1832 its only caller is the atomic settings patch's **generic-dialect (SQLite/MariaDB) fallback** (`_apply_settings_patch_generic`) — on Postgres the patch is a single `UPDATE` and never takes this. | **watch** – Organisation row (Postgres never reaches it). |
-| C6 | `db/crud/observability.py:88` | `update_otel_config` | FOR UPDATE (generic-dialect fallback only) | caller txn | **FAR-1832:** the Postgres path is now a single-statement atomic `otel_config_json = COALESCE(…) || :patch` write with no pre-lock; the `FOR UPDATE` survives only on the SQLite/MariaDB fallback branch (which never runs on Postgres). Deliberately still `include_soft_deleted` — FAR-1025 keeps OTel config writable during the pending-deletion window (unlike `settings_json`, whose writers now refuse soft-deleted orgs). | no – never reached on Postgres. |
+| C5 | `db/crud/organisation.py:89` | `get_organisation` | FOR UPDATE (opt-in) | caller txn | Generic org row lock used by org-updating callers. Marks itself FAR-1624: intentionally plain `FOR UPDATE`, not `FOR NO KEY UPDATE`. Since FAR-1830/1832 its only caller is the atomic settings patch's **generic-dialect (SQLite/MariaDB) fallback** (`_apply_json_column_patch_generic`) — on Postgres the patch is a single `UPDATE` and never takes this. | **watch** – Organisation row (Postgres never reaches it). |
+| C6 | `db/crud/observability.py:28` (`update_otel_config` → shared `db/crud/organisation.py` machinery) | `update_otel_config` | FOR UPDATE (generic-dialect fallback only) | caller txn | **FAR-1832 (QA F3):** routes through the shared atomic JSON-column patch (`update_org_json_column_patch`) — the Postgres path is a single-statement atomic `otel_config_json = COALESCE(…) || :patch` write with no pre-lock; the `FOR UPDATE` survives only on the SQLite/MariaDB fallback branch (`_apply_json_column_patch_generic`, which never runs on Postgres). Deliberately `require_live_row=False` (still `include_soft_deleted` on the generic read) — FAR-1025 keeps OTel config writable during the pending-deletion window (unlike `settings_json`, whose writers now refuse soft-deleted orgs). QA F3 also gave this path the same fail-closed tenant guard as the settings writer (it previously trusted `org_id` verbatim — and `organisations` is not RLS-scoped, so that guard is the only tenant control). | no – never reached on Postgres. |
 | C7 | `db/crud/parameter_set.py:84` | `update_set` | FOR UPDATE | caller txn | Parameter-set version bump RMW. | no. |
 | C8 | `db/crud/account.py:86` | `_get_account_locked` | FOR UPDATE (`session.get`) | caller txn | The account-preferences serialisation point (documented): all preference writers serialise here. | **watch** – Account row shared with key quota B9. |
 | C9 | `db/crud/node_observation.py:36` | `observe_node` | FOR UPDATE | caller txn | Idempotent node-observation upsert (insert if absent). | no. |
@@ -259,7 +259,10 @@ over-broad locking.*
 statement instead of pre-locking across a read-modify-write. The converted sites — sandbox
 concurrency, HITL window, analytics consent ×2, runtime flags, licence set/clear, plus the
 already-converted retention/email/logo/cost/run-concurrency writers — no longer appear in the
-inventory at all. What still locks the `organisations` row:
+inventory at all. The product-analytics writers (QA F1) use the patch's nested sub-field form
+(`jsonb_set(…, '{product_analytics}', COALESCE(…) || :subpatch)`), still one statement and
+still no pre-lock: two writers of DIFFERENT sub-fields of the block both survive without
+serialising. What still locks the `organisations` row:
 
 - **D1–D4 (deletion FSM) — intentional and preserved.** Deletion must keep exclusive
   `FOR UPDATE` so a hard delete still blocks concurrent child inserts (`FOR KEY SHARE`); a
