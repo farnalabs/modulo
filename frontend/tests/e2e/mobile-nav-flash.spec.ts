@@ -6,7 +6,9 @@ import { flagCacheKey, serializeFlagCache } from '../../src/config/flagCache'
 // feature-flags response.
 //
 // Before the fix, `mobile_sidebar_rail` was read from a store that started
-// empty and only populated after `GET /api/v1/plan` landed, so
+// empty and only populated after the tier-gated bootstrap landed (then
+// `GET /api/v1/admin/feature-flags`; repointed to the caller-scoped
+// `GET /api/v1/plan` by FAR-1809), so
 // every mobile load painted the legacy hamburger top-nav first and swapped to
 // the left rail when the response arrived (the slow-connection flash Duncan
 // reported). The fix resolves the mode from a persisted cache synchronously.
@@ -180,8 +182,8 @@ async function boot(page: Page, opts: { rail: boolean; cachedRail?: boolean; wai
 
   await setupLocalMockApi(page)
   // Registered after the catch-all mock — Playwright gives later-registered
-  // handlers precedence, so this one owns the flags endpoint. FAR-1809: the
-  // flag map now arrives from the caller-scoped GET /api/v1/plan.
+  // handlers precedence, so this one owns the plan bootstrap endpoint
+  // (`GET /api/v1/plan`, the tier-gated flags source since FAR-1809).
   await page.route('**/api/v1/plan', async (route) => {
     await gate
     await route.fulfill({
