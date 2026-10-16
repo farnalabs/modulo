@@ -258,15 +258,18 @@ async function preparePage(page: Page, env: TestEnv): Promise<string> {
     // Local: mock all /api/v1 traffic and seed the auth tokens so
     // authenticated routes render with mocked data (mirrors loginAsAdmin's
     // local branch). Re-navigate so the router guard picks up the seeded
-    // session.
+    // session; /login stays untouched so the login page renders as-is —
+    // seeding a session there would bounce it to the dashboard.
     await setupLocalMockApi(page)
-    await page.evaluate(([token, refresh]) => {
-      localStorage.setItem('modulo_access_token', token)
-      localStorage.setItem('modulo_refresh_token', refresh)
-    }, [MOCK_ACCESS_TOKEN, MOCK_REFRESH_TOKEN])
-    const remount = await page.goto(route)
-    await waitForAppMount(page, route, remount)
-    await settle(page)
+    if (route !== '/login') {
+      await page.evaluate(([token, refresh]) => {
+        localStorage.setItem('modulo_access_token', token)
+        localStorage.setItem('modulo_refresh_token', refresh)
+      }, [MOCK_ACCESS_TOKEN, MOCK_REFRESH_TOKEN])
+      const remount = await page.goto(route)
+      await waitForAppMount(page, route, remount)
+      await settle(page)
+    }
   } else if (page.url().includes('/login') && route !== '/login') {
     // storageState may have expired — fall back to a single real login, then
     // retry the route and re-run the mount/settle waits.

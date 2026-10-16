@@ -105,7 +105,7 @@ export async function setupLocalMockApi(page: Page) {
             eval_pass_rate: 88 + i,
             token_spend_usd: 3.5 + i * 0.75,
             avg_time_to_approve_ms: 120000 + i * 5000,
-            rejection_rate: 0.05 + i * 0.01,
+            rejection_rate: 5 + i,
           })),
           teams: [
             {
@@ -132,6 +132,8 @@ export async function setupLocalMockApi(page: Page) {
       // every series shares DASHBOARD_TREND_DATES so the combined trend in
       // DashboardView renders a full curve. Registered BEFORE the generic GET
       // catch-all so it is actually reachable.
+      // Every rejection-rate field is a PERCENTAGE (0-100), matching the
+      // backend's `round(rejected / total * 100, 1)` — never a 0-1 fraction.
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -140,9 +142,9 @@ export async function setupLocalMockApi(page: Page) {
           run_counts: DASHBOARD_TREND_DATES.map((date, i) => ({ date, run_count: 12 + i * 3 })),
           eval_pass_rates: DASHBOARD_TREND_DATES.map((date, i) => ({ date, total_evals: 8, passed_evals: 7, pass_rate: 88 + i })),
           token_spend: DASHBOARD_TREND_DATES.map((date, i) => ({ date, total_spend_usd: 3.5 + i * 0.75 })),
-          hitl_volume: DASHBOARD_TREND_DATES.map((date, i) => ({ date, total_decisions: 4, approved_count: 3, rejected_count: 1, rejection_rate: 0.25, avg_time_to_approve_ms: 120000 + i * 5000 })),
-          rejection_trend: DASHBOARD_TREND_DATES.map((date, i) => ({ date, rolling_rejection_rate: 0.05 + i * 0.01, raw_rejection_rate: 0.06 + i * 0.01 })),
-          correlation: DASHBOARD_TREND_DATES.map((date, i) => ({ date, rejection_rate: 0.05 + i * 0.01, eval_pass_rate: 88 + i })),
+          hitl_volume: DASHBOARD_TREND_DATES.map((date, i) => ({ date, total_decisions: 4, approved_count: 3, rejected_count: 1, rejection_rate: 25, avg_time_to_approve_ms: 120000 + i * 5000 })),
+          rejection_trend: DASHBOARD_TREND_DATES.map((date, i) => ({ date, rolling_rejection_rate: 5 + i, raw_rejection_rate: 6 + i })),
+          correlation: DASHBOARD_TREND_DATES.map((date, i) => ({ date, rejection_rate: 5 + i, eval_pass_rate: 88 + i })),
           feedback_volume: DASHBOARD_TREND_DATES.map((date) => ({ date, feedback_count: 2, resolved_count: 1, correcting_count: 1 })),
         }),
       })
