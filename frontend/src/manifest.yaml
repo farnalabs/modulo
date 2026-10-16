@@ -3414,9 +3414,6 @@ elements:
       - testid: pipeline-editor-run-dialog-cancel
         type: button
         dynamic_testid: false
-      - testid: pipeline-editor-edge-panel-close
-        type: button
-        dynamic_testid: false
       - testid: pipeline-editor-hitl-review-window
         type: input
         dynamic_testid: false
