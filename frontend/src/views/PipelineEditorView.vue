@@ -547,6 +547,19 @@
             </button>
           </div>
         </div>
+        <!-- FAR-1816: transient success notice after a restore. A plain toast
+             would be unmounted the moment the view navigates back to latest,
+             so it lives here as a persistent-until-explicit status region
+             (role=status announces it; the timer clears it). Names the exact
+             outcome: which version was restored and which new version was
+             created. -->
+        <output
+          v-if="restoreNotice"
+          class="block border-b bg-success/10 px-3 py-2 text-xs text-success"
+          data-testid="pipeline-editor-restore-notice"
+        >
+          {{ restoreNotice }}
+        </output>
         <!-- FAR-1812: persistent historical-version banner. Amber/warning tint
              (NOT destructive red — nothing here is being destroyed), always
              visible while a historic version is on screen, with BOTH actions
@@ -569,7 +582,7 @@
               type="button"
               :class="btnToolbarSecondary"
               data-testid="pipeline-editor-historic-restore"
-              @click="openRestoreConfirm"
+              @click="openRestoreConfirm()"
             >
               {{ $t('views.PipelineEditorView.historic_restore') }}
             </button>
@@ -1713,10 +1726,14 @@
       <ErrorAlert v-if="deleteError" :message="deleteError" :retryable="false" class="mb-4" :compact="true" />
     </FormDialog>
 
-    <!-- FAR-1812: restore confirmation for the banner's "Restore this
-         version" — the SAME rollback endpoint the timeline wires. FAR-1816
-         replaces this shell with the shared restore dialog; the seam is
-         openRestoreConfirm/confirmRestore. -->
+    <!-- FAR-1816: the SHARED restore dialog — used by the historic banner AND
+         the version timeline's "Restore this version" action. It shows the
+         old-vs-latest change summary (from the diff endpoint) and the real
+         consequences of restoring before the user confirms. Confirmation is a
+         plain confirm (no typed phrase): restore is reversible because it
+         creates a NEW version rather than rewriting history. The server's own
+         guards (HITL-gate weakening, guardrail strip, connector-team mismatch)
+         remain the backstop and their refusals are surfaced as human copy. -->
     <FormDialog
       :open="showRestoreConfirm"
       @update:open="showRestoreConfirm = false"
@@ -1726,9 +1743,57 @@
       @confirm="confirmRestore"
     >
       <p class="text-sm text-muted-foreground">
-        {{ $t('views.PipelineEditorView.historic_restore_dialog_body', { version: viewSnapshot?.snapshot_version ?? '' }) }}
+        {{ $t('views.PipelineEditorView.historic_restore_dialog_intro', { version: restoreTargetVersion ?? '' }) }}
       </p>
-      <ErrorAlert v-if="restoreError" :message="restoreError" :retryable="false" :compact="true" />
+
+      <!-- Change summary: what restoring this version does to the live config. -->
+      <div class="mt-3 rounded-md border bg-muted/30 p-2" data-testid="pipeline-editor-restore-diff">
+        <p class="text-xs font-medium">{{ $t('views.PipelineEditorView.historic_restore_diff_title') }}</p>
+        <p v-if="restoreDiffLoading" class="mt-1 text-[11px] text-muted-foreground">
+          {{ $t('views.PipelineEditorView.historic_restore_diff_loading') }}
+        </p>
+        <p v-else-if="restoreDiffError" class="mt-1 text-[11px] text-muted-foreground">
+          {{ $t('views.PipelineEditorView.historic_restore_diff_failed', { error: restoreDiffError }) }}
+        </p>
+        <template v-else-if="restoreDiffSummary">
+          <p
+            v-if="restoreDiffSummary.nodesRestored === 0 && restoreDiffSummary.nodesRemoved === 0 && restoreDiffSummary.breaking.length === 0"
+            class="mt-1 text-[11px] text-muted-foreground"
+          >
+            {{ $t('views.PipelineEditorView.historic_restore_diff_no_changes') }}
+          </p>
+          <ul v-else class="mt-1 list-disc space-y-0.5 pl-4 text-[11px] text-muted-foreground">
+            <li v-if="restoreDiffSummary.nodesRestored > 0">
+              {{ $t('views.PipelineEditorView.historic_restore_diff_nodes_restored', restoreDiffSummary.nodesRestored) }}
+            </li>
+            <li v-if="restoreDiffSummary.nodesRemoved > 0">
+              {{ $t('views.PipelineEditorView.historic_restore_diff_nodes_removed', restoreDiffSummary.nodesRemoved) }}
+            </li>
+            <li v-if="restoreDiffSummary.impacted > 0">
+              {{ $t('views.PipelineEditorView.historic_restore_diff_impacted', restoreDiffSummary.impacted) }}
+            </li>
+            <li
+              v-for="(b, i) in restoreDiffSummary.breaking"
+              :key="i"
+              :class="b.severity === 'block' ? 'text-destructive' : 'text-warning-text'"
+            >
+              {{ $t('views.PipelineEditorView.historic_restore_diff_breaking', { severity: b.severity, reason: b.reason }) }}
+            </li>
+          </ul>
+        </template>
+      </div>
+
+      <!-- The real risks of restoring, in plain language. -->
+      <ul class="mt-3 list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+        <li>{{ $t('views.PipelineEditorView.historic_restore_effect_runs') }}</li>
+        <li>{{ $t('views.PipelineEditorView.historic_restore_effect_edits') }}</li>
+        <li>{{ $t('views.PipelineEditorView.historic_restore_effect_history') }}</li>
+        <li>{{ $t('views.PipelineEditorView.historic_restore_effect_in_progress') }}</li>
+      </ul>
+      <p class="mt-2 text-xs text-muted-foreground">
+        {{ $t('views.PipelineEditorView.historic_restore_blocked_note') }}
+      </p>
+      <ErrorAlert v-if="restoreError" :message="restoreError" :retryable="false" :compact="true" class="mt-3" />
     </FormDialog>
     <!-- FAR-1812: unsaved-changes guard — never silently discard live edits
          when the user navigates into a historic version. -->
@@ -1744,9 +1809,11 @@
 
     <PipelineSnapshotTimeline
       v-if="showVersionTimeline"
+      ref="timelineRef"
       :pipeline-id="pipelineId"
       @close="showVersionTimeline = false"
       @view="requestViewSnapshot"
+      @restore="openRestoreConfirm"
     />
   </div>
 </template>
@@ -4174,46 +4241,147 @@ function openVersionTimeline(): void {
   showVersionTimeline.value = true
 }
 
-// --- Restore (banner action) ----------------------------------------------
-// FAR-1816 will supply the shared restore dialog; this wires the banner
-// button to the SAME rollback path the timeline uses, behind a confirmation.
+// --- Restore (shared dialog: banner + timeline) ---------------------------
+// FAR-1816: one restore dialog, backed by the existing POST
+// /snapshots/{id}/rollback endpoint. Restore replays the chosen version's
+// graph into the live pipeline and creates a NEW version from it (history is
+// never rewritten), and the server's own guards still refuse a weakening
+// restore. The dialog shows the old-vs-latest change summary from the diff
+// endpoint and names the consequences before the user confirms.
 const showRestoreConfirm = ref(false)
 const restoreLoading = ref(false)
 const restoreError = ref<string | null>(null)
+const restoreTargetId = ref<string | null>(null)
+const restoreTargetVersion = ref<number | null>(null)
+const restoreNotice = ref<string | null>(null)
+let restoreNoticeTimer: ReturnType<typeof setTimeout> | null = null
 
-function openRestoreConfirm(): void {
+// The change summary between the version being restored (target) and the
+// current live version (latest). `snapshot_a` is the live/latest graph and
+// `snapshot_b` the target, so the diff's `nodes_added` are what restoring
+// brings back and `nodes_removed` what it drops.
+const restoreDiff = ref<Record<string, any> | null>(null)
+const restoreDiffLoading = ref(false)
+const restoreDiffError = ref<string | null>(null)
+const restoreDiffSummary = computed(() => {
+  const d = restoreDiff.value
+  if (!d) return null
+  return {
+    nodesRestored: Array.isArray(d.nodes_added) ? d.nodes_added.length : 0,
+    nodesRemoved: Array.isArray(d.nodes_removed) ? d.nodes_removed.length : 0,
+    impacted: Array.isArray(d.semantic?.impacted_nodes) ? d.semantic.impacted_nodes.length : 0,
+    breaking: (Array.isArray(d.semantic?.breaking_changes) ? d.semantic.breaking_changes : []) as Array<{
+      severity: string
+      reason: string
+    }>,
+  }
+})
+
+const timelineRef = ref<InstanceType<typeof PipelineSnapshotTimeline> | null>(null)
+
+function setRestoreNotice(message: string): void {
+  restoreNotice.value = message
+  if (restoreNoticeTimer !== null) clearTimeout(restoreNoticeTimer)
+  restoreNoticeTimer = setTimeout(() => {
+    restoreNotice.value = null
+    restoreNoticeTimer = null
+  }, 8000)
+}
+
+async function loadRestoreDiff(): Promise<void> {
+  restoreDiff.value = null
+  restoreDiffError.value = null
+  const target = restoreTargetId.value
+  // The newest snapshot is the live/current version. Without it (or when the
+  // target IS the current version) there is nothing meaningful to compare.
+  const latest = snapshots.value[0]?.id as string | undefined
+  if (!target || !latest || target === latest) return
+  restoreDiffLoading.value = true
+  try {
+    const { data, error } = await withTimeout((signal) =>
+      api.POST('/api/v1/pipelines/{pipeline_id}/snapshots/diff', {
+        params: { path: { pipeline_id: pipelineId } },
+        body: { snapshot_a_id: latest, snapshot_b_id: target },
+        signal,
+      }),
+    )
+    if (error) {
+      restoreDiffError.value = formatApiError(error)
+      return
+    }
+    restoreDiff.value = (data as Record<string, any>) ?? null
+  } catch (e: unknown) {
+    restoreDiffError.value = formatApiError(e)
+  } finally {
+    restoreDiffLoading.value = false
+  }
+}
+
+/**
+ * FAR-1816: turn a restore refusal into human language. The server refuses a
+ * restore that would weaken a HITL gate, strip a node-bound guardrail, or pin
+ * another team's connector — those must read as plain sentences, never the raw
+ * server string. Any other failure keeps the existing detail-bearing message.
+ */
+function describeRestoreRefusal(err: unknown): string {
+  const raw = formatApiError(err)
+  if (/connector_team_mismatch/i.test(raw)) {
+    return t('views.PipelineEditorView.historic_restore_blocked_connector')
+  }
+  if (/gate weakening denied/i.test(raw)) {
+    return t('views.PipelineEditorView.historic_restore_blocked_hitl')
+  }
+  if (/guardrail/i.test(raw)) {
+    return t('views.PipelineEditorView.historic_restore_blocked_guardrail')
+  }
+  return t('views.PipelineEditorView.historic_restore_failed', { error: raw })
+}
+
+function openRestoreConfirm(snapshotId?: string, snapshotVersion?: number): void {
+  restoreTargetId.value = snapshotId ?? resolvedSnapshotId.value
+  restoreTargetVersion.value = snapshotVersion ?? viewSnapshot.value?.snapshot_version ?? null
   restoreError.value = null
+  restoreDiff.value = null
+  restoreDiffError.value = null
   showRestoreConfirm.value = true
+  void loadRestoreDiff()
 }
 
 async function confirmRestore(): Promise<void> {
-  const snapshotId = resolvedSnapshotId.value
+  const snapshotId = restoreTargetId.value ?? resolvedSnapshotId.value
   if (!snapshotId) return
+  const restoredVersion = restoreTargetVersion.value ?? viewSnapshot.value?.snapshot_version ?? null
   restoreLoading.value = true
   restoreError.value = null
   try {
-    const { error } = await withTimeout((signal) =>
+    const { data, error } = await withTimeout((signal) =>
       api.POST('/api/v1/pipelines/{pipeline_id}/snapshots/{snapshot_id}/rollback', {
         params: { path: { pipeline_id: pipelineId, snapshot_id: snapshotId } },
         signal,
       }),
     )
     if (error) {
-      restoreError.value = t('views.PipelineEditorView.historic_restore_failed', {
-        error: formatApiError(error),
-      })
+      restoreError.value = describeRestoreRefusal(error)
       return
     }
+    const createdVersion = (data as { snapshot_version?: number } | null)?.snapshot_version ?? null
     showRestoreConfirm.value = false
-    // A rollback replays this version into the LIVE graph and creates a new
-    // version from it — reload both, then land back in the latest editor.
+    setRestoreNotice(
+      t('views.PipelineEditorView.historic_restore_success', {
+        restored: restoredVersion ?? '',
+        created: createdVersion ?? '',
+      }),
+    )
+    // A restore replays this version into the LIVE graph and creates a new
+    // version from it — reload the graph, the catalog (for the version chip)
+    // and the timeline (so the new version shows as a rollback entry), then
+    // land back in the latest editor with the historic banner gone.
     await loadGraph()
     await loadCatalog()
+    await timelineRef.value?.reload()
     viewLatest()
   } catch (e: unknown) {
-    restoreError.value = t('views.PipelineEditorView.historic_restore_failed', {
-      error: formatApiError(e),
-    })
+    restoreError.value = describeRestoreRefusal(e)
   } finally {
     restoreLoading.value = false
   }
@@ -4250,6 +4418,7 @@ async function copyHistoricLink(): Promise<void> {
 
 onBeforeUnmount(() => {
   if (copyLinkResetTimer !== null) clearTimeout(copyLinkResetTimer)
+  if (restoreNoticeTimer !== null) clearTimeout(restoreNoticeTimer)
   if (unsavedConfirmResolve) {
     unsavedConfirmResolve(false)
     unsavedConfirmResolve = null

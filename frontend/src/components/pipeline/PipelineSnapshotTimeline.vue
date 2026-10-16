@@ -109,16 +109,21 @@
       </div>
 
       <div class="mt-3 flex justify-end border-t pt-2">
+        <!-- FAR-1816: "Restore this version" replaces the old "Rollback to
+             selected" label. The action no longer POSTs the rollback itself —
+             it asks the host editor to open the SHARED restore dialog (backed
+             by the same endpoint), so the diff summary and guard-refusal copy
+             live in one place. -->
         <Button
           size="small"
           severity="danger"
           outlined
           class="text-xs"
           :disabled="!selectedSnapshotId"
-          @click="rollback"
+          @click="requestRestore"
           data-testid="snapshot-timeline-rollback"
         >
-          {{ $t('components.PipelineSnapshotTimeline.rollback_to_selected') }}
+          {{ $t('components.PipelineSnapshotTimeline.restore_version') }}
         </Button>
       </div>
       <p v-if="actionError" class="mt-1 text-[11px] text-destructive">{{ actionError }}</p>
@@ -149,7 +154,10 @@ const props = defineProps<{ pipelineId: string }>()
 // FAR-1812: `view` asks the host editor to open this snapshot as a read-only
 // historical version (deep link) — selection for diff/rollback stays on the
 // row itself.
-const emit = defineEmits<{ close: []; view: [id: string] }>()
+// FAR-1816: `restore` hands the selected version to the host editor's shared
+// restore dialog (the version number travels with the id so the dialog can
+// name it even when the row is outside the host's snapshot page).
+const emit = defineEmits<{ close: []; view: [id: string]; restore: [id: string, version: number] }>()
 
 const loading = ref(true)
 const snapshots = ref<TimelineSnapshot[]>([])
@@ -179,8 +187,19 @@ function formatDate(dateStr: string | null): string {
   }
 }
 
+const selectedSnapshot = computed(() =>
+  snapshots.value.find(s => s.id === selectedSnapshotId.value) ?? null,
+)
+
 function selectA(id: string): void {
   selectedSnapshotId.value = id
+}
+
+/** FAR-1816: hand the selected version to the host's shared restore dialog. */
+function requestRestore(): void {
+  const snapshot = selectedSnapshot.value
+  if (!snapshot) return
+  emit('restore', snapshot.id, snapshot.snapshot_version)
 }
 
 async function loadSnapshots(): Promise<void> {
@@ -211,19 +230,9 @@ async function runDiff(): Promise<void> {
   diffResult.value = data as Record<string, any>
 }
 
-async function rollback(): Promise<void> {
-  if (!selectedSnapshotId.value) return
-  actionError.value = null
-  const { error } = await api.POST('/api/v1/pipelines/{pipeline_id}/snapshots/{snapshot_id}/rollback', {
-    params: { path: { pipeline_id: props.pipelineId, snapshot_id: selectedSnapshotId.value } },
-  })
-  if (error) {
-    actionError.value = formatApiError(error)
-    return
-  }
-  actionError.value = null
-  await loadSnapshots()
-}
-
 onMounted(loadSnapshots)
+
+// FAR-1816: the host editor re-fetches after a successful restore so the newly
+// created version shows up here without the user reopening the timeline.
+defineExpose({ reload: loadSnapshots })
 </script>

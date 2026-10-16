@@ -116,35 +116,34 @@ describe('PipelineSnapshotTimeline', () => {
     expect(rowFor(wrapper, 'snap-1').text()).toMatch(/[-\u2014]/)
   })
 
-  it('rolls back to the selected snapshot and reloads', async () => {
+  it('hands the selected version to the host as a restore request (FAR-1816)', async () => {
     const wrapper = await flushMount([makeSnapshot(), makeSnapshot({ id: 'snap-2', snapshot_version: 2, version_kind: 'run', tag: null })])
     expect(rowFor(wrapper, 'snap-1').classes()).not.toContain('bg-primary')
     await rowFor(wrapper, 'snap-1').trigger('click')
-    const rollbackBtn = wrapper.find('[data-testid="snapshot-timeline-rollback"]')
-    expect(rollbackBtn.attributes('disabled')).toBeUndefined()
-    await rollbackBtn.trigger('click')
+    const restoreBtn = wrapper.find('[data-testid="snapshot-timeline-rollback"]')
+    expect(restoreBtn.attributes('disabled')).toBeUndefined()
+    expect(restoreBtn.text()).toBe('Restore this version')
+    await restoreBtn.trigger('click')
     await flushPromises()
-    expect(apiPost).toHaveBeenCalledWith('/api/v1/pipelines/{pipeline_id}/snapshots/{snapshot_id}/rollback', {
-      params: { path: { pipeline_id: 'pipe-1', snapshot_id: 'snap-1' } },
-    })
-    expect(apiGet).toHaveBeenCalledTimes(2)
+    // The timeline no longer POSTs the rollback itself — the host editor owns
+    // the shared restore dialog (diff summary + guard-refusal copy).
+    expect(apiPost).not.toHaveBeenCalled()
+    expect(wrapper.emitted('restore')).toEqual([['snap-1', 3]])
   })
 
-  it('disables rollback until a snapshot row is selected', async () => {
+  it('disables the restore action until a snapshot row is selected', async () => {
     const wrapper = await flushMount([makeSnapshot()])
     expect(wrapper.find('[data-testid="snapshot-timeline-rollback"]').attributes('disabled')).toBeDefined()
+    await wrapper.find('[data-testid="snapshot-timeline-rollback"]').trigger('click')
+    expect(wrapper.emitted('restore')).toBeUndefined()
   })
 
-  it('shows an action error when rollback fails', async () => {
-    apiPost.mockResolvedValue({ data: null, error: { detail: 'rollback forbidden' } })
+  it('re-fetches snapshots when the host asks it to reload (FAR-1816)', async () => {
     const wrapper = await flushMount([makeSnapshot()])
-    await rowFor(wrapper, 'snap-1').trigger('click')
-    await wrapper.find('[data-testid="snapshot-timeline-rollback"]').trigger('click')
+    expect(apiGet).toHaveBeenCalledTimes(1)
+    ;(wrapper.vm as unknown as { reload: () => Promise<void> }).reload()
     await flushPromises()
-    // Structured ProblemDetail errors render via formatApiError, surfacing
-    // the human-readable detail instead of "[object Object]".
-    expect(wrapper.text()).toContain('rollback forbidden')
-    expect(wrapper.text()).not.toContain('[object Object]')
+    expect(apiGet).toHaveBeenCalledTimes(2)
   })
 
   it('diffs the selected snapshot against the compare base', async () => {

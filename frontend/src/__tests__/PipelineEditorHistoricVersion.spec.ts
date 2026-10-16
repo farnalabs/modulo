@@ -272,6 +272,34 @@ async function mountEditor(
   return wrapper
 }
 
+/**
+ * FAR-1816: route the restore dialog's two POSTs independently — the diff
+ * summary fetched on open and the rollback posted on confirm. `mockResolvedValue`
+ * cannot express the two different responses, so drive them by URL.
+ */
+function mockRestoreEndpoints(opts: {
+  diff?: unknown
+  diffError?: unknown
+  diffThrows?: Error
+  rollback?: unknown
+  rollbackError?: unknown
+  rollbackThrows?: Error
+} = {}) {
+  apiPostMock.mockImplementation((url: string) => {
+    if (url.includes('/snapshots/diff')) {
+      if (opts.diffThrows) return Promise.reject(opts.diffThrows)
+      if (opts.diffError) return Promise.resolve({ data: undefined, error: opts.diffError })
+      return Promise.resolve({ data: opts.diff ?? {}, error: undefined })
+    }
+    if (url.includes('/rollback')) {
+      if (opts.rollbackThrows) return Promise.reject(opts.rollbackThrows)
+      if (opts.rollbackError) return Promise.resolve({ data: undefined, error: opts.rollbackError })
+      return Promise.resolve({ data: opts.rollback ?? {}, error: undefined })
+    }
+    return Promise.resolve({ data: {}, error: undefined })
+  })
+}
+
 describe('PipelineEditorView — historic version view (FAR-1812)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -554,28 +582,177 @@ describe('PipelineEditorView — historic version view (FAR-1812)', () => {
     wrapper.unmount()
   })
 
-  it('wires the banner Restore button to the rollback endpoint behind a confirmation', async () => {
+  it('opens the shared restore dialog with the old-vs-latest diff summary and confirms the rollback', async () => {
     const wrapper = await mountEditor({ snapshot: 'snap-4' })
     const vm = wrapper.vm as any
+    mockRestoreEndpoints({
+      diff: {
+        nodes_added: [{ id: 'frozen-1' }, { id: 'frozen-2' }],
+        nodes_removed: [{ id: 'live-1' }],
+        semantic: {
+          impacted_nodes: ['down-1'],
+          breaking_changes: [{ severity: 'block', reason: 'Input port removed' }],
+        },
+      },
+      rollback: { snapshot_version: 10 },
+    })
 
     await wrapper.find('[data-testid="pipeline-editor-historic-restore"]').trigger('click')
-    await nextTick()
+    await flushPromises()
+
     expect(vm.showRestoreConfirm).toBe(true)
-    expect(apiPostMock).not.toHaveBeenCalled()
+    // The summary compares the LATEST version (snap-9, snapshot_a) against the
+    // version being restored (snap-4, snapshot_b), so `nodes_added` are what
+    // the restore brings back.
+    expect(apiPostMock).toHaveBeenCalledWith(
+      '/api/v1/pipelines/{pipeline_id}/snapshots/diff',
+      expect.objectContaining({
+        params: { path: { pipeline_id: 'test-pipeline-id' } },
+        body: { snapshot_a_id: 'snap-9', snapshot_b_id: 'snap-4' },
+      }),
+    )
+    // PrimeVue Dialog teleports its content to <body>, so read it there.
+    const summaryText = document.querySelector('[data-testid="pipeline-editor-restore-diff"]')?.textContent ?? ''
+    expect(summaryText).toContain('2 nodes will be restored from this version')
+    expect(summaryText).toContain('1 node will stop being used')
+    expect(summaryText).toContain('1 downstream node affected')
+    expect(summaryText).toContain('Input port removed')
+    // No rollback has been posted yet.
+    expect(
+      apiPostMock.mock.calls.some((c) => String(c[0]).includes('/rollback')),
+    ).toBe(false)
 
     await vm.confirmRestore()
+    await flushPromises()
+
     expect(apiPostMock).toHaveBeenCalledWith(
       '/api/v1/pipelines/{pipeline_id}/snapshots/{snapshot_id}/rollback',
       expect.objectContaining({
         params: { path: { pipeline_id: 'test-pipeline-id', snapshot_id: 'snap-4' } },
       }),
     )
+    expect(vm.showRestoreConfirm).toBe(false)
+    // Toast names the exact outcome: restored v4, created v10.
+    expect(vm.restoreNotice).toBe('Restored v4. Created v10.')
+    expect(wrapper.find('[data-testid="pipeline-editor-restore-notice"]').text()).toBe('Restored v4. Created v10.')
     // After a restore the live graph IS the restored version — land in latest.
     expect(router.push).toHaveBeenCalledWith({
       path: '/pipelines/test-pipeline-id/editor',
       query: {},
     })
+    wrapper.unmount()
+  })
+
+  it('closing the dialog without confirming posts no rollback and shows no notice', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    const vm = wrapper.vm as any
+    mockRestoreEndpoints({ diff: { nodes_added: [], nodes_removed: [], semantic: {} } })
+
+    await wrapper.find('[data-testid="pipeline-editor-historic-restore"]').trigger('click')
+    await flushPromises()
+    expect(vm.showRestoreConfirm).toBe(true)
+
+    // Cancel: close the dialog without confirming.
+    vm.showRestoreConfirm = false
+    await nextTick()
+    expect(vm.restoreNotice).toBeNull()
+    expect(apiPostMock.mock.calls.some((c) => String(c[0]).includes('/rollback'))).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('opens the shared restore dialog from the timeline restore action (FAR-1816)', async () => {
+    const wrapper = await mountEditor()
+    const vm = wrapper.vm as any
+    mockRestoreEndpoints({ diff: { nodes_added: [], nodes_removed: [], semantic: {} } })
+
+    await wrapper.find('[data-testid="pipeline-editor-version-timeline"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="snapshot-timeline-row-snap-4"]').trigger('click')
+    await wrapper.find('[data-testid="snapshot-timeline-rollback"]').trigger('click')
+    await flushPromises()
+
+    expect(vm.showRestoreConfirm).toBe(true)
+    // The timeline's selection (snap-4) drives the dialog, not the resolved
+    // (latest-mode) snapshot.
+    expect(apiPostMock).toHaveBeenCalledWith(
+      '/api/v1/pipelines/{pipeline_id}/snapshots/diff',
+      expect.objectContaining({ body: { snapshot_a_id: 'snap-9', snapshot_b_id: 'snap-4' } }),
+    )
+    wrapper.unmount()
+  })
+
+  it('still confirms the restore when the diff summary cannot be loaded', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    const vm = wrapper.vm as any
+    mockRestoreEndpoints({ diffError: { detail: 'diff unavailable' }, rollback: { snapshot_version: 11 } })
+
+    await wrapper.find('[data-testid="pipeline-editor-historic-restore"]').trigger('click')
+    await flushPromises()
+    expect(document.querySelector('[data-testid="pipeline-editor-restore-diff"]')?.textContent ?? '').toContain(
+      'Could not load the change summary: diff unavailable',
+    )
+
+    await vm.confirmRestore()
+    await flushPromises()
     expect(vm.showRestoreConfirm).toBe(false)
+    expect(vm.restoreNotice).toBe('Restored v4. Created v11.')
+    wrapper.unmount()
+  })
+
+  it('surfaces a HITL-gate weakening refusal as human copy, never the raw server string', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    const vm = wrapper.vm as any
+    mockRestoreEndpoints({
+      rollbackError: { detail: 'Gate weakening denied (legacy-snapshot-ambiguous). Affected edges: a→b' },
+    })
+
+    await wrapper.find('[data-testid="pipeline-editor-historic-restore"]').trigger('click')
+    await flushPromises()
+    await vm.confirmRestore()
+    await flushPromises()
+
+    expect(vm.restoreError).toBe(
+      "This version can't be restored: it would remove a human-review gate. Ask an admin, or restore a version that keeps the gate.",
+    )
+    expect(vm.restoreError).not.toContain('Gate weakening denied')
+    expect(vm.showRestoreConfirm).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('surfaces a connector-team mismatch refusal as human copy', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    const vm = wrapper.vm as any
+    mockRestoreEndpoints({
+      rollbackError: {
+        detail: "connector_team_mismatch: connector 'gh' (id=abc) is team-private (owner team t1) but pipeline is owned by team t2",
+      },
+    })
+
+    await wrapper.find('[data-testid="pipeline-editor-historic-restore"]').trigger('click')
+    await flushPromises()
+    await vm.confirmRestore()
+    await flushPromises()
+
+    expect(vm.restoreError).toContain("it uses a connector owned by another team")
+    expect(vm.restoreError).not.toContain('connector_team_mismatch')
+    wrapper.unmount()
+  })
+
+  it('surfaces a guardrail-binding strip refusal as human copy', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    const vm = wrapper.vm as any
+    mockRestoreEndpoints({
+      rollbackError: {
+        detail: 'Non-admin cannot strip a guardrail binding: removing node(s) n1 would drop a node-bound guardrail.',
+      },
+    })
+
+    await wrapper.find('[data-testid="pipeline-editor-historic-restore"]').trigger('click')
+    await flushPromises()
+    await vm.confirmRestore()
+    await flushPromises()
+
+    expect(vm.restoreError).toContain('would strip a guardrail bound to a node')
     wrapper.unmount()
   })
 
@@ -1183,10 +1360,10 @@ describe('PipelineEditorView — FAR-1812 defensive arms', () => {
   it('surfaces a rollback error returned by the endpoint inside the dialog', async () => {
     const wrapper = await mountEditor({ snapshot: 'snap-4' })
     const vm = wrapper.vm as any
-    apiPostMock.mockResolvedValueOnce({ data: undefined, error: { detail: 'rollback-refused' } })
+    mockRestoreEndpoints({ rollbackError: { detail: 'rollback-refused' } })
 
     await wrapper.find('[data-testid="pipeline-editor-historic-restore"]').trigger('click')
-    await nextTick()
+    await flushPromises()
     await vm.confirmRestore()
 
     expect(vm.restoreError).toBe('Failed to restore this version: rollback-refused')
@@ -1198,10 +1375,10 @@ describe('PipelineEditorView — FAR-1812 defensive arms', () => {
   it('surfaces a thrown rollback request inside the dialog', async () => {
     const wrapper = await mountEditor({ snapshot: 'snap-4' })
     const vm = wrapper.vm as any
-    apiPostMock.mockRejectedValueOnce(new Error('socket down'))
+    mockRestoreEndpoints({ rollbackThrows: new Error('socket down') })
 
     await wrapper.find('[data-testid="pipeline-editor-historic-restore"]').trigger('click')
-    await nextTick()
+    await flushPromises()
     await vm.confirmRestore()
 
     expect(vm.restoreError).toBe('Failed to restore this version: socket down')
