@@ -82,8 +82,8 @@ function notificationEvent(overrides: Record<string, unknown> = {}): Record<stri
   }
 }
 
-async function mountBell() {
-  const wrapper = mount(NotificationBell, { global: { plugins: [createPinia()] } })
+async function mountBell(props: Record<string, unknown> = {}) {
+  const wrapper = mount(NotificationBell, { props, global: { plugins: [createPinia()] } })
   await flushPromises()
   await nextTick()
   return wrapper
@@ -121,6 +121,20 @@ describe('NotificationBell (FAR-250)', () => {
     await mountBell()
     expect(h.mockSubscribe.mock.calls[0][0]).toBe('notification')
     expect(h.mockSubscribe.mock.calls[0][1]).toBeTypeOf('function')
+  })
+
+  it('keeps the desktop hit-box by default and enlarges it to 44px for the touch size', async () => {
+    const desktop = await mountBell()
+    const desktopButton = desktop.find('[data-testid="notification-bell-button"]')
+    expect(desktopButton.classes()).toContain('p-2')
+    expect(desktopButton.classes()).not.toContain('h-11')
+
+    const touch = await mountBell({ size: 'touch' })
+    const touchButton = touch.find('[data-testid="notification-bell-button"]')
+    expect(touchButton.classes()).toContain('h-11')
+    expect(touchButton.classes()).toContain('w-11')
+    // The visible glyph is unchanged — only the hit box is enlarged.
+    expect(touchButton.classes()).not.toContain('p-2')
   })
 
   it('renders the unread badge from the initial fetch', async () => {

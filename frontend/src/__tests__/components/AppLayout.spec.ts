@@ -112,7 +112,11 @@ describe('AppLayout', () => {
       expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(true)
     })
 
-    it('combines header + banner offsets into one additive padding class when both are active on mobile', async () => {
+    it('keeps header-only padding when the mobile header and the onboarding banner are both active', async () => {
+      // Regression pin: the onboarding banner is in normal flow, so it reserves
+      // its own height and <main> must NOT add a banner offset. The padding here
+      // is identical to the banner-inactive case ("pt-14" on mobile) — any
+      // banner term would double-count the gap.
       mockMatchMedia(false)
       const wrapper = mount(AppLayout, {
         global: {
@@ -127,12 +131,16 @@ describe('AppLayout', () => {
       await nextTick()
       await nextTick()
       const main = wrapper.find('main')
-      expect(main.classes()).toContain('pt-[calc(3.5rem+8.25rem)]')
-      expect(main.classes()).not.toContain('pt-14')
+      expect(main.classes()).toContain('pt-14')
+      expect(main.classes()).not.toContain('pt-[calc(3.5rem+8.25rem)]')
       expect(main.classes()).not.toContain('pt-[8.25rem]')
+      expect(main.classes()).not.toContain('md:pt-20')
     })
 
-    it('uses banner-only padding on mobile when the rail header (flag ON) replaces the fixed header', async () => {
+    it('adds no padding when the rail (flag ON) replaces the fixed header, even with the banner active', async () => {
+      // The rail is in-flow, so there is no fixed header to clear and the
+      // in-flow banner needs no offset — the padding matches the
+      // banner-inactive rail case (empty). Banner state does not vary padding.
       mockMatchMedia(false)
       const wrapper = mount(AppLayout, {
         global: {
@@ -149,8 +157,10 @@ describe('AppLayout', () => {
       await nextTick()
       await nextTick()
       const main = wrapper.find('main')
-      expect(main.classes()).toContain('pt-[8.25rem]')
       expect(main.classes()).not.toContain('pt-14')
+      expect(main.classes()).not.toContain('pt-[8.25rem]')
+      expect(main.classes()).not.toContain('pt-[calc(3.5rem+8.25rem)]')
+      expect(main.classes()).not.toContain('md:pt-20')
     })
   })
 
