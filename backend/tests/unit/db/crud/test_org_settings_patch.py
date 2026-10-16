@@ -511,6 +511,17 @@ async def test_update_organisation_refuses_settings_json_alongside_other_keys() 
         )
 
 
+async def test_update_organisation_refuses_otel_config_json_writes() -> None:
+    """QA F14: the twin tenant JSON column is refused on the same dumper-guard
+    grounds as ``settings_json`` — before any database work (the session's
+    ``execute`` raises if the guard is missing)."""
+    session = _FakeSession(exc=RuntimeError("db work must not start"))
+    with pytest.raises(ValueError, match="otel_config_json"):
+        await organisation_mod.update_organisation(
+            session, uuid.uuid4(), {"otel_config_json": {"otlp_endpoint": "http://x:4317"}}
+        )
+
+
 async def test_update_organisation_still_writes_non_settings_columns(monkeypatch: pytest.MonkeyPatch) -> None:
     """Legitimate non-settings callers (``name``, ``plan_id``, ...) are
     unaffected by the guard."""
