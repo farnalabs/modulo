@@ -237,8 +237,14 @@ async function waitForAppMount(page: Page, route: string, response: Response | n
 }
 
 async function settle(page: Page): Promise<void> {
-  // Content settle — not every route renders a data-loading marker.
-  await page.waitForSelector('[data-loading="false"]', { timeout: CONTENT_SETTLE_TIMEOUT_MS }).catch(() => {})
+  // The data-loading marker is not universal — only AnalyticsView and
+  // SettingsLicenseView render it — so a blanket waitForSelector on any other
+  // route never succeeded and, swallowed, made a route stuck mid-load
+  // indistinguishable from a settled one. Wait only when a marker is actually
+  // present, and let a present-but-stuck marker throw: a swallowed settle here
+  // would surface later as a misleading capture assertion.
+  if ((await page.locator('[data-loading]').count()) === 0) return
+  await page.waitForSelector('[data-loading="false"]', { timeout: CONTENT_SETTLE_TIMEOUT_MS })
 }
 
 /**
@@ -250,7 +256,6 @@ async function settle(page: Page): Promise<void> {
 async function preparePage(page: Page, env: TestEnv): Promise<string> {
   const route = POLISH_ROUTE
   const response = await page.goto(route)
-  await page.waitForURL('**/*', { timeout: 5000 }).catch(() => {})
   await waitForAppMount(page, route, response)
   await settle(page)
 
