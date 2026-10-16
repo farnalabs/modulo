@@ -4388,6 +4388,7 @@ export default {
     },
     "NotificationBell": {
       "notifications": "Notifications",
+      "notifications_with_unread": "Notifications, {count} unread",
       "reconnect_banner": "Live updates stopped. Reconnect with a fresh sign-in to resume them.",
       "reconnect_action": "Reconnect",
       "unread_count_status": "{count} unread notifications"
