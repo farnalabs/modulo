@@ -1,7 +1,14 @@
 ﻿<template>
   <router-link
     :to="to"
-    :class="['sidebar-link', { active: isActive, 'sidebar-link--collapsed': collapsed }]"
+    :class="[
+      'sidebar-link',
+      {
+        active: isActive,
+        'sidebar-link--collapsed': collapsed,
+        'sidebar-link--collapsed--touch': collapsed && size === 'touch',
+      },
+    ]"
     :aria-current="isActive ? 'page' : undefined"
     :title="collapsed ? labelText : undefined"
     :aria-label="collapsed ? labelText : undefined"
@@ -31,6 +38,11 @@ const props = defineProps<{
   exact?: boolean;
   visibility?: 'public' | 'public_preview' | 'private_preview' | 'in_dev'
   collapsed?: boolean;
+  /**
+   * Hit-target profile for the collapsed (rail) variant. `touch` widens the
+   * 40x40 collapsed box to 44x44 (WCAG 2.5.8); absent/`default` is unchanged.
+   */
+  size?: 'default' | 'touch';
 }>();
 
 const { t } = useI18n();
@@ -56,5 +68,13 @@ const isActive = computed(() =>
 .sidebar-link--collapsed.active {
   border-left: none;
   padding-left: 0.5rem;
+}
+
+/* Touch surface only: widen the collapsed rail box from 40x40 to 44x44.
+   Declared after `.sidebar-link--collapsed` so it wins at equal specificity;
+   it is never applied unless `size === 'touch'`. */
+.sidebar-link--collapsed--touch {
+  width: 2.75rem;
+  height: 2.75rem;
 }
 </style>

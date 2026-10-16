@@ -64,12 +64,17 @@
       :is-system-admin="isSystemAdmin"
       :user-role="userRole"
       :user-permissions="userPermissions"
+      :size="size === 'touch' ? 'touch' : undefined"
       @navigate="$emit('navigate')"
     />
 
     <div class="my-1 w-full border-t" aria-hidden="true" />
 
-    <SidebarFooter :collapsed="true" @logout="$emit('logout')" />
+    <SidebarFooter
+      :collapsed="true"
+      :size="size === 'touch' ? 'touch' : undefined"
+      @logout="$emit('logout')"
+    />
   </div>
 </template>
 

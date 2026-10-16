@@ -210,6 +210,65 @@ describe('SidebarRail touch targets', () => {
     )
   })
 
+  describe('rail children (SidebarNav + SidebarFooter) touch targets', () => {
+    it('keeps the group-rail toggles off the touch box in default mode', () => {
+      const wrapper = mountRail()
+      const toggles = wrapper.findAll('.sidebar-group-rail-toggle')
+      expect(toggles.length).toBeGreaterThan(0)
+      for (const toggle of toggles) {
+        expect(toggle.classes()).not.toContain('sidebar-group-rail-toggle--touch')
+      }
+    })
+
+    it('raises every group-rail toggle to the 44x44 touch box in touch mode', () => {
+      const wrapper = mountRail('touch')
+      const toggles = wrapper.findAll('.sidebar-group-rail-toggle')
+      expect(toggles.length).toBeGreaterThan(0)
+      for (const toggle of toggles) {
+        expect(toggle.classes()).toContain('sidebar-group-rail-toggle--touch')
+      }
+    })
+
+    it('keeps rail links at the default 40x40 box in default mode', () => {
+      const wrapper = mountRail()
+      const links = wrapper.findAll('.sidebar-link')
+      expect(links.length).toBeGreaterThan(0)
+      for (const link of links) {
+        expect(link.classes()).toContain('sidebar-link--collapsed')
+        expect(link.classes()).not.toContain('sidebar-link--collapsed--touch')
+      }
+    })
+
+    it('forwards touch sizing to every rail link in touch mode', () => {
+      const wrapper = mountRail('touch')
+      const links = wrapper.findAll('.sidebar-link')
+      expect(links.length).toBeGreaterThan(0)
+      for (const link of links) {
+        expect(link.classes()).toContain('sidebar-link--collapsed--touch')
+      }
+    })
+
+    it('keeps the collapsed logout button at h-10 w-10 (40x40) in default mode', () => {
+      const wrapper = mountRail()
+      const logout = wrapper.find('[aria-label="Sign out"]')
+      expect(logout.exists()).toBe(true)
+      expect(logout.classes()).toContain('h-10')
+      expect(logout.classes()).toContain('w-10')
+      expect(logout.classes()).not.toContain('h-11')
+      expect(logout.classes()).not.toContain('w-11')
+    })
+
+    it('raises the collapsed logout button to h-11 w-11 (44x44) in touch mode', () => {
+      const wrapper = mountRail('touch')
+      const logout = wrapper.find('[aria-label="Sign out"]')
+      expect(logout.exists()).toBe(true)
+      expect(logout.classes()).toContain('h-11')
+      expect(logout.classes()).toContain('w-11')
+      expect(logout.classes()).not.toContain('h-10')
+      expect(logout.classes()).not.toContain('w-10')
+    })
+  })
+
   describe('AppSidebar wiring', () => {
     it('passes touch sizing to the rail on the MOBILE rail path (flag ON)', async () => {
       const wrapper = mountSidebar({}, { mobileRail: true })
@@ -243,6 +302,20 @@ describe('SidebarRail touch targets', () => {
       const bell = wrapper.find(BELL_SELECTOR)
       expect(bell.exists()).toBe(true)
       expect(bell.attributes('data-bell-size')).toBe('default')
+    })
+
+    it('flows touch sizing through the rail to its nav toggles and logout button (flag ON)', async () => {
+      const wrapper = mountSidebar({}, { mobileRail: true })
+      await flushPromises()
+
+      const toggle = wrapper.find('.sidebar-group-rail-toggle')
+      expect(toggle.exists()).toBe(true)
+      expect(toggle.classes()).toContain('sidebar-group-rail-toggle--touch')
+
+      const logout = wrapper.find('[aria-label="Sign out"]')
+      expect(logout.exists()).toBe(true)
+      expect(logout.classes()).toContain('h-11')
+      expect(logout.classes()).toContain('w-11')
     })
   })
 })
