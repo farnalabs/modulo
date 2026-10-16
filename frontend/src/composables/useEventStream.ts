@@ -110,6 +110,20 @@ function isPersistentClientError(status: number | undefined): boolean {
 }
 
 /**
+ * Classify a failed connect and schedule the retry. A likely-permanent
+ * non-auth 4xx (400/404/… — not 429) retries forever, so warn before it
+ * loops silently (FAR-1861). Extracted from doConnect so the extra branch
+ * does not push that function's cognitive complexity over Sonar S3776.
+ */
+function handleFailedConnect(status: number): void {
+  const kind = classifyHttpFailure(status)
+  if (kind === 'retry' && isPersistentClientError(status)) {
+    warnPersistentClientError(status)
+  }
+  scheduleReconnect(kind)
+}
+
+/**
  * CSPRNG-backed fraction in [0, 1) used for reconnect half-jitter. Sourced
  * from crypto.getRandomValues, not Math.random (Sonar S2245) — every
  * supported browser exposes WebCrypto, so there is deliberately no PRNG
@@ -244,13 +258,9 @@ async function doConnect(): Promise<void> {
     clearTimeout(timeoutId)
 
     if (!response.ok || !response.body) {
-      const kind = classifyHttpFailure(response.status)
       // A likely-permanent 4xx (400/404/... — not 429) retries forever, so
       // say so loudly instead of looping silently (FAR-1861).
-      if (kind === 'retry' && isPersistentClientError(response.status)) {
-        warnPersistentClientError(response.status)
-      }
-      scheduleReconnect(kind)
+      handleFailedConnect(response.status)
       return
     }
 
