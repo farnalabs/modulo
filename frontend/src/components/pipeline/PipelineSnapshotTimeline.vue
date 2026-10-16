@@ -15,6 +15,26 @@
 
     <LoadingSpinner v-if="loading" />
 
+    <!-- M3: a FAILED load is not an empty history. Distinguish the two so a
+         network/server failure never reads as "this pipeline has no versions",
+         and offer an explicit retry. role="alert" announces it when it appears. -->
+    <div
+      v-else-if="loadError"
+      role="alert"
+      data-testid="snapshot-timeline-load-error"
+      class="space-y-2"
+    >
+      <p class="text-sm text-muted-foreground">{{ $t('components.PipelineSnapshotTimeline.load_failed') }}</p>
+      <Button
+        size="small"
+        class="text-xs"
+        data-testid="snapshot-timeline-load-retry"
+        @click="loadSnapshots"
+      >
+        {{ $t('components.PipelineSnapshotTimeline.retry') }}
+      </Button>
+    </div>
+
     <template v-else>
       <p v-if="snapshots.length === 0" class="text-sm text-muted-foreground">{{ $t('components.PipelineSnapshotTimeline.no_snapshots_yet') }}</p>
 
@@ -72,8 +92,12 @@
                 {{ $t('components.PipelineSnapshotTimeline.ran_times', { count: g.runs.length }) }}
               </button>
             </div>
+            <!-- aria-controls must reference an element that exists even while
+                 collapsed, so the runs container is always mounted for a group
+                 with runs and hidden with the `hidden` attribute (never v-if). -->
             <div
-              v-if="g.runs.length > 0 && expandedGroups.has(g.key)"
+              v-if="g.runs.length > 0"
+              :hidden="!expandedGroups.has(g.key)"
               :id="`snapshot-timeline-runs-${g.anchor.id}`"
               :data-testid="`snapshot-timeline-runs-list-${g.anchor.id}`"
               class="ml-5 space-y-1"
@@ -92,6 +116,70 @@
               </button>
             </div>
           </div>
+
+          <!-- M2: runs that predate the OLDEST substantive version are NOT
+               attributed to a version they did not execute. They render as an
+               explicit "earlier versions" bucket instead of being folded onto
+               the oldest row (which would assert false provenance). -->
+          <div
+            v-if="earlierRuns.length > 0"
+            class="rounded-md border border-dashed p-1.5"
+            data-testid="snapshot-timeline-earlier"
+          >
+            <button
+              type="button"
+              class="w-full rounded-md px-1 py-0.5 text-left text-[10px] font-medium text-muted-foreground hover:bg-accent"
+              :aria-expanded="expandedGroups.has('earlier')"
+              aria-controls="snapshot-timeline-runs-earlier"
+              data-testid="snapshot-timeline-earlier-toggle"
+              @click="toggleGroup('earlier')"
+            >
+              {{ $t('components.PipelineSnapshotTimeline.ran_earlier', { count: earlierRuns.length }) }}
+            </button>
+            <div
+              :hidden="!expandedGroups.has('earlier')"
+              id="snapshot-timeline-runs-earlier"
+              data-testid="snapshot-timeline-earlier-list"
+              class="mt-1 space-y-1"
+            >
+              <button
+                v-for="r in earlierRuns"
+                :key="r.id"
+                type="button"
+                class="flex w-full items-center justify-between gap-2 rounded-md border border-dashed px-2 py-1 text-left text-[10px] text-muted-foreground hover:bg-accent"
+                :aria-label="$t('components.PipelineSnapshotTimeline.open_version_aria', { version: r.snapshot_version })"
+                :data-testid="`snapshot-timeline-earlier-run-${r.id}`"
+                @click="emit('view', r.id)"
+              >
+                <span class="font-medium">v{{ r.snapshot_version }}</span>
+                <span>{{ formatDate(r.created_at) }}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- M1: history is windowed (page_size 100). Never leave the user
+             believing they are seeing their whole history. -->
+        <div
+          v-if="hasMore"
+          class="mb-3 space-y-1"
+          data-testid="snapshot-timeline-truncated"
+        >
+          <p class="text-[10px] text-muted-foreground">
+            {{ $t('components.PipelineSnapshotTimeline.truncated_notice', { loaded: snapshots.length, total: snapshotsTotal }) }}
+          </p>
+          <Button
+            size="small"
+            class="text-xs"
+            :loading="loadingMore"
+            data-testid="snapshot-timeline-load-more"
+            @click="loadMoreSnapshots"
+          >
+            {{ $t('components.PipelineSnapshotTimeline.load_more') }}
+          </Button>
+          <p v-if="loadMoreError" role="alert" class="text-[10px] text-destructive" data-testid="snapshot-timeline-load-more-error">
+            {{ $t('components.PipelineSnapshotTimeline.load_more_failed') }}
+          </p>
         </div>
       </template>
 
@@ -99,7 +187,7 @@
       <div class="mb-3 flex items-center gap-2">
         <Select
           data-testid="snapshot-timeline-compare"
-          aria-label="Base snapshot to compare"
+          :aria-label="$t('components.PipelineSnapshotTimeline.select_base_snapshot_aria')"
           :placeholder="$t('components.PipelineSnapshotTimeline.select_base_snapshot')"
           :options="compareOptions"
           option-value="value"
@@ -157,7 +245,7 @@
           {{ $t('components.PipelineSnapshotTimeline.restore_version') }}
         </Button>
       </div>
-      <p v-if="actionError" class="mt-1 text-[11px] text-destructive">{{ actionError }}</p>
+      <p v-if="actionError" role="alert" class="mt-1 text-[11px] text-destructive">{{ actionError }}</p>
     </template>
   </div>
 </template>
@@ -171,6 +259,7 @@ import LoadingSpinner from '../shared/LoadingSpinner.vue'
 import { formatDateShort } from '../../lib/formatDate'
 import { api } from '../../lib/api/client'
 import { formatApiError } from '../../lib/api/formatError'
+import { isSubstantiveKind, createdKindLabel } from '../../lib/pipelineVersion'
 
 interface TimelineSnapshot {
   id: string
@@ -195,11 +284,6 @@ interface VersionGroup {
   runs: TimelineSnapshot[]
 }
 
-// FAR-1817: substantive = the versions a user recognises as pipeline history.
-// 'run' snapshots are frozen at run-start and belong to the version they
-// executed, never as rows of their own.
-const SUBSTANTIVE_KINDS = new Set(['initial', 'edit', 'rollback'])
-
 const props = defineProps<{ pipelineId: string }>()
 // FAR-1812: `view` asks the host editor to open this snapshot as a read-only
 // historical version (deep link).
@@ -210,19 +294,45 @@ const emit = defineEmits<{ close: []; view: [id: string]; restore: [id: string, 
 
 const { t } = useI18n()
 
+const REQUEST_TIMEOUT_MS = 15000
+
+/** The host editor's request pattern: abort a request that stalls. */
+function withTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, ms = REQUEST_TIMEOUT_MS): Promise<T> {
+  const ctrl = new AbortController()
+  const timeout = setTimeout(() => ctrl.abort(), ms)
+  return factory(ctrl.signal).finally(() => clearTimeout(timeout))
+}
+
 const loading = ref(true)
+const loadError = ref<string | null>(null)
+const loadingMore = ref(false)
+const loadMoreError = ref<string | null>(null)
 const snapshots = ref<TimelineSnapshot[]>([])
+const snapshotsTotal = ref(0)
+const snapshotsPage = ref(1)
 const compareB = ref<string | null>(null)
 const diffResult = ref<Record<string, any> | null>(null)
 const selectedSnapshotId = ref<string | null>(null)
 const actionError = ref<string | null>(null)
 const expandedGroups = ref<Set<string>>(new Set())
 
-function isSubstantive(s: TimelineSnapshot): boolean {
-  // Legacy snapshots serialise created_kind as 'run' (the server default), so
-  // an absent/unknown kind is treated as a run snapshot and grouped under the
-  // initial anchor rather than surfaced as a synthetic version.
-  return SUBSTANTIVE_KINDS.has(s.created_kind)
+// M6: only the newest request's result may be applied. A mount load, a
+// host-triggered reload after a restore, and a "load more" all share the token
+// so a slow older response can never overwrite a newer one.
+let snapshotsRequestSeq = 0
+// M6: an earlier restore-dialog open must not land after a later one and show
+// the wrong version's summary beside an enabled Confirm.
+let diffRequestSeq = 0
+
+/** The page size the grouping loads; the endpoint caps at 100. */
+const SNAPSHOT_PAGE_SIZE = 100
+
+const hasMore = computed(() => snapshots.value.length < snapshotsTotal.value)
+
+function isRenderableSnapshot(s: TimelineSnapshot): boolean {
+  // FAR-1817: match the editor's own snapshot load — a version-0 placeholder
+  // must never render as a row or capture every run.
+  return typeof s.snapshot_version === 'number' && s.snapshot_version > 0
 }
 
 /**
@@ -236,22 +346,28 @@ function isSubstantive(s: TimelineSnapshot): boolean {
  *
  * A pipeline with NO substantive version at all (its history predates edit
  * boundaries — FAR-1810) renders under a single 'initial' anchor taken from
- * its oldest run; no synthetic edit versions are invented. Runs older than
- * every substantive version are attached to the oldest substantive row for the
- * same reason: fabricating an 'initial' boundary mid-history would be a lie.
+ * its oldest run; no synthetic edit versions are invented.
+ *
+ * M2: runs OLDER than every substantive version are NOT attributed to any
+ * version — they are returned as `earlierRuns` and rendered as an explicit
+ * "earlier versions" bucket. Folding them onto the oldest row would assert a
+ * provenance the run does not have.
  */
-const versionGroups = computed<VersionGroup[]>(() => {
-  const substantive = snapshots.value.filter(isSubstantive)
-  const runs = snapshots.value.filter((s) => !isSubstantive(s))
+function groupHistory(rows: TimelineSnapshot[]): { groups: VersionGroup[]; earlierRuns: TimelineSnapshot[] } {
+  const substantive = rows.filter((s) => isSubstantiveKind(s.created_kind))
+  const runs = rows.filter((s) => !isSubstantiveKind(s.created_kind))
   if (substantive.length === 0) {
-    if (runs.length === 0) return []
+    if (runs.length === 0) return { groups: [], earlierRuns: [] }
     const oldest = runs[runs.length - 1]
-    return [{
-      key: `initial:${oldest.id}`,
-      anchor: oldest,
-      kind: 'initial',
-      runs: runs.filter((r) => r.id !== oldest.id),
-    }]
+    return {
+      groups: [{
+        key: `initial:${oldest.id}`,
+        anchor: oldest,
+        kind: 'initial',
+        runs: runs.filter((r) => r.id !== oldest.id),
+      }],
+      earlierRuns: [],
+    }
   }
   const groups: VersionGroup[] = substantive.map((s) => ({
     key: s.id,
@@ -260,15 +376,20 @@ const versionGroups = computed<VersionGroup[]>(() => {
     runs: [],
   }))
   // Groups are version-DESC, so the first anchor at or below a run is the
-  // newest substantive version it executed; anything below every anchor lands
-  // on the oldest substantive row.
-  const oldestGroup = groups[groups.length - 1]
+  // newest substantive version it executed. Anything below EVERY anchor has no
+  // substantive version it can be attributed to and goes to `earlierRuns`.
+  const earlierRuns: TimelineSnapshot[] = []
   for (const run of runs) {
-    const group = groups.find((g) => g.anchor.snapshot_version <= run.snapshot_version) ?? oldestGroup
-    group.runs.push(run)
+    const group = groups.find((g) => g.anchor.snapshot_version <= run.snapshot_version)
+    if (group) group.runs.push(run)
+    else earlierRuns.push(run)
   }
-  return groups
-})
+  return { groups, earlierRuns }
+}
+
+const groupedHistory = computed(() => groupHistory(snapshots.value))
+const versionGroups = computed(() => groupedHistory.value.groups)
+const earlierRuns = computed(() => groupedHistory.value.earlierRuns)
 
 const compareOptions = computed(() =>
   versionGroups.value.map(g => ({
@@ -285,11 +406,11 @@ const impactedLabel = computed(() => {
   return ids.map((id: unknown) => String(id).slice(0, 8)).join(', ')
 })
 
+// FAR-1817: one shared created_kind→label mapping (lib/pipelineVersion), used
+// here and by the version chip. An unknown/future kind renders its raw value
+// (visible) rather than being silently mislabelled as a run.
 function kindLabel(kind: string): string {
-  if (kind === 'initial') return t('components.PipelineSnapshotTimeline.initial')
-  if (kind === 'rollback') return t('components.PipelineSnapshotTimeline.rollback')
-  if (kind === 'edit') return t('components.PipelineSnapshotTimeline.edit')
-  return t('components.PipelineSnapshotTimeline.run')
+  return createdKindLabel(kind, t, t('components.PipelineVersionChip.no_value'))
 }
 
 function formatDate(dateStr: string | null): string {
@@ -321,41 +442,112 @@ function requestRestore(): void {
   emit('restore', snapshot.id, snapshot.snapshot_version)
 }
 
+/** Drop a selection that is no longer present in the (re)loaded page. */
+function reconcileSelection(): void {
+  if (!versionGroups.value.some(g => g.anchor.id === selectedSnapshotId.value)) {
+    selectedSnapshotId.value = null
+  }
+}
+
 async function loadSnapshots(): Promise<void> {
+  const seq = ++snapshotsRequestSeq
   loading.value = true
+  loadError.value = null
+  loadMoreError.value = null
+  // A full reload resets to page 1, so any in-flight "load more" is superseded
+  // and must not leave the button stuck in its loading state.
+  loadingMore.value = false
   try {
     // FAR-1817: the grouping annotates each substantive version with the run
     // snapshots that executed it, so load the widest window the endpoint
     // allows (page_size caps at 100) rather than the 20 that sufficed for a
     // flat list.
-    const { data } = await api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
-      params: { path: { pipeline_id: props.pipelineId }, query: { page_size: 100 } },
-    })
-    snapshots.value = ((data as unknown as { items?: TimelineSnapshot[] })?.items ?? []) as TimelineSnapshot[]
-    // A version selected for diff/restore may have dropped out of the reloaded
-    // page (or been removed); never leave the actions acting on a stale id.
-    if (!versionGroups.value.some(g => g.anchor.id === selectedSnapshotId.value)) {
-      selectedSnapshotId.value = null
+    const { data, error } = await withTimeout((signal) =>
+      api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
+        params: { path: { pipeline_id: props.pipelineId }, query: { page_size: SNAPSHOT_PAGE_SIZE } },
+        signal,
+      }),
+    )
+    if (seq !== snapshotsRequestSeq) return
+    if (error) {
+      // A failed load is NOT an empty history: keep any rows already shown and
+      // surface the failure with a retry (M3).
+      loadError.value = formatApiError(error)
+      return
     }
+    const payload = data as unknown as { items?: TimelineSnapshot[]; total?: number } | null
+    snapshots.value = (payload?.items ?? []).filter(isRenderableSnapshot)
+    snapshotsTotal.value = typeof payload?.total === 'number' ? payload.total : snapshots.value.length
+    snapshotsPage.value = 1
+    reconcileSelection()
   } catch (e: unknown) {
-    snapshots.value = []
+    if (seq !== snapshotsRequestSeq) return
+    loadError.value = formatApiError(e)
   } finally {
-    loading.value = false
+    if (seq === snapshotsRequestSeq) loading.value = false
+  }
+}
+
+/** M1: fetch the next page of history and append it (history is windowed). */
+async function loadMoreSnapshots(): Promise<void> {
+  if (loadingMore.value || !hasMore.value) return
+  const seq = ++snapshotsRequestSeq
+  loadingMore.value = true
+  loadMoreError.value = null
+  try {
+    const nextPage = snapshotsPage.value + 1
+    const { data, error } = await withTimeout((signal) =>
+      api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
+        params: { path: { pipeline_id: props.pipelineId }, query: { page_size: SNAPSHOT_PAGE_SIZE, page: nextPage } },
+        signal,
+      }),
+    )
+    if (seq !== snapshotsRequestSeq) return
+    if (error) {
+      loadMoreError.value = formatApiError(error)
+      return
+    }
+    const payload = data as unknown as { items?: TimelineSnapshot[]; total?: number } | null
+    const next = (payload?.items ?? []).filter(isRenderableSnapshot)
+    const seen = new Set(snapshots.value.map((s) => s.id))
+    snapshots.value = [...snapshots.value, ...next.filter((s) => !seen.has(s.id))]
+    if (typeof payload?.total === 'number') snapshotsTotal.value = payload.total
+    snapshotsPage.value = nextPage
+  } catch (e: unknown) {
+    if (seq !== snapshotsRequestSeq) return
+    loadMoreError.value = formatApiError(e)
+  } finally {
+    if (seq === snapshotsRequestSeq) loadingMore.value = false
   }
 }
 
 async function runDiff(): Promise<void> {
   if (!selectedSnapshotId.value || !compareB.value) return
+  const snapshotA = selectedSnapshotId.value
+  const snapshotB = compareB.value
+  const seq = ++diffRequestSeq
   actionError.value = null
-  const { data, error } = await api.POST('/api/v1/pipelines/{pipeline_id}/snapshots/diff', {
-    params: { path: { pipeline_id: props.pipelineId } },
-    body: { snapshot_a_id: selectedSnapshotId.value, snapshot_b_id: compareB.value },
-  })
-  if (error) {
-    actionError.value = formatApiError(error)
-    return
+  // M4: clear the previous result BEFORE the new request so a failure never
+  // leaves a stale diff on screen next to a fresh error.
+  diffResult.value = null
+  try {
+    const { data, error } = await withTimeout((signal) =>
+      api.POST('/api/v1/pipelines/{pipeline_id}/snapshots/diff', {
+        params: { path: { pipeline_id: props.pipelineId } },
+        body: { snapshot_a_id: snapshotA, snapshot_b_id: snapshotB },
+        signal,
+      }),
+    )
+    if (seq !== diffRequestSeq) return
+    if (error) {
+      actionError.value = formatApiError(error)
+      return
+    }
+    diffResult.value = (data as Record<string, any>) ?? null
+  } catch (e: unknown) {
+    if (seq !== diffRequestSeq) return
+    actionError.value = formatApiError(e)
   }
-  diffResult.value = data as Record<string, any>
 }
 
 onMounted(loadSnapshots)

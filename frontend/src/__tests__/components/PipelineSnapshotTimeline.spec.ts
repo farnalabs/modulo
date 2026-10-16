@@ -58,10 +58,11 @@ function makeSnapshot(overrides: Partial<TimelineSnapshot> = {}): TimelineSnapsh
   }
 }
 
-// A modern pipeline: an initial anchor and an edit, each with run snapshots
-// frozen at run-start. Version-DESC on the wire.
+// A modern pipeline: an edit with no runs, an initial anchor and an edit, each
+// with run snapshots frozen at run-start. Version-DESC on the wire.
 function modernHistory(): TimelineSnapshot[] {
   return [
+    makeSnapshot({ id: 'snap-6', snapshot_version: 6, created_kind: 'edit', version_kind: 'edit', tag: null }),
     makeSnapshot({ id: 'snap-5', snapshot_version: 5, created_kind: 'run', version_kind: 'run', tag: null, channel: 'stable' }),
     makeSnapshot({ id: 'snap-4', snapshot_version: 4, created_kind: 'edit', version_kind: 'edit' }),
     makeSnapshot({ id: 'snap-3', snapshot_version: 3, created_kind: 'run', version_kind: 'run', tag: null }),
@@ -131,9 +132,11 @@ describe('PipelineSnapshotTimeline', () => {
 
   it('renders only substantive versions as primary rows and groups runs as an annotation (FAR-1817)', async () => {
     const wrapper = await flushMount(modernHistory())
-    // Primary rows: the initial anchor (v1) and the edit (v4) only.
+    // Primary rows: the run-less edit (v6), the initial anchor (v1) and the
+    // edit (v4) only.
     expect(rowFor(wrapper, 'snap-1').exists()).toBe(true)
     expect(rowFor(wrapper, 'snap-4').exists()).toBe(true)
+    expect(rowFor(wrapper, 'snap-6').exists()).toBe(true)
     expect(rowFor(wrapper, 'snap-2').exists()).toBe(false)
     expect(rowFor(wrapper, 'snap-3').exists()).toBe(false)
     expect(rowFor(wrapper, 'snap-5').exists()).toBe(false)
@@ -143,14 +146,30 @@ describe('PipelineSnapshotTimeline', () => {
     // The kind badge reads the created_kind, not version_kind.
     expect(rowFor(wrapper, 'snap-1').text()).toContain('initial')
     expect(rowFor(wrapper, 'snap-4').text()).toContain('edit')
-    // The version with no runs has no annotation toggle.
-    expect(toggleFor(wrapper, 'snap-1').exists()).toBe(true)
+    // M7: a version with NO runs has no annotation toggle (snap-6 is edit v6
+    // with no run snapshots; snap-1/snap-4 above DO have one).
+    expect(toggleFor(wrapper, 'snap-6').exists()).toBe(false)
+  })
+
+  it('renders an unrecognised created_kind as a VISIBLE substantive row, not a run (FAR-1817)', async () => {
+    // An unknown/future kind must not be silently folded into the run bucket
+    // (which would hide a real version) — nor mislabelled as a run.
+    const future = [
+      makeSnapshot({ id: 'snap-2', snapshot_version: 2, created_kind: 'imported', version_kind: 'edit', tag: null }),
+      makeSnapshot({ id: 'snap-1', snapshot_version: 1, created_kind: 'edit', version_kind: 'edit', tag: null }),
+    ]
+    const wrapper = await flushMount(future)
+    expect(rowFor(wrapper, 'snap-2').exists()).toBe(true)
+    expect(rowFor(wrapper, 'snap-2').text()).toContain('imported')
   })
 
   it('expands and collapses the run annotation on demand (FAR-1817)', async () => {
     const wrapper = await flushMount(modernHistory())
     const listId = 'snapshot-timeline-runs-snap-1'
-    expect(wrapper.find(`#${listId}`).exists()).toBe(false)
+    // The container is ALWAYS mounted (so aria-controls always resolves) and
+    // hidden with the `hidden` attribute — present, not absent, while collapsed.
+    expect(wrapper.find(`#${listId}`).exists()).toBe(true)
+    expect(wrapper.find(`#${listId}`).attributes('hidden')).toBeDefined()
     expect(toggleFor(wrapper, 'snap-1').attributes('aria-expanded')).toBe('false')
     expect(toggleFor(wrapper, 'snap-1').attributes('aria-controls')).toBe(listId)
 
@@ -158,12 +177,13 @@ describe('PipelineSnapshotTimeline', () => {
     expect(toggleFor(wrapper, 'snap-1').attributes('aria-expanded')).toBe('true')
     const list = wrapper.find(`#${listId}`)
     expect(list.exists()).toBe(true)
+    expect(list.attributes('hidden')).toBeUndefined()
     expect(list.find('[data-testid="snapshot-timeline-run-snap-3"]').exists()).toBe(true)
     expect(list.find('[data-testid="snapshot-timeline-run-snap-2"]').exists()).toBe(true)
 
     await toggleFor(wrapper, 'snap-1').trigger('click')
     expect(toggleFor(wrapper, 'snap-1').attributes('aria-expanded')).toBe('false')
-    expect(wrapper.find(`#${listId}`).exists()).toBe(false)
+    expect(wrapper.find(`#${listId}`).attributes('hidden')).toBeDefined()
   })
 
   it('opens the read-only historic version view when a primary row is clicked (FAR-1812/FAR-1817)', async () => {
@@ -196,9 +216,10 @@ describe('PipelineSnapshotTimeline', () => {
     expect(toggleFor(wrapper, 'snap-1').text()).toBe('ran 2x')
   })
 
-  it('attaches runs older than every substantive version to the oldest version, never a synthetic initial row (FAR-1817)', async () => {
+  it('buckets runs older than every substantive version as "earlier versions", never attributing them to the oldest row (M2)', async () => {
     // A modern pipeline whose oldest run predates its first edit boundary must
-    // not grow a fabricated 'initial' row mid-history.
+    // not claim that run executed the edit — it goes to an explicit earlier
+    // bucket instead of asserting false provenance.
     const mixed = [
       makeSnapshot({ id: 'snap-3', snapshot_version: 3, created_kind: 'run', version_kind: 'run', tag: null }),
       makeSnapshot({ id: 'snap-2', snapshot_version: 2, created_kind: 'edit', version_kind: 'edit', tag: null }),
@@ -208,7 +229,15 @@ describe('PipelineSnapshotTimeline', () => {
     expect(wrapper.findAll('[data-testid^="snapshot-timeline-row-"]')).toHaveLength(1)
     expect(rowFor(wrapper, 'snap-2').exists()).toBe(true)
     expect(rowFor(wrapper, 'snap-2').text()).toContain('edit')
-    expect(toggleFor(wrapper, 'snap-2').text()).toBe('ran 2x')
+    // Only the run that actually executed v2 is attributed to it.
+    expect(toggleFor(wrapper, 'snap-2').text()).toBe('ran 1x')
+    // The older run is surfaced, unattributed, in its own bucket.
+    const earlier = wrapper.find('[data-testid="snapshot-timeline-earlier"]')
+    expect(earlier.exists()).toBe(true)
+    expect(wrapper.find('[data-testid="snapshot-timeline-earlier-toggle"]').text()).toBe('ran 1x on earlier versions')
+    // Expands to the individual run, still outside any version row.
+    await wrapper.find('[data-testid="snapshot-timeline-earlier-toggle"]').trigger('click')
+    expect(wrapper.find('[data-testid="snapshot-timeline-earlier-run-snap-1"]').exists()).toBe(true)
   })
 
   it('does not emit view when the selection radio is used', async () => {
@@ -271,7 +300,7 @@ describe('PipelineSnapshotTimeline', () => {
     expect(diffBtn.attributes('disabled')).toBeUndefined()
     await diffBtn.trigger('click')
     await flushPromises()
-    expect(apiPost).toHaveBeenCalledWith('/api/v1/pipelines/{pipeline_id}/snapshots/diff', {
+    expect(apiPost).toHaveBeenCalledWith('/api/v1/pipelines/{pipeline_id}/snapshots/diff', expect.objectContaining({
       params: { path: { pipeline_id: 'pipe-1' } },
       // The compare Select passes option-value="value", so compareB holds the
       // snapshot id (not the whole {value,label} option object) and the diff
@@ -280,7 +309,7 @@ describe('PipelineSnapshotTimeline', () => {
         snapshot_a_id: 'snap-1',
         snapshot_b_id: 'snap-2',
       },
-    })
+    }))
     const result = wrapper.find('[data-testid="snapshot-timeline-diff-result"]')
     expect(result.exists()).toBe(true)
     // impactedLabel truncates each node id to 8 characters.
@@ -332,9 +361,112 @@ describe('PipelineSnapshotTimeline', () => {
     expect(wrapper.text()).not.toContain('[object Object]')
   })
 
-  it('survives a failed snapshot load by showing the empty state', async () => {
+  it('shows a retryable error (not a false empty state) when the snapshot load fails (M3)', async () => {
     const wrapper = await flushMount(null, true)
-    expect(wrapper.text()).toContain('No snapshots yet')
+    expect(wrapper.find('[data-testid="snapshot-timeline-load-error"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Could not load this pipeline\'s version history')
+    expect(wrapper.text()).not.toContain('No snapshots yet')
+    // The retry re-issues the request.
+    expect(apiGet).toHaveBeenCalledTimes(1)
+    await wrapper.find('[data-testid="snapshot-timeline-load-retry"]').trigger('click')
+    await flushPromises()
+    expect(apiGet).toHaveBeenCalledTimes(2)
+  })
+
+  it('surfaces a truncation notice and a Load more action when history exceeds one page (M1)', async () => {
+    const pageOne = Array.from({ length: 100 }, (_, i) =>
+      makeSnapshot({ id: `snap-${101 - i}`, snapshot_version: 101 - i, created_kind: 'edit', tag: null }),
+    )
+    const older = makeSnapshot({ id: 'snap-oldest', snapshot_version: 1, created_kind: 'initial', tag: null })
+    apiGet.mockImplementation((_url: string, init?: any) => {
+      const page = (init?.params?.query?.page ?? 1) as number
+      if (page === 1) return Promise.resolve({ data: { items: pageOne, total: 101 }, error: undefined })
+      return Promise.resolve({ data: { items: [older], total: 101 }, error: undefined })
+    })
+    const wrapper = mount(PipelineSnapshotTimeline, {
+      props: { pipelineId: 'pipe-1' },
+      global: { stubs: { Select: SelectStub } },
+    })
+    await flushPromises()
+
+    const notice = wrapper.find('[data-testid="snapshot-timeline-truncated"]')
+    expect(notice.exists()).toBe(true)
+    expect(notice.text()).toContain('Showing the most recent 100 of 101 versions')
+
+    await wrapper.find('[data-testid="snapshot-timeline-load-more"]').trigger('click')
+    await flushPromises()
+    // The older page is appended and the truncation notice disappears.
+    expect(wrapper.find('[data-testid="snapshot-timeline-row-snap-oldest"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="snapshot-timeline-truncated"]').exists()).toBe(false)
+  })
+
+  it('reports a failed "load more" without blanking the rows already shown (M1/M3)', async () => {
+    const pageOne = Array.from({ length: 100 }, (_, i) =>
+      makeSnapshot({ id: `snap-${101 - i}`, snapshot_version: 101 - i, created_kind: 'edit', tag: null }),
+    )
+    let call = 0
+    apiGet.mockImplementation(() => {
+      call += 1
+      if (call === 1) return Promise.resolve({ data: { items: pageOne, total: 101 }, error: undefined })
+      return Promise.resolve({ data: undefined, error: { detail: 'page two unavailable' } })
+    })
+    const wrapper = mount(PipelineSnapshotTimeline, {
+      props: { pipelineId: 'pipe-1' },
+      global: { stubs: { Select: SelectStub } },
+    })
+    await flushPromises()
+    await wrapper.find('[data-testid="snapshot-timeline-load-more"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="snapshot-timeline-load-more-error"]').exists()).toBe(true)
+    // Existing rows survive a failed page.
+    expect(wrapper.find('[data-testid="snapshot-timeline-row-snap-101"]').exists()).toBe(true)
+  })
+
+  it('drops a stale diff result when the request throws, showing the error instead (M4)', async () => {
+    const wrapper = await flushMount(twoSubstantive())
+    // A first successful diff populates the result.
+    apiPost.mockResolvedValueOnce({ data: { semantic: { impacted_nodes: ['n1'], breaking_changes: [] } }, error: undefined })
+    await selectVersion(wrapper, 'snap-1')
+    await wrapper.find('[data-testid="mock-select"]').setValue('0')
+    await wrapper.find('[data-testid="snapshot-timeline-diff"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="snapshot-timeline-diff-result"]').exists()).toBe(true)
+
+    // A later request THROWS (network/abort) — no unhandled rejection, the
+    // stale result is cleared and the error surfaces.
+    apiPost.mockRejectedValueOnce(new Error('socket down'))
+    await wrapper.find('[data-testid="snapshot-timeline-diff"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="snapshot-timeline-diff-result"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('socket down')
+  })
+
+  it('applies only the newest snapshot response, ignoring a slower earlier one (M6)', async () => {
+    let resolveFirst: (value: unknown) => void = () => {}
+    const first = new Promise((resolve) => { resolveFirst = resolve })
+    let call = 0
+    apiGet.mockImplementation(() => {
+      call += 1
+      if (call === 1) return first
+      return Promise.resolve({
+        data: { items: [makeSnapshot({ id: 'newer', snapshot_version: 5, created_kind: 'edit', tag: null })], total: 1 },
+        error: undefined,
+      })
+    })
+    const wrapper = mount(PipelineSnapshotTimeline, {
+      props: { pipelineId: 'pipe-1' },
+      global: { stubs: { Select: SelectStub } },
+    })
+    // A host-triggered reload supersedes the slow mount load.
+    ;(wrapper.vm as unknown as { reload: () => Promise<void> }).reload()
+    await flushPromises()
+    // Now let the OLD (first) request resolve with stale rows.
+    resolveFirst({ data: { items: [makeSnapshot({ id: 'stale', snapshot_version: 1, created_kind: 'edit', tag: null })], total: 1 }, error: undefined })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="snapshot-timeline-row-newer"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="snapshot-timeline-row-stale"]').exists()).toBe(false)
   })
 
   it('emits close from the close button', async () => {

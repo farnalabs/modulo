@@ -683,16 +683,18 @@ describe('PipelineEditorView — historic version view (FAR-1812)', () => {
     wrapper.unmount()
   })
 
-  it('still confirms the restore when the diff summary cannot be loaded', async () => {
+  it('still confirms the restore when the diff summary cannot be loaded, showing generic copy and a retry', async () => {
     const wrapper = await mountEditor({ snapshot: 'snap-4' })
     const vm = wrapper.vm as any
     mockRestoreEndpoints({ diffError: { detail: 'diff unavailable' }, rollback: { snapshot_version: 11 } })
 
     await wrapper.find('[data-testid="pipeline-editor-historic-restore"]').trigger('click')
     await flushPromises()
-    expect(document.querySelector('[data-testid="pipeline-editor-restore-diff"]')?.textContent ?? '').toContain(
-      'Could not load the change summary: diff unavailable',
-    )
+    const box = document.querySelector('[data-testid="pipeline-editor-restore-diff"]')
+    expect(box?.textContent ?? '').toContain('Could not load the change summary')
+    // The raw server detail is never rendered; the fetch detail is logged.
+    expect(box?.textContent ?? '').not.toContain('diff unavailable')
+    expect(document.querySelector('[data-testid="pipeline-editor-restore-diff-retry"]')).not.toBeNull()
 
     await vm.confirmRestore()
     await flushPromises()
@@ -787,6 +789,53 @@ describe('PipelineEditorView — historic version view (FAR-1812)', () => {
       path: '/pipelines/test-pipeline-id/editor',
       query: { snapshot: 'snap-4' },
     })
+    wrapper.unmount()
+  })
+
+  it('warns before RESTORING when the live graph has unsaved edits (reuses the guard)', async () => {
+    const wrapper = await mountEditor()
+    const vm = wrapper.vm as any
+    mockRestoreEndpoints({ diff: { nodes_added: [], nodes_removed: [], semantic: {} } })
+
+    // An unsaved live edit.
+    vm.rawNodes.push({ id: 'node-edited', node_type: 'agent', label: 'Edited' })
+    await nextTick()
+    expect(vm.isGraphDirty).toBe(true)
+
+    // Opening restore from the timeline prompts first.
+    const restore = vm.openRestoreConfirm('snap-4', 4)
+    await nextTick()
+    expect(vm.unsavedConfirmVisible).toBe(true)
+    expect(vm.showRestoreConfirm).toBe(false)
+
+    // Decline: the restore dialog never opens.
+    vm.resolveUnsavedConfirm(false)
+    await restore
+    expect(vm.showRestoreConfirm).toBe(false)
+
+    // Accept: the restore dialog opens.
+    const accepted = vm.openRestoreConfirm('snap-4', 4)
+    await nextTick()
+    vm.resolveUnsavedConfirm(true)
+    await accepted
+    await flushPromises()
+    expect(vm.showRestoreConfirm).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('names the restored version without emitting an empty "Created v." (minor guard)', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    const vm = wrapper.vm as any
+    // The rollback response lacks snapshot_version.
+    mockRestoreEndpoints({ diff: { nodes_added: [], nodes_removed: [], semantic: {} }, rollback: {} })
+
+    await wrapper.find('[data-testid="pipeline-editor-historic-restore"]').trigger('click')
+    await flushPromises()
+    await vm.confirmRestore()
+    await flushPromises()
+
+    expect(vm.restoreNotice).toBe('Restored v4.')
+    expect(vm.restoreNotice).not.toContain('Created v.')
     wrapper.unmount()
   })
 
@@ -1359,6 +1408,112 @@ describe('PipelineEditorView — FAR-1812 defensive arms', () => {
     wrapper.unmount()
   })
 
+  it('summarises a config-only change (modified nodes/edges) instead of claiming no differences (C1)', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    mockRestoreEndpoints({
+      diff: {
+        nodes_added: [],
+        nodes_removed: [],
+        nodes_modified: [{ id: 'frozen-mod' }],
+        edges_added: [],
+        edges_removed: [],
+        edges_modified: [{ id: 'edge-mod' }],
+        semantic: { impacted_nodes: [], breaking_changes: [] },
+      },
+      rollback: { snapshot_version: 12 },
+    })
+
+    await wrapper.find('[data-testid="pipeline-editor-historic-restore"]').trigger('click')
+    await flushPromises()
+
+    const text = document.querySelector('[data-testid="pipeline-editor-restore-diff"]')?.textContent ?? ''
+    // Before the fix this rendered "No configuration differences" despite the
+    // restore reverting in-place config edits.
+    expect(text).not.toContain('No configuration differences')
+    expect(text).toContain("1 node will be updated to this version's settings")
+    expect(text).toContain('1 connection will change')
+    wrapper.unmount()
+  })
+
+  it('counts downstream impact as a change even with no additions/removals (C1)', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    mockRestoreEndpoints({
+      diff: {
+        nodes_added: [],
+        nodes_removed: [],
+        nodes_modified: [],
+        edges_added: [],
+        edges_removed: [],
+        edges_modified: [],
+        semantic: { impacted_nodes: ['down-1'], breaking_changes: [] },
+      },
+      rollback: { snapshot_version: 13 },
+    })
+
+    await wrapper.find('[data-testid="pipeline-editor-historic-restore"]').trigger('click')
+    await flushPromises()
+
+    const text = document.querySelector('[data-testid="pipeline-editor-restore-diff"]')?.textContent ?? ''
+    expect(text).not.toContain('No configuration differences')
+    expect(text).toContain('1 downstream node affected')
+    wrapper.unmount()
+  })
+
+  it('states that the target is already the current version rather than showing an empty box (C2)', async () => {
+    const wrapper = await mountEditor()
+    // Select the NEWEST snapshot (snap-9) and restore it: it IS the current
+    // version, so there is nothing to compare.
+    await wrapper.find('[data-testid="pipeline-editor-version-timeline"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="snapshot-timeline-select-snap-9"]').setValue(true)
+    await wrapper.find('[data-testid="snapshot-timeline-rollback"]').trigger('click')
+    await flushPromises()
+
+    const box = document.querySelector('[data-testid="pipeline-editor-restore-diff"]')
+    expect(box?.textContent ?? '').toContain("This is already the pipeline's current version")
+    // Never a bare "What will change" title with nothing under it.
+    expect(document.querySelector('[data-testid="pipeline-editor-restore-diff-current"]')).not.toBeNull()
+    expect(box?.textContent ?? '').not.toContain('No configuration differences')
+    wrapper.unmount()
+  })
+
+  it('states when there is no current version to compare against, with a retry (C2)', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    const vm = wrapper.vm as any
+    // Host list unloaded/empty: no baseline snapshot exists to diff against.
+    vm.snapshots = []
+    await vm.openRestoreConfirm()
+    await flushPromises()
+
+    const box = document.querySelector('[data-testid="pipeline-editor-restore-diff"]')
+    expect(box?.textContent ?? '').toContain("Could not compare against the current version")
+    expect(document.querySelector('[data-testid="pipeline-editor-restore-diff-reload"]')).not.toBeNull()
+    expect(box?.textContent ?? '').not.toContain('No configuration differences')
+    wrapper.unmount()
+  })
+
+  it('labels the current SUBSTANTIVE version on the chip, not a newer run snapshot (C3)', async () => {
+    // Newest snapshot (snap-9) is a RUN snapshot; the newest substantive
+    // version is snap-4 (rollback). The chip must agree with the timeline.
+    const runNewest = [
+      {
+        id: 'snap-9', pipeline_id: 'test-pipeline-id', snapshot_version: 9, tag: null, notes: null,
+        created_at: '2026-08-02T12:00:00Z', created_by: 'acct-0123456789abcdef',
+        version_kind: 'run', created_kind: 'run', draft: false, channel: 'none',
+      },
+      {
+        id: 'snap-4', pipeline_id: 'test-pipeline-id', snapshot_version: 4, tag: 'release-b', notes: 'fourth version',
+        created_at: '2026-08-01T12:00:00Z', created_by: 'acct-fedcba9876543210',
+        version_kind: 'edit', created_kind: 'rollback', draft: false, channel: 'none',
+      },
+    ]
+    const wrapper = await mountEditor({}, () => seedApiWith({ snapshots: () => Promise.resolve({ data: { items: runNewest }, error: undefined }) }))
+    const vm = wrapper.vm as any
+    expect(vm.versionChipSnapshot?.id).toBe('snap-4')
+    expect(wrapper.find('[data-testid="pipeline-editor-version-chip"]').text()).toContain('v4')
+    wrapper.unmount()
+  })
+
   it('surfaces a rollback error returned by the endpoint inside the dialog', async () => {
     const wrapper = await mountEditor({ snapshot: 'snap-4' })
     const vm = wrapper.vm as any
@@ -1368,9 +1523,13 @@ describe('PipelineEditorView — FAR-1812 defensive arms', () => {
     await flushPromises()
     await vm.confirmRestore()
 
-    expect(vm.restoreError).toBe('Failed to restore this version: rollback-refused')
+    // M8: an unclassified refusal gets generic human copy — the raw server
+    // string is never rendered to the user (it is logged instead).
+    expect(vm.restoreError).toBe(
+      "This version can't be restored right now. Try again, or ask an administrator if it keeps happening.",
+    )
     expect(vm.showRestoreConfirm).toBe(true)
-    expect(document.body.textContent).toContain('rollback-refused')
+    expect(document.body.textContent).not.toContain('rollback-refused')
     wrapper.unmount()
   })
 
@@ -1383,7 +1542,10 @@ describe('PipelineEditorView — FAR-1812 defensive arms', () => {
     await flushPromises()
     await vm.confirmRestore()
 
-    expect(vm.restoreError).toBe('Failed to restore this version: socket down')
+    expect(vm.restoreError).toBe(
+      "This version can't be restored right now. Try again, or ask an administrator if it keeps happening.",
+    )
+    expect(document.body.textContent).not.toContain('socket down')
     wrapper.unmount()
   })
 

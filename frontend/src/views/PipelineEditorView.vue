@@ -1746,18 +1746,51 @@
         {{ $t('views.PipelineEditorView.historic_restore_dialog_intro', { version: restoreTargetVersion ?? '' }) }}
       </p>
 
-      <!-- Change summary: what restoring this version does to the live config. -->
+      <!-- Change summary: what restoring this version does to the live config.
+           C2: EVERY reachable state renders something truthful. The box never
+           shows its title with nothing under it, and "no changes" is asserted
+           only from a real diff every class of which is empty. -->
       <div class="mt-3 rounded-md border bg-muted/30 p-2" data-testid="pipeline-editor-restore-diff">
         <p class="text-xs font-medium">{{ $t('views.PipelineEditorView.historic_restore_diff_title') }}</p>
         <p v-if="restoreDiffLoading" class="mt-1 text-[11px] text-muted-foreground">
           {{ $t('views.PipelineEditorView.historic_restore_diff_loading') }}
         </p>
-        <p v-else-if="restoreDiffError" class="mt-1 text-[11px] text-muted-foreground">
-          {{ $t('views.PipelineEditorView.historic_restore_diff_failed', { error: restoreDiffError }) }}
+        <div v-else-if="restoreDiffError" class="mt-1 space-y-1">
+          <p role="alert" class="text-[11px] text-muted-foreground" data-testid="pipeline-editor-restore-diff-error">
+            {{ $t('views.PipelineEditorView.historic_restore_diff_failed') }}
+          </p>
+          <Button
+            size="small"
+            class="text-xs"
+            data-testid="pipeline-editor-restore-diff-retry"
+            @click="loadRestoreDiff"
+          >
+            {{ $t('views.PipelineEditorView.historic_restore_diff_retry') }}
+          </Button>
+        </div>
+        <p
+          v-else-if="restoreDiffIsCurrent"
+          class="mt-1 text-[11px] text-muted-foreground"
+          data-testid="pipeline-editor-restore-diff-current"
+        >
+          {{ $t('views.PipelineEditorView.historic_restore_diff_is_current') }}
         </p>
+        <div v-else-if="restoreDiffNoBaseline" class="mt-1 space-y-1">
+          <p class="text-[11px] text-muted-foreground" data-testid="pipeline-editor-restore-diff-no-baseline">
+            {{ $t('views.PipelineEditorView.historic_restore_diff_no_baseline') }}
+          </p>
+          <Button
+            size="small"
+            class="text-xs"
+            data-testid="pipeline-editor-restore-diff-reload"
+            @click="loadRestoreDiff"
+          >
+            {{ $t('views.PipelineEditorView.historic_restore_diff_retry') }}
+          </Button>
+        </div>
         <template v-else-if="restoreDiffSummary">
           <p
-            v-if="restoreDiffSummary.nodesRestored === 0 && restoreDiffSummary.nodesRemoved === 0 && restoreDiffSummary.breaking.length === 0"
+            v-if="!restoreDiffSummary.hasChanges"
             class="mt-1 text-[11px] text-muted-foreground"
           >
             {{ $t('views.PipelineEditorView.historic_restore_diff_no_changes') }}
@@ -1768,6 +1801,18 @@
             </li>
             <li v-if="restoreDiffSummary.nodesRemoved > 0">
               {{ $t('views.PipelineEditorView.historic_restore_diff_nodes_removed', restoreDiffSummary.nodesRemoved) }}
+            </li>
+            <li v-if="restoreDiffSummary.nodesModified > 0">
+              {{ $t('views.PipelineEditorView.historic_restore_diff_nodes_modified', restoreDiffSummary.nodesModified) }}
+            </li>
+            <li v-if="restoreDiffSummary.edgesRestored > 0">
+              {{ $t('views.PipelineEditorView.historic_restore_diff_edges_restored', restoreDiffSummary.edgesRestored) }}
+            </li>
+            <li v-if="restoreDiffSummary.edgesRemoved > 0">
+              {{ $t('views.PipelineEditorView.historic_restore_diff_edges_removed', restoreDiffSummary.edgesRemoved) }}
+            </li>
+            <li v-if="restoreDiffSummary.edgesModified > 0">
+              {{ $t('views.PipelineEditorView.historic_restore_diff_edges_modified', restoreDiffSummary.edgesModified) }}
             </li>
             <li v-if="restoreDiffSummary.impacted > 0">
               {{ $t('views.PipelineEditorView.historic_restore_diff_impacted', restoreDiffSummary.impacted) }}
@@ -1781,6 +1826,11 @@
             </li>
           </ul>
         </template>
+        <!-- Defensive catch-all: reachable only if a state transition left the
+             model in no state at all, but it guarantees the box is never bare. -->
+        <p v-else class="mt-1 text-[11px] text-muted-foreground">
+          {{ $t('views.PipelineEditorView.historic_restore_diff_unavailable') }}
+        </p>
       </div>
 
       <!-- The real risks of restoring, in plain language. -->
@@ -1850,6 +1900,7 @@ import { useProductAnalytics } from '../composables/useProductAnalytics'
 import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
 import { useEnvironmentProfilesStore } from '../stores/environmentProfiles'
 import { runnerTierLabelKeyForProvider } from '../lib/runnerTiers'
+import { currentSubstantiveVersion } from '../lib/pipelineVersion'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 import { Pencil as PencilIcon, LoaderCircle as LoaderCircleIcon, Download as DownloadIcon, Play as PlayIcon, Plus as PlusIcon, Maximize2 as Maximize2Icon, X as XIcon, ExternalLink as ExternalLinkIcon } from '@lucide/vue'
@@ -4081,13 +4132,16 @@ const historicResolving = computed(
     versionDetailStatus.value !== 'failed',
 )
 
-// Version chip: the VIEWED version while viewing, the newest snapshot (the
-// current version — the list is ordered version-descending server-side and
-// loadCatalog filters version 0) otherwise. Hidden only when there is no
-// version at all yet.
+// Version chip: the VIEWED version while viewing, otherwise the pipeline's
+// current SUBSTANTIVE version. FAR-1817: a version is a substantive snapshot
+// (created_kind initial/edit/rollback) — run snapshots are NOT versions, so
+// the chip must NOT label the newest snapshot (which after any run is a run
+// snapshot) as the current version. The predicate is shared with the timeline
+// (lib/pipelineVersion) so the two surfaces can never disagree. loadCatalog
+// filters version 0. Hidden only when there is no substantive version yet.
 const versionChipSnapshot = computed(() => {
   if (isViewing.value) return viewSnapshot.value
-  return snapshots.value[0] ?? null
+  return currentSubstantiveVersion(snapshots.value)
 })
 
 const viewedVersionDate = computed(() => formatDateShort(viewSnapshot.value?.created_at ?? null))
@@ -4258,22 +4312,59 @@ let restoreNoticeTimer: ReturnType<typeof setTimeout> | null = null
 
 // The change summary between the version being restored (target) and the
 // current live version (latest). `snapshot_a` is the live/latest graph and
-// `snapshot_b` the target, so the diff's `nodes_added` are what restoring
-// brings back and `nodes_removed` what it drops.
+// `snapshot_b` the target, so the diff's `nodes_added`/`edges_added` are what
+// restoring brings back and `*_removed` what it drops; `*_modified` are
+// in-place config changes (agent, prompt, commands, timeout, label, ports).
 const restoreDiff = ref<Record<string, any> | null>(null)
 const restoreDiffLoading = ref(false)
 const restoreDiffError = ref<string | null>(null)
-const restoreDiffSummary = computed(() => {
+// C2: the early-return outcomes. Both must render an explicit message — never
+// a bare "Change summary" title that reads as "nothing will change".
+const restoreDiffIsCurrent = ref(false)
+const restoreDiffNoBaseline = ref(false)
+// M6: sequence guard so an earlier dialog's diff cannot land after a later one.
+let restoreDiffRequestSeq = 0
+
+interface RestoreBreakingChange {
+  severity: string
+  reason: string
+}
+
+interface RestoreDiffSummary {
+  nodesRestored: number
+  nodesRemoved: number
+  nodesModified: number
+  edgesRestored: number
+  edgesRemoved: number
+  edgesModified: number
+  impacted: number
+  breaking: RestoreBreakingChange[]
+  /** True only when EVERY change class the endpoint reports is empty. */
+  hasChanges: boolean
+}
+
+const restoreDiffSummary = computed<RestoreDiffSummary | null>(() => {
   const d = restoreDiff.value
   if (!d) return null
+  const count = (value: unknown): number => (Array.isArray(value) ? value.length : 0)
+  const nodesRestored = count(d.nodes_added)
+  const nodesRemoved = count(d.nodes_removed)
+  const nodesModified = count(d.nodes_modified)
+  const edgesRestored = count(d.edges_added)
+  const edgesRemoved = count(d.edges_removed)
+  const edgesModified = count(d.edges_modified)
+  const impacted = count(d.semantic?.impacted_nodes)
+  const breaking = (Array.isArray(d.semantic?.breaking_changes) ? d.semantic.breaking_changes : []) as RestoreBreakingChange[]
+  // C1: "no differences" may only be concluded when EVERY class is empty —
+  // otherwise a config-only edit (nodes/edges modified, nothing added) would
+  // falsely read as "no configuration differences".
+  const hasChanges =
+    nodesRestored + nodesRemoved + nodesModified + edgesRestored + edgesRemoved + edgesModified + impacted > 0 ||
+    breaking.length > 0
   return {
-    nodesRestored: Array.isArray(d.nodes_added) ? d.nodes_added.length : 0,
-    nodesRemoved: Array.isArray(d.nodes_removed) ? d.nodes_removed.length : 0,
-    impacted: Array.isArray(d.semantic?.impacted_nodes) ? d.semantic.impacted_nodes.length : 0,
-    breaking: (Array.isArray(d.semantic?.breaking_changes) ? d.semantic.breaking_changes : []) as Array<{
-      severity: string
-      reason: string
-    }>,
+    nodesRestored, nodesRemoved, nodesModified,
+    edgesRestored, edgesRemoved, edgesModified,
+    impacted, breaking, hasChanges,
   }
 })
 
@@ -4288,14 +4379,43 @@ function setRestoreNotice(message: string): void {
   }, 8000)
 }
 
+/**
+ * Build the success notice without ever emitting an empty version ("Restored
+ * v. Created v."). Each half is included only when the value is known.
+ */
+function restoreSuccessNotice(restored: number | null, created: number | null): string {
+  if (restored != null && created != null) {
+    return t('views.PipelineEditorView.historic_restore_success', { restored, created })
+  }
+  if (restored != null) {
+    return t('views.PipelineEditorView.historic_restore_success_no_created', { restored })
+  }
+  if (created != null) {
+    return t('views.PipelineEditorView.historic_restore_success_no_restored', { created })
+  }
+  return t('views.PipelineEditorView.historic_restore_success_generic')
+}
+
 async function loadRestoreDiff(): Promise<void> {
+  const seq = ++restoreDiffRequestSeq
   restoreDiff.value = null
   restoreDiffError.value = null
+  restoreDiffIsCurrent.value = false
+  restoreDiffNoBaseline.value = false
   const target = restoreTargetId.value
-  // The newest snapshot is the live/current version. Without it (or when the
-  // target IS the current version) there is nothing meaningful to compare.
+  // The newest snapshot is the closest representation of the live/current
+  // config. Without it (or when the target IS the current snapshot) there is
+  // nothing to compare — but that outcome must still be stated explicitly
+  // (C2), never left as an empty box.
   const latest = snapshots.value[0]?.id as string | undefined
-  if (!target || !latest || target === latest) return
+  if (!target || !latest) {
+    restoreDiffNoBaseline.value = true
+    return
+  }
+  if (target === latest) {
+    restoreDiffIsCurrent.value = true
+    return
+  }
   restoreDiffLoading.value = true
   try {
     const { data, error } = await withTimeout((signal) =>
@@ -4305,15 +4425,20 @@ async function loadRestoreDiff(): Promise<void> {
         signal,
       }),
     )
+    // C2/M6: an earlier dialog's response must not land after a later one.
+    if (seq !== restoreDiffRequestSeq) return
     if (error) {
+      console.warn('[PipelineEditorView] failed to load restore diff', formatApiError(error))
       restoreDiffError.value = formatApiError(error)
       return
     }
     restoreDiff.value = (data as Record<string, any>) ?? null
   } catch (e: unknown) {
+    if (seq !== restoreDiffRequestSeq) return
+    console.warn('[PipelineEditorView] failed to load restore diff', formatApiError(e))
     restoreDiffError.value = formatApiError(e)
   } finally {
-    restoreDiffLoading.value = false
+    if (seq === restoreDiffRequestSeq) restoreDiffLoading.value = false
   }
 }
 
@@ -4321,7 +4446,8 @@ async function loadRestoreDiff(): Promise<void> {
  * FAR-1816: turn a restore refusal into human language. The server refuses a
  * restore that would weaken a HITL gate, strip a node-bound guardrail, or pin
  * another team's connector — those must read as plain sentences, never the raw
- * server string. Any other failure keeps the existing detail-bearing message.
+ * server string. Any UNCLASSIFIED refusal gets generic human copy too (the
+ * detail is logged for diagnostics); the raw server text is never rendered.
  */
 function describeRestoreRefusal(err: unknown): string {
   const raw = formatApiError(err)
@@ -4334,10 +4460,16 @@ function describeRestoreRefusal(err: unknown): string {
   if (/guardrail/i.test(raw)) {
     return t('views.PipelineEditorView.historic_restore_blocked_guardrail')
   }
-  return t('views.PipelineEditorView.historic_restore_failed', { error: raw })
+  // M8: never surface the raw server string as user-facing copy.
+  console.warn('[PipelineEditorView] restore refused', raw)
+  return t('views.PipelineEditorView.historic_restore_failed_generic')
 }
 
-function openRestoreConfirm(snapshotId?: string, snapshotVersion?: number): void {
+async function openRestoreConfirm(snapshotId?: string, snapshotVersion?: number): Promise<void> {
+  // Reuse the same unsaved-changes guard the "view historic version" path
+  // runs: restoring replaces the live graph, so unsaved edits must not be
+  // silently discarded.
+  if (isGraphDirty.value && !(await confirmLeaveUnsaved())) return
   restoreTargetId.value = snapshotId ?? resolvedSnapshotId.value
   restoreTargetVersion.value = snapshotVersion ?? viewSnapshot.value?.snapshot_version ?? null
   restoreError.value = null
@@ -4366,12 +4498,7 @@ async function confirmRestore(): Promise<void> {
     }
     const createdVersion = (data as { snapshot_version?: number } | null)?.snapshot_version ?? null
     showRestoreConfirm.value = false
-    setRestoreNotice(
-      t('views.PipelineEditorView.historic_restore_success', {
-        restored: restoredVersion ?? '',
-        created: createdVersion ?? '',
-      }),
-    )
+    setRestoreNotice(restoreSuccessNotice(restoredVersion, createdVersion))
     // A restore replays this version into the LIVE graph and creates a new
     // version from it — reload the graph, the catalog (for the version chip)
     // and the timeline (so the new version shows as a rollback entry), then
