@@ -21,10 +21,11 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-from modulo.connectors.ci_runner import GitHubActionsCIRunner
+from modulo.connectors.ci_runner import GitHubActionsCIRunner, WoodpeckerCIRunner
 from modulo.connectors.github import GitHubConnector
 from modulo.connectors.gitlab import GitLabConnector
 from modulo.connectors.jira import JiraConnector
+from modulo.connectors.plane import PlaneConnector
 from modulo.core.connector_hub import _build_connector
 from tests.unit.connector_hub._fixtures import BUILD_CASES
 
@@ -134,6 +135,69 @@ def test_build_github_actions_ci_default_base_url() -> None:
     connector = _build_connector("github_actions_ci", {}, {"token": "gha_token"})
     assert isinstance(connector, GitHubActionsCIRunner)
     assert connector._base_url == "https://api.github.com"
+
+
+# ── Woodpecker CI (FAR-1766): REQUIRED base_url ──────────────────────────
+
+
+def test_build_woodpecker_requires_base_url() -> None:
+    """A self-hosted instance has no public default — a missing base_url fails loud."""
+    with pytest.raises(ValueError, match="WoodpeckerCIRunner requires 'base_url' in config_json"):
+        _build_connector("woodpecker", {}, {"token": "wp_token"})
+
+
+def test_build_woodpecker_rejects_non_string_base_url() -> None:
+    with pytest.raises(TypeError, match="must be a string"):
+        _build_connector("woodpecker", {"base_url": 123}, {"token": "wp_token"})
+
+
+def test_build_woodpecker_threads_base_url_and_token() -> None:
+    connector = _build_connector(
+        "woodpecker",
+        {"base_url": "https://ci.example.com"},
+        {"token": "wp_token"},
+    )
+    assert isinstance(connector, WoodpeckerCIRunner)
+    assert connector.connector_type == ConnectorType.CI_RUNNER
+    assert connector._base_url == "https://ci.example.com"
+    # the instance root gains the API prefix exactly once
+    assert connector._api_base == "https://ci.example.com/api"
+
+
+# ── Plane (FAR-1767): REQUIRED base_url + workspace_slug ─────────────────
+
+
+def test_build_plane_requires_base_url() -> None:
+    with pytest.raises(ValueError, match="PlaneConnector requires 'base_url' in config_json"):
+        _build_connector("plane", {"workspace_slug": "acme"}, {"token": "plane_token"})
+
+
+def test_build_plane_requires_workspace_slug() -> None:
+    with pytest.raises(ValueError, match="PlaneConnector requires 'workspace_slug' in config_json"):
+        _build_connector("plane", {"base_url": "https://plane.example.com/api/v1"}, {"token": "plane_token"})
+
+
+def test_build_plane_rejects_non_string_config() -> None:
+    with pytest.raises(TypeError, match="must be a string"):
+        _build_connector(
+            "plane",
+            {"base_url": "https://plane.example.com/api/v1", "workspace_slug": 123},
+            {"token": "plane_token"},
+        )
+
+
+def test_build_plane_threads_config_and_token() -> None:
+    connector = _build_connector(
+        "plane",
+        {"base_url": "https://plane.example.com/api/v1", "workspace_slug": "acme"},
+        {"token": "plane_token"},
+    )
+    assert isinstance(connector, PlaneConnector)
+    assert connector._base_url == "https://plane.example.com/api/v1"
+    assert connector._workspace_slug == "acme"
+    # "plane" is hub-native (no enum member); the object's family type carries
+    # the ticket read/write/search capability set.
+    assert connector.connector_type == ConnectorType.TICKET_TRACKER
 
 
 @pytest.mark.parametrize("type_id", ["github", "github_actions_ci"])

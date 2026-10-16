@@ -72,6 +72,7 @@ __all__ = [
     "_GitLabCITestDouble",
     "_JenkinsTestDouble",
     "_TeamCityTestDouble",
+    "_WoodpeckerTestDouble",
     # --- Known dead in production, referenced only by tests (kept — see comments) ---
     "LicenseKeyTier",  # test-support PlanContext double — used by BDD steps to fake licensed plans
     "circuit_state",  # test-consumed circuit-breaker observability API (health_check deliberately bypasses the breaker)
