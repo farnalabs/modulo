@@ -1520,3 +1520,56 @@ async def test_dispatch_drops_empty_attribution_values(monkeypatch: pytest.Monke
     assert dispatch.created_spec is not None
     assert dispatch.created_spec.workspace_metadata["modulo.run.id"] == "run-1"
     assert "modulo.org.id" not in dispatch.created_spec.workspace_metadata
+
+
+# ---------------------------------------------------------------------------
+# 14. FAR-1694 S2 — in-loop escalation surfaces a typed, summary-only failure
+# ---------------------------------------------------------------------------
+
+
+async def test_provider_bridge_escalation_surfaces_a_summary_only_failure_detail(
+    monkeypatch: pytest.MonkeyPatch, fake_file_io
+) -> None:
+    """A stopped loop (dedicated exit code + ``MODULO_BRIDGE_ESCALATED`` marker)
+    is surfaced as a summary-only failure detail, and the node still FAILS
+    (fail-closed) — no behaviour change until S3 wires the suspension.
+
+    The marker is summary-only by design: tool / guardrail / reason appear, the
+    raw args (here ``{"url": "x"}``) never do.
+    """
+    from modulo.core.guardrails.loop_intercept import (
+        BRIDGE_ESCALATED_EXIT_CODE,
+        BRIDGE_ESCALATED_MARKER,
+    )
+
+    _install_log_tail(monkeypatch)
+    # A dict output with no ``summary``: the failure summary therefore falls
+    # back to ``command_error`` (the escalation detail) — the line this test
+    # exists to cover.
+    fake_file_io.files["/home/user/output.json"] = b"{}"
+    marker = BRIDGE_ESCALATED_MARKER + json.dumps(
+        {
+            "tool": "git push",
+            "direction": "before",
+            "guardrail": "gr-esc",
+            "reason": "needs a human",
+            "args_sha256": "deadbeef",
+        }
+    )
+    install_fake_dispatch(
+        monkeypatch,
+        ref="sbx-escalation",
+        exit_code=BRIDGE_ESCALATED_EXIT_CODE,
+        chunks=[ExecStreamChunk(stream="stdout", data=f"agent working\n{marker}\n")],
+    )
+
+    result = await make_sandbox_agent_fn(_base_node_def())(_run_state())
+
+    assert result["output"]["status"] == "failed"
+    summary = result["output"]["summary"]
+    assert "escalation requested" in summary
+    assert "git push" in summary
+    assert "gr-esc" in summary
+    # Summary-only: the human-readable reason is included, the args hash is the
+    # only fingerprint (never the raw args).
+    assert "needs a human" in summary
