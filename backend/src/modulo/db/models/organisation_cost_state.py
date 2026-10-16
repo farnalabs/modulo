@@ -4,13 +4,12 @@ One row per organisation, keyed directly by ``org_id`` (no surrogate id). A
 MISSING ROW means the defaults: both ceilings unlimited (NULL) and cumulative
 spend 0. Accrual and ceiling writes UPSERT, so the row appears on first write.
 
-This table is the additive half of FAR-1823 Land 2. The three columns mirror
-the ``organisations`` columns of the same names; a later change moves the
-finalize gate+accrual onto this row under a per-org advisory lock
-(``modulo.core.runner_capacity.lock_org_cost_state``) so the hot path never
-updates — and never takes a row lock on — the ``organisations`` row (the
-FAR-1823 / D9 lock-coupling shape). Until that change lands this table is
-populated only by the backfill in migration ``0316``.
+This table is the cutover of FAR-1823 Land 2: the finalize gate+accrual and
+the admin ceiling set/clear endpoints read and write it under a per-org
+advisory lock (``modulo.core.runner_capacity.lock_org_cost_state``), so the hot
+path never updates — and never takes a row lock on — the ``organisations`` row
+(the FAR-1823 / D9 lock-coupling shape). Migration ``0317`` creates and
+backfills it, then drops the three ``organisations`` columns of the same names.
 
 The table is deliberately keyed ``org_id`` and NOT ``organisation_id``: the
 ``rls_org_isolation`` policies and the ORM tenant filter both key on the exact
