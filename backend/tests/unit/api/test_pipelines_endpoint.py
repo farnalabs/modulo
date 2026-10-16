@@ -25,6 +25,7 @@ from modulo.api.routes.pipelines import (
 )
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.exceptions import SnapshotLockNotAvailableError
 from modulo.core.graph_validator._types import ValidationResult
 from modulo.db.crud.hitl_review_guard import GuardrailBindingStripDenied
 from modulo.db.crud.pipeline_folder import create_folder, update_folder
@@ -916,6 +917,45 @@ def test_replace_pipeline_graph_returns_soft_validation_issues(client: TestClien
     assert resp.json()["validation_issues"][0]["code"] == "TOPOLOGY_UNREACHABLE"
     validate.assert_awaited_once()
     assert validate.await_args.kwargs["model_backend_pins"] == backend_pins
+
+
+def test_replace_pipeline_graph_lock_busy_maps_503(client: TestClient) -> None:
+    """FAR-1810: ``PUT /{id}/graph`` mints an edit snapshot inside the write,
+    so a contended snapshot lock reaches THIS surface too. It carries no
+    SQLSTATE, so it matches neither the route's ``except SQLAlchemyError`` arms
+    nor ``handle_db_errors``'s 55P03 map — without the explicit arm it fell
+    through to the decorator's generic 500 "Internal server error". The answer
+    must be the retryable 503 every run-start surface already gives."""
+    node_id = uuid.uuid4()
+    agent_id = uuid.uuid4()
+    nodes = [
+        {
+            "id": str(node_id),
+            "agent_id": str(agent_id),
+            "position": {"x": 10, "y": 20},
+            "connector_binding": None,
+        }
+    ]
+    with (
+        patch(
+            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            new=AsyncMock(side_effect=SnapshotLockNotAvailableError("snapshot allocation lock busy")),
+        ),
+        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=MagicMock(issues=[])),
+        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.put(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": nodes, "edges": []},
+        )
+
+    assert resp.status_code == 503, resp.text
+    detail = resp.json()["detail"]
+    assert "snapshot lock unavailable" in detail.lower(), detail
+    assert "retry" in detail.lower(), detail
 
 
 def test_replace_pipeline_graph_rejects_duplicate_paths(client: TestClient) -> None:

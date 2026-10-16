@@ -12,7 +12,9 @@ How to upgrade an existing Modulo deployment with minimal downtime. Covers versi
    uv run alembic history
    uv run alembic upgrade heads --sql  # preview SQL without applying
    ```
-3. **Back up the database** – always take a backup before upgrading:
+3. **Back up the database** – always take a backup before upgrading
+   (from the repository root - `scripts/` lives at the repo root, not in
+   `backend/`):
    ```bash
    uv run scripts/backup.py --output /backups/pre-upgrade-$(date +%Y%m%d).tar.gz.enc
    ```
@@ -195,7 +197,8 @@ docker compose -f deploy/compose/docker-compose.prod.yml exec modulo uv run alem
 
 **Prefer a forward-fix over downgrading.** Write a new migration that reverts the schema change rather than using `alembic downgrade`. Not all migrations include a `downgrade()` function.
 
-If downgrade fails, restore from the pre-upgrade backup instead:
+If downgrade fails, restore from the pre-upgrade backup instead
+(from the repository root):
 
 ```bash
 uv run scripts/restore.py --input /backups/pre-upgrade-<date>.tar.gz.enc --full

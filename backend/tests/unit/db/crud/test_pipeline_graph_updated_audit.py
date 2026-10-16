@@ -18,7 +18,7 @@ import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any, Literal
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import event, select
@@ -429,6 +429,17 @@ class TestMcpGraphWriteAttribution:
                 patch(
                     "modulo.core.team_visibility.find_connector_team_mismatches",
                     new=AsyncMock(return_value=[]),
+                ),
+                # FAR-1810: the MCP graph write now records an edit snapshot in
+                # the same transaction. ``create_snapshot_edit`` takes a Postgres
+                # advisory lock (``pg_try_advisory_lock``), which in-memory SQLite
+                # cannot execute — patched out here exactly like the rollback test
+                # below patches ``create_snapshot_from_live_graph``. The audit
+                # event under test is written BEFORE the snapshot hook, so this
+                # cannot mask a missing ``graph_updated`` event.
+                patch(
+                    "modulo.db.crud.pipeline.create_snapshot_edit",
+                    new=AsyncMock(return_value=MagicMock(snapshot_version=1)),
                 ),
             ):
                 result = await ms.update_pipeline_graph(

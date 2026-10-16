@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import operator
 import types
+import uuid
 from collections.abc import Generator
 from typing import Self
 
 import pytest
+from sqlalchemy import TextClause
 
 from modulo.core.license import (
     _LICENSE_PUBLIC_KEY_HEX,
@@ -64,6 +66,9 @@ def _use_test_license_key() -> Generator[None, None, None]:
 class _FakeResult:
     def __init__(self, rows: list) -> None:
         self._rows = rows
+
+    def scalar(self):
+        return self._rows[0] if self._rows else None
 
     def scalar_one_or_none(self):
         return self._rows[0] if self._rows else None
@@ -120,10 +125,24 @@ class FakeAsyncSession:
         self.added: list = []
 
     def add(self, obj) -> None:
+        # Mirror SQLAlchemy's client-side default: a flushed row gets a UUID
+        # primary key. Without this the seeded Organisation keeps ``id=None``
+        # and the FAR-1830 settings patch rejects a non-UUID org id.
+        if hasattr(obj, "id") and getattr(obj, "id", None) is None:
+            obj.id = uuid.uuid4()
         self.added.append(obj)
         self._store.setdefault(type(obj), []).append(obj)
 
+    def get_bind(self):
+        # Drives the dialect gate in update_org_settings_patch; "sqlite" keeps
+        # the helper on its generic (non-JSONB) merge path.
+        return types.SimpleNamespace(dialect=types.SimpleNamespace(name="sqlite"))
+
     async def execute(self, stmt):
+        if isinstance(stmt, TextClause):
+            # Non-ORM statements (e.g. read_rls_org's current_setting probe)
+            # answer "no rows".
+            return _FakeResult([])
         entity = stmt.column_descriptions[0]["entity"]
         preds = _extract_predicates(stmt.whereclause)
         matches = [
@@ -211,6 +230,35 @@ async def test_seed_demo_org_team_license() -> None:
     # Team license grants the team feature set.
     assert "team_rbac" in validation.license_data.features
     assert org.settings_json["demo"]["full"] is True
+
+
+async def test_seed_demo_org_patches_only_its_own_top_level_keys(monkeypatch) -> None:
+    """FAR-1830: the seeder emits ONLY ``license_key`` + ``demo`` via the patch.
+
+    A revert to a whole-column ``settings_json`` write would not call the patch
+    helper at all (or would pass extra keys), so this fails.
+    """
+    session = FakeAsyncSession()
+    captured: dict = {}
+
+    async def _fake_patch(session_, organisation_id, patch=None, delete_keys=None, **kwargs):
+        captured["organisation_id"] = organisation_id
+        captured["patch"] = patch
+        captured["allow_unbound_context"] = kwargs.get("allow_unbound_context")
+        return patch or {}
+
+    monkeypatch.setattr(demo_mod, "update_org_settings_patch", _fake_patch)
+    await seed_demo_org(
+        session,
+        slug="demo-sweep",
+        tier="community",
+        full=False,
+        admin_email="sweep@demo.example",
+        admin_password="secret123",
+    )
+
+    assert set(captured["patch"]) == {"license_key", "demo"}
+    assert captured["allow_unbound_context"] is True
 
 
 async def test_seed_demo_org_idempotent() -> None:

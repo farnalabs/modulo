@@ -231,18 +231,31 @@ class TestParseAndVerify:
         assert not result.license_data.expires_at
 
 
-class TestResolveLicenseKey:
-    """``admin_license._resolve_license_key`` delegates to the shared verifier."""
+class TestResolveEffectiveLicense:
+    """``admin_license._resolve_effective_license`` walks the shared ladder and
+    converts its result (FAR-1806: the walk itself is the shared
+    ``core.feature_flags.resolve_effective_license``).
 
-    def test_returns_none_for_empty_key(self) -> None:
-        assert admin_license._resolve_license_key("") is None
+    Retargeted from the deleted per-key ``_resolve_license_key`` helper — the
+    same three behavioural pins (empty key grants nothing, an unverifiable key
+    grants nothing, a verified key resolves to its status) observed through
+    the surviving conversion surface."""
 
-    def test_returns_none_for_invalid_key(self) -> None:
-        assert admin_license._resolve_license_key("not-a-valid-key") is None
+    def test_empty_org_key_resolves_to_no_license(self) -> None:
+        status = admin_license._resolve_effective_license(_make_settings(), _mock_org({"license_key": ""}))
+        assert status.has_license is False
+        assert status.tier == "community"
 
-    def test_returns_status_for_valid_key(self) -> None:
+    def test_invalid_org_key_resolves_to_no_license(self) -> None:
+        status = admin_license._resolve_effective_license(
+            _make_settings(), _mock_org({"license_key": "not-a-valid-key"})
+        )
+        assert status.has_license is False
+        assert status.tier == "community"
+
+    def test_valid_key_resolves_to_its_status(self) -> None:
         key = _sign_license_payload(_make_valid_payload())
-        status = admin_license._resolve_license_key(key)
+        status = admin_license._resolve_effective_license(_make_settings(), _mock_org({"license_key": key}))
         assert status is not None
         assert status.has_license is True
         assert status.tier == "team"

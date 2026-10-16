@@ -2137,92 +2137,52 @@ async def fire_polling_trigger(
     return {"status": "error", "reason": "unexpected"}
 
 
-async def fire_report_trigger(*, report_id: uuid.UUID, org_id: uuid.UUID) -> dict[str, Any]:
+async def fire_report_trigger(*, report_id: uuid.UUID, org_id: uuid.UUID, epoch: str | None = None) -> dict[str, Any]:
     """Fire one scheduled report — generate, format, deliver (SAQ bounded job).
 
-    Plan F1 report delivery: timeout=300 / retries=2 SAQ knobs at enqueue; on
-    failure the job backs off ``next_send_at`` by +5min (or deactivates after 5
-    consecutive failures) so ``fire_due_triggers`` NEVER re-enqueues every 30s.
-    ``next_send_at`` was already advanced at enqueue time; success sets
-    ``last_sent_at`` only.
-    """
-    from sqlalchemy import update
+    Delegates the fire mechanics to the shared core
+    (:func:`modulo.core.reports.scheduler._fire_scheduled_report`), which holds
+    the ``ScheduledReport`` row lock only for its two short read/stamp sections
+    and runs generation/delivery OUTSIDE it (FAR-1822). This wrapper owns the
+    SAQ-specific failure policy: Plan F1 report delivery (timeout=300 /
+    retries=2 SAQ knobs at enqueue); on failure the job backs off
+    ``next_send_at`` by +5min (or deactivates after 5 consecutive failures) so
+    ``fire_due_triggers`` NEVER re-enqueues every 30s; on success it clears the
+    consecutive-failure counter.
 
-    from modulo.core.reports.scheduler import (
-        _deliver_via_config,
-        get_deliverer,
-        get_formatter,
-        get_generator,
-    )
-    from modulo.db.models.scheduled_report import ScheduledReport
+    ``epoch`` is the enqueue tick passed through from ``fire_due_triggers`` and
+    replayed verbatim by SAQ on a retry — it makes the fire idempotent per
+    epoch (an already-delivered epoch is skipped, and its lease is stealable if
+    a crashed attempt left one behind; FAR-1822).
+    """
+    from modulo.core.reports.scheduler import _fire_scheduled_report
 
     factory = _open_factory()
     settings = get_settings()
-    redis_client = AsyncRedis.from_url(settings.redis_url, socket_connect_timeout=5)
+    # socket_timeout as well as socket_connect_timeout: an unresponsive Redis
+    # must fail fast, not hang a whole read until the 300s SAQ job timeout.
+    redis_client = AsyncRedis.from_url(settings.redis_url, socket_connect_timeout=5, socket_timeout=5)
     try:
-        async with factory() as session, session.begin():
-            await _set_rls_org(session, org_id)
+        result = await _fire_scheduled_report(
+            report_id=report_id,
+            org_id=org_id,
+            epoch=epoch,
+            session_factory=factory,
+            redis_client=redis_client,
+            rls_setter=_set_rls_org,
+        )
+        status = result.get("status")
+        if status == "failed":
             now = datetime.now(UTC)
-            result = await session.execute(
-                select(ScheduledReport)
-                .where(
-                    ScheduledReport.id == report_id,
-                    ScheduledReport.organisation_id == org_id,
-                    ScheduledReport.active.is_(True),
-                )
-                .with_for_update()
-            )
-            report = result.scalar_one_or_none()
-            if report is None:
-                return {"status": "skipped", "reason": "report_inactive_or_missing"}
-
-            generator = get_generator(report.report_type)
-            if generator is None:
-                _log.warning("No generator registered for report type %s", report.report_type)
+            async with factory() as session, session.begin():
+                await _set_rls_org(session, org_id)
                 await _handle_report_failure(session, redis_client, report_id, now)
-                return {"status": "failed", "reason": f"no_generator_for_{report.report_type}"}
-
-            try:
-                config = report.config_json or {}
-                report_data = await generator(session, org_id, config)
-                formatter = get_formatter(report.report_type)
-                payload: Any = report_data
-                if formatter is not None:
-                    payload = formatter(report_data)
-                deliverer = get_deliverer(report.report_type)
-                recipient_config = report.recipient_config or {}
-                if deliverer is not None:
-                    delivery_results = await deliverer(payload, recipient_config)
-                else:
-                    delivery_results = await _deliver_via_config(payload, recipient_config)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception("Report %s (%s) generation or delivery failed", report_id, report.report_type)
-                await _handle_report_failure(session, redis_client, report_id, now)
-                return {"status": "failed", "reason": "generation_or_delivery_failed"}
-
-            schedule_type = (report.config_json or {}).get("schedule_type")
-            values: dict[str, Any] = {"last_sent_at": now}
-            if schedule_type == "one_time":
-                values["active"] = False
-                values["next_send_at"] = None
-            # next_send_at was already advanced to the next cron match at enqueue time.
-
-            await session.execute(update(ScheduledReport).where(ScheduledReport.id == report_id).values(**values))
+        elif status == "sent":
             await _clear_report_failure_counter(redis_client, report_id)
-            _log.info("Report %s (%s) sent", report_id, report.report_type)
-            return {
-                "status": "sent",
-                "report_id": str(report_id),
-                "report_type": report.report_type,
-                "delivery_results": delivery_results,
-            }
+        return result
     finally:
         with _suppress_aclose():
             await redis_client.aclose()
-
-    return {"status": "error", "reason": "unexpected"}
 
 
 async def _handle_report_failure(
@@ -2927,32 +2887,54 @@ async def _suite_run_llm_judge_guard(
     org_id: uuid.UUID,
     eval_suite_id: uuid.UUID,
 ) -> dict[str, Any] | None:
-    """Reject an ``llm_judge`` suite_run fire up front; ``skip`` when unsupported.
+    """Skip a judge suite fire only when the org has NO ACTIVE model backend (FAR-1742).
 
-    ``llm_judge`` suites are not yet supported on the scheduled path: the SAQ
-    ``execute_suite_run`` job does not wire a judge callable, so any
-    ``llm_judge`` definition would hard-fail the run at execution time
-    (``suite contains llm_judge definitions but no judge callable was
-    provided``). Reject the fire up front (a clear, observable skip) rather
-    than letting the run build and then fail — config must not promise a run it
-    cannot deliver. This is the fire-boundary guard that mirrors "reject
-    llm_judge suite_run triggers" (FAR-377 reviewer finding).
+    FAR-1712 wired an org-scoped judge callable into the SAQ ``execute_suite_run``
+    job, so a suite containing an ``llm_judge`` definition now fires normally and
+    reaches that wired job whenever the org has at least one ACTIVE
+    ``ModelBackend``. The former blanket refusal (skip reason
+    ``llm_judge_unsupported``) is gone: it rejected the fire before the run was
+    ever built, so the scheduled path never reached the job FAR-1742 exists to
+    reach.
+
+    A judge suite whose org has NO ACTIVE backend still cannot be judged — the
+    runner would raise ``suite contains llm_judge definitions but no judge
+    callable was provided`` and terminalise the whole run as failed. Skip the
+    fire up front instead (a clear, observable skip) so config never promises a
+    run it cannot deliver. Non-judge suites are unaffected: the ACTIVE-backend
+    probe runs only for a suite that actually carries an ``llm_judge`` definition.
     """
+    from sqlalchemy import select
+
     from modulo.core.eval_engine.execute_suite_run import load_suite_definitions
+    from modulo.db.models.model_backend import ModelBackend
 
     suite_defs = await load_suite_definitions(session, org_id, eval_suite_id)
-    if any(str(getattr(d, "eval_type", "")) == "llm_judge" for d in suite_defs):
-        _log.warning(
-            "fire_suite_run_trigger: suite %s contains llm_judge definitions which are not "
-            "supported on the scheduled path; skipping fire (run would hard-fail at execution)",
-            eval_suite_id,
+    if not any(str(getattr(d, "eval_type", "")) == "llm_judge" for d in suite_defs):
+        return None
+    active_backend_id = (
+        await session.execute(
+            select(ModelBackend.id)
+            .where(
+                ModelBackend.organisation_id == org_id,
+                ModelBackend.status == "active",
+            )
+            .limit(1)
         )
-        return {
-            "status": "skipped",
-            "reason": "llm_judge_unsupported",
-            "suite_id": str(eval_suite_id),
-        }
-    return None
+    ).first()
+    if active_backend_id is not None:
+        return None
+    _log.warning(
+        "fire_suite_run_trigger: suite %s contains llm_judge definitions but org %s has no "
+        "ACTIVE model backend; skipping fire (the run would hard-fail at execution)",
+        eval_suite_id,
+        org_id,
+    )
+    return {
+        "status": "skipped",
+        "reason": "llm_judge_backend_unavailable",
+        "suite_id": str(eval_suite_id),
+    }
 
 
 async def _build_suite_run_or_skip(
@@ -4396,6 +4378,10 @@ async def _process_one_due_report_row(
             f"fire:report:{row.id}:{int(now.timestamp())}",
             report_id=str(row.id),
             org_id=str(org_id),
+            # The enqueue tick is the fire's EPOCH: SAQ replays it verbatim on a
+            # retry, so the fire core can skip an already-delivered epoch and a
+            # re-queued dead job can steal its predecessor's lease (FAR-1822).
+            epoch=now.isoformat(),
         )
         if job_id is not None:
             summary["report_enqueued"] += 1
@@ -8723,6 +8709,35 @@ async def _clear_previous_attempt_marker(
     )
 
 
+async def _resume_org_capacity_free(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+) -> bool:
+    """True when the org's sandbox cap can admit *run_id*'s resume (fail-open).
+
+    FAR-1831: the F6a resume re-dispatch must not run into a saturated org —
+    ``dispatch_run`` never org-cap-defers a ``resume_run`` (its check is
+    execute-only), so without this gate every tick would claim the run
+    (``claim_count++``) only for the executor's capacity gate to deny it,
+    exhausting the claim cap and stranding a decided run ``awaiting_human``.
+
+    Reuses the HITL route pre-check verbatim — it is the single source of truth
+    for "may this org admit another sandbox resume now" (flag-on converges onto
+    ``runner_capacity.resolve_runner_capacity_decision``, flag-off onto the
+    legacy graph-based count). Fail-open: any read error admits the resume so a
+    committed decision is never lost behind a transient read fault.
+
+    The ``pipeline_engine.executor`` import is LAZY (in-function) and is the
+    exact module pair already sanctioned for ``_retry_after_policy`` (FAR-733,
+    ``.importlinter``): no new contract edge and no import-time langgraph
+    coupling for the API seams that reach ``cron_helpers``.
+    """
+    from modulo.core.pipeline_engine.executor import org_sandbox_capacity_free
+
+    return await org_sandbox_capacity_free(session, org_id, run_id)
+
+
 async def _re_dispatch_reconciled_run(
     session: AsyncSession,
     q: RedisQueue,
@@ -8743,7 +8758,19 @@ async def _re_dispatch_reconciled_run(
     re-dispatched RUNNING run has its previous attempt's stale marker
     refreshed first (qa F2 — a stale marker must never survive into the new
     attempt's running state).
+
+    FAR-1831: a ``resume_run`` re-dispatch is capacity-gated FIRST — a
+    saturated org skips the tick (no claim burned, no enqueue) and the row is
+    re-attempted once a slot frees. Placed before the marker refresh so the
+    row keeps its pre-dispatch shape (the FAR-1728 override marker survives).
     """
+    if job_type == "resume_run" and not await _resume_org_capacity_free(session, org_id, row.id):
+        summary["capacity_deferred"] += 1
+        _log.info(
+            "dispatcher_reconcile: resume of run %s deferred — org sandbox capacity full",
+            row.id,
+        )
+        return enqueue_failed_redispatched
     if getattr(row, "status", None) == "running":
         await _clear_previous_attempt_marker(session, org_id, row)
     try:

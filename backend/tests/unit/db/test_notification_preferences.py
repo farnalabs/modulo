@@ -5,9 +5,11 @@ Covers ``apply_prefs_filter`` (the shared read-path helper) and the
 round-trip against an in-memory SQLite database.
 """
 
+import logging
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy import select
@@ -195,6 +197,94 @@ async def test_opt_outs_are_scoped_per_org(session: AsyncSession) -> None:
     await set_notification_preferences(session, org_id=_ORG, account_id=_USER, opt_outs={"run.failed": True})
     await session.commit()
     assert not await get_opted_out_categories(session, org_id=other_org, account_id=_USER)
+
+
+# ---------------------------------------------------------------------------
+# FAR-247 fail-open: a broken preferences read never aborts a notification read
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def engine_no_prefs_table() -> AsyncGenerator[AsyncEngine, None]:
+    """SQLite engine whose schema LACKS ``notification_preferences``.
+
+    Simulates the prefs-read failure the fail-open contract covers (missing
+    table / lost privilege): the filtered statement raises, and every read
+    path must degrade to "all categories enabled" instead of aborting.
+    """
+    eng = create_async_engine("sqlite+aiosqlite://", echo=False)
+    async with eng.begin() as conn:
+        await conn.run_sync(
+            lambda sync_conn: Base.metadata.create_all(
+                sync_conn,
+                tables=[
+                    Notification.__table__,
+                    Dismissal.__table__,
+                    OrgMembership.__table__,
+                    Account.__table__,
+                ],
+            )
+        )
+    yield eng
+    await eng.dispose()
+
+
+@pytest.fixture
+async def session_no_prefs_table(engine_no_prefs_table: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
+    maker = async_sessionmaker(engine_no_prefs_table, expire_on_commit=False)
+    async with maker() as s:
+        yield s
+
+
+async def test_prefs_read_failure_fails_open_on_all_four_read_paths(
+    session_no_prefs_table: AsyncSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    """PROVE-THE-FIX (FAR-247): prefs read raises -> rows still returned.
+
+    All four read paths (dashboard list, full list, count, unread count)
+    degrade to "nothing opted out" — logged, never aborted — and they agree
+    with each other while degrading.
+    """
+    session = session_no_prefs_table
+    expires_at = datetime.now(UTC) + timedelta(days=1)
+    for category in ("run.failed", "run.stalled"):
+        await create_notification(
+            session,
+            org_id=_ORG,
+            scope="org",
+            level="warning",
+            category=category,
+            title=f"{category} notification",
+            body="body",
+            expires_at=expires_at,
+        )
+    await session.commit()
+
+    with caplog.at_level(logging.WARNING, logger="modulo.db.crud.notifications"):
+        dashboard = await get_dashboard_notifications(session, org_id=_ORG, user_id=_USER, min_level="debug", limit=50)
+        listed = await get_notifications_for_user(session, org_id=_ORG, user_id=_USER, limit=50)
+        count = await count_notifications_for_user(session, org_id=_ORG, user_id=_USER)
+        unread = await get_unread_count(session, org_id=_ORG, user_id=_USER, min_level="debug")
+
+    assert {n.category for n in dashboard} == {"run.failed", "run.stalled"}
+    assert {n.category for n in listed} == {"run.failed", "run.stalled"}
+    assert count == 2
+    assert unread == 2
+    fail_open_logs = [m for m in caplog.messages if "prefs_filter_fail_open" in m]
+    assert len(fail_open_logs) == 4, f"expected one fail-open log per read path, got {len(fail_open_logs)}"
+
+
+async def test_get_opted_out_categories_runs_in_savepoint() -> None:
+    """The prefs read runs inside ``session.begin_nested()`` (FAR-247): a
+    failure there must roll back only the savepoint, never the caller's write
+    transaction."""
+    session = AsyncMock(spec=AsyncSession)
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = []
+    session.execute = AsyncMock(return_value=result)
+
+    assert not await get_opted_out_categories(session, org_id=_ORG, account_id=_USER)
+    session.begin_nested.assert_called()
 
 
 # ---------------------------------------------------------------------------

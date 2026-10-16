@@ -2534,9 +2534,13 @@ export interface paths {
          *     (:func:`_build_node_patch_graph`) runs under the locked pipeline row, and
          *     the write is delegated to :func:`_apply_graph_update` — the SAME function
          *     the ``PATCH /{pipeline_id}`` payload's ``graph_json`` path uses — so every
-         *     guard, the row lock, the Agent-row ``agent_commands`` sync, the save-time
-         *     graph validation and the ``pipeline.graph_updated`` audit fire through one
-         *     shared write path rather than a second, parallel one.
+         *     guard, the row lock, the save-time graph validation and the
+         *     ``pipeline.graph_updated`` audit fire through one shared write path rather
+         *     than a second, parallel one. The Agent-row ``agent_commands`` sync runs in
+         *     that shared path too: ``_apply_graph_update`` calls it AFTER the
+         *     masked-echo merge and BEFORE ``replace_pipeline_graph`` writes, so the
+         *     FAR-1810 edit snapshot the write mints pins the command this patch just
+         *     saved rather than the stale pre-patch one.
          *
          *     Unknown ``node_id`` → 404 (a missing pipeline already 404s in the team
          *     gate). A body key outside :class:`PipelineGraphNodePatch`'s allowlist → 422
@@ -2772,6 +2776,31 @@ export interface paths {
          *     tags the edit's release channel.
          */
         post: operations["save_edit_snapshot_endpoint_api_v1_pipelines__pipeline_id__snapshots_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pipelines/{pipeline_id}/snapshots/by-version/{snapshot_version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Snapshot By Version Endpoint
+         * @description Read one snapshot by its per-pipeline version number (FAR-1811).
+         *
+         *     Backs the ``?version=<n>`` deep-link: same response model and the SAME
+         *     team/pipeline scoping as the by-UUID read below (FAR-1360), so a version
+         *     belonging to another pipeline resolves to ``None`` -> 404 and never leaks.
+         *     A non-integer version path segment is a 422; an absent version is a 404.
+         */
+        get: operations["get_snapshot_by_version_endpoint_api_v1_pipelines__pipeline_id__snapshots_by_version__snapshot_version__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5473,6 +5502,39 @@ export interface paths {
         };
         /** Viewmodel Current */
         get: operations["viewmodel_current_api_v1_viewmodel_current_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Plan Bootstrap
+         * @description Caller-scoped effective plan bootstrap, readable by any authenticated member.
+         *
+         *     FAR-1806: the client's plan/tier/feature bootstrap previously read the
+         *     instance-admin-only ``/api/v1/admin/feature-flags`` (and
+         *     ``/api/v1/admin/license``), so every non-admin ran the app on permanently
+         *     wrong defaults (tier ``community``, ``dev_mode`` false, no flags). This
+         *     endpoint serves the same caller-scoped truth — effective tier, dev mode,
+         *     licence view, and the FULL effective flag set with the org
+         *     ``feature_overrides`` overlay — with no permission beyond authentication
+         *     against the caller's own org. The admin endpoints keep their
+         *     system-admin/permission gates for the inspection and toggle UI.
+         *
+         *     Failure ladder mirrors ``viewmodel_current``: ProgrammingError -> 501,
+         *     SQLAlchemyError -> 503, HTTPException re-raised, Exception -> 500.
+         */
+        get: operations["plan_bootstrap_api_v1_plan_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -17186,12 +17248,65 @@ export interface components {
              */
             environment_profile_id?: string | null;
         };
+        /**
+         * PlanBootstrapResponse
+         * @description Caller-scoped effective plan + feature bootstrap (FAR-1806).
+         *
+         *     Readable by ANY authenticated member of their own org (no instance-admin
+         *     permission), with the org ``feature_overrides`` overlay applied and the
+         *     FULL known flag set present — inactive flags carry
+         *     ``currently_active: false`` rather than being omitted.
+         */
+        PlanBootstrapResponse: {
+            license: components["schemas"]["PlanLicenseInfo"];
+            /** Dev Mode */
+            dev_mode: boolean;
+            /** Flags */
+            flags: components["schemas"]["PlanFlagInfo"][];
+        };
+        /**
+         * PlanFlagInfo
+         * @description One effective feature flag in the ``/api/v1/plan`` payload.
+         *
+         *     Mirrors the admin feature-flag list's ``flags[]`` vocabulary
+         *     (``currently_active`` / ``depends_on`` included) so a client reading
+         *     either endpoint maps the same field names.
+         */
+        PlanFlagInfo: {
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Tier */
+            tier: string;
+            /** Currently Active */
+            currently_active: boolean;
+            /** Depends On */
+            depends_on?: string[] | null;
+        };
         /** PlanInfo */
         PlanInfo: {
             /** Tier */
             tier: string;
             /** Daily Spend Limit */
             daily_spend_limit?: number | null;
+        };
+        /**
+         * PlanLicenseInfo
+         * @description Effective-licence view served by ``GET /api/v1/plan`` (FAR-1806).
+         *
+         *     ``tier`` is the plan context's resolved tier; ``expires_at`` / ``org_id``
+         *     come from the same licence-ladder rung the admin ``/api/v1/admin/license``
+         *     resolver walks, so a member reads the licence view without hitting an
+         *     admin-permission-gated endpoint.
+         */
+        PlanLicenseInfo: {
+            /** Tier */
+            tier: string;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Org Id */
+            org_id?: string | null;
         };
         /** PluginHealth */
         PluginHealth: {
@@ -18438,6 +18553,8 @@ export interface components {
             langgraph_thread_id: string;
             /** Snapshot Id */
             snapshot_id?: string | null;
+            /** Snapshot Version */
+            snapshot_version?: number | null;
             /** Error Detail */
             error_detail?: string | null;
             /** Error Code */
@@ -27157,6 +27274,40 @@ export interface operations {
             };
         };
     };
+    get_snapshot_by_version_endpoint_api_v1_pipelines__pipeline_id__snapshots_by_version__snapshot_version__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                pipeline_id: string;
+                snapshot_version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SnapshotDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
     get_snapshot_detail_endpoint_api_v1_pipelines__pipeline_id__snapshots__snapshot_id__get: {
         parameters: {
             query?: {
@@ -33187,6 +33338,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ViewModelCurrent"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    plan_bootstrap_api_v1_plan_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanBootstrapResponse"];
                 };
             };
             /** @description Validation Error */

@@ -119,6 +119,38 @@ def test_nodeless_in_flight_floor_equal_to_the_requirement_is_accepted() -> None
 
 
 # ---------------------------------------------------------------------------
+# node_started_stale_seconds — the FAR-1808 node-started reclaim bound must
+# cover a legitimate single-node dispatch window (grace + max node timeout),
+# mirroring the nodeless in-flight floor guard above
+# ---------------------------------------------------------------------------
+
+
+def test_node_started_stale_seconds_default_covers_the_node_window() -> None:
+    """The shipped default (7200) sits above the worst-case legitimate
+    single-node window, grace + max node timeout (600 + 3300 = 3900)."""
+    settings = _make()
+
+    assert settings.node_started_stale_seconds == 7200
+    assert settings.node_started_stale_seconds >= settings.saq_setup_grace_seconds + MAX_NODE_TIMEOUT_SECONDS
+
+
+def test_node_started_stale_seconds_below_the_requirement_refuses_to_load() -> None:
+    """FAIL (never warn): a bound below grace + max node timeout would let the
+    node-started reclaim sweep kill a live node mid-execution — so Settings
+    raises at load with the arithmetic."""
+    with pytest.raises(ValidationError, match="NODE_STARTED_STALE_SECONDS"):
+        _make(NODE_STARTED_STALE_SECONDS="3600")
+
+
+def test_node_started_stale_seconds_equal_to_the_requirement_is_accepted() -> None:
+    """The boundary (grace + max node timeout = 3900) must not be rejected —
+    the guard is ``>=`` the requirement, matching the nodeless floor guard."""
+    settings = _make(NODE_STARTED_STALE_SECONDS="3900")
+
+    assert settings.node_started_stale_seconds == 3900
+
+
+# ---------------------------------------------------------------------------
 # saq_zero_progress_max_age_minutes — DERIVED-unset knob with a load-time
 # floor at the worst window of EVERY consumer (FAR-1715; pre-PR QA M1: the
 # floor also covers the mid-graph age gate, which shares the knob)
