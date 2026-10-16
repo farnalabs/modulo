@@ -408,6 +408,19 @@ class TestEmptyLifecycleMaps:
         session.add(
             LifecycleMap(id=uuid.uuid4(), organisation_id=_ORG_A, account_id=_ACCOUNT, name="empty", content_json={})
         )
+        # The application always persists the three-key shape
+        # (``normalize_content``), so a map emptied in the UI is
+        # ``{"stages": [], ...}`` — NOT ``{}``. Before FAR-1856 it was never
+        # surfaced because the predicate was an equality against ``{}``.
+        session.add(
+            LifecycleMap(
+                id=uuid.uuid4(),
+                organisation_id=_ORG_A,
+                account_id=_ACCOUNT,
+                name="ui-emptied",
+                content_json={"stages": [], "edges": [], "notes": ""},
+            )
+        )
         session.add(
             LifecycleMap(
                 id=uuid.uuid4(),
@@ -430,7 +443,7 @@ class TestEmptyLifecycleMaps:
 
         candidates = await _scan_empty_lifecycle_maps(session, _ORG_A)
 
-        assert _candidate_names(candidates) == ["empty"]
+        assert _candidate_names(candidates) == ["empty", "ui-emptied"]
 
 
 class TestDuplicateTriggers:

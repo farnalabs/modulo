@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import contextlib
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -79,14 +80,22 @@ async def _seed_org_and_account(session: AsyncSession, *, slug_prefix: str) -> t
 
 
 class TestEmptyLifecycleMapScanOnPostgres:
-    """FAR-1856: ``content_json == {}`` must compile to ``jsonb = jsonb``."""
+    """FAR-1856: emptiness is structural ("no stages"), not ``content_json == {}``.
 
-    async def test_empty_map_is_surfaced_and_non_empty_map_is_not(
+    Two defects lived here: the bare-``JSON`` model made ``== {}`` raise
+    ``operator does not exist: jsonb = json`` on Postgres, and even once that
+    compiled, an equality against ``{}`` never matched the three-key shape the
+    UI persists (``{"stages": [], "edges": [], "notes": ""}``), so an emptied
+    map was silently never surfaced.
+    """
+
+    async def test_empty_maps_are_surfaced_and_staged_map_is_not(
         self,
         db_session: AsyncSession,
     ) -> None:
         org_id, account_id = await _seed_org_and_account(db_session, slug_prefix="far1856")
         empty_id = uuid.uuid4()
+        ui_emptied_id = uuid.uuid4()
         filled_id = uuid.uuid4()
         db_session.add(
             LifecycleMap(
@@ -97,13 +106,25 @@ class TestEmptyLifecycleMapScanOnPostgres:
                 content_json={},
             )
         )
+        # The application ALWAYS persists this three-key shape
+        # (``normalize_content``); it is what a map looks like after its stages
+        # were all deleted in the UI, and it is NOT ``{}``.
+        db_session.add(
+            LifecycleMap(
+                id=ui_emptied_id,
+                organisation_id=org_id,
+                account_id=account_id,
+                name="hk-ui-emptied-map",
+                content_json={"stages": [], "edges": [], "notes": ""},
+            )
+        )
         db_session.add(
             LifecycleMap(
                 id=filled_id,
                 organisation_id=org_id,
                 account_id=account_id,
                 name="hk-filled-map",
-                content_json={"stages": ["build", "test"]},
+                content_json={"stages": ["build", "test"], "edges": [], "notes": "n"},
             )
         )
         await db_session.flush()
@@ -113,9 +134,13 @@ class TestEmptyLifecycleMapScanOnPostgres:
         candidates = await _scan_empty_lifecycle_maps(db_session, org_id)
 
         surfaced_names = sorted(c.name for c in candidates)
-        assert surfaced_names == ["hk-empty-map"], f"expected only the empty map, got {surfaced_names}"
-        assert str(empty_id) in {c.id for c in candidates}
-        assert str(filled_id) not in {c.id for c in candidates}
+        assert surfaced_names == ["hk-empty-map", "hk-ui-emptied-map"], (
+            f"expected both empty-shaped maps, got {surfaced_names}"
+        )
+        surfaced_ids = {c.id for c in candidates}
+        assert str(empty_id) in surfaced_ids
+        assert str(ui_emptied_id) in surfaced_ids
+        assert str(filled_id) not in surfaced_ids
 
         # Production path: scan_all swallows a per-scanner exception and
         # substitutes [], so the category itself must carry the candidate —
@@ -124,7 +149,7 @@ class TestEmptyLifecycleMapScanOnPostgres:
         by_category = {r.category: r for r in results}
         category = by_category["empty_lifecycle_maps"]
         category_names = sorted(c.name for c in category.candidates)
-        assert category_names == ["hk-empty-map"], f"scan_all category was {category_names}"
+        assert category_names == ["hk-empty-map", "hk-ui-emptied-map"], f"scan_all category was {category_names}"
 
 
 async def _best_effort_cleanup(db_engine: AsyncEngine, org_id: uuid.UUID, account_id: uuid.UUID) -> None:
@@ -149,6 +174,86 @@ async def _best_effort_cleanup(db_engine: AsyncEngine, org_id: uuid.UUID, accoun
                 await session.execute(text(statement), {"oid": str(org_id), "aid": str(account_id)})
 
 
+@dataclass(frozen=True)
+class _CleanupBatch:
+    org_id: uuid.UUID
+    account_id: uuid.UUID
+    secret_id: uuid.UUID
+    snapshot_id: uuid.UUID
+
+
+async def _seed_cleanup_batch(db_engine: AsyncEngine, *, slug_prefix: str) -> _CleanupBatch:
+    """Seed one deletable row and one FK-RESTRICT-refused row.
+
+    * ``secrets`` — nothing FKs ``secrets.id``, so it deletes cleanly.
+    * ``pipeline_snapshots`` — ``runs.snapshot_id`` references it with
+      ``ON DELETE RESTRICT`` (migration 0110), so its DELETE is refused at
+      flush time (the savepoint release).
+    """
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    org_id = uuid.uuid4()
+    account_id = uuid.uuid4()
+    secret_id = uuid.uuid4()
+    pipeline_id = uuid.uuid4()
+    snapshot_id = uuid.uuid4()
+
+    async with factory() as session, session.begin():
+        session.add(Organisation(id=org_id, name="Housekeeping Cleanup Org", slug=f"{slug_prefix}-{org_id.hex[:8]}"))
+        session.add(
+            Account(
+                id=account_id,
+                email=f"{slug_prefix}-{account_id.hex[:8]}@test.local",
+                display_name="Housekeeping Cleanup User",
+                auth_provider="local",
+            )
+        )
+        # Flush the FK targets first so the dependent rows below cannot be
+        # ordered ahead of them by a single big autoflush.
+        await session.flush()
+        # `get_current_tenant_user` requires a live org membership.
+        session.add(OrgMembership(id=uuid.uuid4(), account_id=account_id, organisation_id=org_id, role="admin"))
+        session.add(Secret(id=secret_id, organisation_id=org_id, key="hk-cleanup-deletable", encrypted_value=b"x"))
+        session.add(Pipeline(id=pipeline_id, organisation_id=org_id, account_id=account_id, name="hk-cleanup-pipeline"))
+        session.add(
+            PipelineSnapshot(
+                id=snapshot_id,
+                organisation_id=org_id,
+                pipeline_id=pipeline_id,
+                snapshot_version=1,
+                account_id=account_id,
+                graph_json={},
+                connector_bindings_json=[],
+                schema_pins_json=[],
+                prompt_pins_json=[],
+                model_backend_pins_json=[],
+            )
+        )
+        await session.execute(
+            text(
+                "INSERT INTO runs (id, organisation_id, pipeline_id, "
+                "snapshot_id, trigger_type, status, input_hash, "
+                "langgraph_thread_id, run_number) "
+                "VALUES (:rid, :oid, :pid, :sid, 'manual', 'pending', "
+                ":hash, :tid, :rn)"
+            ),
+            {
+                "rid": str(uuid.uuid4()),
+                "oid": str(org_id),
+                "pid": str(pipeline_id),
+                "sid": str(snapshot_id),
+                "hash": uuid.uuid4().hex,
+                "tid": f"thread-{slug_prefix}-{snapshot_id.hex[:8]}",
+                "rn": 1,
+            },
+        )
+    return _CleanupBatch(
+        org_id=org_id,
+        account_id=account_id,
+        secret_id=secret_id,
+        snapshot_id=snapshot_id,
+    )
+
+
 class TestPerformCleanupDeletedCountOnPostgres:
     """FAR-1857: ``deleted_count`` must count rows that actually committed."""
 
@@ -157,95 +262,15 @@ class TestPerformCleanupDeletedCountOnPostgres:
         db_engine: AsyncEngine,
         integration_client: AsyncClient,
     ) -> None:
-        factory = async_sessionmaker(db_engine, expire_on_commit=False)
-        org_id = uuid.uuid4()
-        account_id = uuid.uuid4()
-        secret_id = uuid.uuid4()
-        pipeline_id = uuid.uuid4()
-        snapshot_id = uuid.uuid4()
-
-        async with factory() as session, session.begin():
-            session.add(Organisation(id=org_id, name="Housekeeping Cleanup Org", slug=f"far1857-{org_id.hex[:8]}"))
-            session.add(
-                Account(
-                    id=account_id,
-                    email=f"far1857-{account_id.hex[:8]}@test.local",
-                    display_name="Housekeeping Cleanup User",
-                    auth_provider="local",
-                )
-            )
-            # Flush the FK targets first so the dependent rows below cannot be
-            # ordered ahead of them by a single big autoflush.
-            await session.flush()
-            # `get_current_tenant_user` requires a live org membership.
-            session.add(
-                OrgMembership(
-                    id=uuid.uuid4(),
-                    account_id=account_id,
-                    organisation_id=org_id,
-                    role="admin",
-                )
-            )
-            # Genuinely deletable: nothing FKs ``secrets.id``.
-            session.add(
-                Secret(
-                    id=secret_id,
-                    organisation_id=org_id,
-                    key="hk-cleanup-deletable",
-                    encrypted_value=b"x",
-                )
-            )
-            # Refused by FK RESTRICT: ``runs.snapshot_id`` ->
-            # ``pipeline_snapshots(id) ON DELETE RESTRICT`` (migration 0110).
-            session.add(
-                Pipeline(
-                    id=pipeline_id,
-                    organisation_id=org_id,
-                    account_id=account_id,
-                    name="hk-cleanup-pipeline",
-                )
-            )
-            session.add(
-                PipelineSnapshot(
-                    id=snapshot_id,
-                    organisation_id=org_id,
-                    pipeline_id=pipeline_id,
-                    snapshot_version=1,
-                    account_id=account_id,
-                    graph_json={},
-                    connector_bindings_json=[],
-                    schema_pins_json=[],
-                    prompt_pins_json=[],
-                    model_backend_pins_json=[],
-                )
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO runs (id, organisation_id, pipeline_id, "
-                    "snapshot_id, trigger_type, status, input_hash, "
-                    "langgraph_thread_id, run_number) "
-                    "VALUES (:rid, :oid, :pid, :sid, 'manual', 'pending', "
-                    ":hash, :tid, :rn)"
-                ),
-                {
-                    "rid": str(uuid.uuid4()),
-                    "oid": str(org_id),
-                    "pid": str(pipeline_id),
-                    "sid": str(snapshot_id),
-                    "hash": uuid.uuid4().hex,
-                    "tid": f"thread-far1857-{snapshot_id.hex[:8]}",
-                    "rn": 1,
-                },
-            )
-
-        headers = {"Authorization": f"Bearer {_token(org_id, account_id)}"}
+        batch = await _seed_cleanup_batch(db_engine, slug_prefix="far1857")
+        headers = {"Authorization": f"Bearer {_token(batch.org_id, batch.account_id)}"}
         try:
             resp = await integration_client.post(
                 "/api/v1/admin/housekeeping/cleanup",
                 json={
                     "items": [
-                        {"id": str(secret_id), "entity_type": "secret"},
-                        {"id": str(snapshot_id), "entity_type": "pipeline_snapshot"},
+                        {"id": str(batch.secret_id), "entity_type": "secret"},
+                        {"id": str(batch.snapshot_id), "entity_type": "pipeline_snapshot"},
                     ]
                 },
                 headers=headers,
@@ -258,17 +283,18 @@ class TestPerformCleanupDeletedCountOnPostgres:
             assert body["deleted_count"] == 1, body
             assert len(body["errors"]) == 1, body
             error = body["errors"][0]
-            assert error["id"] == str(snapshot_id), error
+            assert error["id"] == str(batch.snapshot_id), error
             assert error["entity_type"] == "pipeline_snapshot", error
             assert error["error"] == "Foreign key constraint violation", error
 
             async with db_engine.connect() as conn:
                 secret_rows = (
-                    await conn.execute(text("SELECT id FROM secrets WHERE id = :sid"), {"sid": str(secret_id)})
+                    await conn.execute(text("SELECT id FROM secrets WHERE id = :sid"), {"sid": str(batch.secret_id)})
                 ).all()
                 snapshot_rows = (
                     await conn.execute(
-                        text("SELECT id FROM pipeline_snapshots WHERE id = :sid"), {"sid": str(snapshot_id)}
+                        text("SELECT id FROM pipeline_snapshots WHERE id = :sid"),
+                        {"sid": str(batch.snapshot_id)},
                     )
                 ).all()
 
@@ -276,4 +302,62 @@ class TestPerformCleanupDeletedCountOnPostgres:
             assert len(secret_rows) == 0, "the counted deletion must actually have happened"
             assert len(snapshot_rows) == 1, "the FK-restricted row must have been rolled back"
         finally:
-            await _best_effort_cleanup(db_engine, org_id, account_id)
+            await _best_effort_cleanup(db_engine, batch.org_id, batch.account_id)
+
+
+class TestMcpPerformHousekeepingDeletedCountOnPostgres:
+    """FAR-1857: the MCP twin counts only committed rows too.
+
+    ``perform_housekeeping`` deletes via
+    ``_delete_housekeeping_groups`` -> ``_delete_housekeeping_group``. The
+    identical count-inside-the-savepoint defect lived here; this pins the real
+    Postgres behaviour so the two call sites cannot drift again.
+    """
+
+    async def test_mcp_mixed_batch_counts_only_rows_actually_deleted(
+        self,
+        db_engine: AsyncEngine,
+    ) -> None:
+        from modulo.api.mcp_server import _delete_housekeeping_groups
+        from modulo.core.housekeeping import ENTITY_MODEL_MAP
+
+        batch = await _seed_cleanup_batch(db_engine, slug_prefix="far1857mcp")
+        errors: list[dict[str, str]] = []
+        try:
+            factory = async_sessionmaker(db_engine, expire_on_commit=False)
+            async with factory() as session, session.begin():
+                deleted = await _delete_housekeeping_groups(
+                    session,
+                    {
+                        "secret": [str(batch.secret_id)],
+                        "pipeline_snapshot": [str(batch.snapshot_id)],
+                    },
+                    ENTITY_MODEL_MAP,
+                    batch.org_id,
+                    errors,
+                )
+
+            # Only the row that really committed is counted. The old MCP code
+            # incremented inside the savepoint and returned 2 here.
+            assert deleted == 1
+            assert len(errors) == 1, errors
+            error = errors[0]
+            assert error["id"] == str(batch.snapshot_id), error
+            assert error["entity_type"] == "pipeline_snapshot", error
+            assert error["error"] == "Foreign key constraint violation", error
+
+            async with db_engine.connect() as conn:
+                secret_rows = (
+                    await conn.execute(text("SELECT id FROM secrets WHERE id = :sid"), {"sid": str(batch.secret_id)})
+                ).all()
+                snapshot_rows = (
+                    await conn.execute(
+                        text("SELECT id FROM pipeline_snapshots WHERE id = :sid"),
+                        {"sid": str(batch.snapshot_id)},
+                    )
+                ).all()
+
+            assert len(secret_rows) == 0, "the counted deletion must actually have happened"
+            assert len(snapshot_rows) == 1, "the FK-restricted row must have been rolled back"
+        finally:
+            await _best_effort_cleanup(db_engine, batch.org_id, batch.account_id)

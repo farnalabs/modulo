@@ -8,11 +8,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.graph_validator.mask_sentinel import find_mask_sentinel_values
 from modulo.db.bundled_runner_template import BUNDLED_RUNNER_PROVIDER_TYPE
+from modulo.db.crud.run_node_outputs import resolve_dialect
 from modulo.db.crud.run_retention import CHECKPOINT_RETENTION_DAYS, _checkpoint_detail
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
@@ -716,6 +717,44 @@ async def _scan_unused_schemas(session: AsyncSession, org_id: uuid.UUID) -> list
     ]
 
 
+def _lifecycle_map_has_no_stages(session: AsyncSession) -> ColumnElement[bool]:
+    """SQL predicate: the map has no stages configured.
+
+    Emptiness is derived structurally, not by dict equality (FAR-1856). The
+    application ALWAYS persists the three-key shape
+    ``{"stages": [...], "edges": [...], "notes": "..."}`` (``normalize_content``
+    in ``core/lifecycle_map/validation.py``), so ``content_json == {}`` only ever
+    matched rows written by seeds/tests and never surfaced a map the UI had
+    emptied — even though every other reader treats "no stages" as
+    ``content.get("stages") or []`` (``api/routes/lifecycle_maps.py``,
+    ``derive_lifecycle_map_stages``).
+
+    A missing key, an empty array and a malformed non-array value all count as
+    "no stages" — matching those readers' ``isinstance(stages, list)`` guard.
+    Dialect-branched because the array-length function and its type guard
+    differ between Postgres (``jsonb``; the product DB) and SQLite (the unit
+    scanner suite's dialect).
+    """
+    stages = LifecycleMap.content_json["stages"]
+    dialect = resolve_dialect(session)
+    if dialect == "postgresql":
+        # ``jsonb_typeof`` is NULL for a missing key, so the CASE falls through
+        # to 0; the guard keeps ``jsonb_array_length`` from raising on a
+        # non-array value (Postgres refuses array length of a non-array).
+        length = case(
+            (func.jsonb_typeof(stages) == "array", func.jsonb_array_length(stages)),
+            else_=0,
+        )
+    else:
+        # SQLite: ``json_type`` is NULL for a missing path and
+        # ``json_array_length`` returns 0 for any non-array value.
+        length = case(
+            (func.json_type(LifecycleMap.content_json, "$.stages") == "array", func.json_array_length(stages)),
+            else_=0,
+        )
+    return func.coalesce(length, 0) == 0
+
+
 async def _scan_empty_lifecycle_maps(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
     """Lifecycle maps with empty content (no stages configured)."""
     maps = (
@@ -724,7 +763,7 @@ async def _scan_empty_lifecycle_maps(session: AsyncSession, org_id: uuid.UUID) -
                 select(LifecycleMap).where(
                     LifecycleMap.organisation_id == org_id,
                     LifecycleMap.deleted_at.is_(None),
-                    LifecycleMap.content_json == {},  # empty dict = no content
+                    _lifecycle_map_has_no_stages(session),
                 )
             )
         )
