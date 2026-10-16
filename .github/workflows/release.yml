@@ -7,18 +7,43 @@ name: "Release: Cut / Recut / Promote"
 #   cut     - tag vX.Y.Z-rcN at main HEAD, push release-freeze, trigger rc-validate
 #   recut   - after a manually-merged fix on main: tag the NEXT RC, re-freeze
 #   release - promote vX.Y.Z GA at the validated RC commit and lift the freeze (requires a successful rc-validate run recorded as validated/<rc>)
+#   dry-run - rehearse the whole release: build every artefact, publish NOTHING
+#
+# Dry-run (FAR-1867): the "publishes nothing" guarantee is STRUCTURAL, not a
+# prose promise. A dry-run pushes no tag of any kind - not `v*`, not
+# `release-freeze`, not `validated/*` (a single `v*` push would itself fire
+# publish-images.yml and push container images) - performs no registry push, and
+# creates no GitHub Release, CHANGELOG commit, PyPI package, Helm OCI tag,
+# attestation or deploy. It is therefore safe to run during an active freeze.
+# Any publish-shaped job added below MUST be gated with
+# `if: inputs.action != 'dry-run'`, which is what keeps that property true as the
+# workflow grows. See docs/release-process.md.
+#
+# platforms: v1 ships the container images for linux/amd64 ONLY. That is what
+#   publish-images.yml actually builds and pushes today, and it is asserted here
+#   rather than assumed. The remaining slots are named so the gap stays labelled:
+#     linux/arm64   - Planned (P2). docs/system-requirements.md lists it as
+#                     Planned (P2); scripts/bundle-versions.env already carries
+#                     the arm64 pins; bundle-release.yml already carries a
+#                     disabled arm64 matrix leg. Nothing in .github/workflows
+#                     cross-builds arm64 today, so wiring it into the publish
+#                     path (and adding the leg to the matrix below) is a later
+#                     slice's work.
+#     macOS         - Planned (P2), out of scope for v1 (FAR-1873; ADR 031).
+#     Windows       - Planned (P3), out of scope for v1 (FAR-1873; ADR 031).
 
 on:
   workflow_dispatch:
     inputs:
       action:
-        description: "cut = new RC + freeze | recut = next RC after manual fix | release = promote GA + unfreeze"
+        description: "cut = new RC + freeze | recut = next RC after manual fix | release = promote GA + unfreeze | dry-run = build all, publish nothing"
         type: choice
         required: true
         options:
           - cut
           - recut
           - release
+          - dry-run
       version:
         description: "Release version in X.Y.Z form (e.g. 0.1.0)"
         type: string
@@ -236,3 +261,239 @@ jobs:
           fi
 
           exit $rc
+
+  # ===========================================================================
+  # Dry-run rehearsal (FAR-1867, release slice 3)
+  #
+  # Resolves what a real `cut` WOULD do and proves the release is coherent,
+  # while publishing nothing. Read-only: it resolves a tag name, reads HEAD, and
+  # writes a step summary. It creates no tag, pushes nothing, and touches neither
+  # `release-freeze` nor CHANGELOG.md, so it is safe to run during a freeze.
+  # ===========================================================================
+  dry-run:
+    name: Dry-run rehearsal (${{ inputs.version }})
+    if: inputs.action == 'dry-run'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history so the RC-number lookup below sees every existing tag.
+          fetch-depth: 0
+          ref: main
+
+      - name: Validate version input
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::version must be semver X.Y.Z (e.g. 0.1.0); got '$VERSION'"
+            exit 1
+          fi
+
+      - name: Rehearse the release (no tags, no pushes, no publishes)
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          BASE="v${VERSION}"
+
+          # Next free RC number - the SAME resolution the live `cut` step uses.
+          # Read-only: this inspects existing tags and creates none.
+          N=1
+          while git rev-parse -q --verify "refs/tags/${BASE}-rc${N}" >/dev/null 2>&1; do
+            N=$((N+1))
+          done
+          RC_TAG="${BASE}-rc${N}"
+          HEAD_SHA="$(git rev-parse HEAD)"
+
+          {
+            echo "## Dry-run rehearsal - nothing was published"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Resolved version | ${VERSION} |"
+            echo "| main HEAD | ${HEAD_SHA} |"
+            echo "| RC tag a real cut would create | ${RC_TAG} |"
+            echo "| GA tag a real release would create | ${BASE} |"
+            echo ""
+            echo "A real cut WOULD have: tagged ${RC_TAG} at ${HEAD_SHA}, force-moved"
+            echo "the release-freeze tag to it, and dispatched rc-validate.yml for it."
+            echo ""
+            echo "This run deliberately did none of that and published nothing: no git"
+            echo "tag, no container image, no GitHub Release, no CHANGELOG commit, no"
+            echo "PyPI package, no Helm chart, no attestation, no deploy."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "Dry-run OK: a real cut would have created ${RC_TAG} at ${HEAD_SHA}; nothing was published."
+
+  # ===========================================================================
+  # Artefact build (FAR-1867, release slice 3)
+  #
+  # Builds every container image with publishing SUPPRESSED, so a dry-run proves
+  # the Dockerfiles build without touching a registry. This is a build SKELETON:
+  # the publish path (registry login, push, and the image smoke checks) is owned
+  # by later slices and stubbed below, so the smoke checks that gate
+  # publish-images.yml (the 2026-07-06 crash-loop regression) are deliberately
+  # NOT duplicated here - they belong with the publish path that FAR-1869 wires
+  # into this workflow. A `push: false` build produces no loadable image, so it
+  # could not run them even if it wanted to.
+  #
+  # linux/amd64 only, matching what v1 actually ships (see the `platforms:`
+  # header comment). Cross-building arm64 under QEMU would rehearse a platform no
+  # publish path produces, and it is the slowest, most flake-prone leg - so it is
+  # left labelled rather than enabled, mirroring bundle-release.yml.
+  # ===========================================================================
+  build-images:
+    name: Build ${{ matrix.image }} (no push)
+    if: inputs.action == 'dry-run'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      # Never let one image's failure cancel the others - a dry-run should
+      # surface every broken Dockerfile in one pass.
+      fail-fast: false
+      matrix:
+        # Built from `include` only (no base list), mirroring the context/file
+        # pairing of publish-images.yml exactly so the rehearsal exercises the
+        # same Dockerfiles the real publish will.
+        include:
+          - image: all-in-one
+            context: .
+            dockerfile: deploy/docker/Dockerfile.all-in-one
+            image_name: ${{ github.repository }}
+          - image: backend
+            context: backend
+            dockerfile: backend/Dockerfile
+            image_name: ${{ github.repository }}/backend
+          - image: frontend
+            context: frontend
+            dockerfile: frontend/Dockerfile.prod
+            image_name: ${{ github.repository }}/frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build ${{ matrix.image }} (no push)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          # Only the platform v1 ships (see the `platforms:` header comment).
+          platforms: linux/amd64
+          # Publishing is SUPPRESSED: a dry-run must never reach a registry.
+          push: false
+          # The tag mirrors the real publish shape (FAR-1869) and is never
+          # pushed. buildx notes "No output specified" here - that is expected,
+          # because a dry-run intentionally produces no exportable artefact.
+          tags: ghcr.io/${{ matrix.image_name }}:dry-run-${{ github.run_id }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  # ===========================================================================
+  # Deliberate stubs for the later release slices (FAR-1868 .. FAR-1872).
+  #
+  # Each is a named, visible no-op: the slot exists so the release path is
+  # legible end-to-end, and it can never run, so it can never be mistaken for
+  # working. The guard is `if: inputs.action == 'never'` - a value the `action`
+  # input cannot take, so the condition is never satisfiable. It is written that
+  # way rather than as `if: false` because actionlint rejects a constant
+  # condition (`if-cond`: "constant expression in condition. remove the if:
+  # section"), and the lint gate must stay green. Each is replaced with a real
+  # job by the ticket named on it. See docs/release-process.md.
+  # ===========================================================================
+
+  # FAR-1869 (release slice 5) - versioned GHCR publish of the images, including
+  # the first-ever publish of the runner image.
+  publish-images:
+    name: "STUB FAR-1869 - publish container images"
+    if: inputs.action == 'never'
+    runs-on: ubicloud-standard-2
+    permissions:
+      contents: read
+    steps:
+      - name: Not implemented yet
+        run: |
+          echo "STUB (FAR-1869, release slice 5): publish the versioned container images to GHCR."
+          echo "Not implemented yet. This is the publish path - registry login, the image push,"
+          echo "and the per-image smoke checks - and is owned by FAR-1869. Keeping it a no-op"
+          echo "guarantees a dry-run can never reach a registry push."
+
+  # FAR-1869 (release slice 5) - the native release bundle and the release record.
+  publish-release-bundle:
+    name: "STUB FAR-1869 - release bundle, GitHub Release, Helm chart"
+    if: inputs.action == 'never'
+    runs-on: ubicloud-standard-2
+    permissions:
+      contents: read
+    steps:
+      - name: Not implemented yet
+        run: |
+          echo "STUB (FAR-1869, release slice 5): build, sign and attest the native release bundle"
+          echo "from scripts/bundle-versions.env, push bundle-v*, create the GitHub Release with its"
+          echo "assets, and push the Helm chart to OCI. Owned by FAR-1869."
+
+  # FAR-1868 (release slice 4) - attestation and SBOM production.
+  produce-sbom-and-attestations:
+    name: "STUB FAR-1868 - SBOM and build attestations"
+    if: inputs.action == 'never'
+    runs-on: ubicloud-standard-2
+    permissions:
+      contents: read
+    steps:
+      - name: Not implemented yet
+        run: |
+          echo "STUB (FAR-1868, release slice 4): produce a build attestation for every published"
+          echo "artefact and a SBOM via backend/scripts/generate-sbom.py. Owned by FAR-1868 - note"
+          echo "that native-release-smoke.yml already runs 'gh attestation verify', which has no"
+          echo "producer on the release path until this job lands."
+
+  # FAR-1870 (release slice 6) - the deterministic RC soak.
+  dispatch-rc-soak:
+    name: "STUB FAR-1870 - dispatch the RC soak"
+    if: inputs.action == 'never'
+    runs-on: ubicloud-standard-2
+    permissions:
+      contents: read
+    steps:
+      - name: Not implemented yet
+        run: |
+          echo "STUB (FAR-1870, release slice 6): dispatch 'Deploy: Staging + Prod' with"
+          echo "force_deploy=true and then rc-validate.yml, so an RC is actually soaked and the"
+          echo "validated/<rc> marker a real release requires can be produced. Owned by FAR-1870."
+
+  # FAR-1871 (release slice 7) - the PyPI package.
+  publish-pypi:
+    name: "STUB FAR-1871 - publish the Python package"
+    if: inputs.action == 'never'
+    runs-on: ubicloud-standard-2
+    permissions:
+      contents: read
+    steps:
+      - name: Not implemented yet
+        run: |
+          echo "STUB (FAR-1871, release slice 7): build with uv and publish to PyPI via the"
+          echo "Trusted Publisher OIDC flow on a GA release only, fixing the MIT-vs-BUSL licence"
+          echo "metadata on the way. Owned by FAR-1871."
+
+  # FAR-1872 (release slice 8) - release documentation and version pins.
+  pin-release-docs:
+    name: "STUB FAR-1872 - pin the released version in docs"
+    if: inputs.action == 'never'
+    runs-on: ubicloud-standard-2
+    permissions:
+      contents: read
+    steps:
+      - name: Not implemented yet
+        run: |
+          echo "STUB (FAR-1872, release slice 8): write the versioned install command into README.md"
+          echo "and the version-pin table in the docs. Note the compose TAG template is deliberately"
+          echo "never rewritten to a fixed version. Owned by FAR-1872."
