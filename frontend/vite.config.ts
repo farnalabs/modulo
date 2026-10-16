@@ -9,6 +9,22 @@ import autoprefixer from 'autoprefixer'
 
 const require = createRequire(import.meta.url)
 
+// Read the first `VITE_PRIMEUI_LICENSE=` line from an .env file, returning its
+// trimmed value, or null when the file is unreadable / the key is absent or
+// empty. A missing licence is already visible via PrimeVue's banner, so an
+// unreadable candidate is not an error.
+function readPrimeUiLicenseFromEnvFile(path: string): string | null {
+  try {
+    const line = readFileSync(path, 'utf8')
+      .split(/\r?\n/)
+      .find((l) => l.startsWith('VITE_PRIMEUI_LICENSE='))
+    if (!line) return null
+    return line.slice(line.indexOf('=') + 1).trim() || null
+  } catch {
+    return null
+  }
+}
+
 // FAR-1858: surface VITE_PRIMEUI_LICENSE from the nearest ancestor .env
 // (gitignored — e.g. the workspace-root .env) into process.env when it is not
 // already set. Vite inlines process-env VITE_* vars into import.meta.env, so
@@ -27,20 +43,10 @@ function liftPrimeUiLicenseFromAncestorEnv(): void {
   for (let i = 0; i < 10; i++) {
     const candidate = join(dir, '.env')
     if (existsSync(candidate)) {
-      try {
-        const line = readFileSync(candidate, 'utf8')
-          .split(/\r?\n/)
-          .find((l) => l.startsWith('VITE_PRIMEUI_LICENSE='))
-        if (line) {
-          const value = line.slice(line.indexOf('=') + 1).trim()
-          if (value) {
-            process.env.VITE_PRIMEUI_LICENSE = value
-            return
-          }
-        }
-      } catch {
-        // Unreadable candidate — keep walking; a missing licence is already
-        // visible via PrimeVue's banner, so absence here is not an error.
+      const value = readPrimeUiLicenseFromEnvFile(candidate)
+      if (value) {
+        process.env.VITE_PRIMEUI_LICENSE = value
+        return
       }
     }
     const parent = join(dir, '..')
