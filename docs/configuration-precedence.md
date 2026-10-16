@@ -60,7 +60,7 @@ Do not conflate these; they do NOT share a code path:
   org-wide trigger pause, `org_row_is_paused`) from the database rows -
   a per-request decision layered above Settings, read fresh from Postgres
   on every fire path. It is not part of the precedence order above, but it
-  is not env-free either: its `get_schema_validator_mode` resolver runs a
+  is not env-free either: its `resolve_schema_validator_mode` resolver runs a
   four-level chain (FAR-899) of
   `organisations.settings_json["schema_validator_mode"]` (per-org) →
   `system_config` row (instance-wide) → `MODULO_SCHEMA_VALIDATOR_MODE`
