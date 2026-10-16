@@ -1,6 +1,7 @@
 """Unit tests for the registry protocol v2 crypto module."""
 
 import copy
+import hashlib
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -71,13 +72,11 @@ class TestCryptoV2:
 
         assert verify_signature(data, tampered_sig, kp["public_key"]) is False
 
-    def test_sign_primitive_with_fingerprint_roundtrip(self):
+    def test_generate_keypair_fingerprint_matches_sha256_derivation(self):
         kp = generate_keypair()
         fp = kp["fingerprint"]
 
         # Re-derive fingerprint from public key hex
-        import hashlib
-
         expected_fp = hashlib.sha256(bytes.fromhex(kp["public_key"])).hexdigest()[:16]
         assert fp == expected_fp
 
@@ -107,6 +106,15 @@ class TestCryptoV2:
     def test_verify_signature_empty_signature_returns_false(self):
         kp = generate_keypair()
         assert verify_signature({"name": "test"}, "", kp["public_key"]) is False
+
+    def test_verify_signature_rejects_short_public_key_hex(self):
+        kp = generate_keypair()
+        sig = sign_primitive({"name": "test"}, kp["private_key"])
+        assert verify_signature({"name": "test"}, sig, "00" * 16) is False
+
+    def test_sign_primitive_rejects_short_private_key_hex(self):
+        with pytest.raises(ValueError, match="invalid private key hex"):
+            sign_primitive({"name": "test"}, "00" * 16)
 
     def test_canonical_json_rejects_non_serializable_values(self):
         from modulo.core.registry.crypto import _canonical_json
