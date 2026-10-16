@@ -8,7 +8,8 @@ Lenses:
 
 * **Chain** — 0311 revises ``0310_library_cluster_db_hardening``; the
   migrations directory has exactly one head
-  (``0316_policy_gate_evaluation_mode``, which chains onto
+  (``0317_organisation_cost_state``, which chains onto
+  ``0316_policy_gate_evaluation_mode``, which chains onto
   ``0315_service_accounts_lifecycle``, which chains onto
   ``0314_external_agents_mcp_servers``, which chains onto
   ``0313_collection_install_drop_installed_entities``, and is pinned by all sibling chain
@@ -47,7 +48,7 @@ from modulo.db.models.publisher import Publisher
 
 _MIGRATION_REVISION = "0311_library_cluster_schema_hygiene"
 _MIGRATION_DOWN_REVISION = "0310_library_cluster_db_hardening"
-_HEAD_MIGRATION = "0316_policy_gate_evaluation_mode"
+_HEAD_MIGRATION = "0317_organisation_cost_state"
 
 _DROP_INSTALL_ENTITY_INDEX = "ix_collection_install_entity_install_id"
 _DROP_PUBLISHER_INDEX = "ix_publishers_public_key_hex"
@@ -106,7 +107,7 @@ def _joined(rec: _Recorder) -> str:
 
 
 class TestChain:
-    def test_single_head_is_0316_policy_gate_evaluation_mode(self) -> None:
+    def test_single_head_is_0317_organisation_cost_state(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 

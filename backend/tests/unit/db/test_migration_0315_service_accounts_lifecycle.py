@@ -37,7 +37,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0315_service_accounts_lifecycle"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0314_external_agents_mcp_servers"
-_HEAD_MIGRATION = "0316_policy_gate_evaluation_mode"
+_HEAD_MIGRATION = "0317_organisation_cost_state"
 
 _CHECK_NAME = "ck_accounts_decommissioned_service"
 _CHECK_PREDICATE = "decommissioned_at IS NULL OR kind = 'service'"
@@ -62,7 +62,7 @@ def _source() -> str:
 
 
 class TestChain:
-    def test_single_head_is_0316_policy_gate_evaluation_mode(self) -> None:
+    def test_single_head_is_0317_organisation_cost_state(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 

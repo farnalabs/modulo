@@ -62,7 +62,9 @@ Lenses:
     0315_service_accounts_lifecycle chains onto
     0314_external_agents_mcp_servers, and
     0316_policy_gate_evaluation_mode chains onto
-    0315_service_accounts_lifecycle as the
+    0315_service_accounts_lifecycle, and
+    0317_organisation_cost_state chains onto
+    0316_policy_gate_evaluation_mode as the
     single linear head.
 * **Structure (mocked ``op``)** - upgrade emits FOUR existence-gated DO blocks
   (add NOT VALID, then VALIDATE, for each of the two columns) carrying the full
@@ -88,7 +90,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0259_pipeline_snapshot_max_autonomy_check"
 _MIGRATION_DOWN_REVISION = "0258_pipeline_accountability_owners"
-_HEAD_MIGRATION = "0316_policy_gate_evaluation_mode"
+_HEAD_MIGRATION = "0317_organisation_cost_state"
 _MAX_CEILING_CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_level"
 _DEFAULT_LEVEL_CONSTRAINT = "ck_pipeline_snapshots_default_autonomy_level"
 _CONSTRAINTS = (_MAX_CEILING_CONSTRAINT, _DEFAULT_LEVEL_CONSTRAINT)
