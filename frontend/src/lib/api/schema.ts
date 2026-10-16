@@ -5471,6 +5471,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Plan Bootstrap
+         * @description Caller-scoped effective plan bootstrap, readable by any authenticated member.
+         *
+         *     FAR-1806: the client's plan/tier/feature bootstrap previously read the
+         *     instance-admin-only ``/api/v1/admin/feature-flags`` (and
+         *     ``/api/v1/admin/license``), so every non-admin ran the app on permanently
+         *     wrong defaults (tier ``community``, ``dev_mode`` false, no flags). This
+         *     endpoint serves the same caller-scoped truth — effective tier, dev mode,
+         *     licence view, and the FULL effective flag set with the org
+         *     ``feature_overrides`` overlay — with no permission beyond authentication
+         *     against the caller's own org. The admin endpoints keep their
+         *     system-admin/permission gates for the inspection and toggle UI.
+         *
+         *     Failure ladder mirrors ``viewmodel_current``: ProgrammingError -> 501,
+         *     SQLAlchemyError -> 503, HTTPException re-raised, Exception -> 500.
+         */
+        get: operations["plan_bootstrap_api_v1_plan_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/viewmodel/views": {
         parameters: {
             query?: never;
@@ -17045,12 +17078,65 @@ export interface components {
              */
             environment_profile_id?: string | null;
         };
+        /**
+         * PlanBootstrapResponse
+         * @description Caller-scoped effective plan + feature bootstrap (FAR-1806).
+         *
+         *     Readable by ANY authenticated member of their own org (no instance-admin
+         *     permission), with the org ``feature_overrides`` overlay applied and the
+         *     FULL known flag set present — inactive flags carry
+         *     ``currently_active: false`` rather than being omitted.
+         */
+        PlanBootstrapResponse: {
+            license: components["schemas"]["PlanLicenseInfo"];
+            /** Dev Mode */
+            dev_mode: boolean;
+            /** Flags */
+            flags: components["schemas"]["PlanFlagInfo"][];
+        };
+        /**
+         * PlanFlagInfo
+         * @description One effective feature flag in the ``/api/v1/plan`` payload.
+         *
+         *     Mirrors the admin feature-flag list's ``flags[]`` vocabulary
+         *     (``currently_active`` / ``depends_on`` included) so a client reading
+         *     either endpoint maps the same field names.
+         */
+        PlanFlagInfo: {
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Tier */
+            tier: string;
+            /** Currently Active */
+            currently_active: boolean;
+            /** Depends On */
+            depends_on?: string[] | null;
+        };
         /** PlanInfo */
         PlanInfo: {
             /** Tier */
             tier: string;
             /** Daily Spend Limit */
             daily_spend_limit?: number | null;
+        };
+        /**
+         * PlanLicenseInfo
+         * @description Effective-licence view served by ``GET /api/v1/plan`` (FAR-1806).
+         *
+         *     ``tier`` is the plan context's resolved tier; ``expires_at`` / ``org_id``
+         *     come from the same licence-ladder rung the admin ``/api/v1/admin/license``
+         *     resolver walks, so a member reads the licence view without hitting an
+         *     admin-permission-gated endpoint.
+         */
+        PlanLicenseInfo: {
+            /** Tier */
+            tier: string;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Org Id */
+            org_id?: string | null;
         };
         /** PluginHealth */
         PluginHealth: {
@@ -33044,6 +33130,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ViewModelCurrent"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    plan_bootstrap_api_v1_plan_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanBootstrapResponse"];
                 };
             };
             /** @description Validation Error */

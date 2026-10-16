@@ -398,6 +398,26 @@ class TestListFeatureFlags:
         sso = next(f for f in body["flags"] if f["name"] == "sso")
         assert sso["currently_active"] is False
 
+    def test_missing_org_row_returns_registry_defaults(self, client: TestClient) -> None:
+        """``_read_org_overrides`` with a vanished org row returns ``{}`` — the
+        shared bool-only reader's org-None branch answers, no exception."""
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            resp = client.get("/api/v1/admin/feature-flags")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        sso = next(f for f in body["flags"] if f["name"] == "sso")
+        assert sso["currently_active"] is False
+
 
 # ---------------------------------------------------------------------------
 # GET /api/v1/admin/feature-flags/{flag_name}
