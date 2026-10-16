@@ -3032,25 +3032,24 @@ function scheduleMobileRefit() {
 }
 
 let mobileFitObserver: MutationObserver | null = null
-onMounted(() => {
-  refitMobileEditor()
-  window.addEventListener('resize', scheduleMobileRefit)
-  // Re-measure only when the CHROME ABOVE the editor changes — that is the
-  // only thing that moves the editor's document-relative top. A body-wide
-  // observer (childList+subtree+attributes:class/style) also fired on
-  // VueFlow's viewport transform, which is written as an inline style on
-  // every pointermove during pan/zoom/node-drag — turning the mobile hot
-  // path into a forced synchronous layout (the getBoundingClientRect in
-  // refitMobileEditor) once per animation frame. Narrow targets instead:
-  //  - the editor's parent (AppLayout's <main>): its `class` carries the
-  //    padding-top offsets (fixed mobile header / onboarding banner) and its
-  //    direct childList catches a new chrome block inserted above the editor,
-  //    without ever descending into the editor where VueFlow lives;
-  //  - each element ABOVE the editor root inside that parent (banner
-  //    container, breadcrumb): subtree childList + class/style attributes
-  //    catch those banners mounting, unmounting and toggling asynchronously —
-  //    the behaviour the original body-wide observer existed for.
-  const root = editorRootRef.value
+// Re-measure only when the CHROME ABOVE the editor changes — that is the
+// only thing that moves the editor's document-relative top. A body-wide
+// observer (childList+subtree+attributes:class/style) also fired on
+// VueFlow's viewport transform, which is written as an inline style on
+// every pointermove during pan/zoom/node-drag — turning the mobile hot
+// path into a forced synchronous layout (the getBoundingClientRect in
+// refitMobileEditor) once per animation frame. Narrow targets instead:
+//  - the editor's parent (AppLayout's <main>): its `class` carries the
+//    padding-top offsets (fixed mobile header / onboarding banner) and its
+//    direct childList catches a new chrome block inserted above the editor,
+//    without ever descending into the editor where VueFlow lives;
+//  - each element ABOVE the editor root inside that parent (banner
+//    container, breadcrumb): subtree childList + class/style attributes
+//    catch those banners mounting, unmounting and toggling asynchronously —
+//    the behaviour the original body-wide observer existed for.
+// Extracted from onMounted so each guard (root / parent present) is
+// unit-testable; `root` is null only in the defensive detached case.
+function setupMobileFitObserver(root: HTMLElement | null) {
   const parent = root?.parentElement ?? null
   if (root && parent) {
     // Stop at the first element containing the root (the root itself when it
@@ -3086,6 +3085,12 @@ onMounted(() => {
     })
     observeChromeSiblings()
   }
+}
+
+onMounted(() => {
+  refitMobileEditor()
+  window.addEventListener('resize', scheduleMobileRefit)
+  setupMobileFitObserver(editorRootRef.value)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('resize', scheduleMobileRefit)
