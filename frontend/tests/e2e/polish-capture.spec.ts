@@ -64,8 +64,11 @@
  *                         + computed `overflow`, the `main` element rect,
  *                         interactive-control count + bounding boxes, `clipped`
  *                         and `smallTargets` (with non-rendered/off-canvas
- *                         subtrees excluded), plus the console errors collected
- *                         during the run.
+ *                         subtrees excluded), a `pageHealth` probe of any
+ *                         rendered `error-alert-*` control (`{ healthy, signals
+ *                         }` — recorded data the skill acts on, never an
+ *                         assertion), plus the console errors collected during
+ *                         the run.
  *
  * Full-page screenshots are best-effort per viewport: canvas/chart-heavy routes
  * (e.g. the pipeline editor) can crash a Playwright worker on a full-page
@@ -172,6 +175,16 @@ interface SmallTargetEntry extends Box {
   measuredVia: 'self' | 'label'
 }
 
+/**
+ * Rendered-error probe. `healthy` is true when no `error-alert-*` control is in
+ * the DOM. Recorded DATA only — the consuming polish skill acts on it; the test
+ * never asserts it (an error-state render is a valid capture artefact).
+ */
+interface PageHealth {
+  healthy: boolean
+  signals: string[]
+}
+
 interface ViewportMeasurement {
   viewport: ViewportName
   viewportWidth: number
@@ -187,6 +200,7 @@ interface ViewportMeasurement {
   controlBoxes: Box[]
   clipped: ClipEntry[]
   smallTargets: SmallTargetEntry[]
+  pageHealth: PageHealth
   screenshots: { viewport: string; fullPage: string | null; fullPageError: string | null }
   consoleErrors: { type: ConsoleEntry['type']; text: string }[]
 }
@@ -456,6 +470,19 @@ test.describe('polish capture', () => {
         },
       )
 
+      // Rendered-error probe: record a signal for each shared ErrorAlert
+      // control in the DOM (root has no testid; its buttons do). Recorded, not
+      // asserted — a capture of an error state is still a successful capture,
+      // but the consuming skill must be able to SEE it.
+      const pageHealth: PageHealth = await page.evaluate(() => {
+        const alerts = Array.from(document.querySelectorAll('[data-testid^="error-alert-"]'))
+        const signals = alerts.map((el) => {
+          const text = (el.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 80)
+          return text || (el.getAttribute('data-testid') ?? 'error-alert')
+        })
+        return { healthy: signals.length === 0, signals }
+      })
+
       // Screenshots: viewport shot (required — its failure fails the capture),
       // full-page shot (best-effort — canvas/chart-heavy routes can crash the
       // Playwright worker, so a failure is recorded, never fatal).
@@ -476,6 +503,7 @@ test.describe('polish capture', () => {
 
       const measurement: ViewportMeasurement = {
         ...measured,
+        pageHealth,
         screenshots: { viewport: viewportFile, fullPage, fullPageError },
         consoleErrors: consoleEntries
           .filter((e) => e.segment === vp.name)
