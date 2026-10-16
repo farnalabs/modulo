@@ -206,11 +206,11 @@ async function preparePage(page: Page, route: string, env: TestEnv): Promise<Pag
   await waitForAppMount(page, route, response)
 
   // No content settle here (FAR-1876). A blanket
-  // `waitForSelector('[data-loading="false"]')` can never succeed: only
-  // AnalyticsView and SettingsLicenseView render that marker and neither is in
-  // the sweep, so on every other route the wait burned its full 15s timeout
-  // and was then discarded by `.catch(() => {})`. Two of those (32.3s incl.
-  // navigation) overran the 30s local test budget, the deadline fired mid-wait,
+  // `waitForSelector('[data-loading="false"]')` only matches on the two routes
+  // that render the marker (AnalyticsView and SettingsLicenseView); on every
+  // other route the wait burned its full 15s timeout and was then discarded by
+  // `.catch(() => {})`. Two of those (32.3s incl. navigation) overran the 30s
+  // local test budget, the deadline fired mid-wait,
   // and the discarded rejection let the test limp into checkViewportMeta()
   // during teardown — reported as a viewport-meta failure (`Received string:
   // ""`) with no trace of the real cause. There is no universal content marker
