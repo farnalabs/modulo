@@ -11,11 +11,19 @@ path never updates — and never takes a row lock on — the ``organisations`` r
 (the FAR-1823 / D9 lock-coupling shape). Migration ``0317`` creates and
 backfills it, then drops the three ``organisations`` columns of the same names.
 
-The table is deliberately keyed ``org_id`` and NOT ``organisation_id``: the
-``rls_org_isolation`` policies and the ORM tenant filter both key on the exact
-column name ``organisation_id``, so this row sits outside that regime by
-construction (the same naming rule ``system_audit_events`` documents). Access
-is always by an explicit organisation id.
+The table is deliberately keyed ``org_id`` and NOT ``organisation_id``, so it
+sits outside the generic ``organisation_id`` RLS sweep by construction. It is
+STILL row-level-secured: migration ``0317`` ENABLEs (and FORCEs) RLS with an
+explicit ``org_id`` policy, because on Postgres the ORM tenant filter is a no-op
+(``db/rls.py`` returns early for ``postgres``), so RLS is the only DB-level
+backstop. Every production path here (the admin cost routes, the finalize
+gate+accrual, the executor pre-dispatch gate) runs under ``set_rls_org``.
+
+Earlier revisions of this docstring drew a parallel to ``system_audit_events``;
+that analogy was INAPT. ``system_audit_events`` is append-only, has no FK and
+must OUTLIVE org deletion, so it deliberately sits outside RLS. This table is the
+opposite — mutable, ``ON DELETE CASCADE``, and it MUST NOT survive its org — so
+it is a normal org-scoped table and RLS is correct.
 """
 
 import uuid
