@@ -55,7 +55,6 @@ import AssistantPanel from "./assistant/AssistantPanel.vue";
 import AppSidebar from "./AppSidebar.vue";
 import { useAssistantStore } from "../composables/useAssistantStore";
 import { useSidebarMode } from "../composables/useSidebarMode";
-import { useOnboardingStore } from "../composables/useOnboarding";
 import { abortUiCommands } from "../composables/useUiCommandExecutor";
 import { applyPrimeVueTokenBridge } from "../lib/primevue-theme";
 import OnboardingBanner from "./onboarding/OnboardingBanner.vue";
@@ -67,9 +66,6 @@ import ProductAnalyticsConsentPrompt from "./product-analytics/ProductAnalyticsC
 
 const planStore = usePlanStore();
 const assistantStore = useAssistantStore();
-const onboardingStore = useOnboardingStore();
-
-const onboardingActive = computed(() => onboardingStore.isActive);
 
 const commandPaletteRef = ref<InstanceType<typeof CommandPalette> | null>(null);
 
@@ -83,21 +79,15 @@ const isLight = ref(document.documentElement.classList.contains("light"));
 // with AppSidebar via useSidebarMode so the two can't drift.
 const { showMobileHeader } = useSidebarMode();
 
-// Single mutually-exclusive padding source: the fixed mobile header (3.5rem)
-// and the onboarding banner (8.25rem mobile / 5rem desktop) are both offsets
-// that would collide if applied as separate additive class bindings — when both
-// conditions are true on mobile one class silently wins and the other is lost.
-// Only one computed drives <main>'s padding-top.
-const mainPaddingClass = computed(() => {
-  if (onboardingActive.value) {
-    // Banner is in-flow at the top of <main>; on mobile it must clear the fixed
-    // header (3.5rem) AND reserve its own height (8.25rem).
-    return showMobileHeader.value
-      ? 'pt-[calc(3.5rem+8.25rem)] md:pt-20'
-      : 'pt-[8.25rem] md:pt-20'
-  }
-  return showMobileHeader.value ? 'pt-14 md:pt-0' : ''
-});
+// <main>'s only top offset is the fixed mobile chrome described above
+// (h-14 / 3.5rem). The onboarding banner needs NO offset: it is in normal flow
+// (OnboardingBanner.vue `.onboarding-banner { position: relative }`) and
+// reserves its own height, so padding <main> for it double-counts the gap. The
+// old 8.25rem/5rem banner terms were a stale leftover from when the banner was
+// an overlay.
+const mainPaddingClass = computed(() =>
+  showMobileHeader.value ? 'pt-14 md:pt-0' : '',
+);
 
 // The Assistant panel is a position:fixed overlay (AssistantPanel .assistant-panel) in every
 // open state, including "docked" — it floats above the page on the right with

@@ -101,7 +101,7 @@
 
        Review finding: the placeholder must read as pending NAV, not a blank
        slot. It now mirrors the drawer header's hamburger geometry (same 22px
-       Menu glyph in the same p-2 rounded box, but non-interactive with a muted
+       Menu glyph in the same 44px rounded box, but non-interactive with a muted
        tone) and is a labelled live region (`role="status"` + `aria-busy`) so
        attempted activation gets visible wait feedback instead of silence. The
        header is position:fixed, so neither it nor <main>'s offset shifts when
@@ -116,7 +116,7 @@
     >
       <span
         data-testid="mobile-nav-pending-hamburger"
-        class="rounded-md p-2 text-muted-foreground/50"
+        class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted-foreground/50"
         aria-hidden="true"
       >
         <Menu class="h-[22px] w-[22px]" />
@@ -128,12 +128,12 @@
   <!-- Mobile + flag OFF: hamburger header + slide-in drawer + backdrop (restored from main) -->
   <template v-if="!isDesktop && mobileNavMode === 'drawer'">
     <header
-      class="md:hidden fixed top-0 left-0 right-0 z-50 flex items-center justify-between border-b bg-background px-4 h-14"
+      class="md:hidden fixed top-0 left-0 right-0 z-50 flex items-center justify-between gap-2 border-b bg-background px-4 h-14"
     >
       <button type="button"
         ref="mobileButtonRef"
         @click="mobileOpen = !mobileOpen"
-        class="rounded-md p-2 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+        class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
         :aria-label="mobileOpen ? $t('components.AppLayout.close_navigation') : $t('components.AppLayout.open_navigation')"
         :aria-expanded="mobileOpen"
         aria-controls="mobile-sidebar"
@@ -141,17 +141,17 @@
         <Menu v-if="!mobileOpen" class="h-[22px] w-[22px]" aria-hidden="true" />
         <X v-else class="h-[22px] w-[22px]" aria-hidden="true" />
       </button>
-      <div class="flex items-center gap-1.5 ml-auto" :inert="mobileOpen">
-        <NotificationBell />
+      <div class="flex items-center gap-1.5 ml-auto min-w-0" :inert="mobileOpen">
+        <NotificationBell size="touch" />
         <button type="button"
           @click="$emit('open-command-palette')"
-          class="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
           :title="$t('components.AppLayout.search_pages_hint', { modifier: isMac ? 'Cmd' : 'Ctrl' })"
           :aria-label="$t('components.AppLayout.search_pages')"
         >
           <Search class="h-[22px] w-[22px]" aria-hidden="true" />
         </button>
-        <label for="applayout-field-1" class="toggle-switch ml-2 mr-2" :class="isLight ? 'light' : 'dark'">
+        <label for="applayout-field-1" class="toggle-switch h-11 w-11 shrink-0 justify-center" :class="isLight ? 'light' : 'dark'">
           <span class="track">
             <span class="thumb" />
           </span>
@@ -164,14 +164,14 @@
             :checked="isLight"
           />
         </label>
-        <router-link to="/" class="flex items-center gap-1.5">
+        <router-link to="/" class="flex items-center gap-1.5 min-w-0">
           <div
-            class="flex items-center justify-center rounded-lg bg-primary/10 p-1.5"
+            class="flex items-center justify-center rounded-lg bg-primary/10 p-1.5 shrink-0"
           >
             <LogoMark :size="24" transparent />
           </div>
-          <h2 class="hidden min-[360px]:inline text-lg font-bold tracking-tight">{{ $t('components.AppLayout.modulo') }}</h2>
-          <Badge v-if="planStore.currentTier" severity="secondary" class="border border-border hidden min-[380px]:inline-flex text-[10px] px-1.5 py-0 leading-none opacity-70">
+          <h2 class="hidden min-[360px]:inline min-w-0 truncate text-lg font-bold tracking-tight">{{ $t('components.AppLayout.modulo') }}</h2>
+          <Badge v-if="planStore.currentTier" severity="secondary" class="shrink-0 border border-border hidden! min-[440px]:inline-flex! text-[10px] px-1.5 py-0 leading-none opacity-70">
             {{ planStore.getTierLabel(planStore.currentTier) }}
           </Badge>
         </router-link>
