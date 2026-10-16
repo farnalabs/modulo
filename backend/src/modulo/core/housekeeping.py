@@ -720,20 +720,28 @@ async def _scan_unused_schemas(session: AsyncSession, org_id: uuid.UUID) -> list
 def _lifecycle_map_has_no_stages(session: AsyncSession) -> ColumnElement[bool]:
     """SQL predicate: the map has no stages configured.
 
-    Emptiness is derived structurally, not by dict equality (FAR-1856). The
-    application ALWAYS persists the three-key shape
-    ``{"stages": [...], "edges": [...], "notes": "..."}`` (``normalize_content``
-    in ``core/lifecycle_map/validation.py``), so ``content_json == {}`` only ever
-    matched rows written by seeds/tests and never surfaced a map the UI had
-    emptied — even though every other reader treats "no stages" as
-    ``content.get("stages") or []`` (``api/routes/lifecycle_maps.py``,
-    ``derive_lifecycle_map_stages``).
+    Emptiness is derived structurally ("no stages"), never by dict equality
+    against ``{}`` (FAR-1856). Both real production shapes must count as empty:
 
-    A missing key, an empty array and a malformed non-array value all count as
-    "no stages" — matching those readers' ``isinstance(stages, list)`` guard.
-    Dialect-branched because the array-length function and its type guard
-    differ between Postgres (``jsonb``; the product DB) and SQLite (the unit
-    scanner suite's dialect).
+    * the three-key shape ``{"stages": [], "edges": [], "notes": ""}`` that the
+      editor's **save** path writes (``normalize_content`` in
+      ``core/lifecycle_map/validation.py``) once every stage is deleted; and
+    * a bare ``{}``, which the API persists for a map created with no content:
+      ``LifecycleMapCreate.content_json`` defaults to ``{}`` and
+      ``normalize_content`` leaves an empty payload ``{}`` (it validates only the
+      keys present and injects nothing).
+
+    Both are REQUIRED, not dead/legacy: a map created empty is empty just as
+    much as one the UI has emptied. A missing ``stages`` key, an empty array and
+    a malformed non-array value all count as "no stages" — matching the other
+    readers' ``content.get("stages") or []`` / ``isinstance(stages, list)``
+    guards (``api/routes/lifecycle_maps.py``, ``derive_lifecycle_map_stages``).
+
+    Dialect-branched because the array-length function and its type guard differ
+    between Postgres (``jsonb``; the product DB) and SQLite (the unit scanner
+    suite's dialect). ``jsonb_typeof`` returns NULL for a missing key, so the
+    CASE falls through to 0; the type guard stops ``jsonb_array_length`` raising
+    on a non-array value (Postgres refuses array length of a non-array).
     """
     stages = LifecycleMap.content_json["stages"]
     dialect = resolve_dialect(session)
@@ -745,12 +753,21 @@ def _lifecycle_map_has_no_stages(session: AsyncSession) -> ColumnElement[bool]:
             (func.jsonb_typeof(stages) == "array", func.jsonb_array_length(stages)),
             else_=0,
         )
-    else:
+    elif dialect == "sqlite":
         # SQLite: ``json_type`` is NULL for a missing path and
         # ``json_array_length`` returns 0 for any non-array value.
         length = case(
             (func.json_type(LifecycleMap.content_json, "$.stages") == "array", func.json_array_length(stages)),
             else_=0,
+        )
+    else:
+        # Fail loud on any other dialect rather than falling through to the
+        # SQLite branch: ``json_type``/``json_array_length`` are invalid on e.g.
+        # MySQL/MariaDB, where they would raise and ``scan_all`` would swallow
+        # the per-scanner exception into an empty category — the exact
+        # silent-failure class FAR-1856 fixed. Mirrors ``dialect_insert``.
+        raise NotImplementedError(
+            f"_lifecycle_map_has_no_stages is not implemented for the {dialect!r} backend (postgres/sqlite only)"
         )
     return func.coalesce(length, 0) == 0
 

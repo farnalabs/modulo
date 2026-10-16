@@ -106,9 +106,10 @@ class TestEmptyLifecycleMapScanOnPostgres:
                 content_json={},
             )
         )
-        # The application ALWAYS persists this three-key shape
-        # (``normalize_content``); it is what a map looks like after its stages
-        # were all deleted in the UI, and it is NOT ``{}``.
+        # The editor's save path writes this three-key shape
+        # (``normalize_content``) after all stages are deleted in the UI. It is
+        # distinct from the bare ``{}`` above (a map created with no content);
+        # both are real shapes the predicate must surface.
         db_session.add(
             LifecycleMap(
                 id=ui_emptied_id,

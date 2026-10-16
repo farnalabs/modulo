@@ -408,10 +408,13 @@ class TestEmptyLifecycleMaps:
         session.add(
             LifecycleMap(id=uuid.uuid4(), organisation_id=_ORG_A, account_id=_ACCOUNT, name="empty", content_json={})
         )
-        # The application always persists the three-key shape
-        # (``normalize_content``), so a map emptied in the UI is
-        # ``{"stages": [], ...}`` — NOT ``{}``. Before FAR-1856 it was never
-        # surfaced because the predicate was an equality against ``{}``.
+        # ``{}`` is a REAL shape, not a seed/test artefact: the API persists it
+        # for a map created with no content (``LifecycleMapCreate.content_json``
+        # defaults to ``{}`` and ``normalize_content`` leaves an empty payload
+        # untouched). The three-key shape below is what the editor's save path
+        # writes after every stage is deleted. Both must be surfaced; before
+        # FAR-1856 an equality against ``{}`` never matched the UI-emptied shape
+        # (and on Postgres raised outright — ``jsonb = json``).
         session.add(
             LifecycleMap(
                 id=uuid.uuid4(),

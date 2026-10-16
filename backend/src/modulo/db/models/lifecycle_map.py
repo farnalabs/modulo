@@ -43,11 +43,13 @@ class LifecycleMap(SoftDeleteMixin, OrgScoped):
     )
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
-    # DB stores JSONB (0147_json_to_jsonb_standardize); the PG variant keeps
-    # SQLite parity via generic JSON. Without it the ORM binds a ``json``
-    # parameter against the ``jsonb`` column and every SQL-level equality
-    # comparison (housekeeping's ``content_json == {}``) fails with
-    # ``operator does not exist: jsonb = json`` (FAR-1856).
+    # The DB column is ``jsonb`` (migration 0147_json_to_jsonb_standardize).
+    # The PG variant aligns the ORM declaration to that real column type, so a
+    # comparison cannot bind as ``json`` and fail with ``operator does not
+    # exist: jsonb = json`` — housekeeping's lifecycle-map emptiness predicate
+    # was the demonstrated instance (FAR-1856). Generic ``JSON`` keeps SQLite
+    # parity for the unit suites; the wider json-to-jsonb ORM alignment is
+    # tracked as FAR-1878.
     content_json: Mapped[dict[str, Any]] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=dict
     )
