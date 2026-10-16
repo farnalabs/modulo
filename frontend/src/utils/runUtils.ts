@@ -142,7 +142,10 @@ export function formatRunDate(dateStr: string | null): string {
  * Seconds elapsed since the run's last heartbeat, or null when there is no
  * heartbeat to measure (no heartbeat_at, terminal run, or invalid timestamp).
  * Shared by the runs list and run detail views so the age computation and the
- * stale threshold never drift apart.
+ * stale threshold never drift apart. Null for a terminal run is deliberate:
+ * an age measured against wall-clock "now" would keep growing forever after
+ * completion, and staleness only means something while a run is live — the
+ * terminal run's heartbeat is PRESENTED via `heartbeatDisplayText` instead.
  */
 export const HEARTBEAT_STALE_AFTER_SECONDS = 60
 
@@ -185,6 +188,41 @@ export function formatHeartbeatAge(age: number | null, t: (key: string, named?: 
   if (days >= 1) return t('common.heartbeat.days_hours_ago', { d: days, h: hours })
   if (totalMinutes >= 60) return t('common.heartbeat.hours_minutes_ago', { h: hours, m: pad2(totalMinutes % 60) })
   return t('common.heartbeat.minutes_seconds_ago', { m: totalMinutes, s: pad2(seconds) })
+}
+
+/**
+ * The value to RENDER for a run's "Last heartbeat" (FAR-1839), shared by the
+ * runs list and the run detail so the two surfaces can never disagree:
+ *
+ * - no `heartbeat_at` (or an unparseable one) → "—", the only case where the
+ *   dash means "there genuinely is no heartbeat";
+ * - TERMINAL run → the ABSOLUTE local time of the last heartbeat. The backend
+ *   keeps `heartbeat_at` on a finished run (only a re-dispatch clears it), so
+ *   the value exists and is worth showing — but an age measured against
+ *   wall-clock now would keep growing after completion, so a fixed timestamp
+ *   is what the reader actually wants next to Created/Started/Completed;
+ * - LIVE run → the humanized relative age (staleness is derived separately
+ *   from `heartbeatAgeSeconds`, which stays null on terminal runs so a
+ *   finished run can never carry the "(stale)" marker or the warnings-strip
+ *   entry).
+ *
+ * `formatAbsolute` is supplied by the caller so each surface renders the
+ * timestamp in its own locale/format (`formatTimestamp` on the run detail,
+ * `formatRunDate` in the runs list).
+ */
+export function heartbeatDisplayText(
+  heartbeatAt: string | null | undefined,
+  status: string,
+  nowMs: number,
+  t: (key: string, named?: Record<string, unknown>) => string,
+  formatAbsolute: (iso: string) => string,
+): string {
+  if (!heartbeatAt) return '—'
+  if (isTerminalStatus(status)) {
+    const parsed = new Date(heartbeatAt) // nosemgrep: new-date-without-guard
+    return Number.isNaN(parsed.getTime()) ? '—' : formatAbsolute(heartbeatAt)
+  }
+  return formatHeartbeatAge(heartbeatAgeSeconds(heartbeatAt, status, nowMs), t)
 }
 
 /** Human-readable label for a dotted run error code (e.g. `agent.stall` →

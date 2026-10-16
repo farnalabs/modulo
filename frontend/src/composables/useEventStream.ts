@@ -1,7 +1,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import type { EventBusEvent } from '@/types/events'
 import { getHandlers } from '@/stores/syncRegistry'
-import { getAuthHeaders } from '@/lib/api/client'
+import { getAuthHeaders, attemptTokenRefresh, onAuthChange } from '@/lib/api/client'
 import { parseSSEStream } from '@/lib/sse'
 
 export type EventHandler = (event: EventBusEvent) => void
@@ -9,10 +9,19 @@ export type EventHandler = (event: EventBusEvent) => void
 /** Stream lifecycle state (FAR-250 classified reconnect). */
 export type EventStreamState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'auth_failed'
 
+/**
+ * Feedback for a MANUAL reconnect (banner button), so the click is visibly
+ * acknowledged: 'attempting' while the restart is in flight, 'failed' when it
+ * lands back on a terminal auth stop (FAR-1842). Cleared on success / a
+ * retry-classified failure (the stream is self-healing again) / disconnect.
+ */
+export type ReconnectFeedback = 'idle' | 'attempting' | 'failed'
+
 const SSE_URL = '/api/v1/events'
 
 const connected = ref(false)
 const connectionState = ref<EventStreamState>('idle')
+const reconnectFeedback = ref<ReconnectFeedback>('idle')
 let abortController: AbortController | null = null
 const handlers = new Map<string, Set<EventHandler>>()
 let reconnectAttempts = 0
@@ -47,13 +56,16 @@ function scheduleReconnectBackfill(): void {
 }
 
 /**
- * Classify a failed HTTP response (FAR-250):
- * - 4xx (401/403/429 connection cap/any client error) -> STOP retrying and
- *   surface the reconnect banner; a fresh token / freed cap is required.
+ * Classify a failed HTTP response (FAR-250, corrected by FAR-1842):
+ * - 401/403 -> terminal auth failure: STOP retrying and surface the
+ *   reconnect banner; a fresh sign-in is required.
+ * - 429 (rate-limit / connection cap) and every other 4xx -> TRANSIENT:
+ *   retry with capped backoff like 5xx. Only a genuine auth rejection
+ *   demands a fresh sign-in.
  * - 5xx and everything else -> retry forever with capped backoff + jitter.
  */
 function classifyHttpFailure(status: number | undefined): 'auth' | 'retry' {
-  if (typeof status === 'number' && status >= 400 && status < 500) {
+  if (status === 401 || status === 403) {
     return 'auth'
   }
   return 'retry'
@@ -76,8 +88,18 @@ function scheduleReconnect(kind: 'auth' | 'retry'): void {
   if (kind === 'auth') {
     connectionState.value = 'auth_failed'
     abortController = null
-    console.warn('[EventBus] Stopping stream: server rejected it (4xx). Restart with a fresh token.')
+    // A manual restart that lands back on a terminal stop must SAY so —
+    // the banner re-shows with the failed feedback (FAR-1842).
+    if (reconnectFeedback.value === 'attempting') {
+      reconnectFeedback.value = 'failed'
+    }
+    console.warn('[EventBus] Stopping stream: server rejected it (401/403). Restart with a fresh token.')
     return
+  }
+  // A retry-classified failure is self-healing: clear any in-flight manual
+  // feedback so the banner does not linger over an automatic retry loop.
+  if (reconnectFeedback.value === 'attempting') {
+    reconnectFeedback.value = 'idle'
   }
   connectionState.value = 'reconnecting'
   reconnectAttempts++
@@ -147,17 +169,31 @@ function handleResourceChanged(data: string): void {
 async function doConnect(): Promise<void> {
   cleanup()
   abortController = new AbortController()
-  // connect() blocks while auth_failed and reconnect() clears it, so doConnect
-  // is only ever reached from a non-auth-stopped state.
+  // connect() blocks while auth_failed and restartStream()/reconnect() clear
+  // it, so doConnect is only ever reached from a non-auth-stopped state.
   connectionState.value = 'connecting'
   const timeoutId = setTimeout(() => abortController?.abort(), FETCH_TIMEOUT_MS)
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
 
   try {
-    const response = await fetch(SSE_URL, {
+    let response = await fetch(SSE_URL, {
       headers: { ...getAuthHeaders() },
       signal: abortController.signal,
     })
+    // The stream does NOT ride the API client's withAuth 401-refresh loop, so
+    // serialise through the SAME attemptTokenRefresh() here (FAR-1842): a
+    // normal access-token expiry re-issues the fetch once with the fresh
+    // token instead of raising the terminal banner. 403 is a permission
+    // rejection, not an expiry — no refresh, straight to classification.
+    if (response.status === 401) {
+      const refreshed = await attemptTokenRefresh()
+      if (refreshed && !abortController.signal.aborted) {
+        response = await fetch(SSE_URL, {
+          headers: { ...getAuthHeaders() },
+          signal: abortController.signal,
+        })
+      }
+    }
     clearTimeout(timeoutId)
 
     if (!response.ok || !response.body) {
@@ -171,6 +207,11 @@ async function doConnect(): Promise<void> {
     reconnectAttempts = 0
     connected.value = true
     connectionState.value = 'connected'
+    // Manual restart recovered: clear the feedback so the banner disappears
+    // with the successful connection (it is only visible again on failure).
+    if (reconnectFeedback.value === 'attempting') {
+      reconnectFeedback.value = 'idle'
+    }
     if (wasReconnect) {
       // Successful reconnect (FAR-250): backfill unread count + dropdown
       // via the debounced REST refetch — /api/v1/events has no replay buffer.
@@ -214,6 +255,7 @@ function disconnect(): void {
   _disconnecting = true
   cleanup()
   connectionState.value = 'idle'
+  reconnectFeedback.value = 'idle'
   clearAllHandlers()
   if (backfillTimer) {
     clearTimeout(backfillTimer)
@@ -232,11 +274,40 @@ function dispatchToStore(event: EventBusEvent): void {
   }
 }
 
+/**
+ * Tear down and immediately re-run the connect attempt, bypassing the
+ * auth_failed stop in connect(). Shared by the manual reconnect button and
+ * the auth-change re-arm below.
+ */
+function restartStream(): void {
+  cleanup()
+  reconnectAttempts = 0
+  _disconnecting = false
+  connectionState.value = 'connecting'
+  void doConnect()
+}
+
+// Auth-change re-arm (FAR-1842): auth_failed is only valid for as long as the
+// session that hit it. A fresh non-null token (re-login, SSO callback, or a
+// successful refresh) supersedes the terminal stop — re-arm the stream so the
+// banner cannot outlive the condition that raised it, on ANY route. The
+// unsubscribe is retained so the HMR dispose hook below drops the listener
+// with the rest of the module state — otherwise a hot reload accumulates
+// listeners bound to a previous module closure.
+const disposeAuthChangeHook = onAuthChange((token: string | null) => {
+  if (token && connectionState.value === 'auth_failed') {
+    reconnectFeedback.value = 'idle'
+    restartStream()
+  }
+})
+
 export const eventBus = {
   get connected() { return connected.value },
   get state(): EventStreamState { return connectionState.value },
-  /** True when the stream stopped on a 4xx and needs a banner restart. */
+  /** True when the stream stopped on 401/403 and needs a banner restart. */
   get reconnectRequired(): boolean { return connectionState.value === 'auth_failed' },
+  /** Manual-reconnect feedback ('idle' | 'attempting' | 'failed'), FAR-1842. */
+  get reconnectFeedback(): ReconnectFeedback { return reconnectFeedback.value },
   subscribe(resourceType: string, handler: EventHandler): () => void {
     if (!handlers.has(resourceType)) handlers.set(resourceType, new Set())
     handlers.get(resourceType)!.add(handler)
@@ -255,11 +326,10 @@ export const eventBus = {
   },
   /** Manual restart (banner button): clears the auth-failed stop with a fresh token. */
   reconnect(): void {
-    cleanup()
-    reconnectAttempts = 0
-    _disconnecting = false
-    connectionState.value = 'connecting'
-    void doConnect()
+    // Feedback first so the click is synchronously acknowledged before the
+    // async restart settles (FAR-1842).
+    reconnectFeedback.value = 'attempting'
+    restartStream()
   },
   /**
    * Register a callback fired (debounced as one batch) after each successful
@@ -296,6 +366,7 @@ export { dispatchToStore }
  * (the HMR branch itself never executes under vitest).
  */
 export function resetEventStreamState(): void {
+  disposeAuthChangeHook()
   cleanup()
   clearAllHandlers()
   backfillSubscribers.clear()
@@ -304,6 +375,7 @@ export function resetEventStreamState(): void {
     backfillTimer = null
   }
   connectionState.value = 'idle'
+  reconnectFeedback.value = 'idle'
   _everConnected = false
 }
 

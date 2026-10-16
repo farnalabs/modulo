@@ -52,8 +52,10 @@ Lenses:
     0312_memberships_active_lookups, and
     0314_external_agents_mcp_servers chains onto
     0313_collection_install_drop_installed_entities, and
-    0315_policy_gate_evaluation_mode chains onto
-    0314_external_agents_mcp_servers as the
+    0315_service_accounts_lifecycle chains onto
+    0314_external_agents_mcp_servers, and
+    0316_policy_gate_evaluation_mode chains onto
+    0315_service_accounts_lifecycle as the
     current single linear head.
 * **Structure (mocked ``op``)** - upgrade adds BOTH columns existence-gated,
   adds the ``ck_pipelines_hitl_review_window`` CHECK (NOT VALID then VALIDATE on
@@ -80,7 +82,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0265_hitl_review_window"
 _MIGRATION_DOWN_REVISION = "0264_pipelines_max_autonomy_ge_default"
-_HEAD_MIGRATION = "0315_policy_gate_evaluation_mode"
+_HEAD_MIGRATION = "0316_policy_gate_evaluation_mode"
 _CHECK_CONSTRAINT = "ck_pipelines_hitl_review_window"
 _SWEEP_INDEX = "ix_hitl_claims_terminalize_sweep"
 _ENVELOPE = (60, 604800)

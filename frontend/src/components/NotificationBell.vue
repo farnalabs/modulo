@@ -34,29 +34,43 @@
       {{ $t('components.NotificationBell.unread_count_status', { count: store.unreadCount }) }}
     </output>
     <NotificationDropdown v-if="dropdownOpen" @close="closeDropdown" />
-    <!-- FAR-250: classified-reconnect banner — shown when the SSE stream stopped on a 4xx -->
+    <!-- FAR-250: classified-reconnect banner — shown when the SSE stream
+         stopped on a terminal 401/403. Stays visible while a manual restart
+         is in flight ('attempting') so the click is acknowledged, and shows
+         an explicit failure message when recovery is impossible (FAR-1842). -->
     <div
-      v-if="eventBus.reconnectRequired"
+      v-if="showReconnectBanner"
       data-testid="sse-reconnect-banner"
       role="status"
       aria-live="polite"
       class="absolute left-full top-0 z-50 ml-2 w-56 rounded-md border border-border bg-popover p-3 text-xs shadow-md"
     >
-      <p class="mb-2 text-foreground">{{ $t('components.NotificationBell.reconnect_banner') }}</p>
+      <p v-if="reconnectFeedback === 'failed'" class="mb-2 text-foreground">
+        {{ $t('components.NotificationBell.reconnect_failed') }}
+      </p>
+      <p v-else-if="reconnectFeedback === 'attempting'" class="mb-2 text-foreground">
+        {{ $t('components.NotificationBell.reconnect_attempting') }}
+      </p>
+      <p v-else class="mb-2 text-foreground">{{ $t('components.NotificationBell.reconnect_banner') }}</p>
       <button
         type="button"
         data-testid="sse-reconnect-button"
-        class="rounded bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:opacity-90"
+        class="rounded bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-60"
+        :disabled="reconnectFeedback === 'attempting'"
         @click="eventBus.reconnect()"
       >
-        {{ $t('components.NotificationBell.reconnect_action') }}
+        {{
+          reconnectFeedback === "attempting"
+            ? $t("components.NotificationBell.reconnect_attempting")
+            : $t("components.NotificationBell.reconnect_action")
+        }}
       </button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { api } from "../lib/api/client";
 import { throwOnError } from "../lib/api/formatError";
 import { eventBus } from "../composables/useEventStream";
@@ -71,6 +85,14 @@ const rootRef = ref<HTMLElement | null>(null);
 const bellButtonRef = ref<HTMLButtonElement | null>(null);
 /** Categories this user opted out of (FAR-247 read-time suppression). */
 const optOutCategories = ref<Set<string>>(new Set());
+
+// FAR-1842: banner visibility + feedback. The banner is shown for a terminal
+// auth stop AND while a manual restart is in flight; on success the state
+// leaves auth_failed and the feedback clears, so it disappears on any route.
+const reconnectFeedback = computed(() => eventBus.reconnectFeedback);
+const showReconnectBanner = computed(
+  () => eventBus.reconnectRequired || reconnectFeedback.value === "attempting",
+);
 
 let unsubStream: (() => void) | null = null;
 let unsubBackfill: (() => void) | null = null;

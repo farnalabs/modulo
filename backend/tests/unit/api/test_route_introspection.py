@@ -133,6 +133,13 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/admin/users/{user_id}/reactivate"): "admin.py inline _require_admin",
     ("POST", "/api/v1/admin/users/{user_id}/reset-password"): "admin.py inline _require_admin",
     ("PUT", "/api/v1/admin/users/{user_id}"): "admin.py inline _require_admin",
+    # FAR-1478: service-account lifecycle carries an inline _require_admin
+    # check in the handler (admin-only), same pattern as the admin user
+    # routes above. The key-mint route is NOT exempt — it is tagged via
+    # require_permission_any_credential("api_key.create").
+    ("POST", "/api/v1/service-accounts"): "service_accounts.py inline _require_admin",
+    ("PATCH", "/api/v1/service-accounts/{service_account_id}"): "service_accounts.py inline _require_admin",
+    ("POST", "/api/v1/service-accounts/{service_account_id}/decommission"): "service_accounts.py inline _require_admin",
     ("POST", "/api/v1/admin/teams"): "admin.py inline _require_admin",
     ("PUT", "/api/v1/admin/teams/{team_id}"): "admin.py inline _require_admin",
     ("DELETE", "/api/v1/admin/teams/{team_id}"): "admin.py inline _require_admin",

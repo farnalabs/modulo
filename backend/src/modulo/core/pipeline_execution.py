@@ -3476,80 +3476,87 @@ async def resume_run(
         _log.warning("resume_run: run %s not claimed (wrong state or claim cap)", rid)
         return {"status": "not_claimed"}
 
-    # FAR-1088: mirror saq_worker.execute_run — attach the same bounded,
-    # fail-soft durable phase writer (bound to THIS claim's fresh token) so the
-    # phases AFTER the claim are recorded durably on a resume too. The resume
-    # claim itself stamped 'claimed' inside its own UPDATE (see
-    # _RESUME_CLAIM_UPDATE_SQL), so the writer only owns the later entries;
-    # every write is token-fenced and monotonic (DispatchPhaseWriter).
-    tracker = DispatchPhaseTracker(run_id=str(rid), org_id=str(oid))
-    tracker.enter_phase(PHASE_CLAIMED)
-    tracker.durable_writer = DispatchPhaseWriter(
-        async_engine,
-        run_id=str(rid),
-        org_id=str(oid),
-        claim_token=claim_token,
-    )
+    # FAR-1627: scope this claim's ownership for the worker-shutdown handoff.
+    # The entry is dropped on EVERY normal/failed exit and KEPT on
+    # cancellation (SAQ shutdown), so the worker's shutdown hook releases
+    # exactly the runs this process abandoned.
+    from modulo.core.worker_handoff import track_inflight_run
 
-    # Stamp the claim token into the job hash so the after_process task_failure
-    # hook can fence its terminal write (dist/runtime-core A1).
-    if job is not None:
+    async with track_inflight_run(run_id=rid, org_id=oid, claim_token=str(claim_token)):
+        # FAR-1088: mirror saq_worker.execute_run — attach the same bounded,
+        # fail-soft durable phase writer (bound to THIS claim's fresh token) so
+        # the phases AFTER the claim are recorded durably on a resume too. The
+        # resume claim itself stamped 'claimed' inside its own UPDATE (see
+        # _RESUME_CLAIM_UPDATE_SQL), so the writer only owns the later entries;
+        # every write is token-fenced and monotonic (DispatchPhaseWriter).
+        tracker = DispatchPhaseTracker(run_id=str(rid), org_id=str(oid))
+        tracker.enter_phase(PHASE_CLAIMED)
+        tracker.durable_writer = DispatchPhaseWriter(
+            async_engine,
+            run_id=str(rid),
+            org_id=str(oid),
+            claim_token=claim_token,
+        )
+
+        # Stamp the claim token into the job hash so the after_process task_failure
+        # hook can fence its terminal write (dist/runtime-core A1).
+        if job is not None:
+            try:
+                job_kwargs = getattr(job, "kwargs", None)
+                merged_kwargs = {**(job_kwargs if isinstance(job_kwargs, dict) else {}), "claim_token": claim_token}
+                await job.update(kwargs=merged_kwargs)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.warning("resume_run: job kwargs stamp failed for run %s", rid, exc_info=True)
+
+        tracker.enter_phase(PHASE_LOADING_SETUP)
         try:
-            job_kwargs = getattr(job, "kwargs", None)
-            merged_kwargs = {**(job_kwargs if isinstance(job_kwargs, dict) else {}), "claim_token": claim_token}
-            await job.update(kwargs=merged_kwargs)
+            run, executor = await load_and_setup(async_engine, rid, oid)
         except asyncio.CancelledError:
             raise
         except Exception:
-            _log.warning("resume_run: job kwargs stamp failed for run %s", rid, exc_info=True)
+            _log.exception("resume_run: load_and_setup failed for run %s", rid)
+            await fail_run_terminal(
+                async_engine,
+                str(rid),
+                str(oid),
+                error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
+                error_detail="load_and_setup failed during resume (pre-stream setup)",
+            )
+            return {"status": "setup_failed"}
+        if run is None:
+            return {"status": "missing"}
 
-    tracker.enter_phase(PHASE_LOADING_SETUP)
-    try:
-        run, executor = await load_and_setup(async_engine, rid, oid)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.exception("resume_run: load_and_setup failed for run %s", rid)
-        await fail_run_terminal(
+        tracker.enter_phase(PHASE_SETUP_COMPLETE)
+        # Wire the tracker onto the executor so its streaming transition reports
+        # through enter_phase() exactly as on the execute path.
+        setattr(executor, DISPATCH_TRACKER_ATTR, tracker)
+
+        outcome = await run_executor_with_watchdog(
             async_engine,
-            str(rid),
-            str(oid),
-            error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
-            error_detail="load_and_setup failed during resume (pre-stream setup)",
-        )
-        return {"status": "setup_failed"}
-    if run is None:
-        return {"status": "missing"}
-
-    tracker.enter_phase(PHASE_SETUP_COMPLETE)
-    # Wire the tracker onto the executor so its streaming transition reports
-    # through enter_phase() exactly as on the execute path.
-    setattr(executor, DISPATCH_TRACKER_ATTR, tracker)
-
-    outcome = await run_executor_with_watchdog(
-        async_engine,
-        run_id=str(rid),
-        org_id=str(oid),
-        executor=executor,
-        job=job,
-        claim_token=claim_token,
-        dispatch_tracker=tracker,
-        # FAR-1831: only a resume that carries a committed HITL gate decision
-        # may be parked non-terminally on a capacity denial. Derived from the
-        # payload here so every dispatch path (F6a HITL resume vs node recovery
-        # vs guardrail override) is classified by the same predicate.
-        hitl_decision_resume=resume_carries_committed_hitl_decision(resume_data),
-        execute_fn=lambda: executor.resume(
-            run_id=rid,
-            org_id=oid,
-            resume_data=resume_data or {},
+            run_id=str(rid),
+            org_id=str(oid),
+            executor=executor,
+            job=job,
             claim_token=claim_token,
-        ),
-    )
-    # FAR-1088: drain any still-in-flight phase write (bounded + fail-soft) so
-    # the final phase lands before the job finishes — same as execute_run.
-    if tracker.durable_writer is not None:
-        await tracker.durable_writer.flush()
-    if outcome.get("status") == "complete":
-        await mark_complete(async_engine, str(rid), str(oid), claim_token=claim_token)
-    return outcome
+            dispatch_tracker=tracker,
+            # FAR-1831: only a resume that carries a committed HITL gate decision
+            # may be parked non-terminally on a capacity denial. Derived from the
+            # payload here so every dispatch path (F6a HITL resume vs node recovery
+            # vs guardrail override) is classified by the same predicate.
+            hitl_decision_resume=resume_carries_committed_hitl_decision(resume_data),
+            execute_fn=lambda: executor.resume(
+                run_id=rid,
+                org_id=oid,
+                resume_data=resume_data or {},
+                claim_token=claim_token,
+            ),
+        )
+        # FAR-1088: drain any still-in-flight phase write (bounded + fail-soft)
+        # so the final phase lands before the job finishes — same as execute_run.
+        if tracker.durable_writer is not None:
+            await tracker.durable_writer.flush()
+        if outcome.get("status") == "complete":
+            await mark_complete(async_engine, str(rid), str(oid), claim_token=claim_token)
+        return outcome

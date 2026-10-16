@@ -71,6 +71,7 @@ from modulo.core.model_backend_hub import ModelBackendHub
 from modulo.core.node_output_split import (
     DEFAULT_NODE_TYPE,
     SPLITTABLE_NODE_TYPES,
+    extend_node_type_map_from_edges,
     node_telemetry,
     resolve_node_contract_output,
 )
@@ -278,8 +279,8 @@ def _governed_evaluation_mode(gate: PolicyGate) -> str:
     """Normalise ``policy_gates.evaluation_mode`` to the closed DTO vocabulary.
 
     Production rows always carry the NOT NULL column (migration
-    0315_policy_gate_evaluation_mode); the attribute fallback keeps
-    pre-0315 ORM stand-ins and legacy fixtures (no attribute at all) on
+    0316_policy_gate_evaluation_mode); the attribute fallback keeps
+    pre-0316 ORM stand-ins and legacy fixtures (no attribute at all) on
     today's behaviour — automatic. Hoisted out of
     ``PipelineExecutor._resolve_governed_gate`` for the cognitive-complexity
     budget (S3776); behaviour is unchanged.
@@ -5332,6 +5333,12 @@ class PipelineExecutor:
         # ``_run_post_stream_and_teardown`` — the teardown runs in a finally so
         # it fires even when the tail re-raises (e.g. CancelledError), matching
         # the original inline block.
+        #
+        # FAR-131: the signal map is EXTENDED from the snapshot edges so an
+        # edge-synthesized HITL gate node (absent from graph_json.nodes)
+        # resolves to "gate" and its child pipeline receives the gate's pure
+        # return. The base map stays unextended for every other consumer.
+        signal_node_type_map = extend_node_type_map_from_edges(node_type_map, graph_json)
         final_status, error_code, error_detail = await self._run_post_stream_and_teardown(
             run_id=run_id,
             org_id=org_id,
@@ -5340,6 +5347,7 @@ class PipelineExecutor:
             error_code=error_code,
             error_detail=error_detail,
             completed_node_outputs=completed_node_outputs,
+            node_type_map=signal_node_type_map,
             model_backend_hub=model_backend_hub,
             connector_hub=connector_hub,
         )
@@ -6094,6 +6102,15 @@ class PipelineExecutor:
         unsafe (FAR-295). A new call site MUST keep that gate or a
         non-idempotent node-started run becomes re-dispatchable.
 
+        The gate is a property of EVERY producer of a re-dispatchable
+        ``pending`` row, not just this method: the FAR-1627 worker-shutdown
+        handback (``worker_handoff``) is a second, independent producer — it
+        CLEARS ``dispatched_at``/``dispatcher`` (so its rows are recovered by
+        the capacity-deferred leg, not the re-enqueue leg above) and gates
+        its own reset on graph idempotency + the run's retry policy at the
+        producer (``worker_handoff._handback_decision``), terminal-failing a
+        non-idempotent node-started run in place instead of resetting it.
+
         Returns the UPDATE rowcount (1 = the fence held / reset confirmed,
         0 = fence lost) so callers can distinguish a confirmed reset from a
         lost race (FAR-525: the retry counter only fires on a CONFIRMED reset).
@@ -6434,6 +6451,7 @@ class PipelineExecutor:
         error_code: str | None,
         error_detail: str | None,
         completed_node_outputs: dict[str, Any],
+        node_type_map: dict[str, str] | None = None,
     ) -> tuple[str, str | None, str | None]:
         """Post-stream tail: agent_signal firing, gated publish.
 
@@ -6458,6 +6476,7 @@ class PipelineExecutor:
                         run_id=run_id,
                         pipeline_id=pipeline_id,
                         completed_node_outputs=completed_node_outputs,
+                        node_type_map=node_type_map,
                     )
             # FAR-228 / FAR-1534: a gated run completes without re-executing
             # the node; its ``run_completed`` is published post-finalize like
@@ -6480,11 +6499,12 @@ class PipelineExecutor:
         completed_node_outputs: dict[str, Any],
         model_backend_hub: ModelBackendHub | None,
         connector_hub: Any | None,
+        node_type_map: dict[str, str] | None = None,
     ) -> tuple[str, str | None, str | None]:
         """Run the post-stream tail then tear down the run's execution environment.
 
-        The teardown (contextvars, hub teardown, broker registry close) runs in
-        a ``finally`` so it fires even when the tail re-raises (e.g. a
+        The teardown (contextvars, hub teardown, broker registry close) runs in a
+        ``finally`` so it fires even when the tail re-raises (e.g. a
         ``CancelledError``), preserving the original inline try/finally
         semantics in ``execute``. Returns the (possibly mutated) triplet from
         the tail.
@@ -6499,6 +6519,7 @@ class PipelineExecutor:
                 error_code=error_code,
                 error_detail=error_detail,
                 completed_node_outputs=completed_node_outputs,
+                node_type_map=node_type_map,
             )
             tail_ok = True
         finally:
@@ -6526,6 +6547,7 @@ class PipelineExecutor:
         run_id: uuid.UUID,
         pipeline_id: uuid.UUID,
         completed_node_outputs: dict[str, Any],
+        node_type_map: dict[str, str] | None = None,
     ) -> None:
         """Fire agent_signal triggers for each completed node.
 
@@ -6533,6 +6555,14 @@ class PipelineExecutor:
         is a SKIPPED delivery (guard A/B) — it must not re-fire child
         pipelines. Keyed ONLY on the marker, never on status == "skipped"
         (template-error skips fire today).
+
+        FAR-131: each node's resolved type is passed through so
+        ``fire_agent_signal`` embeds the node's PURE RETURN (not the legacy
+        mixed envelope) in the child run's input payload for a SPLITTABLE type
+        — whatever the return's shape. The map is EXTENDED from the snapshot
+        edges by the caller, so an edge-synthesized HITL gate resolves to
+        ``"gate"``. A node absent from the map resolves to ``None`` and keeps
+        the legacy verbatim behaviour.
         """
         for node_id, node_output in completed_node_outputs.items():
             if _node_output_has_idempotency_gate(node_output):
@@ -6544,6 +6574,7 @@ class PipelineExecutor:
                 pipeline_id=pipeline_id,
                 node_id=node_id,
                 node_output=node_output,
+                node_type=(node_type_map or {}).get(node_id),
             )
 
     async def _fire_agent_signal_for_node(
@@ -6555,6 +6586,7 @@ class PipelineExecutor:
         pipeline_id: uuid.UUID,
         node_id: str,
         node_output: Any,
+        node_type: str | None = None,
     ) -> None:
         """Fire one node's agent_signal triggers, failure-isolated + logged."""
         try:
@@ -6565,6 +6597,7 @@ class PipelineExecutor:
                 source_pipeline_id=pipeline_id,
                 completed_node_id=node_id,
                 node_output=node_output,
+                node_type=node_type,
             )
             for sr in signal_results:
                 _log.info(

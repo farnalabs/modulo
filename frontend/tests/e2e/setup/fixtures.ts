@@ -24,6 +24,14 @@ export function isDevModeTarget(env: TestEnv): boolean {
 const MOCK_ACCESS_TOKEN = 'mock-access-token-for-e2e-tests'
 const MOCK_REFRESH_TOKEN = 'mock-refresh-token-for-e2e-tests'
 
+// Shared date spine for the dashboard summary/trends fixtures. Kept as data
+// (rather than inlined per series) so the seven trends arrays stay the same
+// length and every series lines up on the same dates for the charts.
+const DASHBOARD_TREND_DATES = [
+  '2026-07-01', '2026-07-02', '2026-07-03', '2026-07-04',
+  '2026-07-05', '2026-07-06', '2026-07-07',
+]
+
 export async function setupLocalMockApi(page: Page) {
   await page.route('**/api/v1/**', async (route) => {
     const url = route.request().url()
@@ -67,6 +75,77 @@ export async function setupLocalMockApi(page: Page) {
             { id: '2', name: 'Kanban Board', view_type: 'grid', columns: ['name', 'status'], filters: {}, sort_by: 'name', sort_order: 'asc', created_by: 'bob@test.com', created_at: new Date().toISOString() },
           ],
           total: 2,
+        }),
+      })
+    }
+    if (url.includes('/api/v1/dashboard/summary') && method === 'GET') {
+      // DashboardView calls this on mount (with `days=<n>` for a rolling
+      // window). serve the same populated body for both shapes — the summary
+      // validators require total_runs/active_pipelines/run_counts_by_status/
+      // teams/recent_runs, and the arrays must not be empty or the view falls
+      // through to its error/empty branches. Registered BEFORE the generic GET
+      // catch-all below so it is actually reachable.
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          total_runs: 128,
+          active_pipelines: 4,
+          run_counts_by_status: { running: 1, awaiting_human: 0, failed: 3, idle: 124 },
+          eval_pass_rate: {
+            overall_pass_rate: 92,
+            total_evals: 50,
+            passed_evals: 46,
+            per_pipeline: {},
+            per_team_pipeline: {},
+          },
+          trend: DASHBOARD_TREND_DATES.map((date, i) => ({
+            date,
+            run_count: 12 + i * 3,
+            eval_pass_rate: 88 + i,
+            token_spend_usd: 3.5 + i * 0.75,
+            avg_time_to_approve_ms: 120000 + i * 5000,
+            rejection_rate: 5 + i,
+          })),
+          teams: [
+            {
+              id: '1',
+              name: 'Platform',
+              total_runs: 128,
+              active_pipelines: 4,
+              run_counts_by_status: { running: 1, awaiting_human: 0, failed: 3, idle: 124 },
+              eval_pass_rate: { total_evals: 50, passed_evals: 46, pass_rate: 92 },
+            },
+          ],
+          recent_runs: [
+            { id: '101', pipeline_name: 'Release Pipeline', status: 'success', created_at: '2026-07-07T09:15:00Z', trigger_type: 'webhook', execution_origin: null },
+            { id: '102', pipeline_name: 'Nightly Regression', status: 'failed', created_at: '2026-07-07T06:00:00Z', trigger_type: 'cron', execution_origin: 'dispatched' },
+            { id: '103', pipeline_name: 'Docs Build', status: 'running', created_at: '2026-07-07T11:30:00Z', trigger_type: 'manual', execution_origin: null },
+          ],
+          config_warnings: [],
+        }),
+      })
+    }
+    if (url.includes('/api/v1/dashboard/trends') && method === 'GET') {
+      // Seven required series, each an ARRAY (validateTrendsResponse rejects
+      // any missing/non-array key). Populated wherever the chart reads a value;
+      // every series shares DASHBOARD_TREND_DATES so the combined trend in
+      // DashboardView renders a full curve. Registered BEFORE the generic GET
+      // catch-all so it is actually reachable.
+      // Every rejection-rate field is a PERCENTAGE (0-100), matching the
+      // backend's `round(rejected / total * 100, 1)` — never a 0-1 fraction.
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          days: DASHBOARD_TREND_DATES.length,
+          run_counts: DASHBOARD_TREND_DATES.map((date, i) => ({ date, run_count: 12 + i * 3 })),
+          eval_pass_rates: DASHBOARD_TREND_DATES.map((date, i) => ({ date, total_evals: 8, passed_evals: 7, pass_rate: 88 + i })),
+          token_spend: DASHBOARD_TREND_DATES.map((date, i) => ({ date, total_spend_usd: 3.5 + i * 0.75 })),
+          hitl_volume: DASHBOARD_TREND_DATES.map((date, i) => ({ date, total_decisions: 4, approved_count: 3, rejected_count: 1, rejection_rate: 25, avg_time_to_approve_ms: 120000 + i * 5000 })),
+          rejection_trend: DASHBOARD_TREND_DATES.map((date, i) => ({ date, rolling_rejection_rate: 5 + i, raw_rejection_rate: 6 + i })),
+          correlation: DASHBOARD_TREND_DATES.map((date, i) => ({ date, rejection_rate: 5 + i, eval_pass_rate: 88 + i })),
+          feedback_volume: DASHBOARD_TREND_DATES.map((date) => ({ date, feedback_count: 2, resolved_count: 1, correcting_count: 1 })),
         }),
       })
     }

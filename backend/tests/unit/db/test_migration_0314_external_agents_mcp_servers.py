@@ -6,8 +6,9 @@ the same first-class coverage. It pins the four things a reviewer needs to trust
 the migration without a live DB:
 
 * **Revision chain** - 0314 revises ``0313_collection_install_drop_installed_entities``; the
-  migrations directory has exactly one head (``0315_policy_gate_evaluation_mode``, which
-  chains onto ``0314_external_agents_mcp_servers``), the revision id matches the filename,
+  migrations directory has exactly one head (``0316_policy_gate_evaluation_mode``, which
+  chains onto ``0315_service_accounts_lifecycle``, which chains onto
+  ``0314_external_agents_mcp_servers``), the revision id matches the filename,
   and neither ``branch_labels`` nor ``depends_on`` is set (the pre-commit
   check-migration-heads hook and every ``test_single_head_*`` pin depend on that shape).
 * **Org-scoped RLS coverage** - ``_ORG_SCOPED_TABLES`` names both new tables, so
@@ -46,7 +47,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0314_external_agents_mcp_servers"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0313_collection_install_drop_installed_entities"
-_HEAD_MIGRATION = "0315_policy_gate_evaluation_mode"
+_HEAD_MIGRATION = "0316_policy_gate_evaluation_mode"
 
 _EXTERNAL_AGENTS = "external_agents"
 _MCP_SERVERS = "mcp_servers"
@@ -141,7 +142,7 @@ def _joined(rec: _Recorder) -> str:
 
 
 class TestChain:
-    def test_single_head_is_0315_policy_gate_evaluation_mode(self) -> None:
+    def test_single_head_is_0316_policy_gate_evaluation_mode(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 

@@ -30,15 +30,21 @@ vi.mock('../lib/api/formatError', () => ({
 
 // Reactive banner flag: a plain { value } object would NOT trigger a re-render
 // (Vue only tracks refs/computed), so the mock owns a real ref and the test
-// flips it through the exported __banner handle.
+// flips it through the exported __banner / __feedback handles (FAR-1842 adds
+// the reconnect feedback tri-state on top of the banner flag).
 vi.mock('../composables/useEventStream', async () => {
   const { ref } = await import('vue')
   const banner = ref(false)
+  const feedback = ref<'idle' | 'attempting' | 'failed'>('idle')
   return {
     __banner: banner,
+    __feedback: feedback,
     eventBus: {
       get reconnectRequired() {
         return banner.value
+      },
+      get reconnectFeedback() {
+        return feedback.value
       },
       get connected() {
         return false
@@ -58,6 +64,9 @@ import NotificationBell from '../components/NotificationBell.vue'
 import * as eventStreamModule from '../composables/useEventStream'
 
 const bannerFlag = (eventStreamModule as unknown as { __banner: { value: boolean } }).__banner
+const feedbackFlag = (
+  eventStreamModule as unknown as { __feedback: { value: 'idle' | 'attempting' | 'failed' } }
+).__feedback
 
 function notificationEvent(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -85,6 +94,7 @@ describe('NotificationBell (FAR-250)', () => {
     vi.clearAllMocks()
     setActivePinia(createPinia())
     bannerFlag.value = false
+    feedbackFlag.value = 'idle'
     h.mockFetchUnreadCount.mockResolvedValue(3)
     h.mockApiGet.mockResolvedValue({
       data: {
@@ -236,6 +246,48 @@ describe('NotificationBell (FAR-250)', () => {
     expect(h.mockReconnect).toHaveBeenCalledTimes(1)
 
     bannerFlag.value = false
+    await nextTick()
+    expect(wrapper.find('[data-testid="sse-reconnect-banner"]').exists()).toBe(false)
+  })
+
+  it('keeps the banner visible with attempting feedback and a disabled button while a manual restart is in flight (FAR-1842)', async () => {
+    const wrapper = await mountBell()
+    // No terminal stop, but a manual restart is in flight: the banner stays
+    // so the click is visibly acknowledged (it used to vanish silently).
+    feedbackFlag.value = 'attempting'
+    await nextTick()
+
+    const banner = wrapper.find('[data-testid="sse-reconnect-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('Reconnecting')
+    expect(wrapper.find('[data-testid="sse-reconnect-button"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('shows explicit failure feedback when a manual restart cannot recover (FAR-1842)', async () => {
+    const wrapper = await mountBell()
+    bannerFlag.value = true
+    feedbackFlag.value = 'failed'
+    await nextTick()
+
+    const banner = wrapper.find('[data-testid="sse-reconnect-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('Reconnect failed. Sign in again')
+    // The retry affordance stays enabled so the user can try again.
+    expect(wrapper.find('[data-testid="sse-reconnect-button"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('clears the banner when the stream state leaves auth_failed (FAR-1842)', async () => {
+    // State-transition coverage: banner shown while failed, then cleared —
+    // driven by the reactive flags, matching eventBus leaving auth_failed
+    // (manual recovery or the auth-change re-arm).
+    const wrapper = await mountBell()
+    bannerFlag.value = true
+    feedbackFlag.value = 'failed'
+    await nextTick()
+    expect(wrapper.find('[data-testid="sse-reconnect-banner"]').exists()).toBe(true)
+
+    bannerFlag.value = false
+    feedbackFlag.value = 'idle'
     await nextTick()
     expect(wrapper.find('[data-testid="sse-reconnect-banner"]').exists()).toBe(false)
   })

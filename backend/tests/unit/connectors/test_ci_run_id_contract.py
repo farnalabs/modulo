@@ -30,6 +30,7 @@ from modulo.connectors.azure_pipelines import AzurePipelinesConnector, _AzurePip
 from modulo.connectors.buildkite import BuildkiteConnector, _BuildkiteTestDouble
 from modulo.connectors.ci_runner.github_actions import GitHubActionsCIRunner, _GitHubActionsTestDouble
 from modulo.connectors.ci_runner.gitlab_ci import GitLabCIRunner, _GitLabCITestDouble
+from modulo.connectors.ci_runner.woodpecker import WoodpeckerCIRunner, _WoodpeckerTestDouble
 from modulo.connectors.circleci import _CircleCITestDouble
 from modulo.connectors.jenkins import JenkinsConnector, _JenkinsTestDouble
 from modulo.connectors.teamcity import _TeamCityTestDouble
@@ -68,9 +69,15 @@ _QUALIFIED_CASES = [
         "my-job",
         id="jenkins",
     ),
+    pytest.param(
+        _WoodpeckerTestDouble,
+        lambda: WoodpeckerCIRunner(token="wpt_test", base_url="https://ci.example.com"),
+        "acme/widget",
+        id="woodpecker",
+    ),
 ]
 
-#: The five real connectors, for the discriminating-power check.
+#: The real connectors, for the discriminating-power check.
 _REAL_CASES = [
     pytest.param(real, id=name)
     for name, real in [
@@ -79,6 +86,7 @@ _REAL_CASES = [
         ("buildkite", lambda: BuildkiteConnector(token="bkt_test")),
         ("azure_pipelines", lambda: AzurePipelinesConnector(token="apt_test", organization="test-org")),
         ("jenkins", lambda: JenkinsConnector(username="test", token="test")),
+        ("woodpecker", lambda: WoodpeckerCIRunner(token="wpt_test", base_url="https://ci.example.com")),
     ]
 ]
 
@@ -180,6 +188,7 @@ _EMPTY_ID_REJECTING_CASES = [
     pytest.param(_BuildkiteTestDouble, "Invalid pipeline_id format", id="buildkite"),
     pytest.param(_AzurePipelinesTestDouble, "pipeline_id is required", id="azure_pipelines"),
     pytest.param(_JenkinsTestDouble, "Unsafe job name", id="jenkins"),
+    pytest.param(_WoodpeckerTestDouble, "pipeline_id is required", id="woodpecker"),
 ]
 
 

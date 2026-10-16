@@ -30,6 +30,7 @@ from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
 from modulo.connectors.azure_pipelines import AzurePipelinesConnector
 from modulo.connectors.azure_repos import AzureReposConnector
 from modulo.connectors.base import (
+    ACL_OPERATION_BY_CONNECTOR_METHOD,
     CIRun,
     CIRunLog,
     CIRunStatus,
@@ -46,7 +47,7 @@ from modulo.connectors.base import (
 )
 from modulo.connectors.bitbucket import BitbucketConnector
 from modulo.connectors.buildkite import BuildkiteConnector
-from modulo.connectors.ci_runner import CIRunnerBase, GitHubActionsCIRunner, GitLabCIRunner
+from modulo.connectors.ci_runner import CIRunnerBase, GitHubActionsCIRunner, GitLabCIRunner, WoodpeckerCIRunner
 from modulo.connectors.circleci import CircleCIConnector
 from modulo.connectors.codeclimate import CodeClimateConnector
 from modulo.connectors.confluence import ConfluenceConnector
@@ -69,6 +70,7 @@ from modulo.connectors.npm import NpmConnector
 from modulo.connectors.onepassword import OnePasswordConnector
 from modulo.connectors.opsgenie import OpsgenieConnector
 from modulo.connectors.pagerduty import PagerDutyConnector
+from modulo.connectors.plane import PlaneConnector
 from modulo.connectors.pypi import PyPIConnector
 from modulo.connectors.rest import RestConnector, SecurityGuard
 from modulo.connectors.security import CredentialRedactor
@@ -781,7 +783,7 @@ class _TracedConnector(ConnectorBase):
                 "health_check",
                 self._inner.health_check,
                 post_span=lambda span, result: span.set_attribute("connector.healthy", result.ok),
-                acl_operation="read",
+                acl_operation=ACL_OPERATION_BY_CONNECTOR_METHOD["health_check"],
             ),
         )
 
@@ -797,7 +799,7 @@ class _TracedConnector(ConnectorBase):
                 post_span=lambda span, result: (
                     span.set_attribute("connector.result_total", result.total) if result.total is not None else None
                 ),
-                acl_operation="read",
+                acl_operation=ACL_OPERATION_BY_CONNECTOR_METHOD["query"],
             ),
         )
 
@@ -814,7 +816,7 @@ class _TracedConnector(ConnectorBase):
                 self._inner.write,
                 payload,
                 extra_attrs={_OTEL_ATTR_CONNECTOR_RESOURCE: payload.resource},
-                acl_operation="write",
+                acl_operation=ACL_OPERATION_BY_CONNECTOR_METHOD["write"],
             ),
         )
 
@@ -842,7 +844,7 @@ class _TracedConnector(ConnectorBase):
                 branch=branch,
                 variables=variables,
                 extra_attrs={"connector.pipeline_id": pipeline_id},
-                acl_operation="write",
+                acl_operation=ACL_OPERATION_BY_CONNECTOR_METHOD["trigger_run"],
             ),
         )
 
@@ -857,7 +859,7 @@ class _TracedConnector(ConnectorBase):
                 ci.get_run_status,
                 run_id,
                 extra_attrs={"connector.run_id": run_id},
-                acl_operation="read",
+                acl_operation=ACL_OPERATION_BY_CONNECTOR_METHOD["get_run_status"],
             ),
         )
 
@@ -876,7 +878,7 @@ class _TracedConnector(ConnectorBase):
                 run_id,
                 cursor=cursor,
                 extra_attrs={"connector.run_id": run_id},
-                acl_operation="read",
+                acl_operation=ACL_OPERATION_BY_CONNECTOR_METHOD["get_run_logs"],
             ),
         )
 
@@ -901,7 +903,7 @@ class _TracedConnector(ConnectorBase):
                 status=status,
                 limit=limit,
                 extra_attrs=extra_attrs,
-                acl_operation="read",
+                acl_operation=ACL_OPERATION_BY_CONNECTOR_METHOD["list_runs"],
             ),
         )
 
@@ -1011,6 +1013,7 @@ _HUB_NATIVE_TOKEN_TYPES: frozenset[str] = frozenset(
         "github",
         "github_actions_ci",
         "gitlab_ci",
+        "woodpecker",
         "linear",
         "sharepoint",
         "shortcut",
@@ -1024,6 +1027,7 @@ _HUB_NATIVE_TOKEN_TYPES: frozenset[str] = frozenset(
         "grafana",
         "onepassword",
         "codeclimate",
+        "plane",
     }
 )
 
@@ -1142,6 +1146,7 @@ _HUB_BUILT_TYPE_IDS: frozenset[str] = frozenset(
         "github",
         "github_actions_ci",
         "gitlab_ci",
+        "woodpecker",
         "gitlab",
         "shell",
         "jira",
@@ -1178,6 +1183,7 @@ _HUB_BUILT_TYPE_IDS: frozenset[str] = frozenset(
         "n8n",
         "rest",
         "ticket-tracker",
+        "plane",
     }
 )
 
@@ -1233,6 +1239,12 @@ def _build_connector(
         case "gitlab_ci":
             base_url = config.get("base_url", "https://gitlab.com/api/v4")
             return GitLabCIRunner(token=_get_cred(creds, "token", type_id), base_url=base_url)
+        case "woodpecker":
+            # Self-hosted Woodpecker/Drone CI (FAR-1766): base_url is REQUIRED
+            # (an air-gapped instance has no sensible public default) and the
+            # PAT is a single token credential.
+            base_url = _require_config(config, "base_url", "WoodpeckerCIRunner")
+            return WoodpeckerCIRunner(token=_get_cred(creds, "token", type_id), base_url=base_url)
         case "gitlab":
             base_url = config.get("base_url", "https://gitlab.com/api/v4")
             return GitLabConnector(token=_get_cred(creds, "token", type_id), base_url=base_url)
@@ -1385,6 +1397,16 @@ def _build_connector(
 
                 return TrelloTicketTracker(config, creds)
             raise ValueError(f"Unknown ticket-tracker provider: {provider!r}")
+        case "plane":
+            # Self-hosted / air-gapped Plane issue tracking (FAR-1767): both
+            # base_url (the API root) and workspace_slug are REQUIRED — an
+            # air-gapped instance has no public default, and every route is
+            # workspace-scoped.
+            return PlaneConnector(
+                token=_get_cred(creds, "token", type_id),
+                base_url=_require_config(config, "base_url", "PlaneConnector"),
+                workspace_slug=_require_config(config, "workspace_slug", "PlaneConnector"),
+            )
         case _:
             registry = get_plugin_registry()
             if registry.has_connector_type(type_id):

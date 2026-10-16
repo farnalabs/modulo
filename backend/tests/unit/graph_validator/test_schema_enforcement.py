@@ -24,30 +24,13 @@ from tests.unit.graph_validator._helpers import (
 from tests.unit.graph_validator._helpers import (
     schema_version_session as _schema_version_session,
 )
+from tests.unit.graph_validator._helpers import (
+    snapshot as _snapshot,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-_SIMPLE_GRAPH = {
-    "nodes": [{"id": "a"}, {"id": "b"}],
-    "edges": [{"source": "a", "target": "b", "type": "normal"}],
-}
-
-_PHASE_1_CUTOVER = datetime(2026, 7, 22, tzinfo=UTC)
-
-
-def _snapshot(**kw):
-    snap = MagicMock()
-    snap.graph_json = kw.get("graph_json", _SIMPLE_GRAPH)
-    snap.schema_pins_json = kw.get("schema_pins_json", [])
-    snap.connector_bindings_json = kw.get("connector_bindings_json", [])
-    snap.model_backend_pins_json = kw.get("model_backend_pins_json", [])
-    snap.created_at = kw.get("created_at", _PHASE_1_CUTOVER)
-    snap.pipeline_id = kw.get("pipeline_id", uuid.uuid4())
-    snap.id = kw.get("id", uuid.uuid4())
-    snap.environment_profile_id = kw.get("environment_profile_id")
-    return snap
 
 
 def _deletion_session(

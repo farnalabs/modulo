@@ -321,6 +321,129 @@ test.describe('JsonViewer design-token theming', { tag: '@regression' }, () => {
     expect(overflow, 'no horizontal overflow in the viewer scroll container').toBe(0)
   })
 
+  test.describe('narrow viewport — FAR-1840', () => {
+    // iPhone-ish viewport: the reported bug is that a long string value
+    // collapses to one character per line because the shrink-proof expand
+    // toggle + char count squeeze the preview text.
+    test.use({ viewport: { width: 375, height: 812 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true })
+
+    test('long string value fills the row and the expand control stays reachable', { tag: '@regression' }, async ({ page, env }) => {
+      await loginAsAdmin(page, env)
+
+      const longText = 'The quick brown fox jumps over the lazy dog. '.repeat(60)
+
+      await page.route('**/api/v1/runs/run-json-viewer', (route) => {
+        if (route.request().method() === 'GET') {
+          return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              run_id: 'run-json-viewer',
+              run_number: 42,
+              pipeline_id: 'p-1',
+              pipeline_name: 'JSON Viewer Test',
+              status: 'complete',
+              trace_id: 'trace-abc',
+              total_cost_usd: '0.000100',
+              node_token_usage: { format: { input_tokens: 10, output_tokens: 20, total_tokens: 30 } },
+            }),
+          })
+        }
+        return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+      })
+      await page.route('**/api/v1/runs/run-json-viewer/io', (route) => {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            outputs_json: {
+              format: {
+                // First key (not last) so the row also carries the dep's
+                // trailing comma — the comma must not break the layout.
+                agent_stdout: longText,
+                result: 'success',
+              },
+            },
+          }),
+        })
+      })
+      await page.route('**/api/v1/runs/run-json-viewer/events*', (route) => {
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ events: [] }) })
+      })
+
+      await page.goto('/runs/run-json-viewer')
+      await expect(page.locator('.json-viewer').first()).toBeVisible()
+      await page.getByTestId('run-detail-toggle-io').click()
+
+      const truncated = page.getByTestId('json-viewer-string-truncated').first()
+      await expect(truncated).toBeVisible()
+
+      // Measure the preview's actual line boxes. A single-character column
+      // shows up as ~one line per character (hundreds of near-zero-width
+      // line rects); the fixed layout wraps at the container width.
+      const metrics = await truncated.evaluate((el) => {
+        const text = el.querySelector('.json-viewer-string-truncated-text') as HTMLElement | null
+        if (!text) return null
+        const range = document.createRange()
+        range.selectNodeContents(text)
+        const byLine = new Map<number, number>()
+        for (const r of Array.from(range.getClientRects())) {
+          if (r.width <= 0 || r.height <= 0) continue
+          const y = Math.round(r.y)
+          byLine.set(y, Math.max(byLine.get(y) ?? 0, r.width))
+        }
+        const lineWidths = Array.from(byLine.values())
+        const textBox = text.getBoundingClientRect()
+        const scroll = el.closest('.overflow-auto')
+        const toggle = el.querySelector('[data-testid="json-viewer-string-expand"]')
+        const toggleBox = toggle?.getBoundingClientRect()
+        return {
+          lineCount: lineWidths.length,
+          widestLine: Math.max(...lineWidths),
+          narrowestLine: Math.min(...lineWidths),
+          previewChars: (text.textContent ?? '').length,
+          textBoxWidth: Math.round(textBox.width),
+          containerWidth: scroll ? Math.round(scroll.getBoundingClientRect().width) : 0,
+          horizontalOverflow: scroll ? scroll.scrollWidth - scroll.clientWidth : null,
+          toggleWidth: toggleBox ? Math.round(toggleBox.width) : 0,
+          toggleHeight: toggleBox ? Math.round(toggleBox.height) : 0,
+        }
+      })
+      expect(metrics, 'truncated preview rendered').not.toBeNull()
+      console.log(`[far-1840] narrow-viewport metrics: ${JSON.stringify(metrics!)}`)
+
+      // 1. The value fills the row: the preview takes most of the viewer's
+      //    width instead of being squeezed next to the controls.
+      expect(metrics!.textBoxWidth, `value must fill the row (got ${metrics!.textBoxWidth}px of ${metrics!.containerWidth}px container)`).toBeGreaterThan(
+        metrics!.containerWidth * 0.5,
+      )
+
+      // 2. NOT a single-character column: every wrapped line carries real
+      //    text, and the 500-char preview wraps to a sane number of lines
+      //    (one char per line would be ~500 line boxes).
+      expect(metrics!.widestLine, `widest preview line must carry more than one character (got ${metrics!.widestLine}px)`).toBeGreaterThan(40)
+      expect(metrics!.lineCount, `preview must not wrap one character per line (got ${metrics!.lineCount} lines for ${metrics!.previewChars} chars)`).toBeLessThan(
+        metrics!.previewChars / 5,
+      )
+
+      // 3. The controls keep their natural size and stay reachable.
+      expect(metrics!.toggleWidth, 'expand toggle must keep its label width').toBeGreaterThan(40)
+      expect(metrics!.toggleHeight, 'expand toggle must stay one label tall').toBeLessThanOrEqual(30)
+
+      // 4. The row does not force horizontal scrolling on the viewport.
+      expect(metrics!.horizontalOverflow, 'no horizontal overflow in the viewer scroll container').toBe(0)
+
+      // 5. The expand control actually works at this viewport.
+      await page.getByTestId('json-viewer-string-expand').first().click()
+      const expanded = page.getByTestId('json-viewer-string-expanded').first()
+      await expect(expanded).toContainText(longText.slice(0, 60))
+
+      await page.getByTestId('json-viewer-string-collapse').first().click()
+      await expect(truncated).toBeVisible()
+      await expect(page.getByTestId('json-viewer-string-expanded')).toHaveCount(0)
+    })
+  })
+
   test('copy still copies the FULL long string value when the tree truncates it', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
 

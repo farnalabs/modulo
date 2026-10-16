@@ -9,6 +9,8 @@ vi.mock('../../lib/api/client', () => ({
   getAccessToken: vi.fn().mockReturnValue('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbkBtb2R1bG8ucnVuIiwib3JnX3JvbGUiOiJhZG1pbiJ9.fakesignature'),
   clearAccessToken: vi.fn(),
   isDemoSession: vi.fn().mockReturnValue(false),
+  // useEventStream registers a module-scope re-arm listener on import (FAR-1842).
+  onAuthChange: vi.fn(() => vi.fn()),
 }))
 
 function mockMatchMedia(matches: boolean) {
@@ -175,13 +177,22 @@ describe('AppLayout', () => {
   describe('mobile — nav flag unresolved (FAR-1237 pending placeholder)', () => {
     it('renders neither chrome on first paint — pending placeholder + header offset, no hamburger, no rail', async () => {
       mockMatchMedia(false)
-      // Hold the flags response so the store is genuinely IN FLIGHT ('none')
-      // at assertion time. Without the gate the no-payload mock would settle
-      // the store to terminal 'unavailable' (FAR-1805) within the awaits
-      // below and the placeholder would already have unmounted — the settled
-      // case is pinned by the companion test next door.
+      // Hold the plan-bootstrap response so the store is genuinely IN FLIGHT
+      // ('none') at assertion time. The store currently reads the flags from
+      // `/api/v1/admin/feature-flags`; FAR-1809 (PR #1863) repoints that read
+      // to the caller-scoped `/api/v1/plan`, so BOTH paths are held — the
+      // test stays genuine on either side of that merge. Without the hold the
+      // no-payload mock would settle the store to terminal 'unavailable'
+      // (FAR-1805) — the settled case is pinned by the companion test next
+      // door. The flushPromises() below makes the discrimination real: it
+      // drains the settle chain, so a hold that misses the live path leaves
+      // flagsSource 'none' only by timing luck and the assertion fails once
+      // the chain settles (proven by mutation: a bogus hold path fails this
+      // test).
       ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((path: string) => {
-        if (path === '/api/v1/admin/feature-flags') return new Promise(() => {})
+        if (path === '/api/v1/admin/feature-flags' || path === '/api/v1/plan') {
+          return new Promise(() => {})
+        }
         return Promise.resolve({ data: null, error: undefined })
       })
       const wrapper = mount(AppLayout, {
@@ -192,8 +203,11 @@ describe('AppLayout', () => {
       })
       const onboarding = useOnboardingStore()
       onboarding.dismissed = true
-      await nextTick()
-      await nextTick()
+      // Drain the microtask chain fully: license/tiers settle (no-payload),
+      // and the held bootstrap request must STILL leave the store in 'none'.
+      // Without this the assertions below could pass on timing luck alone,
+      // before an unheld request had time to settle the store.
+      await flushPromises()
 
       expect(usePlanStore().flagsSource).toBe('none')
       const pending = wrapper.find(`[data-testid="${MOBILE_NAV_PENDING_TESTID}"]`)

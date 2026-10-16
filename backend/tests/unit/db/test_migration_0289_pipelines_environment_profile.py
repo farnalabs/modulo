@@ -29,8 +29,10 @@ Lenses:
   ``0312_memberships_active_lookups``, and
   ``0314_external_agents_mcp_servers`` chains onto
   ``0313_collection_install_drop_installed_entities``, and
-  ``0315_policy_gate_evaluation_mode`` chains onto
-  ``0314_external_agents_mcp_servers`` as the single
+  ``0315_service_accounts_lifecycle`` chains onto
+  ``0314_external_agents_mcp_servers``, and
+  ``0316_policy_gate_evaluation_mode`` chains onto
+  ``0315_service_accounts_lifecycle`` as the single
   linear head; the revision id matches the filename, and neither
   branch_labels nor depends_on is set (the pre-commit check-migration-heads
   hook and every ``test_single_head_*`` pin depend on that shape).
@@ -63,7 +65,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0289_pipelines_environment_profile"
 _MIGRATION_DOWN_REVISION = "0288_runs_execution_origin"
-_HEAD_MIGRATION = "0315_policy_gate_evaluation_mode"
+_HEAD_MIGRATION = "0316_policy_gate_evaluation_mode"
 _TABLE = "pipelines"
 _COLUMN = "environment_profile_id"
 _FK_NAME = "fk_pipelines_environment_profile_id"

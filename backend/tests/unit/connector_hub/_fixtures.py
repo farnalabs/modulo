@@ -19,7 +19,7 @@ from modulo.connectors.azure_repos import AzureReposConnector
 from modulo.connectors.base import ConnectorBase, ConnectorType
 from modulo.connectors.bitbucket import BitbucketConnector
 from modulo.connectors.buildkite import BuildkiteConnector
-from modulo.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
+from modulo.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner, WoodpeckerCIRunner
 from modulo.connectors.circleci import CircleCIConnector
 from modulo.connectors.codeclimate import CodeClimateConnector
 from modulo.connectors.confluence import ConfluenceConnector
@@ -41,6 +41,7 @@ from modulo.connectors.npm import NpmConnector
 from modulo.connectors.onepassword import OnePasswordConnector
 from modulo.connectors.opsgenie import OpsgenieConnector
 from modulo.connectors.pagerduty import PagerDutyConnector
+from modulo.connectors.plane import PlaneConnector
 from modulo.connectors.pypi import PyPIConnector
 from modulo.connectors.sentry import SentryConnector
 from modulo.connectors.sharepoint import SharePointConnector
@@ -67,6 +68,13 @@ BUILD_CASES: list[tuple[str, dict[str, Any], dict[str, Any], type[ConnectorBase]
     ("github", {}, {"token": "gh_token"}, GitHubConnector, ConnectorType.GITHUB),
     ("github_actions_ci", {}, {"token": "gha_token"}, GitHubActionsCIRunner, ConnectorType.CI_RUNNER),
     ("gitlab_ci", {}, {"token": "gl_token"}, GitLabCIRunner, ConnectorType.CI_RUNNER),
+    (
+        "woodpecker",
+        {"base_url": "https://ci.example.com"},
+        {"token": "wp_token"},
+        WoodpeckerCIRunner,
+        ConnectorType.CI_RUNNER,
+    ),
     ("gitlab", {}, {"token": "gitlab_token"}, GitLabConnector, ConnectorType.GITLAB),
     ("shell", {"allowed_commands": ["echo", "cat"]}, {}, ShellConnector, ConnectorType.SHELL),
     ("jira", {"instance": "acme.atlassian.net"}, {"token": "jira_token"}, JiraConnector, ConnectorType.JIRA),
@@ -124,4 +132,11 @@ BUILD_CASES: list[tuple[str, dict[str, Any], dict[str, Any], type[ConnectorBase]
     ("codeclimate", {}, {"token": "cc2_token"}, CodeClimateConnector, ConnectorType.CODECLIMATE),
     ("snyk", {}, {"token": "snyk_token"}, SnykConnector, ConnectorType.SNYK),
     ("n8n", {}, {"token": "n8n_token"}, N8NConnector, ConnectorType.N8N),
+    (
+        "plane",
+        {"base_url": "https://plane.example.com/api/v1", "workspace_slug": "acme"},
+        {"token": "plane_token"},
+        PlaneConnector,
+        ConnectorType.TICKET_TRACKER,
+    ),
 ]

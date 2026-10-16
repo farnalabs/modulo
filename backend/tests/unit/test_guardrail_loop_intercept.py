@@ -1144,3 +1144,208 @@ async def test_persist_audit_catches_exception():
         )
     # Exception was logged, not raised
     mock_log.exception.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# FAR-1694 S2 — escalate bridge protocol (refuse + typed marker + exit code)
+# ---------------------------------------------------------------------------
+
+
+def _escalate_decision(guardrail: str = "gr-esc", reason: str = "needs a human") -> dict:
+    return {"action": "escalate", "blocked": True, "guardrail": guardrail, "reason": reason}
+
+
+def test_bridge_client_source_ships_escalate_protocol():
+    """The sandbox-side source written by ``bridge_client_source`` carries the
+    escalate marker + decision handling (single source of truth)."""
+    source = bridge_client_source()
+    assert "MODULO_BRIDGE_ESCALATED" in source
+    assert "ESCALATED_EXIT_CODE" in source
+    assert '"escalate"' in source
+
+
+def test_decide_before_escalate_always_refuses(monkeypatch):
+    """An ``escalate`` decision is a refusal regardless of the ``blocked`` flag —
+    escalate has no record-only downgrade."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    monkeypatch.setattr(
+        sb.BridgeClient,
+        "notify",
+        lambda self, tool, args, direction, result_summary="": {"action": "escalate", "blocked": False},
+    )
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    allowed, masked, action = client.decide_before("git push", {"url": "x"})
+    assert allowed is False
+    assert masked is None
+    assert action == "escalate"
+
+
+def test_wrap_command_escalate_kills_child_and_emits_typed_marker(monkeypatch, capsys):
+    """An ``escalate`` decision kills the wrapped child, emits a
+    ``MODULO_BRIDGE_ESCALATED:<json>`` marker carrying the escalation context,
+    and exits with the dedicated escalate exit code (distinct from block)."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    event_line = b'MODULO_BRIDGE_EVENT: {"tool_name": "git push", "args": {"url": "x"}, "direction": "before"}'
+    proc = _FakeProc([event_line], wait_code=0)
+    monkeypatch.setattr(sb.subprocess, "Popen", lambda *a, **k: proc)
+    monkeypatch.setattr(
+        sb.BridgeClient,
+        "notify",
+        lambda self, tool, args, direction, result_summary="": _escalate_decision(),
+    )
+
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    code = sb._wrap_command(["git", "push"], client)
+
+    assert code == sb.ESCALATED_EXIT_CODE
+    assert sb.ESCALATED_EXIT_CODE != sb.BLOCKED_EXIT_CODE
+    assert proc.killed is True
+    out = capsys.readouterr().out
+    assert sb.ESCALATED_MARKER in out
+    payload = json.loads(out.split(sb.ESCALATED_MARKER, 1)[1].strip())
+    assert payload["tool"] == "git push"
+    assert payload["direction"] == "before"
+    assert payload["guardrail"] == "gr-esc"
+    assert payload["reason"] == "needs a human"
+    # An args fingerprint is recorded for evidence — never the raw args.
+    assert payload["args_sha256"]
+    assert "url" not in payload
+
+
+def test_wrap_command_escalate_leaves_no_blocked_marker(monkeypatch, capsys):
+    """An escalate must not masquerade as a block (no BLOCKED marker on stdout)."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    event_line = b'MODULO_BRIDGE_EVENT: {"tool_name": "git push", "args": {}, "direction": "before"}'
+    proc = _FakeProc([event_line], wait_code=0)
+    monkeypatch.setattr(sb.subprocess, "Popen", lambda *a, **k: proc)
+    monkeypatch.setattr(
+        sb.BridgeClient,
+        "notify",
+        lambda self, tool, args, direction, result_summary="": _escalate_decision(),
+    )
+
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    code = sb._wrap_command(["git", "push"], client)
+
+    assert code == sb.ESCALATED_EXIT_CODE
+    out = capsys.readouterr().out
+    assert sb.BLOCKED_MARKER not in out
+
+
+def test_notify_cli_escalate_emits_marker_and_exit_4(monkeypatch, capsys):
+    """The ``--notify`` CLI emits the escalate marker and exits with the
+    dedicated escalate code."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    monkeypatch.setattr(
+        sb.BridgeClient,
+        "notify",
+        lambda self, tool, args, direction, result_summary="": _escalate_decision(),
+    )
+    code = sb.main(["--notify", '{"tool_name": "git push", "args": {}, "direction": "before"}', "--endpoint", "x"])
+    assert code == sb.ESCALATED_EXIT_CODE
+    out = capsys.readouterr().out
+    assert sb.ESCALATED_MARKER in out
+
+
+def test_parse_bridge_escalation_marker_round_trip():
+    """A marker emitted by the bridge parses back to a typed payload."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    marker_line = sb.ESCALATED_MARKER + json.dumps(
+        {
+            "tool": "git push",
+            "direction": "before",
+            "guardrail": "gr-esc",
+            "reason": "needs a human",
+            "args_sha256": "abc123",
+        }
+    )
+    parsed = li.parse_bridge_escalation_marker(f"agent output\n{marker_line}\nmore output\n")
+    assert parsed is not None
+    assert parsed.tool_name == "git push"
+    assert parsed.direction == "before"
+    assert parsed.guardrail == "gr-esc"
+    assert parsed.reason == "needs a human"
+    assert parsed.args_sha256 == "abc123"
+    assert "git push" in parsed.describe()
+    assert "gr-esc" in parsed.describe()
+
+
+def test_parse_bridge_escalation_marker_absent_or_malformed():
+    """Absent, empty, malformed, and non-dict payloads parse to None."""
+    assert li.parse_bridge_escalation_marker("") is None
+    assert li.parse_bridge_escalation_marker("nothing to see here") is None
+    assert li.parse_bridge_escalation_marker(li.BRIDGE_ESCALATED_MARKER) is None
+    assert li.parse_bridge_escalation_marker(li.BRIDGE_ESCALATED_MARKER + "   ") is None
+    assert li.parse_bridge_escalation_marker(li.BRIDGE_ESCALATED_MARKER + "{broken json") is None
+    assert li.parse_bridge_escalation_marker(li.BRIDGE_ESCALATED_MARKER + "[1, 2, 3]") is None
+
+
+def test_parse_bridge_escalation_marker_takes_the_last_marker():
+    """When several markers appear, the LAST one wins (the stopping event)."""
+    first = li.BRIDGE_ESCALATED_MARKER + json.dumps({"tool": "first"})
+    second = li.BRIDGE_ESCALATED_MARKER + json.dumps({"tool": "second"})
+    parsed = li.parse_bridge_escalation_marker(f"{first}\n{second}\n")
+    assert parsed is not None
+    assert parsed.tool_name == "second"
+
+
+def test_bridge_escalation_describe_omits_empty_optional_fields():
+    """``describe`` omits guardrail/direction/reason when they are empty.
+
+    A bare escalation (all three optional fields blank) still yields a usable
+    summary string, exercising the false arm of each of the three guards.
+    """
+    bare = li.BridgeEscalation(tool_name="git push", direction="", guardrail="", reason="", args_sha256="h")
+    assert bare.describe() == "tool='git push'"
+
+
+def test_args_sha256_falls_back_to_empty_on_unserialisable_args():
+    """The args fingerprint is best-effort: an unserialisable (circular) args
+    dict hashes the empty string rather than raising (FAR-1694 S2)."""
+    import hashlib
+
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    circular: dict = {}
+    circular["self"] = circular
+    # ``json.dumps`` raises ValueError ("Circular reference detected") for the
+    # cycle, so the helper falls back to hashing the empty string.
+    assert sb._args_sha256(circular) == hashlib.sha256(b"").hexdigest()
+
+
+def test_notify_cli_escalate_preserves_the_event_direction(monkeypatch, capsys):
+    """An after-direction escalation is labelled ``after`` in the marker payload.
+
+    ``_escalation_payload`` must stamp the event's ACTUAL direction, not a
+    hardcoded ``before`` — otherwise a ``--notify direction=after`` escalation
+    is mislabelled (review finding 2, FAR-1694 S2)."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    monkeypatch.setattr(
+        sb.BridgeClient,
+        "notify",
+        lambda self, tool, args, direction, result_summary="": _escalate_decision(),
+    )
+    code = sb.main(["--notify", '{"tool_name": "git push", "args": {}, "direction": "after"}', "--endpoint", "x"])
+    assert code == sb.ESCALATED_EXIT_CODE
+    out = capsys.readouterr().out
+    payload = json.loads(out.split(sb.ESCALATED_MARKER, 1)[1].strip())
+    assert payload["direction"] == "after"
+
+
+def test_escalation_channel_is_documented_as_untrusted():
+    """The S2 escalation channel is stdout and thus agent-forgeable; every
+    definition point must say so and defer authentication to S3 (review
+    finding 1). Guards against the warning silently rotting away."""
+    source = bridge_client_source()
+    assert "UNTRUSTED CHANNEL" in source
+    assert "authenticate" in source
+    marker_doc = li.parse_bridge_escalation_marker.__doc__ or ""
+    assert "UNTRUSTED" in marker_doc
+    bridge_escalation_doc = li.BridgeEscalation.__doc__ or ""
+    assert "UNTRUSTED CHANNEL" in bridge_escalation_doc

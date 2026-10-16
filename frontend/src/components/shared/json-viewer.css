@@ -168,3 +168,53 @@
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* FAR-1840: narrow viewports (<= 640px). The shrink-proof expand toggle +
+   char count squeeze the preview to its min-content — with
+   `overflow-wrap: anywhere` that floor is ONE character, so at 375px the
+   long value rendered as a column of single characters (measured: preview
+   7px wide, 400 line boxes for a 500-char preview, controls vertically
+   centred ~4000px down the page, 8px row overflow). Two coordinated moves:
+
+   1. Let the ROW wrap. The value wrapper only receives the space left of
+      the indent + key (~40% of the row at 375px), and the dep's own
+      default-value path is squeezed into that same leftover space. With
+      `flex-wrap: wrap` on the row, a long value's wrapper moves to its own
+      line and takes the FULL row width, so the value wraps at the
+      container edge. Short values still fit on the key's line and are
+      unaffected.
+
+   2. Stack the truncation controls onto their own line ABOVE the preview
+      so they never consume the preview's width. The control cannot be
+      moved next to the key from inside vue-json-pretty's `renderNodeValue`
+      extension point — the dep always renders key + colon before the value
+      slot — so the controls sit at the head of the value block instead:
+      reachable immediately, then the value fills the full row below.
+
+   Desktop rendering (>= 641px) is untouched: every override here is
+   scoped to the media query. Virtual trees keep their `white-space:
+   nowrap` horizontal-scroll contract and are excluded (mirrors the
+   FAR-626 wrap rule above). */
+@media (max-width: 640px) {
+  .json-viewer .vjs-tree:not(.is-virtual) .vjs-tree-node {
+    flex-wrap: wrap;
+  }
+
+  .json-viewer .json-viewer-string-truncated {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .json-viewer .json-viewer-string-truncated-text {
+    order: 3;
+    flex: 1 0 100%;
+  }
+
+  .json-viewer .json-viewer-string-toggle {
+    order: 1;
+  }
+
+  .json-viewer .json-viewer-string-count {
+    order: 2;
+  }
+}

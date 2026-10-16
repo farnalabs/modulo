@@ -84,10 +84,10 @@ def test_unbuildable_enum_labels_are_not_advertised(type_id: str) -> None:
         _build_connector(type_id, {}, {})
 
 
-@pytest.mark.parametrize("type_id", ["github_actions_ci", "gitlab_ci"])
+@pytest.mark.parametrize("type_id", ["github_actions_ci", "gitlab_ci", "woodpecker"])
 def test_hub_native_ci_runner_ids_are_advertised(type_id: str) -> None:
-    """The only creatable CI-runner connector ids stay in the offered set —
-    dropping them would re-open FAR-1764 (no way to create a CI connector)."""
+    """The creatable CI-runner connector ids stay in the offered set —
+    dropping one would re-open FAR-1764 (no way to create a CI connector)."""
     assert type_id in _HUB_BUILT_TYPE_IDS
     assert type_id in buildable_connector_type_ids()
 
