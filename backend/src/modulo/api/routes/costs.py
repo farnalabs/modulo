@@ -140,7 +140,14 @@ def _cost_controls_patch(
     FAR-391 hard spend ceilings (``max_run_cost`` / ``spend_ceiling``) now live on
     the per-org ``organisation_cost_state`` row (FAR-1833), so they are returned
     as a column mapping for the caller to write via ``upsert_org_cost_state``
-    under ``lock_org_cost_state`` — this helper no longer mutates *org*.
+    under ``lock_org_cost_state``.
+
+    This helper DOES still mutate ``org``: when ``req.budget`` is provided it
+    sets ``org.daily_spend_limit`` (the org's daily-spend budget, which stays on
+    the ``organisations`` row). Because that dirties the ORM row and the API
+    session AUTOFLUSHES, the caller MUST acquire ``lock_org_cost_state`` BEFORE
+    calling this helper whenever a ceiling is being written — see the ordering
+    note at the call site in ``update_cost_controls`` (FAR-1833 P1).
 
     Returns ``(settings_patch, cost_state_columns)`` where ``settings_patch`` is
     the top-level ``{COST_CONTROLS_KEY: cc}`` patch to merge ATOMICALLY into
@@ -612,14 +619,32 @@ async def update_cost_controls(
             if org is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
 
+            # FAR-1833 (P1 lock order): the per-org cost advisory MUST be
+            # acquired BEFORE any ``organisations``-row mutation on this
+            # endpoint. ``_cost_controls_patch`` sets ``org.daily_spend_limit``
+            # (dirtying the ORM row) and this endpoint's session AUTOFLUSHES —
+            # so if the lock were taken after it, the autoflush inside
+            # ``lock_org_cost_state``'s first ``execute`` (``set_config``) would
+            # take the org row lock FIRST and only THEN wait on the advisory: an
+            # ABBA cycle against the finalize gate, which holds the advisory and
+            # then writes the org row via the auto-pause path (SQLSTATE 40P01).
+            # Decide "does this request write a ceiling" from the unset-aware
+            # model dump BEFORE ``_cost_controls_patch`` runs, so the lock
+            # precedes the mutation while keeping the SAME lock condition as
+            # before (a ceiling write) — behaviour unchanged.
+            provided_fields = req.model_dump(exclude_unset=True)
+            writes_cost_state = "max_run_cost" in provided_fields or "spend_ceiling" in provided_fields
+            if writes_cost_state:
+                await lock_org_cost_state(session, org.id)
+
             # FAR-1830: patch ONLY the cost_controls key atomically rather than
             # writing the whole settings_json column back from a stale read.
             patch, cost_state_columns = _cost_controls_patch(org, req)
             if cost_state_columns:
                 # FAR-1833: the FAR-391 ceilings now live on the per-org
-                # cost-state row and are written under the cost advisory lock,
-                # serialised against the finalize gate+accrual.
-                await lock_org_cost_state(session, org.id)
+                # cost-state row and are written under the cost advisory lock
+                # (already held above), serialised against the finalize
+                # gate+accrual.
                 await upsert_org_cost_state(session, org.id, provided=cost_state_columns)
             if patch is not None:
                 settings_after = await update_org_settings_patch(session, org.id, patch)

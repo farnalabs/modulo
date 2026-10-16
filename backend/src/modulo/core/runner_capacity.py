@@ -162,13 +162,27 @@ async def lock_org_cost_state(session: AsyncSession, org_id: uuid.UUID) -> None:
     a contended wait must degrade through the transaction-scoped ``lock_timeout``
     that :func:`~modulo.db.crud.row_lock.set_mutation_row_lock_timeout` sets on
     the line above, raising SQLSTATE 55P03 (``lock_not_available``) rather than
-    hanging unbounded — the bounded-degradation contract FAR-1823 requires. The
-    lock wait itself takes no row lock, so it cannot couple with (or extend) any
-    ``organisations`` row lock. Callers treat 55P03 as a retryable degradation.
+    hanging unbounded — the bounded-degradation contract FAR-1823 requires.
+    Callers treat 55P03 as a retryable degradation.
+
+    ORDERING HAZARD (FAR-1833 P1) — callers MUST acquire this lock BEFORE
+    mutating any ORM row, in particular the ``organisations`` row. The helper's
+    first statement is an ``execute`` (``set_mutation_row_lock_timeout``'s
+    ``SELECT set_config``), and the API/executor sessions AUTOFLUSH, so a session
+    carrying a dirty ``organisations`` row issues that row's ``UPDATE`` during
+    this ``execute`` — i.e. it takes the org row lock FIRST and only then waits
+    on the advisory. That is an ABBA cycle against the finalize auto-pause
+    write, which holds this advisory and then writes ``organisations``
+    (``triggers_paused``) — a SQLSTATE 40P01 deadlock (the Postgres detector
+    fires before the ``lock_timeout``). Taking the advisory before any org-row
+    mutation makes the order uniform (advisory → org row) on every path.
     """
     from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 
-    # Bound the wait FIRST (the helper takes no lock, so ordering is unaffected).
+    # Bound the wait FIRST. NOTE: this executes before the advisory and any
+    # pending ORM writes AUTOFLUSH during it — which is exactly why callers must
+    # not have dirtied the ``organisations`` row before calling (see the
+    # ordering hazard in the docstring).
     await set_mutation_row_lock_timeout(session)
     k1, k2 = org_cost_state_lock_keys(org_id)
     await session.execute(text("SELECT pg_advisory_xact_lock(:k1, :k2)"), {"k1": k1, "k2": k2})
