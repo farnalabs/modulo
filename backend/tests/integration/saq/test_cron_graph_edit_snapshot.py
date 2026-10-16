@@ -6,7 +6,7 @@ snapshot, while a pipeline graphed *before* its first run snapshotted
 correctly. The observing deployment also saw a plan-gated snapshot-save
 endpoint (``402 pipeline_diff_rollback``), offered as a competing explanation.
 
-Two hypotheses:
+Two hypotheses were framed at the time:
 
 * **H1 — expected:** the edit produced no new snapshot (the save endpoint is
   plan-gated), so the pipeline correctly points at its one snapshot and every
@@ -15,14 +15,20 @@ Two hypotheses:
   than the manual path (latest EXISTING snapshot vs the live graph at run
   start), so a run pins a stale snapshot after an edit.
 
-This module decides between them end to end, through the real HTTP routes
+H1 was later superseded by FAR-1810: an explicit graph save now records an
+immutable ``version_kind='edit'`` snapshot in the save transaction, so an
+edited pipeline legitimately gains a snapshot. This module asserts that
+save-history contract instead of the old "the edit path attempts no save"
+premise, while still nailing H2 end to end.
+
+The module exercises the real HTTP routes
 (``PUT /api/v1/pipelines/{id}/graph``, ``POST /api/v1/runs``) and the real
 scheduler dispatch (``fire_due_triggers`` -> ``fire_cron_trigger``) against a
 real Postgres + Redis (testcontainers):
 
-1. The graph edit creates NO snapshot — **even with every plan feature
-   enabled** (the ASGI client reports enterprise tier), so H1's plan-gate
-   story cannot be the cause: nothing in the edit path attempts a save.
+1. The graph edit records exactly ONE new ``version_kind='edit'`` snapshot
+   (FAR-1810) — **even with every plan feature enabled** (the ASGI client
+   reports enterprise tier), so the old plan-gate story is not in play.
 2. Pre-fix, the second cron fire reuses run A's pre-edit snapshot while
    ``POST /runs`` at the same moment creates a fresh snapshot from the edited
    live graph — the divergence H2 predicts. Post-fix, the second cron fire
@@ -248,12 +254,14 @@ async def _execute_cron_fire(captured: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-async def _snapshot_count(db_engine: AsyncEngine, pipeline_id: uuid.UUID) -> int:
+async def _snapshot_count(db_engine: AsyncEngine, pipeline_id: uuid.UUID, *, version_kind: str | None = None) -> int:
+    query = "SELECT count(*) FROM pipeline_snapshots WHERE pipeline_id = :pid"
+    params: dict[str, Any] = {"pid": str(pipeline_id)}
+    if version_kind is not None:
+        query += " AND version_kind = :vk"
+        params["vk"] = version_kind
     async with db_engine.connect() as conn:
-        result = await conn.execute(
-            text("SELECT count(*) FROM pipeline_snapshots WHERE pipeline_id = :pid"),
-            {"pid": str(pipeline_id)},
-        )
+        result = await conn.execute(text(query), params)
         return int(result.scalar_one())
 
 
@@ -405,13 +413,22 @@ async def test_cron_fire_after_graph_edit_executes_the_edited_graph(
 
         # --- Edit the graph through the REAL route (enterprise plan context:
         # every feature, including pipeline_diff_rollback, is enabled here).
+        edit_snapshots_before = await _snapshot_count(db_engine, pipeline_id, version_kind="edit")
         await _patch_graph(integration_client, test_org, test_user, pipeline_id, "v2", schema_id)
         assert await _live_node_label(db_engine, pipeline_id) == "v2"
 
-        # H1 observation: the edit itself creates NO snapshot — with the plan
-        # feature enabled, so the 402 plan-gate story cannot be the cause.
-        assert await _snapshot_count(db_engine, pipeline_id) == 1, (
-            "graph edit unexpectedly created a snapshot — the H1 (plan-gated save) premise needs re-examination"
+        # FAR-1810: an explicit graph save records an immutable
+        # version_kind='edit' snapshot in the same transaction. Count only
+        # ``version_kind='edit'`` rows so the assertion pins the exact kind the
+        # docstring claims (a plain row count could be satisfied by any
+        # snapshot kind), and assert the delta so it stays meaningful. This
+        # supersedes the FAR-1519 H1 premise that the edit path attempts no
+        # save (the plan feature that once gated saves is enabled here).
+        edit_snapshots_after = await _snapshot_count(db_engine, pipeline_id, version_kind="edit")
+        assert edit_snapshots_after == edit_snapshots_before + 1, (
+            "an explicit graph save must record exactly one FAR-1810 "
+            "version_kind='edit' snapshot "
+            f"(before={edit_snapshots_before}, after={edit_snapshots_after})"
         )
 
         # --- Second fire: the cron run must execute the EDITED graph.
