@@ -1,5 +1,9 @@
 <template>
-  <div class="flex h-[calc(100vh-3.5rem)]">
+  <!-- `relative` anchors the mobile properties-panel overlay (FAR-1841);
+       `mobileFitStyle` pins the editor to the leftover viewport height on
+       <768px (see the script block) so nothing hangs below the fold behind
+       the touch-capturing canvas. Desktop keeps the height class alone. -->
+  <div ref="editorRootRef" data-testid="pipeline-editor-root" class="relative flex h-[calc(100vh-3.5rem)]" :style="mobileFitStyle">
     <div v-if="loading || historicResolving" class="flex flex-1 items-center justify-center">
       <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
     </div>
@@ -815,9 +819,28 @@
         </VueFlow>
         </div>
       </div>
-      <!-- Node Properties Panel -->
-      <aside v-if="selectedNodeData && !selectedEdgeData" class="w-96 overflow-y-auto border-l bg-card p-4">
-        <h2 class="mb-4 text-base font-semibold">{{ $t('views.PipelineEditorView.node_properties') }}</h2>
+      <!-- Node Properties Panel. Mobile (FAR-1841): an in-editor overlay sheet
+           (`max-md:absolute max-md:inset-0`) with an explicit Close button.
+           As a flex sibling its fixed w-96 swallowed the whole viewport and
+           crushed the canvas to 0x0 — and with the canvas gone there was no
+           pane-click target to deselect, trapping the user in the panel.
+           Desktop keeps the docked side panel unchanged. -->
+      <aside
+        v-if="selectedNodeData && !selectedEdgeData"
+        class="w-96 overflow-y-auto border-l bg-card p-4 max-md:absolute max-md:inset-0 max-md:z-40 max-md:w-auto max-md:border-l-0"
+      >
+        <div class="mb-4 flex items-center justify-between">
+          <h2 class="text-base font-semibold">{{ $t('views.PipelineEditorView.node_properties') }}</h2>
+          <button
+            type="button"
+            class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
+            :aria-label="$t('common.close')"
+            data-testid="pipeline-editor-node-props-close"
+            @click="onPaneClick"
+          >
+            <XIcon class="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
         <dl class="space-y-4 text-sm">
           <div>
             <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.id_label') }}</dt>
@@ -1246,9 +1269,27 @@
           </button>
         </div>
       </aside>
-      <!-- Edge Properties Panel (with HITL gate config) -->
-      <aside v-if="selectedEdgeData" class="w-96 overflow-y-auto border-l bg-card p-4">
-        <h2 class="mb-4 text-base font-semibold">{{ $t('views.PipelineEditorView.edge_properties') }}</h2>
+      <!-- Edge Properties Panel (with HITL gate config). Mobile (FAR-1841):
+           same overlay-sheet treatment as the node panel above — a flex
+           sibling of this width crushes the canvas to 0x0 on a phone. The
+           header Close (mobile-only) mirrors the node panel; the existing
+           bottom Close button remains for every breakpoint. -->
+      <aside
+        v-if="selectedEdgeData"
+        class="w-96 overflow-y-auto border-l bg-card p-4 max-md:absolute max-md:inset-0 max-md:z-40 max-md:w-auto max-md:border-l-0"
+      >
+        <div class="mb-4 flex items-center justify-between">
+          <h2 class="text-base font-semibold">{{ $t('views.PipelineEditorView.edge_properties') }}</h2>
+          <button
+            type="button"
+            class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
+            :aria-label="$t('common.close')"
+            data-testid="pipeline-editor-edge-props-close"
+            @click="selectedEdgeData = null"
+          >
+            <XIcon class="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
         <dl class="space-y-3 text-sm">
           <div>
             <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.source') }}</dt>
@@ -1711,7 +1752,7 @@
   </div>
 </template>
 <script setup lang="ts">
-import { ref, computed, reactive, watch, nextTick, onBeforeUnmount } from 'vue'
+import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { VueFlow, useVueFlow, Position } from '@vue-flow/core'
@@ -2939,6 +2980,123 @@ function onPaneClick() {
   capabilityToolInput.value = ''
   capabilityContextInput.value = ''
 }
+
+// --- Mobile viewport fit (FAR-1841) ---------------------------------------
+// On mobile the editor sits BELOW the app chrome (fixed header offset,
+// banners, breadcrumb) but was always calc(100vh - 3.5rem) tall, so its
+// lower portion — the canvas — hung below the fold. VueFlow captures
+// wheel/touch over the canvas, so the page could not be scrolled from that
+// region (pinch zoomed the graph instead of revealing the UI) and the bottom
+// of the canvas was unreachable. Pin the editor to the space actually left
+// in the viewport below the chrome (<768px only): the whole editor — toolbar
+// plus canvas — then lands on screen and the document has nothing left to
+// scroll, so no touch is ever trapped. Desktop is untouched: the inline
+// height stays unset at >=768px and the h-[calc(100vh-3.5rem)] class applies.
+const MOBILE_EDITOR_MIN_HEIGHT_PX = 240
+const editorRootRef = ref<HTMLElement | null>(null)
+const mobileFitHeightPx = ref<number | null>(null)
+const mobileFitStyle = computed(() =>
+  mobileFitHeightPx.value != null ? { height: `${mobileFitHeightPx.value}px` } : undefined,
+)
+
+function refitMobileEditor() {
+  const el = editorRootRef.value
+  if (!el) return
+  if (window.matchMedia('(min-width: 768px)').matches) {
+    mobileFitHeightPx.value = null
+    return
+  }
+  // Document-relative top so the measurement is stable regardless of the
+  // current scroll position and cannot feed back through the height set here.
+  // top <= 0 means the element is not laid out yet (jsdom mounts return an
+  // all-zero rect) — skip the measure, but also clear any previously pinned
+  // height: leaving it would keep a stale pin that no longer matches layout.
+  const top = el.getBoundingClientRect().top + window.scrollY
+  if (top <= 0) {
+    mobileFitHeightPx.value = null
+    return
+  }
+  const next = Math.max(Math.round(window.innerHeight - top), MOBILE_EDITOR_MIN_HEIGHT_PX)
+  // The measurement above is the forced layout; skip the reactive write (and
+  // the re-render it causes) when nothing changed.
+  if (mobileFitHeightPx.value !== next) mobileFitHeightPx.value = next
+}
+
+let refitFrame = 0
+function scheduleMobileRefit() {
+  if (refitFrame) return
+  refitFrame = window.requestAnimationFrame(() => {
+    refitFrame = 0
+    refitMobileEditor()
+  })
+}
+
+let mobileFitObserver: MutationObserver | null = null
+// Re-measure only when the CHROME ABOVE the editor changes — that is the
+// only thing that moves the editor's document-relative top. A body-wide
+// observer (childList+subtree+attributes:class/style) also fired on
+// VueFlow's viewport transform, which is written as an inline style on
+// every pointermove during pan/zoom/node-drag — turning the mobile hot
+// path into a forced synchronous layout (the getBoundingClientRect in
+// refitMobileEditor) once per animation frame. Narrow targets instead:
+//  - the editor's parent (AppLayout's <main>): its `class` carries the
+//    padding-top offsets (fixed mobile header / onboarding banner) and its
+//    direct childList catches a new chrome block inserted above the editor,
+//    without ever descending into the editor where VueFlow lives;
+//  - each element ABOVE the editor root inside that parent (banner
+//    container, breadcrumb): subtree childList + class/style attributes
+//    catch those banners mounting, unmounting and toggling asynchronously —
+//    the behaviour the original body-wide observer existed for.
+// Extracted from onMounted so each guard (root / parent present) is
+// unit-testable; `root` is null only in the defensive detached case.
+function setupMobileFitObserver(root: HTMLElement | null) {
+  const parent = root?.parentElement ?? null
+  if (root && parent) {
+    // Stop at the first element containing the root (the root itself when it
+    // is a direct child of <main>): the editor subtree — and therefore
+    // VueFlow's viewport — is never observed, however deeply the root nests.
+    const observeChromeSiblings = () => {
+      for (
+        let sibling = parent.firstElementChild;
+        sibling && !sibling.contains(root);
+        sibling = sibling.nextElementSibling
+      ) {
+        mobileFitObserver?.observe(sibling, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['class', 'style'],
+        })
+      }
+    }
+    mobileFitObserver = new MutationObserver((mutations) => {
+      // A chrome block inserted above the editor is a new sibling — observe
+      // it too, so mutations inside it keep re-fitting (observe() on an
+      // already-observed node just refreshes its options, no duplicates).
+      if (mutations.some((m) => m.type === 'childList' && m.target === parent)) {
+        observeChromeSiblings()
+      }
+      scheduleMobileRefit()
+    })
+    mobileFitObserver.observe(parent, {
+      childList: true,
+      attributes: true,
+      attributeFilter: ['class'],
+    })
+    observeChromeSiblings()
+  }
+}
+
+onMounted(() => {
+  refitMobileEditor()
+  window.addEventListener('resize', scheduleMobileRefit)
+  setupMobileFitObserver(editorRootRef.value)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', scheduleMobileRefit)
+  mobileFitObserver?.disconnect()
+  if (refitFrame) window.cancelAnimationFrame(refitFrame)
+})
 
 const newNodeType = ref<'agent' | 'router' | 'hitl'>('agent')
 const nodeTypeOptions = [

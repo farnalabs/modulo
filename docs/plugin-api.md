@@ -26,8 +26,15 @@ Plugins are **discovered at startup**: all builder functions are loaded from ins
 |---|---|---|---|
 | `modulo.connectors` | Third-party connector types | `(config: dict, creds: dict) -> ConnectorBase` | Implemented |
 | `modulo.model_backends` | Third-party model backends | `(api_key: str, model_id: str, **params) -> ModelBackendBase` | Implemented |
-| `modulo.evals` | Custom eval functions | `(config: dict) -> Any` | Implemented |
-| `modulo.schema_types` | Custom schema field types | `(config: dict) -> Any` | Implemented |
+| `modulo.evals` | Custom eval functions | `(config: dict) -> Any` | Loaded, never resolved |
+| `modulo.schema_types` | Custom schema field types | `(config: dict) -> Any` | Loaded, never resolved |
+
+> **Status caveat for `modulo.evals` and `modulo.schema_types`:** the registry
+> stores the builder callable but nothing reads it. Unlike the connector and
+> model-backend groups, these two have no `build_*` / `has_*` accessor anywhere
+> in `backend/src`, so a builder registered here is never invoked and its
+> declared signature is unenforced. Treat the two rows as reserved entry-point
+> namespaces, not as working extension points.
 
 ## Plugin Registry reference
 
@@ -173,6 +180,8 @@ Create a Python package that implements either `ConnectorBase` or `ModelBackendB
 
 ```python
 # my_plugin/connector.py
+from typing import Any
+
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -186,7 +195,11 @@ from modulo.connectors.base import (
 class MyConnector(ConnectorBase):
     @property
     def connector_type(self) -> ConnectorType:
-        return ConnectorType.GITHUB  # reuse a built-in type, or register a custom one
+        # Plugin lookup is by ENTRY-POINT NAME, not by this property. The hub
+        # asks the registry `has_connector_type(<type_id>)` where `<type_id>` is
+        # the entry-point name, so returning a built-in member here does not
+        # make the plugin reachable under it.
+        return ConnectorType.CUSTOM
 
     async def health_check(self) -> HealthResult:
         # verify your external service is reachable
@@ -241,8 +254,9 @@ my_eval = "my_plugin:build_my_eval"
 # my_plugin/__init__.py
 def build_my_eval(config: dict) -> "EvalDefinition":
     # Return an EvalDefinition (see modulo.core.eval_engine.EvalDefinition) or
-    # any consumer-defined eval object: the registry stores the builder result
-    # keyed by the entry-point name.
+    # any consumer-defined eval object. The registry stores the BUILDER callable
+    # (not its result) under the entry-point name, and nothing invokes it, so
+    # this return value is never produced at run time.
     ...
 ```
 
@@ -256,8 +270,11 @@ my_field = "my_plugin:build_my_field"
 ```python
 # my_plugin/__init__.py
 def build_my_field(config: dict) -> "SchemaField":
-    # Return a SchemaField or any consumer-defined field object: the registry
-    # stores the builder result keyed by the entry-point name.
+    # Return a SchemaField or any consumer-defined field object. As with the
+    # eval group above, the registry stores the builder, not the built object,
+    # and has no consumer. Note there is no SchemaField class in Modulo today:
+    # only the API response models SchemaFieldResponse / SchemaFieldListResponse
+    # in modulo.api.routes.schemas.
     ...
 ```
 
@@ -278,9 +295,12 @@ A complete plugin that adds a "Slack notify" connector type:
 ```python
 """modulo-connector-slack – Slack notification connector for Modulo."""
 
+from typing import Any
+
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
+    ConnectorQuery,
     ConnectorResult,
     ConnectorType,
     HealthResult,
@@ -290,6 +310,8 @@ from modulo.connectors.base import (
 class SlackNotifier(ConnectorBase):  # custom type, registered by the plugin
     @property
     def connector_type(self) -> ConnectorType:
+        # Reported as a distinct type from the built-in members. The hub finds
+        # this class by the entry-point NAME below, not by this value.
         return ConnectorType.SLACK
 
     def __init__(self, bot_token: str, default_channel: str = "#general"):
@@ -383,7 +405,7 @@ If a plugin package is removed from the environment between restarts:
 - `ConnectorInstances` referencing the missing type still exist in the database.
 - When the connector is built at run time, the build fails with `ValueError("Unknown connector type: …")`, so the run is blocked.
 - Existing completed runs are unaffected (they execute against immutable snapshots).
-- The Plugins admin view shows each plugin's package health as Active/Inactive.
+- The Plugins admin view shows each plugin's package health as Healthy/Unhealthy.
 - Resolution: reinstall the package or migrate affected instances to a different type.
 
 ### SaaS deployments (v3+)
