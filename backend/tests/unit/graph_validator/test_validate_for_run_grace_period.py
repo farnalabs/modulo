@@ -18,7 +18,7 @@ advisory warning and that a naive implementation could break:
 * a schema block does not also fabricate an "input schema" block,
 * a clean pre-cutover snapshot carries no marker (the marker means "pre-existing
   block", not "old"),
-* the marker reaches the caller when the payload is ``None``.
+* a ``None`` payload blocks on its own check and never acquires the marker.
 """
 
 import logging
@@ -36,6 +36,9 @@ from tests.unit.graph_validator._helpers import (
 from tests.unit.graph_validator._helpers import (
     schema_version_session as _session_returning,
 )
+from tests.unit.graph_validator._helpers import (
+    snapshot as _snapshot,
+)
 
 _PRE_CUTOVER = datetime(2026, 7, 21, 12, 0, 0, tzinfo=UTC)
 
@@ -43,19 +46,6 @@ _STRING_VS_INT = (
     {"type": "object", "properties": {"x": {"type": "string"}}},
     {"type": "object", "properties": {"x": {"type": "integer"}}},
 )
-
-
-def _snapshot(graph_json: dict, *, created_at: datetime):
-    snap = MagicMock()
-    snap.graph_json = graph_json
-    snap.schema_pins_json = []
-    snap.connector_bindings_json = []
-    snap.model_backend_pins_json = []
-    snap.created_at = created_at
-    snap.pipeline_id = uuid.uuid4()
-    snap.id = uuid.uuid4()
-    snap.environment_profile_id = None
-    return snap
 
 
 def _incompatible_graph(*, extra_unreachable_node: bool = False) -> tuple[dict, list[MagicMock]]:
@@ -136,17 +126,28 @@ async def test_schema_block_does_not_fabricate_input_schema_log(caplog):
     assert not [r for r in caplog.records if "Input schema incompatibility" in r.getMessage()]
 
 
-async def test_marker_reaches_caller_when_payload_is_null():
-    """The marker survives to the caller even when the input payload is ``None``.
+async def test_null_payload_blocks_without_a_pre_existing_marker():
+    """A ``None`` payload blocks on its own check and never acquires the marker.
 
-    A pre-cutover snapshot with an incompatible schema blocks on the schema
-    check and returns the marker; the ``None`` payload never reaches its own
-    check, but the caller still sees the pre-existing distinction.
+    The marker means "pre-existing snapshot *schema/input* block". A ``None``
+    payload is rejected by ``INPUT_NULL_PAYLOAD`` before any input-schema
+    comparison runs, so a pre-cutover snapshot with a *compatible* schema
+    reports only ``INPUT_NULL_PAYLOAD`` — attaching ``SCHEMA_PRE_EXISTING_BLOCKED``
+    here would falsely imply a schema incompatibility that was never found.
     """
-    graph, rows = _incompatible_graph()
+    out_id = uuid.uuid4()
+    graph = {
+        "nodes": [
+            {"id": "a", "output_schema_pin": {"schema_id": str(out_id), "schema_version": "1.0"}},
+            {"id": "b", "input_schema_pin": {"schema_id": str(out_id), "schema_version": "1.0"}},
+        ],
+        "edges": [{"source": "a", "target": "b", "type": "normal"}],
+    }
+    shared = {"type": "object", "properties": {"name": {"type": "string"}}}
     snap = _snapshot(graph, created_at=_PRE_CUTOVER)
 
-    result = await GraphValidator().validate_for_run(snap, None, _session_returning(rows))
+    result = await GraphValidator().validate_for_run(snap, None, _session_returning([_schema_row(out_id, shared)]))
 
     assert not result.is_valid
-    assert "SCHEMA_PRE_EXISTING_BLOCKED" in _codes(result)
+    assert "INPUT_NULL_PAYLOAD" in _codes(result)
+    assert "SCHEMA_PRE_EXISTING_BLOCKED" not in _codes(result)

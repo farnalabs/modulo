@@ -15,10 +15,14 @@ Facts defined once here so the test suite cannot drift apart:
   stand-in and a schema-version lookup session that resolves rows by the
   query's OWN ``(schema_id, version)`` filter (structural), never by call
   order; statements not filtering ``schema_versions`` get an empty result.
+- ``snapshot`` — the PipelineSnapshot stand-in ``validate_for_run`` reads
+  (was re-declared in the schema-enforcement and pre-existing-marker modules).
 """
 
 from __future__ import annotations
 
+import uuid
+from datetime import datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -46,6 +50,35 @@ def session_returning(rows: list[Any]) -> AsyncMock:
     execute_result.scalars.return_value = scalars_result
     session.execute = AsyncMock(return_value=execute_result)
     return session
+
+
+def snapshot(
+    graph_json: dict[str, Any],
+    *,
+    created_at: datetime,
+    schema_pins_json: list[Any] | None = None,
+    connector_bindings_json: list[Any] | None = None,
+    model_backend_pins_json: list[Any] | None = None,
+    pipeline_id: Any = None,
+    snapshot_id: Any = None,
+    environment_profile_id: Any = None,
+) -> MagicMock:
+    """A PipelineSnapshot stand-in carrying the fields ``validate_for_run`` reads.
+
+    ``created_at`` drives the Phase 1 pre-existing cutover decision, so callers
+    pass it explicitly (a pre-cutover snapshot exercises the pre-existing path).
+    ``id`` is exposed as ``snapshot_id`` to avoid shadowing the builtin.
+    """
+    snap = MagicMock()
+    snap.graph_json = graph_json
+    snap.schema_pins_json = [] if schema_pins_json is None else schema_pins_json
+    snap.connector_bindings_json = [] if connector_bindings_json is None else connector_bindings_json
+    snap.model_backend_pins_json = [] if model_backend_pins_json is None else model_backend_pins_json
+    snap.created_at = created_at
+    snap.pipeline_id = uuid.uuid4() if pipeline_id is None else pipeline_id
+    snap.id = uuid.uuid4() if snapshot_id is None else snapshot_id
+    snap.environment_profile_id = environment_profile_id
+    return snap
 
 
 def gated_edge_graph(config: dict[str, Any]) -> dict[str, Any]:
