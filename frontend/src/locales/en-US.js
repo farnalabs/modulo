@@ -4390,6 +4390,8 @@ export default {
       "notifications": "Notifications",
       "reconnect_banner": "Live updates stopped. Reconnect with a fresh sign-in to resume them.",
       "reconnect_action": "Reconnect",
+      "reconnect_attempting": "Reconnecting…",
+      "reconnect_failed": "Reconnect failed. Sign in again to restore live updates.",
       "unread_count_status": "{count} unread notifications"
     },
     "NotificationDropdown": {
