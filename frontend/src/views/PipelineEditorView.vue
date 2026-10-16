@@ -581,6 +581,16 @@
             >
               {{ $t('views.PipelineEditorView.historic_view_latest') }}
             </button>
+            <!-- FAR-1818: one-click entry into semantic-led compare mode
+                 (viewed version vs the latest). -->
+            <button
+              type="button"
+              :class="btnToolbarSecondary"
+              data-testid="pipeline-editor-historic-compare"
+              @click="openCompare"
+            >
+              {{ $t('views.PipelineEditorView.historic_compare') }}
+            </button>
             <button
               type="button"
               :class="btnToolbarSecondary"
@@ -655,7 +665,9 @@
             </button>
           </div>
         </div>
-        <div class="relative min-h-0 flex-1">
+        <!-- FAR-1818: the canvas is hidden (not unmounted — viewport state is
+             preserved) while the compare view occupies the same flex slot. -->
+        <div v-show="!compareMode" class="relative min-h-0 flex-1">
         <!-- Empty-state overlay on top of the canvas (latest mode only — its
              rename/archive/delete/add-node row is all write affordances, so a
              historical view of an empty graph shows the canvas alone). -->
@@ -816,6 +828,21 @@
             </div>
           </template>
         </VueFlow>
+        </div>
+        <!-- FAR-1818: semantic-led old-vs-latest compare mode. Rendered in the
+             canvas slot (the canvas above is hidden) so the presentation has
+             room; the pair pickers keep the route query authoritative, which is
+             what makes the view deep-linkable for sharing. -->
+        <div v-if="compareMode" class="min-h-0 flex-1 overflow-y-auto">
+          <PipelineSnapshotCompare
+            :pipeline-id="pipelineId"
+            :base-snapshot-id="resolvedSnapshotId ?? ''"
+            :compare-snapshot-id="compareParam"
+            :snapshots="snapshots"
+            :latest-snapshot-id="latestSnapshotId"
+            @change="updateCompare"
+            @close="exitCompare"
+          />
         </div>
       </div>
       <!-- Node Properties Panel. Mobile (FAR-1841): an in-editor overlay sheet
@@ -1766,6 +1793,7 @@ import FormDialog from '../components/shared/FormDialog.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FlowControls from '../components/shared/FlowControls.vue'
 import PipelineSnapshotTimeline from '../components/pipeline/PipelineSnapshotTimeline.vue'
+import PipelineSnapshotCompare from '../components/pipeline/PipelineSnapshotCompare.vue'
 import PipelineVersionChip from '../components/pipeline/PipelineVersionChip.vue'
 import SandboxCommandsEditor from '../components/pipeline/SandboxCommandsEditor.vue'
 import SnapshotLockCard from '../components/pipeline/SnapshotLockCard.vue'
@@ -3789,6 +3817,19 @@ const snapshotParam = computed(() => readQueryValue(route.query.snapshot))
 const versionParam = computed(() => readQueryValue(route.query.version))
 const historicRequested = computed(() => snapshotParam.value !== null || versionParam.value !== null)
 
+// FAR-1818: version compare mode. `?compare=<uuid>` — the KEY's presence is
+// what selects the mode, and an empty/absent id means "compare against the
+// latest version". The base side is the resolved `?snapshot=` version (or its
+// `?version=` alias), so the canonical deep link is
+// `?snapshot=<base>&compare=<other>`. Kept separate from the historic-view
+// refs: entering compare never hydrates the editable graph.
+const compareRequested = computed(() => route.query.compare !== undefined)
+const compareParam = computed(() => readQueryValue(route.query.compare))
+
+// The latest saved version (the snapshot list is version-DESCENDING and
+// loadCatalog filters version 0) — the default "compare against" target.
+const latestSnapshotId = computed<string | null>(() => snapshots.value[0]?.id ?? null)
+
 /** `?version=<n>`: the positive integer, -1 when malformed, null when absent. */
 const requestedVersion = computed(() => {
   const raw = versionParam.value
@@ -3988,6 +4029,13 @@ const isViewing = computed(
     viewSnapshot.value !== null,
 )
 
+// FAR-1818: compare mode is the `?compare=` key ON TOP of the historic view —
+// it needs a resolved base version, and it stays read-only (isViewing holds,
+// so every write affordance remains unmounted).
+const compareMode = computed(
+  () => compareRequested.value && isViewing.value && resolvedSnapshotId.value !== null,
+)
+
 // Graceful miss: unknown/deleted snapshot, a `?version=` the bounded search
 // PROVED absent, or a malformed version param — never a raw error, never a
 // dead page. A search that could not complete ('failed') is deliberately not
@@ -4120,7 +4168,9 @@ watch([isViewing, resolvedSnapshotId], async () => {
 function versionParamsExceptSnapshot(): LocationQueryRaw {
   const out: LocationQueryRaw = {}
   for (const [key, value] of Object.entries(route.query)) {
-    if (key !== 'snapshot' && key !== 'version') out[key] = value
+    // `compare` is a view-selection param too (FAR-1818): leaving the version
+    // view must not strand a stale compare id in the URL.
+    if (key !== 'snapshot' && key !== 'version' && key !== 'compare') out[key] = value
   }
   return out
 }
@@ -4128,6 +4178,35 @@ function versionParamsExceptSnapshot(): LocationQueryRaw {
 /** Strip the version params and navigate back to the live editor. */
 function viewLatest(): void {
   void router.push({ path: route.path, query: versionParamsExceptSnapshot() })
+}
+
+// --- FAR-1818: version compare mode ----------------------------------------
+/** Banner action: open the viewed version against the latest (one click). */
+function openCompare(): void {
+  const base = resolvedSnapshotId.value
+  if (!base) return
+  onPaneClick() // the compare view replaces the canvas; drop any selection
+  const query = versionParamsExceptSnapshot()
+  query.snapshot = base
+  query.compare = latestSnapshotId.value ?? ''
+  void router.push({ path: route.path, query })
+}
+
+/** Pair-picker change from the compare view — deep-linkable via the route. */
+function updateCompare(payload: { base: string; compare: string }): void {
+  if (!payload.base) return
+  const query = versionParamsExceptSnapshot()
+  query.snapshot = payload.base
+  query.compare = payload.compare
+  void router.push({ path: route.path, query })
+}
+
+/** Leave compare, staying on the same historic base version. */
+function exitCompare(): void {
+  const query = versionParamsExceptSnapshot()
+  const base = resolvedSnapshotId.value
+  if (base) query.snapshot = base
+  void router.push({ path: route.path, query })
 }
 
 // --- Unsaved-changes guard (FAR-1812 B) -----------------------------------
@@ -4228,6 +4307,9 @@ function historicShareLink(): string {
   const params = new URLSearchParams()
   const id = resolvedSnapshotId.value
   if (id) params.set('snapshot', id)
+  // FAR-1818: while comparing, the canonical share link carries the compare id
+  // too (an empty compare id means "against latest", which the link preserves).
+  if (compareMode.value) params.set('compare', compareParam.value ?? latestSnapshotId.value ?? '')
   const query = params.toString()
   return query ? `${window.location.origin}${route.path}?${query}` : `${window.location.origin}${route.path}`
 }
