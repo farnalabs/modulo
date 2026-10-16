@@ -10,8 +10,12 @@ const defaultComponents = [
   { id: 'comp-3', name: 'sandbox_infra', display_name: 'Sandbox Infra', kind: 'calculated', rate_usd: '0.020000', rate_fallback: 'e2b_rate', formula: 'wall_clock_hours * rate', report_key: null, enabled: false, sort_order: 2, deleted_at: null },
 ]
 
-const defaultFlags = {
-  data: { license: { tier: 'team', has_license_key: true, is_valid: true }, flags: [{ name: 'admin_cost_breakdown', description: 'Cost Breakdown', tier: 'team', currently_active: true, depends_on: null }], would_activate: [] },
+const defaultPlan = {
+  data: {
+    license: { tier: 'team', expires_at: null, org_id: null },
+    dev_mode: false,
+    flags: [{ name: 'admin_cost_breakdown', description: 'Cost Breakdown', tier: 'team', currently_active: true, depends_on: null }],
+  },
   error: undefined,
 }
 
@@ -19,8 +23,8 @@ function defaultGet(path: string) {
   if (path === '/api/v1/admin/costs/components') {
     return Promise.resolve({ data: [...defaultComponents], error: undefined })
   }
-  if (path === '/api/v1/admin/feature-flags') {
-    return Promise.resolve(defaultFlags)
+  if (path === '/api/v1/plan') {
+    return Promise.resolve(defaultPlan)
   }
   return Promise.resolve({ data: null, error: undefined })
 }
@@ -107,9 +111,9 @@ describe('CostComponentsView', () => {
 
   it('shows locked state when feature is disabled', async () => {
     mockGet.mockImplementation((path: string) => {
-      if (path === '/api/v1/admin/feature-flags') {
+      if (path === '/api/v1/plan') {
         return Promise.resolve({
-          data: { license: { tier: 'community', has_license_key: false, is_valid: true }, flags: [{ name: 'admin_cost_breakdown', description: 'Cost Breakdown', tier: 'team', currently_active: false, depends_on: null }], would_activate: [] },
+          data: { license: { tier: 'community', expires_at: null, org_id: null }, dev_mode: false, flags: [{ name: 'admin_cost_breakdown', description: 'Cost Breakdown', tier: 'team', currently_active: false, depends_on: null }] },
           error: undefined,
         })
       }
@@ -371,7 +375,7 @@ describe('CostComponentsView', () => {
   it('shows EmptyState when no components exist', async () => {
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/admin/costs/components') return Promise.resolve({ data: [], error: undefined })
-      return Promise.resolve(defaultFlags)
+      return Promise.resolve(defaultPlan)
     })
 
     const wrapper = mount(CostComponentsView, { global: { plugins: [pinia] } })
@@ -385,7 +389,7 @@ describe('CostComponentsView', () => {
   it('shows ErrorAlert when GET returns an error', async () => {
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/admin/costs/components') return Promise.resolve({ data: null, error: { detail: 'Server error' } })
-      return Promise.resolve(defaultFlags)
+      return Promise.resolve(defaultPlan)
     })
 
     const wrapper = mount(CostComponentsView, { global: { plugins: [pinia] } })
