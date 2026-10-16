@@ -235,7 +235,7 @@ class PluginRegistry:
         return manifest
 
     def _record_unhealthy(self, plugin_id: str, display_name: str, description: str, version: str, detail: str) -> None:
-        """Register ``plugin_id`` as an unhealthy plugin and return ``None``.
+        """Register ``plugin_id`` as an unhealthy plugin.
 
         Keeps a broken plugin visible in the registry (so it shows up in
         ``list_plugins`` / ``health_check`` with a reason) instead of dropping

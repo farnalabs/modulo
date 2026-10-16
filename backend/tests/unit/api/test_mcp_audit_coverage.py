@@ -53,6 +53,20 @@ async def _cancelled_tool() -> dict[str, Any]:
     raise asyncio.CancelledError
 
 
+class _CallableObjectTool:
+    """Callable-object tool body: instances define no ``__name__``.
+
+    ``callable_label`` (not ``fn.__name__``) must derive the recorded label, or
+    the decorator raises ``AttributeError`` while annotating the tool.
+    """
+
+    async def __call__(self) -> dict[str, Any]:
+        return {"id": "w1"}
+
+
+_callable_object_tool = mcp_audited("widget_created", "widget")(_CallableObjectTool())
+
+
 def _audit_session_mock() -> AsyncMock:
     """Session stand-in supporting the ``async with session.begin()`` block."""
     session = AsyncMock()
@@ -295,3 +309,18 @@ class TestFreshSession:
 
         async with mcp_audit._fresh_session() as session:
             assert session is sentinel
+
+
+class TestCallableObjectToolLabel(_AuthContext):
+    """A ``__name__``-less tool body still yields a usable audit label."""
+
+    async def test_callable_object_tool_records_its_type_label(self, audit_env) -> None:
+        _session, append = audit_env
+        result = await _callable_object_tool()
+
+        assert result == {"id": "w1"}
+        assert append.await_count == 1
+        assert append.await_args.kwargs["payload_json"] == {
+            "tool": _CallableObjectTool.__qualname__,
+            "outcome": "success",
+        }
