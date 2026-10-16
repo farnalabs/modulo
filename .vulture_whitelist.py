@@ -428,6 +428,7 @@ __all__ = [
     "_terminalize_expired_hitl_reviews",
     "_terminalize_hitl_review_missing",
     "_terminalize_aged_nodeless_zombies",  # FAR-1329: first batch terminalizer; same string-keyed registry resolution
+    "_terminalize_stranded_pending_runs",  # FAR-1862: stranded-pending age backstop; same registry resolution
     # FAR-720 declarative registry dataclasses: referenced only in type
     # annotations (``tuple[ReconcileTerminalizer, ...]``, ``tuning:
     # ReconcileTuning``), which vulture does not credit as uses.

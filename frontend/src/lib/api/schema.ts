@@ -18937,6 +18937,16 @@ export interface components {
             trigger_id?: string | null;
             /** Heartbeat At */
             heartbeat_at?: string | null;
+            /** Dispatcher */
+            dispatcher?: string | null;
+            /** Dispatched At */
+            dispatched_at?: string | null;
+            /** Dispatch Phase */
+            dispatch_phase?: string | null;
+            /** Claim Count */
+            claim_count?: number | null;
+            /** Enqueue Failed At */
+            enqueue_failed_at?: string | null;
             /** Work Item Refs */
             work_item_refs?: {
                 [key: string]: unknown;
