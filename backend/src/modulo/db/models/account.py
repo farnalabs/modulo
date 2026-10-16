@@ -59,6 +59,14 @@ class Account(Base, TimestampMixin):
             "kind = 'human' OR (email IS NULL AND password_hash IS NULL AND sso_subject IS NULL)",
             name="ck_accounts_service_identity",
         ),
+        # Decommission is a SERVICE-principal lifecycle state (FAR-1478,
+        # migration 0311). Humans are deactivated per-org
+        # (``org_memberships.deactivated_at``, FAR-533) and must never carry
+        # this marker, so the two lifecycles stay structurally distinct.
+        CheckConstraint(
+            "decommissioned_at IS NULL OR kind = 'service'",
+            name="ck_accounts_decommissioned_service",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -68,10 +76,11 @@ class Account(Base, TimestampMixin):
     # no human-shaped identity, so no login/invite/SSO/SCIM/audit lookup can
     # reach one by email, and the UNIQUE constraint tolerates any number of
     # NULLs. The ORM annotation stays ``str`` deliberately: every code path that
-    # reads ``email`` is a human-only path, and a service row cannot exist until
-    # slice 2 ships a mint surface — so the annotation is the human invariant,
-    # while the DB column (nullable=True, pinned by a test) is the storage
-    # shape. A reader of a service row must never assume this value is present.
+    # reads ``email`` is a human-only path (service rows are minted by the
+    # FAR-1478 provisioning surface, which never sets an email) — so the
+    # annotation is the human invariant, while the DB column (nullable=True,
+    # pinned by a test) is the storage shape. A reader of a service row must
+    # never assume this value is present.
     email: Mapped[str] = mapped_column(String(320), nullable=True, unique=True)
     kind: Mapped[str] = mapped_column(String(16), nullable=False, server_default=KIND_HUMAN)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -88,3 +97,7 @@ class Account(Base, TimestampMixin):
     is_break_glass: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     break_glass_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     break_glass_deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # FAR-1478 / ADR 058: the EXPLICIT service-principal retirement marker
+    # (migration 0311). Set once by the decommission endpoint, never by owner
+    # death and never on a human row (``ck_accounts_decommissioned_service``).
+    decommissioned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

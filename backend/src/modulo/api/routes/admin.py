@@ -48,6 +48,7 @@ from modulo.core.eval_engine.regression import VALID_TRENDS, detect_regressions
 from modulo.core.feature_flags import resolve_plan_context
 from modulo.core.hitl_manager.overdue_warning import get_overdue_claims
 from modulo.core.lifecycle_map.journeys import dismiss_journey, restore_journey
+from modulo.core.principals import is_service_account
 from modulo.core.runtime_config import (
     FLAG_COMMUNITY_OBJECTS_ENABLED,
     FLAG_WORK_ITEM_AGENT_MINTING_ENABLED,
@@ -172,6 +173,28 @@ def _require_admin(current_user: TenantPrincipal, action: str) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Only admin users can {action}",
+        )
+
+
+_MSG_SERVICE_ACCOUNT_MANAGED_ELSEWHERE = (
+    "Service accounts are managed at /api/v1/service-accounts — the user admin surface applies to human users only"
+)
+
+
+def _reject_service_account_target(account: Account) -> None:
+    """FAR-1478: the human user-admin surface never mutates a service row.
+
+    Service principals are provisioned, renamed, role-assigned and
+    decommissioned exclusively through ``/api/v1/service-accounts`` (where an
+    ``admin`` role grant is structurally rejected at the operator ceiling).
+    Refusing them here keeps the lifecycle single-path — in particular the
+    REACTIVATION path can never clear the membership tombstone a decommission
+    set behind the service-account endpoint's back.
+    """
+    if is_service_account(account):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_MSG_SERVICE_ACCOUNT_MANAGED_ELSEWHERE,
         )
 
 
@@ -1239,6 +1262,7 @@ async def admin_update_user(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=_MSG_BREAK_GLASS_ACCOUNTS_CANNOT,
                 )
+            _reject_service_account_target(account)
 
             # FAR-533 (gh-1794): is_active is PER-ORG. Deactivating tombstones
             # the CALLER'S-ORG membership (deactivated_at) and never flips the
@@ -1425,6 +1449,11 @@ async def admin_deactivate_user(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=_MSG_USER_NOT_FOUND_IN_ORGANISATION,
                 )
+            # SECURITY (#1188): the service-target rejection runs AFTER the
+            # org-membership check (matching admin_update_user) — a service
+            # account in ANOTHER org must surface as 404, not as a 422 that
+            # discloses its existence and kind.
+            _reject_service_account_target(account)
 
             await assert_not_last_admin(
                 session,
@@ -1546,6 +1575,10 @@ async def admin_reactivate_user(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=_MSG_USER_NOT_FOUND_IN_ORGANISATION,
                 )
+            # The service-target rejection runs AFTER the org-membership check
+            # (matching admin_update_user): a service account in ANOTHER org
+            # surfaces as 404, never a kind-disclosing 422.
+            _reject_service_account_target(account)
 
             # FAR-533 (gh-1794): reactivation is PER-ORG — clear the
             # deactivated_at tombstone on the CALLER'S-ORG membership only and
@@ -1647,6 +1680,10 @@ async def admin_reset_password(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=_MSG_USER_NOT_FOUND_IN_ORGANISATION,
                 )
+            # The service-target rejection runs AFTER the org-membership check
+            # (matching admin_update_user): a service account in ANOTHER org
+            # surfaces as 404, never a kind-disclosing 422.
+            _reject_service_account_target(account)
 
             temporary_password = secrets.token_urlsafe(18)[:24]
             account.password_hash = hash_password(temporary_password)

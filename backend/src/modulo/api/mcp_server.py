@@ -91,6 +91,7 @@ from modulo.api.routes.triggers import (
 from modulo.auth.api_key import (
     ApiKeyGrantsUnavailableError,
     ApiKeyInvalidError,
+    ApiKeyTtlError,
     api_key_grants_enabled,
     resolve_key_grants,
     validate_api_key,
@@ -8962,16 +8963,21 @@ async def _mint_api_key_txn(
                 if exc.status_code == 422:
                     return {"error": "validation_error", "status": 422, "detail": str(exc.detail)}
                 raise MCPAuthorizationError(str(exc.detail)) from None
-        key, full_key = await auth_create_api_key(
-            s,
-            org_id=org_id,
-            name=name,
-            role=role,
-            account_id=account_id,
-            team_id=team_uuid,
-            expires_at=parsed_expires_at,
-            grants=grants,
-        )
+        try:
+            key, full_key = await auth_create_api_key(
+                s,
+                org_id=org_id,
+                name=name,
+                role=role,
+                account_id=account_id,
+                team_id=team_uuid,
+                expires_at=parsed_expires_at,
+                grants=grants,
+            )
+        except ApiKeyTtlError as exc:
+            # FAR-1478: a >365d expiry on a service-owned key — client error,
+            # same 422 shape as the REST surface, never a silent clamp.
+            return {"error": "validation_error", "status": 422, "detail": str(exc)}
     return key, full_key
 
 

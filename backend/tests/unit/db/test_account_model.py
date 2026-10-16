@@ -122,6 +122,62 @@ def test_account_kind_is_a_check_constraint_not_a_unique_column() -> None:
     assert "ck_accounts_kind" in check_names
 
 
+# ---------------------------------------------------------------------------
+# FAR-1478 — the explicit service-principal decommission marker (migration
+# 0310). The column is nullable (NULL = not decommitted), and the CHECK makes
+# the marker a SERVICE-only lifecycle state: a human row can never carry it,
+# so the per-org deactivation (org_memberships.deactivated_at, FAR-533) and
+# the service decommission stay structurally distinct.
+# ---------------------------------------------------------------------------
+
+
+def test_account_decommissioned_at_column_present_and_nullable() -> None:
+    col = Base.metadata.tables["accounts"].c["decommissioned_at"]
+    assert col.nullable is True
+
+
+def test_account_decommissioned_check_forbids_human_rows() -> None:
+    checks = {c.name: str(c.sqltext) for c in Base.metadata.tables["accounts"].constraints if hasattr(c, "sqltext")}
+    assert "ck_accounts_decommissioned_service" in checks
+    sql = checks["ck_accounts_decommissioned_service"]
+    assert "decommissioned_at IS NULL" in sql
+    assert "kind = 'service'" in sql
+
+
+def test_account_decommissioned_check_effective_on_sqlite() -> None:
+    """The model CHECK actually rejects a decommissioned HUMAN row."""
+    from datetime import UTC, datetime
+
+    import pytest
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.orm import Session
+
+    engine = create_engine("sqlite://")
+    Account.__table__.create(engine)
+    now = datetime.now(UTC).isoformat()
+    with Session(engine) as session:
+        with pytest.raises(IntegrityError):
+            session.execute(
+                text(
+                    "INSERT INTO accounts (id, email, display_name, kind, active, must_change_password, "
+                    "is_system_admin, is_break_glass, preferences, decommissioned_at) "
+                    "VALUES (:id, :email, :name, 'human', 1, 0, 0, 0, '{}', :ts)"
+                ),
+                {"id": "00000000-0000-0000-0000-0000000000aa", "email": "h@example.com", "name": "H", "ts": now},
+            )
+        session.rollback()
+        session.execute(
+            text(
+                "INSERT INTO accounts (id, email, display_name, kind, active, must_change_password, "
+                "is_system_admin, is_break_glass, preferences, decommissioned_at) "
+                "VALUES (:id, NULL, :name, 'service', 1, 0, 0, 0, '{}', :ts)"
+            ),
+            {"id": "00000000-0000-0000-0000-0000000000bb", "name": "svc", "ts": now},
+        )
+    engine.dispose()
+
+
 def test_account_not_org_scoped() -> None:
     assert not issubclass(Account, OrgScoped)
 

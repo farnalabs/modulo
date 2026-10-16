@@ -141,6 +141,7 @@ ROLE_RESOLUTION_SITES: dict[str, str] = {
     "modulo/api/dependencies.py": "403 — require_target_org_role: non-member denied (assert_org_role fail-closed)",
     "modulo/api/mcp_server.py": "401/403 — fail-closed live-role deny (JWT + API-key role clamp)",
     "modulo/api/routes/api_keys.py": "403 — mint-cap deny (live role is None)",
+    "modulo/api/routes/service_accounts.py": "403 — service-account key mint-cap deny (live role is None)",
     "modulo/api/routes/auth.py": "401 — refresh / ws-token / me deny (OrganisationMembershipNotFound)",
     "modulo/auth/dependencies.py": "401 — _verify_identity deny (OrganisationMembershipNotFound)",
     "modulo/auth/oauth.py": "401 — InvalidGrantError on OAuth token/refresh",
