@@ -24,7 +24,7 @@ from modulo.db.crud.organisation import (
     get_organisation,
     update_org_settings_patch,
 )
-from modulo.db.rls import read_rls_org, set_rls_org
+from modulo.db.rls import read_rls_org, set_rls_org, set_rls_user_context
 from modulo.db.soft_delete import register_soft_delete_filter
 
 # FAR-1830: the generic patch path relies on the global soft-delete filter,
@@ -292,3 +292,265 @@ async def test_context_read_failure_fails_closed(db_engine: AsyncEngine, monkeyp
     await session.close()
 
     assert not await _read_settings(db_engine, org_id)
+
+
+# ---------------------------------------------------------------------------
+# FAR-1832 (Land 1b): converted locked writers — same-concern composition,
+# deletion-FSM exclusivity, and the licence path driven through the real route.
+# ---------------------------------------------------------------------------
+
+
+async def test_two_writers_of_the_same_concern_serialise_to_one_whole_value(db_engine: AsyncEngine) -> None:
+    """Two writers of the SAME top-level key serialise to exactly one writer's
+    whole value — never a blend of both.
+
+    The jsonb ``||`` composition replaces the whole top-level value, so the
+    final block is the last writer's dict verbatim (a hypothetical per-subkey
+    merge would keep the other writer's ``extra`` key and fail this).
+    """
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    session0 = factory()
+    await session0.begin()
+    await set_rls_org(session0, org_id)
+    await update_org_settings_patch(session0, org_id, {"block": {"from": "seed"}, "sibling": 1})
+    await session0.commit()
+    await session0.close()
+
+    # Writer 1 snapshots the row with a lockless read (a read-modify-write
+    # reads WITHOUT a lock — a patch here would hold a row lock for the whole
+    # txn and deadlock this very test against writer 2).
+    session1 = factory()
+    await session1.begin()
+    await set_rls_org(session1, org_id)
+    snapshot = await get_organisation(session1, org_id)
+    assert snapshot is not None
+    stale_block = dict((snapshot.settings_json or {}).get("block") or {})
+
+    # Writer 2 writes the SAME key from its own state and commits in between.
+    session2 = factory()
+    await session2.begin()
+    await set_rls_org(session2, org_id)
+    await update_org_settings_patch(session2, org_id, {"block": {"writer": "two", "extra": "e2"}})
+    await session2.commit()
+    await session2.close()
+
+    stale_block["writer"] = "one"
+    await update_org_settings_patch(session1, org_id, {"block": stale_block})
+    await session1.commit()
+    await session1.close()
+
+    settings = await _read_settings(db_engine, org_id)
+    assert settings["block"] == {"from": "seed", "writer": "one"}, (
+        f"same-concern writers must serialise to ONE whole value, got {settings['block']!r}"
+    )
+    assert "extra" not in settings["block"], "a per-subkey blend would keep the other writer's key"
+    assert settings["sibling"] == 1
+
+
+async def test_config_patch_wait_bounds_against_an_inflight_deletion(
+    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A settings patch issued while a deletion FSM transaction holds the org
+    row ``FOR UPDATE`` BLOCKS, then fails at the bounded lock wait — never an
+    unbounded hang (R5) — and the blocked write never lands.
+
+    This pins the FAR-1832 invariant: the converted config writers rely on the
+    statement-level row lock (which still conflicts with the deletion FSM's
+    ``FOR UPDATE``), so deletion exclusivity is preserved even though the
+    config writers no longer pre-lock.
+    """
+    import time
+    from types import SimpleNamespace
+
+    from sqlalchemy.exc import DBAPIError
+
+    from modulo.db.crud.org_deletion import request_org_deletion
+
+    # Bound the wait at 300 ms so the test proves "wait, then bound" quickly.
+    monkeypatch.setattr(
+        "modulo.db.crud.row_lock.get_settings",
+        lambda: SimpleNamespace(mutation_row_lock_timeout_ms=300),
+    )
+
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    # In-flight deletion: the FSM crud holds the org row FOR UPDATE until A ends.
+    session_a = factory()
+    await session_a.begin()
+    await request_org_deletion(session_a, org_id, uuid.uuid4())
+
+    try:
+        session_b = factory()
+        await session_b.begin()
+        await set_rls_org(session_b, org_id)
+
+        started = time.monotonic()
+        # asyncpg's lock-timeout surfaces as the dialect's base DBAPIError
+        # ("canceling statement due to lock timeout", SQLSTATE 55P03).
+        with pytest.raises(DBAPIError, match="lock timeout"):
+            await update_org_settings_patch(session_b, org_id, {"k": 1})
+        elapsed = time.monotonic() - started
+        await session_b.rollback()
+        await session_b.close()
+
+        assert elapsed >= 0.1, f"the patch must WAIT on the deletion's lock, not fail for another reason: {elapsed}s"
+        assert elapsed < 5.0, f"the lock wait must be bounded, not hang: {elapsed}s"
+        # The blocked patch never wrote.
+        assert not await _read_settings(db_engine, org_id)
+    finally:
+        await session_a.rollback()
+        await session_a.close()
+
+
+async def test_child_fk_insert_queues_behind_an_inflight_deletion(db_engine: AsyncEngine) -> None:
+    """A child-row FK insert (which takes FOR KEY SHARE on the referenced org)
+    still QUEUES behind a deletion transaction's ``FOR UPDATE`` — the FSM's
+    exclusivity over child inserts is untouched by FAR-1832 (its own locks were
+    deliberately kept)."""
+    import asyncio
+
+    from modulo.db.crud.org_deletion import request_org_deletion
+    from modulo.db.models.audit_event import AuditEvent
+
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    session_a = factory()
+    await session_a.begin()
+    await request_org_deletion(session_a, org_id, uuid.uuid4())
+
+    session_b = factory()
+    await session_b.begin()
+    await set_rls_org(session_b, org_id)
+    await set_rls_user_context(session_b, uuid.uuid4(), "admin")
+    session_b.add(AuditEvent(organisation_id=org_id, event_type="far1832_fk_probe"))
+    flush_task = asyncio.ensure_future(session_b.flush())
+
+    await asyncio.sleep(0.5)
+    assert not flush_task.done(), "the child FK insert must QUEUE behind the deletion's FOR UPDATE"
+
+    await session_a.rollback()
+    await session_a.close()
+
+    await asyncio.wait_for(flush_task, timeout=10)
+    # The probe row only existed to prove queueing — discard it.
+    await session_b.rollback()
+    await session_b.close()
+
+
+async def test_licence_clear_path_uses_delete_keys_and_keeps_siblings(
+    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Drive the REAL ``DELETE /{org}/license`` handler against Postgres and
+    assert both halves of the contract: the writer calls the patch helper's
+    ``delete_keys`` form (no whole-column blob), and on the real engine the key
+    is ABSENT afterwards while sibling settings survive."""
+    from unittest.mock import AsyncMock
+
+    from modulo.api.routes import admin_orgs
+    from modulo.api.routes.admin_orgs import admin_remove_org_license
+    from modulo.auth.jwt import AuthenticatedPrincipal
+    from modulo.settings import get_settings
+
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    seed = factory()
+    await seed.begin()
+    await set_rls_org(seed, org_id)
+    await update_org_settings_patch(seed, org_id, {"license_key": "old.key", "retention_days": 30})
+    await seed.commit()
+    await seed.close()
+
+    recorded: dict[str, Any] = {}
+    real_patch = admin_orgs.update_org_settings_patch
+
+    async def _spy(session_arg: Any, oid: Any, patch: Any = None, delete_keys: Any = None, **kwargs: Any) -> Any:
+        recorded["patch"] = patch
+        recorded["delete_keys"] = delete_keys
+        return await real_patch(session_arg, oid, patch, delete_keys=delete_keys, **kwargs)
+
+    monkeypatch.setattr(admin_orgs, "update_org_settings_patch", _spy)
+    monkeypatch.setattr(admin_orgs, "invalidate_license_status_cache", AsyncMock())
+
+    principal = AuthenticatedPrincipal(
+        username="admin",
+        organisation_id=org_id,
+        account_id=uuid.uuid4(),
+        org_role="admin",
+    )
+    handler_session = factory()
+    await admin_remove_org_license(org_id, principal, handler_session, get_settings())
+
+    settings = await _read_settings(db_engine, org_id)
+    assert "license_key" not in settings, f"the clear must remove the key on a real engine: {settings!r}"
+    assert settings.get("retention_days") == 30, f"sibling settings must survive the clear: {settings!r}"
+    assert recorded.get("delete_keys") == ["license_key"], f"expected the delete_keys form, got {recorded!r}"
+    assert not recorded.get("patch"), f"no whole-column blob may be passed, got {recorded!r}"
+
+
+async def test_licence_set_path_patches_only_license_key(
+    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Drive the REAL ``PUT /{org}/license`` handler against Postgres: the
+    write emits ONLY ``license_key`` through the atomic patch, and sibling
+    settings survive the real jsonb composition."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from modulo.api.routes import admin_orgs
+    from modulo.api.routes.admin_orgs import SetOrgLicenseRequest, admin_set_org_license
+    from modulo.auth.jwt import AuthenticatedPrincipal
+    from modulo.settings import get_settings
+
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    seed = factory()
+    await seed.begin()
+    await set_rls_org(seed, org_id)
+    await update_org_settings_patch(seed, org_id, {"license_key": "old.key", "retention_days": 30})
+    await seed.commit()
+    await seed.close()
+
+    monkeypatch.setattr(
+        "modulo.core.license.parse_and_verify",
+        MagicMock(
+            return_value=SimpleNamespace(
+                valid=True,
+                error=None,
+                license_data=SimpleNamespace(tier="team", features=["sso"], expires_at=None, org_id=None),
+            )
+        ),
+    )
+    monkeypatch.setattr(admin_orgs, "invalidate_license_status_cache", AsyncMock())
+
+    recorded: dict[str, Any] = {}
+    real_patch = admin_orgs.update_org_settings_patch
+
+    async def _spy(session_arg: Any, oid: Any, patch: Any = None, delete_keys: Any = None, **kwargs: Any) -> Any:
+        recorded["patch"] = patch
+        recorded["delete_keys"] = delete_keys
+        return await real_patch(session_arg, oid, patch, delete_keys=delete_keys, **kwargs)
+
+    monkeypatch.setattr(admin_orgs, "update_org_settings_patch", _spy)
+
+    principal = AuthenticatedPrincipal(
+        username="admin",
+        organisation_id=org_id,
+        account_id=uuid.uuid4(),
+        org_role="admin",
+    )
+    handler_session = factory()
+    await admin_set_org_license(
+        org_id, SetOrgLicenseRequest(license_key="new.key"), principal, handler_session, get_settings()
+    )
+
+    settings = await _read_settings(db_engine, org_id)
+    assert settings.get("license_key") == "new.key", f"the set must land on a real engine: {settings!r}"
+    assert settings.get("retention_days") == 30, f"sibling settings must survive the set: {settings!r}"
+    assert recorded.get("patch") == {"license_key": "new.key"}, f"the write must emit only its own key: {recorded!r}"
+    assert not recorded.get("delete_keys"), f"the set path must not delete keys: {recorded!r}"

@@ -42,6 +42,11 @@ def mock_session(org_settings):
     result.scalar_one_or_none.return_value = org
 
     session = AsyncMock()
+    # Real SQLAlchemy sessions expose ``info`` as a dict; the route binds RLS
+    # via ``set_rls_org`` which stores the org id here on generic backends, and
+    # the FAR-1830/FAR-1832 patch helper reads it back through its strict
+    # fail-closed tenant guard.
+    session.info = {}
     begin_cm = MagicMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -130,16 +135,38 @@ async def test_put_sets_limit(client_admin, mock_session):
 
 
 @pytest.mark.anyio
-async def test_put_uses_row_lock_against_concurrent_writers(client_admin, mock_session):
-    """FAR-589 D3b: the settings read-modify-write must SELECT ... FOR UPDATE so
-    a concurrent settings writer cannot be dropped between read and flush."""
-    resp = await client_admin.put(
-        "/api/v1/admin/org/sandbox-concurrency",
-        json={"sandbox_concurrency_limit": 5},
-    )
+async def test_put_patches_only_its_own_key_without_prelatching_the_org_row(client_admin, mock_session):
+    """FAR-1832: the writer delegates to the atomic settings patch with ONLY
+    its own key and issues no ``FOR UPDATE`` org select of its own.
+
+    This fails against the old shape two ways: the old code never called the
+    patch helper (``captured`` stays empty), and it executed a
+    ``SELECT ... FOR UPDATE`` on the org row before writing. The audit append
+    (which legitimately locks the per-org audit-chain head) is stubbed out so
+    the statement scan sees only the writer's own statements.
+    """
+    captured: dict[str, object] = {}
+
+    async def _fake_patch(session, organisation_id, patch=None, delete_keys=None, **kwargs):
+        captured["organisation_id"] = organisation_id
+        captured["patch"] = patch
+        captured["delete_keys"] = delete_keys
+        return dict(patch or {})
+
+    with (
+        patch("modulo.api.routes.admin.update_org_settings_patch", new=_fake_patch),
+        patch("modulo.api.routes.admin._record_org_audit", new=AsyncMock()),
+    ):
+        resp = await client_admin.put(
+            "/api/v1/admin/org/sandbox-concurrency",
+            json={"sandbox_concurrency_limit": 5},
+        )
     assert resp.status_code == 200
-    stmt = mock_session.execute.await_args_list[0].args[0]
-    assert "FOR UPDATE" in str(stmt)
+    assert captured["organisation_id"] == ORG_ID
+    assert captured["patch"] == {"sandbox_concurrency_limit": 5}
+    assert captured["delete_keys"] is None
+    for call in mock_session.execute.await_args_list:
+        assert "FOR UPDATE" not in str(call.args[0]), f"writer must not pre-lock the org row: {call.args[0]}"
 
 
 @pytest.mark.anyio

@@ -34,7 +34,8 @@ from modulo.core.product_analytics.consent import (
     merge_product_analytics_block,
     set_level,
 )
-from modulo.core.product_analytics.constants import DEFAULT_LEVEL, LEVEL_OFF
+from modulo.core.product_analytics.constants import DEFAULT_LEVEL, LEVEL_OFF, PRODUCT_ANALYTICS_KEY
+from modulo.db.crud.organisation import update_org_settings_patch
 from modulo.db.models.metrics_staging import MetricsStaging
 from modulo.db.models.organisation import Organisation
 from modulo.db.rls import set_rls_org
@@ -81,21 +82,20 @@ class LevelUpdateResponse(BaseModel):
 async def _get_org_or_404(
     session: AsyncSession,
     org_id: uuid.UUID,
-    *,
-    for_update: bool = False,
 ) -> Organisation:
     """Fetch an organisation by ID or raise 404.
 
-    When *for_update* is True, acquires a FOR UPDATE row lock to make
-    check-then-act sequences atomic within the enclosing transaction.
+    FAR-1025: opts out of the global soft-delete filter -- a pending-deletion
+    org is still operationally live; the consent check must still work during
+    the confirmation window.
 
-    FAR-1025: both paths opt out of the global soft-delete filter -- a
-    pending-deletion org is still operationally live; the consent check
-    must still work during the confirmation window.
+    FAR-1832: this is a READ-ONLY existence check. The writers no longer take
+    a ``FOR UPDATE`` row lock here — they write through the single-statement
+    atomic settings patch, whose UPDATE takes the row lock only for its own
+    statement (and refuses a soft-deleted org with ``LookupError``, which the
+    handlers map to the same 404).
     """
     stmt = include_soft_deleted(select(Organisation).where(Organisation.id == org_id))
-    if for_update:
-        stmt = stmt.with_for_update()
     result = await session.execute(stmt)
     org = result.scalar_one_or_none()
     if org is None:
@@ -165,7 +165,7 @@ async def post_consent(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            org = await _get_org_or_404(session, current_user.organisation_id, for_update=True)
+            org = await _get_org_or_404(session, current_user.organisation_id)
 
             consent = get_product_analytics_block(org.settings_json)
 
@@ -177,8 +177,27 @@ async def post_consent(
                 )
 
             updated_consent = apply_consent_action(consent, req.action)
-            new_settings = merge_product_analytics_block(org.settings_json, updated_consent)
-            org.settings_json = new_settings
+            # FAR-1832: derive the final block through the canonical merge
+            # helper (the single source of truth for block-merge semantics),
+            # then emit ONLY that top-level key via the single-statement atomic
+            # patch — it replaces the ``FOR UPDATE`` whole-column
+            # read-modify-write: the block is written as one whole value while
+            # every sibling settings key survives by jsonb composition. A
+            # soft-deleted org (pending-deletion window) is refused with
+            # ``LookupError`` → the same 404 — the FAR-1830 retention-writer
+            # precedent; reads keep their FAR-1025 opt-out above.
+            final_block = merge_product_analytics_block(org.settings_json, updated_consent)[PRODUCT_ANALYTICS_KEY]
+            try:
+                await update_org_settings_patch(
+                    session,
+                    current_user.organisation_id,
+                    {PRODUCT_ANALYTICS_KEY: final_block},
+                )
+            except LookupError:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Organisation not found.",
+                ) from None
 
             # Consent withdrawn -> drop staged events immediately (FAR-1717);
             # they can never be dumped for a non-consenting org anyway.
@@ -261,12 +280,26 @@ async def update_product_analytics_level(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            org = await _get_org_or_404(session, current_user.organisation_id, for_update=True)
+            org = await _get_org_or_404(session, current_user.organisation_id)
 
             consent = get_product_analytics_block(org.settings_json)
             updated_consent = set_level(consent, req.level)
-            new_settings = merge_product_analytics_block(org.settings_json, updated_consent)
-            org.settings_json = new_settings
+            # FAR-1832: same contract as the consent POST — derive the final
+            # block through the canonical merge helper and patch ONLY that key
+            # atomically (no ``FOR UPDATE`` pre-lock, no whole-column write,
+            # sibling keys survive by composition, soft-deleted org → 404).
+            final_block = merge_product_analytics_block(org.settings_json, updated_consent)[PRODUCT_ANALYTICS_KEY]
+            try:
+                await update_org_settings_patch(
+                    session,
+                    current_user.organisation_id,
+                    {PRODUCT_ANALYTICS_KEY: final_block},
+                )
+            except LookupError:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Organisation not found.",
+                ) from None
 
             # Turning analytics OFF withdraws consent: drop staged events now
             # (FAR-1717), in the same transaction as the level write.

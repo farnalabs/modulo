@@ -291,7 +291,7 @@ def _set_valid_org_license(key: str, request, client):
     with (
         patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=org),
         patch(
-            "modulo.api.routes.admin_orgs.update_organisation", new_callable=AsyncMock, return_value=org
+            "modulo.api.routes.admin_orgs.update_org_settings_patch", new_callable=AsyncMock, return_value=org
         ) as mock_update,
         patch("modulo.core.license.parse_and_verify", return_value=validation),
     ):
@@ -310,7 +310,7 @@ def _set_invalid_org_license(key: str, request, client):
     with (
         patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=org),
         patch(
-            "modulo.api.routes.admin_orgs.update_organisation", new_callable=AsyncMock, return_value=org
+            "modulo.api.routes.admin_orgs.update_org_settings_patch", new_callable=AsyncMock, return_value=org
         ) as mock_update,
         patch("modulo.core.license.parse_and_verify", return_value=validation),
     ):
@@ -326,7 +326,7 @@ def _set_license_missing_org(key: str, request, client):
     with (
         patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=None),
         patch(
-            "modulo.api.routes.admin_orgs.update_organisation", new_callable=AsyncMock, return_value=None
+            "modulo.api.routes.admin_orgs.update_org_settings_patch", new_callable=AsyncMock, return_value=None
         ) as mock_update,
         patch("modulo.core.license.parse_and_verify"),
     ):
@@ -344,7 +344,7 @@ def _remove_org_license(request, client):
     with (
         patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=org),
         patch(
-            "modulo.api.routes.admin_orgs.update_organisation", new_callable=AsyncMock, return_value=org
+            "modulo.api.routes.admin_orgs.update_org_settings_patch", new_callable=AsyncMock, return_value=org
         ) as mock_update,
     ):
         resp = client.delete(f"/api/v1/admin/orgs/{org_id}/license")
@@ -359,7 +359,7 @@ def _remove_license_missing_org(request, client):
     with (
         patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=None),
         patch(
-            "modulo.api.routes.admin_orgs.update_organisation", new_callable=AsyncMock, return_value=None
+            "modulo.api.routes.admin_orgs.update_org_settings_patch", new_callable=AsyncMock, return_value=None
         ) as mock_update,
     ):
         resp = client.delete(f"/api/v1/admin/orgs/{org_id}/license")
@@ -688,11 +688,15 @@ def _license_set(key: str, request):
     assert body.get("has_license") is True, f"expected has_license, got {body}"
     assert body.get("tier") == "team", f"expected tier 'team', got {body.get('tier')!r}"
     update_mock = getattr(request.node, "_update_org", None)
-    assert update_mock is not None, "update_organisation was not called"
+    assert update_mock is not None, "update_org_settings_patch was not called"
     assert update_mock.call_count == 1, f"expected one write, got {update_mock.call_count}"
-    settings = update_mock.call_args.args[2]["settings_json"]
-    assert settings.get("license_key") == key, f"expected license_key {key!r}, got {settings!r}"
-    assert settings.get("existing") is True, "pre-existing settings keys must be preserved alongside the key"
+    # FAR-1832: the writer emits ONLY its own key through the atomic patch —
+    # sibling settings survive by jsonb composition (asserted against a real DB
+    # in tests/integration/crud/test_org_settings_patch.py), never by
+    # re-writing a stale whole-column blob (the forbidden dumper shape).
+    written = update_mock.call_args.args[2]
+    assert written.get("license_key") == key, f"expected license_key {key!r}, got {written!r}"
+    assert set(written) == {"license_key"}, f"writer must emit only its own key, got {set(written)!r}"
 
 
 @then("the organisation license is removed")
@@ -702,10 +706,15 @@ def _license_removed(request):
     body = resp.json()
     assert body.get("has_license") is False, f"expected has_license False, got {body}"
     update_mock = getattr(request.node, "_update_org", None)
-    assert update_mock is not None, "update_organisation was not called"
+    assert update_mock is not None, "update_org_settings_patch was not called"
     assert update_mock.call_count == 1, f"expected one write, got {update_mock.call_count}"
-    settings = update_mock.call_args.args[2]["settings_json"]
-    assert "license_key" not in settings, f"expected license_key to be cleared, got {settings!r}"
+    # FAR-1832: the clear goes through the helper's ``delete_keys`` form —
+    # exactly one top-level key removed, and no whole-column blob is passed
+    # (positional args are just session + org id).
+    assert update_mock.call_args.kwargs.get("delete_keys") == ["license_key"], (
+        f"expected a delete_keys clear of license_key, got {update_mock.call_args}"
+    )
+    assert len(update_mock.call_args.args) == 2, f"expected no whole-column blob, got {update_mock.call_args.args}"
 
 
 @then(parsers.parse("I receive a {status:d} {error_type} error"))

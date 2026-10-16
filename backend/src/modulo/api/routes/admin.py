@@ -2667,18 +2667,8 @@ async def confirm_org_deletion(
 
             # FAR-1517: the hard delete destroys this org's audit trail, so the
             # record of the destructive act goes to the org-independent ledger
-            # FIRST, in the same transaction — it commits only if the delete
-            # commits, and a failed append aborts the delete (fail-closed).
-            await append_system_audit_event(
-                session,
-                event_type="org_deletion_completed",
-                org_id=current_user.organisation_id,
-                actor_user_id=current_user.account_id,
-                resource_type="organisation",
-                resource_id=current_user.organisation_id,
-                payload_json={"flow": "deletion_confirm", "immediate": False, "force": req.force},
-            )
-
+            # IN the same transaction — it commits only if the delete commits,
+            # and a failed append aborts the delete (fail-closed).
             try:
                 result = await _confirm_deletion(
                     session,
@@ -2689,6 +2679,23 @@ async def confirm_org_deletion(
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+            # FAR-1832 (R4): append AFTER the crud call, not before it. This
+            # was the one org-deletion FSM path that took a write lock BEFORE
+            # the org-row ``FOR UPDATE`` (every sibling route — request, cancel,
+            # immediate delete — locks the org row first). Same transaction, so
+            # atomicity and the fail-closed property are unchanged; only the
+            # lock order is repaired to the global order (org FSM lock, then
+            # audit append).
+            await append_system_audit_event(
+                session,
+                event_type="org_deletion_completed",
+                org_id=current_user.organisation_id,
+                actor_user_id=current_user.account_id,
+                resource_type="organisation",
+                resource_id=current_user.organisation_id,
+                payload_json={"flow": "deletion_confirm", "immediate": False, "force": req.force},
+            )
     except IntegrityError:
         logger.exception(_CODE_ADMIN_CONFIRM_ORG_DELETION)
         _raise_conflict()
@@ -4112,27 +4119,23 @@ async def admin_update_sandbox_concurrency(
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             try:
-                # FAR-589 D3b: row-level lock (SELECT ... FOR UPDATE) so the
-                # read-modify-write of settings_json cannot drop a concurrent
-                # writer's change between the read and the flush.
-                # FAR-1025: opt out of the global soft-delete filter — a
-                # pending-deletion org is still operationally live during the
-                # confirmation window.
-                result = await session.execute(
-                    include_soft_deleted(
-                        select(Organisation)
-                        .where(Organisation.id == current_user.organisation_id)
-                        .limit(1)
-                        .with_for_update()
-                    )
+                # FAR-1832: a single-statement atomic patch (FAR-1830 helper)
+                # replaces the FAR-589 D3b ``FOR UPDATE`` read-modify-write —
+                # the helper emits ONLY this concern's key, so no concurrent
+                # writer's keys can be dropped, and the org row is no longer
+                # pre-locked across the read→write window. An explicit ``null``
+                # is STORED (not deleted): ``is_default`` distinguishes an
+                # absent key (Docker-tier default) from a stored no-gate null.
+                # A soft-deleted org (pending-deletion window) is refused with
+                # ``LookupError`` → 404, matching the FAR-1830 retention
+                # writer's precedent — reads keep their FAR-1025 opt-out.
+                await update_org_settings_patch(
+                    session,
+                    current_user.organisation_id,
+                    {"sandbox_concurrency_limit": req.sandbox_concurrency_limit},
                 )
-                org = result.scalar_one_or_none()
-                if org is None:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
-                settings = dict(org.settings_json) if org.settings_json else {}
-                settings["sandbox_concurrency_limit"] = req.sandbox_concurrency_limit
-                org.settings_json = settings
-                await session.flush()
+            except LookupError:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND) from None
             except IntegrityError:
                 logger.exception("admin.admin_update_sandbox_concurrency")
                 raise HTTPException(
@@ -4236,31 +4239,31 @@ async def admin_update_hitl_review_window(
     async def _do_write() -> None:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            # FAR-589 D3b row-level lock (SELECT ... FOR UPDATE) so the
-            # read-modify-write of settings_json cannot drop a concurrent
-            # writer's change between the read and the flush. FAR-1025: opt out
-            # of the global soft-delete filter — a pending-deletion org is still
-            # operationally live during the confirmation window.
-            result = await session.execute(
-                include_soft_deleted(
-                    select(Organisation)
-                    .where(Organisation.id == current_user.organisation_id)
-                    .limit(1)
-                    .with_for_update()
-                )
-            )
-            org = result.scalar_one_or_none()
-            if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
-            # Merge, never replace: every OTHER settings_json key (license,
-            # retention, feature_overrides, sandbox_concurrency, ...) survives.
-            settings = dict(org.settings_json) if org.settings_json else {}
-            if req.hitl_review_window_seconds is None:
-                settings.pop(ORG_HITL_REVIEW_WINDOW_KEY, None)
-            else:
-                settings[ORG_HITL_REVIEW_WINDOW_KEY] = req.hitl_review_window_seconds
-            org.settings_json = settings
-            await session.flush()
+            # FAR-1832: the FAR-589 D3b ``FOR UPDATE`` read-modify-write is
+            # replaced by the single-statement atomic patch (FAR-1830 helper) —
+            # it emits ONLY ``hitl_review_window_seconds`` (or deletes exactly
+            # that key on an explicit ``null``), so concurrent writers'
+            # settings survive and the org row is no longer pre-locked. A
+            # soft-deleted org (pending-deletion window) is refused with
+            # ``LookupError`` → 404, matching the FAR-1830 retention writer's
+            # precedent — reads keep their FAR-1025 opt-out.
+            try:
+                if req.hitl_review_window_seconds is None:
+                    # ``null`` CLEARS the key (inherit the instance default) —
+                    # never stores a meaningless zero-window.
+                    await update_org_settings_patch(
+                        session,
+                        current_user.organisation_id,
+                        delete_keys=[ORG_HITL_REVIEW_WINDOW_KEY],
+                    )
+                else:
+                    await update_org_settings_patch(
+                        session,
+                        current_user.organisation_id,
+                        {ORG_HITL_REVIEW_WINDOW_KEY: req.hitl_review_window_seconds},
+                    )
+            except LookupError:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND) from None
 
     await _run_admin_rls_txn(
         session,

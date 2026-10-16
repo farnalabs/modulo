@@ -40,7 +40,7 @@ from modulo.db.crud.organisation import (
     get_organisation,
     get_organisation_by_slug,
     list_organisations,
-    update_organisation,
+    update_org_settings_patch,
 )
 from modulo.db.models.organisation import MODULO_REGISTRY_ORG_ID, SYSTEM_ORG_ID, Organisation
 from modulo.db.rls import set_rls_org
@@ -582,18 +582,6 @@ def _verify_license_key(req: SetOrgLicenseRequest) -> Any:
     return validation.license_data
 
 
-def _set_org_license_key(settings_json: dict[str, Any], license_key: str) -> dict[str, Any]:
-    merged = dict(settings_json)
-    merged["license_key"] = license_key
-    return merged
-
-
-def _clear_org_license_key(settings_json: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(settings_json)
-    merged.pop("license_key", None)
-    return merged
-
-
 @router.put(
     "/{org_id}/license",
     dependencies=[
@@ -609,14 +597,20 @@ async def admin_set_org_license(
     settings: Settings = Depends(get_settings),
 ) -> OrgLicenseResponse:
     try:
-        # Single locked transaction: read the org FOR UPDATE, verify, then
-        # write. Holding the row lock across read→write closes the TOCTOU
-        # window where a concurrent license rotate/clear could interleave
-        # between the read and the re-read inside update_organisation and
-        # resurrect a license key that was concurrently cleared (#1798).
+        # Single transaction: read the org (no lock), verify, then write via
+        # the single-statement atomic patch. FAR-1832 replaces the #1798
+        # ``FOR UPDATE`` + whole-column ``update_organisation`` dumper:
+        # atomicity now comes from the patch statement itself (each write
+        # composes at the settings top level, so a concurrent rotate/clear
+        # can no longer interleave a stale blob over a fresher one), so the
+        # org row is not pre-locked.
         async with session.begin():
+            # FAR-1832 (D5): bind the org RLS context first — the patch
+            # helper's tenant guard FAILS CLOSED on a session with no readable
+            # org context, and this cross-org admin route never set one before.
+            await set_rls_org(session, org_id)
             try:
-                org = await get_organisation(session, org_id, for_update=True)
+                org = await get_organisation(session, org_id)
             except ProgrammingError as exc:
                 _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_SET, MSG_FEATURE_NOT_AVAILABLE, exc)
             except SQLAlchemyError as exc:
@@ -636,9 +630,12 @@ async def admin_set_org_license(
             # preserves the prior API contract (FAR #1798 regression).
             d = _verify_license_key(req)
 
-            settings_json = _set_org_license_key(org.settings_json or {}, req.license_key)
-
-            await update_organisation(session, org_id, {"settings_json": settings_json})
+            # FAR-1832: patch ONLY the ``license_key`` key — sibling settings
+            # survive by jsonb composition, never by re-writing a stale blob.
+            try:
+                await update_org_settings_patch(session, org_id, {"license_key": req.license_key})
+            except LookupError:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND) from None
     except ProgrammingError as exc:
         _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_SET, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:
@@ -678,12 +675,19 @@ async def admin_remove_org_license(
     settings: Settings = Depends(get_settings),
 ) -> OrgLicenseResponse:
     try:
-        # Same locked read-modify-write transaction as admin_set_org_license —
-        # a concurrent rotate must not be clobbered by a delete committed from
-        # a stale pre-write read (#1798).
+        # Single transaction: read the org (no lock), then clear via the
+        # atomic patch's ``delete_keys`` form. FAR-1832 replaces the #1798
+        # ``FOR UPDATE`` + whole-column ``update_organisation`` dumper: the
+        # clear deletes exactly one top-level key in one statement, so it can
+        # neither resurrect a concurrently-cleared key from a stale blob nor
+        # drop a concurrent writer's keys, and the org row is not pre-locked.
         async with session.begin():
+            # FAR-1832 (D5): bind the org RLS context first — the patch
+            # helper's tenant guard FAILS CLOSED on a session with no readable
+            # org context, and this cross-org admin route never set one before.
+            await set_rls_org(session, org_id)
             try:
-                org = await get_organisation(session, org_id, for_update=True)
+                org = await get_organisation(session, org_id)
             except ProgrammingError as exc:
                 _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_REMOVE, MSG_FEATURE_NOT_AVAILABLE, exc)
             except SQLAlchemyError as exc:
@@ -698,9 +702,10 @@ async def admin_remove_org_license(
             if org is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
 
-            settings_json = _clear_org_license_key(org.settings_json or {})
-
-            await update_organisation(session, org_id, {"settings_json": settings_json})
+            try:
+                await update_org_settings_patch(session, org_id, delete_keys=["license_key"])
+            except LookupError:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND) from None
     except ProgrammingError as exc:
         _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_REMOVE, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:

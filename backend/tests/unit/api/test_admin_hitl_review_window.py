@@ -1,8 +1,9 @@
 """FAR-1257: the admin org HITL review-window endpoint contract.
 
 Mirrors ``test_admin_sandbox_concurrency`` — same org ``settings_json``
-substrate, same ``SELECT ... FOR UPDATE`` read-modify-write, same admin-only
-gate — but the VALUE is the middle layer of the review-window chain:
+substrate, same single-statement atomic settings patch (FAR-1832; previously a
+``SELECT ... FOR UPDATE`` read-modify-write), same admin-only gate — but the
+VALUE is the middle layer of the review-window chain:
 
     pipeline override > ORG DEFAULT (this endpoint) > instance/env default
 
@@ -12,7 +13,7 @@ zero-window — the safety net has no "0 = disabled"), the envelope is enforced
 at the boundary, and no other ``settings_json`` key may be clobbered.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -54,6 +55,11 @@ def mock_session(org_settings):
     result.scalar_one_or_none.return_value = org
 
     session = AsyncMock()
+    # Real SQLAlchemy sessions expose ``info`` as a dict; the route binds RLS
+    # via ``set_rls_org`` which stores the org id here on generic backends, and
+    # the FAR-1830/FAR-1832 patch helper reads it back through its strict
+    # fail-closed tenant guard.
+    session.info = {}
     begin_cm = MagicMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -153,14 +159,55 @@ class TestWrite:
         assert org.settings_json[_KEY] == 4500
 
     @pytest.mark.anyio
-    async def test_put_uses_row_lock_against_concurrent_writers(self, client_admin, mock_session):
-        """The settings read-modify-write must SELECT ... FOR UPDATE so a
-        concurrent settings writer (sandbox_concurrency, retention, ...) cannot
-        be dropped between our read and flush."""
-        resp = await client_admin.put(_PATH, json={_KEY: 4500})
+    async def test_put_patches_only_its_own_key_without_prelatching_the_org_row(self, client_admin, mock_session):
+        """FAR-1832: the writer delegates to the atomic settings patch with ONLY
+        its own key and issues no ``FOR UPDATE`` org select of its own.
+
+        Fails against the old shape two ways: the old code never called the
+        patch helper (``captured`` stays empty), and it executed a
+        ``SELECT ... FOR UPDATE`` on the org row before writing. The audit
+        append (which legitimately locks the per-org audit-chain head) is
+        stubbed out so the statement scan sees only the writer's own statements.
+        """
+        captured: dict[str, object] = {}
+
+        async def _fake_patch(session, organisation_id, patch=None, delete_keys=None, **kwargs):
+            captured["organisation_id"] = organisation_id
+            captured["patch"] = patch
+            captured["delete_keys"] = delete_keys
+            return dict(patch or {})
+
+        with (
+            patch("modulo.api.routes.admin.update_org_settings_patch", new=_fake_patch),
+            patch("modulo.api.routes.admin._record_org_audit", new=AsyncMock()),
+        ):
+            resp = await client_admin.put(_PATH, json={_KEY: 4500})
         assert resp.status_code == 200
-        stmt = mock_session.execute.await_args_list[0].args[0]
-        assert "FOR UPDATE" in str(stmt)
+        assert captured["organisation_id"] == ORG_ID
+        assert captured["patch"] == {_KEY: 4500}
+        for call in mock_session.execute.await_args_list:
+            assert "FOR UPDATE" not in str(call.args[0]), f"writer must not pre-lock the org row: {call.args[0]}"
+
+    @pytest.mark.anyio
+    async def test_put_null_clears_via_delete_keys_not_a_stored_null(self, client_admin, mock_session):
+        """FAR-1832: an explicit ``null`` must go through the patch helper's
+        ``delete_keys`` form — the key is REMOVED (inherit the instance
+        default), never stored as a null window."""
+        captured: dict[str, object] = {}
+
+        async def _fake_patch(session, organisation_id, patch=None, delete_keys=None, **kwargs):
+            captured["patch"] = patch
+            captured["delete_keys"] = delete_keys
+            return dict(patch or {})
+
+        with (
+            patch("modulo.api.routes.admin.update_org_settings_patch", new=_fake_patch),
+            patch("modulo.api.routes.admin._record_org_audit", new=AsyncMock()),
+        ):
+            resp = await client_admin.put(_PATH, json={_KEY: None})
+        assert resp.status_code == 200
+        assert captured["delete_keys"] == [_KEY]
+        assert not captured["patch"]
 
     @pytest.mark.anyio
     @pytest.mark.parametrize("value", [60, 4500, 604800])
@@ -209,9 +256,8 @@ class TestWrite:
         """``null`` REMOVES the key (inherit the instance default) — it must
         never be stored as a null window the resolver would have to guess at.
 
-        The route writes a FRESH dict onto the org row (read-modify-write), so
-        the assertion reads the mock's ``org.settings_json``, not the fixture's
-        original dict."""
+        The patch helper refreshes the mock's org row with the merged mapping,
+        so the assertion reads ``org.settings_json`` after the write."""
         org = mock_session.execute.return_value.scalar_one_or_none.return_value
         org.settings_json = {_KEY: 4500, "license_key": "license-abc"}
         resp = await client_admin.put(_PATH, json={_KEY: None})
@@ -222,8 +268,8 @@ class TestWrite:
 
     @pytest.mark.anyio
     async def test_put_merge_preserves_other_settings(self, client_admin, mock_session):
-        """Do not clobber other ``settings_json`` keys — the merge is a dict
-        copy of the WHOLE blob, with one key written/removed."""
+        """Do not clobber other ``settings_json`` keys — the patch composes at
+        the top level, writing or removing exactly this one key."""
         org = mock_session.execute.return_value.scalar_one_or_none.return_value
         org.settings_json = {
             "license_key": "license-abc",

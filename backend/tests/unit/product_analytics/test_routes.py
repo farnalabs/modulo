@@ -2,7 +2,9 @@
 
 These exercises the real FastAPI handlers (POST /consent, GET, PUT) end-to-end
 through ``TestClient`` with a mocked DB session, so the permission gate, the
-prompt-eligibility 409, and the FOR UPDATE org lock path are all round-tripped.
+prompt-eligibility 409, and the single-statement atomic settings-patch write
+path (FAR-1832; previously a ``FOR UPDATE`` read-modify-write) are all
+round-tripped.
 
 The DB session is mocked, so the org row is a MagicMock whose ``settings_json``
 persists across requests within a single test — that lets us assert state
@@ -50,6 +52,11 @@ def _make_session() -> tuple[AsyncMock, MagicMock]:
     execute_result = MagicMock()
     execute_result.scalar_one_or_none = MagicMock(return_value=org)
     session.execute = AsyncMock(return_value=execute_result)
+    # ``set_rls_org`` is stubbed in the ``env`` fixture (it would touch the
+    # bind), so bind the org context directly: the FAR-1832 settings patch the
+    # writers go through reads it back through its strict fail-closed tenant
+    # guard, and an unbound session is refused (500) by design.
+    session.info = {"org_id": str(_ORG_ID)}
     return session, org
 
 
@@ -123,6 +130,36 @@ class TestConsentEndpoint:
         retry = client.post(_CONSENT_URL, json={"action": "accept"})
         assert retry.status_code == 409, retry.text
 
+    def test_consent_write_patches_only_its_block_without_prelatching(self, env) -> None:
+        """FAR-1832: the consent writer delegates to the atomic settings patch
+        with ONLY the ``product_analytics`` block and issues no ``FOR UPDATE``
+        org select of its own.
+
+        Fails against the old shape two ways: the old code never called the
+        patch helper (``captured`` stays empty) and its existence read took
+        ``FOR UPDATE``. The helper is faked so its generic-dialect fallback
+        lock cannot mask the writer's own statements.
+        """
+        session, org = env
+        captured: dict[str, object] = {}
+
+        async def _fake_patch(_session, org_id, patch=None, delete_keys=None, **kwargs):
+            captured["patch"] = patch
+            captured["delete_keys"] = delete_keys
+            merged = dict(org.settings_json or {})
+            merged.update(patch or {})
+            org.settings_json = merged
+            return merged
+
+        with patch.object(pa_module, "update_org_settings_patch", new=_fake_patch):
+            resp = _client().post(_CONSENT_URL, json={"action": "accept"})
+        assert resp.status_code == 200, resp.text
+        assert set(captured["patch"]) == {"product_analytics"}
+        assert captured["delete_keys"] is None
+        assert org.settings_json["product_analytics"]["level"] == "all"
+        for call in session.execute.await_args_list:
+            assert "FOR UPDATE" not in str(call.args[0]), f"writer must not pre-lock the org row: {call.args[0]}"
+
 
 # ---------------------------------------------------------------------------
 # GET / — reflects committed consent state
@@ -173,6 +210,28 @@ class TestUpdateLevelEndpoint:
         # The pydantic Literal validation rejects an invalid level before the
         # handler runs, so FastAPI returns 422 Unprocessable Entity.
         assert resp.status_code == 422, resp.text
+
+    def test_put_level_patches_only_its_block_without_prelatching(self, env) -> None:
+        """FAR-1832: the admin level toggle delegates to the atomic settings
+        patch with ONLY the ``product_analytics`` block — no ``FOR UPDATE``
+        pre-lock, no whole-column write (same contract as the consent POST)."""
+        session, org = env
+        captured: dict[str, object] = {}
+
+        async def _fake_patch(_session, org_id, patch=None, delete_keys=None, **kwargs):
+            captured["patch"] = patch
+            merged = dict(org.settings_json or {})
+            merged.update(patch or {})
+            org.settings_json = merged
+            return merged
+
+        with patch.object(pa_module, "update_org_settings_patch", new=_fake_patch):
+            resp = _client().put(_PRODUCT_ANALYTICS_URL, json={"level": "all"})
+        assert resp.status_code == 200, resp.text
+        assert set(captured["patch"]) == {"product_analytics"}
+        assert org.settings_json["product_analytics"]["level"] == "all"
+        for call in session.execute.await_args_list:
+            assert "FOR UPDATE" not in str(call.args[0]), f"writer must not pre-lock the org row: {call.args[0]}"
 
 
 # ---------------------------------------------------------------------------

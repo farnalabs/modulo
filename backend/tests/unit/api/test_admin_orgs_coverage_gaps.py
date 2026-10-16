@@ -483,15 +483,17 @@ def test_set_org_license_success(api: tuple[TestClient, AsyncMock], monkeypatch:
         "modulo.core.license.parse_and_verify",
         MagicMock(return_value=SimpleNamespace(valid=True, license_data=_license_data(), error=None)),
     )
-    update = AsyncMock(return_value=org)
-    monkeypatch.setattr(admin_orgs, "update_organisation", update)
+    update = AsyncMock(return_value=org.settings_json or {})
+    monkeypatch.setattr(admin_orgs, "update_org_settings_patch", update)
     resp = client.put(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license", json={"license_key": "valid-key"})
     assert resp.status_code == 200
     data = resp.json()
     assert data["has_license"] is True
     assert data["tier"] == "pro"
-    persisted = update.call_args.args[2]
-    assert persisted["settings_json"]["license_key"] == "valid-key"
+    # FAR-1832: the writer patches ONLY license_key — sibling settings survive
+    # by jsonb composition, not by re-writing a stale whole-column blob.
+    written = update.call_args.args[2]
+    assert written == {"license_key": "valid-key"}
 
 
 def test_set_org_license_invalid_key_422(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -531,7 +533,7 @@ def test_set_org_license_update_error_mapping(
         "modulo.core.license.parse_and_verify",
         MagicMock(return_value=SimpleNamespace(valid=True, license_data=_license_data(), error=None)),
     )
-    monkeypatch.setattr(admin_orgs, "update_organisation", AsyncMock(side_effect=exc))
+    monkeypatch.setattr(admin_orgs, "update_org_settings_patch", AsyncMock(side_effect=exc))
     resp = client.put(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license", json={"license_key": "k"})
     assert resp.status_code == expected
 
@@ -545,7 +547,7 @@ def test_set_org_license_update_unexpected_500(
         "modulo.core.license.parse_and_verify",
         MagicMock(return_value=SimpleNamespace(valid=True, license_data=_license_data(), error=None)),
     )
-    monkeypatch.setattr(admin_orgs, "update_organisation", AsyncMock(side_effect=RuntimeError("boom")))
+    monkeypatch.setattr(admin_orgs, "update_org_settings_patch", AsyncMock(side_effect=RuntimeError("boom")))
     resp = client.put(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license", json={"license_key": "k"})
     assert resp.status_code == 500
 
@@ -554,15 +556,18 @@ def test_remove_org_license_success(api: tuple[TestClient, AsyncMock], monkeypat
     client, _ = api
     org = _org(settings_json={"license_key": "k", "other": 1})
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
-    update = AsyncMock(return_value=org)
-    monkeypatch.setattr(admin_orgs, "update_organisation", update)
+    update = AsyncMock(return_value=org.settings_json or {})
+    monkeypatch.setattr(admin_orgs, "update_org_settings_patch", update)
     resp = client.delete(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license")
     assert resp.status_code == 200
     data = resp.json()
     assert data["has_license"] is False
-    persisted = update.call_args.args[2]
-    assert "license_key" not in persisted["settings_json"]
-    assert persisted["settings_json"]["other"] == 1
+    # FAR-1832: the clear goes through the helper's ``delete_keys`` form —
+    # exactly one top-level key removed, no whole-column blob passed (the
+    # sibling-survives half of the old assertion is proven against a real DB
+    # in tests/integration/crud/test_org_settings_patch.py).
+    assert update.call_args.kwargs.get("delete_keys") == ["license_key"]
+    assert len(update.call_args.args) == 2  # (session, org_id) only
 
 
 def test_remove_org_license_missing_org_404(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -618,7 +623,7 @@ def test_set_org_license_invalidates_org_status_cache(
         "modulo.core.license.parse_and_verify",
         MagicMock(return_value=SimpleNamespace(valid=True, license_data=_license_data(), error=None)),
     )
-    monkeypatch.setattr(admin_orgs, "update_organisation", AsyncMock(return_value=org))
+    monkeypatch.setattr(admin_orgs, "update_org_settings_patch", AsyncMock(return_value=org.settings_json or {}))
     key = f"license:{_TARGET_ORG_ID}"
     probe.set(key, _STALE_STATUS, ex=60)
 
@@ -636,7 +641,7 @@ def test_remove_org_license_invalidates_org_status_cache(
     probe = _patch_fake_redis(monkeypatch)
     org = _org(settings_json={"license_key": "k", "other": 1})
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
-    monkeypatch.setattr(admin_orgs, "update_organisation", AsyncMock(return_value=org))
+    monkeypatch.setattr(admin_orgs, "update_org_settings_patch", AsyncMock(return_value=org.settings_json or {}))
     key = f"license:{_TARGET_ORG_ID}"
     probe.set(key, _STALE_STATUS, ex=60)
 
