@@ -14,6 +14,7 @@ code:
   - backend/src/modulo/api/routes/admin_orgs.py
   - backend/src/modulo/api/routes/stripe_webhook.py
   - backend/src/modulo/api/routes/viewmodel.py
+  - frontend/src/stores/planStore.ts
 unit-tests:
   - backend/tests/unit/core/test_license_key.py
   - backend/tests/unit/core/test_license_signing.py
@@ -23,11 +24,13 @@ unit-tests:
   - backend/tests/unit/api/test_admin_tiers_endpoint.py
   - backend/tests/unit/api/test_stripe_webhook.py
   - backend/tests/unit/api/test_viewmodel_license.py
+  - backend/tests/unit/api/test_viewmodel_plan.py
   - backend/tests/unit/api/test_viewmodel_resolve_tier.py
   - backend/tests/unit/api/test_admin_orgs_coverage_gaps.py
   - backend/tests/unit/mcp/test_mcp_governance_read_tools.py
   - backend/tests/unit/test_license_adversarial.py
   - backend/tests/unit/test_team_license_activation.py
+  - frontend/src/__tests__/planStore.spec.ts
 bdd:
   - backend/tests/bdd/features/licensing/license_management.feature
   - backend/tests/bdd/features/licensing/team_gates.feature
@@ -72,6 +75,21 @@ neither is valid; see Behaviours.)
 - [x] Feature-flag inspection returns the `license` object plus the active `flags` array,
       supports per-flag detail and override toggles, and 404s unknown flags
       (`test_admin_feature_flags.py` + `feature_flag_inspection.feature`)
+- [x] Caller-scoped plan bootstrap: GET `/api/v1/plan` answers 200 for ANY
+      authenticated org member with `license.tier` / `expires_at` / `org_id`,
+      `dev_mode`, and the FULL known flag set with the org `feature_overrides`
+      overlay applied (inactive flags present as `currently_active: false`) -
+      so a non-admin gets their org's real tier, dev mode and effective flags
+      rather than the bootstrap defaults the instance-admin-only
+      `/api/v1/admin/feature-flags` + `/api/v1/admin/license` reads left them
+      with. The frontend `planStore` bootstraps from this one call plus the
+      viewer-readable `/api/v1/admin/tiers` catalogue; a timeout / 5xx still
+      settles the flag source to the terminal `unavailable` state that falls
+      back to the default nav layout rather than pending forever. The admin
+      endpoints keep their system-admin gates for the inspection/toggle UI
+      (`viewmodel.py` `plan_bootstrap`, `test_viewmodel_plan.py`,
+      `test_plan_bootstrap.py`, `frontend/src/stores/planStore.ts`,
+      `planStore.spec.ts`; FAR-1806 + FAR-1809)
 - [x] The public, unauthenticated `/api/v1/license` surface resolves the REAL
       deployment-level licence through the canonical ladder (rungs 2-3 of
       `feature_flags._resolve_paid_plan`; the endpoint is org-less so the
@@ -157,6 +175,17 @@ neither is valid; see Behaviours.)
   cited above.
 
 ## QA History
+
+- 2026-10-16: **FAR-1809** - documented the caller-scoped `GET /api/v1/plan`
+  endpoint (delivered by **FAR-1806**; nothing here had drifted - this is a
+  new-endpoint record, not a correction) and the frontend repoint onto it:
+  `planStore.doFetchPlan` now reads that single call instead of the
+  instance-admin `/api/v1/admin/feature-flags` + `/api/v1/admin/license`
+  pair (`/api/v1/admin/tiers` stays as the viewer-readable tier catalogue),
+  and the router's tier guard keys its check on `loaded` (tier known) instead
+  of flag-map emptiness, so a known-empty flag set and an unknown one are no
+  longer conflated. `code:` cites `frontend/src/stores/planStore.ts`;
+  `unit-tests:` adds `test_viewmodel_plan.py` and `planStore.spec.ts`.
 
 - 2026-10-13: **FAR-1733** - replaced env-var licence-key PRESENCE-trust with
   verification at the remaining surfaces. `viewmodel._resolve_tier` rung 3 had
