@@ -292,9 +292,9 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
   })
 
   test('fit observer re-fits on chrome above the editor, not on viewport style writes', { tag: '@regression' }, async ({ page, env }) => {
-    // Count measurements of the editor root: refitMobileEditor's
+    // Count measurements of the editor root: refitEditorFit's
     // getBoundingClientRect is the only page code that reads that element,
-    // so each call == one scheduled re-fit of the mobile pin.
+    // so each call == one scheduled re-fit of the editor height pin.
     await page.addInitScript(() => {
       const original = Element.prototype.getBoundingClientRect
       ;(window as any).__rootRectMeasures = 0
