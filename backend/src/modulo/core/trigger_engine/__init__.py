@@ -27,7 +27,10 @@ Webhook processing pipeline:
       logs a ``coalesced`` TriggerEvent and raises ``CiFailureCoalescedError``
       (the route COMMITS the audit event inside its transaction and acks the
       sender with a handled 202).
-  7. Flood protection (concurrent run count vs. trigger.max_concurrent_runs)
+  7. Flood protection (concurrent run count vs. trigger.max_concurrent_runs) —
+     REFUSED at the run-creation site (``ConcurrentRunLimitError`` → 429)
+     rather than queued, so the declared cap actually bounds run creation (no
+     run is created when the trigger is at its limit)
   8. Payload mapping (dot-notation path → input_payload key)
   9. Create Run + TriggerEvent in one transaction
  10. Dedup hash committed with run (single atomic unit)
@@ -714,24 +717,26 @@ class TriggerEngine:
                     )
                     raise CiFailureCoalescedError(ci_key)
 
-            # Flood / concurrency protection — accept and queue instead of rejecting.
-            # The run is created as pending and the executor queues it via
-            # _check_capacity / _retry_pending, so webhooks never get 429s.
+            # Flood / concurrency protection (FAR-1863) — REFUSE at the run-
+            # creation site instead of queuing an unbounded run. The previous
+            # behaviour logged ``concurrency_limit_reached`` and created the run
+            # anyway ("queuing anyway"), so a burst could pile unlimited runs
+            # onto the trigger and the declared ``max_concurrent_runs`` never
+            # bound anything. Raising ``ConcurrentRunLimitError`` makes the
+            # declared cap bind here, exactly as ``replay_event`` and the other
+            # trigger types already do; the route maps it to 429 (the documented
+            # concurrent-run-limit rejection — never a fabricated "queued" ack
+            # with no run behind it). A 429 is reject-and-retry, so the sender
+            # can re-deliver once a slot frees.
             active_count = await self._count_active_runs(session, trigger.id)
             if active_count >= trigger.max_concurrent_runs:
                 _log.warning(
-                    "Webhook concurrency limit reached for trigger %s (%d active >= %d limit) — queuing anyway",
+                    "Webhook concurrency limit reached for trigger %s (%d active >= %d limit) — delivery refused",
                     trigger_id,
                     active_count,
                     trigger.max_concurrent_runs,
                 )
-                await self._log_event(
-                    session,
-                    trigger=trigger,
-                    org_id=org_id,
-                    payload_hash=dedup_hash,
-                    result="concurrency_limit_reached",
-                )
+                raise ConcurrentRunLimitError(trigger.id, trigger.max_concurrent_runs)
 
             # Payload mapping — derived from the POST-guardrail payload so a
             # redact-action guardrail's masks are reflected in the mapped input.
