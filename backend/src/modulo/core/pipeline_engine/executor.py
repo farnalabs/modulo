@@ -5832,6 +5832,15 @@ class PipelineExecutor:
         unsafe (FAR-295). A new call site MUST keep that gate or a
         non-idempotent node-started run becomes re-dispatchable.
 
+        The gate is a property of EVERY producer of a re-dispatchable
+        ``pending`` row, not just this method: the FAR-1627 worker-shutdown
+        handback (``worker_handoff``) is a second, independent producer — it
+        CLEARS ``dispatched_at``/``dispatcher`` (so its rows are recovered by
+        the capacity-deferred leg, not the re-enqueue leg above) and gates
+        its own reset on graph idempotency + the run's retry policy at the
+        producer (``worker_handoff._handback_decision``), terminal-failing a
+        non-idempotent node-started run in place instead of resetting it.
+
         Returns the UPDATE rowcount (1 = the fence held / reset confirmed,
         0 = fence lost) so callers can distinguish a confirmed reset from a
         lost race (FAR-525: the retry counter only fires on a CONFIRMED reset).
