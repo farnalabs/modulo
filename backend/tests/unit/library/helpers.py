@@ -41,6 +41,26 @@ VALID_PROPERTY_TYPES = {"string", "number", "integer", "boolean", "object", "arr
 
 VALID_FORMATS = {"date", "date-time"}
 
+VALID_CONNECTOR_BINDING_TYPES: set[str] = {
+    "source_control",
+    "ci_runner",
+    "ci_cd",
+    "incident_management",
+    "issue_tracking",
+    "filesystem",
+    "monitoring",
+    "messaging",
+    "devops",
+    "security",
+    "code_quality",
+    "containers",
+    "documentation",
+    "observability",
+    "infrastructure",
+    "automation",
+    "integration",
+}
+
 
 def _string_value(prop_schema: dict[str, Any]) -> str:
     """Pick a string that satisfies *prop_schema*, honoring ``pattern``.

@@ -17,27 +17,12 @@ import pytest
 from modulo.core.library.workflows import __all__ as workflow_exports
 from modulo.core.library.workflows import definitions as workflow_defs
 
-from .helpers import KNOWN_AGENTS, REQUIRED_WORKFLOW_KEYS, WORKFLOWS
-
-VALID_CONNECTOR_BINDING_TYPES: set[str] = {
-    "source_control",
-    "ci_runner",
-    "ci_cd",
-    "incident_management",
-    "issue_tracking",
-    "filesystem",
-    "monitoring",
-    "messaging",
-    "devops",
-    "security",
-    "code_quality",
-    "containers",
-    "documentation",
-    "observability",
-    "infrastructure",
-    "automation",
-    "integration",
-}
+from .helpers import (
+    KNOWN_AGENTS,
+    REQUIRED_WORKFLOW_KEYS,
+    VALID_CONNECTOR_BINDING_TYPES,
+    WORKFLOWS,
+)
 
 
 def _workflow(name: str) -> dict[str, Any]:
