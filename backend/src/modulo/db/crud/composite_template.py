@@ -87,7 +87,8 @@ async def list_composite_templates(
     )
     result = await session.execute(stmt)
     items = list(result.scalars().all())
-    return PageResult(items=items, total=total, page=page, page_size=page_size)
+    has_more = (offset + len(items)) < total
+    return PageResult(items=items, total=total, page=page, page_size=page_size, has_more=has_more)
 
 
 async def update_composite_template(

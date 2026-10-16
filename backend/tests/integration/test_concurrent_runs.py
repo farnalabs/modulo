@@ -17,7 +17,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.core.trigger_engine import TriggerEngine
+from modulo.core.trigger_engine import ConcurrentRunLimitError, TriggerEngine
 from modulo.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
@@ -464,13 +464,13 @@ class TestMaxConcurrentRunsEnforcement:
                     },
                 )
 
-    async def test_trigger_accepts_when_at_limit_and_queues(
+    async def test_trigger_refuses_when_at_limit_without_creating_run(
         self,
         db_engine: AsyncEngine,
         test_org: uuid.UUID,
         test_user: uuid.UUID,
     ) -> None:
-        """At the concurrency limit the webhook is accepted and queued (pending), not rejected."""
+        """At the concurrency limit the webhook is REFUSED (no run), not queued."""
         ctx = await self._make_private_trigger(db_engine, test_org, test_user, max_concurrent=5)
         await self._fill_active_runs(
             db_engine,
@@ -484,33 +484,32 @@ class TestMaxConcurrentRunsEnforcement:
 
         engine = TriggerEngine()
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
-        async with factory() as session, session.begin():
-            await set_rls_org(session, test_org)
-            run, event, _ = await engine.handle_webhook(
-                session,
-                trigger_id=ctx["trigger_id"],
-                org_id=test_org,
-                raw_body=b'{"event": "push"}',
-                raw_payload={"event": "push"},
-                hmac_signature=None,
-                modulo_timestamp=str(int(time.time())),
-                snapshot_id=ctx["snapshot_id"],
-            )
-        # Accept-and-queue: the run is created as pending, never a 429.
-        assert run is not None
-        assert run.status == "pending"
-        assert event.validation_result == "accepted"
-        # The concurrency limit was still recorded as a TriggerEvent.
+
+        async def _deliver() -> None:
+            async with factory() as session, session.begin():
+                await set_rls_org(session, test_org)
+                await engine.handle_webhook(
+                    session,
+                    trigger_id=ctx["trigger_id"],
+                    org_id=test_org,
+                    raw_body=b'{"event": "push"}',
+                    raw_payload={"event": "push"},
+                    hmac_signature=None,
+                    modulo_timestamp=str(int(time.time())),
+                    snapshot_id=ctx["snapshot_id"],
+                )
+
+        with pytest.raises(ConcurrentRunLimitError):
+            await _deliver()
+        # Refuse-and-retry: no run was created — the trigger still holds only
+        # the 5 seeded active runs (the old behaviour added a 6th, pending).
         async with factory() as session, session.begin():
             await set_rls_org(session, test_org)
             result = await session.execute(
-                text(
-                    "SELECT validation_result FROM trigger_events "
-                    "WHERE trigger_id = :tid AND validation_result = 'concurrency_limit_reached'",
-                ),
+                text("SELECT count(*) FROM runs WHERE trigger_id = :tid"),
                 {"tid": str(ctx["trigger_id"])},
             )
-            assert result.scalar_one_or_none() is not None, "Expected concurrency_limit_reached TriggerEvent"
+            assert result.scalar_one() == 5, "The refused delivery must not create a run"
 
     async def test_trigger_accepts_when_below_limit(
         self,
@@ -538,13 +537,13 @@ class TestMaxConcurrentRunsEnforcement:
             assert run.status == "pending"
             assert event.validation_result == "accepted"
 
-    async def test_trigger_accepts_when_limit_configured_lower_and_queues(
+    async def test_trigger_refuses_when_limit_configured_lower(
         self,
         db_engine: AsyncEngine,
         test_org: uuid.UUID,
         test_user: uuid.UUID,
     ) -> None:
-        """A lower configured limit still accepts-and-queues rather than rejecting."""
+        """A lower configured limit refuses rather than accepting-and-queuing."""
         ctx = await self._make_private_trigger(db_engine, test_org, test_user, max_concurrent=3)
         await self._fill_active_runs(
             db_engine,
@@ -558,28 +557,28 @@ class TestMaxConcurrentRunsEnforcement:
 
         engine = TriggerEngine()
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
-        async with factory() as session, session.begin():
-            await set_rls_org(session, test_org)
-            run, event, _ = await engine.handle_webhook(
-                session,
-                trigger_id=ctx["trigger_id"],
-                org_id=test_org,
-                raw_body=b'{"event": "over-limit"}',
-                raw_payload={"event": "over-limit"},
-                hmac_signature=None,
-                modulo_timestamp=str(int(time.time())),
-                snapshot_id=ctx["snapshot_id"],
-            )
-        assert run is not None
-        assert run.status == "pending"
-        assert event.validation_result == "accepted"
+
+        async def _deliver() -> None:
+            async with factory() as session, session.begin():
+                await set_rls_org(session, test_org)
+                await engine.handle_webhook(
+                    session,
+                    trigger_id=ctx["trigger_id"],
+                    org_id=test_org,
+                    raw_body=b'{"event": "over-limit"}',
+                    raw_payload={"event": "over-limit"},
+                    hmac_signature=None,
+                    modulo_timestamp=str(int(time.time())),
+                    snapshot_id=ctx["snapshot_id"],
+                )
+
+        with pytest.raises(ConcurrentRunLimitError):
+            await _deliver()
+        # No run was created — only the 3 seeded active runs remain.
         async with factory() as session, session.begin():
             await set_rls_org(session, test_org)
             result = await session.execute(
-                text(
-                    "SELECT validation_result FROM trigger_events "
-                    "WHERE trigger_id = :tid AND validation_result = 'concurrency_limit_reached'",
-                ),
+                text("SELECT count(*) FROM runs WHERE trigger_id = :tid"),
                 {"tid": str(ctx["trigger_id"])},
             )
-            assert result.scalar_one_or_none() is not None, "Expected concurrency_limit_reached TriggerEvent"
+            assert result.scalar_one() == 3, "The refused delivery must not create a run"

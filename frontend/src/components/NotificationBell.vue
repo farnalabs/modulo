@@ -4,7 +4,10 @@
       ref="bellButtonRef"
       type="button"
       data-testid="notification-bell-button"
-      class="relative inline-flex items-center justify-center rounded-md p-2 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+      :class="[
+        'relative inline-flex shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors',
+        props.size === 'touch' ? 'h-11 w-11' : 'p-2',
+      ]"
       :aria-label="bellAriaLabel"
       aria-haspopup="true"
       :aria-expanded="dropdownOpen"
@@ -81,6 +84,12 @@ import { useNotificationsStore } from "../stores/notifications";
 import type { EventBusEvent } from "../types/events";
 import NotificationDropdown from "./NotificationDropdown.vue";
 import { Bell } from "@lucide/vue";
+
+// `touch` sizes the trigger to a 44x44 minimum hit area for compact mobile
+// chrome (the drawer header); `default` keeps the desktop rail/sidebar sizing.
+const props = withDefaults(defineProps<{ size?: "default" | "touch" }>(), {
+  size: "default",
+});
 
 const store = useNotificationsStore();
 const { t } = useI18n();

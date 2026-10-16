@@ -1045,7 +1045,12 @@ async def test_handle_webhook_undecryptable_hmac_secret_fails_closed() -> None:
             {"active_run_count": 1},
             None,
             lambda: str(int(time.time())),
-            None,  # no longer raises - run is queued
+            # FAR-1863: at the trigger's declared bound the delivery is REFUSED
+            # at the run-creation site (no run), not queued. The engine records
+            # the ``concurrency_limit_reached`` event before raising (matching
+            # ``replay_event``); the receive route maps the raise to 429 and
+            # re-records the refusal after the transaction unwinds.
+            ConcurrentRunLimitError,
             "concurrency_limit_reached",
         ),
     ],
@@ -1079,8 +1084,50 @@ async def test_handle_webhook_logs_trigger_event(
             modulo_timestamp=mod_ts,
             snapshot_id=_SNAP,
         )
-    found = any(getattr(c[0][0], "validation_result", None) == expected_vr for c in session.add.call_args_list)
-    assert found
+    if expected_vr is not None:
+        # Every case stamps an in-transaction TriggerEvent on ``session.add`` —
+        # including the FAR-1863 concurrency refusal, which records
+        # ``concurrency_limit_reached`` before raising. (In the route that write
+        # rolls back with the unwound transaction and the refusal is
+        # re-recorded post-unwind; the engine-level contract asserted here is
+        # that a refusal is never silent.)
+        found = any(getattr(c[0][0], "validation_result", None) == expected_vr for c in session.add.call_args_list)
+        assert found
+
+
+async def test_handle_webhook_refuses_at_concurrency_limit_without_creating_run() -> None:
+    """FAR-1863: a delivery at the trigger's declared cap is refused, not queued.
+
+    Before the fix the engine logged ``concurrency_limit_reached`` and created
+    the run anyway ("queuing anyway"), so ``max_concurrent_runs`` never bounded
+    run creation — a webhook burst could pile on unlimited runs. This test
+    fails without the fix: the run is now NOT created and the engine raises
+    ``ConcurrentRunLimitError`` (which the receive route maps to 429, the
+    documented concurrent-run-limit rejection).
+    """
+    trigger = _make_trigger(max_concurrent_runs=2)
+    session = _make_session(trigger=trigger, active_run_count=2)
+    with (
+        patch("modulo.core.trigger_engine.create_run", new_callable=AsyncMock) as create_run,
+        pytest.raises(ConcurrentRunLimitError) as excinfo,
+    ):
+        await TriggerEngine().handle_webhook(
+            session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=_RAW_BODY,
+            raw_payload=_RAW_PAYLOAD,
+            hmac_signature=None,
+            modulo_timestamp=str(_VALID_TS),
+            snapshot_id=_SNAP,
+        )
+    create_run.assert_not_awaited()
+    assert excinfo.value.trigger_id == trigger.id
+    assert excinfo.value.limit == 2
+    # The refusal is not silent: the ``concurrency_limit_reached`` event is
+    # recorded before the raise (the receive route re-records it post-unwind).
+    recorded = [c[0][0] for c in session.add.call_args_list if getattr(c[0][0], "validation_result", None)]
+    assert any(te.validation_result == "concurrency_limit_reached" for te in recorded)
 
 
 # ---------------------------------------------------------------------------

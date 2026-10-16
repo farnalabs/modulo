@@ -495,11 +495,17 @@ async def list_pipelines(
             count_stmt = include_soft_deleted(count_stmt)
         total = (await session.execute(count_stmt)).scalar_one()
     except ProgrammingError:
-        return PageResult(items=[], total=0, page=page, page_size=page_size)
+        # Count failed (e.g. table not yet migrated): report an empty page.
+        # total=0 means no rows exist, so has_more must be False — consistent,
+        # not the default-by-omission that made the offset path always False.
+        return PageResult(items=[], total=0, page=page, page_size=page_size, has_more=False)
     items = list(
         (await session.execute(base.order_by(Pipeline.created_at.desc()).offset(offset).limit(page_size))).scalars()
     )
-    return PageResult(items=items, total=total, page=page, page_size=page_size)
+    # Offset/page paging: more rows exist beyond this page when the rows we
+    # have plus the rows already skipped are fewer than the total.
+    has_more = (offset + len(items)) < total
+    return PageResult(items=items, total=total, page=page, page_size=page_size, has_more=has_more)
 
 
 def _validate_circuit_breaker_change(

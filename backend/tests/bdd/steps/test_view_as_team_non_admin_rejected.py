@@ -81,9 +81,11 @@ def get_pipelines_with_view_as_team(team_name: str, request, ctx) -> None:
 
     def shaper(session: MagicMock) -> None:
         # The page total is the route's only extra read on top of the row
-        # fetch (shape it explicitly: 0 pipelines behind the caller's RLS
-        # filter - the empty default emits None, which pydantic rejects).
-        _shaped_execute(session, [MagicMock(scalar=MagicMock(return_value=0))])
+        # fetch (shape it explicitly with scalar_one: 0 pipelines behind the
+        # caller's RLS filter). The empty default emits None and a bare
+        # MagicMock emits a MagicMock - both make the new has_more comparison
+        # raise TypeError rather than produce a boolean.
+        _shaped_execute(session, [MagicMock(scalar_one=MagicMock(return_value=0))])
 
     from tests.bdd.conftest import session_client
 
