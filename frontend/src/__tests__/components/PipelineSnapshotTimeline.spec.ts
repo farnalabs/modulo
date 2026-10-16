@@ -39,6 +39,7 @@ interface TimelineSnapshot {
   tag: string | null
   created_at: string | null
   version_kind: string
+  created_kind: string
   channel: string
   draft: boolean
 }
@@ -50,10 +51,31 @@ function makeSnapshot(overrides: Partial<TimelineSnapshot> = {}): TimelineSnapsh
     tag: 'release-b',
     created_at: '2026-08-01T12:00:00Z',
     version_kind: 'edit',
+    created_kind: 'edit',
     channel: 'none',
     draft: false,
     ...overrides,
   }
+}
+
+// A modern pipeline: an initial anchor and an edit, each with run snapshots
+// frozen at run-start. Version-DESC on the wire.
+function modernHistory(): TimelineSnapshot[] {
+  return [
+    makeSnapshot({ id: 'snap-5', snapshot_version: 5, created_kind: 'run', version_kind: 'run', tag: null, channel: 'stable' }),
+    makeSnapshot({ id: 'snap-4', snapshot_version: 4, created_kind: 'edit', version_kind: 'edit' }),
+    makeSnapshot({ id: 'snap-3', snapshot_version: 3, created_kind: 'run', version_kind: 'run', tag: null }),
+    makeSnapshot({ id: 'snap-2', snapshot_version: 2, created_kind: 'run', version_kind: 'run', tag: null }),
+    makeSnapshot({ id: 'snap-1', snapshot_version: 1, created_kind: 'initial', version_kind: 'edit', tag: null }),
+  ]
+}
+
+// Two substantive versions (the minimum needed to diff); no runs.
+function twoSubstantive(): TimelineSnapshot[] {
+  return [
+    makeSnapshot({ id: 'snap-2', snapshot_version: 2, created_kind: 'edit' }),
+    makeSnapshot({ id: 'snap-1', snapshot_version: 1, created_kind: 'edit', tag: null }),
+  ]
 }
 
 function mountTimeline(items: TimelineSnapshot[] | null, rejects = false) {
@@ -78,6 +100,18 @@ function rowFor(wrapper: ReturnType<typeof mount>, id: string) {
   return wrapper.find(`[data-testid="snapshot-timeline-row-${id}"]`)
 }
 
+function selectFor(wrapper: ReturnType<typeof mount>, id: string) {
+  return wrapper.find(`[data-testid="snapshot-timeline-select-${id}"]`)
+}
+
+function toggleFor(wrapper: ReturnType<typeof mount>, id: string) {
+  return wrapper.find(`[data-testid="snapshot-timeline-runs-toggle-${id}"]`)
+}
+
+async function selectVersion(wrapper: ReturnType<typeof mount>, id: string) {
+  await selectFor(wrapper, id).setValue(true)
+}
+
 describe('PipelineSnapshotTimeline', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -95,20 +129,92 @@ describe('PipelineSnapshotTimeline', () => {
     expect(wrapper.text()).toContain('No snapshots yet')
   })
 
-  it('renders snapshot rows with version, kind badge, channel and tag', async () => {
-    const wrapper = await flushMount([
-      makeSnapshot(),
-      makeSnapshot({ id: 'snap-2', snapshot_version: 2, version_kind: 'run', channel: 'stable', tag: null }),
-    ])
-    const row1 = rowFor(wrapper, 'snap-1')
-    expect(row1.text()).toContain('v3')
-    expect(row1.text()).toContain('edit')
-    expect(row1.text()).toContain('release-b')
-    const row2 = rowFor(wrapper, 'snap-2')
-    expect(row2.text()).toContain('v2')
-    expect(row2.text()).toContain('run')
-    expect(row2.text()).toContain('stable')
-    expect(row2.text()).not.toContain('release-b')
+  it('renders only substantive versions as primary rows and groups runs as an annotation (FAR-1817)', async () => {
+    const wrapper = await flushMount(modernHistory())
+    // Primary rows: the initial anchor (v1) and the edit (v4) only.
+    expect(rowFor(wrapper, 'snap-1').exists()).toBe(true)
+    expect(rowFor(wrapper, 'snap-4').exists()).toBe(true)
+    expect(rowFor(wrapper, 'snap-2').exists()).toBe(false)
+    expect(rowFor(wrapper, 'snap-3').exists()).toBe(false)
+    expect(rowFor(wrapper, 'snap-5').exists()).toBe(false)
+    // Run counts annotate the version they executed.
+    expect(toggleFor(wrapper, 'snap-1').text()).toBe('ran 2x')
+    expect(toggleFor(wrapper, 'snap-4').text()).toBe('ran 1x')
+    // The kind badge reads the created_kind, not version_kind.
+    expect(rowFor(wrapper, 'snap-1').text()).toContain('initial')
+    expect(rowFor(wrapper, 'snap-4').text()).toContain('edit')
+    // The version with no runs has no annotation toggle.
+    expect(toggleFor(wrapper, 'snap-1').exists()).toBe(true)
+  })
+
+  it('expands and collapses the run annotation on demand (FAR-1817)', async () => {
+    const wrapper = await flushMount(modernHistory())
+    const listId = 'snapshot-timeline-runs-snap-1'
+    expect(wrapper.find(`#${listId}`).exists()).toBe(false)
+    expect(toggleFor(wrapper, 'snap-1').attributes('aria-expanded')).toBe('false')
+    expect(toggleFor(wrapper, 'snap-1').attributes('aria-controls')).toBe(listId)
+
+    await toggleFor(wrapper, 'snap-1').trigger('click')
+    expect(toggleFor(wrapper, 'snap-1').attributes('aria-expanded')).toBe('true')
+    const list = wrapper.find(`#${listId}`)
+    expect(list.exists()).toBe(true)
+    expect(list.find('[data-testid="snapshot-timeline-run-snap-3"]').exists()).toBe(true)
+    expect(list.find('[data-testid="snapshot-timeline-run-snap-2"]').exists()).toBe(true)
+
+    await toggleFor(wrapper, 'snap-1').trigger('click')
+    expect(toggleFor(wrapper, 'snap-1').attributes('aria-expanded')).toBe('false')
+    expect(wrapper.find(`#${listId}`).exists()).toBe(false)
+  })
+
+  it('opens the read-only historic version view when a primary row is clicked (FAR-1812/FAR-1817)', async () => {
+    const wrapper = await flushMount(modernHistory())
+    await rowFor(wrapper, 'snap-4').trigger('click')
+    expect(wrapper.emitted('view')).toEqual([['snap-4']])
+  })
+
+  it('opens the historic view for an individual run snapshot from an expanded annotation (FAR-1817)', async () => {
+    const wrapper = await flushMount(modernHistory())
+    await toggleFor(wrapper, 'snap-1').trigger('click')
+    await wrapper.find('[data-testid="snapshot-timeline-run-snap-3"]').trigger('click')
+    expect(wrapper.emitted('view')).toEqual([['snap-3']])
+  })
+
+  it('renders a legacy pipeline under a single initial anchor with no synthetic versions (FAR-1817)', async () => {
+    // Every snapshot is a run snapshot: no edit boundary exists to reconstruct.
+    const legacy = [
+      makeSnapshot({ id: 'snap-3', snapshot_version: 3, created_kind: 'run', version_kind: 'run', tag: null }),
+      makeSnapshot({ id: 'snap-2', snapshot_version: 2, created_kind: 'run', version_kind: 'run', tag: null }),
+      makeSnapshot({ id: 'snap-1', snapshot_version: 1, created_kind: 'run', version_kind: 'run', tag: null }),
+    ]
+    const wrapper = await flushMount(legacy)
+    // Exactly one primary row — the oldest snapshot promoted to the initial anchor.
+    expect(wrapper.findAll('[data-testid^="snapshot-timeline-row-"]')).toHaveLength(1)
+    expect(rowFor(wrapper, 'snap-1').exists()).toBe(true)
+    expect(rowFor(wrapper, 'snap-2').exists()).toBe(false)
+    expect(rowFor(wrapper, 'snap-3').exists()).toBe(false)
+    expect(rowFor(wrapper, 'snap-1').text()).toContain('initial')
+    expect(toggleFor(wrapper, 'snap-1').text()).toBe('ran 2x')
+  })
+
+  it('attaches runs older than every substantive version to the oldest version, never a synthetic initial row (FAR-1817)', async () => {
+    // A modern pipeline whose oldest run predates its first edit boundary must
+    // not grow a fabricated 'initial' row mid-history.
+    const mixed = [
+      makeSnapshot({ id: 'snap-3', snapshot_version: 3, created_kind: 'run', version_kind: 'run', tag: null }),
+      makeSnapshot({ id: 'snap-2', snapshot_version: 2, created_kind: 'edit', version_kind: 'edit', tag: null }),
+      makeSnapshot({ id: 'snap-1', snapshot_version: 1, created_kind: 'run', version_kind: 'run', tag: null }),
+    ]
+    const wrapper = await flushMount(mixed)
+    expect(wrapper.findAll('[data-testid^="snapshot-timeline-row-"]')).toHaveLength(1)
+    expect(rowFor(wrapper, 'snap-2').exists()).toBe(true)
+    expect(rowFor(wrapper, 'snap-2').text()).toContain('edit')
+    expect(toggleFor(wrapper, 'snap-2').text()).toBe('ran 2x')
+  })
+
+  it('does not emit view when the selection radio is used', async () => {
+    const wrapper = await flushMount(modernHistory())
+    await selectVersion(wrapper, 'snap-1')
+    expect(wrapper.emitted('view')).toBeUndefined()
   })
 
   it('shows a dash for snapshots without a date', async () => {
@@ -117,9 +223,9 @@ describe('PipelineSnapshotTimeline', () => {
   })
 
   it('hands the selected version to the host as a restore request (FAR-1816)', async () => {
-    const wrapper = await flushMount([makeSnapshot(), makeSnapshot({ id: 'snap-2', snapshot_version: 2, version_kind: 'run', tag: null })])
+    const wrapper = await flushMount(modernHistory())
     expect(rowFor(wrapper, 'snap-1').classes()).not.toContain('bg-primary')
-    await rowFor(wrapper, 'snap-1').trigger('click')
+    await selectVersion(wrapper, 'snap-1')
     const restoreBtn = wrapper.find('[data-testid="snapshot-timeline-rollback"]')
     expect(restoreBtn.attributes('disabled')).toBeUndefined()
     expect(restoreBtn.text()).toBe('Restore this version')
@@ -128,7 +234,7 @@ describe('PipelineSnapshotTimeline', () => {
     // The timeline no longer POSTs the rollback itself — the host editor owns
     // the shared restore dialog (diff summary + guard-refusal copy).
     expect(apiPost).not.toHaveBeenCalled()
-    expect(wrapper.emitted('restore')).toEqual([['snap-1', 3]])
+    expect(wrapper.emitted('restore')).toEqual([['snap-1', 1]])
   })
 
   it('disables the restore action until a snapshot row is selected', async () => {
@@ -156,12 +262,12 @@ describe('PipelineSnapshotTimeline', () => {
       },
       error: undefined,
     })
-    const wrapper = await flushMount([makeSnapshot(), makeSnapshot({ id: 'snap-2', snapshot_version: 2, version_kind: 'run', tag: null })])
-    await rowFor(wrapper, 'snap-1').trigger('click')
+    const wrapper = await flushMount(twoSubstantive())
+    await selectVersion(wrapper, 'snap-1')
     const diffBtn = wrapper.find('[data-testid="snapshot-timeline-diff"]')
     expect(diffBtn.attributes('disabled')).toBeDefined()
-    // Selecting the second option in the compare dropdown (snap-2).
-    await wrapper.find('[data-testid="mock-select"]').setValue('1')
+    // Selecting the first compare option (snap-2, the newer substantive version).
+    await wrapper.find('[data-testid="mock-select"]').setValue('0')
     expect(diffBtn.attributes('disabled')).toBeUndefined()
     await diffBtn.trigger('click')
     await flushPromises()
@@ -192,9 +298,9 @@ describe('PipelineSnapshotTimeline', () => {
       },
       error: undefined,
     })
-    const wrapper = await flushMount([makeSnapshot(), makeSnapshot({ id: 'snap-2', snapshot_version: 2, version_kind: 'run', tag: null })])
-    await rowFor(wrapper, 'snap-1').trigger('click')
-    await wrapper.find('[data-testid="mock-select"]').setValue('1')
+    const wrapper = await flushMount(twoSubstantive())
+    await selectVersion(wrapper, 'snap-1')
+    await wrapper.find('[data-testid="mock-select"]').setValue('0')
     await wrapper.find('[data-testid="snapshot-timeline-diff"]').trigger('click')
     await flushPromises()
     const result = wrapper.find('[data-testid="snapshot-timeline-diff-result"]')
@@ -204,9 +310,9 @@ describe('PipelineSnapshotTimeline', () => {
 
   it('lists no impacted nodes and no breaking changes for a clean diff', async () => {
     apiPost.mockResolvedValue({ data: { semantic: { impacted_nodes: [], breaking_changes: [] } }, error: undefined })
-    const wrapper = await flushMount([makeSnapshot(), makeSnapshot({ id: 'snap-2', snapshot_version: 2, version_kind: 'run', tag: null })])
-    await rowFor(wrapper, 'snap-1').trigger('click')
-    await wrapper.find('[data-testid="mock-select"]').setValue('1')
+    const wrapper = await flushMount(twoSubstantive())
+    await selectVersion(wrapper, 'snap-1')
+    await wrapper.find('[data-testid="mock-select"]').setValue('0')
     await wrapper.find('[data-testid="snapshot-timeline-diff"]').trigger('click')
     await flushPromises()
     const result = wrapper.find('[data-testid="snapshot-timeline-diff-result"]')
@@ -216,9 +322,9 @@ describe('PipelineSnapshotTimeline', () => {
 
   it('shows an action error when the diff request fails', async () => {
     apiPost.mockResolvedValue({ data: null, error: { detail: 'diff unavailable' } })
-    const wrapper = await flushMount([makeSnapshot(), makeSnapshot({ id: 'snap-2', snapshot_version: 2, version_kind: 'run', tag: null })])
-    await rowFor(wrapper, 'snap-1').trigger('click')
-    await wrapper.find('[data-testid="mock-select"]').setValue('1')
+    const wrapper = await flushMount(twoSubstantive())
+    await selectVersion(wrapper, 'snap-1')
+    await wrapper.find('[data-testid="mock-select"]').setValue('0')
     await wrapper.find('[data-testid="snapshot-timeline-diff"]').trigger('click')
     await flushPromises()
     // Structured errors render via formatApiError (same as the rollback path).
@@ -229,22 +335,6 @@ describe('PipelineSnapshotTimeline', () => {
   it('survives a failed snapshot load by showing the empty state', async () => {
     const wrapper = await flushMount(null, true)
     expect(wrapper.text()).toContain('No snapshots yet')
-  })
-
-  it('emits view with the snapshot id from the per-row View action (FAR-1812)', async () => {
-    const wrapper = await flushMount([
-      makeSnapshot(),
-      makeSnapshot({ id: 'snap-2', snapshot_version: 2, version_kind: 'run', tag: null }),
-    ])
-    const viewBtn = wrapper.find('[data-testid="snapshot-timeline-view-snap-2"]')
-    expect(viewBtn.exists()).toBe(true)
-    expect(viewBtn.attributes('aria-label')).toContain('version 2')
-    await viewBtn.trigger('click')
-    expect(wrapper.emitted('view')).toEqual([['snap-2']])
-    // The row button keeps its own meaning: select for diff/rollback.
-    await rowFor(wrapper, 'snap-2').trigger('click')
-    const rollbackBtn = wrapper.find('[data-testid="snapshot-timeline-rollback"]')
-    expect(rollbackBtn.attributes('disabled')).toBeUndefined()
   })
 
   it('emits close from the close button', async () => {

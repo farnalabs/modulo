@@ -18,51 +18,82 @@
     <template v-else>
       <p v-if="snapshots.length === 0" class="text-sm text-muted-foreground">{{ $t('components.PipelineSnapshotTimeline.no_snapshots_yet') }}</p>
 
-      <div v-else class="mb-3 max-h-56 space-y-1 overflow-y-auto">
-        <!-- FAR-1812: each row pairs the existing select-for-diff/rollback
-             button with a separate "View" action that deep-links the editor
-             to that historical version (?snapshot=<id>). Sibling, never
-             nested: a button inside a button is invalid and unreachable. -->
-        <div
-          v-for="s in snapshots"
-          :key="s.id"
-          class="flex items-stretch gap-1"
-        >
-          <button
-            type="button"
-            :data-testid="`snapshot-timeline-row-${s.id}`"
-            class="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md border px-2 py-1.5 text-left"
-            @click="selectA(s.id)"
-          >
-            <div class="flex min-w-0 items-center gap-2">
-              <span class="text-xs font-medium">v{{ s.snapshot_version }}</span>
-              <span
-                class="rounded px-1.5 py-0.5 text-[10px] font-medium"
-                :class="s.version_kind === 'edit' ? 'bg-primary/10 text-primary' : 'bg-muted/40 text-muted-foreground'"
+      <template v-else>
+        <!-- FAR-1817: PRIMARY rows are SUBSTANTIVE versions only
+             (created_kind initial / edit / rollback). Run snapshots are NOT
+             rows — they annotate the version they executed ("ran Nx") and
+             expand on demand. A row (or an expanded run) click opens the
+             read-only historic version view (FAR-1812) via the host editor's
+             `view` event; the radio selects the version for the diff/restore
+             actions, which stay on this component. -->
+        <div class="mb-3 max-h-56 space-y-2 overflow-y-auto">
+          <div v-for="g in versionGroups" :key="g.key" class="space-y-1">
+            <div class="flex items-stretch gap-1">
+              <input
+                type="radio"
+                class="mt-2 shrink-0"
+                name="snapshot-timeline-select"
+                :value="g.anchor.id"
+                v-model="selectedSnapshotId"
+                :aria-label="$t('components.PipelineSnapshotTimeline.select_version_aria', { version: g.anchor.snapshot_version })"
+                :data-testid="`snapshot-timeline-select-${g.anchor.id}`"
+              />
+              <button
+                type="button"
+                :data-testid="`snapshot-timeline-row-${g.anchor.id}`"
+                :aria-label="$t('components.PipelineSnapshotTimeline.open_version_aria', { version: g.anchor.snapshot_version })"
+                class="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md border px-2 py-1.5 text-left hover:bg-accent"
+                @click="emit('view', g.anchor.id)"
               >
-                {{ s.version_kind === 'edit' ? $t('components.PipelineSnapshotTimeline.edit') : $t('components.PipelineSnapshotTimeline.run') }}
-              </span>
-              <span
-                v-if="s.channel && s.channel !== 'none'"
-                class="rounded bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning-text"
+                <div class="flex min-w-0 items-center gap-2">
+                  <span class="text-xs font-medium">v{{ g.anchor.snapshot_version }}</span>
+                  <span class="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                    {{ kindLabel(g.kind) }}
+                  </span>
+                  <span
+                    v-if="g.anchor.channel && g.anchor.channel !== 'none'"
+                    class="rounded bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning-text"
+                  >
+                    {{ g.anchor.channel }}
+                  </span>
+                  <span class="truncate text-[10px] text-muted-foreground">{{ formatDate(g.anchor.created_at) }}</span>
+                </div>
+                <span class="shrink-0 text-[10px] text-muted-foreground">{{ g.anchor.tag || '' }}</span>
+              </button>
+              <button
+                v-if="g.runs.length > 0"
+                type="button"
+                class="shrink-0 self-center rounded-md border border-input bg-background px-2 py-1 text-[10px] font-medium hover:bg-accent"
+                :aria-expanded="expandedGroups.has(g.key)"
+                :aria-controls="`snapshot-timeline-runs-${g.anchor.id}`"
+                :data-testid="`snapshot-timeline-runs-toggle-${g.anchor.id}`"
+                @click="toggleGroup(g.key)"
               >
-                {{ s.channel }}
-              </span>
-              <span class="truncate text-[10px] text-muted-foreground">{{ formatDate(s.created_at) }}</span>
+                {{ $t('components.PipelineSnapshotTimeline.ran_times', { count: g.runs.length }) }}
+              </button>
             </div>
-            <span class="shrink-0 text-[10px] text-muted-foreground">{{ s.tag || '' }}</span>
-          </button>
-          <button
-            type="button"
-            class="shrink-0 self-center rounded-md border border-input bg-background px-2 py-1 text-[10px] font-medium hover:bg-accent"
-            :aria-label="$t('components.PipelineSnapshotTimeline.view_version_aria', { version: s.snapshot_version })"
-            :data-testid="`snapshot-timeline-view-${s.id}`"
-            @click="emit('view', s.id)"
-          >
-            {{ $t('components.PipelineSnapshotTimeline.view_version') }}
-          </button>
+            <div
+              v-if="g.runs.length > 0 && expandedGroups.has(g.key)"
+              :id="`snapshot-timeline-runs-${g.anchor.id}`"
+              :data-testid="`snapshot-timeline-runs-list-${g.anchor.id}`"
+              class="ml-5 space-y-1"
+            >
+              <button
+                v-for="r in g.runs"
+                :key="r.id"
+                type="button"
+                class="flex w-full items-center justify-between gap-2 rounded-md border border-dashed px-2 py-1 text-left text-[10px] text-muted-foreground hover:bg-accent"
+                :aria-label="$t('components.PipelineSnapshotTimeline.open_version_aria', { version: r.snapshot_version })"
+                :data-testid="`snapshot-timeline-run-${r.id}`"
+                @click="emit('view', r.id)"
+              >
+                <span class="font-medium">v{{ r.snapshot_version }}</span>
+                <span>{{ formatDate(r.created_at) }}</span>
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      </template>
 
       <span class="mb-1 block text-[10px] text-muted-foreground">{{ $t('components.PipelineSnapshotTimeline.compare_to') }}</span>
       <div class="mb-3 flex items-center gap-2">
@@ -133,6 +164,7 @@
 
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import Select from '../shared/AppSelect.vue'
 import Button from 'primevue/button'
 import LoadingSpinner from '../shared/LoadingSpinner.vue'
@@ -146,18 +178,37 @@ interface TimelineSnapshot {
   tag: string | null
   created_at: string | null
   version_kind: string
+  created_kind: string
   channel: string
   draft: boolean
 }
 
+/** FAR-1817: a version the history timeline shows as its own row. */
+interface VersionGroup {
+  /** Stable key for the expand/collapse state (unique per anchor). */
+  key: string
+  /** The snapshot the row renders and deep-links to. */
+  anchor: TimelineSnapshot
+  /** Badge kind: the created_kind, or 'initial' for the legacy anchor. */
+  kind: string
+  /** Run snapshots that executed this version, newest first. */
+  runs: TimelineSnapshot[]
+}
+
+// FAR-1817: substantive = the versions a user recognises as pipeline history.
+// 'run' snapshots are frozen at run-start and belong to the version they
+// executed, never as rows of their own.
+const SUBSTANTIVE_KINDS = new Set(['initial', 'edit', 'rollback'])
+
 const props = defineProps<{ pipelineId: string }>()
 // FAR-1812: `view` asks the host editor to open this snapshot as a read-only
-// historical version (deep link) — selection for diff/rollback stays on the
-// row itself.
+// historical version (deep link).
 // FAR-1816: `restore` hands the selected version to the host editor's shared
 // restore dialog (the version number travels with the id so the dialog can
 // name it even when the row is outside the host's snapshot page).
 const emit = defineEmits<{ close: []; view: [id: string]; restore: [id: string, version: number] }>()
+
+const { t } = useI18n()
 
 const loading = ref(true)
 const snapshots = ref<TimelineSnapshot[]>([])
@@ -165,9 +216,65 @@ const compareB = ref<string | null>(null)
 const diffResult = ref<Record<string, any> | null>(null)
 const selectedSnapshotId = ref<string | null>(null)
 const actionError = ref<string | null>(null)
+const expandedGroups = ref<Set<string>>(new Set())
+
+function isSubstantive(s: TimelineSnapshot): boolean {
+  // Legacy snapshots serialise created_kind as 'run' (the server default), so
+  // an absent/unknown kind is treated as a run snapshot and grouped under the
+  // initial anchor rather than surfaced as a synthetic version.
+  return SUBSTANTIVE_KINDS.has(s.created_kind)
+}
+
+/**
+ * FAR-1817 grouping. Snapshots arrive version-DESCENDING.
+ *
+ * Every substantive snapshot becomes a primary row. A run snapshot belongs to
+ * the substantive version it executed — the newest substantive version at or
+ * below the run's own version number, since versions are allocated
+ * monotonically and a run freezes the live graph at run-start (the state the
+ * newest prior substantive version recorded).
+ *
+ * A pipeline with NO substantive version at all (its history predates edit
+ * boundaries — FAR-1810) renders under a single 'initial' anchor taken from
+ * its oldest run; no synthetic edit versions are invented. Runs older than
+ * every substantive version are attached to the oldest substantive row for the
+ * same reason: fabricating an 'initial' boundary mid-history would be a lie.
+ */
+const versionGroups = computed<VersionGroup[]>(() => {
+  const substantive = snapshots.value.filter(isSubstantive)
+  const runs = snapshots.value.filter((s) => !isSubstantive(s))
+  if (substantive.length === 0) {
+    if (runs.length === 0) return []
+    const oldest = runs[runs.length - 1]
+    return [{
+      key: `initial:${oldest.id}`,
+      anchor: oldest,
+      kind: 'initial',
+      runs: runs.filter((r) => r.id !== oldest.id),
+    }]
+  }
+  const groups: VersionGroup[] = substantive.map((s) => ({
+    key: s.id,
+    anchor: s,
+    kind: s.created_kind,
+    runs: [],
+  }))
+  // Groups are version-DESC, so the first anchor at or below a run is the
+  // newest substantive version it executed; anything below every anchor lands
+  // on the oldest substantive row.
+  const oldestGroup = groups[groups.length - 1]
+  for (const run of runs) {
+    const group = groups.find((g) => g.anchor.snapshot_version <= run.snapshot_version) ?? oldestGroup
+    group.runs.push(run)
+  }
+  return groups
+})
 
 const compareOptions = computed(() =>
-  snapshots.value.map(s => ({ value: s.id, label: `v${s.snapshot_version} — ${s.version_kind}${s.tag ? ` — ${s.tag}` : ''}` })),
+  versionGroups.value.map(g => ({
+    value: g.anchor.id,
+    label: `v${g.anchor.snapshot_version} — ${kindLabel(g.kind)}${g.anchor.tag ? ` — ${g.anchor.tag}` : ''}`,
+  })),
 )
 
 const canDiff = computed(() => compareB.value != null && selectedSnapshotId.value != null && compareB.value !== selectedSnapshotId.value)
@@ -178,6 +285,13 @@ const impactedLabel = computed(() => {
   return ids.map((id: unknown) => String(id).slice(0, 8)).join(', ')
 })
 
+function kindLabel(kind: string): string {
+  if (kind === 'initial') return t('components.PipelineSnapshotTimeline.initial')
+  if (kind === 'rollback') return t('components.PipelineSnapshotTimeline.rollback')
+  if (kind === 'edit') return t('components.PipelineSnapshotTimeline.edit')
+  return t('components.PipelineSnapshotTimeline.run')
+}
+
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return '—'
   try {
@@ -187,12 +301,17 @@ function formatDate(dateStr: string | null): string {
   }
 }
 
-const selectedSnapshot = computed(() =>
-  snapshots.value.find(s => s.id === selectedSnapshotId.value) ?? null,
-)
+const selectedSnapshot = computed(() => {
+  const group = versionGroups.value.find(g => g.anchor.id === selectedSnapshotId.value)
+  return group?.anchor ?? null
+})
 
-function selectA(id: string): void {
-  selectedSnapshotId.value = id
+/** FAR-1817: expand/collapse the run annotation for one version. */
+function toggleGroup(key: string): void {
+  const next = new Set(expandedGroups.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  expandedGroups.value = next
 }
 
 /** FAR-1816: hand the selected version to the host's shared restore dialog. */
@@ -205,10 +324,19 @@ function requestRestore(): void {
 async function loadSnapshots(): Promise<void> {
   loading.value = true
   try {
+    // FAR-1817: the grouping annotates each substantive version with the run
+    // snapshots that executed it, so load the widest window the endpoint
+    // allows (page_size caps at 100) rather than the 20 that sufficed for a
+    // flat list.
     const { data } = await api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
-      params: { path: { pipeline_id: props.pipelineId } },
+      params: { path: { pipeline_id: props.pipelineId }, query: { page_size: 100 } },
     })
     snapshots.value = ((data as unknown as { items?: TimelineSnapshot[] })?.items ?? []) as TimelineSnapshot[]
+    // A version selected for diff/restore may have dropped out of the reloaded
+    // page (or been removed); never leave the actions acting on a stale id.
+    if (!versionGroups.value.some(g => g.anchor.id === selectedSnapshotId.value)) {
+      selectedSnapshotId.value = null
+    }
   } catch (e: unknown) {
     snapshots.value = []
   } finally {

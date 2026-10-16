@@ -667,7 +667,9 @@ describe('PipelineEditorView — historic version view (FAR-1812)', () => {
 
     await wrapper.find('[data-testid="pipeline-editor-version-timeline"]').trigger('click')
     await flushPromises()
-    await wrapper.find('[data-testid="snapshot-timeline-row-snap-4"]').trigger('click')
+    // FAR-1817: a primary row click opens the historic view; selecting a version
+    // for the restore dialog is the per-version radio.
+    await wrapper.find('[data-testid="snapshot-timeline-select-snap-4"]').setValue(true)
     await wrapper.find('[data-testid="snapshot-timeline-rollback"]').trigger('click')
     await flushPromises()
 
