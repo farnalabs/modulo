@@ -43,8 +43,6 @@ router = APIRouter(
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
 
-_EXPECTED_FIELDS = {"event_id", "event_type", "recorded_at", "payload"}
-
 
 class MetricsEventItem(BaseModel):
     event_id: str = Field(..., min_length=1, max_length=128)
