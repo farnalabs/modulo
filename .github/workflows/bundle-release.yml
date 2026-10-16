@@ -243,6 +243,10 @@ jobs:
         run: |
           set -euo pipefail
           cd "build/${BUNDLE_ROOT}"
+          # The output file is excluded from the find set (! -name SHA256SUMS),
+          # so it is never read and written by the same pipeline; shellcheck
+          # cannot see that exclusion.
+          # shellcheck disable=SC2094
           find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS
           wc -l SHA256SUMS
 

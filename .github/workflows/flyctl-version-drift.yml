@@ -133,9 +133,11 @@ jobs:
             echo "| ${PIN} | ${LATEST} | ${STALE} |"
           } >> "$SUMMARY"
 
-          echo "stale=${STALE}" >> "$GITHUB_OUTPUT"
-          echo "pin=${PIN}" >> "$GITHUB_OUTPUT"
-          echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
+          {
+            echo "stale=${STALE}"
+            echo "pin=${PIN}"
+            echo "latest=${LATEST}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create or update the drift issue
         if: steps.compare.outputs.stale == 'true'
@@ -195,7 +197,7 @@ jobs:
 
           **Release:** https://github.com/superfly/flyctl/releases/tag/${LATEST}
 
-          **Do not retitle this issue** - it is found by its `[flyctl-drift]` title prefix.
+          **Do not retitle this issue** - it is found by its \`[flyctl-drift]\` title prefix.
 
           ---
           Auto-raised by the "Flyctl version drift check" workflow (weekly, Mondays 06:00 UTC). This issue is idempotent: it closes itself automatically once the pin catches up (or is bumped).

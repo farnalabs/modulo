@@ -225,6 +225,9 @@ jobs:
             exit 0
           fi
           rc=0
+          # $PATHS is a space-separated path list: git diff needs each path as
+          # its own argument, so word-splitting is intended here.
+          # shellcheck disable=SC2086
           CHANGED="$(git diff --name-only "$BASE" HEAD -- $PATHS)" || rc=$?
           CHART="$(git diff --name-only "$BASE" HEAD -- $CHART_PATHS)" || rc=$?
           if [ "$rc" -ne 0 ]; then

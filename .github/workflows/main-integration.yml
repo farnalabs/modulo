@@ -76,7 +76,7 @@ jobs:
             -e POSTGRES_DB=modulo_test \
             -p 5433:5432 \
             postgres:16-alpine
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             docker exec modulo-ci-pg pg_isready -U modulo_test 2>/dev/null && { echo "Postgres ready"; break; }
             sleep 2
           done
@@ -90,7 +90,7 @@ jobs:
         run: |
           docker rm -f modulo-ci-redis 2>/dev/null || true
           docker run -d --name modulo-ci-redis -p 6379:6379 redis:7-alpine
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             docker exec modulo-ci-redis redis-cli ping 2>/dev/null && { echo "Redis ready"; break; }
             sleep 2
           done
