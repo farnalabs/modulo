@@ -1187,7 +1187,7 @@ describe('PipelineEditorView — FAR-1812 defensive arms', () => {
     await nextTick()
     await vm.confirmRestore()
 
-    expect(vm.restoreError).toBeTruthy()
+    expect(vm.restoreError).toBe('Failed to restore this version: rollback-refused')
     expect(vm.showRestoreConfirm).toBe(true)
     expect(document.body.textContent).toContain('rollback-refused')
     wrapper.unmount()
@@ -1202,7 +1202,7 @@ describe('PipelineEditorView — FAR-1812 defensive arms', () => {
     await nextTick()
     await vm.confirmRestore()
 
-    expect(vm.restoreError).toBeTruthy()
+    expect(vm.restoreError).toBe('Failed to restore this version: socket down')
     wrapper.unmount()
   })
 

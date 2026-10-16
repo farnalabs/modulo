@@ -4042,7 +4042,9 @@ async function confirmRestore(): Promise<void> {
       }),
     )
     if (error) {
-      restoreError.value = formatApiError(error)
+      restoreError.value = t('views.PipelineEditorView.historic_restore_failed', {
+        error: formatApiError(error),
+      })
       return
     }
     showRestoreConfirm.value = false
@@ -4052,7 +4054,9 @@ async function confirmRestore(): Promise<void> {
     await loadCatalog()
     viewLatest()
   } catch (e: unknown) {
-    restoreError.value = formatApiError(e)
+    restoreError.value = t('views.PipelineEditorView.historic_restore_failed', {
+      error: formatApiError(e),
+    })
   } finally {
     restoreLoading.value = false
   }
