@@ -2206,7 +2206,7 @@ def test_convert_to_agent_happy_path_returns_graph() -> None:
 
 
 def test_convert_to_agent_surfaces_advisory_validation_issues() -> None:
-    """FAR-1277: advisory issues come back in ``validation_issues``, like PATCH /graph.
+    """FAR-1277: advisory issues come back in ``validation_issues``, like PUT /graph.
 
     ``_save_locked_graph`` logs them AND returns them; the endpoint must pass
     them through to the response instead of dropping them. Blocking codes still

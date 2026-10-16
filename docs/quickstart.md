@@ -126,7 +126,7 @@ curl -X POST http://localhost:8000/api/v1/model-backends \
 1. Go to **Pipelines** (`/pipelines`) and click **New Pipeline**. This takes you to the **Library** (`/library`). Pick a template and click **Create Pipeline**; the wizard creates the pipeline in your workspace.
 2. Open it in the editor (`/pipelines/:id/editor`). Click **Add Node** to drop a node onto the canvas, then select it to open the **Node Properties** panel. A node runs as an **Agent** bound to a model backend with input/output schemas; bind it to an agent via the agent picker (agents and connectors are defined through the API: `POST /api/v1/agents`, `POST /api/v1/connectors`).
 3. Add a second node the same way, then connect the two by dragging between the nodes' ports. To add a human-in-the-loop gate, select the edge between them and enable the **HITL Gate** section with a label (e.g. "Review before deploy").
-4. Click **Save** to persist the graph (`PATCH /api/v1/pipelines/{pipeline_id}/graph`).
+4. Click **Save** to persist the graph (`PUT /api/v1/pipelines/{pipeline_id}/graph`).
 
 **4. Trigger a run**
 

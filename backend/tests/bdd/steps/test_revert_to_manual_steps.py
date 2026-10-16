@@ -42,7 +42,7 @@ def set_node_back_to_manual(node_id: str, node_type: str, ctx, client, request):
             return_value={"nodes": [{"id": node_id, "node_type": node_type}]},
         ),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{ctx['pipeline'].id}/graph",
             json={
                 "nodes": [{"id": node_id, "node_type": node_type}],

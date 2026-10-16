@@ -116,7 +116,7 @@ describe('PipelineEditorView — branch coverage sweep', () => {
     const vm = wrapper.vm as any
     vm.rawNodes = [{ id: 'n1', node_type: 'agent', label: 'A', description: '', position: { x: 0, y: 0 } }]
 
-    ;(api.PATCH as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('save_failed'))
+    ;(api.PUT as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('save_failed'))
     await vm.saveGraph()
     await flushPromises()
     expect(vm.saveGraphError).toContain('save_failed')
@@ -140,12 +140,12 @@ describe('PipelineEditorView — branch coverage sweep', () => {
     vm.edgeForm.description = 'Too short'
     await nextTick()
 
-    ;(api.PATCH as ReturnType<typeof vi.fn>).mockClear()
+    ;(api.PUT as ReturnType<typeof vi.fn>).mockClear()
     await vm.saveEdgeConfig()
     await flushPromises()
     expect(vm.edgeSaveError).toBeTruthy()
     expect(vm.savingEdge).toBe(false)
-    expect(vi.mocked(api.PATCH).mock.calls.length).toBe(0)
+    expect(vi.mocked(api.PUT).mock.calls.length).toBe(0)
     wrapper.unmount()
   })
 
@@ -163,7 +163,7 @@ describe('PipelineEditorView — branch coverage sweep', () => {
     vm.populateEdgeForm(vm.rawEdges[0])
     vm.edgeForm.hitl_enabled = false
 
-    ;(api.PATCH as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('edge_save_failed'))
+    ;(api.PUT as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('edge_save_failed'))
     await vm.saveEdgeConfig()
     await flushPromises()
     expect(vm.edgeSaveError).toContain('edge_save_failed')
@@ -203,7 +203,7 @@ describe('PipelineEditorView — branch coverage sweep', () => {
     vm.runPrompt = 'test'
     vm.confirmEmptyRun = true
 
-    ;(api.PATCH as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('graph_save_fail'))
+    ;(api.PUT as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('graph_save_fail'))
     await vm.triggerRun()
     await flushPromises()
     expect(vm.runError).toBeTruthy()
@@ -227,7 +227,7 @@ describe('PipelineEditorView — branch coverage sweep', () => {
     let patchCount = 0
     ;(api.PATCH as ReturnType<typeof vi.fn>).mockImplementation(() => {
       patchCount++
-      if (patchCount === 1) return Promise.resolve({ data: {}, error: undefined }) // saveGraph
+      if (patchCount === 1) return Promise.resolve({ data: {}, error: undefined })
       return Promise.resolve({ data: {}, error: undefined })
     })
     ;(api.POST as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('run_api_fail'))

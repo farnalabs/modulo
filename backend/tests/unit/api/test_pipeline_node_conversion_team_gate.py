@@ -2,7 +2,7 @@
 
 PARITY + defence-in-depth: before this change NEITHER layer of the two-layer
 team gate sat on the two node-conversion endpoints, while both layers sat on
-their siblings ``replace_pipeline_graph_endpoint`` (PATCH /graph) and
+their siblings ``replace_pipeline_graph_endpoint`` (PUT /graph) and
 ``update_pipeline_endpoint`` (PATCH /{id}):
 
 * no ``require_team_membership_or_admin(resolve_pipeline_team_scope)``

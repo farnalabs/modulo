@@ -768,7 +768,7 @@ def validate_agent_git_content_values(
 
     Shared, non-HTTP validation called by every Agent write path: the REST
     save paths (``routes/agents.py`` -> HTTP 422), the MCP ``create_agent``
-    tool (-> tool error dict), the graph-PATCH Agent-command sync in
+    tool (-> tool error dict), the graph-PUT Agent-command sync in
     ``routes/pipelines.py`` (``_sync_agent_row_commands``, which validates
     each incoming ``agent_commands`` list before writing the row — surfaced
     as HTTP 422 by the graph save/patch/update endpoints), and prompt

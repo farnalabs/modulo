@@ -44,7 +44,7 @@ Runs against the migrated testcontainer with the real auth stack:
 
 FAR-1515 CRITICAL 1 adds the WRITE-side counterpart on the same fixtures: a
 NON-ADMIN Team-A member binding Team-B's team-private connector through
-``PATCH /{id}/graph`` gets 409 ``connector_team_mismatch`` — proved against
+``PUT /{id}/graph`` gets 409 ``connector_team_mismatch`` — proved against
 REAL RLS with an unmocked lookup, so it fails (some other status, and never
 the connector's name in the detail) without the team-blind candidate read.
 """
@@ -744,7 +744,7 @@ async def test_restore_member_succeeds_on_a_deleted_row(
 # ``rls_team_isolation`` (migration 0124) hides Team-B's team-private
 # connector from a Team-A-only member, so the connector-team gate's candidate
 # SELECT used to return NOTHING for it: the mismatch loop skipped the row
-# silently and PATCH /graph accepted a binding whose every run would use
+# silently and PUT /graph accepted a binding whose every run would use
 # Team-B's credentials. The candidate rows are now read team-blind but
 # org-scoped, so the predicate SEES the hidden row - and the detail names the
 # connector, which only a successful read can do.
@@ -825,7 +825,7 @@ async def test_team_a_member_binding_team_b_connector_is_rejected_409(
         "connector_binding": {"type": "github", "instance_id": str(connector_id)},
     }
     try:
-        resp = await integration_client.patch(
+        resp = await integration_client.put(
             f"/api/v1/pipelines/{pipeline_id}/graph",
             json={"nodes": [node], "edges": []},
             headers=_auth_headers(test_org, member, role="operator"),

@@ -2946,7 +2946,7 @@ async function saveEdgeConfig() {
   })
 
   try {
-    await withTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}/graph', {
+    await withTimeout((signal) => api.PUT('/api/v1/pipelines/{pipeline_id}/graph', {
       params: { path: { pipeline_id: pipelineId } },
       body: {
         nodes: rawNodes.value.map(buildNodePayload),
@@ -3655,7 +3655,7 @@ async function saveGraph() {
         ? { ...selectedNodeOverrides.value }
         : null
     }
-    await withTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}/graph', {
+    await withTimeout((signal) => api.PUT('/api/v1/pipelines/{pipeline_id}/graph', {
       params: { path: { pipeline_id: pipelineId } },
       body: {
         nodes: rawNodes.value.map(buildNodePayload),

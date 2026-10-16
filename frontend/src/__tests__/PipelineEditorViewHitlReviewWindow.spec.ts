@@ -106,7 +106,7 @@ function windowPatchBodies(): unknown[] {
 
 function graphPatchBodies(): unknown[] {
   return vi
-    .mocked(api.PATCH)
+    .mocked(api.PUT)
     .mock.calls
     .filter((c) => c[0] === '/api/v1/pipelines/{pipeline_id}/graph')
     .map((c) => (c[1] as { body?: Record<string, unknown> }).body)

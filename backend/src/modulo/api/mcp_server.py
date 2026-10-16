@@ -3900,7 +3900,7 @@ async def _replace_pipeline_graph_txn(
         extract_connector_bindings,
         find_connector_team_mismatches,
     )
-    from modulo.db.crud.pipeline import get_pipeline, replace_pipeline_graph
+    from modulo.db.crud.pipeline import GraphWriteRecording, get_pipeline, replace_pipeline_graph
     from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 
     async with _session(org_id) as s:
@@ -3983,7 +3983,7 @@ async def _replace_pipeline_graph_txn(
             is_guardrail_admin=is_guardrail_admin,
             # FAR-1810: an MCP graph update is an explicit save — it records an
             # immutable edit snapshot like the REST graph-write endpoints.
-            record_edit_snapshot=True,
+            recording=GraphWriteRecording(record_snapshot=True),
         )
         if result is None:
             return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}

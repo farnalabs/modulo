@@ -23,7 +23,7 @@ save-history contract instead of the old "the edit path attempts no save"
 premise, while still nailing H2 end to end.
 
 The module exercises the real HTTP routes
-(``PATCH /api/v1/pipelines/{id}/graph``, ``POST /api/v1/runs``) and the real
+(``PUT /api/v1/pipelines/{id}/graph``, ``POST /api/v1/runs``) and the real
 scheduler dispatch (``fire_due_triggers`` -> ``fire_cron_trigger``) against a
 real Postgres + Redis (testcontainers):
 
@@ -371,12 +371,12 @@ async def _patch_graph(
     label: str,
     output_schema_id: uuid.UUID,
 ) -> None:
-    resp = await client.patch(
+    resp = await client.put(
         f"/api/v1/pipelines/{pipeline_id}/graph",
         json=_graph_payload(label, output_schema_id),
         headers=_auth_headers(org_id, account_id),
     )
-    assert resp.status_code == 200, f"PATCH /graph ({label}) failed: {resp.status_code} {resp.text}"
+    assert resp.status_code == 200, f"PUT /graph ({label}) failed: {resp.status_code} {resp.text}"
 
 
 # ---------------------------------------------------------------------------
