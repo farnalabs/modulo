@@ -3337,6 +3337,21 @@ class TestPerProviderSamlRouteErrorPaths:
         assert resp.status_code == 303
         assert resp.headers["location"].endswith("/login?sso_error=provider_unavailable")
 
+    def test_acs_resolution_unexpected_error_redirects_provider_unavailable(self, client: TestClient) -> None:
+        """FAR-1791: an unexpected fault during provider RESOLUTION 303s, not 500 JSON.
+
+        The resolution block's catch-all makes the browser-facing contract
+        uniform with ``_run_sso_callback_process`` (which maps an unexpected
+        error to ``provider_unavailable``); before the fix a non-HTTP, non-DB
+        fault escaped as the ``handle_db_errors`` JSON 500.
+        """
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
+        with patch("modulo.api.routes.sso._read_system_saml_provider_by_slug", new_callable=AsyncMock) as mock_read:
+            mock_read.side_effect = RuntimeError("boom")
+            resp = self._post_acs(client)
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=provider_unavailable")
+
     def test_login_value_error_returns_400(self, client: TestClient) -> None:
         _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
         with (

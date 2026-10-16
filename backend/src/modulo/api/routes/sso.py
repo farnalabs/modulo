@@ -597,6 +597,14 @@ async def saml_acs_provider(
         raise_session_contract_error(exc, "sso.saml_acs_provider_resolution")
         _log.warning("SAML ACS provider resolution DB error: %s", exc, exc_info=True)
         raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
+    except Exception as exc:
+        # FAR-1791: an UNEXPECTED (non-HTTP, non-DB) fault resolving the provider
+        # must reach the browser as the same login-page 303 the process-response
+        # arms give, never ``handle_db_errors``' raw JSON 500 — the resolution
+        # path's contract is uniform with ``_run_sso_callback_process``'s
+        # catch-all. Logged (not swallowed), so the real cause stays visible.
+        _log.exception("sso.saml_acs_provider_resolution.unexpected_error")
+        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
     # FAR-1516: the provider names its org — record the ACS attempt there (an
     # unknown slug redirects above and keeps the sentinel).
     bind_audit_org(request, provider.organisation_id)
