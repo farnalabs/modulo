@@ -51,6 +51,33 @@ def _in_memory_settings_patch(org: MagicMock):
     return _apply
 
 
+def _cost_state(*, max_run_cost_cents=None, spend_ceiling_cents=None, org_cumulative_spend_cents=0) -> MagicMock:
+    """A cost-state row mock (FAR-1833)."""
+    state = MagicMock()
+    state.max_run_cost_cents = max_run_cost_cents
+    state.spend_ceiling_cents = spend_ceiling_cents
+    state.org_cumulative_spend_cents = org_cumulative_spend_cents
+    return state
+
+
+def _cost_state_store_cm(store: dict[str, Any]):
+    """Patch the cost-state CRUD (FAR-1833) with an in-memory ``store``."""
+    from contextlib import ExitStack
+
+    stack = ExitStack()
+
+    async def _get(session, org_id):
+        return _cost_state(**store)
+
+    async def _upsert(session, org_id, *, provided):
+        store.update(provided)
+
+    stack.enter_context(patch("modulo.api.routes.costs.get_org_cost_state", new=AsyncMock(side_effect=_get)))
+    stack.enter_context(patch("modulo.api.routes.costs.upsert_org_cost_state", new=AsyncMock(side_effect=_upsert)))
+    stack.enter_context(patch("modulo.api.routes.costs.lock_org_cost_state", new=AsyncMock()))
+    return stack
+
+
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
     begin_cm = AsyncMock()
@@ -1113,12 +1140,11 @@ class TestSpendCeilingEndpoints:
     def test_get_returns_ceilings_and_remaining(self, client: TestClient) -> None:
         org = MagicMock()
         org.id = _ORG_ID
-        org.max_run_cost_cents = 1234  # $12.34
-        org.spend_ceiling_cents = 10000  # $100.00
-        org.org_cumulative_spend_cents = 4000  # $40.00 consumed
+        state = _cost_state(max_run_cost_cents=1234, spend_ceiling_cents=10000, org_cumulative_spend_cents=4000)
 
         with (
             patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.get_org_cost_state", new=AsyncMock(return_value=state)),
             patch("modulo.api.routes.costs.set_rls_org"),
         ):
             resp = client.get("/api/v1/admin/costs/ceiling")
@@ -1133,12 +1159,11 @@ class TestSpendCeilingEndpoints:
     def test_get_null_ceilings_serialise_as_none(self, client: TestClient) -> None:
         org = MagicMock()
         org.id = _ORG_ID
-        org.max_run_cost_cents = None
-        org.spend_ceiling_cents = None
-        org.org_cumulative_spend_cents = 0
+        state = _cost_state(max_run_cost_cents=None, spend_ceiling_cents=None, org_cumulative_spend_cents=0)
 
         with (
             patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.get_org_cost_state", new=AsyncMock(return_value=state)),
             patch("modulo.api.routes.costs.set_rls_org"),
         ):
             resp = client.get("/api/v1/admin/costs/ceiling")
@@ -1152,13 +1177,16 @@ class TestSpendCeilingEndpoints:
     def test_put_persists_cents(self, client: TestClient) -> None:
         org = MagicMock()
         org.id = _ORG_ID
-        org.max_run_cost_cents = None
-        org.spend_ceiling_cents = None
-        org.org_cumulative_spend_cents = 0
+        store: dict[str, Any] = {
+            "max_run_cost_cents": None,
+            "spend_ceiling_cents": None,
+            "org_cumulative_spend_cents": 0,
+        }
 
         with (
             patch("modulo.api.routes.costs.get_organisation", return_value=org),
             patch("modulo.api.routes.costs.set_rls_org"),
+            _cost_state_store_cm(store),
         ):
             resp = client.put(
                 "/api/v1/admin/costs/ceiling",
@@ -1166,8 +1194,8 @@ class TestSpendCeilingEndpoints:
             )
 
         assert resp.status_code == 200
-        assert org.max_run_cost_cents == 1234
-        assert org.spend_ceiling_cents == 10000
+        assert store["max_run_cost_cents"] == 1234
+        assert store["spend_ceiling_cents"] == 10000
         assert resp.json()["remaining_budget_usd"] == 100.0
 
     def test_put_clears_ceiling_with_explicit_null(self, client: TestClient) -> None:
@@ -1177,15 +1205,16 @@ class TestSpendCeilingEndpoints:
         round-trip. A non-null sibling field must be left untouched (the handler
         uses ``exclude_unset`` so omitted fields are never clobbered).
         """
-        org = MagicMock()
-        org.id = _ORG_ID
-        org.max_run_cost_cents = 1234  # pre-existing per-run ceiling
-        org.spend_ceiling_cents = 10000  # pre-existing org ceiling
-        org.org_cumulative_spend_cents = 0
+        store: dict[str, Any] = {
+            "max_run_cost_cents": 1234,  # pre-existing per-run ceiling
+            "spend_ceiling_cents": 10000,  # pre-existing org ceiling
+            "org_cumulative_spend_cents": 0,
+        }
 
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.get_organisation", return_value=MagicMock(id=_ORG_ID)),
             patch("modulo.api.routes.costs.set_rls_org"),
+            _cost_state_store_cm(store),
         ):
             resp = client.put(
                 "/api/v1/admin/costs/ceiling",
@@ -1194,21 +1223,22 @@ class TestSpendCeilingEndpoints:
 
         assert resp.status_code == 200
         # per-run ceiling cleared to unlimited
-        assert org.max_run_cost_cents is None
+        assert store["max_run_cost_cents"] is None
         # org ceiling preserved (explicit value)
-        assert org.spend_ceiling_cents == 10000
+        assert store["spend_ceiling_cents"] == 10000
 
     def test_put_omitted_field_is_left_unchanged(self, client: TestClient) -> None:
         """A field absent from the body must NOT be reset to unlimited."""
-        org = MagicMock()
-        org.id = _ORG_ID
-        org.max_run_cost_cents = 1234
-        org.spend_ceiling_cents = 10000
-        org.org_cumulative_spend_cents = 0
+        store: dict[str, Any] = {
+            "max_run_cost_cents": 1234,
+            "spend_ceiling_cents": 10000,
+            "org_cumulative_spend_cents": 0,
+        }
 
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.get_organisation", return_value=MagicMock(id=_ORG_ID)),
             patch("modulo.api.routes.costs.set_rls_org"),
+            _cost_state_store_cm(store),
         ):
             resp = client.put(
                 "/api/v1/admin/costs/ceiling",
@@ -1216,5 +1246,5 @@ class TestSpendCeilingEndpoints:
             )
 
         assert resp.status_code == 200
-        assert org.max_run_cost_cents == 1234  # untouched
-        assert org.spend_ceiling_cents == 20000
+        assert store["max_run_cost_cents"] == 1234  # untouched
+        assert store["spend_ceiling_cents"] == 20000
