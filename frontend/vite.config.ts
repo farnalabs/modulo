@@ -2,10 +2,54 @@ import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'vitest/config'
 import { fileURLToPath, URL } from 'node:url'
 import { createRequire } from 'node:module'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import tailwindcss from '@tailwindcss/postcss'
 import autoprefixer from 'autoprefixer'
 
 const require = createRequire(import.meta.url)
+
+// FAR-1858: surface VITE_PRIMEUI_LICENSE from the nearest ancestor .env
+// (gitignored — e.g. the workspace-root .env) into process.env when it is not
+// already set. Vite inlines process-env VITE_* vars into import.meta.env, so
+// this single lift makes the PrimeVue 5 licence available to `pnpm dev`, the
+// Playwright e2e webServer (which runs the dev server), and local builds —
+// without ever committing the key. Production Docker builds still supply the
+// key as a build-arg (process env wins over this fallback); CI and machines
+// without the key keep today's behaviour (PrimeVue shows its unlicensed
+// banner). Only THIS key is lifted — an ancestor .env may hold many other
+// secrets which must never enter the client bundle. Config resolution runs
+// with cwd=frontend/ (the repo's Node-tooling working-directory rule), so the
+// walk starts there and is bounded to avoid pathological filesystems.
+function liftPrimeUiLicenseFromAncestorEnv(): void {
+  if (process.env.VITE_PRIMEUI_LICENSE) return
+  let dir = process.cwd()
+  for (let i = 0; i < 10; i++) {
+    const candidate = join(dir, '.env')
+    if (existsSync(candidate)) {
+      try {
+        const line = readFileSync(candidate, 'utf8')
+          .split(/\r?\n/)
+          .find((l) => l.startsWith('VITE_PRIMEUI_LICENSE='))
+        if (line) {
+          const value = line.slice(line.indexOf('=') + 1).trim()
+          if (value) {
+            process.env.VITE_PRIMEUI_LICENSE = value
+            return
+          }
+        }
+      } catch {
+        // Unreadable candidate — keep walking; a missing licence is already
+        // visible via PrimeVue's banner, so absence here is not an error.
+      }
+    }
+    const parent = join(dir, '..')
+    if (parent === dir) break
+    dir = parent
+  }
+}
+
+liftPrimeUiLicenseFromAncestorEnv()
 
 function yamlPlugin() {
   const yaml = require('js-yaml')
