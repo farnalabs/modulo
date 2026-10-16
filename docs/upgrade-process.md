@@ -4,6 +4,28 @@ How to upgrade an existing Modulo deployment with minimal downtime. Covers versi
 
 ---
 
+## Project Version Convention
+
+The **single source of truth** for the product version is `backend/pyproject.toml` (`[project].version`). It is mirrored into:
+
+| File | Field |
+|------|-------|
+| `frontend/package.json` | `"version"` |
+| `deploy/helm/modulo/Chart.yaml` | `version` and `appVersion` |
+
+All of these files carry a plain numeric `X.Y.Z`. A pre-release suffix (`-rc1`) lives in the **git tag only** (e.g. `v0.4.0-rc1`) and is never written into the files.
+
+Bump with `scripts/bump-version.py` (reads the current version from `backend/pyproject.toml`, writes every mirror):
+
+```bash
+python scripts/bump-version.py patch        # or: minor | major
+python scripts/bump-version.py --set 1.2.3  # explicit version
+```
+
+The script fails loudly (non-zero exit, nothing written) if any mirror has drifted away from the source of truth or is already at the target version - it never reports a change it did not make. After a bump, run `uv lock` in `backend/`: `backend/uv.lock` also records the project version, and the `check-uv-lock` pre-commit hook fails the commit when it is stale.
+
+---
+
 ## Before You Start
 
 1. **Read the release notes** for the target version – check for breaking changes, new required env vars, and deprecated features.

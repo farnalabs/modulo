@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""PR Reviewer trigger-side dedup decision logic (ci.yml notify-pr-review).
+"""PR Reviewer trigger-side dedup decision logic (pr-review.yml).
 
 Reads two JSON files (the GitHub API responses for a PR's reviews and
 commits) and a head SHA, then prints exactly one line: `skip=true` or
 `skip=false`.
 
-The ci.yml notify-pr-review job calls this instead of inline bash because
+The pr-review.yml "Skip when head already reviewed (dedup)" step calls this
+instead of inline bash because
 the decision needs to handle multi-line review bodies and pipe characters
 in body text, which naive `cut -d'|'` parsing mangles (cut is
 line-oriented, so continuation lines bleed into the parsed SHA). Keeping
@@ -96,9 +97,9 @@ def decide(reviews: list[Review], commits: list[Commit], head_sha: str) -> tuple
 
 def load(path: str) -> Any:
     # ``path`` is a CLI argument supplied by the calling workflow
-    # (.github/workflows/ci.yml passes the fixed paths /tmp/pr-reviews.json and
-    # /tmp/pr-commits.json); it is never user- or model-supplied, so this S8707
-    # taint flow is a false positive.
+    # (.github/workflows/pr-review.yml passes the fixed paths
+    # /tmp/pr-reviews.json and /tmp/pr-commits.json); it is never user- or
+    # model-supplied, so this S8707 taint flow is a false positive.
     with Path(path).open(encoding="utf-8") as fh:  # NOSONAR pythonsecurity:S8707
         return json.load(fh)
 

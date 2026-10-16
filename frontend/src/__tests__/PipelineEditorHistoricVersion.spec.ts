@@ -247,7 +247,7 @@ function seedPagedSnapshots(versions: number[], opts: { drop?: number[] } = {}) 
 async function mountEditor(
   query: Record<string, string> = {},
   afterSeed?: () => void,
-  features: Record<string, boolean> = { pipeline_delete: true, pipeline_diff_rollback: true },
+  features: Record<string, boolean> = { pipeline_delete: true },
 ) {
   seedRoute(query)
   seedApi()
@@ -844,13 +844,15 @@ describe('PipelineEditorView — FAR-1812 defensive arms', () => {
     wrapper.unmount()
   })
 
-  it('hides the restore action when the rollback feature is disabled', async () => {
+  it('shows the restore action regardless of plan features (FAR-1819: gate retired)', async () => {
+    // The old pipeline_diff_rollback gate hid this button on Community-tier
+    // plans; the flag is retired, so the action renders even when the plan
+    // feature map has no entry for it.
     const wrapper = await mountEditor({ snapshot: 'snap-4' }, undefined, {
       pipeline_delete: true,
-      pipeline_diff_rollback: false,
     })
     expect(wrapper.find('[data-testid="pipeline-editor-historic-banner"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="pipeline-editor-historic-restore"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="pipeline-editor-historic-restore"]').exists()).toBe(true)
     wrapper.unmount()
   })
 

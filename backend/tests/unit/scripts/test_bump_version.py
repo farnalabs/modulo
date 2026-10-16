@@ -1,4 +1,4 @@
-"""Unit tests for bump-version.py — semver bump across pyproject.toml and package.json."""
+"""Unit tests for bump-version.py — version sync across pyproject.toml, package.json and Chart.yaml."""
 
 from __future__ import annotations
 
@@ -74,6 +74,12 @@ def test_read_version_json(tmp_path):
     assert bv.read_version(path) == "4.5.6"
 
 
+def test_read_version_chart_yaml(tmp_path):
+    path = tmp_path / "Chart.yaml"
+    path.write_text('apiVersion: v2\nname: modulo\nversion: 1.2.3\nappVersion: "1.2.3"\n')
+    assert bv.read_version(path) == "1.2.3"
+
+
 def test_read_version_missing_returns_none(tmp_path):
     path = tmp_path / "pyproject.toml"
     path.write_text('[project]\nname = "modulo"\n')
@@ -110,6 +116,51 @@ def test_write_version_json(root_tmp):
     content = path.read_text()
     assert '"version": "1.3.0"' in content
     assert "1.2.3" not in content
+
+
+def test_write_version_chart_updates_both_fields(root_tmp):
+    """Chart.yaml carries the version twice; both fields must move together."""
+    path = root_tmp / "Chart.yaml"
+    path.write_text('apiVersion: v2\nname: modulo\nversion: 1.2.3\nappVersion: "1.2.3"\n')
+    bv.write_version(path, "1.2.3", "2.0.0")
+    content = path.read_text()
+    assert "version: 2.0.0" in content
+    assert 'appVersion: "2.0.0"' in content
+    assert "1.2.3" not in content
+
+
+def test_write_version_drifted_target_raises(root_tmp):
+    """A file whose expected version pattern is absent must raise, not no-op.
+
+    The pre-FAR-1865 writer ran an unasserted str.replace: with package.json
+    at 9.9.9 the replace found nothing, the file was still "written", and the
+    run printed the version change as if it had happened.
+    """
+    path = root_tmp / "package.json"
+    path.write_text('{"name": "modulo", "version": "9.9.9"}\n')
+    with pytest.raises(ValueError, match="drifted"):
+        bv.write_version(path, "1.2.3", "2.0.0")
+    # prepare raises before any write, so the drifted file is untouched
+    assert '"version": "9.9.9"' in path.read_text()
+
+
+def test_write_version_chart_partial_drift_raises(root_tmp):
+    """A chart whose appVersion drifted must fail before anything is written."""
+    path = root_tmp / "Chart.yaml"
+    path.write_text('apiVersion: v2\nname: modulo\nversion: 1.2.3\nappVersion: "9.9.9"\n')
+    with pytest.raises(ValueError, match="drifted"):
+        bv.write_version(path, "1.2.3", "2.0.0")
+    assert 'appVersion: "9.9.9"' in path.read_text()
+
+
+def test_write_version_already_at_target_raises(root_tmp):
+    """Setting a file to the version it already has is a no-op -> hard error."""
+    path = root_tmp / "pyproject.toml"
+    path.write_text('[project]\nname = "modulo"\nversion = "1.2.3"\n')
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match=r"already at version 1\.2\.3"):
+        bv.write_version(path, "1.2.3", "1.2.3")
+    assert path.read_bytes() == before
 
 
 def test_write_version_preserves_crlf(root_tmp):
@@ -153,49 +204,142 @@ def test_write_version_refuses_outside_root(tmp_path):
 
 
 def _setup_main(root_tmp):
+    """Create all three version targets at 1.2.3 and return them."""
     pyproject = root_tmp / "pyproject.toml"
     pyproject.write_text('[project]\nname = "modulo"\nversion = "1.2.3"\n')
     package = root_tmp / "package.json"
     package.write_text('{"name": "modulo", "version": "1.2.3"}\n')
-    return pyproject, package
+    chart = root_tmp / "Chart.yaml"
+    chart.write_text('apiVersion: v2\nname: modulo\nversion: 1.2.3\nappVersion: "1.2.3"\n')
+    return pyproject, package, chart
 
 
 def test_main_bumps_patch_by_default(monkeypatch, root_tmp, capsys):
-    pyproject, package = _setup_main(root_tmp)
+    pyproject, package, chart = _setup_main(root_tmp)
     monkeypatch.setattr(sys, "argv", ["bump-version.py"])
     with (
         patch.object(bv, "BACKEND_PYPROJECT", pyproject),
         patch.object(bv, "FRONTEND_PACKAGE", package),
+        patch.object(bv, "HELM_CHART", chart),
     ):
         bv.main()
     assert 'version = "1.2.4"' in pyproject.read_text()
     assert '"version": "1.2.4"' in package.read_text()
+    assert 'appVersion: "1.2.4"' in chart.read_text()
     out = capsys.readouterr().out
     assert "Bumping patch version: 1.2.3 -> 1.2.4" in out
 
 
 def test_main_bumps_requested_part(monkeypatch, root_tmp):
-    pyproject, package = _setup_main(root_tmp)
+    pyproject, package, chart = _setup_main(root_tmp)
     monkeypatch.setattr(sys, "argv", ["bump-version.py", "minor"])
     with (
         patch.object(bv, "BACKEND_PYPROJECT", pyproject),
         patch.object(bv, "FRONTEND_PACKAGE", package),
+        patch.object(bv, "HELM_CHART", chart),
     ):
         bv.main()
     assert 'version = "1.3.0"' in pyproject.read_text()
     assert '"version": "1.3.0"' in package.read_text()
+    assert "version: 1.3.0" in chart.read_text()
 
 
 def test_main_bumps_major(monkeypatch, root_tmp):
-    pyproject, package = _setup_main(root_tmp)
+    pyproject, package, chart = _setup_main(root_tmp)
     monkeypatch.setattr(sys, "argv", ["bump-version.py", "major"])
     with (
         patch.object(bv, "BACKEND_PYPROJECT", pyproject),
         patch.object(bv, "FRONTEND_PACKAGE", package),
+        patch.object(bv, "HELM_CHART", chart),
     ):
         bv.main()
     assert 'version = "2.0.0"' in pyproject.read_text()
     assert '"version": "2.0.0"' in package.read_text()
+    assert "version: 2.0.0" in chart.read_text()
+
+
+def test_main_set_writes_explicit_version(monkeypatch, root_tmp, capsys):
+    """--set X.Y.Z writes the exact version to all three targets."""
+    pyproject, package, chart = _setup_main(root_tmp)
+    monkeypatch.setattr(sys, "argv", ["bump-version.py", "--set", "2.5.0"])
+    with (
+        patch.object(bv, "BACKEND_PYPROJECT", pyproject),
+        patch.object(bv, "FRONTEND_PACKAGE", package),
+        patch.object(bv, "HELM_CHART", chart),
+    ):
+        bv.main()
+    assert 'version = "2.5.0"' in pyproject.read_text()
+    assert '"version": "2.5.0"' in package.read_text()
+    chart_content = chart.read_text()
+    assert "version: 2.5.0" in chart_content
+    assert 'appVersion: "2.5.0"' in chart_content
+    out = capsys.readouterr().out
+    assert "Setting version: 1.2.3 -> 2.5.0" in out
+
+
+def test_main_set_rejects_prerelease_suffix(monkeypatch, capsys):
+    """Numeric-only in files: -rc1 suffixes belong to git tags, never manifests."""
+    monkeypatch.setattr(sys, "argv", ["bump-version.py", "--set", "1.2.3-rc1"])
+    with pytest.raises(SystemExit) as exc:
+        bv.main()
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "invalid --set version" in out
+    assert "git tags only" in out
+
+
+def test_main_fails_loud_when_a_target_has_drifted(monkeypatch, root_tmp, capsys):
+    """FAIL-LOUD PROOF (FAR-1865): a drifted mirror aborts the whole run.
+
+    The pre-FAR-1865 writer never asserted that its replace landed: with
+    package.json at 9.9.9 it wrote pyproject at the new version, left
+    package.json untouched, printed both lines as if they had changed, and
+    exited 0. Against that old behaviour this test FAILS (main() returns
+    normally instead of raising SystemExit, and pyproject gets bumped).
+    """
+    pyproject, package, chart = _setup_main(root_tmp)
+    package.write_text('{"name": "modulo", "version": "9.9.9"}\n')
+    monkeypatch.setattr(sys, "argv", ["bump-version.py", "patch"])
+    with (
+        patch.object(bv, "BACKEND_PYPROJECT", pyproject),
+        patch.object(bv, "FRONTEND_PACKAGE", package),
+        patch.object(bv, "HELM_CHART", chart),
+        pytest.raises(SystemExit) as exc,
+    ):
+        bv.main()
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "no files were written" in out
+    assert "package.json" in out
+    assert "drifted from backend/pyproject.toml" in out
+    # Validation runs before any write: the valid targets stayed untouched.
+    assert 'version = "1.2.3"' in pyproject.read_text()
+    assert "version: 1.2.3" in chart.read_text()
+
+
+def test_main_set_fails_when_all_targets_already_at_version(monkeypatch, root_tmp, capsys):
+    """FAIL-LOUD PROOF (FAR-1865): --set to the current value is a hard error.
+
+    Against the old behaviour this test FAILS too: --set was not a recognised
+    mode, so the run aborted on "invalid part" and never emitted the
+    already-at-target diagnosis asserted below.
+    """
+    pyproject, package, chart = _setup_main(root_tmp)
+    before = (pyproject.read_bytes(), package.read_bytes(), chart.read_bytes())
+    monkeypatch.setattr(sys, "argv", ["bump-version.py", "--set", "1.2.3"])
+    with (
+        patch.object(bv, "BACKEND_PYPROJECT", pyproject),
+        patch.object(bv, "FRONTEND_PACKAGE", package),
+        patch.object(bv, "HELM_CHART", chart),
+        pytest.raises(SystemExit) as exc,
+    ):
+        bv.main()
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "no files were written" in out
+    assert "already at version 1.2.3" in out
+    after = (pyproject.read_bytes(), package.read_bytes(), chart.read_bytes())
+    assert after == before
 
 
 def test_main_exits_when_version_unreadable(monkeypatch, tmp_path, capsys):

@@ -1,9 +1,12 @@
-"""Tests for pipeline_diff_rollback feature gating via require_feature('pipeline_diff_rollback').
+"""Snapshot save/diff/rollback are Community-tier — the pipeline_diff_rollback gate is retired (FAR-1819).
 
-The team-tier ``pipeline_diff_rollback`` flag covers "diff-based pipeline
-version comparison and rollback" — the snapshot-diff and snapshot-rollback
-endpoints. Snapshot listing/detail/creation stay community tier; only the
-diff and rollback operations are gated.
+Snapshot save, diff and rollback used to carry a team-tier
+``require_feature("pipeline_diff_rollback")`` gate (Community callers got 402).
+Duncan's 2026-10-15 decision: view, restore and diff are FREE at Community
+tier — gating them was arbitrary, and a Community user could not even open a
+run→version deep link. The gate is gone from the routes, the MCP parity tool,
+and the feature registry; these tests pin the un-gated behaviour by exercising
+the real routes with a Community-tier plan context.
 """
 
 import uuid
@@ -98,9 +101,10 @@ def _save_edit_url(pipeline_id: uuid.UUID = _PIPELINE_ID) -> str:
     return f"/api/v1/pipelines/{pipeline_id}/snapshots"
 
 
-def _assert_feature_402(resp: Any) -> None:
-    assert resp.status_code == 402, f"Expected 402, got {resp.status_code}: {resp.text[:200]}"
-    assert "pipeline_diff_rollback" in resp.text
+def _assert_not_feature_gated(resp: Any) -> None:
+    """A retired gate must not resurface: 402 Payment Required is the
+    status ``require_feature`` used to return on these routes."""
+    assert resp.status_code != 402, f"Feature gate resurfaced (402): {resp.text[:200]}"
 
 
 def _diff_payload() -> dict[str, str]:
@@ -120,18 +124,85 @@ def _empty_diff_response() -> dict[str, Any]:
     }
 
 
-# ── Diff / rollback return 402 when the team feature is disabled ──
+# ── Diff / rollback / save succeed at Community tier (FAR-1819) ──
+#
+# These three tests are the retirement proof: with a Community-tier plan
+# context (every plan feature disabled) the routes reach their handlers and
+# return 200 instead of the 402 the pipeline_diff_rollback gate used to raise.
 
 
-def test_diff_returns_402_when_disabled(community_client: TestClient) -> None:
-    _assert_feature_402(community_client.post(_diff_url(), json=_diff_payload()))
+def test_diff_succeeds_for_community_tier(community_client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("modulo.api.routes.pipelines.diff_snapshots", return_value=_empty_diff_response()),
+    ):
+        resp = community_client.post(_diff_url(), json=_diff_payload())
+    _assert_not_feature_gated(resp)
+    assert resp.status_code == 200, resp.text
 
 
-def test_rollback_returns_402_when_disabled(community_client: TestClient) -> None:
-    _assert_feature_402(community_client.post(_rollback_url()))
+def test_rollback_succeeds_for_community_tier(community_client: TestClient) -> None:
+    new_snapshot = MagicMock()
+    new_snapshot.id = _SNAPSHOT_B
+    new_snapshot.pipeline_id = _PIPELINE_ID
+    new_snapshot.snapshot_version = 2
+    new_snapshot.tag = None
+    new_snapshot.notes = None
+    new_snapshot.created_at = None
+    new_snapshot.account_id = _USER_ID
+    new_snapshot.version_kind = "run"
+    new_snapshot.created_kind = "run"
+    new_snapshot.draft = False
+    new_snapshot.channel = "none"
+    with (
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch(
+            "modulo.api.routes.pipelines.rollback_to_snapshot",
+            return_value=new_snapshot,
+        ),
+    ):
+        resp = community_client.post(_rollback_url())
+    _assert_not_feature_gated(resp)
+    assert resp.status_code == 200, resp.text
 
 
-# ── Diff / rollback succeed when the team feature is enabled ──
+def test_save_edit_succeeds_for_community_tier(community_client: TestClient) -> None:
+    """The live-edit save route used to be the Community user's first wall:
+    a run→version deep link led to a save/diff chain it could not use."""
+    snapshot = MagicMock()
+    snapshot.id = _SNAPSHOT_A
+    snapshot.pipeline_id = _PIPELINE_ID
+    snapshot.snapshot_version = 3
+    snapshot.tag = None
+    snapshot.notes = None
+    snapshot.created_at = None
+    snapshot.account_id = _USER_ID
+    snapshot.version_kind = "edit"
+    snapshot.created_kind = "edit"
+    snapshot.draft = False
+    snapshot.channel = "none"
+
+    with (
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=MagicMock()),
+        patch(
+            "modulo.api.routes.pipelines.create_snapshot_edit",
+            return_value=snapshot,
+        ),
+    ):
+        resp = community_client.post(
+            _save_edit_url(),
+            json={"draft": False, "channel": "none"},
+        )
+    _assert_not_feature_gated(resp)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["version_kind"] == "edit"
+
+
+# ── Diff / rollback also keep succeeding on the team plan ──
 
 
 def test_diff_succeeds_when_enabled(team_client: TestClient) -> None:
@@ -169,7 +240,7 @@ def test_rollback_succeeds_when_enabled(team_client: TestClient) -> None:
     assert resp.status_code == 200, resp.text
 
 
-# ── Community tier keeps the non-gated snapshot surface ──
+# ── The rest of the snapshot surface stays community tier ──
 
 
 def test_save_edit_endpoint_round_trips_edit_body(team_client: TestClient) -> None:
@@ -240,7 +311,7 @@ def test_save_edit_endpoint_rejects_overlong_channel(team_client: TestClient) ->
 
 
 def test_snapshot_list_is_community_tier(community_client: TestClient) -> None:
-    """Snapshot listing stays community tier — only diff/rollback are gated."""
+    """Snapshot listing stays community tier (was already un-gated; kept as a regression guard)."""
     snapshot = MagicMock()
     snapshot.id = _SNAPSHOT_A
     snapshot.pipeline_id = _PIPELINE_ID

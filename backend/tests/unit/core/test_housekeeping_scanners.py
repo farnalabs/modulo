@@ -22,6 +22,7 @@ from modulo.core.housekeeping import (
     NON_DELETABLE_ENTITY_TYPES,
     _scan_degraded_composite_templates,
     _scan_duplicate_triggers,
+    _scan_edit_snapshot_retention,
     _scan_empty_lifecycle_maps,
     _scan_empty_teams,
     _scan_expired_webhook_dedups,
@@ -85,6 +86,7 @@ _TABLE_NAMES = {
     "team_memberships",
     "teams",
     "triggers",
+    "variant_groups",
     "webhook_dedup_hashes",
 }
 
@@ -99,6 +101,11 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
     async with eng.begin() as conn:
         tables = [t for name, t in Base.metadata.tables.items() if name in _TABLE_NAMES]
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+    # PRAGMA foreign_keys is a no-op inside a transaction — issue it on the
+    # bare pooled connection instead (StaticPool → one in-memory connection;
+    # the default is already OFF on this stack, same as
+    # test_edit_snapshot_retention.py's fixture).
+    async with eng.connect() as conn:
         await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
     yield eng
     await eng.dispose()
@@ -122,6 +129,8 @@ def _snapshot(
     version: int = 1,
     environment_profile_id: uuid.UUID | None = None,
     connector_bindings_json: list[dict] | None = None,
+    version_kind: str = "run",
+    created_kind: str = "run",
 ) -> PipelineSnapshot:
     return PipelineSnapshot(
         id=uuid.uuid4(),
@@ -135,6 +144,8 @@ def _snapshot(
         schema_pins_json=[],
         prompt_pins_json=[],
         model_backend_pins_json=[],
+        version_kind=version_kind,
+        created_kind=created_kind,
     )
 
 
@@ -531,6 +542,148 @@ class TestOrphanSnapshots:
 
         assert len(candidates) == 1
         assert "Orphan snapshot" in candidates[0].detail
+
+
+class TestEditSnapshotRetention:
+    """FAR-1815: the edit-snapshot retention sweep's selection.
+
+    Keeps the newest 200 provenance-edit snapshots (``version_kind='edit'`` +
+    ``created_kind='edit'``) per pipeline and surfaces only what is older;
+    run / rollback / initial snapshots and the pipeline's latest snapshot are
+    never selected. Every expectation below is pinned to the literal bound of
+    200 so a policy change cannot silently follow the constant.
+    """
+
+    async def test_flags_only_plain_edit_snapshots_beyond_the_newest_200(
+        self,
+        session: AsyncSession,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        over_limit = Pipeline(id=uuid.uuid4(), organisation_id=_ORG_A, name="over-limit", account_id=_ACCOUNT)
+        under_limit = Pipeline(id=uuid.uuid4(), organisation_id=_ORG_A, name="under-limit", account_id=_ACCOUNT)
+        other_org = Pipeline(id=uuid.uuid4(), organisation_id=_ORG_B, name="other-org", account_id=_ACCOUNT)
+        session.add_all([over_limit, under_limit, other_org])
+
+        by_version: dict[int, uuid.UUID] = {}
+        rows: list[PipelineSnapshot] = []
+
+        # v1: a rollback (version_kind='edit', created_kind='rollback') — the
+        # OLDEST row of the pipeline, so a version_kind-only filter beyond the
+        # retention bound would delete rollback history.
+        rollback = _snapshot(
+            organisation_id=_ORG_A,
+            pipeline_id=over_limit.id,
+            version=1,
+            version_kind="edit",
+            created_kind="rollback",
+        )
+        rows.append(rollback)
+        by_version[1] = rollback.id
+
+        # v2..v207: 206 plain explicit-save snapshots (the FAR-1810 growth path).
+        for version in range(2, 208):
+            snap = _snapshot(
+                organisation_id=_ORG_A,
+                pipeline_id=over_limit.id,
+                version=version,
+                version_kind="edit",
+                created_kind="edit",
+            )
+            rows.append(snap)
+            by_version[version] = snap.id
+
+        # v208: an 'initial' snapshot — also carved out of the deletable pool.
+        initial = _snapshot(
+            organisation_id=_ORG_A,
+            pipeline_id=over_limit.id,
+            version=208,
+            version_kind="edit",
+            created_kind="initial",
+        )
+        # v209: a run-frozen snapshot (version_kind='run').
+        run_snap = _snapshot(
+            organisation_id=_ORG_A,
+            pipeline_id=over_limit.id,
+            version=209,
+            version_kind="run",
+            created_kind="run",
+        )
+        # v210: the pipeline's LATEST snapshot overall (an edit save) — the
+        # "never delete the latest snapshot" invariant must keep it.
+        latest = _snapshot(
+            organisation_id=_ORG_A,
+            pipeline_id=over_limit.id,
+            version=210,
+            version_kind="edit",
+            created_kind="edit",
+        )
+        rows.extend([initial, run_snap, latest])
+        by_version[208] = initial.id
+        by_version[209] = run_snap.id
+        by_version[210] = latest.id
+
+        # Boundary: exactly 200 plain edits on a second org-A pipeline →
+        # nothing sits beyond retention there.
+        for version in range(1, 201):
+            rows.append(
+                _snapshot(
+                    organisation_id=_ORG_A,
+                    pipeline_id=under_limit.id,
+                    version=version,
+                    version_kind="edit",
+                    created_kind="edit",
+                )
+            )
+        # Org isolation: an over-limit pipeline in ANOTHER org must not leak
+        # into this org's scan.
+        for version in range(1, 206):
+            rows.append(
+                _snapshot(
+                    organisation_id=_ORG_B,
+                    pipeline_id=other_org.id,
+                    version=version,
+                    version_kind="edit",
+                    created_kind="edit",
+                )
+            )
+        session.add_all(rows)
+        await session.commit()
+
+        with caplog.at_level(logging.WARNING, logger="modulo.core.housekeeping"):
+            candidates = await _scan_edit_snapshot_retention(session, _ORG_A)
+
+        # Pool for `over_limit` = v210 + v2..v207 = 207 provenance-edit rows;
+        # the newest 200 (v210 down to v9) are kept, so exactly v2..v8 remain.
+        candidate_ids = {c.id for c in candidates}
+        expected_versions = {2, 3, 4, 5, 6, 7, 8}
+        assert candidate_ids == {str(by_version[version]) for version in expected_versions}
+        # run / rollback / initial / latest snapshots are never surfaced.
+        for version in (1, 208, 209, 210):
+            assert str(by_version[version]) not in candidate_ids
+        # The count is reported loudly, not silently swallowed (sibling
+        # pattern: _scan_degraded_composite_templates).
+        assert any("edit_snapshot_retention" in record.getMessage() for record in caplog.records)
+        # The retention bound itself is part of the operator-facing detail.
+        assert "newest 200" in candidates[0].detail
+
+    async def test_returns_no_candidates_when_every_pipeline_is_within_retention(self, session: AsyncSession) -> None:
+        pipeline = Pipeline(id=uuid.uuid4(), organisation_id=_ORG_A, name="within-limit", account_id=_ACCOUNT)
+        session.add(pipeline)
+        session.add_all(
+            _snapshot(
+                organisation_id=_ORG_A,
+                pipeline_id=pipeline.id,
+                version=version,
+                version_kind="edit",
+                created_kind="edit",
+            )
+            for version in range(1, 201)
+        )
+        await session.commit()
+
+        candidates = await _scan_edit_snapshot_retention(session, _ORG_A)
+
+        assert not candidates
 
 
 class TestUntriggeredPipelines:

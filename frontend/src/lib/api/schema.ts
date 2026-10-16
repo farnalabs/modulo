@@ -2636,7 +2636,7 @@ export interface paths {
         put?: never;
         /**
          * Demote Pipeline Autonomy
-         * @description Manually lower a pipeline's earned autonomy level (FAR-1175, ADR 043 §1).
+         * @description Manually lower a pipeline's earned autonomy level (FAR-1175, ADR 062 §1).
          *
          *     Demotion adds human review, so it is always safe: an admin or the pipeline's
          *     owner may lower the earned level at any time. Takes effect at the run's next
@@ -2661,7 +2661,7 @@ export interface paths {
         put?: never;
         /**
          * Promote Pipeline Autonomy
-         * @description Manually raise a pipeline's earned autonomy level (FAR-1175, ADR 043 §1).
+         * @description Manually raise a pipeline's earned autonomy level (FAR-1175, ADR 062 §1).
          *
          *     Promotion is never automatic: an admin or the pipeline's owner approves it,
          *     capped at the pipeline's ``max_autonomy_level`` ceiling. It applies only to

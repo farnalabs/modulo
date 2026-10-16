@@ -30,6 +30,11 @@ test.describe('Admin Notification Delivery', { tag: "@regression" }, () => {
     await page.route('**/api/v1/plan*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ license: { tier: 'team' }, flags: [{ name: 'webhook_notification_log', currently_active: true }] }) })
     })
+    // The caller-scoped plan resolves during login (200 for any authenticated
+    // member), so the guard's `!loaded` fetch is skipped on a plain goto and
+    // the mock above would never be read. Reload for a fresh plan store so the
+    // guard re-reads the mocked plan before navigating.
+    await page.reload()
     await page.goto('/admin/notification-delivery')
     await expect(page.locator('h1')).toContainText('Webhook Notifications')
     await expect(page.getByTestId('admin-notification-log-title')).toBeVisible()
@@ -77,6 +82,9 @@ test.describe('Admin Plugins', { tag: "@regression" }, () => {
     await page.route('**/api/v1/plugins*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([{ PLUGIN_ID: 'p1', display_name: 'Test Plugin', description: 'A test plugin', version: '1.0.0', capabilities: ['connector_type'], health_ok: true, health_detail: 'OK', health_checked_at: '2025-06-01T12:00:00Z' }]) })
     })
+    // Fresh plan store so the guard re-reads the mocked plan (see the
+    // notification-delivery test above for why a reload is required).
+    await page.reload()
     await page.goto('/admin/plugins')
     await expect(page.locator('h1')).toContainText('Plugins')
     await expect(page.getByTestId('admin-plugins-refresh')).toBeVisible()

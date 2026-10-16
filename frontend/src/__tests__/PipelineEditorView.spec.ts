@@ -167,7 +167,7 @@ function mountEditor() {
   setActivePinia(pinia)
   const store = usePlanStore()
   store.currentTier = 'team'
-  store.features = { pipeline_delete: true, pipeline_diff_rollback: true }
+  store.features = { pipeline_delete: true }
   return mount(PipelineEditorView, {
     global: {
       plugins: [pinia, router],
@@ -1021,20 +1021,22 @@ describe('PipelineEditorView — toolbar rendering', () => {
     // archived pipeline shows Unarchive, not Archive
     expect(wrapper.find('[data-testid="pipeline-editor-unarchive"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="pipeline-editor-archive"]').exists()).toBe(false)
-    // plan features enable the Versions + Delete buttons
+    // The Versions button is always available (FAR-1819: tier gate retired);
+    // the Delete button still needs the pipeline_delete feature
     expect(wrapper.find('[data-testid="pipeline-editor-version-timeline"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="pipeline-editor-delete"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
-  it('hides feature-gated toolbar buttons when the plan lacks them', async () => {
+  it('keeps the ungated Versions button when the plan lacks features, still hides Delete', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
     const wrapper = await mountEditorLoaded()
     const store = usePlanStore()
     store.features = {}
     await nextTick()
-    expect(wrapper.find('[data-testid="pipeline-editor-version-timeline"]').exists()).toBe(false)
+    // FAR-1819: the version timeline is no longer plan-feature-gated
+    expect(wrapper.find('[data-testid="pipeline-editor-version-timeline"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="pipeline-editor-delete"]').exists()).toBe(false)
     wrapper.unmount()
   })
@@ -1292,6 +1294,29 @@ describe('PipelineEditorView — run dialog', () => {
     await button.trigger('keydown', { key: ' ', code: 'Space' })
     await nextTick()
     expect(wrapper.find('[data-testid="pipeline-editor-version-timeline"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('toggles the version timeline when the always-available Versions button is clicked (FAR-1819)', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.pipeline = { id: 'test-pipeline-id', name: 'Test Pipeline' }
+    await nextTick()
+
+    // FAR-1819: the Versions button lost its plan-feature gate, so it is always
+    // present and its click handler must actually open and close the timeline.
+    const button = wrapper.find('[data-testid="pipeline-editor-version-timeline"]')
+    expect(button.exists()).toBe(true)
+
+    await button.trigger('click')
+    await nextTick()
+    expect(vm.showVersionTimeline).toBe(true)
+
+    await button.trigger('click')
+    await nextTick()
+    expect(vm.showVersionTimeline).toBe(false)
     wrapper.unmount()
   })
 

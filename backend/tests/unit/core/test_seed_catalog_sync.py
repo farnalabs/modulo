@@ -12,6 +12,8 @@ from modulo.core.feature_flags import _KNOWN_FLAGS
 from modulo.core.seed_data.catalog import FLAGS
 
 # Flags added to the seed catalog in FAR-114 (previously absent from the DB seed).
+# ``pipeline_diff_rollback`` was retired (FAR-1819) and dropped from this set
+# with the registry.
 _SYNCED_FLAGS: set[str] = {
     "error_tracking",
     "runtime_config",
@@ -19,7 +21,6 @@ _SYNCED_FLAGS: set[str] = {
     "email_config",
     "scim",
     "external_secrets",
-    "pipeline_diff_rollback",
     "pipeline_delete",
     "web_vitals_analytics",
 }
@@ -64,7 +65,6 @@ class TestFar114SyncedFlags:
             "email_config",
             "scim",
             "external_secrets",
-            "pipeline_diff_rollback",
             "pipeline_delete",
         }
         community_flags = _SYNCED_FLAGS - team_flags

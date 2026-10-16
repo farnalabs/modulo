@@ -4,13 +4,14 @@ Observation (self-hosted bring-up, FAR-1519 item 3): after a pipeline's graph
 was edited, every subsequent cron-triggered run still carried the FIRST
 snapshot, while a pipeline graphed *before* its first run snapshotted
 correctly. The observing deployment also saw a plan-gated snapshot-save
-endpoint (``402 pipeline_diff_rollback``), offered as a competing explanation.
+endpoint (HTTP 402), offered as a competing explanation — that gate has since
+been retired (FAR-1819).
 
 Two hypotheses were framed at the time:
 
-* **H1 — expected:** the edit produced no new snapshot (the save endpoint is
-  plan-gated), so the pipeline correctly points at its one snapshot and every
-  run uses it.
+* **H1 — expected:** the edit produced no new snapshot (at the time the save
+  endpoint was plan-gated), so the pipeline correctly points at its one
+  snapshot and every run uses it.
 * **H2 — defect:** the cron dispatch path resolves a different snapshot source
   than the manual path (latest EXISTING snapshot vs the live graph at run
   start), so a run pins a stale snapshot after an edit.
@@ -412,7 +413,7 @@ async def test_cron_fire_after_graph_edit_executes_the_edited_graph(
         assert await _snapshot_node_label(db_engine, snap_a) == "v1"
 
         # --- Edit the graph through the REAL route (enterprise plan context:
-        # every feature, including pipeline_diff_rollback, is enabled here).
+        # every feature is enabled here).
         edit_snapshots_before = await _snapshot_count(db_engine, pipeline_id, version_kind="edit")
         await _patch_graph(integration_client, test_org, test_user, pipeline_id, "v2", schema_id)
         assert await _live_node_label(db_engine, pipeline_id) == "v2"

@@ -17,6 +17,9 @@ const SAMPLE_DETAIL = {
 }
 
 async function mockFeedbackInboxApi(page: Page, detailStatus: number) {
+  // FAR-1809 repointed the plan bootstrap at the caller-scoped
+  // GET /api/v1/plan, which now also carries flags / dev mode (the old
+  // /admin/feature-flags read is gone).
   await page.route(/\/api\/v1\/plan$/, async (route) => {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ flags: [], license: { tier: 'team' }, dev_mode: true }) })
   })

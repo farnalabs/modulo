@@ -20,12 +20,12 @@ run_context key. When no ceiling is pinned, the effective ceiling is the
 pipeline's default, so a recommendation can only lower autonomy. Every clamp
 is recorded by ``emit_autonomy_clamp_telemetry``.
 
-Earned autonomy (FAR-1175 / ADR 043 S1): behind the ``autonomy_gating`` feature
+Earned autonomy (FAR-1175 / ADR 062 S1): behind the ``autonomy_gating`` feature
 flag (default OFF), the ``base`` level is the pipeline's runtime
 ``earned_autonomy_level`` (falling back to the pinned default when never set),
 read LIVE at every gate and clamped to the ceiling. In-flight runs apply
 ``min(pinned-at-run-start, live earned)`` so a demotion bites at the run's next
-gate while a promotion can never loosen an in-flight run (ADR 043 §3). The
+gate while a promotion can never loosen an in-flight run (ADR 062 §3). The
 pinned-at-run-start value is carried in the reserved run_context key
 ``_pipeline_earned_at_start``. With the flag OFF, resolution is byte-identical
 to the S0 behaviour (``base`` = pinned default).
@@ -175,7 +175,7 @@ def resolve_autonomy(
 ) -> AutonomyResolution:
     """Resolve the autonomy level for a run, clamped to the pipeline ceiling.
 
-    Pseudocode (ADR 043 §2)::
+    Pseudocode (ADR 062 §2)::
 
         ceiling = run_context[_pipeline_max_autonomy] or pipeline_default or manual_approval
         base    = min(earned_if_gating else pinned_default, ceiling)
@@ -217,7 +217,7 @@ def resolve_autonomy(
     )
     base_default = default_level or AutonomyLevel.default()
 
-    # In-flight pin (ADR 043 §3): min(pinned-at-start, live) so a demotion wins
+    # In-flight pin (ADR 062 §3): min(pinned-at-start, live) so a demotion wins
     # and a promotion never loosens the run.
     base_source = _earned_base_source(
         earned_start_raw,

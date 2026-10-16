@@ -69,6 +69,14 @@ Gate semantics (fail-closed):
   with a dedicated reason instead of skipping into a pass.  The gate cannot
   tell a justified deletion from a load-bearing one, so it fails closed and
   routes the change to review.
+- **Reviewer-approved deletion-only change** → SKIP-as-PASS, exit 0.  A
+  deletion-only diff is authorised only by an explicit, human-applied opt-in:
+  the PR's ``coverage: deletion-only-approved`` label, which the CI job
+  forwards as ``--allow-deletion-only-approved``.  This preserves the
+  fail-closed default (a bare deletion-only diff still FAILs) while letting a
+  reviewer accept a purely subtractive change (e.g. retiring a plan-feature
+  gate) without inventing coverage for code that no longer exists.  The
+  label is the authorisation — never pass the flag without it.
 - **Changed production lines, but no coverage data for them** → FAIL,
   exit 1.  If production lines changed but diff-cover cannot match them to
   the coverage report (the report does not contain those files at all), every
@@ -123,6 +131,11 @@ was only restored by independent review on PR #1029.)
   rather than skipping into a pass under the "no changed production
   lines" rule.  The gate cannot distinguish a justified deletion from a
   load-bearing one, so it fails closed and the change goes to review.
+  The one exception is an explicit reviewer opt-in: when the PR carries
+  the ``coverage: deletion-only-approved`` label (forwarded to this script
+  as ``--allow-deletion-only-approved``), a deletion-only diff is
+  authorised and skips into a pass.  A bare deletion-only diff still
+  FAILs — the override is never implicit.
 - When a change **mixes deletions with additions**, the added lines alone
   must clear the real threshold: the ≤10-line tiny-diff exemption is
   withheld for any diff that removes executable production lines, so
@@ -195,6 +208,18 @@ _EXCLUDE_PATTERNS: list[str] = [
     "backend/tools/**",
     "scripts/**",
     "frontend/scripts/**",
+    # Frontend build/tooling config files (``frontend/*.config.*``: vite,
+    # vitest, playwright, eslint, tailwind, stryker, ...) are Node-side build
+    # configuration, not client source. The vitest/v8 coverage scan never
+    # imports them during a test run, so they never appear in the frontend
+    # LCOV report and every changed line would otherwise register as
+    # "0% unmeasured". Observed on PR #1881 (FAR-1858): a licence-lift helper
+    # added to ``frontend/vite.config.ts`` failed this gate (28 unmeasured JS
+    # lines) AND the SonarCloud new_coverage quality gate (16 uncovered new
+    # lines), even though config code is never client-shipped and cannot be
+    # line-covered in CI. Same measurement-boundary class as
+    # ``frontend/scripts/**``.
+    "frontend/*.config.*",
     # CI/ops helper modules under ``.github/scripts/**`` are the same class as
     # the ``scripts/**`` and ``backend/scripts/**`` exclusions: the CI coverage
     # scan runs ``pytest --cov=src/modulo`` (see scripts/coverage-thresholds.sh),
@@ -1439,8 +1464,19 @@ class GateResult:
     # in ``evaluate``: a deletion-only diff FAILs instead of skipping, and the
     # tiny-diff exemption is withheld when it is non-zero.
     deleted_lines: int = 0
+    # True when a deletion-only diff was explicitly authorised by a reviewer
+    # (the PR's ``coverage: deletion-only-approved`` label, forwarded as
+    # ``--allow-deletion-only-approved``).  Such a result is a SKIP-as-PASS:
+    # it never carries a FAIL, but it is rendered distinctly so the override
+    # is visible in the summary as an audit trail.
+    deletion_only_approved: bool = False
 
     def summary(self) -> str:
+        if self.deletion_only_approved:
+            return (
+                f"[{self.language}] PASS — deletion-only change authorised by reviewer "
+                f"({self.deleted_lines} deleted line(s); coverage: deletion-only-approved)"
+            )
         if self.skipped:
             return f"[{self.language}] SKIPPED — {self.skip_reason}"
         if self.tiny_diff:
@@ -1828,15 +1864,39 @@ def _branch_gate_outcome(
     return branch_actual_pct, branch_actual_pct >= branch_fail_under
 
 
-def _empty_diff_gate(language: str, fail_under: int, deleted_files: dict[str, int], deleted_lines: int) -> GateResult:
+def _empty_diff_gate(
+    language: str,
+    fail_under: int,
+    deleted_files: dict[str, int],
+    deleted_lines: int,
+    allow_deletion_only: bool,
+) -> GateResult:
     """Gate result when the diff adds no executable production lines (FAR-1317).
 
     A deletion-only production change FAILs instead of skipping into a pass —
     the gate cannot tell a justified deletion from a load-bearing one, so it
     fails closed.  A diff with neither additions nor deletions (test-only,
-    docs-only, or comment-only) is a skip.
+    docs-only, or comment-only) is a skip.  When *allow_deletion_only* is set
+    (the reviewer applied the ``coverage: deletion-only-approved`` label), a
+    deletion-only diff is authorised and skips as a pass instead of failing.
     """
     if deleted_lines > 0:
+        if allow_deletion_only:
+            return GateResult(
+                language=language,
+                skipped=True,
+                skip_reason=(
+                    f"deletion-only production change authorised by reviewer: {deleted_lines} "
+                    f"executable line(s) in {len(deleted_files)} file(s) removed and none added "
+                    "(coverage: deletion-only-approved label; FAR-1317 override)"
+                ),
+                passed=True,
+                actual_pct=None,
+                threshold=fail_under,
+                changed_lines=0,
+                deleted_lines=deleted_lines,
+                deletion_only_approved=True,
+            )
         return GateResult(
             language=language,
             skipped=False,
@@ -1968,12 +2028,18 @@ def evaluate(
     allow_missing: bool = False,
     branch_fail_under: int = BRANCH_COVERAGE_THRESHOLD,
     js_src_root: str = DEFAULT_JS_SRC_ROOT,
+    allow_deletion_only: bool = False,
 ) -> GateResult:
     """Evaluate one language's changed-lines coverage (line + branch).
 
     When *allow_missing* is False (the CI default), a missing or unreadable
     report is a gate failure — the upstream job or artifact download broke.
     When True (local convenience), a missing report is a skip.
+
+    When *allow_deletion_only* is True, a deletion-only production diff is
+    authorised and skips as a pass (the reviewer applied the PR's
+    ``coverage: deletion-only-approved`` label).  It has no effect on any
+    other outcome — a bare deletion-only diff still FAILs.
 
     The gate detects unmeasured files by comparing the executable changed
     production lines (from ``git diff``, excluding comments/docstrings/blanks)
@@ -1996,7 +2062,7 @@ def evaluate(
 
     # --- No added production lines: a deletion-only change FAILs (never SKIPs) ---
     if changed_lines == 0:
-        return _empty_diff_gate(language, fail_under, deleted_files, deleted_lines)
+        return _empty_diff_gate(language, fail_under, deleted_files, deleted_lines, allow_deletion_only)
 
     # --- Tiny-diff exemption ---
     # Withheld when the diff also removes executable production lines
@@ -2109,7 +2175,13 @@ def _write_summary(results: list[GateResult]) -> None:
         "|----------|--------|--------|----------|----------|------------|---------------|----------|------------|",
     ]
     for r in results:
-        if r.skipped:
+        if r.deletion_only_approved:
+            # SKIP-as-PASS authorised by the PR's coverage: deletion-only-approved
+            # label.  Distinct status so the override is visible in the summary.
+            status = "PASS (deletion-only approved)"
+            pct = "—"
+            bpct = "—"
+        elif r.skipped:
             status = "SKIPPED"
             pct = "—"
             bpct = "—"
@@ -2164,6 +2236,7 @@ class Args:
     js_src_root: str
     allow_missing_reports: bool
     allow_missing_js_report: bool
+    allow_deletion_only: bool
 
 
 @dataclass(frozen=True)
@@ -2239,6 +2312,17 @@ def _parse_args(argv: list[str]) -> Args:
             "deliberately produced no coverage because the PR touched no frontend path."
         ),
     )
+    parser.add_argument(
+        "--allow-deletion-only-approved",
+        action="store_true",
+        default=False,
+        help=(
+            "Authorise a deletion-only production diff to skip as a pass instead of "
+            "failing closed (FAR-1317). CI sets this ONLY when the PR carries the "
+            "reviewer-applied 'coverage: deletion-only-approved' label; it is the "
+            "explicit human authorisation for a purely subtractive change."
+        ),
+    )
     parsed = parser.parse_args(argv)
     return Args(
         compare_branch=parsed.compare_branch,
@@ -2249,6 +2333,7 @@ def _parse_args(argv: list[str]) -> Args:
         js_src_root=parsed.js_src_root,
         allow_missing_reports=parsed.allow_missing_reports,
         allow_missing_js_report=parsed.allow_missing_js_report,
+        allow_deletion_only=parsed.allow_deletion_only_approved,
     )
 
 
@@ -2378,6 +2463,7 @@ def _evaluate_changed_lines(
                     or (language == "JavaScript" and args.allow_missing_js_report),
                     branch_fail_under=args.branch_fail_under,
                     js_src_root=js_src_root,
+                    allow_deletion_only=args.allow_deletion_only,
                 )
             )
     finally:
