@@ -153,7 +153,21 @@ function isCanvasRoute(route: string): boolean {
 // getting the run cancelled with no actionable signal. A hung run is reported
 // as 'cancelled' and re-dispatches the Branch Fixer, so fail fast and loud
 // instead.
+//
+// Kept BELOW the local test budget (FAR-1876) so a dead target trips this
+// gate's actionable diagnostic rather than the generic 'Test timeout of Nms
+// exceeded'. Local runs drive the unbundled Vite dev server, where a cold
+// authenticated route mount is CPU-bound and can take well over 20s on a
+// loaded, shared machine (observed), so the bound stays at the 30s the sibling
+// specs use and LOCAL_SWEEP_TIMEOUT_MS below supplies the headroom.
 const APP_MOUNT_TIMEOUT_MS = 30_000
+
+// Local test budget for the two sweeps that call preparePage(): a cold route
+// mount on the dev server can exceed 30s under CPU contention, so the default
+// 30s budget would trip the generic deadline before APP_MOUNT_TIMEOUT_MS could
+// surface the mount diagnostic. Staging and production serve a pre-built bundle
+// and keep the config's 180s default.
+const LOCAL_SWEEP_TIMEOUT_MS = 45_000
 
 // Wait for the Vue app to mount, failing fast with the HTTP status whenever the
 // target serves an error/non-SPA page instead of the app shell. A 5xx edge
@@ -191,15 +205,21 @@ async function preparePage(page: Page, route: string, env: TestEnv): Promise<Pag
 
   await waitForAppMount(page, route, response)
 
-  // No content settle here (FAR-1889). A blanket
+  // No content settle here (FAR-1876, FAR-1889). A blanket
   // `waitForSelector('[data-loading="false"]')` only matches on the two routes
   // that render the marker (AnalyticsView and SettingsLicenseView); on every
-  // other route the wait burned its full 15s and was then discarded by
-  // `.catch(() => {})`, so a route stuck mid-load was indistinguishable from a
+  // other route the wait burned its full 15s timeout and was then discarded by
+  // `.catch(() => {})`. Two of those (32.3s incl. navigation) overran the 30s
+  // local test budget, the deadline fired mid-wait, and the discarded rejection
+  // let the test limp into checkViewportMeta() during teardown — reported as a
+  // viewport-meta failure (`Received string: ""`) with no trace of the real
+  // cause. A route stuck mid-load was therefore indistinguishable from a
   // settled one and surfaced later as a misleading audit measurement. There is
   // no universal content marker to wait on; `waitForAppMount` above is the
   // readiness signal, and a future settle MUST throw on timeout rather than
-  // swallow. (The dead swallowed `waitForURL('**/*')` no-op is removed too.)
+  // swallow — a swallowed settle failure is indistinguishable from the page
+  // being wrong. (The dead swallowed `waitForURL('**/*')` no-op is removed
+  // too.)
   if (env.name === 'local') {
     // Local CI: mock all /api/v1 traffic and seed the auth tokens so
     // authenticated routes render with mocked data (mirrors loginAsAdmin's
@@ -565,6 +585,7 @@ test.describe('Mobile layout audit — exclusion config integrity', { tag: ['@re
 })
 
 test.describe('Mobile layout audit — full route sweep', { tag: ['@regression', '@mobile'] }, () => {
+  if (target === 'local') test.describe.configure({ timeout: LOCAL_SWEEP_TIMEOUT_MS })
   for (const route of ROUTES) {
     test(`${route} — mobile layout invariants + above-the-fold screenshot`, { tag: ['@regression', '@mobile'] }, async ({ page, env }) => {
       await runFullSweep(page, route, env)
@@ -573,6 +594,7 @@ test.describe('Mobile layout audit — full route sweep', { tag: ['@regression',
 })
 
 test.describe('Mobile layout audit — narrow viewport bounding sweep', { tag: '@mobile' }, () => {
+  if (target === 'local') test.describe.configure({ timeout: LOCAL_SWEEP_TIMEOUT_MS })
   // defaultBrowserType is stripped from the Pixel 5 spread: Playwright forbids
   // use({ defaultBrowserType }) inside a describe group (it forces a new worker).
   const pixel5 = devices['Pixel 5']

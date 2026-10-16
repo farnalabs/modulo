@@ -253,7 +253,7 @@ class TestSeedOrgGuardrailRowsForPipeline:
             )
         assert created == 0
         mock_create.assert_awaited_once()
-        assert mock_create.call_args.kwargs["existing_eval_id"] == existing.id
+        assert mock_create.call_args.kwargs["write_options"].existing_eval_id == existing.id
 
     async def test_node_bound_name_collision_is_left_alone(self) -> None:
         """A node-bound row owns its name — the seed must neither overwrite

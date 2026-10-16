@@ -3900,7 +3900,7 @@ async def _replace_pipeline_graph_txn(
         extract_connector_bindings,
         find_connector_team_mismatches,
     )
-    from modulo.db.crud.pipeline import get_pipeline, replace_pipeline_graph
+    from modulo.db.crud.pipeline import GraphWriteRecording, get_pipeline, replace_pipeline_graph
     from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 
     async with _session(org_id) as s:
@@ -3983,7 +3983,7 @@ async def _replace_pipeline_graph_txn(
             is_guardrail_admin=is_guardrail_admin,
             # FAR-1810: an MCP graph update is an explicit save — it records an
             # immutable edit snapshot like the REST graph-write endpoints.
-            record_edit_snapshot=True,
+            recording=GraphWriteRecording(record_snapshot=True),
         )
         if result is None:
             return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
@@ -5418,7 +5418,11 @@ async def _update_eval_definition_impl(
 
     from starlette.exceptions import HTTPException as StarletteHTTPException
 
-    from modulo.core.eval_engine.eval_definition_write import create_or_update_eval, validate_guardrail_request
+    from modulo.core.eval_engine.eval_definition_write import (
+        EvalWriteOptions,
+        create_or_update_eval,
+        validate_guardrail_request,
+    )
     from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
 
     async with _session(org_id) as s:
@@ -5439,6 +5443,13 @@ async def _update_eval_definition_impl(
         )
         current_gate = gate_result.scalar_one_or_none()
         current_failure_behaviour = current_gate.action if current_gate is not None else "warn"
+        # FAR-939 chunk 12 §3.1: preserve the live gate's evaluation mode
+        # across an MCP eval edit — mirrors the failure_behaviour
+        # preservation above (an eval edit must not silently reset a
+        # human-mode gate to automatic). The REST update route does the
+        # same; the shared helper preserves on None, and passes the live
+        # value through here.
+        current_evaluation_mode = current_gate.evaluation_mode if current_gate is not None else "automatic"
 
         # Run guardrail validator; catch HTTPException and convert to MCP error dict
         try:
@@ -5464,8 +5475,11 @@ async def _update_eval_definition_impl(
                 failure_behaviour=current_failure_behaviour,
                 pass_threshold=updates.get("pass_threshold", eval_row.pass_threshold),
                 suite_id=updates.get("suite_id", eval_row.suite_id),
-                eval_suite_id=updates.get("eval_suite_id", getattr(eval_row, "eval_suite_id", None)),
-                existing_eval_id=eid,
+                write_options=EvalWriteOptions(
+                    eval_suite_id=updates.get("eval_suite_id", getattr(eval_row, "eval_suite_id", None)),
+                    existing_eval_id=eid,
+                    evaluation_mode=current_evaluation_mode,
+                ),
             )
         except PolicyGateBindingViolationError as exc:
             return {"error": "validation_failed", "detail": f"PolicyGate binding violation: {exc}"}

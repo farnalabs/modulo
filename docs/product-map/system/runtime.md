@@ -11,6 +11,7 @@ code:
   - backend/src/modulo/api/routes/admin.py
   - backend/src/modulo/core/runtime_config/store.py
   - backend/src/modulo/core/runtime_config/key_bridge.py
+  - backend/src/modulo/core/housekeeping.py
   - backend/src/modulo/db/crud/policy_gate_decision.py
 unit-tests:
   - backend/tests/unit/api/test_admin_runtime_config.py
@@ -20,6 +21,9 @@ unit-tests:
   - backend/tests/unit/mcp/test_housekeeping_decision_block.py
   - backend/tests/unit/rate_limiter/test_admin_rate_limits_api.py
   - backend/tests/unit/core/test_housekeeping.py
+  - backend/tests/unit/core/test_housekeeping_scanners.py
+  - backend/tests/unit/core/test_edit_snapshot_retention.py
+  - backend/tests/integration/test_far1815_edit_snapshot_retention.py
   - backend/tests/unit/core/runtime_config/test_key_registry.py
   - backend/tests/unit/core/runtime_config/test_key_bridge.py
 bdd:
@@ -63,6 +67,21 @@ purging old run data.
 - [x] Housekeeping scan returns cleanup candidates grouped by category;
       cleanup deletes selected candidates; checkpoint purge reclaims DB volume
       (`backend/tests/bdd/features/admin/housekeeping.feature`)
+- [x] Housekeeping includes an `edit_snapshot_retention` category (FAR-1815):
+      per pipeline it surfaces provenance-edit snapshots (`version_kind='edit'`
+      AND `created_kind='edit'`) beyond the newest 200 as `pipeline_snapshot`
+      cleanup candidates, so unbounded editor graph-save history is bounded.
+      Never surfaced: run / rollback / initial snapshots, the pipeline's latest
+      snapshot, release-channel-tagged snapshots (any `channel` other than
+      `none`), trigger-pinned snapshots (matched on the canonicalised
+      `config_json.snapshot_id`), and variant-referenced snapshots
+      (canonicalised `variant_groups.variants[].snapshot_id`); a
+      run-referenced edit snapshot fails loudly on delete through the
+      `ondelete=RESTRICT` FK rather than being silently removed
+      (`backend/src/modulo/core/housekeeping.py`,
+      `backend/tests/unit/core/test_edit_snapshot_retention.py`,
+      `backend/tests/unit/core/test_housekeeping_scanners.py`,
+      `backend/tests/integration/test_far1815_edit_snapshot_retention.py`)
 - [x] Housekeeping deletes fail closed with a typed `blocked_by` reason when a
       candidate row is parented by `policy_gate_decisions` RESTRICT FKs
       (FAR-1102): both the REST cleanup (`perform_cleanup` in
@@ -84,6 +103,13 @@ purging old run data.
 ## Known Gaps
 
 ## QA History
+- 2026-10-16: **product-map review pass** - tracked the FAR-1815
+  `edit_snapshot_retention` housekeeping category that shipped without a
+  product-map home: the per-pipeline newest-200 edit-snapshot sweep (with its
+  channel / trigger-pin / variant-pin exclusions and the `ondelete=RESTRICT`
+  run-reference behaviour) is now a behaviour line with code and test
+  citations, and `core/housekeeping.py` plus the three FAR-1815 test modules
+  were added to the frontmatter.
 - 2026-09-26: **Improve Architecture product-map walk** - tracked the
   FAR-1102 decision-record housekeeping block surface that shipped without a
   product-map home: the typed `blocked_by: policy_gate_decisions` response on

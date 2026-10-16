@@ -6281,7 +6281,7 @@ features:
             - "[x] Rendering is cached in a bounded LRU keyed by (schema content SHA-256, profile, provider_id, renderer_version); mutation-safe via deep copies"
             - "[x] Design-time schema_translation_report in graph response (include_schema_warnings=true) lists per-node keyword-strip warnings before pipeline execution"
             - "[x] Agent schema_profile (String(30), nullable, CHECK constraint) defaults to verbatim; set via POST /api/v1/agents or PATCH /api/v1/agents/{id}"
-            - "[x] Node schema_profile is an optional field on PipelineGraphNode; set via PATCH /api/v1/pipelines/{id}/graph"
+            - "[x] Node schema_profile is an optional field on PipelineGraphNode; set via PUT /api/v1/pipelines/{id}/graph"
             - "[x] The schema_profile field is optional and defaults to verbatim; no graph migration is required for existing pipelines"
 
             # On-disk sandbox contract (FAR-901)

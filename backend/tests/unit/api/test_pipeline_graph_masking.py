@@ -4,7 +4,7 @@ Covers both sides of the masked graph round-trip:
 - READ: GET /pipelines/{id}/graph and snapshot detail mask credential-bearing
   node fields (env_vars / context_files / composite_parameter_values /
   parameter_overrides) reusing the shipped maskers.
-- WRITE: a full-replace graph write (PATCH /graph) round-tripping a masked
+- WRITE: a full-replace graph write (PUT /graph) round-tripping a masked
   read resolves mask echoes against the stored graph, so the mask literals are
   never persisted over the stored secrets.
 
@@ -324,7 +324,7 @@ def test_patch_graph_resolves_masked_echo_against_stored(client: TestClient) -> 
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": [masked_node], "edges": []},
         )
@@ -358,7 +358,7 @@ def test_patch_graph_persists_echoless_deletion(client: TestClient) -> None:
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": [emptied_node], "edges": []},
         )
@@ -428,7 +428,7 @@ def test_masked_read_to_rest_patch_round_trip_preserves_stored_secret(client: Te
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
-        write_resp = client.patch(
+        write_resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": read_body["nodes"], "edges": read_body["edges"]},
         )

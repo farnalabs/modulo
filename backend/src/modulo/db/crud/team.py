@@ -74,12 +74,13 @@ async def list_teams(
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
 
+    offset = (page - 1) * page_size
     try:
         query = (
             select(Team)
             .where(Team.organisation_id == org_id, Team.deleted_at.is_(None))
             .order_by(Team.created_at)
-            .offset((page - 1) * page_size)
+            .offset(offset)
             .limit(page_size)
         )
         result = await session.execute(query)
@@ -87,7 +88,8 @@ async def list_teams(
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
 
-    return PageResult(items=items, total=total, page=page, page_size=page_size)
+    has_more = (offset + len(items)) < total
+    return PageResult(items=items, total=total, page=page, page_size=page_size, has_more=has_more)
 
 
 async def update_team(

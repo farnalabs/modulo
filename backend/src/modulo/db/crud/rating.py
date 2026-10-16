@@ -219,7 +219,8 @@ async def list_ratings_for_primitive(
         items = list(result.scalars())
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
-    return PageResult(items=items, total=total, page=page, page_size=page_size)
+    has_more = (offset + len(items)) < total
+    return PageResult(items=items, total=total, page=page, page_size=page_size, has_more=has_more)
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +280,8 @@ async def list_abuse_reports(
         items = list(result.scalars())
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
-    return PageResult(items=items, total=total, page=page, page_size=page_size)
+    has_more = (offset + len(items)) < total
+    return PageResult(items=items, total=total, page=page, page_size=page_size, has_more=has_more)
 
 
 async def review_abuse_report(

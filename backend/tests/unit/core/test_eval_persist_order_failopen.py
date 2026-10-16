@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from modulo.core.eval_engine import EvalResult as EngineEvalResult
 from modulo.core.eval_engine.policy_gate import (
     EvalPolicySnapshot,
     EvalResultView,
@@ -493,3 +494,142 @@ class TestDecisionStateUnchangedAfterPersistenceFailure:
         assert block_outcome.action == "block"
         assert block_outcome.result == outcome_before.result
         assert block_outcome.error == outcome_before.error
+
+
+# ---------------------------------------------------------------------------
+# FAR-939 chunk 12 — criterion 7: human-governed evals are skipped in BOTH
+# loops (one skip site, in the shared helper both call).
+# ---------------------------------------------------------------------------
+
+
+def _human_eval_def(*, name: str = "human-eval", failure_behaviour: str = "block") -> EvalDefDTO:
+    """A DTO whose governing gate is evaluation_mode='human'."""
+    return EvalDefDTO(
+        id=uuid.uuid4(),
+        org_id=org_id,
+        name=name,
+        eval_type="regex",
+        config={"pattern": "x", "field": "out"},
+        failure_behaviour=failure_behaviour,
+        node_id=str(uuid.uuid4()),
+        policy_gate_id=uuid.uuid4(),
+        policy_gate_version=1,
+        policy_gate_node_id=uuid.uuid4(),
+        policy_gate_evaluation_mode="human",
+    )
+
+
+def _automatic_eval_def(*, name: str = "auto-eval") -> EvalDefDTO:
+    """A DTO governed by an automatic gate (default behaviour)."""
+    return EvalDefDTO(
+        id=uuid.uuid4(),
+        org_id=org_id,
+        name=name,
+        eval_type="regex",
+        config={"pattern": "x", "field": "out"},
+        failure_behaviour="warn",
+        node_id=str(uuid.uuid4()),
+    )
+
+
+class TestHumanGovernedEvalSkip:
+    """Criterion 7 — the shared helper skips human-governed evals entirely."""
+
+    @pytest.mark.asyncio
+    async def test_human_eval_is_never_computed_or_persisted(self) -> None:
+        """No ``engine.evaluate_result`` call, zero results, no decision row,
+        no EvalBlockedError — even with ``failure_behaviour='block'``."""
+        eval_def = _human_eval_def(failure_behaviour="block")
+        session = _ok_session()
+
+        with patch.object(eval_persist_order, "_compute_eval_result") as compute:
+            results = await run_evals_persist_before_decide(
+                eval_defs=[eval_def],
+                resolve_eval_target=lambda ed: {"out": "x"},
+                resolve_llm_judge=lambda _ed: None,
+                run_id=run_id,
+                org_id=org_id,
+                session_factory=_session_factory(session),
+                node_id="node-1",
+            )
+
+        compute.assert_not_called()
+        session.add.assert_not_called()
+        assert results == {}
+
+    @pytest.mark.asyncio
+    async def test_mixed_node_automatic_still_computes_and_persists(self) -> None:
+        """On a mixed node, automatic-governed evals still run normally while
+        the human-governed sibling is skipped."""
+        human_def = _human_eval_def(name="human-eval")
+        auto_def = _automatic_eval_def(name="auto-eval")
+        session = _ok_session()
+        auto_result = EngineEvalResult(
+            run_id=run_id,
+            node_id=auto_def.node_id,
+            eval_id=auto_def.id,
+            passed=True,
+            score=1.0,
+            detail="ok",
+        )
+
+        def _fake_compute(eval_def, **kwargs):
+            assert eval_def is auto_def, "only the automatic eval may be computed"
+            return auto_result
+
+        with patch.object(eval_persist_order, "_compute_eval_result", side_effect=_fake_compute):
+            results = await run_evals_persist_before_decide(
+                eval_defs=[human_def, auto_def],
+                resolve_eval_target=lambda ed: {"out": "x"},
+                resolve_llm_judge=lambda _ed: None,
+                run_id=run_id,
+                org_id=org_id,
+                session_factory=_session_factory(session),
+                node_id="node-1",
+            )
+
+        assert list(results.keys()) == ["auto-eval"]
+        assert results["auto-eval"] is auto_result
+        # Exactly one EvalResult row persisted (the automatic eval's).
+        assert session.add.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_skip_via_run_gate_evals_loop(self) -> None:
+        """The gate loop (``_run_gate_evals``) honours the skip: returns {}
+        and never computes."""
+        from modulo.core.pipeline_engine.node_runner import _run_gate_evals
+
+        eval_def = _human_eval_def()
+
+        with patch.object(eval_persist_order, "_compute_eval_result") as compute:
+            results = await _run_gate_evals(
+                {"_run_id": run_id},
+                [eval_def],
+                None,
+                "review-1",
+                None,
+                org_id,
+            )
+
+        compute.assert_not_called()
+        assert results == {}
+
+    @pytest.mark.asyncio
+    async def test_skip_via_post_node_evals_loop(self) -> None:
+        """The post-node loop (``_run_post_node_evals``) honours the same
+        skip — it must NOT quietly evaluate a human-mode gate automatically."""
+        from modulo.core.pipeline_engine.executor import PipelineExecutor
+
+        eval_def = _human_eval_def()
+        executor = PipelineExecutor(MagicMock())
+
+        with patch.object(eval_persist_order, "_compute_eval_result") as compute:
+            await executor._run_post_node_evals(
+                eval_def.node_id or "node-1",
+                {"artifacts": [], "output": {"out": "x"}},
+                {eval_def.node_id or "node-1": [eval_def]},
+                run_id,
+                org_id,
+            )
+
+        compute.assert_not_called()

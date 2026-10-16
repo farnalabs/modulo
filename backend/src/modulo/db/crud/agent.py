@@ -119,7 +119,8 @@ async def list_agents(
             await session.execute(select(Agent).order_by(Agent.created_at.desc()).offset(offset).limit(page_size))
         ).scalars()
     )
-    return PageResult(items=items, total=total, page=page, page_size=page_size)
+    has_more = (offset + len(items)) < total
+    return PageResult(items=items, total=total, page=page, page_size=page_size, has_more=has_more)
 
 
 async def update_agent(

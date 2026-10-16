@@ -1595,7 +1595,7 @@ async def test_seeded_graph_passes_the_graph_read_validation(
     through ``_graph_response`` — the exact serializer the graph endpoint
     uses — and requires zero validation issues and no dropped node/edge. Each
     node must also pass STRICT (write-path) validation, and the whole graph
-    the PATCH /graph body model, so the editor can re-save it unchanged.
+    the PUT /graph body model, so the editor can re-save it unchanged.
     """
     await _run_seed(session, monkeypatch, _demo_settings())
     pipeline = await _pipeline_by_name(session, spec.name)
@@ -1927,7 +1927,8 @@ async def test_seed_edge_convergence_records_an_edit_snapshot(
     await _run_seed(session, monkeypatch, _demo_settings())
     pipeline = (await session.execute(select(Pipeline).where(Pipeline.name == "Demo Governance Pipeline"))).scalar_one()
     assert graph_spy.await_count > 0, "the first boot must converge the demo edges"
-    genesis_flags = [call.kwargs.get("record_edit_snapshot") for call in graph_spy.await_args_list]
+    genesis_recording = [call.kwargs.get("recording") for call in graph_spy.await_args_list]
+    genesis_flags = [recording.record_snapshot if recording is not None else False for recording in genesis_recording]
     assert genesis_flags == [False] * len(genesis_flags), genesis_flags
     assert snap_spy.await_count == 0, "a genesis write must not enter the edit history"
 
@@ -1942,7 +1943,7 @@ async def test_seed_edge_convergence_records_an_edit_snapshot(
     await _run_seed(session, monkeypatch, _demo_settings())
 
     assert graph_spy.await_count == 1, graph_spy.await_count
-    assert graph_spy.await_args.kwargs["record_edit_snapshot"] is True, (
+    assert graph_spy.await_args.kwargs["recording"].record_snapshot is True, (
         "a convergence write against an existing pipeline must be versioned"
     )
     assert snap_spy.await_count == 1, f"the convergence write must mint a snapshot: {snap_spy.await_count}"

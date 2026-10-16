@@ -999,10 +999,18 @@ def _make_resume_session(snapshot: MagicMock, retry_policy: dict[str, Any] | Non
     # retry_policy) regardless of which iterator slot resume() consumes it from.
     eval_result.scalar_one_or_none.return_value = pipeline
 
+    # FAR-939 M4: the fire-time evaluation-mode stamp read (one
+    # gate_config_json select per fired claim) sits between the eval load and
+    # the second session block.
+    claim_stamp_result = MagicMock()
+    claim_stamp_result.scalars.return_value = []
+
     count_result = MagicMock()
     count_result.scalar.return_value = 0
 
-    execute_results = iter([graph_json_result, snapshot_result, pipeline_result, eval_result, count_result])
+    execute_results = iter(
+        [graph_json_result, snapshot_result, pipeline_result, claim_stamp_result, eval_result, count_result]
+    )
 
     async def _execute(*_args: Any, **_kwargs: Any) -> Any:
         try:
@@ -2132,6 +2140,67 @@ async def test_interrupt_window_resolution_cancellation_propagates():
             )
 
     hitl_manager.create_gate.assert_not_awaited()
+
+
+async def test_interrupt_gate_stamps_frozen_eval_modes_onto_the_resolved_config():
+    """FAR-939 chunk 12 (M4): the fire-time evaluation-mode snapshot is
+    merged onto the RESOLVED review config on the claim row, so a resume can
+    re-freeze the DTO universe (``gate_config_json`` is the stamp's home —
+    see ``executor._overlay_frozen_gated_eval_modes`` on resume)."""
+    from modulo.core.pipeline_engine.executor import _GATED_EVAL_MODES_KEY
+
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    hitl_manager = MagicMock()
+    hitl_manager.create_gate = AsyncMock()
+    pipeline = MagicMock()
+    pipeline.name = "Human Gate Pipeline"
+    frozen = [
+        {
+            "eval_id": str(uuid.uuid4()),
+            "policy_gate_id": str(uuid.uuid4()),
+            "evaluation_mode": "human",
+        }
+    ]
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch(
+            "modulo.core.pipeline_engine.executor.evaluate_gate_coalescing",
+            new=AsyncMock(return_value="fresh"),
+        ),
+        patch("modulo.core.pipeline_engine.executor.get_pipeline", new=AsyncMock(return_value=pipeline)),
+        patch(
+            "modulo.core.pipeline_engine.executor.build_hitl_review_context",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "modulo.core.pipeline_engine.executor.resolve_hitl_review_config",
+            new=AsyncMock(return_value={"human_only": True}),
+        ),
+        patch(
+            "modulo.core.pipeline_engine.executor.resolve_review_window_for_gate",
+            new=AsyncMock(return_value=3600),
+        ),
+        patch("modulo.core.pipeline_engine.executor.HITLManager", return_value=hitl_manager),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        executor._session_factory = factory
+        pipeline_name, coalesce_reused = await executor._create_interrupt_gate(
+            org_id=uuid.uuid4(),
+            run_id=uuid.uuid4(),
+            review_id="native-gate",
+            pipeline_id=uuid.uuid4(),
+            required_team_id=None,
+            frozen_gated_eval_modes=frozen,
+        )
+
+    assert pipeline_name == "Human Gate Pipeline"
+    assert coalesce_reused is False
+    gate_config = hitl_manager.create_gate.await_args.kwargs["gate_config_json"]
+    assert gate_config == {"human_only": True, _GATED_EVAL_MODES_KEY: frozen}
 
 
 async def test_interrupt_threads_matched_condition_result_into_the_context():

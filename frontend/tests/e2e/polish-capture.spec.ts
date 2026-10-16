@@ -27,21 +27,58 @@
  *   # Optional output subdirectory (defaults to the sanitized route):
  *   POLISH_ROUTE=/pipelines POLISH_SLUG=pipelines-list pnpm exec playwright test polish-capture.spec.ts
  *
+ *   # Durable output dir OUTSIDE the (transient) worktree — an absolute path.
+ *   # Without this the captures land under the gitignored in-tree
+ *   # `.mobile-captures/` and are destroyed when the worktree is cleaned up:
+ *   POLISH_ROUTE=/pipelines POLISH_OUT_DIR=/tmp/polish/pipelines \
+ *     pnpm exec playwright test polish-capture.spec.ts
+ *
  *   # Against staging — no local web server; global-setup health-checks the
- *   # target, seeds data and logs in once, writing storageState-staging.json:
+ *   # target, seeds data and logs in once, writing storageState-staging.json.
+ *   # NOTE: staging carries NO real data by design, so it is useless for a
+ *   # real-data polish pass — use `app` below:
  *   E2E_TARGET=staging E2E_NO_WEBSERVER=true \
  *     E2E_ADMIN_EMAIL=<admin> E2E_ADMIN_PASSWORD=<password> \
  *     POLISH_ROUTE=/pipelines pnpm exec playwright test polish-capture.spec.ts
  *
- *   # (Same shape for prod: E2E_TARGET=app E2E_NO_WEBSERVER=true ...)
+ *   # Against production (app.modulo.run) — the ONLY real-data deployment, so
+ *   # the one to capture when polish findings must be adjudicated on real data.
+ *   # Same shape as staging, target `app`:
+ *   E2E_TARGET=app E2E_NO_WEBSERVER=true \
+ *     E2E_ADMIN_EMAIL=<admin> E2E_ADMIN_PASSWORD=<password> \
+ *     POLISH_ROUTE=/pipelines POLISH_OUT_DIR=/tmp/polish/pipelines-real \
+ *     pnpm exec playwright test polish-capture.spec.ts
+ *
+ *   # CAUTION — real targets are not read-only by default: for ANY non-local
+ *   # target `tests/e2e/setup/global-setup.ts` runs the data seeder, which
+ *   # WRITES to the target (an E2E Test Pipeline plus retention / email / cost
+ *   # settings). This spec itself only logs in and loads pages, so for a
+ *   # READ-ONLY capture of a real deployment point `E2E_API_URL` at a closed
+ *   # address to stop the seeder authenticating (it skips on auth failure); the
+ *   # spec's own UI login does not use E2E_API_URL:
+ *   E2E_TARGET=app E2E_NO_WEBSERVER=true E2E_API_URL=http://127.0.0.1:1 \
+ *     E2E_ADMIN_EMAIL=<admin> E2E_ADMIN_PASSWORD=<password> \
+ *     POLISH_ROUTE=/pipelines POLISH_OUT_DIR=/tmp/polish/pipelines-real \
+ *     pnpm exec playwright test polish-capture.spec.ts
  *
  * ENV VARS
- *   POLISH_ROUTE  (required) Route path to capture, e.g. `/pipelines`. Must
- *                              begin with `/`. UNSET ⇒ the whole file skips.
- *   POLISH_SLUG   (optional) Output subdirectory under `.../polish/`. Defaults
- *                              to the route sanitized the same way
- *                              mobile-layout.spec.ts's `sanitizePath` does it
- *                              (`/pipelines` → `pipelines`).
+ *   POLISH_ROUTE   (required) Route path to capture, e.g. `/pipelines`. Must
+ *                               begin with `/`. UNSET ⇒ the whole file skips.
+ *   POLISH_SLUG    (optional) Output subdirectory under `.../polish/` when
+ *                               POLISH_OUT_DIR is unset. Defaults to the route
+ *                               sanitized the same way mobile-layout.spec.ts's
+ *                               `sanitizePath` does it (`/pipelines` →
+ *                               `pipelines`).
+ *   POLISH_OUT_DIR (optional) ABSOLUTE path to write the per-viewport PNGs and
+ *                               `measurements.json` to, instead of the default
+ *                               in-tree `.mobile-captures/polish/<slug>/`.
+ *                               Unset/empty ⇒ the default path (unchanged
+ *                               behaviour). Parent dirs are created. A
+ *                               non-absolute value fails the run loud rather
+ *                               than resolving against Playwright's cwd.
+ *   E2E_TARGET     (optional) Target selector — `local` (default, mock API),
+ *                               `staging` (no real data) or `app`
+ *                               (app.modulo.run — the real-data target).
  *
  * TARGET SELECTION — the real mechanism (tests/e2e/setup/env.ts)
  *   `getTarget()` reads `process.env.E2E_TARGET` and lowercases it; valid
@@ -54,9 +91,13 @@
  *   targets additionally reuse the `storageState-staging.json` written by
  *   `tests/e2e/setup/global-setup.ts`.
  *
- * OUTPUT — `frontend/tests/e2e/.mobile-captures/polish/<slug>/`
+ * OUTPUT — `frontend/tests/e2e/.mobile-captures/polish/<slug>/` by default, or
+ *   `POLISH_OUT_DIR` when set (see above).
  *   (the parent `.mobile-captures/` is gitignored via frontend/.gitignore —
- *   captures are NEVER committed):
+ *   captures are NEVER committed. It also lives INSIDE the git worktree, so a
+ *   capture left there does not survive worktree cleanup: set POLISH_OUT_DIR to
+ *   a durable absolute path when the disposition record has to keep pointing at
+ *   live screenshots.)
  *     desktop.png / desktop-full.png            1280 x 800
  *     desktop-wide.png / desktop-wide-full.png  1440 x 800
  *     mobile.png / mobile-full.png               390 x 844
@@ -91,6 +132,13 @@ test.describe.configure({ retries: 0 })
 
 const POLISH_ROUTE = process.env.POLISH_ROUTE ?? ''
 const POLISH_SLUG = process.env.POLISH_SLUG?.trim() ?? ''
+
+// Optional ABSOLUTE override for the capture output directory. Unset/empty ⇒
+// the default gitignored in-tree path below (identical to the pre-override
+// behaviour). Set ⇒ an operator-chosen DURABLE directory outside the transient
+// worktree, so captures survive worktree cleanup (the default
+// `.mobile-captures/` is gitignored and dies with the worktree).
+const POLISH_OUT_DIR = process.env.POLISH_OUT_DIR?.trim() ?? ''
 
 // Same rule as mobile-layout.spec.ts's sanitizePath (not imported from there —
 // specs stay independent); keeps the slug filesystem-safe.
@@ -328,7 +376,17 @@ test.describe('polish capture', () => {
       `POLISH_ROUTE must be a route path beginning with "/": got "${POLISH_ROUTE}"`,
     ).toBe(true)
 
-    const outDir = path.join(__dirname, '.mobile-captures', 'polish', SLUG)
+    // Fail loud on a relative override instead of silently writing relative to
+    // Playwright's cwd (the header documents POLISH_OUT_DIR as ABSOLUTE). A
+    // capture landing somewhere unexpected is worse than a legible failure.
+    expect(
+      !POLISH_OUT_DIR || path.isAbsolute(POLISH_OUT_DIR),
+      `POLISH_OUT_DIR must be an absolute path: got "${POLISH_OUT_DIR}"`,
+    ).toBe(true)
+
+    // Absolute override wins verbatim (never joined/re-based); when unset the
+    // default path is exactly the pre-override one.
+    const outDir = POLISH_OUT_DIR || path.join(__dirname, '.mobile-captures', 'polish', SLUG)
     fs.mkdirSync(outDir, { recursive: true })
 
     let segment = 'navigation'

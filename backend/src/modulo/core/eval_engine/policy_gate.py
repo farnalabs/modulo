@@ -36,7 +36,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
     from modulo.db.models.policy_gate_decision import PolicyGateDecision
@@ -162,6 +162,112 @@ def resolve_policy_gate(snapshot: EvalPolicySnapshot) -> Outcome:
         action=pg.action,
         eval_result_id=er.id,
         error=None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Human evaluation mode (FAR-939 chunk 12)
+# ---------------------------------------------------------------------------
+
+#: The gate-action vocabulary a human-mode gate may carry on the OUTCOME.
+#: Chunk 12's ``Outcome`` contract is the terminal ``continue|warn|block``
+#: set (chunk 12 §3.2 / RQ1: ``escalate`` is a routing transition, never a
+#: terminal resolution). The LIVE ``policy_gates.action`` CHECK was widened
+#: to ``escalate`` by FAR-1694 (migration 0305), so a live row CAN carry an
+#: action outside this set — :func:`resolve_human_evaluation` fails closed
+#: on it (see :func:`_safe_gate_action`) instead of propagating it.
+HumanGateAction = Literal["warn", "block"]
+
+
+def _safe_gate_action(action: str) -> HumanGateAction:
+    """Fail-closed normalisation of a live gate action for the human path.
+
+    Only ``warn``/``block`` may reach the ``Outcome``. Anything else — in
+    particular ``escalate`` (legal on the live row since 0305, illegal on a
+    human-path Outcome per chunk 12 RQ1/§3.2) or corrupt data — maps to
+    ``block``: the module's fail-closed action (``block`` fails CLOSED on
+    undefined — the run halts; see the module docstring). The alternative,
+    raising, would abort the Evidence grounding of an already-committed
+    human decision (§3.4's fail-open contract) for a configuration defect
+    the resolver can resolve conservatively on its own.
+    """
+    if action in {"warn", "block"}:
+        # The membership check IS the guard; mypy does not narrow a plain
+        # ``str`` by membership, hence the cast.
+        return cast(HumanGateAction, action)
+    return "block"
+
+
+@dataclass(frozen=True)
+class HumanDecision:
+    """Closed vocabulary for human gate decisions."""
+
+    action: Literal["approved", "rejected", "deliver_manual"]
+    decided_by: str | None = None  # who decided, when carried by the payload
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class HumanGateView:
+    """Read-only view of the governing gate for the human resolver."""
+
+    policy_gate_id: uuid.UUID
+    eval_id: uuid.UUID
+    # The gate's configured action for this path. Typed ``warn|block`` (the
+    # only values the Outcome contract admits); callers building the view
+    # from a LIVE row (whose CHECK also allows ``escalate``) cast, and
+    # :func:`resolve_human_evaluation` fail-closes anything out of set.
+    action: HumanGateAction
+    version: int
+
+
+def resolve_human_evaluation(
+    gate_view: HumanGateView,
+    decision: HumanDecision,
+) -> Outcome:
+    """Resolve the Outcome for a human evaluation-mode gate.
+
+    - ``"approved"``       -> ``Outcome(result=True,  action="continue", ...)``
+    - ``"deliver_manual"`` -> ``Outcome(result=True,  action="continue", ...)``
+      (manual delivery is a form of approval)
+    - ``"rejected"``       -> ``Outcome(result=False, action=<gate_view.action>, ...)``
+    - anything else        -> ``Outcome(result=None,  action=<gate_view.action>, ...,
+      error="unrecognized_human_action")``
+
+    The gate action on the ``Outcome`` is ALWAYS inside the terminal
+    ``continue|warn|block`` vocabulary: a live gate carrying ``escalate``
+    (or any out-of-set value) is normalised by :func:`_safe_gate_action`
+    before it can reach the ``Outcome`` — the human resolver never emits
+    ``escalate`` (chunk 12 §3.2 / RQ1).
+
+    ``eval_result_id`` is ``None`` BY CONSTRUCTION: a human decision is not
+    a measurement, and no ``EvalResult`` exists for a human-governed eval
+    (chunk 12 §3.3). The returned ``Outcome`` is NEVER persisted as a
+    ``PolicyGateDecision`` row (chunk 12 §3.5) — the human decision is
+    grounded on an Evidence row instead.
+
+    Called ONCE the human has decided — it does not trigger or consume the
+    interrupt; the gate node's existing machinery owns that. Sibling of
+    ``resolve_policy_gate`` (automatic mode), not a variant of it.
+    """
+    if decision.action == "approved":
+        return Outcome(result=True, action="continue", eval_result_id=None, error=None)
+    if decision.action == "deliver_manual":
+        # Manual delivery is a form of approval.
+        return Outcome(result=True, action="continue", eval_result_id=None, error=None)
+    if decision.action == "rejected":
+        return Outcome(
+            result=False,
+            action=_safe_gate_action(gate_view.action),
+            eval_result_id=None,
+            error=None,
+        )
+    # Fail closed on anything outside the resume path's recognised set.
+    return Outcome(
+        result=None,
+        action=_safe_gate_action(gate_view.action),
+        eval_result_id=None,
+        error="unrecognized_human_action",
     )
 
 

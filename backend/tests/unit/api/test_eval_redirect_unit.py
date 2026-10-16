@@ -21,6 +21,7 @@ from modulo.api.mcp_server import (
     update_eval_definition,
 )
 from modulo.core.eval_engine.eval_definition_write import (
+    EvalWriteOptions,
     create_or_update_eval,
     validate_guardrail_request,
 )
@@ -344,7 +345,7 @@ class TestFirstTimeRedirectCreate:
             failure_behaviour="warn",
             pass_threshold=None,
             suite_id=None,
-            existing_eval_id=missing_id,
+            write_options=EvalWriteOptions(existing_eval_id=missing_id),
         )
 
         assert row.id == missing_id
@@ -538,3 +539,175 @@ class TestGuardrailConfigSoftDeletes:
         assert org_level.deleted_by == account_id
         assert node_bound.deleted_at is None, "node-bound rows must never be reconciled away"
         assert proposed.deleted_at is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-939 chunk 12 §3.1 (C1) — evaluation_mode is carried OR preserved on
+# every update surface
+# ---------------------------------------------------------------------------
+
+
+class TestEvaluationModeCarriedOrPreserved:
+    """C1 regression coverage.
+
+    ``create_or_update_eval`` used to default ``evaluation_mode='automatic'``
+    and UNCONDITIONALLY assign it on the update branch, while the MCP update
+    seam never forwarded the field — so any MCP eval edit silently reset a
+    ``human`` gate to ``automatic`` (losing the human-approval contract with
+    no audit). The fix: ``None`` preserves the live mode on update (and
+    defaults to ``automatic`` on create), and MCP forwards the live value
+    the same way the REST update route does.
+    """
+
+    def setup_method(self) -> None:
+        _set_context("admin")
+
+    def teardown_method(self) -> None:
+        _clear_context()
+
+    async def test_mcp_update_forwards_the_live_human_mode(self) -> None:
+        """An MCP eval edit on a ``human`` gate must carry the live mode
+        through to the shared helper — not fall back to the default."""
+        eval_row = _make_eval(eval_type="regex", node_id=uuid.uuid4(), name="human-gate-eval")
+        gate = SimpleNamespace(id=uuid.uuid4(), action="block", evaluation_mode="human")
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=[_result_mock(eval_row), _result_mock(gate)])
+        recorder = AsyncMock(return_value=eval_row)
+
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", new_callable=AsyncMock, return_value=True),
+            patch("modulo.api.mcp_server._session", return_value=_session_cm(session)),
+            patch("modulo.core.eval_engine.eval_definition_write.create_or_update_eval", recorder),
+            patch("modulo.api.routes.evals._eval_def_to_dict", return_value={"id": str(eval_row.id)}),
+        ):
+            result = await update_eval_definition(eval_id=str(eval_row.id), name="renamed")
+
+        assert "error" not in result, result
+        recorder.assert_awaited_once()
+        kwargs = recorder.await_args.kwargs
+        # THE C1 assertion: the live mode is forwarded, not defaulted.
+        options = kwargs["write_options"]
+        assert options.evaluation_mode == "human"
+        assert kwargs["failure_behaviour"] == "block"
+        assert options.existing_eval_id == eval_row.id
+
+    async def test_helper_update_with_no_mode_preserves_the_live_human_mode(self) -> None:
+        """``evaluation_mode=None`` (an update surface that does not carry
+        the field) must leave the live gate's ``human`` mode untouched."""
+        eval_row = _make_eval(eval_type="regex", node_id=uuid.uuid4(), name="human-gate-eval")
+        gate = SimpleNamespace(
+            id=uuid.uuid4(),
+            action="block",
+            evaluation_mode="human",
+            node_id=eval_row.node_id,
+            version=1,
+        )
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=[_result_mock(eval_row), _result_mock(gate)])
+        session.flush = AsyncMock()
+
+        await create_or_update_eval(
+            session,
+            org_id=_ORG_ID,
+            account_id=_USER_ID,
+            pipeline_id=eval_row.pipeline_id,
+            node_id=eval_row.node_id,
+            name="renamed",
+            eval_type="regex",
+            config_json={"k": "v"},
+            failure_behaviour="block",
+            pass_threshold=None,
+            suite_id=None,
+            # evaluation_mode deliberately omitted -> None -> PRESERVE.
+            write_options=EvalWriteOptions(existing_eval_id=eval_row.id),
+        )
+
+        assert gate.evaluation_mode == "human"
+
+    async def test_helper_update_with_an_explicit_mode_writes_it(self) -> None:
+        """A caller that DOES carry the field (the REST update route
+        forwarding the user's choice) still writes it."""
+        eval_row = _make_eval(eval_type="regex", node_id=uuid.uuid4(), name="eval")
+        gate = SimpleNamespace(
+            id=uuid.uuid4(),
+            action="warn",
+            evaluation_mode="human",
+            node_id=eval_row.node_id,
+            version=1,
+        )
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=[_result_mock(eval_row), _result_mock(gate)])
+        session.flush = AsyncMock()
+
+        await create_or_update_eval(
+            session,
+            org_id=_ORG_ID,
+            account_id=_USER_ID,
+            pipeline_id=eval_row.pipeline_id,
+            node_id=eval_row.node_id,
+            name="renamed",
+            eval_type="regex",
+            config_json={"k": "v"},
+            failure_behaviour="warn",
+            pass_threshold=None,
+            suite_id=None,
+            write_options=EvalWriteOptions(
+                existing_eval_id=eval_row.id,
+                evaluation_mode="automatic",
+            ),
+        )
+
+        assert gate.evaluation_mode == "automatic"
+
+    async def test_helper_create_defaults_to_automatic(self) -> None:
+        """A fresh gate (no live row) created without a mode is automatic —
+        current behaviour, chunk 12 §3.1."""
+        node_id = uuid.uuid4()
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=[_result_mock(None)])
+        session.add = MagicMock()
+        session.flush = AsyncMock()
+
+        await create_or_update_eval(
+            session,
+            org_id=_ORG_ID,
+            account_id=_USER_ID,
+            pipeline_id=uuid.uuid4(),
+            node_id=node_id,
+            name="new-eval",
+            eval_type="regex",
+            config_json={"k": "v"},
+            failure_behaviour="warn",
+            pass_threshold=None,
+            suite_id=None,
+        )
+
+        added = [call.args[0] for call in session.add.call_args_list]
+        assert len(added) == 2, "Eval + PolicyGate must both be added"
+        gate = added[1]
+        assert gate.evaluation_mode == "automatic"
+
+    async def test_helper_create_honours_an_explicit_mode(self) -> None:
+        node_id = uuid.uuid4()
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=[_result_mock(None)])
+        session.add = MagicMock()
+        session.flush = AsyncMock()
+
+        await create_or_update_eval(
+            session,
+            org_id=_ORG_ID,
+            account_id=_USER_ID,
+            pipeline_id=uuid.uuid4(),
+            node_id=node_id,
+            name="new-human-eval",
+            eval_type="regex",
+            config_json={"k": "v"},
+            failure_behaviour="block",
+            pass_threshold=None,
+            suite_id=None,
+            write_options=EvalWriteOptions(evaluation_mode="human"),
+        )
+
+        added = [call.args[0] for call in session.add.call_args_list]
+        assert added[1].evaluation_mode == "human"

@@ -40,7 +40,12 @@ from modulo.api.dependencies import (
     system_engine_is_fallback,
 )
 from modulo.api.routes.runs import pipeline_not_runnable_http
-from modulo.api.trigger_busy import BUSY_ACK_DETAIL, record_backpressure_delivery, record_busy_delivery
+from modulo.api.trigger_busy import (
+    BUSY_ACK_DETAIL,
+    _record_refused_delivery,
+    record_backpressure_delivery,
+    record_busy_delivery,
+)
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import PermissionDenied, assert_org_role
@@ -281,9 +286,22 @@ async def _verify_webhook_auth(
         )
 
 
+# FAR-1863: the refused-delivery outcome recorded when a webhook delivery hits
+# the trigger's declared ``max_concurrent_runs`` cap. Reuses the existing
+# ``concurrency_limit_reached`` vocabulary value (the engine writes the same
+# value at its raise site, and the replay path already accepts it), so the
+# refusal is stored with its raw payload and is replayable with no schema
+# change. The detail is concurrency-specific so the event log never mislabels
+# the refusal as a busy/overlapping dispatch.
+_CONCURRENCY_REFUSAL_VALIDATION_RESULT = "concurrency_limit_reached"
+_CONCURRENCY_REFUSAL_ERROR_DETAIL = (
+    "Concurrent run limit reached — the trigger already has its maximum concurrent runs active; delivery not executed"
+)
+
+
 async def _record_rejected_delivery(
     *,
-    kind: Literal["backpressure", "busy"],
+    kind: Literal["backpressure", "busy", "concurrency"],
     trigger_id: uuid.UUID,
     org_id: uuid.UUID | None,
     raw_body: bytes,
@@ -292,18 +310,19 @@ async def _record_rejected_delivery(
 ) -> bool:
     """FAR-604: re-record a refused delivery in a FRESH transaction.
 
-    Covers the two refused-delivery families whose in-request writes do NOT
+    Covers the refused-delivery families whose in-request writes do NOT
     survive the refusal: ``busy`` (the engine raises ``TriggerBusyError``
-    BEFORE any TriggerEvent is written) and ``backpressure`` (the engine's
+    BEFORE any TriggerEvent is written), ``backpressure`` (the engine's
     ``backpressure_skipped`` write rolls back with the unwound main
-    transaction — deliberately NOT swallowed inside the begin-block, which
-    would commit the dedup insert and break the sender-retry contract).
+    transaction), and ``concurrency`` (FAR-1863 — the engine's
+    ``concurrency_limit_reached`` write likewise rolls back). All are
+    deliberately NOT swallowed inside the begin-block, which would commit the
+    dedup insert and break the sender-retry contract.
 
     MUST run AFTER the main request transaction has unwound — the call site
     is the route's outer handler ladder, never the in-transaction block. The
-    underlying recorder (``record_busy_delivery`` /
-    ``record_backpressure_delivery``) opens its own session from the shared
-    engine and never raises; this helper is the same shape.
+    underlying recorders open their own session from the shared engine and
+    never raise; this helper is the same shape.
 
     Returns ``True`` when a re-record was attempted (the org was resolved),
     ``False`` when there is nothing to record against. Never raises.
@@ -315,6 +334,21 @@ async def _record_rejected_delivery(
             trigger_id=trigger_id,
             org_id=org_id,
             trigger_type="webhook",
+            payload_hash=sha256_hex(raw_body),
+            raw_body=raw_body,
+            raw_payload=raw_payload,
+        )
+    elif kind == "concurrency":
+        # Reuse the shared refused-delivery writer directly (same shape as the
+        # busy/backpressure recorders) so the concurrency refusal carries its
+        # own detail instead of the busy wording, while keeping the shared
+        # ``concurrency_limit_reached`` vocabulary + stored payload.
+        await _record_refused_delivery(
+            trigger_id=trigger_id,
+            org_id=org_id,
+            trigger_type="webhook",
+            validation_result=_CONCURRENCY_REFUSAL_VALIDATION_RESULT,
+            error_detail=_CONCURRENCY_REFUSAL_ERROR_DETAIL,
             payload_hash=sha256_hex(raw_body),
             raw_body=raw_body,
             raw_payload=raw_payload,
@@ -833,9 +867,30 @@ async def receive_webhook(
             detail="Duplicate webhook payload",
         ) from exc
     except ConcurrentRunLimitError as exc:
+        # FAR-1863: at the trigger's declared cap the delivery is REFUSED (no
+        # run), never accepted-and-queued. The engine's in-transaction
+        # ``concurrency_limit_reached`` write rolls back with the unwound main
+        # transaction (the PipelineBackpressureError pattern), so re-record the
+        # refusal + raw payload in a FRESH transaction AFTER the unwind — the
+        # delivery stays auditable and replayable, never silent. The 429 is
+        # reject-and-retry, so it carries a Retry-After (mirroring the busy
+        # refusal) and the sender re-delivers once a slot frees.
+        _log.info(
+            "webhooks.receive_webhook.concurrent_limit_refused trigger=%s limit=%s",
+            trigger_id,
+            exc.limit,
+        )
+        await _record_rejected_delivery(
+            kind="concurrency",
+            trigger_id=trigger_id,
+            org_id=org_id,
+            raw_body=raw_body,
+            raw_payload=raw_payload,
+        )
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Concurrent run limit of {exc.limit} reached",
+            headers={"Retry-After": "5"},
         ) from exc
     except PipelineBackpressureError as exc:
         # FAR-604: the pipeline's pending queue is over the depth/age

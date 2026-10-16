@@ -125,7 +125,7 @@ bash library/curl.sh
 | GET | `/api/v1/pipelines/{id}` | `pipelines/` |
 | PATCH | `/api/v1/pipelines/{id}` | `pipelines/` |
 | DELETE | `/api/v1/pipelines/{id}` | `pipelines/` |
-| PATCH | `/api/v1/pipelines/{id}/graph` | `full-workflow.py` |
+| PUT | `/api/v1/pipelines/{id}/graph` | `full-workflow.py` |
 | POST | `/api/v1/runs` | `runs/`, `full-workflow.py` |
 | GET | `/api/v1/runs/{id}` | `runs/`, `full-workflow.py` |
 | POST | `/api/v1/runs/{id}/cancel` | `runs/`, `full-workflow.py` |

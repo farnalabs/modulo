@@ -159,7 +159,10 @@ def test_create_or_update_eval_bumps_and_snapshots_on_update() -> None:
     An update (``existing_eval_id`` given) bumps ``version`` and snapshots the
     prior config into ``pre_version_raw``.
     """
-    from modulo.core.eval_engine.eval_definition_write import create_or_update_eval
+    from modulo.core.eval_engine.eval_definition_write import (
+        EvalWriteOptions,
+        create_or_update_eval,
+    )
     from modulo.db.models.eval import Eval
 
     org_id = uuid.uuid4()
@@ -196,7 +199,7 @@ def test_create_or_update_eval_bumps_and_snapshots_on_update() -> None:
             failure_behaviour="warn",
             pass_threshold=None,
             suite_id=None,
-            existing_eval_id=row_id,
+            write_options=EvalWriteOptions(existing_eval_id=row_id),
         )
     )
 

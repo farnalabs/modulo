@@ -27,6 +27,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from modulo.auth.jwt import create_access_token
+from modulo.core.feature_flags import _KNOWN_FLAGS
 from modulo.db.soft_delete import register_soft_delete_filter
 
 pytestmark = pytest.mark.integration
@@ -116,8 +117,13 @@ async def test_plan_bootstrap_serves_effective_plan_to_non_admin(
     assert flags["user_scoped_mcp_keys"]["currently_active"] is False
     # Untouched default flows through: community flag, no override.
     assert flags["eval_system"]["currently_active"] is True
-    # Full known set is served, not a filtered subset.
-    assert len(body["flags"]) >= 40
+    # Full known set is served, not a filtered subset. Derive the expected set
+    # from the registry single source of truth (_KNOWN_FLAGS -> catalog.FLAGS)
+    # rather than a magic number, so retiring a flag (FAR-1819 dropped
+    # pipeline_diff_rollback) does not silently turn this into a stale check.
+    known = {flag.name for flag in _KNOWN_FLAGS}
+    served = {f["name"] for f in body["flags"]}
+    assert known <= served, f"plan bootstrap dropped known flags: {sorted(known - served)}"
 
 
 async def test_viewmodel_feature_flags_agree_with_plan_bootstrap(

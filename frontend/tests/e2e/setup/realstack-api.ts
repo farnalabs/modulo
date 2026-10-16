@@ -237,7 +237,7 @@ export async function setPipelineGraph(
   nodes: GraphNode[],
   edges: Array<Record<string, unknown>> = [],
 ): Promise<void> {
-  const res = await apiFetch(apiBase, token, 'PATCH', `/api/v1/pipelines/${pipelineId}/graph`, {
+  const res = await apiFetch(apiBase, token, 'PUT', `/api/v1/pipelines/${pipelineId}/graph`, {
     nodes,
     edges,
   })

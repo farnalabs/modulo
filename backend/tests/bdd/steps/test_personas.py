@@ -2445,7 +2445,7 @@ def alice_update_connector_binding(provider_name: str, request, ctx, client):
         patch("modulo.api.routes.pipelines._sync_agent_row_commands", new_callable=AsyncMock),
         patch("modulo.api.routes.pipelines._validate_graph_save", new_callable=AsyncMock, return_value=[]),
     ):
-        resp = client.patch(f"/api/v1/pipelines/{pipeline.id}/graph", json={"nodes": [node], "edges": []})
+        resp = client.put(f"/api/v1/pipelines/{pipeline.id}/graph", json={"nodes": [node], "edges": []})
     request.node._resp = resp
     _store_response(request, resp)
     assert resp.status_code == 200, resp.text
@@ -2726,7 +2726,7 @@ def add_new_node_between(node_name: str, prev_node: str, next_node: str, request
         patch("modulo.api.routes.pipelines._sync_agent_row_commands", new_callable=AsyncMock),
         patch("modulo.api.routes.pipelines._validate_graph_save", new_callable=AsyncMock, return_value=[]),
     ):
-        resp = client.patch(f"/api/v1/pipelines/{mock_pipeline.id}/graph", json={"nodes": [node], "edges": []})
+        resp = client.put(f"/api/v1/pipelines/{mock_pipeline.id}/graph", json={"nodes": [node], "edges": []})
     request.node._resp = resp
     _store_response(request, resp)
     assert resp.status_code == 200, resp.text

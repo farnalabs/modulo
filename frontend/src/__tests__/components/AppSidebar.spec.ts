@@ -137,6 +137,54 @@ describe('AppSidebar', () => {
       expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false)
     })
 
+    it('gives the four interactive controls in the fixed mobile header a >=44px hit area (WCAG 2.5.5/2.5.8)', async () => {
+      // jsdom cannot measure rendered geometry — these assert the utility
+      // classes that produce the 44px box. The brand home-link is deliberately
+      // out of scope (its size is unchanged by this pass).
+      const wrapper = mountSidebar()
+      await flushPromises()
+      const header = wrapper.find('header')
+      expect(header.exists()).toBe(true)
+
+      const hamburger = header.find('[aria-controls="mobile-sidebar"]')
+      expect(hamburger.classes()).toContain('h-11')
+      expect(hamburger.classes()).toContain('w-11')
+
+      const search = header.find('[aria-label="Search pages"]')
+      expect(search.classes()).toContain('h-11')
+      expect(search.classes()).toContain('w-11')
+
+      // The <label> is the real click target (the checkbox inside it is
+      // sr-only), so enlarging the label enlarges the hit area while the
+      // visible track stays 36x20.
+      const themeToggle = header.find('label.toggle-switch')
+      expect(themeToggle.classes()).toContain('h-11')
+      expect(themeToggle.classes()).toContain('w-11')
+      expect(themeToggle.classes()).toContain('justify-center')
+
+      const bell = header.find('[data-testid="notification-bell-button"]')
+      expect(bell.classes()).toContain('h-11')
+      expect(bell.classes()).toContain('w-11')
+    })
+
+    it('gates the tier badge off below 440px in the drawer header', async () => {
+      // The badge must override PrimeVue's default `inline-flex` so it stays
+      // hidden in the narrow (<440px) drawer header and only appears from
+      // 440px up. Tailwind v4's documented syntax is the trailing important
+      // modifier (`hidden!`, `min-[440px]:inline-flex!`). jsdom cannot
+      // evaluate Tailwind, so pin the utility classes the gate depends on -
+      // the same approach the >=44px hit-area test above uses.
+      const wrapper = mountSidebar()
+      const store = usePlanStore()
+      store.currentTier = 'team'
+      await flushPromises()
+
+      const badge = wrapper.find('header .p-badge')
+      expect(badge.exists()).toBe(true)
+      expect(badge.classes()).toContain('hidden!')
+      expect(badge.classes()).toContain('min-[440px]:inline-flex!')
+    })
+
     it('opens the mobile drawer when the hamburger button is clicked', async () => {
       const wrapper = mountSidebar()
       await flushPromises()
