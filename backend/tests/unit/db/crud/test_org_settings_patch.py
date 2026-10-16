@@ -272,3 +272,49 @@ def test_sync_identity_map_updates_loaded_org() -> None:
     org = Organisation(id=uuid.uuid4(), name="Org", slug="org", settings_json={})
     _sync_identity_map(_FakeSession(identity_map=_IdentityMap(org)), org.id, {"logo_url": "x"})
     assert org.settings_json == {"logo_url": "x"}
+
+
+# ---------------------------------------------------------------------------
+# FAR-1832: update_organisation forbids the whole-column settings_json dumper
+# ---------------------------------------------------------------------------
+
+
+async def test_update_organisation_refuses_settings_json_writes() -> None:
+    """The whole-column dumper shape cannot return: any ``settings_json`` key
+    is refused BEFORE any database work.
+
+    The session's ``execute`` raises — if the guard were missing, the call
+    would reach ``get_organisation`` and surface that RuntimeError instead of
+    the ValueError (the failure shape this test pins).
+    """
+    session = _FakeSession(exc=RuntimeError("db work must not start"))
+    with pytest.raises(ValueError, match="settings_json"):
+        await organisation_mod.update_organisation(
+            session, uuid.uuid4(), {"settings_json": {"logo_url": "https://x/l.png"}}
+        )
+
+
+async def test_update_organisation_refuses_settings_json_alongside_other_keys() -> None:
+    """A mixed updates dict (legit column + settings_json) is refused whole —
+    the guard runs before anything is applied, so no partial write happens."""
+    session = _FakeSession(exc=RuntimeError("db work must not start"))
+    with pytest.raises(ValueError, match="settings_json"):
+        await organisation_mod.update_organisation(
+            session, uuid.uuid4(), {"name": "Renamed", "settings_json": {"k": 1}}
+        )
+
+
+async def test_update_organisation_still_writes_non_settings_columns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Legitimate non-settings callers (``name``, ``plan_id``, ...) are
+    unaffected by the guard."""
+    org = Organisation(id=uuid.uuid4(), name="Org", slug="org", settings_json={"license_key": "keep"})
+    monkeypatch.setattr(organisation_mod, "get_organisation", AsyncMock(return_value=org))
+    session = _FakeSession()
+
+    result = await organisation_mod.update_organisation(session, uuid.uuid4(), {"name": "Renamed", "plan_id": "pro"})
+
+    assert result is org
+    assert org.name == "Renamed"
+    assert org.plan_id == "pro"
+    assert org.settings_json == {"license_key": "keep"}
+    assert session.flushed == 1

@@ -190,6 +190,24 @@ async def update_organisation(
     org_id: uuid.UUID,
     updates: dict[str, object],
 ) -> Organisation | None:
+    """Apply whole-column ORM updates to an organisation row.
+
+    FAR-1832: ``settings_json`` is FORBIDDEN here. Writing the whole settings
+    blob through this generic helper is the lost-update shape the atomic patch
+    replaced (read the column, merge one key in Python, write the WHOLE column
+    back — dropping every concurrent writer's keys committed in the window).
+    Any settings concern writes its own top-level key through
+    :func:`update_org_settings_patch` instead. Raising here rather than
+    silently routing the write makes the dumper shape impossible to reintroduce
+    by copy-paste; legitimate non-settings callers (``name``, ``plan_id``, ...)
+    are unaffected.
+    """
+    if "settings_json" in updates:
+        raise ValueError(
+            "update_organisation cannot write settings_json (whole-column settings writes lose "
+            "concurrent writers' keys); use update_org_settings_patch(session, org_id, {key: value}, "
+            "delete_keys=[...]) for atomic per-key settings writes instead (FAR-1830/FAR-1832)"
+        )
     org = await get_organisation(session, org_id)
     if org is None:
         return None
