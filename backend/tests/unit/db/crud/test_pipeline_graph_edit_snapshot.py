@@ -29,7 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.api.routes.pipelines import _sync_agent_row_commands
-from modulo.db.crud.pipeline import replace_pipeline_graph
+from modulo.db.crud.pipeline import GraphWriteRecording, replace_pipeline_graph
 from modulo.db.crud.pipeline_snapshot import _materialize_agent_fields
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
@@ -138,7 +138,7 @@ async def _patch_graph(
     nodes: list[dict[str, Any]],
     edges: list[dict[str, Any]],
     *,
-    record_edit_snapshot: bool = True,
+    record_snapshot: bool = True,
 ) -> Any:
     """Drive the REAL ``replace_pipeline_graph`` (shared by the REST
     ``PUT /{id}/graph`` route and the MCP ``update_pipeline_graph`` tool).
@@ -157,7 +157,7 @@ async def _patch_graph(
         caller_type="mcp",
         account_id=_ACCOUNT_ID,
         is_guardrail_admin=True,
-        record_edit_snapshot=record_edit_snapshot,
+        recording=GraphWriteRecording(record_snapshot=record_snapshot),
     )
 
 
@@ -337,7 +337,7 @@ class TestScaffoldingDefaultStaysOff:
                 session,
                 [_node(_NODE_A, agent_commands=["run --v2"])],
                 [],
-                record_edit_snapshot=False,
+                record_snapshot=False,
             )
 
         assert result is not None
@@ -382,7 +382,8 @@ _MCP_CTX_NAMES = (
 
 class TestSaveSurfaceWiring:
     """The REST graph endpoints and the MCP tool are the explicit-save surfaces;
-    each must pass ``record_edit_snapshot=True`` into the CRUD write."""
+    each must pass ``recording=GraphWriteRecording(record_snapshot=True)`` into
+    the CRUD write."""
 
     async def test_mcp_update_pipeline_graph_records_edit_snapshot(self, session: AsyncSession) -> None:
         """Drive the REAL MCP ``update_pipeline_graph`` tool through to the REAL
@@ -448,8 +449,9 @@ class TestSaveSurfaceWiring:
         run the FAR-488a agent-command sync BEFORE the write mints the edit
         snapshot.
 
-        The MCP tool is an explicit-save surface (``record_edit_snapshot=True``),
-        but the sync used to live only in the REST routes. The snapshot copy's
+        The MCP tool is an explicit-save surface
+        (``recording=GraphWriteRecording(record_snapshot=True)``), but the sync
+        used to live only in the REST routes. The snapshot copy's
         ``_materialize_agent_fields`` OVERWRITES a bound node's ``agent_commands``
         with the Agent-row value, which was still the PRE-sync value — so a save
         that changed a bound node's commands recorded a snapshot disagreeing with
@@ -538,8 +540,9 @@ class TestSaveSurfaceWiring:
 
 # ---------------------------------------------------------------------------
 # REST wiring: PUT /{id}/graph is the primary explicit-save surface and must
-# pass record_edit_snapshot=True into the CRUD write (mocked at the route layer
-# to assert the call argument — the CRUD behaviour itself is covered above).
+# pass recording=GraphWriteRecording(record_snapshot=True) into the CRUD write
+# (mocked at the route layer to assert the call argument — the CRUD behaviour
+# itself is covered above).
 # ---------------------------------------------------------------------------
 
 _VALID_32 = "a" * 32
@@ -593,9 +596,10 @@ def rest_client() -> Any:
 
 def test_put_graph_endpoint_records_edit_snapshot(rest_client: Any) -> None:
     """PUT /{id}/graph must call the CRUD write with
-    ``record_edit_snapshot=True`` — the flag that makes an explicit save enter
-    the primary version history. Without it the endpoint's save would record
-    nothing (the pre-FAR-1810 bug) and this assertion fails."""
+    ``recording=GraphWriteRecording(record_snapshot=True)`` — the request that
+    makes an explicit save enter the primary version history. Without it the
+    endpoint's save would record nothing (the pre-FAR-1810 bug) and this
+    assertion fails."""
     # The REST model requires a sandbox_agent node to carry template/prompt
     # fields (an ``agent`` node instead needs an agent_id), so this wiring test
     # uses the sandbox_agent shape the API accepts.
@@ -629,4 +633,6 @@ def test_put_graph_endpoint_records_edit_snapshot(rest_client: Any) -> None:
 
     assert resp.status_code == 200, resp.text
     crud_mock.assert_awaited_once()
-    assert crud_mock.await_args.kwargs.get("record_edit_snapshot") is True
+    recording = crud_mock.await_args.kwargs.get("recording")
+    assert recording is not None, "PUT /{id}/graph must declare how the write is recorded"
+    assert recording.record_snapshot is True

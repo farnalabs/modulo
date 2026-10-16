@@ -250,7 +250,7 @@ def test_patch_changes_only_the_supplied_field_on_the_target_node(client: TestCl
     other_written = written_by_id[str(other_id)]
     assert {key: other_written.get(key) for key in other} == other
     # The audit companion knows which field moved — names only.
-    assert write.call_args.kwargs["patched_fields"] == ["timeout_seconds"]
+    assert write.call_args.kwargs["recording"].patched_fields == ["timeout_seconds"]
     # No topology change: the patch writes no edges of its own.
     assert not write.call_args.kwargs["edges"]
 
@@ -282,7 +282,7 @@ def test_empty_patch_body_supplies_no_patched_fields(client: TestClient) -> None
         resp = client.patch(_patch_url(target_id), json={})
 
     assert resp.status_code == 200, resp.text
-    assert not write.call_args.kwargs["patched_fields"]
+    assert not write.call_args.kwargs["recording"].patched_fields
 
 
 def test_patch_syncs_agent_commands_to_the_bound_agent_row(client: TestClient) -> None:
@@ -511,7 +511,7 @@ def test_egress_policy_and_allowlist_are_patchable_together(client: TestClient) 
     written = write.call_args.kwargs["nodes"][0]
     assert written["egress_policy"] == "selected"
     assert written["egress_allowlist"] == [{"host": "api.github.com", "port": 443}]
-    assert write.call_args.kwargs["patched_fields"] == ["egress_allowlist", "egress_policy"]
+    assert write.call_args.kwargs["recording"].patched_fields == ["egress_allowlist", "egress_policy"]
 
 
 def test_egress_pair_can_be_cleared_out_of_selected(client: TestClient) -> None:

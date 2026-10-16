@@ -24,7 +24,7 @@ import pytest
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.pipeline import replace_pipeline_graph
+from modulo.db.crud.pipeline import GraphWriteRecording, replace_pipeline_graph
 from modulo.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
 from modulo.db.models.account import Account
 from modulo.db.models.audit_event import AuditEvent
@@ -341,7 +341,7 @@ class TestGraphUpdatedAuditEvent:
             caller_type="rest",
             account_id=None,
             is_guardrail_admin=True,
-            patched_fields=["timeout_seconds", "label"],
+            recording=GraphWriteRecording(patched_fields=["timeout_seconds", "label"]),
         )
         await session.flush()
 

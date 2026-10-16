@@ -132,6 +132,7 @@ from modulo.db.crud.pipeline import (
     CIRCUIT_BREAKER_THRESHOLD_CHANGE_DENIED_EVENT,
     CIRCUIT_BREAKER_THRESHOLD_MAX,
     CircuitBreakerThresholdChangeDenied,
+    GraphWriteRecording,
     PipelineHasActiveRunsError,
     archive_pipeline,
     check_pipeline_name_available,
@@ -3623,7 +3624,7 @@ async def replace_pipeline_graph_endpoint(
                 is_guardrail_admin=_is_guardrail_admin(principal),
                 grants_deny_privilege=_grants_deny_privilege(principal),
                 grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
-                record_edit_snapshot=True,
+                recording=GraphWriteRecording(record_snapshot=True),
             )
             if graph is not None:
                 issues = await _validate_graph_save(
@@ -3719,6 +3720,9 @@ async def patch_pipeline_graph_node_endpoint(
             # ``updates={}``: a node patch never changes pipeline-level fields,
             # so the effective owner team is the row's current one (which is
             # what ``_apply_graph_update`` falls back to).
+            # FAR-1829: the node-targeted patch DECLARES the field names it
+            # supplied; it is also an explicit save, so it requests the
+            # FAR-1810 edit snapshot like every other graph-write surface.
             saved_nodes, saved_edges, issues = await _apply_graph_update(
                 session,
                 pipeline_id=pipeline_id,
@@ -3726,7 +3730,10 @@ async def patch_pipeline_graph_node_endpoint(
                 principal=principal,
                 graph_json=graph_json,
                 updates={},
-                patched_fields=sorted(req.model_fields_set),
+                recording=GraphWriteRecording(
+                    record_snapshot=True,
+                    patched_fields=sorted(req.model_fields_set),
+                ),
             )
     except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied) as exc:
         await _handle_graph_write_denials(
@@ -4034,17 +4041,25 @@ async def _apply_graph_update(
     principal: TenantPrincipal,
     graph_json: PipelineGraphUpdate,
     updates: dict[str, Any],
-    patched_fields: list[str] | None = None,
+    recording: GraphWriteRecording | None = None,
 ) -> tuple[list[dict[str, Any]], list[PipelineEdge], list[GraphValidationIssue]]:
     """Apply a graph replacement shipped inside a PATCH update payload.
 
-    ``patched_fields`` (FAR-1829) is the node-targeted patch route's list of
-    node-field NAMES it supplied; it is forwarded verbatim to the
-    ``pipeline.graph_updated`` audit payload and is ``None`` for every other
-    caller, whose payload shape is therefore unchanged. The three-value return
-    (saved nodes, saved edges, advisory validation issues) is consumed by the
-    node-targeted patch route; the pre-existing ``graph_json``-inside-``PATCH``
-    caller ignores it, so its behaviour is unchanged.
+    ``recording`` (FAR-1810 + FAR-1829) is the caller's declaration of how the
+    write is recorded. It is forwarded VERBATIM to the shared
+    :func:`replace_pipeline_graph` write, so the caller owns both halves: the
+    node-targeted patch route passes
+    ``GraphWriteRecording(record_snapshot=True, patched_fields=<declared
+    field names>)`` and the ``graph_json``-inside-``PATCH`` caller passes
+    ``GraphWriteRecording(record_snapshot=True)`` — this path is an explicit
+    save, so BOTH callers request the FAR-1810 edit snapshot exactly as the
+    hard-coded flag did before the two recording knobs were folded into one
+    value object. ``patched_fields`` reaches the ``pipeline.graph_updated``
+    audit payload only when the caller declared some, so every non-patch
+    caller's payload shape is unchanged. The three-value return (saved nodes,
+    saved edges, advisory validation issues) is consumed by the node-targeted
+    patch route; the pre-existing ``graph_json``-inside-``PATCH`` caller
+    ignores it, so its behaviour is unchanged.
     """
     node_data, edge_data, validator_graph, graph_bindings = _prepare_graph_write(graph_json)
     existing = await get_pipeline(session, pipeline_id, organisation_id=org_id)
@@ -4089,8 +4104,7 @@ async def _apply_graph_update(
         is_guardrail_admin=_is_guardrail_admin(principal),
         grants_deny_privilege=_grants_deny_privilege(principal),
         grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
-        patched_fields=patched_fields,
-        record_edit_snapshot=True,
+        recording=recording,
     )
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
@@ -4310,6 +4324,10 @@ async def _apply_pipeline_update_payload(
             updates=updates,
         )
         if has_graph and req.graph_json is not None:
+            # A ``graph_json``-inside-``PATCH`` save is an explicit save: it
+            # records the FAR-1810 edit snapshot (it always has — the flag used
+            # to be hard-coded inside ``_apply_graph_update``). It declares no
+            # node fields, so the audit payload carries no ``patched_fields``.
             await _apply_graph_update(
                 session,
                 pipeline_id=pipeline_id,
@@ -4317,6 +4335,7 @@ async def _apply_pipeline_update_payload(
                 principal=principal,
                 graph_json=req.graph_json,
                 updates=updates,
+                recording=GraphWriteRecording(record_snapshot=True),
             )
         pipeline = await update_pipeline(
             session,
@@ -6132,7 +6151,7 @@ async def _save_locked_graph(
         is_guardrail_admin=_is_guardrail_admin(principal),
         grants_deny_privilege=_grants_deny_privilege(principal),
         grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
-        record_edit_snapshot=True,
+        recording=GraphWriteRecording(record_snapshot=True),
     )
     if graph is None:
         return None
@@ -6489,7 +6508,7 @@ async def _save_graph(
     is_guardrail_admin: bool = False,
     grants_deny_privilege: bool = False,
     grants_deny_guardrail_admin: bool = False,
-    record_edit_snapshot: bool = False,
+    recording: GraphWriteRecording | None = None,
 ) -> tuple[list[dict[str, Any]], list[Any]] | None:
     """Persist updated nodes + edges via replace_pipeline_graph.
 
@@ -6497,9 +6516,9 @@ async def _save_graph(
     Forwards is_privileged + caller_type + account_id + is_guardrail_admin to
     the underlying graph write (ADR 047 backstop /
     hitl-gate-removal-guard-plan.md v19 / FAR-309 PR A review). Node-conversion
-    saves pass ``record_edit_snapshot=True`` (FAR-1810) so a conversion — a
-    deliberate graph edit — records an edit snapshot like the sibling
-    graph-write endpoints.
+    saves pass ``recording=GraphWriteRecording(record_snapshot=True)``
+    (FAR-1810) so a conversion — a deliberate graph edit — records an edit
+    snapshot like the sibling graph-write endpoints.
     """
     edge_dicts = [_edge_to_dict(e) if hasattr(e, "source_node_id") else dict(e) for e in edges]
     # FAR-488a + FAR-1810: node-conversion saves go through here too — sync the
@@ -6519,5 +6538,5 @@ async def _save_graph(
         is_guardrail_admin=is_guardrail_admin,
         grants_deny_privilege=grants_deny_privilege,
         grants_deny_guardrail_admin=grants_deny_guardrail_admin,
-        record_edit_snapshot=record_edit_snapshot,
+        recording=recording,
     )

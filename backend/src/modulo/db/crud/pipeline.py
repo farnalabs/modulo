@@ -2149,6 +2149,24 @@ async def _record_edit_snapshot_if_needed(
     )
 
 
+@dataclass(frozen=True)
+class GraphWriteRecording:
+    """How an explicit graph write is recorded (FAR-1810 + FAR-1829).
+
+    ``record_snapshot`` requests a pipeline-snapshot edit record.
+    ``patched_fields`` is the sorted list of node-field **NAMES** the caller
+    declared (node-targeted PATCH only), forwarded to the
+    ``pipeline.graph_updated`` audit payload.
+
+    The two are independent: a snapshot may be recorded with no declared
+    fields (full save, MCP tool, seed), and a declared-field list always
+    accompanies a node-targeted patch.
+    """
+
+    record_snapshot: bool = False
+    patched_fields: list[str] | None = None
+
+
 async def replace_pipeline_graph(
     session: AsyncSession,
     *,
@@ -2162,8 +2180,7 @@ async def replace_pipeline_graph(
     is_guardrail_admin: bool = False,
     grants_deny_privilege: bool = False,
     grants_deny_guardrail_admin: bool = False,
-    record_edit_snapshot: bool = False,
-    patched_fields: list[str] | None = None,
+    recording: GraphWriteRecording | None = None,
     _on_lock_acquired: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[PipelineEdge]] | None:
     """Atomically replace an editable graph while preserving first-class edges.
@@ -2187,13 +2204,13 @@ async def replace_pipeline_graph(
     FAR-1471: a successful write ALSO appends a ``pipeline.graph_updated``
     audit event (actor, pipeline id, before/after node+edge summary) so every
     graph mutation is attributable — the HITL-gate-removal event below only
-    fires for gate weakenings. ``patched_fields`` (FAR-1829) is forwarded to
-    that payload verbatim: only the node-targeted patch route supplies it, so
-    every other caller keeps its exact existing payload shape.
+    fires for gate weakenings. ``recording.patched_fields`` (FAR-1829) is
+    forwarded to that payload verbatim: only the node-targeted patch route
+    supplies it, so every other caller keeps its exact existing payload shape.
 
-    FAR-1810: when ``record_edit_snapshot`` is True (the explicit-save callers:
-    REST ``PUT /{id}/graph``, ``PATCH /{id}`` with ``graph_json``, the MCP
-    ``update_pipeline_graph`` tool, and node conversion), a successful write
+    FAR-1810: when ``recording.record_snapshot`` is True (the explicit-save
+    callers: REST ``PUT /{id}/graph``, ``PATCH /{id}`` with ``graph_json``, the
+    MCP ``update_pipeline_graph`` tool, and node conversion), a successful write
     ALSO records an immutable ``version_kind='edit'`` snapshot in the SAME
     transaction — after the graph rows and the policy-gate reconciliation, so
     the snapshot captures the reconciled post-write state. Fail closed: a
@@ -2202,9 +2219,21 @@ async def replace_pipeline_graph(
     identical to the live one (:func:`_graph_content_unchanged`) records no
     snapshot — no-op suppression caps save-driven volume and keeps "at rest
     the live graph equals the latest snapshot" true. Scaffolding writers
-    (onboarding, demo-seed) leave the default False so a genesis graph does
+    (onboarding, demo-seed genesis) request no recording — ``recording`` stays
+    ``None`` or its ``record_snapshot`` stays False — so a genesis graph does
     not enter the primary edit history.
+
+    The two recording knobs ride on ONE optional value object
+    (:class:`GraphWriteRecording`) rather than two separate parameters: they
+    were added independently by FAR-1810 and FAR-1829, and two defaulted
+    flags on top of the privilege/grant flags push this signature past the
+    13-parameter budget.
     """
+    # Normalise the "no recording requested" default once, so both consumers
+    # below read plain attributes. ``GraphWriteRecording()`` reproduces exactly
+    # what the old separate defaults did (no snapshot, no declared fields), so
+    # every call path behaves byte-identically to the two-flag version.
+    recording = recording if recording is not None else GraphWriteRecording()
     result = await session.execute(
         select(Pipeline)
         .where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id, Pipeline.deleted_at.is_(None))
@@ -2408,7 +2437,7 @@ async def replace_pipeline_graph(
             new_nodes=nodes,
             previous_edge_count=len(old_edges),
             new_edge_count=len(edges),
-            patched_fields=patched_fields,
+            patched_fields=recording.patched_fields,
         ),
     )
 
@@ -2424,7 +2453,7 @@ async def replace_pipeline_graph(
     # the allocation phase), then the allocation lock's ``FOR NO KEY UPDATE`` on
     # this same session is self-reentrant under the held ``FOR UPDATE`` — no
     # wait, no cycle, identical to the rollback path's ordering.
-    if record_edit_snapshot:
+    if recording.record_snapshot:
         await _record_edit_snapshot_if_needed(
             session,
             pipeline_id=pipeline_id,

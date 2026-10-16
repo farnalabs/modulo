@@ -28,6 +28,7 @@ from modulo.api.routes.pipelines import (
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.pipeline_engine.git_content import GitContentRefError
+from modulo.db.crud.pipeline import GraphWriteRecording
 from modulo.db.crud.pipeline_snapshot import _apply_agent_fields
 from modulo.db.models.agent import Agent
 from modulo.settings import Settings
@@ -382,7 +383,7 @@ async def test_save_graph_syncs_agent_rows_before_the_graph_write() -> None:
             [],
             is_privileged=True,
             caller_type="rest",
-            record_edit_snapshot=True,
+            recording=GraphWriteRecording(record_snapshot=True),
         )
 
     assert order == ["sync", "replace"]
