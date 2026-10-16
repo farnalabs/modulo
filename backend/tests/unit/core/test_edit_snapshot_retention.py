@@ -15,10 +15,10 @@ processor, which calls ``value.hex`` on the bind value and raises on ``str``.
 Without the FAR-1815 scanner the category does not exist below, so this test
 fails before any deletion question arises.
 
-The reference-safety selection tests (FAR-1815 review C1/M1) pin the two
-non-FK exclusions a pipeline-less "no external references" seed cannot see: a
-release-channel-tagged snapshot and a trigger-pinned snapshot inside the
-would-be delete band are never surfaced as candidates.
+The reference-safety selection tests (FAR-1815 review C1/M1) pin the non-FK
+exclusions a "no external references" seed cannot see: release-channel-tagged,
+trigger-pinned and variant-referenced snapshots inside the would-be delete band
+are never surfaced as candidates.
 """
 
 import uuid
@@ -33,6 +33,7 @@ from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.trigger import Trigger
+from modulo.db.models.variant_group import VariantGroup
 
 _CATEGORY = "edit_snapshot_retention"
 _ORG = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -63,6 +64,7 @@ _TABLE_NAMES = {
     "team_memberships",
     "teams",
     "triggers",
+    "variant_groups",
     "webhook_dedup_hashes",
 }
 
@@ -171,12 +173,13 @@ class TestEditSnapshotRetentionEnumeration:
 class TestEditSnapshotRetentionReferenceSafety:
     """FAR-1815 review C1/M1: externally referenced rows never leave the pool.
 
-    Both tests seed the SAME 207-row provenance-edit pool as the enumeration
-    test (so the unfiltered delete band is exactly v2..v8), then mark one
-    would-be-deleted rank (v5 — rank 204 in the unfiltered pool) as externally
-    referenced. Without the safety predicate that row IS surfaced and the first
-    assertion in each test fails; with it the pool shrinks to 206 rows and the
-    newest-200 bound resurfaces exactly the six oldest remaining plain edits.
+    All three tests seed the SAME 207-row provenance-edit pool as the
+    enumeration test (so the unfiltered delete band is exactly v2..v8), then
+    mark one would-be-deleted rank (v5 — rank 204 in the unfiltered pool) as
+    externally referenced. Without the safety predicate that row IS surfaced
+    and the first assertion in each test fails; with it the pool shrinks to
+    206 rows and the newest-200 bound resurfaces exactly the six oldest
+    remaining plain edits.
     """
 
     async def test_canary_tagged_snapshot_in_the_delete_band_is_never_surfaced(
@@ -215,6 +218,35 @@ class TestEditSnapshotRetentionReferenceSafety:
                 trigger_type="manual",
                 account_id=_ACCOUNT,
                 config_json={"snapshot_id": str(by_version[pinned_version])},
+            )
+        )
+        await session.commit()
+
+        candidates = await _scan_edit_snapshot_retention(session, _ORG)
+        candidate_ids = {c.id for c in candidates}
+
+        assert str(by_version[pinned_version]) not in candidate_ids
+        assert candidate_ids == {str(by_version[version]) for version in (2, 3, 4, 6, 7, 8)}
+
+    async def test_variant_pinned_snapshot_in_the_delete_band_is_never_surfaced(
+        self,
+        session: AsyncSession,
+    ) -> None:
+        pipeline, by_version = await _seed_history(session)
+        # M1 (variant leg): a variant group pins one snapshot per variant via
+        # the ``variants`` JSON array — the shape variant_group.py fires with
+        # (``_coerce_snapshot_id(variant["snapshot_id"])``); no FK exists.
+        pinned_version = 5
+        session.add(
+            VariantGroup(
+                id=uuid.uuid4(),
+                organisation_id=_ORG,
+                pipeline_id=pipeline.id,
+                name="ab-pin-v5",
+                variants=[
+                    {"id": str(uuid.uuid4()), "name": "A", "snapshot_id": str(by_version[pinned_version])},
+                    {"id": str(uuid.uuid4()), "name": "B", "snapshot_id": str(uuid.uuid4())},
+                ],
             )
         )
         await session.commit()

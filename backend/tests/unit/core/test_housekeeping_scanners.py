@@ -86,6 +86,7 @@ _TABLE_NAMES = {
     "team_memberships",
     "teams",
     "triggers",
+    "variant_groups",
     "webhook_dedup_hashes",
 }
 

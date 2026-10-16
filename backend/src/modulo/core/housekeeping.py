@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import String, exists, func, select
+from sqlalchemy import ColumnElement, String, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.graph_validator.mask_sentinel import find_mask_sentinel_values
@@ -35,6 +35,7 @@ from modulo.db.models.sso_provider import SsoProvider
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
+from modulo.db.models.variant_group import VariantGroup
 from modulo.db.models.webhook import WebhookDedupHash
 
 _log = logging.getLogger(__name__)
@@ -400,8 +401,8 @@ async def _scan_edit_snapshot_retention(session: AsyncSession, org_id: uuid.UUID
     (``entity_type='pipeline_snapshot'`` — same path as ``orphan_snapshots``).
 
     The deletable pool — the set the rank and the newest-200 bound apply to —
-    is edit/edit snapshots that are (a) untagged by a release channel and
-    (b) not pinned by a trigger. Never surfaced:
+    is edit/edit snapshots that are (a) untagged by a release channel, (b) not
+    pinned by a trigger and (c) not referenced by any variant. Never surfaced:
 
     * run / rollback / initial snapshots. The ``created_kind`` carve-out is
       load-bearing: ``rollback_to_snapshot`` writes ``version_kind='edit'`` /
@@ -423,6 +424,15 @@ async def _scan_edit_snapshot_retention(session: AsyncSession, org_id: uuid.UUID
       both sides of the comparison are dash-normalised to 32-hex because the
       pin stores the dashed ``str(uuid)`` form while the ``Uuid`` column binds
       as hex on SQLite and dashed text on Postgres.
+    * variant-referenced snapshots. A variant group pins one snapshot per
+      variant via the ``variant_groups.variants`` JSON array (an ``entry``
+      carrying ``snapshot_id``) — a non-FK reference; deleting the row breaks
+      the group's next fire. Any snapshot any variant pins is excluded from the
+      pool. The referenced-id set is computed in Python (``uuid.UUID`` parse of
+      each entry), which is dialect-portable across the JSON storage
+      differences; the exclusion reads the Core ``variant_groups`` table, not
+      the ORM entity, so the global soft-delete filter cannot hide a
+      soft-deleted group's pin — matching the trigger leg's reasoning.
 
     A run-referenced edit snapshot is deliberately NOT excluded here:
     ``runs.snapshot_id`` is ``ondelete=RESTRICT``, so cleanup of such a row
@@ -448,6 +458,40 @@ async def _scan_edit_snapshot_retention(session: AsyncSession, org_id: uuid.UUID
     trigger_pins = Trigger.__table__
     _pinned_hex = func.replace(trigger_pins.c.config_json["snapshot_id"].as_string(), "-", "")
     _snapshot_hex = func.replace(PipelineSnapshot.id.cast(String), "-", "")
+    # M1 (variant leg): ``variant_groups.variants`` is a JSON array of variant
+    # dicts, each optionally carrying ``snapshot_id`` — a non-FK reference.
+    # Core table so the soft-delete filter cannot hide a soft-deleted group's
+    # pin (matching the trigger leg); Python-side ``uuid.UUID`` parse keeps the
+    # check dialect-portable across the JSON storage differences.
+    variant_pins = VariantGroup.__table__
+    variant_rows = (
+        await session.execute(select(variant_pins.c.variants).where(variant_pins.c.organisation_id == org_id))
+    ).scalars()
+    variant_pinned: set[uuid.UUID] = set()
+    for variants in variant_rows:
+        for entry in variants if isinstance(variants, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            raw = entry.get("snapshot_id")
+            if raw is None:
+                continue
+            try:
+                variant_pinned.add(uuid.UUID(str(raw)))
+            except (ValueError, TypeError):
+                continue
+    # Pool predicates: the (a) channel + (b) trigger + (c) variant exclusions
+    # from the docstring, applied BEFORE ranking so the newest-200 bound counts
+    # only genuinely deletable rows. The variant predicate joins only when the
+    # org has pins (empty ``in_``/``not_in`` sets carry no useful SQL).
+    pool_predicates: list[ColumnElement[bool]] = [
+        PipelineSnapshot.organisation_id == org_id,
+        PipelineSnapshot.version_kind == "edit",
+        PipelineSnapshot.created_kind == "edit",
+        PipelineSnapshot.channel == "none",
+        ~exists(select(trigger_pins.c.id).where(_pinned_hex == _snapshot_hex)),
+    ]
+    if variant_pinned:
+        pool_predicates.append(PipelineSnapshot.id.not_in(variant_pinned))
     ranked = (
         select(
             PipelineSnapshot.id.label("id"),
@@ -461,13 +505,7 @@ async def _scan_edit_snapshot_retention(session: AsyncSession, org_id: uuid.UUID
             )
             .label("retention_rank"),
         )
-        .where(
-            PipelineSnapshot.organisation_id == org_id,
-            PipelineSnapshot.version_kind == "edit",
-            PipelineSnapshot.created_kind == "edit",
-            PipelineSnapshot.channel == "none",
-            ~exists(select(trigger_pins.c.id).where(_pinned_hex == _snapshot_hex)),
-        )
+        .where(*pool_predicates)
         .subquery()
     )
     latest_version = (
@@ -1076,8 +1114,8 @@ _SCANNERS: list[Scanner] = [
         description=(
             "Edit snapshots beyond the newest 200 kept per pipeline — deletable via the "
             "standard housekeeping cleanup; run/rollback/initial snapshots, a pipeline's "
-            "latest snapshot, release-channel-tagged snapshots and trigger-pinned "
-            "snapshots are never selected (FAR-1815)."
+            "latest snapshot, release-channel-tagged snapshots, trigger-pinned snapshots "
+            "and variant-referenced snapshots are never selected (FAR-1815)."
         ),
         entity_type="pipeline_snapshot",
     ),
