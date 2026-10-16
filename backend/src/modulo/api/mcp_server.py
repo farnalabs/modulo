@@ -9547,7 +9547,7 @@ async def list_feature_flags() -> dict[str, Any]:
                 "detail": "list_feature_flags requires system admin role",
             }
 
-        from modulo.core.feature_flags import FeatureFlagRegistry
+        from modulo.core.feature_flags import FeatureFlagRegistry, resolve_effective_license
         from modulo.core.license import get_license, verify_license_key
         from modulo.db.crud.organisation import get_organisation
 
@@ -9557,21 +9557,27 @@ async def list_feature_flags() -> dict[str, Any]:
         async with _session(org_id) as s:
             org = await get_organisation(s, org_id)
             plan_ctx = await resolve_plan_context(settings, s, org)
-            lic = get_license()
-            # FAR-1733: the env-var key is only counted after verification
-            # (never on mere presence); is_valid reports whether any rung of
-            # the licence ladder resolved a VALID licence — in-memory, a
-            # verified env key, or a verified org-level key.
-            env_data = verify_license_key(getattr(settings, "modulo_license_key", "") or "")
-            has_key = env_data is not None or lic is not None
             org_settings = getattr(org, "settings_json", None)
             org_key = org_settings.get("license_key") if isinstance(org_settings, dict) else None
-            if not has_key and org_key:
-                has_key = True
-            license_valid = (
-                lic is not None
-                or env_data is not None
-                or (bool(org_key) and verify_license_key(str(org_key)) is not None)
+            # is_valid is the OUTCOME of the one canonical session-free ladder
+            # (core.feature_flags.resolve_effective_license: verified org key,
+            # then the in-memory licence, then the verified env key) — the same
+            # walk this tool's tier resolves through, so a future rung change
+            # cannot make the two disagree. FAR-1849 replaces the inline
+            # three-rung OR that duplicated it; a disjunction over the same
+            # verified rungs gives an identical answer in every case.
+            license_valid = resolve_effective_license(settings, org) is not None
+            # has_license_key is NOT the ladder and must not be unified with
+            # it: it mirrors the REST route's registry input
+            # (admin_feature_flags._build_registry) — a verified env key or
+            # the in-memory licence, plus an org key counted on PRESENCE
+            # alone. It answers "is a key configured", where is_valid answers
+            # "is it valid" (both pinned in test_mcp_governance_read_tools:
+            # an invalid org key counts for has_license_key but not is_valid).
+            has_key = (
+                verify_license_key(getattr(settings, "modulo_license_key", "") or "") is not None
+                or get_license() is not None
+                or bool(org_key)
             )
             registry = await FeatureFlagRegistry.from_db(s, plan_ctx.tier(), has_license_key=has_key)
 
