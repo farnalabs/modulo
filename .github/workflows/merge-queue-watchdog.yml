@@ -44,6 +44,25 @@ name: "Merge: Queue Watchdog"
 #      conclusion (success, failure, cancelled) still proves the machinery is
 #      alive FOR RE-ARM PURPOSES (#2) - it just must no longer suppress the
 #      stall alert.
+#   4. Escalate on a zero-merge window: fire when NO PR has merged at all
+#      for > 90 min AND either (a) approved PRs wait in a CLEAN or UNSTABLE
+#      merge state — UNSTABLE is GitHub's state for non-passing checks, i.e.
+#      approved-but-red-CI, which is exactly the FAR-1843 shape; a
+#      CLEAN-only selector reads 0 during that outage because red-CI PRs
+#      are UNSTABLE, never CLEAN — or (b) open non-draft PRs await
+#      review/CI with none approved+mergeable yet (post-D1 a red-CI PR
+#      gets no automatic approval, so an "approved PRs waiting" alert
+#      alone is blind to "nothing is getting approved"). This watches the
+#      OUTCOME, not queue-run success: a queue that keeps running while
+#      skipping every PR (FAR-1843, 2026-10-15: five hours, 28+ PRs,
+#      reviewer-dispatch outage made product CI red everywhere) keeps the
+#      success age fresh and never trips #3.
+#   Delivery for #3 and #4 (FAR-1843 review F3): an alert makes this
+#      run FAIL (exit 1) after the re-arm, and the "Escalate to Linear"
+#      step opens or updates ONE Linear ticket per condition (deduped on
+#      the condition title, FAR-1407 pattern) — a bare ::error::
+#      annotation in a green scheduled run nobody opens is not an
+#      escalation, and one ticket per 15-min tick would be spam.
 #
 # Division of labour with merge-queue.yml's in-job sweep:
 #   - merge-queue.yml in-job sweep = belt-and-braces: runs only when the lock
@@ -81,8 +100,9 @@ concurrency:
 #   /repos/{owner}/{repo}/dispatches requires contents: write, so a read-only
 #   contents scope makes every re-arm attempt 403 (behaviour #2 silently dead).
 # actions: write -> gh run cancel (the cancel leg needs only actions: write).
-# pull-requests: read -> gh pr list, for the approved-and-waiting count that
-#   gates the stall alert (behaviour #3). Read-only, least privilege.
+# pull-requests: read -> gh pr list, for the approved-and-waiting /
+#   awaiting-review counts that gate the stall and zero-merge alerts
+#   (behaviours #3 and #4). Read-only, least privilege.
 permissions:
   contents: write
   actions: write
@@ -236,6 +256,10 @@ jobs:
           # real stall the any-conclusion age stays fresh and the old
           # condition suppressed the alert indefinitely (FAR-1689, 2026-10-11:
           # ~5.5 h stall, 25 approved PRs never merged, zero alerts).
+          # Delivery (FAR-1843 review F3): when this alert fires the step
+          # exits non-zero AFTER the re-arm below, and the "Escalate to
+          # Linear" step turns the failure into one deduplicated Linear
+          # ticket — the ::error:: annotation alone reached nobody.
           LAST_SUCCESS="$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --status success --limit 1 --json updatedAt 2>/dev/null)" || LAST_SUCCESS="[]"
           LAST_SUCCESS_AGE="$(echo "$LAST_SUCCESS" | python3 -c '
           import json, sys, datetime
@@ -257,7 +281,7 @@ jobs:
             ''|*[!0-9]*) LAST_SUCCESS_AGE="-1" ;;
           esac
 
-          OPEN_PRS="$(gh pr list --repo "$REPO" --state open --limit 100 --json reviewDecision,mergeStateStatus 2>/dev/null)" || OPEN_PRS="[]"
+          OPEN_PRS="$(gh pr list --repo "$REPO" --state open --limit 100 --json reviewDecision,mergeStateStatus,isDraft 2>/dev/null)" || OPEN_PRS="[]"
           APPROVED_WAITING="$(echo "$OPEN_PRS" | jq '[.[] | select(.reviewDecision == "APPROVED") | select(.mergeStateStatus == "CLEAN" or .mergeStateStatus == "UNSTABLE")] | length' 2>/dev/null)" || APPROVED_WAITING="0"
           # Normalise: empty or non-numeric => 0 (never alerts).
           case "$APPROVED_WAITING" in
@@ -287,6 +311,99 @@ jobs:
             echo "Last successful merge-queue run was ${LAST_SUCCESS_AGE} min ago with ${APPROVED_WAITING} approved PR(s) waiting — within alert threshold."
           fi
 
+          # ---- 5. Zero-merge window alert (FAR-1843; conditions corrected by
+          # pre-PR review F2, last-merge computation by F4) ----
+          # The section-4 alert is keyed on queue-RUN success. A queue that
+          # keeps RUNNING and concluding while merging NOTHING keeps that age
+          # fresh and never alerts — exactly the FAR-1843 outage (2026-10-15):
+          # the PR-reviewer dispatch lived inside "CI: Fast Validation", so a
+          # dispatch outage marked CI red on every PR; the queue completed its
+          # passes while skipping all 28+ PRs for five hours and no alert
+          # fired. This check watches the OUTCOME instead, over the same
+          # ZERO_MERGE_MIN window. Two conditions, because post-D1 a red-CI PR
+          # gets NO automatic approval, so an "approved PRs waiting" alert
+          # alone is blind to a review outage where nothing ever becomes
+          # approved:
+          #   5a. approved PRs wait in CLEAN or UNSTABLE — UNSTABLE is
+          #       GitHub's mergeStateStatus for non-passing checks, i.e.
+          #       approved-but-red-CI (the FAR-1843 shape; the original
+          #       CLEAN-only selector read 0 during exactly that outage,
+          #       because red-CI PRs are UNSTABLE, never CLEAN), OR
+          #   5b. open NON-DRAFT PRs await review/CI and NONE is
+          #       approved+mergeable — nothing is getting approved.
+          # Both require an actual zero-merge window; a quiet repo with no
+          # open non-draft PRs never alerts. Bound: 90 min = six missed
+          # 15-min queue passes — long enough to absorb a burst of
+          # queue-cancelling merges elsewhere, short enough that a multi-hour
+          # starvation is always visible.
+          ZERO_MERGE_MIN=90
+          MERGEABLE_WAITING="$(echo "$OPEN_PRS" | jq '[.[] | select(.reviewDecision == "APPROVED") | select(.mergeStateStatus == "CLEAN" or .mergeStateStatus == "UNSTABLE")] | length' 2>/dev/null)" || MERGEABLE_WAITING="0"
+          case "$MERGEABLE_WAITING" in
+            ''|*[!0-9]*) MERGEABLE_WAITING="0" ;;
+          esac
+          # AWAITING_REVIEW (5b): open non-draft PRs that are NOT
+          # approved+mergeable — i.e. awaiting review or CI. Drafts are
+          # excluded: a draft is deliberately not ready and must never alert.
+          AWAITING_REVIEW="$(echo "$OPEN_PRS" | jq '[.[] | select(.isDraft != true) | select((.reviewDecision == "APPROVED" and (.mergeStateStatus == "CLEAN" or .mergeStateStatus == "UNSTABLE")) | not)] | length' 2>/dev/null)" || AWAITING_REVIEW="0"
+          case "$AWAITING_REVIEW" in
+            ''|*[!0-9]*) AWAITING_REVIEW="0" ;;
+          esac
+          # Last-merge age (F4): minutes since the true max(mergedAt), NOT
+          # `gh pr list --state merged --limit 1` — that returns the most
+          # recently CREATED merged PR, and mergedAt is not monotonic with
+          # creation order, which can overstate the window and false-positive.
+          # Fetch size: the 300 most recently created merged PRs, then take
+          # max(mergedAt) over the set. Bound: the true latest merge is missed
+          # only if >300 PRs created AFTER it were all merged BEFORE it — a
+          # stampede the 90-min window absorbs in practice.
+          LAST_MERGED="$(gh pr list --repo "$REPO" --state merged --limit 300 --json mergedAt 2>/dev/null)" || LAST_MERGED="[]"
+          LAST_MERGE_AGE="$(echo "$LAST_MERGED" | python3 -c '
+          import json, sys, datetime
+          try:
+              prs = json.loads(sys.stdin.read())
+          except Exception:
+              prs = []
+          stamps = [p["mergedAt"] for p in prs if p.get("mergedAt")]
+          if stamps:
+              merged = max(stamps).replace("Z", "+00:00")
+              dt = datetime.datetime.fromisoformat(merged)
+              now = datetime.datetime.now(datetime.timezone.utc)
+              print(int((now - dt).total_seconds() / 60))
+          else:
+              print(-1)
+          ' 2>/dev/null)" || LAST_MERGE_AGE="-1"
+          case "$LAST_MERGE_AGE" in
+            -1) : ;;
+            ''|*[!0-9]*) LAST_MERGE_AGE="-1" ;;
+          esac
+          ZERO_MERGE_ALERT=false
+          if [ "$LAST_MERGE_AGE" -ge "$ZERO_MERGE_MIN" ]; then
+            if [ "$MERGEABLE_WAITING" -gt 0 ]; then
+              ZERO_MERGE_ALERT=true
+              echo "::error::merge-queue-watchdog: no PR merged for ${LAST_MERGE_AGE} min while ${MERGEABLE_WAITING} approved PR(s) wait in CLEAN or UNSTABLE — the queue is running but landing nothing (zero-merge window > ${ZERO_MERGE_MIN} min)."
+            elif [ "$AWAITING_REVIEW" -gt 0 ]; then
+              ZERO_MERGE_ALERT=true
+              echo "::error::merge-queue-watchdog: no PR merged for ${LAST_MERGE_AGE} min with ${AWAITING_REVIEW} open PR(s) awaiting review/CI and none approved+mergeable — nothing is getting approved (zero-merge window > ${ZERO_MERGE_MIN} min)."
+            fi
+          fi
+          {
+            echo "zero_merge_alert=${ZERO_MERGE_ALERT}"
+            echo "last_merge_age=${LAST_MERGE_AGE}"
+            echo "mergeable_waiting=${MERGEABLE_WAITING}"
+            echo "awaiting_review=${AWAITING_REVIEW}"
+          } >> "$GITHUB_OUTPUT"
+          if [ "$ZERO_MERGE_ALERT" = "true" ]; then
+            : # escalation: non-zero exit happens AFTER the re-arm below
+          elif [ "$LAST_MERGE_AGE" -lt 0 ]; then
+            echo "Zero-merge check: no merged PR found (merge age unmeasurable) — not alerting."
+          elif [ "$MERGEABLE_WAITING" -eq 0 ] && [ "$AWAITING_REVIEW" -eq 0 ]; then
+            echo "Zero-merge check: no open non-draft PR waiting at all — not alerting (last merge ${LAST_MERGE_AGE} min ago)."
+          elif [ "$MERGEABLE_WAITING" -eq 0 ]; then
+            echo "Zero-merge check: ${AWAITING_REVIEW} PR(s) awaiting review/CI but none approved+mergeable, last merge ${LAST_MERGE_AGE} min ago — within the ${ZERO_MERGE_MIN}-min window."
+          else
+            echo "Zero-merge check: last merge ${LAST_MERGE_AGE} min ago with ${MERGEABLE_WAITING} approved (CLEAN or UNSTABLE) PR(s) waiting — within the ${ZERO_MERGE_MIN}-min window."
+          fi
+
           if [ "$SHOULD_DISPATCH" = "true" ]; then
             PAYLOAD="$(jq -n '{event_type: "merge-queue-chain", client_payload: {depth: 0, ready_at: 0}}')"
             if gh api -X POST "repos/$REPO/dispatches" --input - <<< "$PAYLOAD" 2>&1; then
@@ -294,4 +411,152 @@ jobs:
             else
               echo "::warning::merge-queue-watchdog: repository_dispatch to re-arm merge-queue.yml failed — the Housekeeper dispatch + cron still cover the queue."
             fi
+          fi
+
+          # ---- Alert delivery (FAR-1843 review F3) ----
+          # A ::error:: annotation in a green scheduled run is not an
+          # escalation: GitHub sends no notification and nothing in-repo
+          # consumes the annotation (nor the stalled= / zero_merge_alert=
+          # outputs, which the step below reads). Exit NON-ZERO when either
+          # alert fired — AFTER the re-arm, which must run regardless — so
+          # the failed run is itself visible, and the "Escalate to Linear"
+          # step turns the failure into ONE deduplicated Linear ticket per
+          # condition (deploy-watchdog FAR-1407 pattern): idempotent per
+          # window, an hours-long outage appends figures to the open ticket
+          # instead of opening one ticket per tick.
+          if [ "$SHOULD_ALERT" = "true" ] || [ "$ZERO_MERGE_ALERT" = "true" ]; then
+            exit 1
+          fi
+
+      # FAR-1843 review F3 — alert delivery leg (mirrors deploy-watchdog's
+      # FAR-910/FAR-1407 escalation, the repo's existing watchdog-notification
+      # precedent). The sweep step exits non-zero when the stall alert
+      # (#3) or the zero-merge alert (#4) fires; this step turns that failure
+      # into a Linear ticket, deduped on the CONDITION (static title): one
+      # open ticket per condition plus appended figures — never one ticket
+      # per cron tick. A closed ticket never suppresses a later recurrence
+      # (the search filters to open states only). If LINEAR_API_KEY is unset
+      # the workflow failure itself remains the notification (red scheduled
+      # run + GitHub's own failed-run notification); this leg is best-effort
+      # delivery, never a silent suppressor, and every dedup-search failure
+      # fails OPEN to creating a fresh ticket.
+      - name: Escalate alert to Linear (deduped per condition)
+        if: failure()
+        shell: bash
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          STALLED: ${{ steps.watchdog.outputs.stalled }}
+          ZERO_MERGE: ${{ steps.watchdog.outputs.zero_merge_alert }}
+          LAST_SUCCESS_AGE: ${{ steps.watchdog.outputs.last_success_age }}
+          APPROVED_WAITING: ${{ steps.watchdog.outputs.approved_waiting }}
+          LAST_MERGE_AGE: ${{ steps.watchdog.outputs.last_merge_age }}
+          MERGEABLE_WAITING: ${{ steps.watchdog.outputs.mergeable_waiting }}
+          AWAITING_REVIEW: ${{ steps.watchdog.outputs.awaiting_review }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$LINEAR_API_KEY" ]; then
+            echo "LINEAR_API_KEY not set - skipping ticket (workflow failure still alerts via GitHub)."
+            exit 0
+          fi
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          # Static condition titles (no run-specific figures) — the title IS
+          # the dedup key (FAR-1407).
+          if [ "$STALLED" = "true" ]; then
+            TITLE="MERGE QUEUE STALLED: no successful queue run with approved PRs waiting (FAR-1689)"
+            DESC="The merge-queue watchdog's success-aware stall alert fired at ${TS}: no SUCCESSFUL merge-queue run for ${LAST_SUCCESS_AGE:-unknown} min while ${APPROVED_WAITING:-unknown} approved PR(s) wait — the queue machinery is not merging. Run: ${RUN_URL}. See FAR-1689."
+          elif [ "$ZERO_MERGE" = "true" ]; then
+            TITLE="MERGE QUEUE ZERO-MERGE WINDOW: nothing landing while PRs wait (FAR-1843)"
+            DESC="The merge-queue watchdog's zero-merge alert fired at ${TS}: no PR merged for ${LAST_MERGE_AGE:-unknown} min; approved (CLEAN/UNSTABLE) waiting: ${MERGEABLE_WAITING:-unknown}; open non-draft PRs awaiting review/CI: ${AWAITING_REVIEW:-unknown} — the queue may be running but is landing nothing. Run: ${RUN_URL}. See FAR-1843."
+          else
+            TITLE="MERGE QUEUE WATCHDOG FAILED"
+            DESC="The merge-queue watchdog workflow step failed at ${TS} without a recognised alert condition. Check the GitHub Actions run for details. Run: ${RUN_URL}."
+          fi
+
+          MARKER="$TITLE"
+          UPDATE=$(printf 'Watchdog escalation still active at %s.\n%s\nAppended by the merge-queue watchdog instead of opening a duplicate ticket (FAR-1407: dedupe on the condition, not the run).' "$TS" "$DESC")
+
+          # ---- FAR-1407: dedupe on the CONDITION, not the run ----
+          # Search Linear for an existing OPEN ticket for this condition
+          # (team + title marker + state type in backlog/unstarted/started =
+          # Backlog / Todo / In Progress). Done and Canceled are excluded BY
+          # the server-side filter, so a closed tracker never suppresses a
+          # later recurrence. FAIL OPEN BY CONSTRUCTION: the create below is
+          # skipped only when the search returns a well-formed issue UUID; a
+          # transport failure, an API error, or a malformed response all
+          # leave EXISTING_ID empty and fall through to create — the alert is
+          # never silently dropped.
+          SEARCH_BODY=$(jq -n \
+            --arg marker "$MARKER" \
+            '{
+              query: "query($m: String!){ issues(filter:{ team:{ id:{ eq:\"ae855baf-6439-4980-97fb-38da80129485\" } }, title:{ contains:$m }, state:{ type:{ in:[\"backlog\",\"unstarted\",\"started\"] } } }, first:1){ nodes { id identifier state { name } } } }",
+              variables: { m: $marker }
+            }')
+          SEARCH_RESULT=$(curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -d "$SEARCH_BODY" 2>&1) || SEARCH_RESULT=""
+          EXISTING_ID=""
+          EXISTING_REF=""
+          SEARCH_OK=""
+          if [ -n "$SEARCH_RESULT" ]; then
+            if echo "$SEARCH_RESULT" | jq -e '.data.issues' >/dev/null 2>&1; then
+              SEARCH_OK="true"
+            fi
+            EXISTING_ID=$(echo "$SEARCH_RESULT" | jq -r '.data.issues.nodes[0].id // ""' 2>/dev/null) || EXISTING_ID=""
+            EXISTING_REF=$(echo "$SEARCH_RESULT" | jq -r '.data.issues.nodes[0].identifier // ""' 2>/dev/null) || EXISTING_REF=""
+          fi
+          # Accept only a well-formed UUID; anything else counts as "search
+          # yielded nothing" and fails open to the create below.
+          if ! printf '%s' "$EXISTING_ID" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
+            EXISTING_ID=""
+          fi
+
+          if [ "$SEARCH_OK" = "true" ] && [ -n "$EXISTING_ID" ]; then
+            COMMENT_BODY=$(jq -n \
+              --arg i "$EXISTING_ID" \
+              --arg b "$UPDATE" \
+              '{
+                query: "mutation($i: String!, $b: String!){ commentCreate(input:{ issueId:$i, body:$b }){ success comment { id } } }",
+                variables: { i: $i, b: $b }
+              }')
+            CRES=$(curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: $LINEAR_API_KEY" \
+              -d "$COMMENT_BODY" 2>&1) || CRES=""
+            if echo "$CRES" | grep -q '"success":true'; then
+              echo "Deduplicated (FAR-1407): appended the latest figures to open ticket $EXISTING_REF - no new ticket created."
+            else
+              echo "::warning::Open ticket $EXISTING_REF exists but appending the update failed: $CRES - no duplicate created; the next run retries the comment."
+            fi
+            exit 0
+          fi
+
+          if [ "$SEARCH_OK" != "true" ]; then
+            # Fail OPEN LOUDLY: search/API failure must never read as
+            # "no ticket needed" - warn and create anyway.
+            echo "::warning::Linear dedup search failed or returned an unexpected response - failing OPEN: creating a fresh ticket anyway (FAR-1407: never suppress the escalation). Response: ${SEARCH_RESULT:-<empty>}"
+          fi
+
+          BODY=$(jq -n \
+            --arg title "$TITLE" \
+            --arg desc "$DESC" \
+            '{
+              query: "mutation($i: IssueCreateInput!){ issueCreate(input:$i){ success issue { identifier url } } }",
+              variables: { i: {
+                teamId: "ae855baf-6439-4980-97fb-38da80129485",
+                title: $title,
+                description: $desc,
+                priority: 1
+              } }
+            }')
+          RESULT=$(curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -d "$BODY" 2>&1) || true
+          if echo "$RESULT" | grep -q '"success":true'; then
+            TICKET_ID=$(echo "$RESULT" | jq -r '.data.issueCreate.issue.identifier // "unknown"')
+            echo "Created Linear ticket: $TICKET_ID"
+          else
+            echo "::warning::Linear ticket creation failed: ${RESULT:-<empty>} - the workflow failure itself remains the alert (visible in the Actions tab)."
           fi

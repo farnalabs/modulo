@@ -5558,7 +5558,7 @@ class PipelineExecutor:
                 # FAR-1175 S1: pin the EARNED autonomy level at run start so
                 # an in-flight run resolves min(pinned-at-start, live earned) —
                 # a demotion bites at the next gate, a promotion never loosens
-                # an in-flight run (ADR 043 §3). Read from the live pipeline row
+                # an in-flight run (ADR 062 §3). Read from the live pipeline row
                 # (falling back to the pinned default and clamped to the
                 # ceiling) on the FIRST execution; the value persists in the run
                 # checkpoint so a resume does not re-pin a promoted level.
