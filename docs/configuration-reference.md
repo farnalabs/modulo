@@ -354,7 +354,7 @@ LOAD.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `MODULO_WORK_ITEM_REFS_CAP` | No | `100` | Unified cap (clamped to `[1, 100000]`) on work-item references carried through the refs pipeline: self-report normalisation, the finalise merge, and node-input injection all read this one value. When more refs are supplied, drops drain lowest-provenance first (agent → derived → caller, then array position) and are counted. A pipeline declaring `work_item_refs_required: true` in its `run_context_defaults` refuses a delivery that supplied no refs (HTTP 422 `work_item_refs_required` on the REST, MCP, and webhook paths). |
+| `MODULO_WORK_ITEM_REFS_CAP` | No | `100` | Unified cap (clamped to `[1, 100000]`) on work-item references carried through the refs pipeline: self-report normalisation, the finalise merge, and node-input injection all read this one value. When more refs are supplied, drops drain lowest-provenance first (agent → derived → caller, then array position) and are counted. A pipeline declaring `work_item_refs_required: true` in its `run_context_defaults` refuses a delivery that supplied no refs: HTTP 422 with a `work_item_refs_required` error on the MCP and webhook paths, and a 422 with a prose detail (`This pipeline requires work_item_refs but none were supplied`) on the REST path. |
 
 ---
 
