@@ -9,10 +9,11 @@ layers import, with a focus on the S5145 log-injection fix
 from __future__ import annotations
 
 import uuid
+from functools import partial
 
 import pytest
 
-from modulo.util import is_valid_http_url, sanitise_log_value
+from modulo.util import callable_label, is_valid_http_url, sanitise_log_value
 from modulo.util.uuid import coerce_uuid
 
 
@@ -124,3 +125,58 @@ class TestBackwardCompatShim:
 
         assert shim_mod is coerce_uuid
         assert shim_mod(None) is None
+
+
+class TestCallableLabel:
+    """``callable_label`` must never raise — it is used ON error paths.
+
+    A ``Callable`` may be a plain function, a callable object, a
+    ``functools.partial``, or a class instance. Only plain functions define
+    ``__name__``, so reading it directly raises ``AttributeError`` for the rest.
+    On an error path that turns the handler itself into the failure.
+    """
+
+    def test_plain_function(self) -> None:
+        def my_builder() -> None: ...
+
+        assert callable_label(my_builder) == "my_builder"
+
+    def test_class_itself(self) -> None:
+        assert callable_label(TestCallableLabel) == "TestCallableLabel"
+
+    def test_callable_object_instance(self) -> None:
+        class Builder:
+            def __call__(self) -> None: ...
+
+        assert callable_label(Builder()).endswith(".Builder")
+
+    def test_functools_partial(self) -> None:
+        def base(a: int, b: int) -> int:
+            return a + b
+
+        assert callable_label(partial(base, 1)) == "partial"
+
+    def test_lambda(self) -> None:
+        # Lambdas DO define __name__; the value is kept as-is.
+        assert callable_label(lambda: None) == "<lambda>"
+
+    def test_bound_method(self) -> None:
+        class Thing:
+            def method(self) -> None: ...
+
+        assert callable_label(Thing().method) == "method"
+
+    def test_non_callable_object_does_not_raise(self) -> None:
+        assert callable_label(object()) == "object"
+
+    def test_empty_dunder_name_falls_back_to_type(self) -> None:
+        class Weird:
+            __name__ = ""
+
+        assert callable_label(Weird()).endswith(".Weird")
+
+    def test_non_string_dunder_name_falls_back_to_type(self) -> None:
+        class Weird:
+            __name__ = 42  # type: ignore[assignment]
+
+        assert callable_label(Weird()).endswith(".Weird")

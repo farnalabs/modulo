@@ -1,0 +1,100 @@
+rules:
+  # ===========================================================================
+  # `__name__` / `__qualname__` must never be read off a value that is not
+  # provably a class or a plain function.
+  #
+  # `Callable[...]` admits callable objects, `functools.partial` and class
+  # instances, none of which define `__name__` — the read raises AttributeError.
+  # On an error path (an `except` handler, or a logging call made while handling
+  # one) that is actively harmful: the *handler itself* raises, replacing the
+  # real failure with an opaque AttributeError and discarding the original
+  # exception cause. `modulo.util.callable_label()` is the safe accessor.
+  # ===========================================================================
+
+  # --- Rule A: value annotated `Callable` -----------------------------------
+  - id: callable-annotated-dunder-name
+    paths:
+      include: ["**/backend/src/**"]
+    patterns:
+      - pattern-either:
+          - pattern: $X.__name__
+          - pattern: $X.__qualname__
+      - pattern-inside: |
+          def $F(..., $X: $ANN, ...):
+              ...
+      - metavariable-regex:
+          metavariable: $ANN
+          regex: ^(Callable|collections\.abc\.Callable|typing\.Callable)\b.*
+    message: >-
+      Do not read `__name__` off a value annotated as `Callable`. A Callable may be
+      a callable object, a functools.partial, or a class instance, none of which
+      define `__name__`, so the attribute read raises AttributeError. If it is read
+      on an error path the handler itself raises, replacing the real failure with an
+      opaque AttributeError and discarding the original exception cause. Use
+      `modulo.util.callable_label($X)` (it falls back to `type($X).__qualname__`).
+    severity: ERROR
+    languages: [python]
+
+  # --- Rule B: read on an error path, on anything not provably a class ------
+  - id: dunder-name-on-error-path
+    paths:
+      include: ["**/backend/src/**"]
+    patterns:
+      - pattern-either:
+          - pattern: $X.__name__
+          - pattern: $X.__qualname__
+      # `type(...).__name__` is always safe — the value really is a type.
+      - pattern-not: type(...).__name__
+      - pattern-not: type(...).__qualname__
+      # `obj.__class__.__name__` is always safe — `obj.__class__` really is a
+      # type, so the `__name__` read cannot raise. NOTE: the receiver here must
+      # be a DIFFERENT metavariable from `$X`; reusing `$X` binds it to the
+      # receiver of the positive pattern (`obj.__class__`), so the negative
+      # pattern resolves to `obj.__class__.__class__.__name__` and never
+      # matches, silently disabling the exclusion.
+      - pattern-not: $SAFE.__class__.__name__
+      - pattern-not: $SAFE.__class__.__qualname__
+      # A parameter annotated `type` / `type[...]` is provably a class, so a
+      # `__name__` read off THAT parameter is safe. Reuse `$X` so the exclusion
+      # binds the positive pattern's receiver to the annotated parameter: the
+      # read is excluded only when it is on the annotated parameter itself. A
+      # DIFFERENT metavariable would exclude the whole function and hide a
+      # genuine read on any other value in it (the fixture's
+      # `safe_annotated_type_generic` and `unsafe_unrelated_read_in_type_fn`
+      # pin both directions on the CI semgrep version).
+      - pattern-not-inside: |
+          def $F(..., $X: type, ...):
+              ...
+      - pattern-not-inside: |
+          def $F(..., $X: type[...], ...):
+              ...
+      # `except $E:` matches only a bare-type handler. `except SomeType as exc:`
+      # (the dominant idiom in this repo) binds a name and `except:` binds
+      # nothing, so each form needs its own pattern or the gate silently misses
+      # the very handler it exists to police.
+      - pattern-either:
+          - pattern-inside: |
+              try:
+                  ...
+              except $E:
+                  ...
+          - pattern-inside: |
+              try:
+                  ...
+              except $E as $N:
+                  ...
+          - pattern-inside: |
+              try:
+                  ...
+              except:
+                  ...
+          - pattern-inside: |
+              $LOG.$METHOD(...)
+    message: >-
+      Do not read `__name__` inside an `except` block or a logging call. Unless the
+      value is provably a class, the read can raise AttributeError from inside the
+      error path itself — replacing the real failure with an opaque AttributeError
+      and discarding the original cause. Use `type($X).__qualname__` for a type, or
+      `modulo.util.callable_label($X)` for an arbitrary callable.
+    severity: ERROR
+    languages: [python]

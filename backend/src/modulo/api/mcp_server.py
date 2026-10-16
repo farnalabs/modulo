@@ -215,6 +215,7 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 from modulo.settings import get_settings
+from modulo.util import callable_label
 
 # NOTE: a `if TYPE_CHECKING:` block used to sit here as an empty placeholder;
 # it held no imports and was removed as a deliberate no-op (S108). Re-add it
@@ -2108,10 +2109,14 @@ async def _run_db_shell[**TOOL_SHELL_P](
       — classified by exception type (FAR-1502), ``server_error`` only when
       nothing more specific is knowable.
     """
-    # `fn.__name__` is the only per-tool identity available here —
+    # `callable_label(fn)` is the only per-tool identity available here —
     # ``cfg.log_constant`` is a "<tool> failed" log MESSAGE, not a key. The
     # classifier appends ``.session_contract_error`` itself (FAR-1482).
-    log_key = f"mcp.{fn.__name__}"
+    # ``callable_label`` (not ``fn.__name__``): the tool body is only known to
+    # be callable, and a callable object / partial has no ``__name__`` — reading
+    # it here would raise AttributeError ABOVE the ``try``, escaping the whole
+    # error ladder this wrapper exists to provide.
+    log_key = f"mcp.{callable_label(fn)}"
     try:
         return await fn(*args, **kwargs)
     except MCPAuthorizationError as exc:
