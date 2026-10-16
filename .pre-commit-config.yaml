@@ -162,7 +162,16 @@
         name: validate sidebar nav translation keys
         entry: uv run --project backend --no-sync python scripts/run_validate_translations.py
         language: system
-        files: ^frontend/src/(config/navigation\.ts|locales/en-US\.js)$
+        files: ^frontend/src/(config/navigation\.ts|locales/en-US\.js|manifest\.yaml)$
+        pass_filenames: false
+      # FAR-52: manifest group-id / sidebar_order structure + manifest <->
+      # navigation.ts route-id parity. Label-key/locale parity lives in the
+      # validate-translations hook above; this one owns the structure rules.
+      - id: validate-nav-config
+        name: validate manifest nav structure (groups, sidebar_order, route-id parity)
+        entry: uv run --project backend --no-sync python scripts/run_validate_nav_config.py
+        language: system
+        files: ^(frontend/src/manifest\.yaml|frontend/src/config/navigation\.ts)$
         pass_filenames: false
       # TEMPORARY (FAR-588 / ADR 029 D3): forbids the retired "sandbox agent" /
       # "external agent" user-facing terms in locales + views/components.
