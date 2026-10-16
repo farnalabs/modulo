@@ -34,7 +34,7 @@ class PolicyGate(SoftDeleteMixin, OrgScoped):
             name="ck_policy_gates_action",
         ),
         # FAR-939 chunk 12 — evaluation-mode vocabulary, shipped by migration
-        # 0314_policy_gate_evaluation_mode. The predicate and name match that
+        # 0315_policy_gate_evaluation_mode. The predicate and name match that
         # migration's SQLite batch definition EXACTLY so metadata.create_all()
         # / SQLite-mirror CTAS parity holds against the shipped contract:
         # 'automatic' (current behaviour — automated evals govern) or
@@ -78,7 +78,7 @@ class PolicyGate(SoftDeleteMixin, OrgScoped):
     # JSON-graph identifier (pipelines.graph_nodes_json), not a materialised row.
     node_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
     action: Mapped[str] = mapped_column(Text, nullable=False)
-    # FAR-939 chunk 12 — evaluation mode (migration 0314_policy_gate_evaluation_mode):
+    # FAR-939 chunk 12 — evaluation mode (migration 0315_policy_gate_evaluation_mode):
     # 'automatic' = the gate's evaluation result comes from the automated eval
     # loop (current behaviour); 'human' = it comes from the human's decision at
     # the existing HITL pause, and the automated evals this gate governs
