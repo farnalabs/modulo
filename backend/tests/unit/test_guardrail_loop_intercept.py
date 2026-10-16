@@ -1316,3 +1316,36 @@ def test_args_sha256_falls_back_to_empty_on_unserialisable_args():
     # ``json.dumps`` raises ValueError ("Circular reference detected") for the
     # cycle, so the helper falls back to hashing the empty string.
     assert sb._args_sha256(circular) == hashlib.sha256(b"").hexdigest()
+
+
+def test_notify_cli_escalate_preserves_the_event_direction(monkeypatch, capsys):
+    """An after-direction escalation is labelled ``after`` in the marker payload.
+
+    ``_escalation_payload`` must stamp the event's ACTUAL direction, not a
+    hardcoded ``before`` — otherwise a ``--notify direction=after`` escalation
+    is mislabelled (review finding 2, FAR-1694 S2)."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    monkeypatch.setattr(
+        sb.BridgeClient,
+        "notify",
+        lambda self, tool, args, direction, result_summary="": _escalate_decision(),
+    )
+    code = sb.main(["--notify", '{"tool_name": "git push", "args": {}, "direction": "after"}', "--endpoint", "x"])
+    assert code == sb.ESCALATED_EXIT_CODE
+    out = capsys.readouterr().out
+    payload = json.loads(out.split(sb.ESCALATED_MARKER, 1)[1].strip())
+    assert payload["direction"] == "after"
+
+
+def test_escalation_channel_is_documented_as_untrusted():
+    """The S2 escalation channel is stdout and thus agent-forgeable; every
+    definition point must say so and defer authentication to S3 (review
+    finding 1). Guards against the warning silently rotting away."""
+    source = bridge_client_source()
+    assert "UNTRUSTED CHANNEL" in source
+    assert "authenticate" in source
+    marker_doc = li.parse_bridge_escalation_marker.__doc__ or ""
+    assert "UNTRUSTED" in marker_doc
+    bridge_escalation_doc = li.BridgeEscalation.__doc__ or ""
+    assert "UNTRUSTED CHANNEL" in bridge_escalation_doc

@@ -723,6 +723,13 @@ def _bridge_escalation_failure_detail(exit_code: int, stdout_raw: str) -> str | 
     the run was not stopped by an escalation. The mid-loop suspension that turns
     this into ``interrupt()``/``awaiting_human`` is a later FAR-1694 slice; here
     it only explains the failure.
+
+    UNTRUSTED CHANNEL (FAR-1694 S2 security note): both *exit_code* and the
+    marker inside *stdout_raw* come from the wrapped agent's process, which can
+    forge them. This helper therefore produces a human-readable failure
+    EXPLANATION only — it must never gate a control decision. S3 must
+    authenticate the escalation channel (a host-recorded decision the agent
+    cannot write) before turning it into ``interrupt()``/``awaiting_human``.
     """
     if exit_code != BRIDGE_ESCALATED_EXIT_CODE:
         return None

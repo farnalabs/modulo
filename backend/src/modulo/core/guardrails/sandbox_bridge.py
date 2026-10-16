@@ -22,6 +22,18 @@ The server's decision is enforced:
   redact -> ``masked_args`` replace the original args before execution.
   warn/pass -> proceed.
 
+UNTRUSTED CHANNEL (FAR-1694 S2 security note): the escalation marker and the
+dedicated exit code travel on the wrapped agent's OWN stdout — this wrapper is
+a transparent proxy for that stream (every non-``MODULO_BRIDGE_EVENT`` child
+line is echoed verbatim) and returns the child's exit code when no refusal
+occurs, so a compromised or prompt-injected agent can forge BOTH the marker and
+exit code 4. The marker is therefore evidence only: it MUST NOT gate a control
+decision. The S3 suspension slice (which turns the marker into ``interrupt()``
+/ ``awaiting_human``) MUST authenticate the channel first — e.g. deliver the
+escalation over the host callback, a child-inaccessible pipe/fd, or a
+host-recorded decision — before acting on it. S2 consumes the marker solely to
+explain a failure the node has already failed closed on.
+
 The bridge is BEST-EFFORT and fail-open: any transport error, timeout, or
 malformed response means the call proceeds (the interior interception must
 never wedge the agent loop). The Modulo side records the failure as a
@@ -61,6 +73,9 @@ EVENT_MARKER = "MODULO_BRIDGE_EVENT:"
 BLOCKED_MARKER = "MODULO_BRIDGE_BLOCKED:"
 # FAR-1694 S2: emitted when an in-loop ``escalate`` verdict stops the loop. The
 # payload is a single line of JSON (see :func:`_escalation_payload`).
+# UNTRUSTED: the marker rides the agent's own stdout (which this wrapper proxies
+# verbatim), so an agent can forge it — see the module docstring. It must never
+# gate a control decision until S3 authenticates the channel.
 ESCALATED_MARKER = "MODULO_BRIDGE_ESCALATED:"
 
 # Dedicated process exit codes for a bridge-enforced loop stop. Distinct so the
@@ -97,19 +112,27 @@ def _args_sha256(args: dict[str, Any]) -> str:
     try:
         blob = json.dumps(args, sort_keys=True, separators=(",", ":"), default=str)
     except (TypeError, ValueError):
+        # Unserialisable args (e.g. a cycle) all fall back to hashing the empty
+        # string, so distinct unserialisable payloads share this one fingerprint.
+        # Best-effort evidence only — the hash never gates behaviour.
         blob = ""
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-def _escalation_payload(tool_name: str, args: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
+def _escalation_payload(
+    tool_name: str, args: dict[str, Any], decision: dict[str, Any], direction: str
+) -> dict[str, Any]:
     """Build the ``MODULO_BRIDGE_ESCALATED`` marker payload for one event.
 
     Summary-only by design: the tool name, direction, the firing guardrail, a
     non-payload reason, and an args hash. Raw args are NEVER included.
+    ``direction`` is the event's ACTUAL direction (``before`` or ``after``) and
+    is passed through — never hardcoded — so an after-direction escalation is
+    not mislabelled as a before-direction one.
     """
     return {
         "tool": tool_name,
-        "direction": "before",
+        "direction": direction,
         "guardrail": str(decision.get("guardrail") or ""),
         "reason": str(decision.get("reason") or ""),
         "args_sha256": _args_sha256(args),
@@ -313,6 +336,10 @@ def _spawn_and_collect(process_args: list[str], client: BridgeClient) -> int:
     The child's exit code is returned once its stdout is exhausted; a refused
     ``before`` call kills the child and returns :data:`BLOCKED_EXIT_CODE`
     (block) or :data:`ESCALATED_EXIT_CODE` (escalate).
+
+    The child's stdout is agent-controlled and echoed verbatim (see the module
+    docstring's UNTRUSTED CHANNEL note): a marker or exit code seen here is
+    evidence, not an authenticated control signal.
     """
     # Suppression on the Popen call below is deliberate — configured agent command (pipeline config, not untrusted
     # input) needs shell features; already suppressed for bandit (B603) and ruff (S603).
@@ -376,7 +403,7 @@ def _forward_event_line(line: str, client: BridgeClient) -> _Refusal | None:
         allowed, masked, action = client.decide_before(tool_name, args)
         if not allowed:
             if action == "escalate":
-                payload = _escalation_payload(tool_name, args, client.last_decision)
+                payload = _escalation_payload(tool_name, args, client.last_decision, direction)
                 return _Refusal("escalate", tool_name, payload)
             return _Refusal("block", tool_name, {})
         if masked is not None:
@@ -424,7 +451,7 @@ def main(argv: list[str] | None = None) -> int:
             # An escalate is always a stop; emit the typed marker + dedicated
             # code so the host can distinguish it from a block (FAR-1694 S2).
             if decision.get("action") == "escalate":
-                _out(f"{ESCALATED_MARKER}{json.dumps(_escalation_payload(tool_name, args_dict, decision))}")
+                _out(f"{ESCALATED_MARKER}{json.dumps(_escalation_payload(tool_name, args_dict, decision, direction))}")
                 return ESCALATED_EXIT_CODE
             # Refuse only on an actual refusal (action=block AND blocked=true);
             # a block_on_guardrail:false downgrade (action=block, blocked=false)

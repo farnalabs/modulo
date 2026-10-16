@@ -246,6 +246,14 @@ class BridgeEscalation:
     (which may carry credentials). The mid-loop suspension that acts on this
     (interrupt -> ``awaiting_human``) ships in a later FAR-1694 slice; S2
     defines the typed payload and the marker/exit-code protocol only.
+
+    UNTRUSTED CHANNEL (FAR-1694 S2 security note): this payload is parsed from
+    the agent command's stdout, which the wrapped agent controls — it can forge
+    both the marker and the dedicated exit code. The parsed value is therefore
+    evidence only. S3 MUST NOT act on a stdout marker as a control decision;
+    it must authenticate the channel (a host-recorded escalation decision, or a
+    channel the child cannot write) before driving ``interrupt()`` /
+    ``awaiting_human``.
     """
 
     tool_name: str
@@ -275,6 +283,10 @@ def parse_bridge_escalation_marker(text: str) -> BridgeEscalation | None:
     best-effort, so a malformed marker is treated as "no escalation" rather
     than raising. The payload is a single line of JSON immediately after the
     marker; raw args never appear in it (only an ``args_sha256`` fingerprint).
+
+    UNTRUSTED: *text* is the agent command's stdout, so the marker is
+    agent-forgeable (see :class:`BridgeEscalation`). Parse it for evidence and
+    failure explanation only — never as an authenticated control signal.
     """
     if not text:
         return None
