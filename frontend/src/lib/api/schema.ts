@@ -1637,9 +1637,14 @@ export interface paths {
          *     Resolves the provider by its globally unique ``provider_id`` slug. The
          *     response is validated against THIS provider's SP entity ID and ACS URL.
          *
+         *     Because the IdP navigates the BROWSER here, a handled callback failure —
+         *     including an unknown, disabled or non-SAML ``provider_id`` — is rendered
+         *     as a 303 redirect to the login page carrying a whitelisted ``sso_error``
+         *     code (FAR-1791), never the uniform JSON 404 the non-ACS routes keep.
+         *
          *     RelayState verification (FAR-1003, defense-in-depth):
          *     - valid signed RelayState for THIS provider → proceed
-         *     - tampered / wrong provider / expired → reject (401)
+         *     - tampered / wrong provider / expired → reject (303 to the login page)
          *     - absent → do NOT fail; proceed on URL path (IdP-initiated SSO)
          *
          *     Security reasoning: with routing by URL path, a forged RelayState

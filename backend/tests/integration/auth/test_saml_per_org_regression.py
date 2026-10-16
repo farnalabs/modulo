@@ -414,10 +414,12 @@ async def test_org_a_assertion_rejected_at_org_b_acs(
     two_saml_orgs: dict[str, str],
 ) -> None:
     """A successful assertion audited for org A's SP entity, posted to org B's
-    per-provider ACS, is rejected 401 — URL-path routing alone is NOT the
-    containment; the resolved org B entity agreement is. The provider row is
-    resolved from the REAL DB via the system leg; only the signature step is
-    mocked (Windows xmlsec), so strict Destination/conditions/audience run."""
+    per-provider ACS, is rejected — URL-path routing alone is NOT the
+    containment; the resolved org B entity agreement is. FAR-1791: the rejection
+    is a 303 redirect to the login page (browser-facing ACS), not a JSON 401.
+    The provider row is resolved from the REAL DB via the system leg; only the
+    signature step is mocked (Windows xmlsec), so strict
+    Destination/conditions/audience run."""
     xml = _build_saml_response(
         audience=two_saml_orgs["entity_a"],
         destination=_acs(two_saml_orgs["saml_b"]),
@@ -429,8 +431,10 @@ async def test_org_a_assertion_rejected_at_org_b_acs(
             data={"SAMLResponse": _b64(xml)},
             follow_redirects=False,
         )
-    assert resp.status_code == 401, f"expected 401, got {resp.status_code}: {resp.text}"
-    assert resp.json()["detail"].startswith("SAML response validation failed")
+    assert resp.status_code == 303, f"expected 303, got {resp.status_code}: {resp.text}"
+    location = resp.headers["location"]
+    assert "/login" in location
+    assert "sso_error=auth_failed" in location
 
 
 @pytest.mark.asyncio
@@ -474,7 +478,8 @@ async def test_relay_state_signed_for_org_a_rejected_at_org_b_acs(
     two_saml_orgs: dict[str, str],
 ) -> None:
     """A signed RelayState minted for provider A is rejected at B's ACS
-    (FAR-1003 HMAC defense-in-depth) BEFORE the response is processed."""
+    (FAR-1003 HMAC defense-in-depth) BEFORE the response is processed.
+    FAR-1791: the browser-facing rejection is a 303 login redirect."""
     from modulo.auth.sso import sign_saml_relay_state
 
     relay = sign_saml_relay_state(two_saml_orgs["saml_a"], "a" * 32)
@@ -489,8 +494,8 @@ async def test_relay_state_signed_for_org_a_rejected_at_org_b_acs(
             data={"SAMLResponse": _b64(xml), "RelayState": relay},
             follow_redirects=False,
         )
-    assert resp.status_code == 401
-    assert "does not match" in resp.json()["detail"]
+    assert resp.status_code == 303
+    assert "sso_error=auth_failed" in resp.headers["location"]
 
 
 # ---------------------------------------------------------------------------
