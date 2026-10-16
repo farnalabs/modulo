@@ -1297,6 +1297,29 @@ describe('PipelineEditorView — run dialog', () => {
     wrapper.unmount()
   })
 
+  it('toggles the version timeline when the always-available Versions button is clicked (FAR-1819)', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.pipeline = { id: 'test-pipeline-id', name: 'Test Pipeline' }
+    await nextTick()
+
+    // FAR-1819: the Versions button lost its plan-feature gate, so it is always
+    // present and its click handler must actually open and close the timeline.
+    const button = wrapper.find('[data-testid="pipeline-editor-version-timeline"]')
+    expect(button.exists()).toBe(true)
+
+    await button.trigger('click')
+    await nextTick()
+    expect(vm.showVersionTimeline).toBe(true)
+
+    await button.trigger('click')
+    await nextTick()
+    expect(vm.showVersionTimeline).toBe(false)
+    wrapper.unmount()
+  })
+
   it('renames the pipeline and reflects the new name', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
