@@ -30,6 +30,7 @@
               :pipeline-id="run.pipeline_id"
               :pipeline-name="run.pipeline_name"
               :snapshot-id="run.snapshot_id ?? null"
+              :snapshot-version="run.snapshot_version ?? null"
               class="font-medium text-foreground"
               data-testid="run-detail-pipeline-version-link"
             >{{ formatRun(run) }}</RunPipelineVersionLink>

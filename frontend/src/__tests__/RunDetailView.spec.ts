@@ -3309,6 +3309,7 @@ describe('RunDetailView pipeline-version link (FAR-1813)', () => {
   // the preceding test left behind.
   let pipelineName: string | null = null
   let snapshotId: string | null = null
+  let snapshotVersion: number | null = null
   let restoreGet: ((url: string) => unknown) | undefined
 
   type GetMock = {
@@ -3321,6 +3322,7 @@ describe('RunDetailView pipeline-version link (FAR-1813)', () => {
     restoreGet = getMock.getMockImplementation()
     pipelineName = null
     snapshotId = null
+    snapshotVersion = null
     getMock.mockImplementation((url: string) => {
       if (url === '/api/v1/runs/{run_id}') {
         return Promise.resolve({
@@ -3329,6 +3331,7 @@ describe('RunDetailView pipeline-version link (FAR-1813)', () => {
             pipeline_id: 'test-pipeline',
             pipeline_name: pipelineName,
             snapshot_id: snapshotId,
+            snapshot_version: snapshotVersion,
             status: 'complete',
             total_cost_usd: 1.23,
           },
@@ -3397,6 +3400,48 @@ describe('RunDetailView pipeline-version link (FAR-1813)', () => {
     expect(wrapper.find('a[href^="/pipelines/"]').exists()).toBe(false)
     // The header still names the run.
     expect(wrapper.text()).toContain('Run #test-run')
+    wrapper.unmount()
+  })
+
+  it('passes the run snapshot_version through: the header shows the v{n} chip inside the link', async () => {
+    // Proves the VIEW forwards RunResponse.snapshot_version — a view-level
+    // regression would otherwise leave the chip permanently absent while every
+    // component-level test stayed green.
+    pipelineName = 'Data Sync'
+    snapshotId = 'snap-42'
+    snapshotVersion = 3
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+
+    const chip = wrapper.find('[data-testid="run-pipeline-version-chip"]')
+    expect(chip.exists()).toBe(true)
+    expect(chip.text()).toBe('v3')
+    // One tab stop, one accessible name: the chip lives INSIDE the link.
+    const link = wrapper.find('[data-testid="run-detail-pipeline-version-link"]')
+    expect(link.exists()).toBe(true)
+    expect(link.find('[data-testid="run-pipeline-version-chip"]').exists()).toBe(true)
+    expect(link.text()).toContain('v3')
+    wrapper.unmount()
+  })
+
+  it('a legacy run with snapshot_version NULL renders NO chip — never a placeholder', async () => {
+    pipelineName = 'Data Sync'
+    snapshotId = null
+    snapshotVersion = null
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+
+    const chip = wrapper.find('[data-testid="run-pipeline-version-chip"]')
+    expect(chip.exists()).toBe(false)
+    const link = wrapper.find('[data-testid="run-detail-pipeline-version-link"]')
+    expect(link.exists()).toBe(true)
+    expect(link.text()).not.toContain('v0')
     wrapper.unmount()
   })
 })
