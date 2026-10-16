@@ -104,7 +104,8 @@ async def list_node_categories(
     if include_deleted:
         stmt = include_soft_deleted(stmt)
     items = list((await session.execute(stmt)).scalars())
-    return PageResult(items=items, total=total, page=page, page_size=page_size)
+    has_more = (offset + len(items)) < total
+    return PageResult(items=items, total=total, page=page, page_size=page_size, has_more=has_more)
 
 
 async def update_node_category(

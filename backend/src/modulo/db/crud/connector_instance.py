@@ -128,7 +128,8 @@ async def list_connector_instances(
         items = list((await session.execute(items_stmt)).scalars())
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
-    return PageResult(items=items, total=total, page=page, page_size=page_size)
+    has_more = (offset + len(items)) < total
+    return PageResult(items=items, total=total, page=page, page_size=page_size, has_more=has_more)
 
 
 async def update_connector_instance(

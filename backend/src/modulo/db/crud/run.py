@@ -2700,7 +2700,8 @@ async def list_runs(
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     items = list((await session.execute(q.order_by(Run.created_at.desc()).offset(offset).limit(page_size))).scalars())
-    return PageResult(items=items, total=total, page=page, page_size=page_size)
+    has_more = (offset + len(items)) < total
+    return PageResult(items=items, total=total, page=page, page_size=page_size, has_more=has_more)
 
 
 _COST_ROLLUP_QUANTUM = Decimal("0.000001")

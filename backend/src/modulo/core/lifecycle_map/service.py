@@ -120,7 +120,7 @@ async def list_lifecycle_maps(
             await session.execute(query.order_by(LifecycleMap.updated_at.desc()).offset(offset).limit(page_size))
         ).scalars()
     )
-    return PageResult(items=items, total=total, page=page, page_size=page_size)
+    return PageResult(items=items, total=total, page=page, page_size=page_size, has_more=offset + len(items) < total)
 
 
 async def update_lifecycle_map(
