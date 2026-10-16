@@ -43,6 +43,7 @@ from modulo.db.models.eval_suite_run import (
     transition_state,
 )
 from modulo.db.models.evidence import Evidence
+from modulo.db.models.external_agent import ExternalAgent
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.invitation import Invitation
@@ -51,6 +52,7 @@ from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.library_sync_state import LibrarySyncState
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
+from modulo.db.models.mcp_server import McpServer
 from modulo.db.models.mcp_setup_token import McpSetupToken
 from modulo.db.models.metrics_staging import MetricsStaging
 from modulo.db.models.model_backend import ModelBackend
@@ -133,6 +135,7 @@ __all__ = [
     "EvalResult",
     "EvalSuite",
     "Evidence",
+    "ExternalAgent",
     "FeatureFlagCatalog",
     "FeedbackRecord",
     "HitlClaim",
@@ -144,6 +147,7 @@ __all__ = [
     "LibrarySyncState",
     "LifecycleMap",
     "LifecycleMapStage",
+    "McpServer",
     "McpSetupToken",
     "MetricsStaging",
     "ModelBackend",

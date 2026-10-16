@@ -9,11 +9,29 @@ import { flagCacheKey, serializeFlagCache } from '../../src/config/flagCache'
 // empty and only populated after `GET /api/v1/admin/feature-flags` landed, so
 // every mobile load painted the legacy hamburger top-nav first and swapped to
 // the left rail when the response arrived (the slow-connection flash Duncan
-// reported). The fix resolves the mode from a persisted cache synchronously
-// and renders a neutral placeholder while it is genuinely unknown.
+// reported). The fix resolves the mode from a persisted cache synchronously.
+//
+// Under the current boot architecture the first navigation is tier-gated:
+// `enforceRoleTierVisibility` (`src/router/index.ts`) awaits
+// `planStore.fetchPlan()` before `main.ts`'s `router.isReady()` can resolve —
+// and `main.ts` mounts the app only after that. So while the flags response
+// is genuinely unknown, the SPA itself is not yet mounted: `#app` stays empty
+// and NO nav chrome can exist. The observable first-visit in-flight invariant
+// is therefore "nothing paints at all" — the legacy top-nav or the rail can
+// never be the wrong first paint for it. The neutral placeholder
+// (`mobile-nav-pending`, kept as `PENDING` below) only exists once a layout
+// is mounted and the store is still 'none' — which the gate-driven first
+// visit can never produce; its real-world guarantee (draining instead of
+// parking forever, and the terminal 'unavailable' → drawer fallback) is
+// asserted end-to-end by `mobile-nav-usable.spec.ts` (FAR-1805) on targets
+// where the flags read is unreadable.
 //
 // The flags request is GATED (held until the test releases it) rather than
-// time-delayed, so the first-paint assertions are deterministic.
+// time-delayed, so both phases are deterministic: phase 1 samples chrome
+// while the response is held (mount is structurally impossible then, e.g.
+// during the 15s `withTimeout` budget), phase 2 releases, waits for the app
+// mount, and asserts the resolved layout. `flushTwoFrames` uses rAF only —
+// never a fixed sleep.
 //
 // Local-only: relies on the mock API plus an overriding route.
 
@@ -127,13 +145,32 @@ interface FlagGate {
   response: Promise<Response>
 }
 
+// Boot bounds, sized for a cold Vite dev compile on a CPU-contended machine.
+// The flags request fires only after the module graph evaluates (post-compile),
+// so the request wait gets generous headroom; everything after release is
+// ms-scale and stays well inside the 90s per-test budget.
+const FLAGS_BOOT_TIMEOUT_MS = 45_000
+// Generous bound for the post-release mount wait — auto-retried by
+// waitForFunction's rAF polling, never a fixed sleep (mirrors the 30s settle
+// budget in mobile-nav-usable.spec.ts).
+const SETTLE_TIMEOUT_MS = 30_000
+
 /**
  * Boot the app at `/` with an authenticated session, the local mock API, and a
  * feature-flags response that is HELD until `release()` is called. The cached
  * flag map (FAR-1237 persistence) is optionally seeded before any page script
  * runs, modelling a returning user.
+ *
+ * `waitForMount` (default true) selects which readiness the boot awaits:
+ *  - true — the app has mounted (`#app` has children), so layout assertions
+ *    can sample immediately (the cached-returning-user tests).
+ *  - false — only the flags REQUEST has fired: the router's tier guard is
+ *    awaiting `planStore.fetchPlan()` (whose flags leg is the held request)
+ *    and `main.ts` awaits `router.isReady()` before mounting. This is the
+ *    genuinely-unknown window the first-visit tests sample in phase 1.
+ *    The response stays HELD in both modes — release() is still required.
  */
-async function boot(page: Page, opts: { rail: boolean; cachedRail?: boolean }): Promise<FlagGate> {
+async function boot(page: Page, opts: { rail: boolean; cachedRail?: boolean; waitForMount?: boolean }): Promise<FlagGate> {
   // Cold Vite dev compile + a CPU-contended machine can push the first
   // navigation well past the config's 30s local budget; the interesting
   // assertions all happen after mount, so give the boot its own headroom.
@@ -224,6 +261,16 @@ async function boot(page: Page, opts: { rail: boolean; cachedRail?: boolean }): 
   // 'commit' — don't gate on the full load event (external font stylesheet /
   // cold compile); readiness is the app mount wait below.
   await page.goto('/', { waitUntil: 'commit' })
+  if (opts.waitForMount === false) {
+    // Phase-1 boot: stop once the guard's flags fetch is genuinely in flight.
+    // The route handler is still awaiting the gate, so the response stays held
+    // and the store keeps resolving.
+    await page.waitForRequest(
+      (r) => r.url().includes('/api/v1/admin/feature-flags'),
+      { timeout: FLAGS_BOOT_TIMEOUT_MS },
+    )
+    return { release, response }
+  }
   await page.waitForFunction(() => (document.querySelector('#app')?.children.length ?? 0) > 0)
   return { release, response }
 }
@@ -252,49 +299,74 @@ test.describe('FAR-1237 — mobile first-paint layout under a slow feature-flags
     }
   })
 
-  // Flow order: capture first paint → release the flags → settle → THEN
-  // assert. A pre-fix failure still completes the whole session, so the
-  // recorded diagnostics and CLS include the header↔rail swap itself rather
-  // than aborting before it happens.
-  test('first visit (rail org): pending placeholder paints first, the legacy top-nav never appears', { tag: '@mobile' }, async ({ page }) => {
-    const gate = await boot(page, { rail: true })
+  // First visit = no persisted cache. Both tests follow the same two-phase,
+  // gate-driven structure:
+  //   Phase 1 (response held): the router's tier guard
+  //   (`enforceRoleTierVisibility`) awaits planStore.fetchPlan(), whose flags
+  //   leg is the held request; `main.ts` awaits `router.isReady()` before
+  //   mounting — so the SPA is structurally NOT mounted and no nav chrome (not
+  //   even the neutral placeholder, which lives inside AppLayout) can exist.
+  //   The in-flight invariant is therefore "nothing paints at all": neither
+  //   chrome can ever be the wrong first paint. A regression that lets layout
+  //   render pre-settle trips this phase-1 zero or the settled assertion.
+  //   Phase 2 (release): the response resolves, the app mounts, and the
+  //   resolved layout paints; the settled chrome must match the flag exactly.
+  // The placeholder's real-world behaviour — draining once the store resolves
+  // (never parked forever), and the terminal 'unavailable' → drawer fallback —
+  // is asserted end-to-end by mobile-nav-usable.spec.ts (FAR-1805).
+  test('first visit (rail org): nothing paints while the flag is unknown; the rail paints once it resolves', { tag: '@mobile' }, async ({ page }) => {
+    const gate = await boot(page, { rail: true, waitForMount: false })
 
-    const firstPaint = await chrome(page)
-    process.stdout.write(`[far-1237] first paint, no cache, flag ON: ${JSON.stringify(firstPaint)}\n`)
+    const whileFlagsUnknown = await chrome(page)
+    process.stdout.write(`[far-1237] while flag unknown, no cache, flag ON: ${JSON.stringify(whileFlagsUnknown)}\n`)
+
+    expect(
+      whileFlagsUnknown,
+      'no nav chrome may exist while the flag is unknown — the SPA is not yet mounted (the tier guard is awaiting the held flags fetch)',
+    ).toEqual({ hamburger: 0, rail: 0, pending: 0 })
 
     gate.release()
     await gate.response
+    await page.waitForFunction(
+      () => (document.querySelector('#app')?.children.length ?? 0) > 0,
+      undefined,
+      { timeout: SETTLE_TIMEOUT_MS },
+    )
     await flushTwoFrames(page)
 
     const settled = await chrome(page)
     process.stdout.write(`[far-1237] after flags resolve ON: ${JSON.stringify(settled)}\n`)
 
-    expect(firstPaint.pending, 'the neutral placeholder must paint while the flag is unknown').toBe(1)
-    expect(firstPaint.hamburger, 'the legacy top-nav must never paint for a rail org').toBe(0)
-    expect(firstPaint.rail, 'the rail must not paint before the flag resolves').toBe(0)
-    expect(settled).toEqual({ hamburger: 0, rail: 1, pending: 0 })
+    expect(settled, 'the resolved layout must paint once the flag lands').toEqual({ hamburger: 0, rail: 1, pending: 0 })
 
     // FAR-1805: the settled rail must also be usable, not just present.
     await openAndNavigate(page, 'rail')
   })
 
-  test('first visit (drawer org): pending placeholder paints first, the rail never appears', { tag: '@mobile' }, async ({ page }) => {
-    const gate = await boot(page, { rail: false })
+  test('first visit (drawer org): nothing paints while the flag is unknown; the drawer paints once it resolves', { tag: '@mobile' }, async ({ page }) => {
+    const gate = await boot(page, { rail: false, waitForMount: false })
 
-    const firstPaint = await chrome(page)
-    process.stdout.write(`[far-1237] first paint, no cache, flag OFF: ${JSON.stringify(firstPaint)}\n`)
+    const whileFlagsUnknown = await chrome(page)
+    process.stdout.write(`[far-1237] while flag unknown, no cache, flag OFF: ${JSON.stringify(whileFlagsUnknown)}\n`)
+
+    expect(
+      whileFlagsUnknown,
+      'no nav chrome may exist while the flag is unknown — the SPA is not yet mounted (the tier guard is awaiting the held flags fetch)',
+    ).toEqual({ hamburger: 0, rail: 0, pending: 0 })
 
     gate.release()
     await gate.response
+    await page.waitForFunction(
+      () => (document.querySelector('#app')?.children.length ?? 0) > 0,
+      undefined,
+      { timeout: SETTLE_TIMEOUT_MS },
+    )
     await flushTwoFrames(page)
 
     const settled = await chrome(page)
     process.stdout.write(`[far-1237] after flags resolve OFF: ${JSON.stringify(settled)}\n`)
 
-    expect(firstPaint.pending).toBe(1)
-    expect(firstPaint.hamburger, 'the legacy top-nav must not paint before the flag resolves').toBe(0)
-    expect(firstPaint.rail, 'the rail must never paint for a drawer org').toBe(0)
-    expect(settled).toEqual({ hamburger: 1, rail: 0, pending: 0 })
+    expect(settled, 'the resolved layout must paint once the flag lands').toEqual({ hamburger: 1, rail: 0, pending: 0 })
 
     await openAndNavigate(page, 'drawer')
   })

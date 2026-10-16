@@ -249,6 +249,11 @@ class TestTeamScopeWiring:
             "lifecycle_maps",
             "eval_datasets",
             "eval_suites",
+            # FAR-1692: external-agent + MCP-server registries carry the
+            # visibility pair and are registered for completeness; enforced by
+            # DB RLS alone (migration 0314), never route-wired.
+            "external_agents",
+            "mcp_servers",
         }
         actual = set(TEAM_SCOPED_RESOLVERS)
         assert actual == expected, (

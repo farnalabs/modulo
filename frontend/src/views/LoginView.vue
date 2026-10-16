@@ -25,6 +25,21 @@
         <p class="mt-1 text-muted-foreground">{{ $t('views.LoginView.agent_governance_for_your_agentic_sdlc') }}</p>
       </div>
 
+      <!-- FAR-1791: an SSO callback failure redirects back here with a
+           whitelisted code. Rendered above every branch (and therefore above
+           the org-entry step too) so a multi-org user is never dropped back
+           onto a bare form with no explanation, and so it is present in the
+           first render. -->
+      <div v-if="ssoErrorKey" ref="ssoErrorRef" tabindex="-1" class="outline-none">
+        <ErrorAlert
+          :message="$t(ssoErrorKey)"
+          :retryable="false"
+          role="alert"
+          aria-live="assertive"
+          data-testid="login-sso-error"
+        />
+      </div>
+
       <div v-if="contextLoading || redirectingToOrg" class="text-center text-muted-foreground" data-testid="login-context-loading">
         {{ $t('common.loading') }}
       </div>
@@ -143,7 +158,7 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import { useMutation } from '../composables/useMutation'
 import { useLoginPrefs } from '../composables/useLoginPrefs'
@@ -153,6 +168,7 @@ import { setMustChangePassword } from '../lib/mustChangePassword'
 import type { components } from '../lib/api/schema'
 import SsoBrandMark from '../components/SsoBrandMark.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { normaliseSsoErrorCode, ssoErrorI18nKey } from '../lib/ssoError'
 
 interface SsoProviderInfo {
   provider_id: string
@@ -170,6 +186,25 @@ type OrgInfo = components['schemas']['OrgInfo']
 // --- Login preferences (last org slug + last-used method) ---
 const loginPrefs = useLoginPrefs()
 const lastUsedMethod = ref<string | null>(loginPrefs.getLastMethod())
+
+// --- SSO callback error (FAR-1791) ---
+// The backend appends `?sso_error=<code>` to the login URL when an SSO
+// callback fails. The value is read synchronously so the alert is present in
+// the first render — never fetched. Vocabulary + normaliser are shared with
+// OrgLoginView (lib/ssoError.ts).
+const route = useRoute()
+const ssoErrorCode = normaliseSsoErrorCode(route.query.sso_error)
+const ssoErrorKey = ssoErrorI18nKey(ssoErrorCode)
+const ssoErrorRef = ref<HTMLElement | null>(null)
+
+// Announce and reach the alert: focus the container once Vue mounts it. The
+// block renders only when a code is present, so `ssoErrorRef.value` is the
+// element exactly when there is an error to announce (and null otherwise, in
+// which case the optional call short-circuits). tabindex="-1" makes the
+// container programmatically focusable without adding it to the tab order.
+onMounted(() => {
+  ssoErrorRef.value?.focus()
+})
 
 // Budgets for the two anonymous pre-auth reads. Only login-context GATES the
 // credential form; SSO discovery is a best-effort enrichment that must never
@@ -241,7 +276,11 @@ async function fetchLoginContext() {
       const rememberedSlug = loginPrefs.getLastOrgSlug()
       if (rememberedSlug) {
         redirectingToOrg.value = true
-        window.location.href = `/login/${encodeURIComponent(rememberedSlug)}`
+        // FAR-1791: preserve the SSO error through the auto-redirect —
+        // otherwise the multi-org fallback silently drops the explanation.
+        // `ssoErrorCode` is already normalised, so only a known code is echoed.
+        const ssoErrorSuffix = ssoErrorCode ? `?sso_error=${ssoErrorCode}` : ''
+        window.location.href = `/login/${encodeURIComponent(rememberedSlug)}${ssoErrorSuffix}`
         return
       }
       multiOrg.value = true

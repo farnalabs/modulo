@@ -112,9 +112,11 @@ jobs:
             exit 0
           fi
 
-          echo "severity=$SEVERITY" >> "$GITHUB_OUTPUT"
-          echo "expiry=$EXPIRY" >> "$GITHUB_OUTPUT"
-          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+          {
+            echo "severity=$SEVERITY"
+            echo "expiry=$EXPIRY"
+            echo "reason=$REASON"
+          } >> "$GITHUB_OUTPUT"
           echo "Suspension: severity=$SEVERITY, expiry=$EXPIRY"
 
       # ------------------------------------------------------------------

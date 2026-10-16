@@ -19,32 +19,49 @@
       <p v-if="snapshots.length === 0" class="text-sm text-muted-foreground">{{ $t('components.PipelineSnapshotTimeline.no_snapshots_yet') }}</p>
 
       <div v-else class="mb-3 max-h-56 space-y-1 overflow-y-auto">
-        <button
-          type="button"
+        <!-- FAR-1812: each row pairs the existing select-for-diff/rollback
+             button with a separate "View" action that deep-links the editor
+             to that historical version (?snapshot=<id>). Sibling, never
+             nested: a button inside a button is invalid and unreachable. -->
+        <div
           v-for="s in snapshots"
           :key="s.id"
-          :data-testid="`snapshot-timeline-row-${s.id}`"
-          class="flex w-full items-center justify-between gap-2 rounded-md border px-2 py-1.5 text-left"
-          @click="selectA(s.id)"
+          class="flex items-stretch gap-1"
         >
-          <div class="flex min-w-0 items-center gap-2">
-            <span class="text-xs font-medium">v{{ s.snapshot_version }}</span>
-            <span
-              class="rounded px-1.5 py-0.5 text-[10px] font-medium"
-              :class="s.version_kind === 'edit' ? 'bg-primary/10 text-primary' : 'bg-muted/40 text-muted-foreground'"
-            >
-              {{ s.version_kind === 'edit' ? $t('components.PipelineSnapshotTimeline.edit') : $t('components.PipelineSnapshotTimeline.run') }}
-            </span>
-            <span
-              v-if="s.channel && s.channel !== 'none'"
-              class="rounded bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning-text"
-            >
-              {{ s.channel }}
-            </span>
-            <span class="truncate text-[10px] text-muted-foreground">{{ formatDate(s.created_at) }}</span>
-          </div>
-          <span class="shrink-0 text-[10px] text-muted-foreground">{{ s.tag || '' }}</span>
-        </button>
+          <button
+            type="button"
+            :data-testid="`snapshot-timeline-row-${s.id}`"
+            class="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md border px-2 py-1.5 text-left"
+            @click="selectA(s.id)"
+          >
+            <div class="flex min-w-0 items-center gap-2">
+              <span class="text-xs font-medium">v{{ s.snapshot_version }}</span>
+              <span
+                class="rounded px-1.5 py-0.5 text-[10px] font-medium"
+                :class="s.version_kind === 'edit' ? 'bg-primary/10 text-primary' : 'bg-muted/40 text-muted-foreground'"
+              >
+                {{ s.version_kind === 'edit' ? $t('components.PipelineSnapshotTimeline.edit') : $t('components.PipelineSnapshotTimeline.run') }}
+              </span>
+              <span
+                v-if="s.channel && s.channel !== 'none'"
+                class="rounded bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning-text"
+              >
+                {{ s.channel }}
+              </span>
+              <span class="truncate text-[10px] text-muted-foreground">{{ formatDate(s.created_at) }}</span>
+            </div>
+            <span class="shrink-0 text-[10px] text-muted-foreground">{{ s.tag || '' }}</span>
+          </button>
+          <button
+            type="button"
+            class="shrink-0 self-center rounded-md border border-input bg-background px-2 py-1 text-[10px] font-medium hover:bg-accent"
+            :aria-label="$t('components.PipelineSnapshotTimeline.view_version_aria', { version: s.snapshot_version })"
+            :data-testid="`snapshot-timeline-view-${s.id}`"
+            @click="emit('view', s.id)"
+          >
+            {{ $t('components.PipelineSnapshotTimeline.view_version') }}
+          </button>
+        </div>
       </div>
 
       <span class="mb-1 block text-[10px] text-muted-foreground">{{ $t('components.PipelineSnapshotTimeline.compare_to') }}</span>
@@ -129,7 +146,10 @@ interface TimelineSnapshot {
 }
 
 const props = defineProps<{ pipelineId: string }>()
-defineEmits<{ close: [] }>()
+// FAR-1812: `view` asks the host editor to open this snapshot as a read-only
+// historical version (deep link) — selection for diff/rollback stays on the
+// row itself.
+const emit = defineEmits<{ close: []; view: [id: string] }>()
 
 const loading = ref(true)
 const snapshots = ref<TimelineSnapshot[]>([])

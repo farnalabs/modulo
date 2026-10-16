@@ -192,3 +192,4 @@ minimumReleaseAgeExclude:
   - '@datadog/browser-rum-core@7.16.0'
   - '@datadog/browser-rum@7.16.0'
   - '@datadog/js-core@0.0.17'
+  - '@axe-core/playwright@4.14.0'

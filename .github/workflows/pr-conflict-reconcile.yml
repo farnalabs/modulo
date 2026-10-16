@@ -69,7 +69,7 @@ jobs:
 
           # Validate the API call succeeded (fail open loudly, FAR-528)
           if [ "$GH_RC" -ne 0 ] || [ ! -s /tmp/open_prs.json ]; then
-            ERR=$(cat /tmp/gh_pr_list_stderr.txt 2>/dev/null | head -c 500)
+            ERR=$(head -c 500 /tmp/gh_pr_list_stderr.txt 2>/dev/null || true)
             echo "::warning::Failed to fetch open PRs from GitHub API (rc=$GH_RC). Reconciler cannot run this cycle.${ERR:+$'\n'}gh pr list stderr: $ERR"
             echo "api_failed=true" >> "${GITHUB_OUTPUT:-/dev/null}"
             exit 0
@@ -105,13 +105,15 @@ jobs:
           echo "$DISPATCH" > /tmp/dispatch_prs.json
           echo "$NOTIFY" > /tmp/notify_prs.json
 
-          echo "## PR Conflict Reconciler" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Category | Count |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|----------|-------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Conflicted PRs (dispatch) | $DISPATCH_COUNT |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Conflicted PRs (manual-delivery, notify only) | $NOTIFY_COUNT |" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## PR Conflict Reconciler"
+            echo ""
+            echo "| Category | Count |"
+            echo "|----------|-------|"
+            echo "| Conflicted PRs (dispatch) | $DISPATCH_COUNT |"
+            echo "| Conflicted PRs (manual-delivery, notify only) | $NOTIFY_COUNT |"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
 
           if [ "$DISPATCH_COUNT" -gt 0 ]; then
             echo "### Dispatching Branch Fixer for:" >> "$GITHUB_STEP_SUMMARY"
@@ -196,7 +198,7 @@ jobs:
               BODY_RESP=$(echo "$RESPONSE" | sed '$d')
               LAST_HTTP="$HTTP_CODE"
               if [ "$HTTP_CODE" = "202" ]; then
-                echo "Branch Fixer accepted for PR #$PR_NUM (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+                echo "Branch Fixer accepted for PR #$PR_NUM (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
                 DISPATCH_OK=true
                 DISPATCHED=$((DISPATCHED + 1))
                 break
@@ -215,7 +217,7 @@ jobs:
                 echo "::warning::Branch Fixer returned HTTP $HTTP_CODE for PR #$PR_NUM (attempt $attempt/5) — retrying in ${DELAY}s"
                 sleep "$DELAY"
               else
-                echo "::warning::Branch Fixer returned HTTP $HTTP_CODE for PR #$PR_NUM: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
+                echo "::warning::Branch Fixer returned HTTP $HTTP_CODE for PR #$PR_NUM: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
                 break
               fi
             done
@@ -227,9 +229,11 @@ jobs:
             fi
           done
 
-          echo "dispatched=$DISPATCHED" >> "${GITHUB_OUTPUT:-/dev/null}"
-          echo "skipped=$SKIPPED" >> "${GITHUB_OUTPUT:-/dev/null}"
-          echo "failed=$FAILED" >> "${GITHUB_OUTPUT:-/dev/null}"
+          {
+            echo "dispatched=$DISPATCHED"
+            echo "skipped=$SKIPPED"
+            echo "failed=$FAILED"
+          } >> "${GITHUB_OUTPUT:-/dev/null}"
           if [ "$FAILED" -gt 0 ]; then
             echo "::error::${FAILED} PR(s) could not be dispatched to the Branch Fixer after retries."
             exit 1
