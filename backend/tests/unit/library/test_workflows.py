@@ -14,12 +14,10 @@ from typing import Any
 
 import pytest
 
-from modulo.core.library.agents import __all__ as agent_exports
-from modulo.core.library.agents import definitions as agent_defs
 from modulo.core.library.workflows import __all__ as workflow_exports
 from modulo.core.library.workflows import definitions as workflow_defs
 
-from .helpers import REQUIRED_WORKFLOW_KEYS, WORKFLOWS
+from .helpers import KNOWN_AGENTS, REQUIRED_WORKFLOW_KEYS, WORKFLOWS
 
 VALID_CONNECTOR_BINDING_TYPES: set[str] = {
     "source_control",
@@ -102,11 +100,10 @@ def test_dependency_edges_are_valid(name: str) -> None:
 @pytest.mark.parametrize("name", workflow_exports, ids=lambda n: n)
 def test_agent_refs_are_known(name: str) -> None:
     """Every agent reference must map to a defined agent primitive."""
-    defined = {getattr(agent_defs, n)["name"].lower().replace(" ", "-") for n in agent_exports}
     for step in _workflow(name)["pipeline_steps"]:
         agent = step.get("agent")
         if agent is not None:
-            assert agent in defined, f"{name}: unknown agent ref {agent!r}"
+            assert agent in KNOWN_AGENTS, f"{name}: unknown agent ref {agent!r}"
 
 
 @pytest.mark.parametrize("name", workflow_exports, ids=lambda n: n)
