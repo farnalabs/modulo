@@ -54,14 +54,19 @@ rules:
       # matches, silently disabling the exclusion.
       - pattern-not: $SAFE.__class__.__name__
       - pattern-not: $SAFE.__class__.__qualname__
-      # A parameter annotated `type` / `type[...]` is provably a class. NOTE: `$Y`
-      # must be a DIFFERENT metavariable from `$X` — reusing `$X` silently
-      # suppresses every match rather than excluding the safe ones.
+      # A parameter annotated `type` / `type[...]` is provably a class, so a
+      # `__name__` read off THAT parameter is safe. Reuse `$X` so the exclusion
+      # binds the positive pattern's receiver to the annotated parameter: the
+      # read is excluded only when it is on the annotated parameter itself. A
+      # DIFFERENT metavariable would exclude the whole function and hide a
+      # genuine read on any other value in it (the fixture's
+      # `safe_annotated_type_generic` and `unsafe_unrelated_read_in_type_fn`
+      # pin both directions on the CI semgrep version).
       - pattern-not-inside: |
-          def $F(..., $Y: type, ...):
+          def $F(..., $X: type, ...):
               ...
       - pattern-not-inside: |
-          def $F(..., $Y: type[...], ...):
+          def $F(..., $X: type[...], ...):
               ...
       # `except $E:` matches only a bare-type handler. `except SomeType as exc:`
       # (the dominant idiom in this repo) binds a name and `except:` binds

@@ -98,3 +98,22 @@ def safe_annotated_type(fn: type) -> str:
     except Exception:  # noqa: BLE001
         # ok: dunder-name-on-error-path
         return fn.__name__
+
+
+def safe_annotated_type_generic(fn: type[BaseException]) -> str:
+    try:
+        connect()
+    except Exception:  # noqa: BLE001
+        # ok: dunder-name-on-error-path
+        return fn.__name__
+
+
+def unsafe_unrelated_read_in_type_fn(fn: type) -> str:
+    # A `type`-annotated parameter makes a read off THAT parameter safe; a read
+    # off any other value on the same error path is still the bug this rule
+    # guards. The exclusion must bind the receiver, not the whole function.
+    try:
+        connect()
+    except Exception:  # noqa: BLE001
+        # ruleid: dunder-name-on-error-path
+        return other.__name__

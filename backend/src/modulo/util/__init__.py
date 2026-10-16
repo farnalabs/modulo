@@ -36,7 +36,10 @@ def callable_label(fn: object) -> str:
     replacing the real failure with an opaque ``AttributeError`` and discarding
     the original exception cause.
 
-    Falls back to the callable's type, which is always present.
+    Falls back to the callable's type, which is always present. For a class
+    defined inside a function, ``type(fn).__qualname__`` includes a ``<locals>``
+    segment (e.g. ``outer.<locals>.Builder``); that is accepted as informative
+    diagnostic context for a label that is only ever logged, never parsed.
     """
     name = getattr(fn, "__name__", None)
     if isinstance(name, str) and name:
