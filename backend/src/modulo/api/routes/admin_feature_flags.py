@@ -548,6 +548,12 @@ async def toggle_feature_flag(
             },
         )
     except SQLAlchemyError as exc:
+        # FAR-1832 QA F16: this arm fronts ``_apply_org_flag_override`` →
+        # ``_write_org_override`` → the bounded-lock org-settings patch, so a
+        # 55P03 is reachable here. Classify it (409 conflict) FIRST, before the
+        # generic 503 below — the F10 sweep converted the org-override sibling
+        # writers but missed this toggle arm.
+        raise_lock_timeout_conflict_if(exc, "admin_feature_flags.toggle_feature_flag")
         raise_session_contract_error(exc, "admin_feature_flags.toggle_feature_flag")
         logger.exception(_CODE_FEATURE_FLAGS_TOGGLE_FAILED, extra={"flag_name": flag_name})
         return JSONResponse(

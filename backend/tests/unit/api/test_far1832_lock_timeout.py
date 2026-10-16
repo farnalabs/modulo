@@ -17,9 +17,11 @@ The real in-flight-lock-holder variants (real Postgres, real handlers) live in
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -27,6 +29,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
+from modulo.api import routes as _routes_package
 from modulo.api.db_error_handling import raise_lock_timeout_conflict_if
 from modulo.api.dependencies import get_db_session
 from modulo.api.routes import product_analytics as pa_module
@@ -192,3 +195,108 @@ async def test_post_consent_direct_call_maps_lock_timeout_to_409() -> None:
             pa_module.ConsentRequest(action="accept"), _principal(), session
         )
     assert exc_info.value.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# FAR-1832 QA F16 sweep guard: every route reaching a bounded-lock patch
+# helper must classify 55P03. Prose did not hold — the "sweep is complete"
+# claim was falsified twice (F10 missed the toggle + evidence-retention arms;
+# F16's own verification found they were still missing).
+# ---------------------------------------------------------------------------
+
+
+# Tokens that identify a route module reaching a bounded-lock org-settings /
+# OTel JSON-column patch helper, directly or transitively:
+#   - ``update_org_settings_patch`` / ``update_org_json_column_patch``: direct
+#   - ``apply_org_settings_patch_or_404``: the route-layer wrapper
+#   - ``update_otel_config``: db.crud.observability -> the shared patch
+#   - ``set_org_flag``: core.runtime_config.org_flags -> the patch
+#   - ``save_policy``: core.evidence_retention -> the patch
+_WRITER_TOKENS = (
+    "update_org_settings_patch",
+    "update_org_json_column_patch",
+    "apply_org_settings_patch_or_404",
+    "update_otel_config",
+    "set_org_flag",
+    "save_policy",
+)
+
+# The writers known to reach a patch helper today. The guard asserts the
+# discovery set is a SUPERSET of this, so a discovery bug (a stale token)
+# fails loudly instead of silently passing on an empty set.
+_KNOWN_WRITER_MODULES = frozenset(
+    {
+        "admin.py",
+        "admin_email.py",
+        "admin_evidence_retention.py",
+        "admin_feature_flags.py",
+        "admin_orgs.py",
+        "costs.py",
+        "observability.py",
+        "product_analytics.py",
+    }
+)
+
+_CLASSIFIER_NAME = "raise_lock_timeout_conflict_if"
+
+
+def _route_sources_reaching_a_patch_helper() -> dict[str, str]:
+    """Map route-module name -> source for every module reaching a patch helper.
+
+    Scans ``api/routes/*.py`` (excluding underscore-prefixed shared helpers —
+    ``_org_settings`` owns the wrapper but has no request arm to classify) for
+    any ``_WRITER_TOKENS`` reference, using a word-boundary match so
+    ``set_org_flag`` does not falsely match ``set_org_flag_override``.
+    """
+    routes_dir = Path(_routes_package.__file__).parent
+    discovered: dict[str, str] = {}
+    pattern = re.compile("|".join(rf"\b{re.escape(token)}\b" for token in _WRITER_TOKENS))
+    for path in sorted(routes_dir.glob("*.py")):
+        if path.name.startswith("_"):
+            continue
+        source = path.read_text(encoding="utf-8")
+        if pattern.search(source):
+            discovered[path.name] = source
+    return discovered
+
+
+def test_every_patch_writer_route_classifies_55p03() -> None:
+    """FAR-1832 QA F16 sweep guard (the completeness claim was falsified twice).
+
+    A bounded org-settings / OTel JSON-column patch bounds the org row-lock
+    wait (``set_mutation_row_lock_timeout``), so SQLSTATE 55P03 is reachable at
+    every route arm that fronts one. An arm that lacks
+    ``raise_lock_timeout_conflict_if`` collapses the busy-row CONFLICT into a
+    generic 503 ("Database temporarily unavailable") — which reads as "retry
+    now" and invites a client retry storm against the very lock that is busy.
+
+    The QA F10 sweep claimed to have converted every writer and missed two (the
+    feature-flag toggle arm and the evidence-retention route, which carries no
+    ``@handle_db_errors`` backstop at all); the independent F16 pass found them
+    still missing. This guard makes the invariant STRUCTURAL rather than prose:
+    it discovers every route module that reaches a patch helper and fails if any
+    of them does not classify 55P03.
+
+    It is non-vacuous by construction — it asserts the discovered set contains
+    the known writers, so a stale-token discovery that finds nothing (or too
+    little) fails loudly rather than passing.
+    """
+    discovered = _route_sources_reaching_a_patch_helper()
+
+    assert discovered, (
+        "writer discovery found NO route module reaching a patch helper — the guard's "
+        "discovery tokens are stale, which is not the same as the sweep being complete"
+    )
+    missing_known = _KNOWN_WRITER_MODULES - set(discovered)
+    assert not missing_known, (
+        f"discovery no longer sees known patch-helper writers {sorted(missing_known)} — "
+        "fix the discovery tokens, do not weaken the guard"
+    )
+
+    unclassified = sorted(name for name, source in discovered.items() if _CLASSIFIER_NAME not in source)
+    assert not unclassified, (
+        "FAR-1832: these route modules reach a bounded-lock org-settings/OTel patch but never "
+        f"call {_CLASSIFIER_NAME}: {unclassified}. Add "
+        "raise_lock_timeout_conflict_if(exc, <that route's own log key>) as the FIRST statement "
+        "of the arm's except SQLAlchemyError (55P03 must be a 409 conflict, not a 503 outage)."
+    )

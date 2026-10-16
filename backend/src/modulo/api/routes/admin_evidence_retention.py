@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_UNEXPECTED_ERROR
-from modulo.api.db_error_handling import raise_session_contract_error
+from modulo.api.db_error_handling import raise_lock_timeout_conflict_if, raise_session_contract_error
 from modulo.api.dependencies import (
     get_db_session,
     require_system_or_org_admin,
@@ -206,6 +206,13 @@ async def update_evidence_retention(
             detail=_MSG_MIGRATIONS_REQUIRED,
         ) from None
     except SQLAlchemyError as exc:
+        # FAR-1832 QA F16: ``save_policy`` writes the ``evidence_retention``
+        # key through the bounded-lock org-settings patch, so a 55P03 is
+        # reachable here. Classify it (409 conflict) FIRST, before the generic
+        # 503 below — and note this route carries NO ``@handle_db_errors``
+        # decorator, so this arm is the only translation (no backstop would
+        # have caught the miss).
+        raise_lock_timeout_conflict_if(exc, "admin_evidence_retention.update_evidence_retention")
         raise_session_contract_error(exc, "admin_evidence_retention.update_evidence_retention")
         _log.exception("evidence_retention.update.db_error")
         raise HTTPException(

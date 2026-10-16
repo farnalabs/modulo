@@ -1625,3 +1625,28 @@ class TestOrgOverrideLockTimeout:
             resp = client.delete("/api/v1/admin/feature-flags/webhook_trigger/org-override")
         assert resp.status_code == 409, resp.text
         assert "another change is in progress" in resp.json()["detail"]
+
+    def test_toggle_feature_flag_lock_timeout_is_409(self, client: TestClient) -> None:
+        """FAR-1832 QA F16: the toggle writer shares
+        ``_apply_org_flag_override`` → ``_write_org_override`` with the
+        org-override writers, so its ``except SQLAlchemyError`` arm must
+        classify 55P03 too — pre-F16 it collapsed the conflict to a 503."""
+        org = _org_with_overrides()
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.update_org_settings_patch",
+                side_effect=_lock_timeout_operational(),
+            ),
+        ):
+            resp = client.put("/api/v1/admin/feature-flags/webhook_trigger", json={"enabled": True})
+        assert resp.status_code == 409, resp.text
+        assert "another change is in progress" in resp.json()["detail"]
