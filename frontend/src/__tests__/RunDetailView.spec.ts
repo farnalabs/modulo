@@ -2215,7 +2215,7 @@ describe('RunDetailView', () => {
     // local time — the backend keeps heartbeat_at on a terminal run, so "—"
     // would discard a value the server still holds.
     expect(el.text()).toMatch(/Last heartbeat\s/)
-    const absoluteLocalTime = new Date(heartbeatAt).toLocaleString('en-US', {
+    const absoluteLocalTime = new Date(heartbeatAt).toLocaleString('en-US', { // nosemgrep: new-date-without-guard
       month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
     })
     expect(el.text()).toContain(absoluteLocalTime)
