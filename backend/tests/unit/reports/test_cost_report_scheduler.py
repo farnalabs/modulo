@@ -193,10 +193,22 @@ async def test_due_report_executes_and_transitions_schedule(
     assert result["next_send_at"] == (expected_next.isoformat() if expected_next else None)
     generator.assert_awaited_once()
     deliverer.assert_awaited_once()
-    update_statement = session.execute.await_args_list[1].args[0]
-    update_params = update_statement.compile().params
-    assert update_params["active"] is expected_active
-    assert update_params["next_send_at"] == expected_next
+    # FAR-1822: only the ONE-TIME terminal transition writes active/next_send_at
+    # (phase 3, after delivery). A recurring report's terminal stamp writes
+    # ``last_sent_at`` ONLY — the enqueue already advanced next_send_at and a
+    # concurrent advance/deactivation must not be rewound (finding 5).
+    terminal = [
+        call.args[0]
+        for call in session.execute.await_args_list
+        if str(call.args[0]).lstrip().startswith("UPDATE") and "last_sent_at" in str(call.args[0])
+    ][-1]
+    update_params = terminal.compile().params
+    if schedule_type == "one_time":
+        assert update_params["active"] is expected_active
+        assert update_params["next_send_at"] == expected_next
+    else:
+        assert "active" not in update_params
+        assert "next_send_at" not in update_params
 
 
 async def test_failed_delivery_does_not_deactivate_one_time_report() -> None:
@@ -216,7 +228,15 @@ async def test_failed_delivery_does_not_deactivate_one_time_report() -> None:
         result = await _fire_scheduled_report(report_id=report.id, org_id=report.organisation_id)
 
     assert result == {"status": "failed", "reason": "generation_or_delivery_failed"}
+    # FAR-1822: Phase 1 is a READ (the enqueue already advanced next_send_at),
+    # so a failed delivery issues only the phase-1 SELECT — no write at all. A
+    # failed one_time report is NOT deactivated and its next_send_at is NOT
+    # nulled, so the due-scan can still re-select it (finding 2).
     assert session.execute.await_count == 1
+    writes = [
+        call.args[0] for call in session.execute.await_args_list if str(call.args[0]).lstrip().startswith("UPDATE")
+    ]
+    assert all("active" not in str(stmt).lstrip() for stmt in writes)
 
 
 async def test_cost_crud_filters_and_cannot_delete_quality_report() -> None:

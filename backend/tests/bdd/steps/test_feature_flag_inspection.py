@@ -44,6 +44,10 @@ def _make_mock_session() -> Any:
     # vacuously (an unawaited coroutine is truthy).
     session.in_transaction = MagicMock(return_value=True)
     session.add = MagicMock()
+    # A real AsyncSession exposes ``info`` as a plain dict; ``set_rls_org`` on a
+    # generic backend writes the org id there and the FAR-1830 settings-patch
+    # tenant guard reads it back.
+    session.info = {}
 
     mock_scalars = MagicMock()
     mock_scalars.all.return_value = []

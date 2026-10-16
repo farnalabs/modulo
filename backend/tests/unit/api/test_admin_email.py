@@ -1,7 +1,7 @@
 """Tests for the admin email settings API."""
 
 import base64
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -259,8 +259,8 @@ class TestPutEmailSettings:
         org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={})
         original_get = admin_email.get_organisation
         admin_email.get_organisation = AsyncMock(return_value=org)
-        original_update = admin_email.update_organisation
-        admin_email.update_organisation = AsyncMock(return_value=org)
+        original_patch = admin_email.update_org_settings_patch
+        admin_email.update_org_settings_patch = AsyncMock(return_value=org.settings_json)
         try:
             resp = await client_admin.put(
                 f"/api/v1/admin/org/{ORG_ID}/email-settings",
@@ -280,16 +280,49 @@ class TestPutEmailSettings:
             assert data["email_from"] == "new@example.com"
             assert data["smtp_password"] == "********"
 
-            admin_email.update_organisation.assert_called_once()
-            call_updates = admin_email.update_organisation.call_args[0][2]
-            assert call_updates["settings_json"]["email"]["smtp_host"] == "smtp.new.com"
+            admin_email.update_org_settings_patch.assert_called_once()
+            call_patch = admin_email.update_org_settings_patch.call_args[0][2]
+            # FAR-1830: only the ``email`` key is patched (never the whole column).
+            assert set(call_patch) == {"email"}
+            assert call_patch["email"]["smtp_host"] == "smtp.new.com"
             # Password should be encrypted, not stored as plaintext
-            stored_password = call_updates["settings_json"]["email"]["smtp_password"]
+            stored_password = call_patch["email"]["smtp_password"]
             assert stored_password != "newpass"
             assert stored_password.startswith("gAAAAA")  # Fernet prefix
         finally:
             admin_email.get_organisation = original_get
-            admin_email.update_organisation = original_update
+            admin_email.update_org_settings_patch = original_patch
+
+    async def test_put_binds_target_org_rls_context(self, client_admin, mock_session):
+        """FAR-1830: the write path must bind the TARGET org's RLS context.
+
+        Without ``set_rls_org`` the patch helper's tenant guard would run
+        against an unbound session — inert on this path-parameter route.
+        """
+        from modulo.api.routes import admin_email
+        from modulo.db.models.organisation import Organisation
+
+        org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={})
+        bind = AsyncMock()
+        with (
+            patch.object(admin_email, "get_organisation", AsyncMock(return_value=org)),
+            patch.object(admin_email, "update_org_settings_patch", AsyncMock(return_value={})),
+            patch.object(admin_email, "set_rls_org", bind),
+        ):
+            resp = await client_admin.put(
+                f"/api/v1/admin/org/{ORG_ID}/email-settings",
+                json={
+                    "smtp_host": "smtp.new.com",
+                    "smtp_port": 465,
+                    "smtp_username": "u",
+                    "smtp_password": "p",
+                    "email_from": "a@example.com",
+                },
+            )
+        assert resp.status_code == 200
+        assert bind.await_count >= 1
+        for call in bind.await_args_list:
+            assert call.args[1] == ORG_ID
 
     async def test_put_settings_not_found(self, client_admin, mock_session):
         from modulo.api.routes import admin_email
@@ -331,8 +364,8 @@ class TestPutEmailSettings:
         org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={})
         original_get = admin_email.get_organisation
         admin_email.get_organisation = AsyncMock(return_value=org)
-        original_update = admin_email.update_organisation
-        admin_email.update_organisation = AsyncMock(return_value=org)
+        original_patch = admin_email.update_org_settings_patch
+        admin_email.update_org_settings_patch = AsyncMock(return_value=org.settings_json)
         try:
             resp = await client_admin.put(
                 f"/api/v1/admin/org/{ORG_ID}/email-settings",
@@ -347,11 +380,12 @@ class TestPutEmailSettings:
             )
             assert resp.status_code == 200
             assert resp.json()["smtp_timeout"] == 10
-            call_updates = admin_email.update_organisation.call_args[0][2]
-            assert call_updates["settings_json"]["email"]["smtp_timeout"] == 10
+            call_patch = admin_email.update_org_settings_patch.call_args[0][2]
+            assert set(call_patch) == {"email"}
+            assert call_patch["email"]["smtp_timeout"] == 10
         finally:
             admin_email.get_organisation = original_get
-            admin_email.update_organisation = original_update
+            admin_email.update_org_settings_patch = original_patch
 
     async def test_put_settings_timeout_too_low_422(self, client_admin, mock_session):
         from modulo.api.routes import admin_email
@@ -726,7 +760,7 @@ class TestOrgAdminAllowed:
 
         org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={})
         monkeypatch.setattr(admin_email, "get_organisation", AsyncMock(return_value=org))
-        monkeypatch.setattr(admin_email, "update_organisation", AsyncMock(return_value=org))
+        monkeypatch.setattr(admin_email, "update_org_settings_patch", AsyncMock(return_value=org.settings_json))
         resp = await client_non_sys_admin.put(
             f"/api/v1/admin/org/{ORG_ID}/email-settings",
             json={
