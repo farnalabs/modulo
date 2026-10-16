@@ -459,7 +459,6 @@ test.describe('JsonViewer design-token theming', { tag: '@regression' }, () => {
       const valueLefts = await truncated
         .locator('.json-viewer-string-truncated-text')
         .evaluate(collectLineLeftEdges)
-      console.log(`[far-1840] alignment: ${JSON.stringify({ ...geometry!, valueLefts })}`)
       // The key must actually be indented past the row edge — otherwise
       // "value aligned to key" would be vacuously true at x of the row.
       expect(geometry!.keyLeft, 'key sits right of the row edge (indent > 0)').toBeGreaterThan(geometry!.nodeLeft + 2)
