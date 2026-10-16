@@ -3675,6 +3675,12 @@ elements:
       - testid: pipeline-editor-root
         type: element
         dynamic_testid: false
+      - testid: pipeline-editor-content
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-canvas
+        type: element
+        dynamic_testid: false
       - testid: pipeline-editor-node-props-close
         type: button
         dynamic_testid: false

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
-import { nextTick } from 'vue'
+import { h, nextTick } from 'vue'
 
 // Viewport-fit coverage for PipelineEditorView: the FAR-1841 mobile fit, the
 // FAR-1851 desktop fold fit, and the FAR-1861 mobile-sheet dialog semantics.
@@ -556,5 +556,101 @@ describe('PipelineEditorView — mobile properties-sheet dialogs (FAR-1861)', ()
 
     wrapper.unmount()
     document.body.removeChild(trigger)
+  })
+
+  it('does not throw on Shift+Tab in an open sheet with no focusable descendants', async () => {
+    const wrapper = mountEditor(document.body)
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.selectedEdgeData = null
+    vm.selectedNodeData = { id: 'n1', node_type: 'agent', agent_id: 'agent-1' }
+    await nextTick()
+
+    const nodeSheet = sheetFor(wrapper, 'pipeline-editor-node-props-close')
+    // Strip every focusable descendant, leaving only the focusable container
+    // itself — the zero-focusable case the trap must treat as a no-op.
+    nodeSheet
+      .querySelectorAll('a[href], button, input, select, textarea, [tabindex]')
+      .forEach((el) => el.remove())
+    nodeSheet.focus()
+    expect(document.activeElement).toBe(nodeSheet)
+
+    // Called directly (not via dispatchEvent) so an unexpected TypeError in the
+    // handler propagates to the assertion rather than being swallowed by jsdom.
+    const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
+    expect(() => vm.onSheetKeydown(event)).not.toThrow()
+    expect(event.defaultPrevented).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('restores focus to the canvas when the sheet trigger is not focusable', async () => {
+    // A VueFlow node/edge wrapper carries no tabindex, so a mobile canvas click
+    // leaves `document.activeElement` on <body> — the state a real sheet opens
+    // from. Restoring <body> is a no-op, so focus must fall back to the canvas.
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    expect(document.activeElement).toBe(document.body)
+
+    const wrapper = mountEditor(document.body)
+    await flushPromises()
+    const vm = wrapper.vm as any
+    const canvas = wrapper.find('[data-testid="pipeline-editor-canvas"]').element as HTMLElement
+    expect(canvas).toBeTruthy()
+
+    vm.selectedEdgeData = null
+    vm.selectedNodeData = { id: 'n1', node_type: 'agent', agent_id: 'agent-1' }
+    await flushPromises()
+
+    const nodeSheet = sheetFor(wrapper, 'pipeline-editor-node-props-close')
+    expect(document.activeElement).toBe(nodeSheet)
+
+    vm.selectedNodeData = null
+    await flushPromises()
+    expect(document.activeElement).toBe(canvas)
+
+    wrapper.unmount()
+  })
+})
+
+describe('PipelineEditorView — edge badge variants (FAR-1861 changed-lines gate)', () => {
+  // The default mount stub renders only the unnamed slot, so the edge-default
+  // template (its loop/llm badge conditionals included) never runs. Rendering
+  // it with each variant exercises both arms of the optional-suffix ternaries,
+  // which the changed-lines coverage gate scores.
+  it('renders the loop and llm edge badges with and without their optional suffix', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.currentTier = 'team'
+    store.features = { pipeline_delete: true }
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+
+    const wrapper = mount(PipelineEditorView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: {
+          VueFlow: {
+            render(this: { $slots: Record<string, any> }) {
+              const slot = this.$slots['edge-default']
+              return h('div', [
+                slot?.({ data: { edge_type: 'loop', max_iterations: 5 } }),
+                slot?.({ data: { edge_type: 'loop', max_iterations: null } }),
+                slot?.({ data: { edge_type: 'llm', routing_label: 'retry' } }),
+                slot?.({ data: { edge_type: 'llm', routing_label: null } }),
+              ])
+            },
+          },
+          Background: true,
+          Controls: true,
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const html = wrapper.html()
+    expect(html).toContain('(5)')
+    expect(html).toContain('retry')
+    wrapper.unmount()
   })
 })

@@ -240,6 +240,64 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     expect(rootBox!.y + rootBox!.height).toBeLessThanOrEqual(viewportHeight + 1)
   })
 
+  test('a short landscape viewport scrolls the editor internally, never the page', { tag: '@regression' }, async ({ page, env }) => {
+    // 640x360 (short landscape) is where the chrome stack above the editor
+    // leaves less space than the wrapped toolbar's own min-content height
+    // (measured ~124px at 640px wide, at root-top ≈322px → ~38px left). Pinning
+    // the root there used to paint the toolbar below the fold with no page
+    // scroll to reach it (FAR-1861). The fix clips the root and makes the
+    // editor's content column the scroll container, so both the toolbar and the
+    // canvas stay reachable without ever scrolling the page.
+    await loginAsAdmin(page, env)
+    await mockEditorWithNode(page)
+    await page.setViewportSize({ width: 640, height: 360 })
+
+    await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
+    await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+    const flow = page.locator('.vue-flow').first()
+    await expect(flow).toHaveCount(1, { timeout: EDITOR_READY_TIMEOUT })
+
+    // The fit resolves async (chrome above mounts/measures on its own schedule).
+    await expect
+      .poll(
+        async () => page.evaluate(() => document.documentElement.scrollHeight - document.documentElement.clientHeight),
+        { timeout: 15_000, message: 'short landscape viewport must not scroll the page' },
+      )
+      .toBeLessThanOrEqual(0)
+
+    // The root clips — nothing paints below the pinned box.
+    const root = page.getByTestId('pipeline-editor-root')
+    expect(await root.evaluate((el) => getComputedStyle(el).overflow)).toBe('hidden')
+
+    // The editor's own content column is the scroll container, so the
+    // sub-toolbar pinned height does not strand any control.
+    const content = page.getByTestId('pipeline-editor-content')
+    const { clientHeight, scrollHeight } = await content.evaluate((el) => ({
+      clientHeight: el.clientHeight,
+      scrollHeight: el.scrollHeight,
+    }))
+    expect(scrollHeight).toBeGreaterThan(clientHeight)
+
+    const viewportHeight = await page.evaluate(() => document.documentElement.clientHeight)
+
+    // Scroll the toolbar's bottom edge to the fold: every toolbar row is
+    // reachable (it is not silently clipped away).
+    const toolbarBox = await page.getByTestId('pipeline-editor-toolbar').boundingBox()
+    expect(toolbarBox).not.toBeNull()
+    await content.evaluate((el, dy) => { el.scrollTop = dy }, Math.max(0, toolbarBox!.height - clientHeight))
+    const toolbarReached = await page.getByTestId('pipeline-editor-toolbar').boundingBox()
+    expect(toolbarReached).not.toBeNull()
+    expect(toolbarReached!.y + toolbarReached!.height).toBeLessThanOrEqual(viewportHeight + 1)
+
+    // Scroll to the bottom: the canvas is reachable too, with real height.
+    await content.evaluate((el) => { el.scrollTop = el.scrollHeight })
+    await expect(flow).toBeVisible()
+    const flowBox = await flow.boundingBox()
+    expect(flowBox).not.toBeNull()
+    expect(flowBox!.height).toBeGreaterThan(0)
+    expect(flowBox!.y + flowBox!.height).toBeLessThanOrEqual(viewportHeight + 1)
+  })
+
   test('node properties panel opens as a closable overlay without crushing the canvas', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await mockEditorWithNode(page)

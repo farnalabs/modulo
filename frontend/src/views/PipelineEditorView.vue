@@ -6,7 +6,7 @@
        and the editor does not overflow the fold behind the breadcrumb on
        desktop (FAR-1851). The `h-[calc(100vh-3.5rem)]` class is only the
        pre-measurement fallback. -->
-  <div ref="editorRootRef" data-testid="pipeline-editor-root" class="relative flex h-[calc(100vh-3.5rem)]" :style="editorFitStyle">
+  <div ref="editorRootRef" data-testid="pipeline-editor-root" class="relative flex h-[calc(100vh-3.5rem)] overflow-hidden" :style="editorFitStyle">
     <div v-if="loading || historicResolving" class="flex flex-1 items-center justify-center">
       <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
     </div>
@@ -34,9 +34,20 @@
       <ErrorAlert :message="pageError" :on-retry="reloadPage" />
     </div>
     <template v-else>
-      <div class="flex min-w-0 flex-1 flex-col">
-        <!-- Docked toolbar: in-flow above the canvas so it never covers node details -->
-        <div class="flex flex-wrap items-center gap-x-2 gap-y-2 border-b bg-card px-3 py-2" data-testid="pipeline-editor-toolbar">
+      <!-- The content column is the editor's INTERNAL scroll container
+           (FAR-1861). The root is pinned to the space left below the app
+           chrome and clips (`overflow-hidden`); if that space is smaller than
+           the toolbar's own min-content height (a short landscape viewport with
+           the chrome stack active), the toolbar would otherwise paint below
+           the pinned box and out of reach. Scrolling this column instead of
+           the page keeps every control reachable while holding the
+           no-page-scroll invariant for the whole band. -->
+      <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto" data-testid="pipeline-editor-content">
+        <!-- Docked toolbar: in-flow above the canvas so it never covers node details.
+             `shrink-0`: when the content column is shorter than the wrapped
+             toolbar, the toolbar must keep its min-content height (scroll the
+             column to reach it) rather than being squeezed. -->
+        <div class="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-2 border-b bg-card px-3 py-2" data-testid="pipeline-editor-toolbar">
           <!-- Group: identity -->
           <div class="flex min-w-0 items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-identity">
             <h2 class="truncate text-sm font-semibold">{{ pipeline?.name || $t('views.PipelineEditorView.pipeline_editor') }}</h2>
@@ -658,7 +669,14 @@
             </button>
           </div>
         </div>
-        <div class="relative min-h-0 flex-1">
+        <!-- Canvas region. `min-h-[8rem]` (replacing the old `min-h-0`) keeps a
+             real, focusable canvas even when the pinned height is smaller than
+             the wrapped toolbar: the toolbar + this minimum make the content
+             column scroll internally (never the page), so both stay reachable.
+             `tabindex="-1"` makes it the focus-restore fallback for a properties
+             sheet whose trigger (a VueFlow node/edge wrapper) is not focusable
+             (FAR-1861). -->
+        <div ref="canvasRef" class="relative min-h-[8rem] flex-1" tabindex="-1" data-testid="pipeline-editor-canvas">
         <!-- Empty-state overlay on top of the canvas (latest mode only — its
              rename/archive/delete/add-node row is all write affordances, so a
              historical view of an empty graph shows the canvas alone). -->
@@ -830,6 +848,7 @@
            breakpoint the sheet is a modal dialog (FAR-1861): labelled
            `role="dialog"`, Escape + focus-trap handled by `onSheetKeydown`,
            focus moved in on open / restored on close (see the script block). -->
+      <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions --><!-- mobile node sheet: a role="dialog" container whose Escape/Tab focus-trap needs the keydown handler -->
       <aside
         v-if="selectedNodeData && !selectedEdgeData"
         ref="nodePanelRef"
@@ -1285,6 +1304,7 @@
            clicking the canvas, matching the node panel) — the duplicated
            bottom Close was removed in FAR-1861. Below the desktop breakpoint
            it is a modal dialog with the same semantics as the node sheet. -->
+      <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions --><!-- mobile edge sheet: a role="dialog" container whose Escape/Tab focus-trap needs the keydown handler -->
       <aside
         v-if="selectedEdgeData"
         ref="edgePanelRef"
@@ -3001,6 +3021,11 @@ function onPaneClick() {
 // editor shrinks to whatever is left instead of spilling below the fold and
 // re-introducing a trapped page scroll.
 const editorRootRef = ref<HTMLElement | null>(null)
+// The canvas region. Focusable (`tabindex="-1"`) so it can receive focus as the
+// fallback return target when a properties sheet's trigger was not focusable
+// (FAR-1861 — a VueFlow node/edge wrapper carries no tabindex, so capturing
+// `document.activeElement` at open yields <body> and restoring it is a no-op).
+const canvasRef = ref<HTMLElement | null>(null)
 const editorFitHeightPx = ref<number | null>(null)
 const editorFitStyle = computed(() =>
   editorFitHeightPx.value != null ? { height: `${editorFitHeightPx.value}px` } : undefined,
@@ -3148,9 +3173,11 @@ function onSheetKeydown(event: KeyboardEvent) {
   const panel = activeSheetElement()
   if (!panel) return
   const focusables = panel.querySelectorAll<HTMLElement>(SHEET_FOCUSABLE_SELECTOR)
-  // Drop the guard clauses an empty list would need: with no focusable
-  // descendants both `first` and `last` are undefined, `document.activeElement`
-  // can never equal them, and the trap below simply does nothing.
+  // A sheet with no focusable descendants has no Tab target to wrap around —
+  // do nothing. `atStart` would otherwise be true (a container-focused empty
+  // sheet leaves `last` undefined), and the Shift+Tab branch would call
+  // `last.focus()` on undefined.
+  if (focusables.length === 0) return
   const first = focusables[0]
   const last = focusables[focusables.length - 1]
   // Focus can legitimately be on the panel container itself (the element
@@ -3184,7 +3211,12 @@ watch([selectedNodeData, selectedEdgeData], () => {
   // Focus already inside the sheet (e.g. the selection changed while it was
   // open) — nothing to move or to remember.
   if (!panel.contains(document.activeElement)) {
-    sheetReturnFocus = document.activeElement as HTMLElement | null
+    // The real triggers (VueFlow node/edge wrappers) carry no tabindex, so a
+    // canvas click leaves `document.activeElement` on <body>; restoring <body>
+    // is a no-op. Fall back to the focusable canvas so focus actually returns
+    // somewhere sensible when the sheet closes (FAR-1861).
+    const active = document.activeElement as HTMLElement | null
+    sheetReturnFocus = active && active !== document.body ? active : canvasRef.value
     panel.focus()
   }
 }, { flush: 'post' })
