@@ -514,14 +514,16 @@ async def test_licence_clear_path_uses_delete_keys_and_keeps_siblings(
     await seed.close()
 
     recorded: dict[str, Any] = {}
-    real_patch = admin_orgs.update_org_settings_patch
+    # Capture the REAL CRUD helper before the spy replaces the module
+    # attribute the shared route wrapper (QA F7) resolves through.
+    from modulo.api.routes._org_settings import update_org_settings_patch as real_patch
 
     async def _spy(session_arg: Any, oid: Any, patch: Any = None, delete_keys: Any = None, **kwargs: Any) -> Any:
         recorded["patch"] = patch
         recorded["delete_keys"] = delete_keys
         return await real_patch(session_arg, oid, patch, delete_keys=delete_keys, **kwargs)
 
-    monkeypatch.setattr(admin_orgs, "update_org_settings_patch", _spy)
+    monkeypatch.setattr("modulo.api.routes._org_settings.update_org_settings_patch", _spy)
     monkeypatch.setattr(admin_orgs, "invalidate_license_status_cache", AsyncMock())
 
     principal = AuthenticatedPrincipal(
@@ -577,14 +579,16 @@ async def test_licence_set_path_patches_only_license_key(
     monkeypatch.setattr(admin_orgs, "invalidate_license_status_cache", AsyncMock())
 
     recorded: dict[str, Any] = {}
-    real_patch = admin_orgs.update_org_settings_patch
+    # Capture the REAL CRUD helper before the spy replaces the module
+    # attribute the shared route wrapper (QA F7) resolves through.
+    from modulo.api.routes._org_settings import update_org_settings_patch as real_patch
 
     async def _spy(session_arg: Any, oid: Any, patch: Any = None, delete_keys: Any = None, **kwargs: Any) -> Any:
         recorded["patch"] = patch
         recorded["delete_keys"] = delete_keys
         return await real_patch(session_arg, oid, patch, delete_keys=delete_keys, **kwargs)
 
-    monkeypatch.setattr(admin_orgs, "update_org_settings_patch", _spy)
+    monkeypatch.setattr("modulo.api.routes._org_settings.update_org_settings_patch", _spy)
 
     principal = AuthenticatedPrincipal(
         username="admin",

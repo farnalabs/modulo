@@ -554,7 +554,7 @@ class TestOrgLicenseAtomicPatch:
         get_recorder = AsyncMock(side_effect=get_side_effect)
         patch_recorder = AsyncMock(side_effect=patch_side_effect)
         monkeypatch.setattr(admin_orgs, "get_organisation", get_recorder)
-        monkeypatch.setattr(admin_orgs, "update_org_settings_patch", patch_recorder)
+        monkeypatch.setattr("modulo.api.routes._org_settings.update_org_settings_patch", patch_recorder)
         return get_recorder, patch_recorder
 
     @staticmethod
@@ -619,7 +619,7 @@ class TestOrgLicenseAtomicPatch:
         get_recorder.side_effect = None
         get_recorder.return_value = None
         patch_mock = AsyncMock()
-        monkeypatch.setattr(admin_orgs, "update_org_settings_patch", patch_mock)
+        monkeypatch.setattr("modulo.api.routes._org_settings.update_org_settings_patch", patch_mock)
 
         resp = await client_admin.put(f"/api/v1/admin/orgs/{ORG_ID}/license", json={"license_key": "abc.123"})
         assert resp.status_code == 404

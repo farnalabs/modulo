@@ -154,7 +154,7 @@ async def test_put_patches_only_its_own_key_without_prelatching_the_org_row(clie
         return dict(patch or {})
 
     with (
-        patch("modulo.api.routes.admin.update_org_settings_patch", new=_fake_patch),
+        patch("modulo.api.routes._org_settings.update_org_settings_patch", new=_fake_patch),
         patch("modulo.api.routes.admin._record_org_audit", new=AsyncMock()),
     ):
         resp = await client_admin.put(

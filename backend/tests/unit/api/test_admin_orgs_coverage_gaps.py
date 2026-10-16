@@ -484,7 +484,7 @@ def test_set_org_license_success(api: tuple[TestClient, AsyncMock], monkeypatch:
         MagicMock(return_value=SimpleNamespace(valid=True, license_data=_license_data(), error=None)),
     )
     update = AsyncMock(return_value=org.settings_json or {})
-    monkeypatch.setattr(admin_orgs, "update_org_settings_patch", update)
+    monkeypatch.setattr("modulo.api.routes._org_settings.update_org_settings_patch", update)
     resp = client.put(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license", json={"license_key": "valid-key"})
     assert resp.status_code == 200
     data = resp.json()
@@ -533,7 +533,7 @@ def test_set_org_license_update_error_mapping(
         "modulo.core.license.parse_and_verify",
         MagicMock(return_value=SimpleNamespace(valid=True, license_data=_license_data(), error=None)),
     )
-    monkeypatch.setattr(admin_orgs, "update_org_settings_patch", AsyncMock(side_effect=exc))
+    monkeypatch.setattr("modulo.api.routes._org_settings.update_org_settings_patch", AsyncMock(side_effect=exc))
     resp = client.put(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license", json={"license_key": "k"})
     assert resp.status_code == expected
 
@@ -547,7 +547,9 @@ def test_set_org_license_update_unexpected_500(
         "modulo.core.license.parse_and_verify",
         MagicMock(return_value=SimpleNamespace(valid=True, license_data=_license_data(), error=None)),
     )
-    monkeypatch.setattr(admin_orgs, "update_org_settings_patch", AsyncMock(side_effect=RuntimeError("boom")))
+    monkeypatch.setattr(
+        "modulo.api.routes._org_settings.update_org_settings_patch", AsyncMock(side_effect=RuntimeError("boom"))
+    )
     resp = client.put(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license", json={"license_key": "k"})
     assert resp.status_code == 500
 
@@ -557,7 +559,7 @@ def test_remove_org_license_success(api: tuple[TestClient, AsyncMock], monkeypat
     org = _org(settings_json={"license_key": "k", "other": 1})
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
     update = AsyncMock(return_value=org.settings_json or {})
-    monkeypatch.setattr(admin_orgs, "update_org_settings_patch", update)
+    monkeypatch.setattr("modulo.api.routes._org_settings.update_org_settings_patch", update)
     resp = client.delete(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license")
     assert resp.status_code == 200
     data = resp.json()
@@ -623,7 +625,9 @@ def test_set_org_license_invalidates_org_status_cache(
         "modulo.core.license.parse_and_verify",
         MagicMock(return_value=SimpleNamespace(valid=True, license_data=_license_data(), error=None)),
     )
-    monkeypatch.setattr(admin_orgs, "update_org_settings_patch", AsyncMock(return_value=org.settings_json or {}))
+    monkeypatch.setattr(
+        "modulo.api.routes._org_settings.update_org_settings_patch", AsyncMock(return_value=org.settings_json or {})
+    )
     key = f"license:{_TARGET_ORG_ID}"
     probe.set(key, _STALE_STATUS, ex=60)
 
@@ -641,7 +645,9 @@ def test_remove_org_license_invalidates_org_status_cache(
     probe = _patch_fake_redis(monkeypatch)
     org = _org(settings_json={"license_key": "k", "other": 1})
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
-    monkeypatch.setattr(admin_orgs, "update_org_settings_patch", AsyncMock(return_value=org.settings_json or {}))
+    monkeypatch.setattr(
+        "modulo.api.routes._org_settings.update_org_settings_patch", AsyncMock(return_value=org.settings_json or {})
+    )
     key = f"license:{_TARGET_ORG_ID}"
     probe.set(key, _STALE_STATUS, ex=60)
 

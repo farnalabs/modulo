@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors, raise_lock_timeout_conflict_if
 from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.routes._org_settings import apply_org_settings_patch_or_404
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
@@ -36,7 +37,6 @@ from modulo.core.product_analytics.consent import (
     set_level,
 )
 from modulo.core.product_analytics.constants import DEFAULT_LEVEL, LEVEL_OFF, PRODUCT_ANALYTICS_KEY
-from modulo.db.crud.organisation import update_org_settings_patch
 from modulo.db.models.metrics_staging import MetricsStaging
 from modulo.db.models.organisation import Organisation
 from modulo.db.rls import set_rls_org
@@ -196,17 +196,13 @@ async def post_consent(
             now = datetime.now(UTC)
             updated_consent = apply_consent_action(consent, req.action, now)
             subpatch = apply_consent_action({}, req.action, now)
-            try:
-                await update_org_settings_patch(
-                    session,
-                    current_user.organisation_id,
-                    nested_patch={PRODUCT_ANALYTICS_KEY: subpatch},
-                )
-            except LookupError:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Organisation not found.",
-                ) from None
+            # The ``LookupError`` → 404 translation is the shared route helper
+            # (QA F7), byte-identical to the hand-copied block it replaces.
+            await apply_org_settings_patch_or_404(
+                session,
+                current_user.organisation_id,
+                nested_patch={PRODUCT_ANALYTICS_KEY: subpatch},
+            )
 
             # Consent withdrawn -> drop staged events immediately (FAR-1717);
             # they can never be dumped for a non-consenting org anyway.
@@ -310,17 +306,13 @@ async def update_product_analytics_level(
             # writer's prompted* sub-fields survive (no ``FOR UPDATE``
             # pre-lock, no whole-block replace, soft-deleted org → 404).
             subpatch = set_level({}, req.level, now)
-            try:
-                await update_org_settings_patch(
-                    session,
-                    current_user.organisation_id,
-                    nested_patch={PRODUCT_ANALYTICS_KEY: subpatch},
-                )
-            except LookupError:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Organisation not found.",
-                ) from None
+            # The ``LookupError`` → 404 translation is the shared route helper
+            # (QA F7), byte-identical to the hand-copied block it replaces.
+            await apply_org_settings_patch_or_404(
+                session,
+                current_user.organisation_id,
+                nested_patch={PRODUCT_ANALYTICS_KEY: subpatch},
+            )
 
             # Turning analytics OFF withdraws consent: drop staged events now
             # (FAR-1717), in the same transaction as the level write.

@@ -38,6 +38,7 @@ from modulo.api.dependencies import (
     require_system_permission,
 )
 from modulo.api.models.problem import ProblemException, ProblemType
+from modulo.api.routes._org_settings import apply_org_settings_patch_or_404
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
@@ -4138,15 +4139,14 @@ async def admin_update_sandbox_concurrency(
                 # is STORED (not deleted): ``is_default`` distinguishes an
                 # absent key (Docker-tier default) from a stored no-gate null.
                 # A soft-deleted org (pending-deletion window) is refused with
-                # ``LookupError`` → 404, matching the FAR-1830 retention
-                # writer's precedent — reads keep their FAR-1025 opt-out.
-                await update_org_settings_patch(
+                # ``LookupError`` → 404 via the shared route helper (QA F7),
+                # matching the FAR-1830 retention writer's precedent — reads
+                # keep their FAR-1025 opt-out.
+                await apply_org_settings_patch_or_404(
                     session,
                     current_user.organisation_id,
-                    {"sandbox_concurrency_limit": req.sandbox_concurrency_limit},
+                    patch={"sandbox_concurrency_limit": req.sandbox_concurrency_limit},
                 )
-            except LookupError:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND) from None
             except IntegrityError:
                 logger.exception("admin.admin_update_sandbox_concurrency")
                 raise HTTPException(
@@ -4256,25 +4256,23 @@ async def admin_update_hitl_review_window(
             # that key on an explicit ``null``), so concurrent writers'
             # settings survive and the org row is no longer pre-locked. A
             # soft-deleted org (pending-deletion window) is refused with
-            # ``LookupError`` → 404, matching the FAR-1830 retention writer's
-            # precedent — reads keep their FAR-1025 opt-out.
-            try:
-                if req.hitl_review_window_seconds is None:
-                    # ``null`` CLEARS the key (inherit the instance default) —
-                    # never stores a meaningless zero-window.
-                    await update_org_settings_patch(
-                        session,
-                        current_user.organisation_id,
-                        delete_keys=[ORG_HITL_REVIEW_WINDOW_KEY],
-                    )
-                else:
-                    await update_org_settings_patch(
-                        session,
-                        current_user.organisation_id,
-                        {ORG_HITL_REVIEW_WINDOW_KEY: req.hitl_review_window_seconds},
-                    )
-            except LookupError:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND) from None
+            # ``LookupError`` → 404 via the shared route helper (QA F7),
+            # matching the FAR-1830 retention writer's precedent — reads keep
+            # their FAR-1025 opt-out.
+            if req.hitl_review_window_seconds is None:
+                # ``null`` CLEARS the key (inherit the instance default) —
+                # never stores a meaningless zero-window.
+                await apply_org_settings_patch_or_404(
+                    session,
+                    current_user.organisation_id,
+                    delete_keys=[ORG_HITL_REVIEW_WINDOW_KEY],
+                )
+            else:
+                await apply_org_settings_patch_or_404(
+                    session,
+                    current_user.organisation_id,
+                    patch={ORG_HITL_REVIEW_WINDOW_KEY: req.hitl_review_window_seconds},
+                )
 
     await _run_admin_rls_txn(
         session,

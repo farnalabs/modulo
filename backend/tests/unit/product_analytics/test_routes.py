@@ -157,7 +157,7 @@ class TestConsentEndpoint:
             org.settings_json = merged
             return merged
 
-        with patch.object(pa_module, "update_org_settings_patch", new=_fake_patch):
+        with patch("modulo.api.routes._org_settings.update_org_settings_patch", new=_fake_patch):
             resp = _client().post(_CONSENT_URL, json={"action": "accept"})
         assert resp.status_code == 200, resp.text
         assert captured["patch"] is None
@@ -239,7 +239,7 @@ class TestUpdateLevelEndpoint:
             org.settings_json = merged
             return merged
 
-        with patch.object(pa_module, "update_org_settings_patch", new=_fake_patch):
+        with patch("modulo.api.routes._org_settings.update_org_settings_patch", new=_fake_patch):
             resp = _client().put(_PRODUCT_ANALYTICS_URL, json={"level": "all"})
         assert resp.status_code == 200, resp.text
         assert captured["patch"] is None

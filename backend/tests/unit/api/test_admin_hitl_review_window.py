@@ -178,7 +178,7 @@ class TestWrite:
             return dict(patch or {})
 
         with (
-            patch("modulo.api.routes.admin.update_org_settings_patch", new=_fake_patch),
+            patch("modulo.api.routes._org_settings.update_org_settings_patch", new=_fake_patch),
             patch("modulo.api.routes.admin._record_org_audit", new=AsyncMock()),
         ):
             resp = await client_admin.put(_PATH, json={_KEY: 4500})
@@ -201,7 +201,7 @@ class TestWrite:
             return dict(patch or {})
 
         with (
-            patch("modulo.api.routes.admin.update_org_settings_patch", new=_fake_patch),
+            patch("modulo.api.routes._org_settings.update_org_settings_patch", new=_fake_patch),
             patch("modulo.api.routes.admin._record_org_audit", new=AsyncMock()),
         ):
             resp = await client_admin.put(_PATH, json={_KEY: None})

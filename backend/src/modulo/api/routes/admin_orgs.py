@@ -23,6 +23,7 @@ from modulo.api.dependencies import (
     require_target_org_role,
     resolve_audit_principal,
 )
+from modulo.api.routes._org_settings import apply_org_settings_patch_or_404
 from modulo.api.routes.admin_license import invalidate_license_status_cache
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
@@ -40,7 +41,6 @@ from modulo.db.crud.organisation import (
     get_organisation,
     get_organisation_by_slug,
     list_organisations,
-    update_org_settings_patch,
 )
 from modulo.db.models.organisation import MODULO_REGISTRY_ORG_ID, SYSTEM_ORG_ID, Organisation
 from modulo.db.rls import set_rls_org
@@ -654,10 +654,9 @@ async def admin_set_org_license(
 
             # FAR-1832: patch ONLY the ``license_key`` key — sibling settings
             # survive by jsonb composition, never by re-writing a stale blob.
-            try:
-                await update_org_settings_patch(session, org_id, {"license_key": req.license_key})
-            except LookupError:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND) from None
+            # The ``LookupError`` → 404 translation is the shared route helper
+            # (QA F7), byte-identical to the hand-copied block it replaces.
+            await apply_org_settings_patch_or_404(session, org_id, patch={"license_key": req.license_key})
     except ProgrammingError as exc:
         _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_SET, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:
@@ -724,10 +723,9 @@ async def admin_remove_org_license(
             if org is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
 
-            try:
-                await update_org_settings_patch(session, org_id, delete_keys=["license_key"])
-            except LookupError:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND) from None
+            # The ``LookupError`` → 404 translation is the shared route helper
+            # (QA F7), byte-identical to the hand-copied block it replaces.
+            await apply_org_settings_patch_or_404(session, org_id, delete_keys=["license_key"])
     except ProgrammingError as exc:
         _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_REMOVE, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:
