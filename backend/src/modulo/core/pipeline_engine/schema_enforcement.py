@@ -133,7 +133,7 @@ def build_enforcement_record(
     serialised = json.dumps(payload, default=str, ensure_ascii=True)
     if len(serialised.encode("utf-8")) > MAX_ENFORCEMENT_PAYLOAD_BYTES:
         # Drop errors in chunks until it fits.
-        while len(payload["validation_errors"]) > 0:
+        while payload["validation_errors"]:
             payload["validation_errors"] = payload["validation_errors"][:-5]
             payload["total_error_count"] = total_count
             payload["truncated"] = True
