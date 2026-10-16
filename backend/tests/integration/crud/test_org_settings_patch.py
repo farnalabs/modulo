@@ -788,6 +788,12 @@ async def test_product_analytics_concurrent_subfield_writers_both_survive(
     response = await post_consent(ConsentRequest(action="dismiss"), principal, consent_session)
     assert response.prompted == "dismissed", f"handler must complete: {response!r}"
     assert fired["done"], "the interleaved admin writer must have run inside the window"
+    # QA F8: the response must reflect the POST-write state, not the pre-read.
+    # The interleaved admin writer set level="all" before this handler wrote, so
+    # a response derived from the stale pre-read (level defaulting to "off")
+    # reports the wrong level — and would purge staging for an org that is in
+    # fact consenting. Fails on the pre-fix code.
+    assert response.level == "all", f"response must report the committed post-write level, got {response!r}"
 
     settings = await _read_settings(db_engine, org_id)
     block = settings["product_analytics"]

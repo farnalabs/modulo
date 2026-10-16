@@ -177,32 +177,37 @@ async def post_consent(
                     detail="Consent prompt is not currently eligible. Dismissed prompts re-appear after 7 days.",
                 )
 
-            # FAR-1832 QA F1: NESTED sub-field patch, composed ONLY from the
+            # FAR-1832 QA F1/F8: NESTED sub-field patch, composed ONLY from the
             # request — ``apply_consent_action({}, action, now)`` derives the
             # exact sub-fields this action changes WITHOUT consulting the
             # stored block, and the helper's ``jsonb_set(… ||
             # :nested_patch)`` composes them into the STORED product_analytics
             # value at the sub-field level. Option (b) over a FOR UPDATE
-            # pre-lock because the write does NOT depend on the previous
-            # stored value: each writer emits only its own sub-fields (the
-            # consent writer writes prompted*, the admin toggle writes level*),
-            # so two concurrent writers of DIFFERENT sub-fields both survive —
-            # the old whole-block patch replaced the entire product_analytics
-            # value and lost one of them. The same ``now`` feeds the response
-            # view and the stored subpatch so they cannot drift. A soft-deleted
-            # org (pending-deletion window) is refused with ``LookupError`` →
-            # the same 404 — the FAR-1830 retention-writer precedent; reads
-            # keep their FAR-1025 opt-out above.
+            # pre-lock because the write does NOT depend on the previous stored
+            # value: each action emits only its own sub-fields — ``accept`` and
+            # ``decline`` write ``level``, ``level_changed_at`` AND the
+            # ``prompted*`` pair, while ``dismiss`` writes only ``prompted*`` —
+            # so two concurrent writers of DIFFERENT sub-fields both survive
+            # (the old whole-block patch replaced the entire product_analytics
+            # value and lost one of them). A soft-deleted org
+            # (pending-deletion window) is refused with ``LookupError`` → the
+            # same 404 — the FAR-1830 retention-writer precedent; reads keep
+            # their FAR-1025 opt-out above.
             now = datetime.now(UTC)
-            updated_consent = apply_consent_action(consent, req.action, now)
             subpatch = apply_consent_action({}, req.action, now)
-            # The ``LookupError`` → 404 translation is the shared route helper
+            # QA F8: drive the response payload AND the LEVEL_OFF purge decision
+            # from the block the patch RETURNED (the committed post-write state),
+            # never a pre-write read. Under a concurrent writer that lands a
+            # different level between our read and our write, a stale pre-read
+            # would report — and purge on — a level the org is no longer on. The
+            # ``LookupError`` → 404 translation is the shared route helper
             # (QA F7), byte-identical to the hand-copied block it replaces.
-            await apply_org_settings_patch_or_404(
+            returned = await apply_org_settings_patch_or_404(
                 session,
                 current_user.organisation_id,
                 nested_patch={PRODUCT_ANALYTICS_KEY: subpatch},
             )
+            updated_consent = get_product_analytics_block(returned)
 
             # Consent withdrawn -> drop staged events immediately (FAR-1717);
             # they can never be dumped for a non-consenting org anyway.
@@ -294,25 +299,24 @@ async def update_product_analytics_level(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            org = await _get_org_or_404(session, current_user.organisation_id)
+            await _get_org_or_404(session, current_user.organisation_id)
 
-            consent = get_product_analytics_block(org.settings_json)
             now = datetime.now(UTC)
-            updated_consent = set_level(consent, req.level, now)
-            # FAR-1832 QA F1: same contract as the consent POST — the subpatch
+            # FAR-1832 QA F1/F8: same contract as the consent POST — the subpatch
             # is composed ONLY from the request (``set_level({}, level, now)``
             # emits exactly this toggle's sub-fields) and is written through
             # the helper's nested sub-field patch, so a concurrent consent
             # writer's prompted* sub-fields survive (no ``FOR UPDATE``
-            # pre-lock, no whole-block replace, soft-deleted org → 404).
+            # pre-lock, no whole-block replace, soft-deleted org → 404). The
+            # response and the LEVEL_OFF purge decision both read the block the
+            # patch RETURNED, never a stale pre-write read (QA F8).
             subpatch = set_level({}, req.level, now)
-            # The ``LookupError`` → 404 translation is the shared route helper
-            # (QA F7), byte-identical to the hand-copied block it replaces.
-            await apply_org_settings_patch_or_404(
+            returned = await apply_org_settings_patch_or_404(
                 session,
                 current_user.organisation_id,
                 nested_patch={PRODUCT_ANALYTICS_KEY: subpatch},
             )
+            updated_consent = get_product_analytics_block(returned)
 
             # Turning analytics OFF withdraws consent: drop staged events now
             # (FAR-1717), in the same transaction as the level write.
