@@ -1629,8 +1629,11 @@ async def _apply_spend_ceiling_gate(
     # Use the same ROUND_HALF_UP cents conversion as the API boundary so the
     # gate value and the persisted org cumulative never diverge on sub-cent
     # run costs (the accrual in ``_record_ledger_with_retry`` uses the same
-    # ``cents_from_usd``).
-    total_cents = cents_from_usd(total) or 0
+    # ``cents_from_usd``). Clamp to >= 0 so the accrual delta agrees with the
+    # decision path (``evaluate_spend_ceilings`` clamps its inputs to >= 0): a
+    # negative run cost can never decrement the org's lifetime spend or trip
+    # the ``ck_organisation_cost_state_cum_spend`` CHECK (FAR-1833 P3-1).
+    total_cents = max(cents_from_usd(total) or 0, 0)
     decision = evaluate_spend_ceilings(
         run_cost_so_far_cents=total_cents,
         estimated_next_step_cents=0,

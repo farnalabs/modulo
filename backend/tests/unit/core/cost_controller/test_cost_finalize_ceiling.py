@@ -310,6 +310,47 @@ async def test_within_ceilings_increments_org_cumulative() -> None:
     accrual.assert_awaited_once_with(session, org.id, delta_cents=300)
 
 
+async def test_missing_cost_state_row_uses_defaults_and_accrual_inserts_row() -> None:
+    """FAR-1833 P3-4: a MISSING ``organisation_cost_state`` row is the defaults.
+
+    No row means both ceilings unlimited and cumulative 0, so the gate allows
+    the run. The accrual is the atomic ``increment_org_cumulative_spend`` upsert
+    — the INSERT branch creates the row on this first terminal run — so the run
+    is both billed and accrued (rather than silently skipped for a fresh org).
+    """
+    run = _make_run()
+    org = _make_org()
+    session = _session_for(run, org)
+
+    with (
+        _cost_state(present=False),
+        patch(
+            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            new=AsyncMock(return_value=(True, None)),
+        ),
+        patch("modulo.core.cost_controller.finalize._check_circuit_breaker", new=AsyncMock()),
+        _accrual() as accrual,
+    ):
+        await _ledger_block(
+            session,
+            run_id=run.id,
+            org_id=org.id,
+            status="complete",
+            total=Decimal("3.00"),
+            owner_team_id=None,
+            run_date=date(2026, 6, 24),
+            finalize_fields={},
+            session_factory=None,
+            claim_token=None,
+        )
+
+    # Defaults allow the run (no ceiling), and the atomic accrual (which INSERTs
+    # the missing row) is applied exactly once for the $3.00 cost.
+    assert run.ledger_refused_at is None
+    assert run.ledger_written is True
+    accrual.assert_awaited_once_with(session, org.id, delta_cents=300)
+
+
 async def test_ledger_write_failure_then_refinalize_does_not_double_accrue() -> None:
     """Money-correctness regression: a contained (non-abort) ledger-write failure
     must NOT commit the org accrual, so a later re-finalisation of the SAME run

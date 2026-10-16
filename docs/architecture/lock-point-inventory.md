@@ -389,6 +389,22 @@ FAR-1833 moved the per-run ceiling, spend ceiling and cumulative total off the
 row lock with a per-org **advisory** lock (`modulo.core.runner_capacity.lock_org_cost_state`
 → `pg_advisory_xact_lock`). An advisory lock is transaction-scoped and is NOT a row lock, so
 it does not belong in this row-lock inventory; D9 is retired from §3/§5 and the row-lock
-counts drop by one. The finalize path now takes NO lock on the `organisations` row — it reads
-it only for existence — so it no longer serialises against the org-row writers listed in §7
-risk #2.
+counts drop by one. On the finalize path the gate takes NO *cost-column* read or write on the
+`organisations` row — it reads the row only for existence, and the ceiling/cumulative values
+come from `organisation_cost_state`.
+
+**Correction (FAR-1833 P3-6):** the earlier claim that "the finalize path now takes NO lock on
+the `organisations` row" was too strong. The finalize path is NOT org-row-free:
+
+- the auto-pause path (`_ceiling_auto_pause_if_org_crossing` → `maybe_auto_pause_org_triggers`)
+  still WRITES `organisations.triggers_paused` / `triggers_paused_at` whenever the org's
+  "Auto-stop on budget exceeded" toggle is ON and a run crosses the org ceiling; and
+- every FK-carrying child-row insert (the ledger/audit rows) takes an implicit **FOR KEY
+  SHARE** on the referenced `organisations` tuple.
+
+What FAR-1833 actually enforces is **ordering**, not the absence of org-row access: the cost
+advisory is acquired BEFORE any `organisations`-row mutation, on both the finalize path
+(advisory first, then the auto-pause write) and the admin ceiling endpoint
+(`lock_org_cost_state` precedes `_cost_controls_patch`, which sets `org.daily_spend_limit`).
+Both take the pair in the SAME order (advisory → org row), so they cannot form the ABBA cycle
+that was D9. The residual coupling is therefore a bounded one-way wait, never a deadlock.

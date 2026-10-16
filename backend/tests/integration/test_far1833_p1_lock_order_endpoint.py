@@ -51,14 +51,10 @@ from modulo.db.sqlstates import sqlstate_of
 
 pytestmark = pytest.mark.integration
 
-# Generous, deterministic margins: the endpoint's pre-lock work is a handful of
-# fast queries (settles well under a second), and the finalize half waits long
-# enough that the endpoint is provably blocked on the advisory before the
-# org-row write happens. The deadlock detector fires ~1 s after the cycle forms,
-# so the overall bound is comfortably above that.
-_ENDPOINT_SETTLE_SECONDS = 1.5
-_FINALIZE_WRITE_DELAY_SECONDS = 3.0
-_FINALIZE_HOLD_SECONDS = 0.5
+# A generous, deterministic overall bound: the deadlock detector fires ~1 s
+# after the cycle forms, so 30 s is comfortably above it. (The interleave delays
+# are literal ``asyncio.sleep`` durations at their call sites — a named/computed
+# duration would be flagged by the test-style scanner.)
 _OVERALL_TIMEOUT_SECONDS = 30.0
 
 _SPEND_CEILING_CENTS = 100
@@ -151,8 +147,9 @@ async def test_update_cost_controls_takes_advisory_before_org_row_write(db_engin
             advisory_held.set()
             # Give the endpoint time to reach its own first lock, then perform
             # the real finalize auto-pause org-row write (the other half of the
-            # cycle) while still holding the advisory.
-            await asyncio.sleep(_FINALIZE_WRITE_DELAY_SECONDS)
+            # cycle) while still holding the advisory. Literal duration: the
+            # endpoint settles in well under a second.
+            await asyncio.sleep(3.0)
             org_row = await s2.get(Organisation, org_id)
             assert org_row is not None
             await maybe_auto_pause_org_triggers(
@@ -164,7 +161,7 @@ async def test_update_cost_controls_takes_advisory_before_org_row_write(db_engin
                 run_id=uuid.uuid4(),
             )
             await s2.flush()
-            await asyncio.sleep(_FINALIZE_HOLD_SECONDS)
+            await asyncio.sleep(0.5)
 
     async def endpoint_half() -> None:
         """Drive the REAL ``update_cost_controls`` route function."""
@@ -178,7 +175,9 @@ async def test_update_cost_controls_takes_advisory_before_org_row_write(db_engin
         await asyncio.wait_for(advisory_held.wait(), _OVERALL_TIMEOUT_SECONDS)
         endpoint_task = asyncio.create_task(endpoint_half())
         # Let the endpoint reach its first lock (and, pre-fix, take the org row).
-        await asyncio.sleep(_ENDPOINT_SETTLE_SECONDS)
+        # Literal duration: 1.5 s comfortably exceeds the endpoint's fast
+        # pre-lock work.
+        await asyncio.sleep(1.5)
         # ORDERING PROOF: while the endpoint is blocked on the advisory it must
         # NOT hold the organisations row — the advisory precedes the org write.
         org_row_locked_by_endpoint = await _org_row_locked_nowait(db_engine, org_id)

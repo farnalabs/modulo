@@ -178,12 +178,18 @@ async def lock_org_cost_state(session: AsyncSession, org_id: uuid.UUID) -> None:
     mutation makes the order uniform (advisory → org row) on every path.
     """
     from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+    from modulo.db.crud.run import get_dialect_name
 
     # Bound the wait FIRST. NOTE: this executes before the advisory and any
     # pending ORM writes AUTOFLUSH during it — which is exactly why callers must
     # not have dirtied the ``organisations`` row before calling (see the
     # ordering hazard in the docstring).
     await set_mutation_row_lock_timeout(session)
+    # ``pg_advisory_xact_lock`` is Postgres-only: a non-Postgres session (the
+    # SQLite unit fixtures) has no such function, so no-op for symmetry with
+    # ``set_mutation_row_lock_timeout`` (which is itself dialect-gated).
+    if await get_dialect_name(session) != "postgresql":
+        return
     k1, k2 = org_cost_state_lock_keys(org_id)
     await session.execute(text("SELECT pg_advisory_xact_lock(:k1, :k2)"), {"k1": k1, "k2": k2})
 

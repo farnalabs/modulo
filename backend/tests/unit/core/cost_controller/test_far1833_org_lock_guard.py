@@ -49,6 +49,20 @@ _COST_STATE_LOCK_TOKEN = "lock_org_cost_state"
 _COST_STATE_READ_TOKEN = "get_org_cost_state"
 _COST_STATE_WRITE_TOKEN = "upsert_org_cost_state"
 
+# Org-row writers on the endpoint path. ``_cost_controls_patch`` mutates
+# ``org.daily_spend_limit`` and ``update_org_settings_patch`` writes
+# ``settings_json`` — both must happen AFTER the advisory.
+_ORG_ROW_MUTATOR_CALL_TOKEN = "_cost_controls_patch"
+_ORG_ROW_SETTINGS_CALL_TOKEN = "update_org_settings_patch"
+_ORG_DAILY_SPEND_ATTR = "org.daily_spend_limit"
+
+
+def _token_index(src: str, token: str) -> int:
+    idx = src.find(token)
+    assert idx != -1, f"expected token {token!r} in source"
+    return idx
+
+
 # Direct writes to the (now-dropped) organisations cost columns — the endpoints
 # must go through ``upsert_org_cost_state`` instead.
 _RETIRED_ORG_WRITE_TOKENS: tuple[str, ...] = (
@@ -81,3 +95,40 @@ def test_ceiling_endpoints_write_the_cost_state_row_not_the_org_row() -> None:
     assert _COST_STATE_READ_TOKEN in src, "ceiling reads must use get_org_cost_state"
     for token in _RETIRED_ORG_WRITE_TOKENS:
         assert token not in src, f"ceiling endpoints must not write org cost columns ({token!r})"
+
+
+def test_update_cost_controls_takes_advisory_before_org_row_mutation() -> None:
+    """P1 ORDERING guard — a pure token scan cannot see the lock-order inversion.
+
+    ``update_cost_controls`` used to call ``_cost_controls_patch`` (which sets
+    ``org.daily_spend_limit``) BEFORE ``lock_org_cost_state``; because the
+    session autoflushes, that took the ``organisations`` row lock first and the
+    advisory second — an ABBA cycle with finalize. This asserts the ORDERING
+    directly: the advisory acquisition precedes every organisations-row mutation
+    on the endpoint path.
+    """
+    src = _code_only(inspect.getsource(costs_routes.update_cost_controls))
+    lock_at = _token_index(src, _COST_STATE_LOCK_TOKEN)
+    patch_at = _token_index(src, _ORG_ROW_MUTATOR_CALL_TOKEN)
+    settings_at = _token_index(src, _ORG_ROW_SETTINGS_CALL_TOKEN)
+    assert lock_at < patch_at, (
+        "the cost advisory must be acquired BEFORE _cost_controls_patch, which "
+        "mutates the organisations row (org.daily_spend_limit) — the P1 lock-order inversion"
+    )
+    assert lock_at < settings_at, "the advisory must precede every organisations-row write"
+
+    # ``_cost_controls_patch`` really does mutate the org row (so the ordering
+    # above is load-bearing, not vacuous). Raw source: the assignment must exist.
+    patch_src = inspect.getsource(costs_routes._cost_controls_patch)
+    assert _ORG_DAILY_SPEND_ATTR in patch_src, (
+        "_cost_controls_patch must mutate org.daily_spend_limit; if that moved, this "
+        "guard's premise changed and must be revisited"
+    )
+
+
+def test_set_spend_ceiling_takes_advisory_before_cost_state_write() -> None:
+    """The ceiling set/clear endpoint acquires the advisory before its write."""
+    src = _code_only(inspect.getsource(costs_routes.set_spend_ceiling))
+    lock_at = _token_index(src, _COST_STATE_LOCK_TOKEN)
+    write_at = _token_index(src, _COST_STATE_WRITE_TOKEN)
+    assert lock_at < write_at
