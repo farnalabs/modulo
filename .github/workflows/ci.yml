@@ -1455,60 +1455,31 @@ jobs:
             echo "queue_in_flight=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Check Branch Fixer in-flight cap
-        id: fanout-check
-        if: (failure() || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted == 'false' && steps.queue-check.outputs.queue_in_flight != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
-          PR_NUM: ${{ github.event.pull_request.number }}
-        run: |
-          # FAR-1843 D3: bound the Branch Fixer fan-out. When product CI goes
-          # red on many PRs at once (the self-amplifying outage of
-          # 2026-10-15: 28+ PRs), this job dispatched a Branch Fixer run for
-          # EVERY failing PR; ~17 concurrent runs saturated the org sandbox
-          # cap (20), demoting the PR Reviewer's own runs to `pending` with
-          # capacity.org and starving the reviewer. Cap deliberate, logged
-          # backpressure at BRANCH_FIXER_CAP in-flight runs: a capped skip is
-          # NOT a lost fix — the PR Housekeeper re-dispatches branch-fixer.yml
-          # for still-failing PRs on its own cadence, and the next push/CI
-          # failure re-fires this job. Never silent: the skip emits ::warning::
-          # naming the cap and the count.
-          #
-          # Cap = 5: the org sandbox cap is 20; Branch Fixer is the dominant
-          # concurrent consumer during a red-CI storm, and 5 concurrent fixers
-          # keep meaningful repair throughput while leaving headroom for the
-          # PR Reviewer and other pipelines (the reviewer starvation in the
-          # outage was the acute failure, not slow fixes).
-          BRANCH_FIXER_CAP=5
-          # In-flight = any run not yet `completed` (queued / pending /
-          # in_progress / requested / waiting). The pending state matters:
-          # capacity.org-demoted runs are exactly the ones holding sandbox
-          # slots. The latest 100 runs always cover the in-flight set (the
-          # org cap is 20).
-          if ! RUNS_JSON=$(gh api \
-            "/repos/${{ github.repository }}/actions/workflows/branch-fixer.yml/runs?per_page=100" \
-            2>/dev/null); then
-            echo "fanout_capped=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Could not query Branch Fixer runs (GitHub API error) — proceeding with dispatch (fail OPEN: the cap is a protective throttle, not a correctness guard; a lost dispatch here would be worse than a slightly-overshot cap)."
-            exit 0
-          fi
-          IN_FLIGHT=$(printf '%s' "$RUNS_JSON" | jq '[.workflow_runs[] | select(.status != "completed")] | length' 2>/dev/null) || IN_FLIGHT=""
-          if [ -z "$IN_FLIGHT" ]; then
-            echo "fanout_capped=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Could not parse Branch Fixer runs (jq failed) — proceeding with dispatch (fail OPEN, same rationale as the API-error branch)."
-            exit 0
-          fi
-          if [ "$IN_FLIGHT" -ge "$BRANCH_FIXER_CAP" ]; then
-            echo "fanout_capped=true" >> "$GITHUB_OUTPUT"
-            echo "::warning::Branch Fixer in-flight cap reached for PR #${PR_NUM}: ${IN_FLIGHT} run(s) in flight >= cap ${BRANCH_FIXER_CAP} — deliberately skipping this dispatch (logged backpressure; the PR Housekeeper re-drives the fix)."
-          else
-            echo "fanout_capped=false" >> "$GITHUB_OUTPUT"
-            echo "Branch Fixer in-flight: ${IN_FLIGHT} (cap ${BRANCH_FIXER_CAP}) — dispatching for PR #${PR_NUM}."
-          fi
+      # FAR-1843 D3 was a Branch Fixer in-flight cap in this job (counting
+      # actions/workflows/branch-fixer.yml/runs against BRANCH_FIXER_CAP=5);
+      # removed after pre-PR review (F1). It could not bound what it claimed:
+      # notify-pr-failure dispatches the Branch Fixer by DIRECT WEBHOOK POST
+      # to MODULO_BRANCH_FIXER_WEBHOOK_URL, which creates ZERO
+      # branch-fixer.yml runs (branch-fixer.yml is a workflow_dispatch-only
+      # wrapper that POSTs the same webhook; its runs are produced only by
+      # app-side / devtools dispatches). The counter therefore read ~0 during
+      # the very storm it was meant to bound, and its read-then-dispatch
+      # TOCTOU across ~28 concurrent ci jobs could not bound anything anyway.
+      # A GitHub-side counter cannot reliably bound an app-side resource — a
+      # cap that does not bound the thing it claims to is worse than no cap:
+      # it looks like protection while providing none. Do not re-add one here.
+      #
+      # The real bound lives APP-SIDE, enforced atomically at run-creation
+      # time: the Branch Fixer pipeline's own concurrency on app.modulo.run —
+      # pipeline id 6bdf5fca-1b29-4ad2-a273-2b3684e97348 — via its
+      # max_concurrent_runs and its webhook trigger's max_concurrent_runs
+      # (follow-up tracked separately; FAR-1843). The dispatch guards that
+      # remain below — superseded-run, exhausted, queue-check,
+      # manual-delivery — are unaffected and still suppress stale, duplicate
+      # and hand-managed dispatches.
 
       - name: Trigger Modulo Branch Fixer
-        if: (failure() || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted == 'false' && steps.queue-check.outputs.queue_in_flight != 'true' && steps.fanout-check.outputs.fanout_capped != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        if: (failure() || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted == 'false' && steps.queue-check.outputs.queue_in_flight != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
