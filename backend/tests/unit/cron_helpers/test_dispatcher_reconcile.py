@@ -2166,6 +2166,25 @@ class TestTerminalizerSyntheticErrorDetail:
         assert "detail" in stmt._bindparams
         assert params["detail"] == ch._DISPATCH_FAILED_ERROR_DETAIL
 
+    @pytest.mark.asyncio
+    async def test_stranded_pending_writes_no_progress_detail_and_returns_ids(self) -> None:
+        """FAR-1862: the stranded-pending age backstop stamps the truthful
+        no-progress code + detail and returns the terminalized ids.
+
+        This is the ROW-RETURNING arm of the batched ``UPDATE ... RETURNING id``
+        backstop — the empty-rows path every other test exercises never enters
+        the per-row loop, so the batch terminalizer's warning log was never run.
+        """
+        ids = [uuid.uuid4(), uuid.uuid4()]
+        session = _MockSession([])
+        session.terminalizer_rows["stranded_pending"] = ids
+        returned = await ch._terminalize_stranded_pending_runs(session, ORG, max_age_minutes=135, max_rows=9)
+        assert returned == ids
+        _stmt, params = session.executed[-1]
+        assert params["code"] == ch._NO_PROGRESS_ERROR_CODE
+        assert params["detail"] == ch._STRANDED_PENDING_ERROR_DETAIL
+        assert params["stranded_age_minutes"] == 135
+
 
 class TestAwaitingHumanHasCommittedDecision:
     """F6a auto-approve guard + FAR-541 gate scoping: the payload-requirement
