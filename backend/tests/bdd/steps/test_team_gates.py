@@ -36,6 +36,10 @@ def _make_mock_session() -> AsyncMock:
     mock_result = MagicMock()
     mock_result.scalars.return_value = mock_scalars
     mock_result.scalar_one_or_none.return_value = None
+    # The offset-pagination count reads (e.g. list_teams' count_q) go through
+    # scalar(); a bare MagicMock there makes the new has_more comparison raise
+    # TypeError, so serve a real 0 (empty page) total.
+    mock_result.scalar.return_value = 0
     mock_result.first.return_value = None
 
     session.execute = AsyncMock(return_value=mock_result)

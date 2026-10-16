@@ -36,16 +36,18 @@ async def list_templates(
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
 
+    offset = (page - 1) * page_size
     items_stmt = (
         select(LibraryPrimitive)
         .where(*conditions)
         .order_by(LibraryPrimitive.created_at.desc())
-        .offset((page - 1) * page_size)
+        .offset(offset)
         .limit(page_size)
     )
     items = list((await session.execute(items_stmt)).scalars())
 
-    return PageResult(items=items, total=total, page=page, page_size=page_size)
+    has_more = (offset + len(items)) < total
+    return PageResult(items=items, total=total, page=page, page_size=page_size, has_more=has_more)
 
 
 async def get_template(session: AsyncSession, template_id: uuid.UUID) -> LibraryPrimitive | None:

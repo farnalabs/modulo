@@ -12,6 +12,7 @@
         <button
           type="button"
           class="sidebar-group-rail-toggle"
+          :class="{ 'sidebar-group-rail-toggle--touch': size === 'touch' }"
           :aria-expanded="!isGroupCollapsed(group.id, group.defaultCollapsed)"
           :aria-controls="`sidebar-group-rail-${group.id}`"
           :title="groupToggleLabel(group)"
@@ -53,6 +54,7 @@
             :exact="item.exact"
             :visibility="item.visibility"
             :collapsed="true"
+            :size="linkSize"
             class="w-full"
             @click="$emit('navigate')"
           />
@@ -79,6 +81,7 @@
               :label-key="item.labelKey"
               :exact="item.exact"
               :visibility="item.visibility"
+              :size="linkSize"
               @click="$emit('navigate')"
             /></SidebarGroup>
         </template>
@@ -109,12 +112,22 @@ const osOptions = {
   },
 };
 
-const props = defineProps<{
-  isSystemAdmin: boolean;
-  userRole?: string | null;
-  userPermissions?: string[];
-  collapsed?: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    isSystemAdmin: boolean;
+    userRole?: string | null;
+    userPermissions?: string[];
+    collapsed?: boolean;
+    /**
+     * Hit-target profile. `touch` widens the collapsed rail's group-disclosure
+     * toggles to 44x44 and forwards touch sizing to each rail link; absent or
+     * `default` leaves the desktop chrome unchanged. Set by SidebarRail only on
+     * the mobile rail path.
+     */
+    size?: "default" | "touch";
+  }>(),
+  { size: "default" },
+);
 
 defineEmits<{
   navigate: [];
@@ -123,6 +136,10 @@ defineEmits<{
 const route = useRoute();
 const { t } = useI18n();
 const { toggleGroup, isGroupCollapsed } = useSidebar();
+
+// Forward the touch profile to each rail link; `undefined` keeps the child on
+// its own `default` so the desktop rail renders exactly as before.
+const linkSize = computed(() => (props.size === "touch" ? "touch" : undefined));
 
 function groupLabel(group: NavGroup): string {
   return group.labelKey ? t(group.labelKey) : group.label;
@@ -185,6 +202,14 @@ const visibleSidebarGroups = computed(() => getVisibleNavGroups(navVisibility.va
   transition:
     background-color 150ms ease,
     color 150ms ease;
+}
+
+/* Touch surface only: raise the rail's group-disclosure control from
+   40x26 to 44x44 (WCAG 2.5.8). Declared after the base rule so it wins at
+   equal specificity; never applied unless `size === 'touch'`. */
+.sidebar-group-rail-toggle--touch {
+  width: 2.75rem;
+  height: 2.75rem;
 }
 
 .sidebar-group-rail-toggle:hover {
