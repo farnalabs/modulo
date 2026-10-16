@@ -9,7 +9,6 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Index,
-    Integer,
     Numeric,
     String,
     Uuid,
@@ -59,7 +58,6 @@ class Organisation(SoftDeleteMixin, Base):
             "NOT guardrails_kill_switch OR guardrails_kill_switch_at IS NOT NULL",
             name="ck_organisations_guardrails_kill_switch_at",
         ),
-        CheckConstraint("org_cumulative_spend_cents >= 0", name="ck_organisations_cum_spend"),
         Index(
             "uq_organisations_slug",
             "slug",
@@ -107,16 +105,13 @@ class Organisation(SoftDeleteMixin, Base):
     guardrails_kill_switch: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     guardrails_kill_switch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     daily_spend_limit: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
-    # Hard spend ceilings (FAR-391, spec §5.1 cost controls). Stored in integer
-    # CENTS so the gate comparison is exact and allocation-free (no float drift).
-    #   max_run_cost_cents      — per-run hard ceiling; None = unlimited.
-    #   spend_ceiling_cents      — org lifetime budget; None = unlimited.
-    #   org_cumulative_spend_cents — running consumed total (incremented at each
-    #                               run's terminal ledger write).
-    # A ceiling of 0 is a deliberate kill-switch (blocks every billable run).
-    max_run_cost_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    spend_ceiling_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    org_cumulative_spend_cents: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    # FAR-391 hard spend ceilings (``max_run_cost_cents`` / ``spend_ceiling_cents``)
+    # and the lifetime consumed total (``org_cumulative_spend_cents``) MOVED OFF
+    # this row in FAR-1833: they now live on ``organisation_cost_state`` keyed by
+    # ``org_id``, read/written under the per-org cost-state advisory lock
+    # (``modulo.core.runner_capacity.lock_org_cost_state``). Keeping them off the
+    # ``organisations`` row removes the lock coupling (the D9 deadlock) between
+    # the finalize gate+accrual and the ceiling set/clear endpoints.
     deletion_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
     deletion_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     export_bundle_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=None)

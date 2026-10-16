@@ -39,9 +39,11 @@ from modulo.core.cost_settings import (
     SUPPORTED_BILLING_PERIODS,
     SUPPORTED_CURRENCIES,
 )
+from modulo.core.runner_capacity import lock_org_cost_state
 from modulo.core.spend_ceiling import cents_from_usd
 from modulo.db.crud.daily_run_count import org_level_predicate
 from modulo.db.crud.organisation import get_organisation, update_org_settings_patch
+from modulo.db.crud.organisation_cost_state import get_org_cost_state, upsert_org_cost_state
 from modulo.db.crud.scheduled_report import (
     create_scheduled_report,
     delete_scheduled_report,
@@ -128,18 +130,24 @@ def _read_circuit_breaker(org: object | None) -> bool:
     return value if isinstance(value, bool) else DEFAULT_CIRCUIT_BREAKER_ENABLED
 
 
-def _cost_controls_patch(org: Organisation, req: "UpdateCostControlsRequest") -> dict[str, Any] | None:
-    """Compute the ``cost_controls`` settings patch for *req* (FAR-1830).
+def _cost_controls_patch(
+    org: Organisation, req: "UpdateCostControlsRequest"
+) -> tuple[dict[str, Any] | None, dict[str, int | None]]:
+    """Compute the ``cost_controls`` settings patch and the cost-state ceiling writes.
 
     ``settings_json`` is a JSON column that may hold arbitrary shapes, so the
     persisted cost-control settings are re-read defensively before merging. The
-    FAR-391 hard spend ceilings (``max_run_cost`` / ``spend_ceiling``) are stored
-    as integer cents on dedicated columns (exact, allocation-free comparison at
-    the gate) and are set directly on *org*.
+    FAR-391 hard spend ceilings (``max_run_cost`` / ``spend_ceiling``) now live on
+    the per-org ``organisation_cost_state`` row (FAR-1833), so they are returned
+    as a column mapping for the caller to write via ``upsert_org_cost_state``
+    under ``lock_org_cost_state`` — this helper no longer mutates *org*.
 
-    Returns the top-level ``{COST_CONTROLS_KEY: cc}`` patch to merge ATOMICALLY
-    into ``settings_json``, or ``None`` when no settings-namespace field was
-    provided (so an absent-only request never rewrites the column).
+    Returns ``(settings_patch, cost_state_columns)`` where ``settings_patch`` is
+    the top-level ``{COST_CONTROLS_KEY: cc}`` patch to merge ATOMICALLY into
+    ``settings_json`` (or ``None`` when no settings-namespace field was
+    provided, so an absent-only request never rewrites the column) and
+    ``cost_state_columns`` is the (possibly empty) mapping of cost-state columns
+    to write.
     """
     if req.budget is not None:
         org.daily_spend_limit = Decimal(str(req.budget))
@@ -148,10 +156,11 @@ def _cost_controls_patch(org: Organisation, req: "UpdateCostControlsRequest") ->
     # the two ceilings can be managed independently and "Empty = no limit" is
     # honoured by the frontend.
     provided = req.model_dump(exclude_unset=True)
+    cost_state_columns: dict[str, int | None] = {}
     if "max_run_cost" in provided:
-        org.max_run_cost_cents = cents_from_usd(req.max_run_cost)
+        cost_state_columns["max_run_cost_cents"] = cents_from_usd(req.max_run_cost)
     if "spend_ceiling" in provided:
-        org.spend_ceiling_cents = cents_from_usd(req.spend_ceiling)
+        cost_state_columns["spend_ceiling_cents"] = cents_from_usd(req.spend_ceiling)
 
     updates: dict[str, Any] = {
         "currency": req.currency,
@@ -160,12 +169,12 @@ def _cost_controls_patch(org: Organisation, req: "UpdateCostControlsRequest") ->
         "alert_thresholds": req.alert_thresholds,
     }
     if not any(v is not None for v in updates.values()):
-        return None
+        return None, cost_state_columns
     cc = dict(_cost_controls(org))
     for key, value in updates.items():
         if value is not None:
             cc[key] = [float(t) for t in value] if key == "alert_thresholds" else value
-    return {COST_CONTROLS_KEY: cc}
+    return {COST_CONTROLS_KEY: cc}, cost_state_columns
 
 
 def _read_alert_thresholds(org: object | None) -> list[float]:
@@ -537,6 +546,7 @@ async def get_cost_controls(
             await set_rls_org(session, current_user.organisation_id)
             teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
             org = await get_organisation(session, current_user.organisation_id)
+            cost_state = await get_org_cost_state(session, current_user.organisation_id)
     except ProgrammingError:
         _log.exception("get_cost_controls ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
@@ -571,10 +581,10 @@ async def get_cost_controls(
             for t in teams_result.items
         ],
         budget=_coerce_spend_limit_usd(org.daily_spend_limit) if org is not None else None,
-        max_run_cost=_coerce_cents_usd(org.max_run_cost_cents) if org is not None else None,
-        spend_ceiling=_coerce_cents_usd(org.spend_ceiling_cents) if org is not None else None,
-        org_cumulative_spend_usd=_coerce_cents_usd(org.org_cumulative_spend_cents or 0) or 0.0
-        if org is not None
+        max_run_cost=_coerce_cents_usd(cost_state.max_run_cost_cents) if cost_state is not None else None,
+        spend_ceiling=_coerce_cents_usd(cost_state.spend_ceiling_cents) if cost_state is not None else None,
+        org_cumulative_spend_usd=_coerce_cents_usd(cost_state.org_cumulative_spend_cents or 0) or 0.0
+        if cost_state is not None
         else 0.0,
         alert_thresholds=_read_alert_thresholds(org),
         circuit_breaker_enabled=_read_circuit_breaker(org),
@@ -604,12 +614,19 @@ async def update_cost_controls(
 
             # FAR-1830: patch ONLY the cost_controls key atomically rather than
             # writing the whole settings_json column back from a stale read.
-            patch = _cost_controls_patch(org, req)
+            patch, cost_state_columns = _cost_controls_patch(org, req)
+            if cost_state_columns:
+                # FAR-1833: the FAR-391 ceilings now live on the per-org
+                # cost-state row and are written under the cost advisory lock,
+                # serialised against the finalize gate+accrual.
+                await lock_org_cost_state(session, org.id)
+                await upsert_org_cost_state(session, org.id, provided=cost_state_columns)
             if patch is not None:
                 settings_after = await update_org_settings_patch(session, org.id, patch)
             else:
                 settings_after = dict(org.settings_json) if isinstance(org.settings_json, dict) else {}
 
+            cost_state = await get_org_cost_state(session, org.id)
             await session.flush()
             teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
     except ProgrammingError:
@@ -649,9 +666,11 @@ async def update_cost_controls(
             for t in teams_result.items
         ],
         budget=_coerce_spend_limit_usd(org.daily_spend_limit),
-        max_run_cost=_coerce_cents_usd(org.max_run_cost_cents),
-        spend_ceiling=_coerce_cents_usd(org.spend_ceiling_cents),
-        org_cumulative_spend_usd=_coerce_cents_usd(org.org_cumulative_spend_cents or 0) or 0.0,
+        max_run_cost=_coerce_cents_usd(cost_state.max_run_cost_cents) if cost_state is not None else None,
+        spend_ceiling=_coerce_cents_usd(cost_state.spend_ceiling_cents) if cost_state is not None else None,
+        org_cumulative_spend_usd=_coerce_cents_usd(cost_state.org_cumulative_spend_cents or 0) or 0.0
+        if cost_state is not None
+        else 0.0,
         alert_thresholds=_read_alert_thresholds(settings_view),
         circuit_breaker_enabled=_read_circuit_breaker(settings_view),
         currency=_read_currency(settings_view),
@@ -697,7 +716,7 @@ async def get_spend_ceiling(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            org = await get_organisation(session, current_user.organisation_id)
+            cost_state = await get_org_cost_state(session, current_user.organisation_id)
     except ProgrammingError:
         _log.exception("get_spend_ceiling ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
@@ -722,9 +741,11 @@ async def get_spend_ceiling(
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
-    max_run_cost = _coerce_cents_usd(org.max_run_cost_cents) if org is not None else None
-    spend_ceiling = _coerce_cents_usd(org.spend_ceiling_cents) if org is not None else None
-    cumulative = _coerce_cents_usd(org.org_cumulative_spend_cents or 0) or 0.0 if org is not None else 0.0
+    max_run_cost = _coerce_cents_usd(cost_state.max_run_cost_cents) if cost_state is not None else None
+    spend_ceiling = _coerce_cents_usd(cost_state.spend_ceiling_cents) if cost_state is not None else None
+    cumulative = (
+        (_coerce_cents_usd(cost_state.org_cumulative_spend_cents or 0) or 0.0) if cost_state is not None else 0.0
+    )
     remaining = None
     if spend_ceiling is not None:
         remaining = max(spend_ceiling - cumulative, 0.0)
@@ -758,10 +779,18 @@ async def set_spend_ceiling(
             # explicit ``null`` (clear this ceiling back to unlimited). An empty
             # frontend input maps to ``null``, so "Empty = no limit" is honoured.
             provided = req.model_dump(exclude_unset=True)
+            cost_state_columns: dict[str, int | None] = {}
             if "max_run_cost" in provided:
-                org.max_run_cost_cents = cents_from_usd(req.max_run_cost)
+                cost_state_columns["max_run_cost_cents"] = cents_from_usd(req.max_run_cost)
             if "spend_ceiling" in provided:
-                org.spend_ceiling_cents = cents_from_usd(req.spend_ceiling)
+                cost_state_columns["spend_ceiling_cents"] = cents_from_usd(req.spend_ceiling)
+            if cost_state_columns:
+                # FAR-1833: ceiling writes go to the per-org cost-state row under
+                # the cost advisory lock — the ceiling columns ONLY, never the
+                # cumulative (the finalize accrual owns that column).
+                await lock_org_cost_state(session, org.id)
+                await upsert_org_cost_state(session, org.id, provided=cost_state_columns)
+            cost_state = await get_org_cost_state(session, org.id)
             await session.flush()
     except ProgrammingError:
         _log.exception("set_spend_ceiling ProgrammingError (org_id=%s)", current_user.organisation_id)
@@ -787,9 +816,11 @@ async def set_spend_ceiling(
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
-    max_run_cost = _coerce_cents_usd(org.max_run_cost_cents)
-    spend_ceiling = _coerce_cents_usd(org.spend_ceiling_cents)
-    cumulative = _coerce_cents_usd(org.org_cumulative_spend_cents or 0) or 0.0
+    max_run_cost = _coerce_cents_usd(cost_state.max_run_cost_cents) if cost_state is not None else None
+    spend_ceiling = _coerce_cents_usd(cost_state.spend_ceiling_cents) if cost_state is not None else None
+    cumulative = (
+        (_coerce_cents_usd(cost_state.org_cumulative_spend_cents or 0) or 0.0) if cost_state is not None else 0.0
+    )
     remaining = None
     if spend_ceiling is not None:
         remaining = max(spend_ceiling - cumulative, 0.0)
