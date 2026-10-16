@@ -21,6 +21,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from modulo.api.constants import MSG_ORGANISATION_NOT_FOUND
 from modulo.api.dependencies import get_db_session
 from modulo.api.routes import product_analytics as pa_module
 from modulo.api.routes.product_analytics import router as product_analytics_router
@@ -305,3 +306,37 @@ class TestStagingPurgeOnOptOut:
         resp = client.post(_CONSENT_URL, json={"action": "accept"})
         assert resp.status_code == 200, resp.text
         assert not self._staging_deletes(session), "accepting consent must not purge staged events"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1832 QA F11: BOTH 404 paths return the SAME shared detail body.
+# The org-missing path is raised by ``_get_org_or_404`` and the patch-refusal
+# path (soft-deleted org) by the shared route helper. Before F11 the former
+# appended a trailing period and the latter did not, so the same endpoint
+# answered two different bodies for the same "no usable org" condition.
+# ---------------------------------------------------------------------------
+
+
+class TestNotFoundBodies:
+    def test_consent_missing_org_returns_shared_404_detail(self, env) -> None:
+        session, _org = env
+        session.execute.return_value.scalar_one_or_none.return_value = None
+        resp = _client().post(_CONSENT_URL, json={"action": "accept"})
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == MSG_ORGANISATION_NOT_FOUND
+
+    def test_consent_patch_refusal_returns_shared_404_detail(self, env) -> None:
+        async def _refuse(*_args, **_kwargs):
+            raise LookupError("organisation not found")
+
+        with patch("modulo.api.routes._org_settings.update_org_settings_patch", new=_refuse):
+            resp = _client().post(_CONSENT_URL, json={"action": "accept"})
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == MSG_ORGANISATION_NOT_FOUND
+
+    def test_put_level_missing_org_returns_shared_404_detail(self, env) -> None:
+        session, _org = env
+        session.execute.return_value.scalar_one_or_none.return_value = None
+        resp = _client().put(_PRODUCT_ANALYTICS_URL, json={"level": "all"})
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == MSG_ORGANISATION_NOT_FOUND

@@ -20,7 +20,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
+from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR, MSG_ORGANISATION_NOT_FOUND
 from modulo.api.db_error_handling import handle_db_errors, raise_lock_timeout_conflict_if
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.routes._org_settings import apply_org_settings_patch_or_404
@@ -102,7 +102,7 @@ async def _get_org_or_404(
     if org is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Organisation not found.",
+            detail=MSG_ORGANISATION_NOT_FOUND,
         )
     return org
 
@@ -309,7 +309,9 @@ async def update_product_analytics_level(
             # writer's prompted* sub-fields survive (no ``FOR UPDATE``
             # pre-lock, no whole-block replace, soft-deleted org → 404). The
             # response and the LEVEL_OFF purge decision both read the block the
-            # patch RETURNED, never a stale pre-write read (QA F8).
+            # patch RETURNED, never a stale pre-write read (QA F8). A soft-deleted
+            # org is refused with ``LookupError`` → the shared route helper's 404
+            # (QA F7), whose body matches the org-missing read's (QA F11).
             subpatch = set_level({}, req.level, now)
             returned = await apply_org_settings_patch_or_404(
                 session,
