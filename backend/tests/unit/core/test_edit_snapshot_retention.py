@@ -14,6 +14,11 @@ cleanup route binds its string ids through SQLAlchemy's character-based Uuid
 processor, which calls ``value.hex`` on the bind value and raises on ``str``.
 Without the FAR-1815 scanner the category does not exist below, so this test
 fails before any deletion question arises.
+
+The reference-safety selection tests (FAR-1815 review C1/M1) pin the two
+non-FK exclusions a pipeline-less "no external references" seed cannot see: a
+release-channel-tagged snapshot and a trigger-pinned snapshot inside the
+would-be delete band are never surfaced as candidates.
 """
 
 import uuid
@@ -22,11 +27,12 @@ from collections.abc import AsyncGenerator
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.housekeeping import SCANNERS_BY_CATEGORY, scan_all
+from modulo.core.housekeeping import SCANNERS_BY_CATEGORY, _scan_edit_snapshot_retention, scan_all
 from modulo.db.models.base import Base
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from modulo.db.models.trigger import Trigger
 
 _CATEGORY = "edit_snapshot_retention"
 _ORG = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -67,6 +73,14 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
     async with eng.begin() as conn:
         tables = [t for name, t in Base.metadata.tables.items() if name in _TABLE_NAMES]
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+    # SQLite documents ``PRAGMA foreign_keys`` as a no-op inside a transaction,
+    # so the pragma is issued on the bare pooled connection instead (StaticPool →
+    # one in-memory connection, covering every later session). Observed on this
+    # stack: the default is already OFF (``PRAGMA foreign_keys`` reads 0 on a
+    # fresh connection), and the fixture relies on that — seed rows carry
+    # synthetic parent ids (e.g. ``account_id`` with no ``accounts`` row) that
+    # real FK enforcement would reject.
+    async with eng.connect() as conn:
         await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
     yield eng
     await eng.dispose()
@@ -152,3 +166,61 @@ class TestEditSnapshotRetentionEnumeration:
         assert entry is not None
         assert entry.entity_type == "pipeline_snapshot"
         assert entry.scan_func.__name__ == "_scan_edit_snapshot_retention"
+
+
+class TestEditSnapshotRetentionReferenceSafety:
+    """FAR-1815 review C1/M1: externally referenced rows never leave the pool.
+
+    Both tests seed the SAME 207-row provenance-edit pool as the enumeration
+    test (so the unfiltered delete band is exactly v2..v8), then mark one
+    would-be-deleted rank (v5 — rank 204 in the unfiltered pool) as externally
+    referenced. Without the safety predicate that row IS surfaced and the first
+    assertion in each test fails; with it the pool shrinks to 206 rows and the
+    newest-200 bound resurfaces exactly the six oldest remaining plain edits.
+    """
+
+    async def test_canary_tagged_snapshot_in_the_delete_band_is_never_surfaced(
+        self,
+        session: AsyncSession,
+    ) -> None:
+        _pipeline, by_version = await _seed_history(session)
+        # C1: release-channel snapshots carry edit/edit kinds but are routing
+        # state for resolve_snapshot_for_channel — not save history.
+        canary = await session.get(PipelineSnapshot, by_version[5])
+        assert canary is not None
+        canary.channel = "canary"
+        await session.commit()
+
+        candidates = await _scan_edit_snapshot_retention(session, _ORG)
+        candidate_ids = {c.id for c in candidates}
+
+        assert str(by_version[5]) not in candidate_ids
+        assert candidate_ids == {str(by_version[version]) for version in (2, 3, 4, 6, 7, 8)}
+
+    async def test_trigger_pinned_snapshot_in_the_delete_band_is_never_surfaced(
+        self,
+        session: AsyncSession,
+    ) -> None:
+        pipeline, by_version = await _seed_history(session)
+        # M1: a trigger pins a specific snapshot via config_json.snapshot_id
+        # (the shape api/routes/triggers.py stores; cron_helpers resolves it at
+        # fire time) — a non-FK reference the sweep must never surface.
+        pinned_version = 5
+        session.add(
+            Trigger(
+                id=uuid.uuid4(),
+                organisation_id=_ORG,
+                pipeline_id=pipeline.id,
+                name="pin-v5",
+                trigger_type="manual",
+                account_id=_ACCOUNT,
+                config_json={"snapshot_id": str(by_version[pinned_version])},
+            )
+        )
+        await session.commit()
+
+        candidates = await _scan_edit_snapshot_retention(session, _ORG)
+        candidate_ids = {c.id for c in candidates}
+
+        assert str(by_version[pinned_version]) not in candidate_ids
+        assert candidate_ids == {str(by_version[version]) for version in (2, 3, 4, 6, 7, 8)}

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import func, select
+from sqlalchemy import String, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.graph_validator.mask_sentinel import find_mask_sentinel_values
@@ -399,25 +399,55 @@ async def _scan_edit_snapshot_retention(session: AsyncSession, org_id: uuid.UUID
     deletable through the standard housekeeping cleanup
     (``entity_type='pipeline_snapshot'`` — same path as ``orphan_snapshots``).
 
-    Never surfaced, by construction:
+    The deletable pool — the set the rank and the newest-200 bound apply to —
+    is edit/edit snapshots that are (a) untagged by a release channel and
+    (b) not pinned by a trigger. Never surfaced:
 
     * run / rollback / initial snapshots. The ``created_kind`` carve-out is
       load-bearing: ``rollback_to_snapshot`` writes ``version_kind='edit'`` /
       ``created_kind='rollback'``, so filtering on ``version_kind`` alone would
-      delete rollback history. Run snapshots (``created_kind='run'``) are also
-      RESTRICT-protected by the ``runs.snapshot_id`` FK — this scan never fights
-      that; a row the FK still protects fails loudly at cleanup instead of being
-      deleted around it.
-    * the pipeline's latest snapshot — excluded explicitly against the SAME key
-      ``delete_snapshot`` orders by (``snapshot_version DESC``), so the existing
-      "refuse to delete the latest snapshot" invariant is preserved structurally
-      rather than by argument.
+      delete rollback history.
+    * release-channel snapshots (``channel='canary'`` / ``'stable'``). These
+      carry the same edit/edit kinds but are ROUTING STATE, not save history:
+      ``resolve_snapshot_for_channel`` resolves the latest snapshot for a
+      channel, and when that row is gone it returns ``None`` and the caller
+      silently falls back to pinning the live graph — a silent behaviour
+      change. Only ``channel='none'`` rows enter the pool.
+    * trigger-pinned snapshots. A trigger pins a specific snapshot via
+      ``config_json.snapshot_id``; a missing pin produces an explicit
+      ``no_pipeline`` event and a skip (never a silent auto-create), i.e. a
+      silently broken trigger — so any snapshot a trigger pins is excluded from
+      the pool. The exclusion reads the Core ``triggers`` table rather than the
+      ORM entity so the global soft-delete filter cannot hide a
+      soft-deleted-but-restorable trigger's pin (``/triggers/{id}/restore``);
+      both sides of the comparison are dash-normalised to 32-hex because the
+      pin stores the dashed ``str(uuid)`` form while the ``Uuid`` column binds
+      as hex on SQLite and dashed text on Postgres.
 
-    Ordering matches the invariant's key (``snapshot_version`` desc; unique per
-    pipeline via ``uq_pipeline_snapshot_version``, so no ties). Failures are not
-    caught here: an exception propagates to :func:`scan_all`, which logs it with
-    the stack trace and still returns the other categories.
+    A run-referenced edit snapshot is deliberately NOT excluded here:
+    ``runs.snapshot_id`` is ``ondelete=RESTRICT``, so cleanup of such a row
+    fails loudly (IntegrityError → per-item cleanup error) instead of being
+    deleted around the FK. Likewise the pipeline's latest snapshot: ranking's
+    ``retention_rank`` is ``row_number() ... ORDER BY snapshot_version DESC``
+    over the pool (unique per pipeline via ``uq_pipeline_snapshot_version``, so
+    no ties), which makes rank 1 the pool's maximum version — ``rank >
+    EDIT_SNAPSHOT_RETENTION_LIMIT`` can never select it. The outer
+    ``snapshot_version != latest_version`` predicate is redundant
+    defence-in-depth against a future rank-definition change, NOT the
+    structural guarantee; ordering matches the invariant's key
+    (``snapshot_version`` desc). Failures are not caught here: an exception
+    propagates to :func:`scan_all`, which logs it with the stack trace and
+    still returns the other categories.
     """
+    # C1 (FAR-1815 review): release-channel rows are routing state — only
+    # untagged ('none') rows are save history eligible for retention.
+    # M1: a trigger's pinned ``config_json.snapshot_id`` is a non-FK reference;
+    # deleting the row silently breaks the trigger at fire time. Core table on
+    # purpose (soft-delete filter must not hide a restorable trigger's pin),
+    # ``replace``-normalise both sides for the dashed/hex dialect difference.
+    trigger_pins = Trigger.__table__
+    _pinned_hex = func.replace(trigger_pins.c.config_json["snapshot_id"].as_string(), "-", "")
+    _snapshot_hex = func.replace(PipelineSnapshot.id.cast(String), "-", "")
     ranked = (
         select(
             PipelineSnapshot.id.label("id"),
@@ -435,6 +465,8 @@ async def _scan_edit_snapshot_retention(session: AsyncSession, org_id: uuid.UUID
             PipelineSnapshot.organisation_id == org_id,
             PipelineSnapshot.version_kind == "edit",
             PipelineSnapshot.created_kind == "edit",
+            PipelineSnapshot.channel == "none",
+            ~exists(select(trigger_pins.c.id).where(_pinned_hex == _snapshot_hex)),
         )
         .subquery()
     )
@@ -1043,8 +1075,9 @@ _SCANNERS: list[Scanner] = [
         label="Edit Snapshot Retention",
         description=(
             "Edit snapshots beyond the newest 200 kept per pipeline — deletable via the "
-            "standard housekeeping cleanup; run/rollback/initial snapshots and a pipeline's "
-            "latest snapshot are never selected (FAR-1815)."
+            "standard housekeeping cleanup; run/rollback/initial snapshots, a pipeline's "
+            "latest snapshot, release-channel-tagged snapshots and trigger-pinned "
+            "snapshots are never selected (FAR-1815)."
         ),
         entity_type="pipeline_snapshot",
     ),

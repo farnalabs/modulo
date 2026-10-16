@@ -13,6 +13,12 @@ exist: nothing is selected, nothing is deleted, and every removal assertion
 below fails. The survivors that MUST remain are asserted by row identity:
 the rollback (v1), the initial (v208), the run-frozen snapshot (v209), the
 pipeline's latest snapshot (v210), and the kept newest 200 edit versions.
+
+The reference-safety test (FAR-1815 review C1/M1) additionally proves, on the
+production engine, that a release-channel-tagged snapshot inside the would-be
+delete band survives (never selected), and that a run-referenced snapshot in
+the delete band makes the REAL cleanup fail loudly via the ``runs.snapshot_id``
+RESTRICT FK (IntegrityError → per-item error) — observed, not merely asserted.
 """
 
 import uuid
@@ -27,6 +33,7 @@ from modulo.core.housekeeping import scan_all
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from modulo.db.models.run import Run
 
 pytestmark = pytest.mark.integration
 
@@ -95,8 +102,16 @@ async def _seed_history(
 
 
 async def _cleanup(session: AsyncSession, *, org_id: uuid.UUID, pipeline_id: uuid.UUID) -> None:
-    """Remove this test's own rows (snapshots -> pipeline -> organisation)."""
+    """Remove this test's own rows (runs -> snapshots -> pipeline -> organisation).
+
+    Runs go first: ``runs.snapshot_id`` is ``ondelete=RESTRICT``, so a
+    snapshot delete while a run still references it is refused by Postgres.
+    """
     await session.rollback()  # clear any failed transaction state first
+    await session.execute(
+        text("DELETE FROM runs WHERE pipeline_id = :pid"),
+        {"pid": str(pipeline_id)},
+    )
     await session.execute(
         text("DELETE FROM pipeline_snapshots WHERE pipeline_id = :pid"),
         {"pid": str(pipeline_id)},
@@ -158,5 +173,101 @@ async def test_retention_sweep_deletes_only_excess_edit_snapshots_on_postgres(
         second_results = await scan_all(db_session, org_id)
         second_by_category = {r.category: r for r in second_results}
         assert not second_by_category[_CATEGORY].candidates
+    finally:
+        await _cleanup(db_session, org_id=org_id, pipeline_id=pipeline_id)
+
+
+async def test_channel_tagged_and_run_referenced_rows_shape_the_delete_set(
+    db_session: AsyncSession,
+    test_user: uuid.UUID,
+) -> None:
+    """FAR-1815 review C1/M1 on real Postgres.
+
+    * C1: a ``channel='canary'`` snapshot inside the would-be delete band is
+      routing state (``resolve_snapshot_for_channel``), never a candidate —
+      asserted by row identity after the real cleanup ran.
+    * run-safety: an edit/edit snapshot inside the delete band that a Run
+      references via the ``runs.snapshot_id`` RESTRICT FK is still surfaced
+      (selection does not exclude it), and deleting it through the REAL
+      cleanup handler fails LOUDLY — observed as a per-item
+      IntegrityError/"Foreign key constraint violation" error entry with the
+      row surviving, never a silent deletion.
+    """
+    org_id = uuid.uuid4()
+    pipeline_id = uuid.uuid4()
+    try:
+        by_version = await _seed_history(db_session, org_id=org_id, pipeline_id=pipeline_id, account_id=test_user)
+
+        # C1: v5 would sit at rank 204 of the unfiltered pool (delete band
+        # v2..v8) — tag it for the canary channel instead.
+        canary = await db_session.get(PipelineSnapshot, by_version[5])
+        assert canary is not None
+        canary.channel = "canary"
+        # run-safety: v6 is a plain edit/edit row a run pinned at start.
+        db_session.add(
+            Run(
+                id=uuid.uuid4(),
+                organisation_id=org_id,
+                pipeline_id=pipeline_id,
+                snapshot_id=by_version[6],
+                trigger_type="manual",
+                status="complete",
+                run_number=1,
+                input_hash="b" * 64,
+                langgraph_thread_id=f"{org_id}:{uuid.uuid4()}",
+            )
+        )
+        await db_session.commit()
+
+        # 1. Selection: the canary row is never surfaced; the pool shrinks by
+        # it (206 rows), so exactly the six oldest remaining plain edits are
+        # candidates — including the run-referenced v6, whose protection is
+        # the RESTRICT FK at delete time, not the selection.
+        results = await scan_all(db_session, org_id)
+        result = {r.category: r for r in results}[_CATEGORY]
+        candidate_ids = {c.id for c in result.candidates}
+        assert candidate_ids == {str(by_version[version]) for version in (2, 3, 4, 6, 7, 8)}
+        assert str(by_version[5]) not in candidate_ids
+
+        # 2. The REAL cleanup: the run-referenced row fails loudly
+        # (savepoint-rolled-back IntegrityError → error entry). The row
+        # identities below — not ``deleted_count`` — prove what was actually
+        # removed: the counter increments on ``session.delete()`` before the
+        # savepoint flush, so it counts the RESTRICT-refused item too
+        # (pre-existing perform_cleanup behaviour, out of scope here).
+        await db_session.commit()
+        principal = _principal(org_id, test_user)
+        response = await perform_cleanup(
+            CleanupRequest(items=[CleanupItem(id=cid, entity_type="pipeline_snapshot") for cid in candidate_ids]),
+            db_session,
+            principal,
+            principal,
+        )
+        assert len(response.errors) == 1
+        assert response.errors[0]["id"] == str(by_version[6])
+        assert "Foreign key constraint violation" in response.errors[0]["error"]
+
+        # 3. Row identities: the run-referenced row and the canary row both
+        # survive; only the five unprotected rows are gone.
+        remaining = {
+            str(snapshot_id)
+            for snapshot_id in (
+                await db_session.execute(
+                    select(PipelineSnapshot.id).where(PipelineSnapshot.pipeline_id == pipeline_id),
+                )
+            ).scalars()
+        }
+        assert str(by_version[5]) in remaining
+        assert str(by_version[6]) in remaining
+        assert remaining == set(map(str, by_version.values())) - {
+            str(by_version[version]) for version in (2, 3, 4, 7, 8)
+        }
+
+        # 4. The RESTRICT failure is a steady-state loop the operator can see:
+        # the run-referenced row keeps being surfaced on the next pass instead
+        # of being deleted around the FK or silently dropped from the pool.
+        second_results = await scan_all(db_session, org_id)
+        second_result = {r.category: r for r in second_results}[_CATEGORY]
+        assert {c.id for c in second_result.candidates} == {str(by_version[6])}
     finally:
         await _cleanup(db_session, org_id=org_id, pipeline_id=pipeline_id)
