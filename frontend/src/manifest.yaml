@@ -3666,6 +3666,15 @@ elements:
       - testid: pipeline-editor-fit-view
         type: button
         dynamic_testid: false
+      - testid: pipeline-editor-root
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-node-props-close
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-edge-props-close
+        type: button
+        dynamic_testid: false
       - testid: pipeline-node-scope-badge
         type: element
         dynamic_testid: false
