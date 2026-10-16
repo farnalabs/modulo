@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -1565,3 +1565,63 @@ class TestSystemAdminRequired:
     def test_get_feature_flag_403(self, non_sys_admin_client: TestClient) -> None:
         resp = non_sys_admin_client.get("/api/v1/admin/feature-flags/sso")
         assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# FAR-1832 QA F10: a bounded lock timeout (55P03) is a 409 on the org-override
+# writers, not the generic 503 the SQLAlchemyError arm answers.
+# ---------------------------------------------------------------------------
+
+
+def _lock_timeout_operational() -> OperationalError:
+    """An ``OperationalError`` whose driver error carries SQLSTATE 55P03."""
+
+    class _PgError(Exception):
+        sqlstate = "55P03"
+
+    return OperationalError("UPDATE organisations ...", {}, _PgError("canceling statement due to lock timeout"))
+
+
+class TestOrgOverrideLockTimeout:
+    """Both org-override writers route through the atomic settings patch, whose
+    ``set_mutation_row_lock_timeout`` bound makes 55P03 reachable. Before F10
+    the local ``except SQLAlchemyError`` arm collapsed it to a 503 outage reply,
+    inviting a client retry storm against the busy lock."""
+
+    def test_set_org_flag_override_lock_timeout_is_409(self, client: TestClient) -> None:
+        org = _org_with_overrides()
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.update_org_settings_patch",
+                side_effect=_lock_timeout_operational(),
+            ),
+        ):
+            resp = client.put("/api/v1/admin/feature-flags/webhook_trigger/org-override", json={"enabled": True})
+        assert resp.status_code == 409, resp.text
+        assert "another change is in progress" in resp.json()["detail"]
+
+    def test_clear_org_flag_override_lock_timeout_is_409(self, client: TestClient) -> None:
+        org = _org_with_overrides(webhook_trigger=True)
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.update_org_settings_patch",
+                side_effect=_lock_timeout_operational(),
+            ),
+        ):
+            resp = client.delete("/api/v1/admin/feature-flags/webhook_trigger/org-override")
+        assert resp.status_code == 409, resp.text
+        assert "another change is in progress" in resp.json()["detail"]

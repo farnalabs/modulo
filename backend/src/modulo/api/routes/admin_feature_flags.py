@@ -21,7 +21,11 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import (
+    handle_db_errors,
+    raise_lock_timeout_conflict_if,
+    raise_session_contract_error,
+)
 from modulo.api.dependencies import get_db_session, require_system_permission, resolve_audit_principal
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.audit_coverage import audited
@@ -661,6 +665,7 @@ async def set_org_flag_override(
             },
         )
     except SQLAlchemyError as exc:
+        raise_lock_timeout_conflict_if(exc, "admin_feature_flags.set_org_flag_override")
         raise_session_contract_error(exc, "admin_feature_flags.set_org_flag_override")
         logger.exception(_CODE_FEATURE_FLAGS_SET_ORG, extra={"flag_name": flag_name})
         return JSONResponse(
@@ -744,6 +749,7 @@ async def clear_org_flag_override(
             },
         )
     except SQLAlchemyError as exc:
+        raise_lock_timeout_conflict_if(exc, "admin_feature_flags.clear_org_flag_override")
         raise_session_contract_error(exc, "admin_feature_flags.clear_org_flag_override")
         logger.exception(_CODE_FEATURE_FLAGS_CLEAR_ORG, extra={"flag_name": flag_name})
         return JSONResponse(

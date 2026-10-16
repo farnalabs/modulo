@@ -291,8 +291,16 @@ def raise_lock_timeout_conflict_if(exc: SQLAlchemyError, log_key: str) -> None:
     SQLAlchemyError`` / ``except Exception`` arms collapsed it into a generic
     503 or 500. Each of those arms calls this shared classifier FIRST (the
     same pattern ``hitl.py`` ``_raise_lock_timeout_if`` and
-    ``product_analytics_identity`` already use), so the 409 mapping has ONE
-    source of truth alongside the ``handle_db_errors`` backstop above.
+    ``product_analytics_identity`` already use).
+
+    FAR-1832 QA F10: the sweep is now COMPLETE — the remaining five writer
+    boundaries that call the bounded-lock patch helper (the two feature-flag
+    org-override writers, ``costs.update_cost_controls``, the email-settings
+    write arm and the OTel ``update_observability_settings``) were converted
+    too. Every route arm fronting a bounded org-settings/OTel JSON-column
+    patch classifies 55P03 here, so the 409 mapping has ONE source of truth
+    alongside the ``handle_db_errors`` backstop above; a genuine outage still
+    falls through to that arm's 503.
 
     For every other ``SQLAlchemyError`` this RETURNS (a no-op) so the caller's
     existing 503 / 500 handling continues unchanged. Callers invoke it from an

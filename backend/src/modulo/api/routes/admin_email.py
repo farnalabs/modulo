@@ -10,7 +10,11 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR, MSG_ORGANISATION_NOT_FOUND
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import (
+    handle_db_errors,
+    raise_lock_timeout_conflict_if,
+    raise_session_contract_error,
+)
 from modulo.api.dependencies import (
     deny_break_glass_mint,
     get_db_session,
@@ -206,6 +210,7 @@ async def admin_update_email_settings(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
+        raise_lock_timeout_conflict_if(exc, _CODE_ADMIN_EMAIL_ADMIN_UPDATE)
         raise_session_contract_error(exc, _CODE_ADMIN_EMAIL_ADMIN_UPDATE)
         logger.exception(_CODE_ADMIN_EMAIL_ADMIN_UPDATE)
         raise HTTPException(
