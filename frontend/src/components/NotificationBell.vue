@@ -18,15 +18,15 @@
         aria-hidden="true"
         class="absolute -right-0.5 -top-0.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold text-destructive-foreground"
       >
-        {{ badgeText }}
+        {{ unreadBadgeText }}
       </span>
     </button>
     <!-- Unread-count live region (FAR-249 a11y): the visual badge above is
-         aria-hidden, but its text is still a visible label inside the button,
-         so WCAG 2.5.3 (axe label-content-name-mismatch) requires it to be part
-         of the button's accessible name — hence the count is folded into
-         aria-label above. This sr-only status region separately announces
-         count *changes* to screen readers (WCAG 4.1.3). -->
+         aria-hidden so it is not announced twice, but its text is still
+         VISIBLE text, so the button's accessible name must contain it (WCAG
+         2.5.3 / axe label-content-name-mismatch) — hence bellAriaLabel. This
+         sr-only status region separately announces count *changes* to screen
+         readers (WCAG 4.1.3). -->
     <output
       data-testid="notification-unread-live"
       :aria-label="$t('components.NotificationBell.notifications')"
@@ -90,13 +90,26 @@ const bellButtonRef = ref<HTMLButtonElement | null>(null);
 /** Categories this user opted out of (FAR-247 read-time suppression). */
 const optOutCategories = ref<Set<string>>(new Set());
 
-// Visible badge text, capped at "99+". WCAG 2.5.3 "Label in Name" requires the
-// visible label to be part of the control's accessible name, so the capped
-// count is folded into the button's aria-label below.
-const badgeText = computed(() => (store.unreadCount > 99 ? "99+" : store.unreadCount));
+/**
+ * Visible text of the unread badge, capped at "99+" to match what is rendered.
+ * Kept in one place so the accessible name always contains exactly the text a
+ * sighted user sees (WCAG 2.5.3 keeps the accessible name and the visible label
+ * in sync, so speech-input users can activate the control by its visible text).
+ */
+const unreadBadgeText = computed(() =>
+  store.unreadCount > 99 ? "99+" : String(store.unreadCount),
+);
+
+/**
+ * Accessible name for the bell. The badge is aria-hidden so it is not announced
+ * twice, but `aria-hidden` only removes it from the accessibility tree — the
+ * count is still *visible* text, so the accessible name must contain it (axe
+ * `label-content-name-mismatch` reads visible text, not just the a11y tree).
+ * Include the count whenever the badge is shown.
+ */
 const bellAriaLabel = computed(() =>
   store.unreadCount > 0
-    ? t("components.NotificationBell.notifications_with_count", { count: badgeText.value })
+    ? t("components.NotificationBell.notifications_with_unread", { count: unreadBadgeText.value })
     : t("components.NotificationBell.notifications"),
 );
 

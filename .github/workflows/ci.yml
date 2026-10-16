@@ -241,6 +241,9 @@ jobs:
       - name: Validate sidebar nav translations
         working-directory: .
         run: uv run --no-build --project backend --no-sync python scripts/run_validate_translations.py
+      - name: Validate manifest nav structure
+        working-directory: .
+        run: uv run --no-build --project backend --no-sync python scripts/run_validate_nav_config.py
       - name: Trivy filesystem scan (dependency CVEs + misconfigs)
         uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297
         # Pin the vulnerability DB to the canonical GHCR repository instead of
@@ -624,6 +627,13 @@ jobs:
       - name: Run WCAG contrast tests
         if: needs.changes.outputs.frontend == 'true'
         run: pnpm exec playwright test wcag-contrast
+      # FAR-1850: the mobile nav specs previously ran only inside the staging
+      # E2E job, so a regression that broke them surfaced (at best) days later.
+      # They run against the local mock target and do not need staging, so the
+      # per-PR frontend job is the earliest gate that can own them.
+      - name: Run mobile nav specs (flash + usable)
+        if: needs.changes.outputs.frontend == 'true'
+        run: pnpm exec playwright test mobile-nav-flash mobile-nav-usable
       - name: Run unit tests (vitest)
         if: needs.changes.outputs.frontend == 'true'
         # FAR-101: ubicloud-standard-2 is 2 vCPU. package.json's `test:unit`

@@ -52,6 +52,85 @@ function enumerateRoutes(): string[] {
 const ROUTES = enumerateRoutes()
 process.stdout.write(`[mobile-layout] enumerated ${ROUTES.length} routes from manifest.yaml\n`)
 
+// Routes the sweep is ALLOWED not to render, mapped to the specific app gate
+// that deactivates them. This is the ONLY skip category: any other non-forward
+// navigation — including a redirect to /login after the real-login retry —
+// fails the test. Derived empirically (FAR-1850): every entry below was
+// observed redirecting on staging or local, and its mechanism cross-checked
+// against the router guard (frontend/src/router/index.ts
+// enforceRoleTierVisibility + the feature_flag gate). The two environments
+// differ in three plan/auth facts:
+//   staging: real admin login → org_role=admin (roles pass), plan >= team
+//     (tier passes), real flags. Dev mode is ON for the staging org as of
+//     2026-10-16 (observed: every private_preview route renders for the e2e
+//     admin; server-side org flag change, not a code deploy — the deploy of
+//     FAR-1809 that day failed), so private_preview deactivates nothing.
+//   local:   mock token 'mock-access-token-for-e2e-tests' is NOT a JWT, so
+//     decodeJwtPayload returns null → every required_roles route redirects;
+//     the mock feature-flag response returns flags: [], so every
+//     feature_flag-gated route redirects; dev_mode: true renders
+//     private_preview routes.
+// A listed route that actually renders still runs every check — the map only
+// licenses the skip when the route is genuinely redirected. Maintaining this
+// list: a new route may ONLY be added together with the app gate that
+// redirects it (private_preview / system_admin_only / tier / role / flag),
+// never as a blanket "skip it". Re-validate entries against BOTH environments
+// before trusting them — this map has already drifted once (the preview
+// entries above were removed the day staging's dev-mode flag flipped on).
+const DEACTIVATED_ROUTES: Record<string, string> = {
+  // --- system_admin_only (FAR-938): SYSTEM sidebar group or route-entry flag;
+  // no e2e identity (staging org admin or local mock) carries is_system_admin ---
+  '/admin/product-analytics': 'system_admin_only — route entry flag; e2e identities have no is_system_admin claim',
+  '/admin/system/config': 'system_admin_only — route entry flag; e2e identities have no is_system_admin claim',
+  '/admin/system/orgs': 'system_admin_only — route entry flag; e2e identities have no is_system_admin claim',
+  '/admin/housekeeping': 'system_admin_only — SYSTEM sidebar group; e2e identities have no is_system_admin claim',
+  '/admin/run-retention': 'system_admin_only — SYSTEM sidebar group; e2e identities have no is_system_admin claim',
+  '/settings/license': 'system_admin_only — SYSTEM sidebar group; e2e identities have no is_system_admin claim',
+  '/settings/email': 'system_admin_only — SYSTEM sidebar group; e2e identities have no is_system_admin claim',
+  '/settings/observability': 'system_admin_only — SYSTEM sidebar group',
+  '/admin/feature-flags': 'system_admin_only — SYSTEM sidebar group; also required_roles (local mock token is not a JWT)',
+  '/settings/error-forwarders': 'system_admin_only — SYSTEM sidebar group; also required_roles',
+  '/settings/rate-limits': 'system_admin_only — SYSTEM sidebar group; also required_roles',
+  '/settings/runtime-config': 'system_admin_only — SYSTEM sidebar group; also required_roles',
+  // --- private_preview: documented mechanism, currently deactivates nothing.
+  // Both e2e identities run with dev mode on (local mock dev_mode: true;
+  // staging org flag observed on 2026-10-16), so preview routes render in
+  // both environments. The 5 routes that were listed here (/runs/diff,
+  // /settings/monitoring, /feedback/inbox, /assistant, /settings/assistant)
+  // were removed after they were observed RENDERING on staging; if the
+  // staging dev-mode flag is turned off again they must come back.
+  // --- feature_flag inactive for the staging e2e identity ---
+  '/admin/notification-delivery': "feature_flag 'webhook_notification_log' inactive for the staging e2e identity; local mock also lacks org_role (required_roles)",
+  // --- required_roles [admin]: the local mock token is not a JWT, so the
+  // guard cannot read org_role and redirects; the staging identity is a real
+  // org admin and renders these ---
+  '/admin/users': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
+  '/admin/org': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
+  '/admin/audit': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
+  '/admin/connectors': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
+  '/admin/costs': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
+  '/admin/costs/components': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
+  '/admin/costs/controls': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
+  '/admin/costs/limits': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
+  '/admin/errors': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
+  '/admin/errors/:id': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
+  '/admin/model-backends': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
+  '/admin/parameter-schemas': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
+  '/admin/runners/concurrency': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
+  '/admin/runners/profiles': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
+  '/admin/runners/profiles/new': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
+  '/admin/runners/profiles/:id/edit': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
+  '/admin/trigger-events': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
+  '/settings/teams': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
+  '/settings/sso': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
+  '/admin/assistant': "required_roles [admin] — local mock token is not a JWT",
+  '/admin/node-categories': "required_roles [admin] — local mock token is not a JWT",
+  '/admin/views': "required_roles [admin] — local mock token is not a JWT",
+  '/admin/plugins': "required_roles [admin] — local mock token is not a JWT",
+}
+
+const DEACTIVATED_ROUTES_SET = new Set(Object.keys(DEACTIVATED_ROUTES))
+
 const NARROW_ROUTES = ['/login', '/', '/pipelines', '/schemas']
 
 function sanitizePath(p: string): string {
@@ -101,10 +180,13 @@ async function waitForAppMount(page: Page, route: string, response: Response | n
   }
 }
 
-// Navigate, wait for the Vue app to mount and data to settle, then bail out
-// gracefully when an unauthenticated route redirects to /login. Returns false
-// to signal the caller to skip the checks without failing.
-async function preparePage(page: Page, route: string, env: TestEnv): Promise<boolean> {
+// Navigate, wait for the Vue app to mount and data to settle. A silent skip is
+// never acceptable (FAR-1850): the caller either runs the checks, or the route
+// was redirected by a gate listed in DEACTIVATED_ROUTES (backed by its
+// per-route reason) — anything else is an assertion failure, not a skip.
+type PageReadiness = 'rendered' | 'deactivated'
+
+async function preparePage(page: Page, route: string, env: TestEnv): Promise<PageReadiness> {
   const response = await page.goto(route)
   await page.waitForURL('**/*', { timeout: 5000 }).catch(() => {})
 
@@ -138,13 +220,24 @@ async function preparePage(page: Page, route: string, env: TestEnv): Promise<boo
   }
 
   const finalUrl = page.url()
-  const redirectedToLogin = finalUrl.includes('/login') && route !== '/login'
   const differsFromPath = !finalUrl.includes(route)
-  if (redirectedToLogin || differsFromPath) {
-    process.stdout.write(`  Skipping ${route} — redirected to ${finalUrl} (auth guard)\n`)
-    return false
+  if (!differsFromPath) return 'rendered'
+
+  if (DEACTIVATED_ROUTES_SET.has(route)) {
+    process.stdout.write(`  [mobile-layout] deactivated: ${route} — ${DEACTIVATED_ROUTES[route]} (redirected to ${finalUrl})\n`)
+    return 'deactivated'
   }
-  return true
+
+  // A redirect the config does not own: silent-skip ban means this FAILS, and
+  // the message names the only auditable way forward (add to DEACTIVATED_ROUTES
+  // with the app gate as reason). This also covers the historic silent class —
+  // a redirect to /login AFTER the real-login retry above already ran, i.e. a
+  // genuinely unauthenticated session.
+  expect(
+    differsFromPath,
+    `${route} redirected to ${finalUrl} instead of rendering. Silent sweep skips are forbidden (FAR-1850): either fix the redirect (session expired? broken login retry?) or add this route to DEACTIVATED_ROUTES with the app gate that excludes it (private_preview / system_admin_only / requiredTier / requiredRoles) as a per-route reason.`,
+  ).toBe(false)
+  return 'deactivated' // unreachable — expect throws first
 }
 
 // Check 1 — viewport meta must opt into device-width rendering.
@@ -406,7 +499,11 @@ async function checkInputFontSize(page: Page) {
 }
 
 async function runFullSweep(page: Page, route: string, env: TestEnv) {
-  if (!(await preparePage(page, route, env))) return
+  const readiness = await preparePage(page, route, env)
+  test.skip(
+    readiness === 'deactivated',
+    `${route} is not renderable by this identity — see DEACTIVATED_ROUTES for the per-route gate reason`,
+  )
 
   await checkViewportMeta(page)
   await checkNoHorizontalOverflow(page)
@@ -424,7 +521,11 @@ async function runFullSweep(page: Page, route: string, env: TestEnv) {
 }
 
 async function runNarrowChecks(page: Page, route: string, env: TestEnv) {
-  if (!(await preparePage(page, route, env))) return
+  const readiness = await preparePage(page, route, env)
+  test.skip(
+    readiness === 'deactivated',
+    `${route} is not renderable by this identity — see DEACTIVATED_ROUTES for the per-route gate reason`,
+  )
 
   await checkViewportMeta(page)
   await checkNoHorizontalOverflow(page)
@@ -443,6 +544,22 @@ const target = getTarget()
 if (target !== 'local') {
   test.use({ storageState: 'storageState-staging.json' })
 }
+
+// Config integrity: the only allowed skip category must name ROUTES that still
+// exist and carry a real gate reason — otherwise the sweep would silently
+// accumulate a stale, unreasoned exclusion list over time.
+test.describe('Mobile layout audit — exclusion config integrity', { tag: ['@regression', '@mobile'] }, () => {
+  test('DEACTIVATED_ROUTES lists only live manifest routes, each with a reason', { tag: ['@regression', '@mobile'] }, () => {
+    const stale = [...DEACTIVATED_ROUTES_SET].filter(r => !ROUTES.includes(r))
+    expect(
+      stale.length,
+      `DEACTIVATED_ROUTES contains routes no longer swept by the manifest (stale exclusions do not belong in the config): ${stale.join(', ')}`,
+    ).toBe(0)
+    for (const [route, reason] of Object.entries(DEACTIVATED_ROUTES)) {
+      expect(reason.length, `DEACTIVATED_ROUTES['${route}'] must carry a per-route gate reason`).toBeGreaterThan(0)
+    }
+  })
+})
 
 test.describe('Mobile layout audit — full route sweep', { tag: ['@regression', '@mobile'] }, () => {
   for (const route of ROUTES) {
