@@ -17,12 +17,13 @@ test.describe('Dashboard', () => {
   test('trend window toggles reflect selection', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     // FAR-92: the rolling-window toggle is gated behind the analytics_page
-    // feature flag. Mock the caller-scoped plan fetch (GET /api/v1/plan,
-    // FAR-1809) so the flag resolves enabled for this regression run (mirrors
-    // the sibling DashboardView unit specs, which turn analytics_page on).
-    // Registered after loginAsAdmin so it takes precedence over the
-    // local-target catch-all API mock, then reloaded so the plan is applied.
-    await page.route('**/api/v1/plan', (route) => {
+    // feature flag. Mock the plan fetch so the flag resolves enabled for this
+    // regression run (mirrors the sibling DashboardView unit specs, which turn
+    // analytics_page on). Registered after loginAsAdmin so it takes precedence
+    // over the local-target catch-all API mock. FAR-1809 repointed the plan
+    // bootstrap at the caller-scoped GET /api/v1/plan, so the mock owns that
+    // endpoint.
+    await page.route('**/api/v1/plan*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ license: { tier: 'community' }, flags: [{ name: 'analytics_page', currently_active: true }] }) })
     })
     await page.reload()

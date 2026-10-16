@@ -22,16 +22,14 @@ test.describe('Admin Notification Delivery', { tag: "@regression" }, () => {
   test('renders the Webhook Notifications page when the flag is enabled', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     // FAR-656: the webhook delivery log is gated behind the
-    // webhook_notification_log flag (default OFF) — mock the caller-scoped plan
-    // fetch so the router guard resolves the flag as enabled for this
-    // regression run. FAR-1809 repointed planStore at GET /api/v1/plan; the
-    // plan is read once at boot, so the mock is registered and the app reloaded
-    // so the flag-bearing payload is applied (a mock registered after the first
-    // fetch would be ignored).
-    await page.route('**/api/v1/plan', (route) => {
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ license: { tier: 'team' }, dev_mode: true, flags: [{ name: 'webhook_notification_log', currently_active: true }] }) })
+    // webhook_notification_log flag (default OFF) — mock the plan fetch so the
+    // router guard resolves the flag as enabled for this regression run.
+    // FAR-1809 repointed the plan bootstrap at the caller-scoped GET
+    // /api/v1/plan, so the mock must own that endpoint (the old instance-admin
+    // /api/v1/admin/feature-flags is no longer read by the store).
+    await page.route('**/api/v1/plan*', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ license: { tier: 'team' }, flags: [{ name: 'webhook_notification_log', currently_active: true }] }) })
     })
-    await page.reload()
     await page.goto('/admin/notification-delivery')
     await expect(page.locator('h1')).toContainText('Webhook Notifications')
     await expect(page.getByTestId('admin-notification-log-title')).toBeVisible()
@@ -73,13 +71,9 @@ test.describe('Admin Plugins', { tag: "@regression" }, () => {
   test('renders the Plugins page', { tag: "@regression" }, async ({ page, env }) => {
     test.skip(!isDevModeTarget(env), 'Route is dev-mode-gated (private_preview); only runs on a dev-mode target')
     await loginAsAdmin(page, env)
-    // FAR-1809: planStore reads the caller-scoped GET /api/v1/plan; the plan is
-    // applied once at boot, so mock it and reload (a mock registered after the
-    // first fetch would be ignored).
-    await page.route('**/api/v1/plan', (route) => {
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ license: { tier: 'enterprise' }, dev_mode: true, flags: [{ name: 'plugin_management', currently_active: true }, { name: 'model_backend_management', currently_active: true }, { name: 'team_rbac', currently_active: true }] }) })
+    await page.route('**/api/v1/plan*', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ license: { tier: 'v2' }, flags: [{ name: 'plugin_management', currently_active: true }, { name: 'model_backend_management', currently_active: true }, { name: 'team_rbac', currently_active: true }] }) })
     })
-    await page.reload()
     await page.route('**/api/v1/plugins*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([{ PLUGIN_ID: 'p1', display_name: 'Test Plugin', description: 'A test plugin', version: '1.0.0', capabilities: ['connector_type'], health_ok: true, health_detail: 'OK', health_checked_at: '2025-06-01T12:00:00Z' }]) })
     })

@@ -212,43 +212,39 @@ test.describe('Real-stack journeys: pipeline lifecycle', { tag: '@regression' },
       // feature flag; when the plan store cannot resolve flags for this
       // account the command is absent, so skip rather than fail the suite on
       // an unavailable surface.
-      //
-      // The popup renders asynchronously, so probe it once before deciding
-      // whether the pipeline_delete command is present — waiting on a command
-      // that is always rendered (Rename) distinguishes "flag off" from "menu
-      // not open". Asserting Delete visible first (as this test used to) threw
-      // before the skip could run, failing the suite on every deployment whose
-      // plan does not enable pipeline_delete.
+      await row.getByTestId('pipeline-list-action-menu').click()
+      const deleteItem = page.getByRole('menuitem', { name: 'Delete', exact: true })
+      // The popup renders asynchronously, so wait for it to open before
+      // deciding whether the pipeline_delete command is present — waiting on a
+      // command that is always rendered (Rename) distinguishes "flag off" from
+      // "menu not open". Asserting Delete visible first (as this test used to)
+      // threw before the skip could run, failing the suite on every deployment
+      // whose plan does not enable pipeline_delete.
       //
       // Wait on the popup being ATTACHED, not visible: PrimeVue's Menu hides on
       // any scroll and a Playwright visibility check can detach the overlay
       // before the subsequent click runs (see setup/row-menu.ts).
-      await row.getByTestId('pipeline-list-action-menu').click()
       await page
         .locator('[data-pc-section="itemcontent"]')
         .first()
         .waitFor({ state: 'attached', timeout: 15_000 })
-      if ((await page.getByRole('menuitem', { name: 'Delete', exact: true }).count()) === 0) {
+      if ((await deleteItem.count()) === 0) {
         test.skip(true, 'pipeline_delete is not enabled on this deployment')
       }
-      // Close the probe's popup so clickRowAction opens a fresh one.
-      await row.getByTestId('pipeline-list-action-menu').click()
-      await page
-        .locator('[data-pc-section="itemcontent"]')
-        .first()
-        .waitFor({ state: 'hidden', timeout: 5_000 })
-        .catch(() => {})
+      // Close the detection popup before re-opening it through the shared
+      // helper (the action-menu button remounts the Menu on every open rather
+      // than toggling, so a stray open overlay must be dismissed first).
+      await page.keyboard.press('Escape')
 
-      // The confirm dialog is the observable effect: the anchored popup is racy
-      // on staging (it can self-hide before the command lands, leaving the row
-      // unchanged with no request ever sent), so clickRowAction re-opens and
-      // re-activates until the dialog appears — the exact silent no-op the
-      // rename/archive journeys hit.
+      // Activate the Delete command through the retry-until-effect helper the
+      // rename/archive journeys use: the anchored PrimeVue popup can self-hide
+      // before the item's command lands, silently no-opping a single
+      // activation. This journey was skipped whenever pipeline_delete was
+      // unresolvable, so it never picked the helper up (see setup/row-menu.ts).
       const dialog = page.locator('dialog').filter({ hasText: 'Delete Pipeline' })
       await clickRowAction(page, row, 'Delete', async () => {
         await expect(dialog).toBeVisible({ timeout: 5_000 })
       })
-      await expect(dialog).toBeVisible()
       await dialog.getByRole('button', { name: 'Delete' }).click()
       deletedThroughUi = true
 
