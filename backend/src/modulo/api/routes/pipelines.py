@@ -1071,7 +1071,7 @@ class PipelineResponse(BaseModel):
     default_autonomy_level: str | None = None
     # FAR-1163: nullable ceiling (NULL = effective ceiling is the default).
     max_autonomy_level: str | None = None
-    # FAR-1175 (ADR 043 S1): the runtime earned autonomy level (NULL until a
+    # FAR-1175 (ADR 062 S1): the runtime earned autonomy level (NULL until a
     # manual promote/demote sets it) and when it last moved. Read LIVE at every
     # HITL gate when the ``autonomy_gating`` flag is on.
     earned_autonomy_level: str | None = None
@@ -4007,7 +4007,7 @@ async def update_pipeline_endpoint(
     return response
 
 
-# ── FAR-1175 (ADR 043 S1): manual autonomy demote / promote ──────────────────
+# ── FAR-1175 (ADR 062 S1): manual autonomy demote / promote ──────────────────
 AUTONOMY_DEMOTED_EVENT = "pipeline.autonomy_demoted"
 AUTONOMY_PROMOTION_DECIDED_EVENT = "pipeline.autonomy_promotion_decided"
 
@@ -4060,7 +4060,7 @@ def _current_effective_level(pipeline: Pipeline) -> AutonomyLevel:
 async def _assert_autonomy_admin_or_owner(
     session: AsyncSession, principal: TenantPrincipal, pipeline: Pipeline
 ) -> None:
-    """Admin/owner gate for a manual autonomy change (ADR 043 §1).
+    """Admin/owner gate for a manual autonomy change (ADR 062 §1).
 
     Promotion/demotion is a governance decision: org admins, and members of the
     pipeline's owner team (the owner), may make it. Everyone else is refused
@@ -4189,7 +4189,7 @@ async def demote_pipeline_autonomy(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
 ) -> AutonomyChangeResponse:
-    """Manually lower a pipeline's earned autonomy level (FAR-1175, ADR 043 §1).
+    """Manually lower a pipeline's earned autonomy level (FAR-1175, ADR 062 §1).
 
     Demotion adds human review, so it is always safe: an admin or the pipeline's
     owner may lower the earned level at any time. Takes effect at the run's next
@@ -4216,7 +4216,7 @@ async def promote_pipeline_autonomy(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
 ) -> AutonomyChangeResponse:
-    """Manually raise a pipeline's earned autonomy level (FAR-1175, ADR 043 §1).
+    """Manually raise a pipeline's earned autonomy level (FAR-1175, ADR 062 §1).
 
     Promotion is never automatic: an admin or the pipeline's owner approves it,
     capped at the pipeline's ``max_autonomy_level`` ceiling. It applies only to
