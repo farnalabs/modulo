@@ -379,6 +379,117 @@ async def _scan_orphan_snapshots(session: AsyncSession, org_id: uuid.UUID) -> li
     ]
 
 
+# FAR-1815 snapshot retention: how many ``version_kind='edit'`` snapshots are
+# kept per pipeline (the newest N). Deliberately a module constant, not a
+# config surface — the ticket scopes no new configuration, and retention bounds
+# are policy, not deployment-specific settings.
+EDIT_SNAPSHOT_RETENTION_LIMIT = 200
+
+
+async def _scan_edit_snapshot_retention(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
+    """Surface edit snapshots beyond the newest ``EDIT_SNAPSHOT_RETENTION_LIMIT`` per pipeline.
+
+    FAR-1815: since FAR-1810 every explicit editor graph save records an
+    immutable ``version_kind='edit'`` snapshot in the save transaction, on top
+    of one row per run — unbounded growth per pipeline with no retention
+    anywhere. This scan ranks each pipeline's PROVENANCE-EDIT snapshots
+    (``version_kind='edit'`` AND ``created_kind='edit'``) newest-first and
+    surfaces only those past the newest 200 as cleanup candidates, so
+    retention keeps the newest 200 edit versions and everything older is
+    deletable through the standard housekeeping cleanup
+    (``entity_type='pipeline_snapshot'`` — same path as ``orphan_snapshots``).
+
+    Never surfaced, by construction:
+
+    * run / rollback / initial snapshots. The ``created_kind`` carve-out is
+      load-bearing: ``rollback_to_snapshot`` writes ``version_kind='edit'`` /
+      ``created_kind='rollback'``, so filtering on ``version_kind`` alone would
+      delete rollback history. Run snapshots (``created_kind='run'``) are also
+      RESTRICT-protected by the ``runs.snapshot_id`` FK — this scan never fights
+      that; a row the FK still protects fails loudly at cleanup instead of being
+      deleted around it.
+    * the pipeline's latest snapshot — excluded explicitly against the SAME key
+      ``delete_snapshot`` orders by (``snapshot_version DESC``), so the existing
+      "refuse to delete the latest snapshot" invariant is preserved structurally
+      rather than by argument.
+
+    Ordering matches the invariant's key (``snapshot_version`` desc; unique per
+    pipeline via ``uq_pipeline_snapshot_version``, so no ties). Failures are not
+    caught here: an exception propagates to :func:`scan_all`, which logs it with
+    the stack trace and still returns the other categories.
+    """
+    ranked = (
+        select(
+            PipelineSnapshot.id.label("id"),
+            PipelineSnapshot.pipeline_id.label("pipeline_id"),
+            PipelineSnapshot.snapshot_version.label("snapshot_version"),
+            PipelineSnapshot.created_at.label("created_at"),
+            func.row_number()
+            .over(
+                partition_by=PipelineSnapshot.pipeline_id,
+                order_by=PipelineSnapshot.snapshot_version.desc(),
+            )
+            .label("retention_rank"),
+        )
+        .where(
+            PipelineSnapshot.organisation_id == org_id,
+            PipelineSnapshot.version_kind == "edit",
+            PipelineSnapshot.created_kind == "edit",
+        )
+        .subquery()
+    )
+    latest_version = (
+        select(
+            PipelineSnapshot.pipeline_id.label("pipeline_id"),
+            func.max(PipelineSnapshot.snapshot_version).label("latest_version"),
+        )
+        .where(PipelineSnapshot.organisation_id == org_id)
+        .group_by(PipelineSnapshot.pipeline_id)
+        .subquery()
+    )
+    rows = (
+        await session.execute(
+            select(ranked)
+            .join(latest_version, ranked.c.pipeline_id == latest_version.c.pipeline_id)
+            .where(
+                ranked.c.retention_rank > EDIT_SNAPSHOT_RETENTION_LIMIT,
+                ranked.c.snapshot_version != latest_version.c.latest_version,
+            )
+            .order_by(ranked.c.pipeline_id, ranked.c.snapshot_version)
+        )
+    ).all()
+    if not rows:
+        return []
+
+    per_pipeline: dict[uuid.UUID, int] = {}
+    for row in rows:
+        per_pipeline[row.pipeline_id] = per_pipeline.get(row.pipeline_id, 0) + 1
+    _log.warning(
+        "housekeeping.edit_snapshot_retention: org %s has %d edit snapshot(s) beyond the newest %d retained "
+        "per pipeline across %d pipeline(s): %s",
+        org_id,
+        len(rows),
+        EDIT_SNAPSHOT_RETENTION_LIMIT,
+        len(per_pipeline),
+        ", ".join(
+            f"{pid}:{count}"
+            for pid, count in sorted((str(pipeline_id), count) for pipeline_id, count in per_pipeline.items())
+        ),
+    )
+    return [
+        Candidate(
+            id=str(row.id),
+            name=f"Snapshot v{row.snapshot_version} for pipeline {row.pipeline_id}",
+            detail=(
+                f"Edit snapshot beyond retention — only the newest {EDIT_SNAPSHOT_RETENTION_LIMIT} "
+                "edit versions are kept per pipeline"
+            ),
+            created_at=row.created_at.isoformat() if row.created_at else None,
+        )
+        for row in rows
+    ]
+
+
 async def _scan_expired_webhook_dedups(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
     now = datetime.now(UTC)
     rows = (
@@ -924,6 +1035,17 @@ _SCANNERS: list[Scanner] = [
         scan_func=_scan_orphan_snapshots,
         label="Orphan Snapshots",
         description="Snapshots whose pipeline no longer exists",
+        entity_type="pipeline_snapshot",
+    ),
+    Scanner(
+        category="edit_snapshot_retention",
+        scan_func=_scan_edit_snapshot_retention,
+        label="Edit Snapshot Retention",
+        description=(
+            "Edit snapshots beyond the newest 200 kept per pipeline — deletable via the "
+            "standard housekeeping cleanup; run/rollback/initial snapshots and a pipeline's "
+            "latest snapshot are never selected (FAR-1815)."
+        ),
         entity_type="pipeline_snapshot",
     ),
     Scanner(
