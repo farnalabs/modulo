@@ -988,3 +988,84 @@ async def test_genuine_db_outage_stays_503_on_the_admin_orgs_boundary(
             org_id, SetOrgLicenseRequest(license_key="new.key"), principal, session, get_settings()
         )
     assert exc_info.value.status_code == 503, f"a genuine outage must stay 503, got {exc_info.value}"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1832 QA F5: the fernet rotation of the OTel langsmith key is a NARROW
+# single-key write — a concurrent operator save of other otel keys, committed
+# inside the rotation's read→write window, survives. Real Postgres via
+# testcontainers: the jsonb_set compose can only be proven against a real
+# engine.
+# ---------------------------------------------------------------------------
+
+
+async def test_otel_rotation_preserves_a_concurrent_writer_other_keys(db_engine: AsyncEngine) -> None:
+    from cryptography.fernet import Fernet
+
+    from modulo.core.fernet_rotation import _rotate_otel_config
+
+    new_fernet = Fernet(Fernet.generate_key())
+    # Store a genuine token encrypted under new_fernet so the rotation's
+    # re_encrypt_str succeeds with old_fernet=None (new-key-only path).
+    stored_ct = new_fernet.encrypt(b"langsmith-secret").decode()
+
+    org_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
+                "VALUES (:id, :name, :slug, '{}'::jsonb, CAST(:cfg AS jsonb))"
+            ),
+            {
+                "id": str(org_id),
+                "name": "Org otel-rot",
+                "slug": f"org-{uuid.uuid4().hex[:8]}",
+                "cfg": json.dumps(
+                    {
+                        "langsmith_api_key_ciphertext": stored_ct,
+                        "otlp_endpoint": "http://old:4317",
+                    }
+                ),
+            },
+        )
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    session = factory()
+    await session.begin()
+
+    # Hook the rotation session: after its SELECT returns (the read side of
+    # the window) but BEFORE its UPDATE issues, an operator saves a different
+    # otel key on its own session/transaction and commits.
+    real_execute = session.execute
+    hooked = {"done": False}
+
+    async def _interleave(statement: object, *args: object, **kwargs: object) -> object:
+        result = await real_execute(statement, *args, **kwargs)
+        if not hooked["done"] and "SELECT id, otel_config_json FROM organisations" in str(statement):
+            hooked["done"] = True
+            op_session = factory()
+            await op_session.begin()
+            await op_session.execute(
+                text(
+                    "UPDATE organisations SET otel_config_json = "
+                    "otel_config_json || '{\"export_interval_seconds\": 12345}'::jsonb "
+                    "WHERE id = :i"
+                ),
+                {"i": str(org_id)},
+            )
+            await op_session.commit()
+            await op_session.close()
+        return result
+
+    session.execute = _interleave  # type: ignore[assignment]
+    count = await _rotate_otel_config(session, new_fernet, None)
+    await session.commit()
+    await session.close()
+
+    assert count == 1, "the org row must have been rotated"
+    final = await _read_otel(db_engine, org_id)
+    assert final["export_interval_seconds"] == 12345, (
+        "the concurrent operator save must survive the rotation — pre-F5 the "
+        f"whole-column write clobbered it: {final!r}"
+    )
+    assert final["otlp_endpoint"] == "http://old:4317"
+    assert new_fernet.decrypt(final["langsmith_api_key_ciphertext"].encode()) == b"langsmith-secret"
