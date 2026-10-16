@@ -7,7 +7,8 @@ endpoints — the contract-round-trip review gate. Covers:
 * GET returns the full ``notification_opt_outs`` map for every category,
 * PUT the full GET-returned map, GET it back, and assert equality
   (dashboard_level + opt-outs),
-* 422 on unknown category keys and on an invalid ``dashboard_level``,
+* 400 on unknown category keys, 422 on unknown top-level fields and on an
+  invalid ``dashboard_level``,
 * RLS/per-user scoping — one user's opt-outs never leak to another user, and
   the dashboard read paths agree with the preference map.
 """
@@ -27,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes.in_app_notifications import _preference_change_is_noop
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.notifier.event_mapper import notification_categories
@@ -41,6 +43,7 @@ _USER_A = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _USER_B = uuid.UUID("00000000-0000-0000-0000-000000000003")
 _PREFERENCES_PATH = "/api/v1/notifications/in-app/preferences"
 _DASHBOARD_PATH = "/api/v1/notifications/in-app/dashboard"
+_UNREAD_COUNT_PATH = "/api/v1/notifications/in-app/unread-count"
 
 # OrgMembership is required because the admin-scope visibility clause reads it
 # (EXISTS) on every notification read the routes perform.
@@ -225,7 +228,21 @@ def test_put_preferences_partial_update_preserves_untouched_keys(client: TestCli
 
 
 def test_put_preferences_unknown_category_returns_422(client: TestClient) -> None:
+    """FAR-247: an unknown category KEY is a domain validation error (400),
+    distinct from the Pydantic body-shape 422.
+
+    The function name keeps its pre-FAR-247 suffix (the status moved 422 -> 400)
+    so the test function itself is preserved rather than removed/renamed.
+    """
     resp = client.put(_PREFERENCES_PATH, json={"notification_opt_outs": {"not.a.real.category": True}})
+    assert resp.status_code == 400, resp.text
+    assert "not.a.real.category" in resp.text
+
+
+def test_put_preferences_unknown_top_level_field_returns_422(client: TestClient) -> None:
+    """FAR-247: an unknown TOP-LEVEL field is a 422 (``extra='forbid'``) —
+    it used to be silently ignored, answering 200 and storing nothing."""
+    resp = client.put(_PREFERENCES_PATH, json={"opt_outs": {"run.failed": True}})
     assert resp.status_code == 422, resp.text
 
 
@@ -420,3 +437,150 @@ def test_dashboard_respects_stored_preference(client: TestClient) -> None:
     assert "deploy" not in categories, (
         f"Info-level notification should be excluded with warning preference, got {categories}"
     )
+
+
+# ---------------------------------------------------------------------------
+# FAR-247: badge/list agreement (dashboard_level threaded into get_unread_count)
+# ---------------------------------------------------------------------------
+
+
+def _seed_info_notification() -> None:
+    async def _seed() -> None:
+        engine = _CREATED_ENGINES[-1]
+        maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+        async with maker() as session, session.begin():
+            session.add(
+                Notification(
+                    id=uuid.uuid4(),
+                    organisation_id=_ORG_ID,
+                    scope="org",
+                    level="info",
+                    category="deploy",
+                    title="Deploy info",
+                    body="deploy body",
+                    expires_at=datetime.now(UTC) + timedelta(days=1),
+                    created_at=datetime.now(UTC),
+                    updated_at=datetime.now(UTC),
+                )
+            )
+
+    asyncio.run(_seed())
+
+
+def test_unread_badge_agrees_with_dashboard_list_at_default_level(client: TestClient) -> None:
+    """FAR-247: badge and list agree at the DEFAULT dashboard level ('info').
+
+    The unread count used to be computed with a hardcoded ``min_level`` of
+    'warning' while the list used the user's level (default 'info'), so an
+    info-level row appeared in the dashboard list but was NOT counted in the
+    badge. Both reads must use the same level.
+    """
+    assert client.get(_PREFERENCES_PATH).status_code == 200  # warm engine + tables
+    _seed_info_notification()
+
+    dashboard = client.get(_DASHBOARD_PATH).json()
+    categories = {n["category"] for n in dashboard["notifications"]}
+    assert "deploy" in categories, f"expected the info-level row in the list, got {categories}"
+    # 2 seeded warning rows + 1 info row — the badge counts every listed row.
+    assert dashboard["total_unread"] == 3
+
+    unread = client.get(_UNREAD_COUNT_PATH).json()
+    assert unread["count"] == 3, "badge endpoint must agree with the dashboard list"
+
+
+def test_unread_badge_respects_stored_dashboard_level(client: TestClient) -> None:
+    """A stored dashboard_level of 'warning' filters BOTH the list and badge."""
+    resp = client.put(_PREFERENCES_PATH, json={"dashboard_level": "warning"})
+    assert resp.status_code == 200, resp.text
+    _seed_info_notification()
+
+    dashboard = client.get(_DASHBOARD_PATH).json()
+    categories = {n["category"] for n in dashboard["notifications"]}
+    assert "deploy" not in categories
+    assert dashboard["total_unread"] == 2
+
+    unread = client.get(_UNREAD_COUNT_PATH).json()
+    assert unread["count"] == 2
+
+
+# ---------------------------------------------------------------------------
+# FAR-247: AuditEvent only on an actual change
+# ---------------------------------------------------------------------------
+
+
+def _success_audit_calls(emit: AsyncMock) -> list:
+    return [
+        call
+        for call in emit.await_args_list
+        if call.kwargs.get("event_type") == "notification_preferences_updated"
+        and call.kwargs.get("payload", {}).get("outcome") == "success"
+    ]
+
+
+def test_put_with_actual_change_emits_success_audit(client: TestClient) -> None:
+    with patch("modulo.core.audit_coverage._emit", new=AsyncMock()) as emit:
+        resp = client.put(_PREFERENCES_PATH, json={"notification_opt_outs": {"run.failed": True}})
+        assert resp.status_code == 200, resp.text
+    assert len(_success_audit_calls(emit)) == 1
+
+
+def test_put_no_op_change_emits_no_success_audit(client: TestClient) -> None:
+    """Replaying an identical PUT (nothing changes) must NOT emit the success
+    AuditEvent (FAR-247: audit only on actual change)."""
+    # Warm the stored state OUTSIDE the patch: run.failed opted out, level 'info'.
+    warm = {"dashboard_level": "info", "notification_opt_outs": {"run.failed": True}}
+    first = client.put(_PREFERENCES_PATH, json=warm)
+    assert first.status_code == 200, first.text
+
+    with patch("modulo.core.audit_coverage._emit", new=AsyncMock()) as emit:
+        replay = client.put(
+            _PREFERENCES_PATH, json={"dashboard_level": "info", "notification_opt_outs": {"run.failed": True}}
+        )
+        assert replay.status_code == 200, replay.text
+    assert not _success_audit_calls(emit)
+
+
+def test_put_back_to_original_state_emits_audit_again(client: TestClient) -> None:
+    """Toggling off an opt-out IS a change (row removal), even though the
+    final state equals the default."""
+    first = client.put(_PREFERENCES_PATH, json={"notification_opt_outs": {"run.failed": True}})
+    assert first.status_code == 200, first.text
+
+    with patch("modulo.core.audit_coverage._emit", new=AsyncMock()) as emit:
+        second = client.put(_PREFERENCES_PATH, json={"notification_opt_outs": {"run.failed": False}})
+        assert second.status_code == 200, second.text
+    assert len(_success_audit_calls(emit)) == 1
+
+
+# ---------------------------------------------------------------------------
+# FAR-247: the extracted no-op detector (audit-change detection)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("requested_opt_outs", "before_opted_out", "dashboard_level", "before_level", "expected"),
+    [
+        # Nothing requested at all -> no change.
+        ({}, {"run.failed"}, None, "info", True),
+        # An opt-out that already exists -> no change.
+        ({"run.failed": True}, {"run.failed"}, None, "info", True),
+        # A new opt-out -> change.
+        ({"run.stalled": True}, set(), None, "info", False),
+        # Toggling an existing opt-out OFF -> change (row removal).
+        ({"run.failed": False}, {"run.failed"}, None, "info", False),
+        # An explicitly unchanged dashboard level -> no change.
+        ({}, set(), "info", "info", True),
+        # A changed dashboard level -> change.
+        ({}, set(), "warning", "info", False),
+        # dashboard_level None means the request did not carry one.
+        ({}, set(), None, "warning", True),
+    ],
+)
+def test_preference_change_is_noop(
+    requested_opt_outs: dict[str, bool],
+    before_opted_out: set[str],
+    dashboard_level: str | None,
+    before_level: str,
+    expected: bool,
+) -> None:
+    assert _preference_change_is_noop(requested_opt_outs, before_opted_out, dashboard_level, before_level) is expected

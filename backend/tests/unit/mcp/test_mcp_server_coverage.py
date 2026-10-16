@@ -852,6 +852,36 @@ class TestToolDbShell:
         result = await handler()
         assert result["error"] == "server_error"
 
+    async def test_callable_object_tool_body_still_gets_the_error_ladder(self) -> None:
+        """A tool body is only known to be callable — the ladder must still apply.
+
+        ``_tool_db_shell`` built its ``log_key`` from ``fn.__name__`` ABOVE the
+        ``try``. A tool body that is a callable object has no ``__name__``, so
+        the AttributeError escaped the wrapper entirely — bypassing the whole
+        error ladder this decorator exists to provide and crashing the MCP
+        dispatch instead of returning a structured error dict.
+        """
+
+        class _CallableObjectTool:
+            async def __call__(self) -> dict[str, Any]:
+                raise RuntimeError("oops")
+
+        body = _CallableObjectTool()
+        assert not hasattr(body, "__name__")
+
+        handler = _tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail")(body)
+        result = await handler()
+
+        assert result["error"] == "server_error"
+
+    async def test_callable_object_tool_body_happy_path(self) -> None:
+        class _CallableObjectTool:
+            async def __call__(self) -> dict[str, Any]:
+                return {"ok": True}
+
+        handler = _tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail")(_CallableObjectTool())
+        assert await handler() == {"ok": True}
+
     async def test_integrity_error_db_errors_to_fallback(self) -> None:
         @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail", db_errors_to_fallback=True)
         async def handler() -> dict[str, Any]:
@@ -928,7 +958,9 @@ class TestApplyNodeConnectorBinding:
         pipeline = SimpleNamespace(graph_nodes_json=nodes)
         result = _apply_node_connector_binding(pipeline, nid, str(nid), "github", "conn-1")
         assert result is None
-        assert nodes[0]["connector_binding"]["type"] == "github"
+        # The helper writes onto the PIPELINE value (a deep copy - never the
+        # caller's scratch list), because that is what the unit of work flushes.
+        assert pipeline.graph_nodes_json[0]["connector_binding"]["type"] == "github"
 
     def test_node_not_found(self) -> None:
         pipeline = SimpleNamespace(graph_nodes_json=[{"id": str(uuid.uuid4())}])
@@ -962,7 +994,7 @@ class TestApplyNodeConnectorBinding:
         # only the instance changes: operation / dispatch_action are omitted
         result = _apply_node_connector_binding(pipeline, nid, str(nid), "github_actions_ci", "conn-1")
         assert result is None
-        binding = nodes[0]["connector_binding"]
+        binding = pipeline.graph_nodes_json[0]["connector_binding"]
         assert binding["instance_id"] == "conn-1"
         assert binding["dispatch_action"] == "get_run_status"
         assert binding["input"] == {"run_id": "r-1"}
@@ -984,7 +1016,7 @@ class TestApplyNodeConnectorBinding:
             dispatch_action="trigger_run",
         )
         assert result is None
-        assert nodes[0]["idempotent"] is False
+        assert pipeline.graph_nodes_json[0]["idempotent"] is False
 
     def test_bind_rejects_a_query_verb_on_a_dispatch_node(self) -> None:
         nid = uuid.uuid4()
@@ -1024,7 +1056,7 @@ class TestApplyNodeConnectorBinding:
         pipeline = SimpleNamespace(graph_nodes_json=nodes)
         result = _apply_node_connector_binding(pipeline, nid, str(nid), "github_actions_ci", "conn-1")
         assert result is None
-        assert nodes[0]["connector_binding"]["operation"] == "dispatch"
+        assert pipeline.graph_nodes_json[0]["connector_binding"]["operation"] == "dispatch"
 
     # FAR-1141 FIX 2: a dispatch verb on a node the engine never routes to a
     # connector is REJECTED, never silently coerced to the resolver's "query".
@@ -1097,7 +1129,7 @@ class TestApplyNodeConnectorBinding:
             pipeline, nid, str(nid), "github_actions_ci", "conn-1", operation="query"
         )
         assert result is None
-        assert nodes[0]["connector_binding"]["operation"] == "query"
+        assert pipeline.graph_nodes_json[0]["connector_binding"]["operation"] == "query"
 
 
 # ─── Instance-level dispatch capability on the full-graph write ────

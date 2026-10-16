@@ -10,8 +10,8 @@ import logging
 import uuid
 from typing import Any, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -97,6 +97,11 @@ class NotificationPreferencesResponse(BaseModel):
 
 
 class NotificationPreferencesUpdate(BaseModel):
+    # FAR-247: an unknown top-level field must be a 422, not silently
+    # dropped — the default Pydantic ``extra='ignore'`` accepted e.g.
+    # ``{"opt_outs": {...}}`` (a typo'd key), answered 200 and stored nothing.
+    model_config = ConfigDict(extra="forbid")
+
     dashboard_level: str | None = None
     notification_opt_outs: dict[str, bool] | None = None
 
@@ -141,6 +146,25 @@ async def _load_dashboard_level(session: AsyncSession, account_id: uuid.UUID) ->
         return "info"
     prefs = account.preferences if isinstance(account.preferences, dict) else {}
     return cast(str, prefs.get(_DASHBOARD_LEVEL_KEY, "info"))
+
+
+def _preference_change_is_noop(
+    requested_opt_outs: dict[str, bool],
+    before_opted_out: set[str],
+    dashboard_level: str | None,
+    before_level: str,
+) -> bool:
+    """Return True when a preferences PUT changes no stored state (FAR-247).
+
+    Merge semantics: keys absent from ``requested_opt_outs`` are untouched, so
+    only requested keys can change. A ``dashboard_level`` of ``None`` means the
+    request did not carry one, so it cannot change the stored level.
+    """
+    opt_outs_changed = any(
+        opted_out != (category in before_opted_out) for category, opted_out in requested_opt_outs.items()
+    )
+    level_changed = dashboard_level is not None and dashboard_level != before_level
+    return not (opt_outs_changed or level_changed)
 
 
 def _notification_to_response(
@@ -198,10 +222,14 @@ async def get_dashboard(
                 org_id=principal.organisation_id,
                 notifications=notifications,
             )
+            # FAR-247: the badge count threads the SAME dashboard_level as the
+            # list above — badge and list must agree (an info-level row shown
+            # in the list is counted here too).
             unread = await get_unread_count(
                 session=session,
                 org_id=principal.organisation_id,
                 user_id=principal.account_id,
+                min_level=min_level,
             )
     except ProgrammingError:
         _log.exception(_CODE_APP_NOTIFICATIONS_GET_DASHBOARD)
@@ -237,10 +265,14 @@ async def get_unread(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            # FAR-247: same dashboard_level as the dashboard list — the badge
+            # and the panel filter on the same severity floor.
+            min_level = await _load_dashboard_level(session, principal.account_id)
             count = await get_unread_count(
                 session=session,
                 org_id=principal.organisation_id,
                 user_id=principal.account_id,
+                min_level=min_level,
             )
     except ProgrammingError:
         _log.exception(_CODE_APP_NOTIFICATIONS_GET_UNREAD)
@@ -461,6 +493,7 @@ async def get_preferences(
 @handle_db_errors(_CODE_APP_NOTIFICATIONS_UPDATE_PREFERENCES)
 async def update_preferences(
     req: NotificationPreferencesUpdate,
+    request: Request,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
 ) -> NotificationPreferencesResponse:
@@ -473,14 +506,33 @@ async def update_preferences(
     if req.notification_opt_outs is not None:
         unknown = set(req.notification_opt_outs) - set(notification_categories())
         if unknown:
+            # FAR-247: an unknown category key is a domain validation error
+            # (400), distinct from the Pydantic body-shape 422 above/below.
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unknown notification category keys: {sorted(unknown)}.",
             )
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            # FAR-247: read the CURRENT state first so the audit event can be
+            # gated on an actual change (merge semantics: keys absent from the
+            # request are untouched, so only requested keys can change).
+            before_opted_out = await get_opted_out_categories(
+                session=session,
+                org_id=principal.organisation_id,
+                account_id=principal.account_id,
+            )
+            before_level = await _load_dashboard_level(session, principal.account_id)
+            # Suppress the success AuditEvent on a no-op PUT (FAR-247); the
+            # attempt/error event still fires if the handler fails below.
+            request.state.audit_no_change = _preference_change_is_noop(
+                req.notification_opt_outs or {},
+                before_opted_out,
+                dashboard_level,
+                before_level,
+            )
             if req.notification_opt_outs is not None:
                 await set_notification_preferences(
                     session=session,

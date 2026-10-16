@@ -1018,3 +1018,48 @@ def test_probe_cloud_sync_hit_stops_at_filesystem_root(tmp_path: Path) -> None:
     """The ancestor walk stops at the filesystem root (``parent == current``)
     instead of stepping past it -> honest None, exercising the ``break`` arm."""
     assert doctor_module._probe_cloud_sync_hit(tmp_path, Path("/")) is None
+
+
+# ---------------------------------------------------------------------------
+# A crashing check that is not a plain function
+#
+# `_CHECKS` is `tuple[Callable[[Path, Any, DoctorProbes], CheckResult], ...]`,
+# so a check may be a callable object with no `__name__`. The crash handler read
+# `check.__name__`, which made the HANDLER raise: the "check crashed" row was
+# lost and the whole `modulo doctor` run aborted with an opaque AttributeError.
+# ---------------------------------------------------------------------------
+
+
+class _CallableObjectCheck:
+    """A doctor check as a callable object — no ``__name__``."""
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    def __call__(self, _root: Path, _state: object, _probes: object) -> object:
+        raise self._exc
+
+
+def test_crash_handler_survives_a_callable_object_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_state_secrets(tmp_path)
+
+    class _Result:
+        ok = True
+
+    monkeypatch.setattr(
+        doctor_module,
+        "_CHECKS",
+        (
+            _CallableObjectCheck(RuntimeError("callable-object check crashed")),
+            doctor_module.check_data_dir,
+        ),
+    )
+
+    emitted: list[str] = []
+    code = run_doctor(tmp_path, sink=emitted.append)
+
+    # The crash is reported rather than taking the whole run down...
+    assert code == 1
+    assert any("callable-object check crashed" in line for line in emitted)
+    # ...and the surviving check still ran.
+    assert any("data-dir" in line for line in emitted)

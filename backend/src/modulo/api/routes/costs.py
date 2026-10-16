@@ -8,6 +8,7 @@ import math
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -40,7 +41,7 @@ from modulo.core.cost_settings import (
 )
 from modulo.core.spend_ceiling import cents_from_usd
 from modulo.db.crud.daily_run_count import org_level_predicate
-from modulo.db.crud.organisation import get_organisation
+from modulo.db.crud.organisation import get_organisation, update_org_settings_patch
 from modulo.db.crud.scheduled_report import (
     create_scheduled_report,
     delete_scheduled_report,
@@ -127,14 +128,18 @@ def _read_circuit_breaker(org: object | None) -> bool:
     return value if isinstance(value, bool) else DEFAULT_CIRCUIT_BREAKER_ENABLED
 
 
-def _apply_cost_control_updates(org: Organisation, req: "UpdateCostControlsRequest") -> None:
-    """Persist the budget and cost-control settings from ``req`` onto ``org``.
+def _cost_controls_patch(org: Organisation, req: "UpdateCostControlsRequest") -> dict[str, Any] | None:
+    """Compute the ``cost_controls`` settings patch for *req* (FAR-1830).
 
     ``settings_json`` is a JSON column that may hold arbitrary shapes, so the
     persisted cost-control settings are re-read defensively before merging. The
     FAR-391 hard spend ceilings (``max_run_cost`` / ``spend_ceiling``) are stored
     as integer cents on dedicated columns (exact, allocation-free comparison at
-    the gate).
+    the gate) and are set directly on *org*.
+
+    Returns the top-level ``{COST_CONTROLS_KEY: cc}`` patch to merge ATOMICALLY
+    into ``settings_json``, or ``None`` when no settings-namespace field was
+    provided (so an absent-only request never rewrites the column).
     """
     if req.budget is not None:
         org.daily_spend_limit = Decimal(str(req.budget))
@@ -155,15 +160,12 @@ def _apply_cost_control_updates(org: Organisation, req: "UpdateCostControlsReque
         "alert_thresholds": req.alert_thresholds,
     }
     if not any(v is not None for v in updates.values()):
-        return
-    settings_raw = org.settings_json if isinstance(org.settings_json, dict) else {}
-    settings_dict = dict(settings_raw)
+        return None
     cc = dict(_cost_controls(org))
     for key, value in updates.items():
         if value is not None:
             cc[key] = [float(t) for t in value] if key == "alert_thresholds" else value
-    settings_dict[COST_CONTROLS_KEY] = cc
-    org.settings_json = settings_dict
+    return {COST_CONTROLS_KEY: cc}
 
 
 def _read_alert_thresholds(org: object | None) -> list[float]:
@@ -592,6 +594,7 @@ async def update_cost_controls(
     current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostControlsResponse:
+    settings_after: dict[str, Any] = {}
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
@@ -599,7 +602,13 @@ async def update_cost_controls(
             if org is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
 
-            _apply_cost_control_updates(org, req)
+            # FAR-1830: patch ONLY the cost_controls key atomically rather than
+            # writing the whole settings_json column back from a stale read.
+            patch = _cost_controls_patch(org, req)
+            if patch is not None:
+                settings_after = await update_org_settings_patch(session, org.id, patch)
+            else:
+                settings_after = dict(org.settings_json) if isinstance(org.settings_json, dict) else {}
 
             await session.flush()
             teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
@@ -627,6 +636,9 @@ async def update_cost_controls(
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
+    # The settings-derived response fields read from the value the atomic patch
+    # returned (the live merged column), not a possibly-stale in-memory row.
+    settings_view = SimpleNamespace(settings_json=settings_after)
     return CostControlsResponse(
         teams=[
             {
@@ -640,10 +652,10 @@ async def update_cost_controls(
         max_run_cost=_coerce_cents_usd(org.max_run_cost_cents),
         spend_ceiling=_coerce_cents_usd(org.spend_ceiling_cents),
         org_cumulative_spend_usd=_coerce_cents_usd(org.org_cumulative_spend_cents or 0) or 0.0,
-        alert_thresholds=_read_alert_thresholds(org),
-        circuit_breaker_enabled=_read_circuit_breaker(org),
-        currency=_read_currency(org),
-        billing_period=_read_billing_period(org),
+        alert_thresholds=_read_alert_thresholds(settings_view),
+        circuit_breaker_enabled=_read_circuit_breaker(settings_view),
+        currency=_read_currency(settings_view),
+        billing_period=_read_billing_period(settings_view),
     )
 
 

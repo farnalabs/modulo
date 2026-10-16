@@ -3,10 +3,9 @@
 Structural contract (no Postgres needed — the bind is mocked):
 
 * **Revision chain** — 0313 revises ``0312_memberships_active_lookups``; the
-   migrations directory has exactly one head
-  (``0314_policy_gate_evaluation_mode``, which chains onto
-  ``0313_collection_install_drop_installed_entities`` and is pinned by all
-  sibling chain tests), the revision id matches the filename, and neither
+  migrations directory has exactly one head
+  (``0315_policy_gate_evaluation_mode``, pinned by all sibling
+  chain tests), the revision id matches the filename, and neither
   ``branch_labels`` nor ``depends_on`` is set (the pre-commit
   check-migration-heads hook and every ``test_single_head_*`` pin depend on
   that shape).
@@ -36,7 +35,7 @@ from modulo.db.models.collection_install import CollectionInstall, CollectionIns
 
 _MIGRATION_REVISION = "0313_collection_install_drop_installed_entities"
 _MIGRATION_DOWN_REVISION = "0312_memberships_active_lookups"
-_HEAD_MIGRATION = "0314_policy_gate_evaluation_mode"
+_HEAD_MIGRATION = "0315_policy_gate_evaluation_mode"
 
 _DROPPED_COLUMN = "installed_entities"
 _INSTALL_TABLE = "collection_install"
@@ -87,7 +86,7 @@ def _run(what: str, *, column_exists: bool) -> _Recorder:
 
 
 class TestChain:
-    def test_single_head_is_0314_policy_gate_evaluation_mode(self) -> None:
+    def test_single_head_is_0315_policy_gate_evaluation_mode(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 

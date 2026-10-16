@@ -47,6 +47,10 @@ def mock_session(org_settings):
     result.scalar_one_or_none.return_value = org
 
     session = AsyncMock()
+    # Real SQLAlchemy sessions expose ``info`` as a dict; the route binds RLS
+    # via ``set_rls_org`` which stores the org id here on generic backends, and
+    # the FAR-1830 patch helper reads it back through its strict tenant guard.
+    session.info = {}
     begin_cm = MagicMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -139,6 +143,31 @@ async def test_put_merge_preserves_other_settings(client_admin, mock_session):
     assert org.settings_json["license_key"] == "license-abc"
     assert org.settings_json["sandbox_concurrency_limit"] == 4
     assert org.settings_json["run_concurrency_limit"] == 7
+
+
+@pytest.mark.anyio
+async def test_put_patches_only_its_own_settings_key(client_admin, mock_session):
+    """FAR-1830: the writer emits ONLY ``run_concurrency_limit``.
+
+    Asserting the patch call arguments fails if the route reverts to a
+    whole-column ``settings_json`` write.
+    """
+    captured = {}
+
+    async def _fake_patch(session, organisation_id, patch=None, delete_keys=None, **kwargs):
+        captured["organisation_id"] = organisation_id
+        captured["patch"] = patch
+        return patch or {}
+
+    with patch("modulo.api.routes.admin.update_org_settings_patch", new=_fake_patch):
+        resp = await client_admin.put(
+            "/api/v1/admin/org/run-concurrency",
+            json={"run_concurrency_limit": 9},
+        )
+    assert resp.status_code == 200
+    assert captured["organisation_id"] == ORG_ID
+    assert set(captured["patch"]) == {"run_concurrency_limit"}
+    assert captured["patch"]["run_concurrency_limit"] == 9
 
 
 @pytest.mark.anyio

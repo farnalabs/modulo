@@ -184,6 +184,10 @@ class TestRunsSpecialCase:
             "lifecycle_maps",
             "eval_datasets",
             "eval_suites",
+            # FAR-1692: registries carry the visibility pair; registered for
+            # completeness, enforced by DB RLS alone (never route-wired).
+            "external_agents",
+            "mcp_servers",
         }
 
     def test_run_model_has_no_visibility_column(self) -> None:

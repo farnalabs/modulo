@@ -33,6 +33,19 @@
         </button>
       </div>
 
+      <!-- FAR-1791: an SSO callback failure redirects back to the org login
+           page with a whitelisted code. Rendered above every state so it is
+           present in the first render and survives the org-context load. -->
+      <div v-if="ssoErrorKey" ref="ssoErrorRef" tabindex="-1" class="outline-none">
+        <ErrorAlert
+          :message="$t(ssoErrorKey)"
+          :retryable="false"
+          role="alert"
+          aria-live="assertive"
+          data-testid="org-login-sso-error"
+        />
+      </div>
+
       <div v-if="loading" class="text-center text-muted-foreground" data-testid="org-login-loading">
         {{ $t('common.loading') }}
       </div>
@@ -136,12 +149,28 @@ import { setMustChangePassword } from '../lib/mustChangePassword'
 import type { components } from '../lib/api/schema'
 import SsoBrandMark from '../components/SsoBrandMark.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { normaliseSsoErrorCode, ssoErrorI18nKey } from '../lib/ssoError'
 
 type OrgLoginProviderInfo = components['schemas']['OrgLoginProviderInfo']
 
 const route = useRoute()
 const router = useRouter()
 const slug = route.params.slug as string
+
+// --- SSO callback error (FAR-1791) ---
+// The backend appends `?sso_error=<code>` when an SSO callback fails. Read
+// synchronously so the alert is present in the first render. Vocabulary +
+// normaliser are shared with LoginView (lib/ssoError.ts).
+const ssoErrorCode = normaliseSsoErrorCode(route.query.sso_error)
+const ssoErrorKey = ssoErrorI18nKey(ssoErrorCode)
+const ssoErrorRef = ref<HTMLElement | null>(null)
+
+// Announce and reach the alert once Vue mounts it (the block renders only when
+// a code is present, so `ssoErrorRef.value` is the element exactly then; the
+// optional call short-circuits when there is no error to announce).
+onMounted(() => {
+  ssoErrorRef.value?.focus()
+})
 
 // --- Login preferences (last org slug + last-used method) ---
 const loginPrefs = useLoginPrefs()

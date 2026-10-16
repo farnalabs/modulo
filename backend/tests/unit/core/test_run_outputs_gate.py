@@ -460,6 +460,10 @@ _UNGUARDED_SITES: set[tuple[str, str]] = {
     ("core/pipeline_engine/executor.py", "_claim_run_and_audit"),
     ("core/pipeline_engine/executor.py", "resume"),
     ("core/dispatch.py", "_org_capacity_deferred"),
+    # FAR-1831: the capacity-defer reset writes only status + the claim refund
+    # (no outputs_json/node_telemetry_json kwargs) — a no-blobs site, so no
+    # guard is needed. Passing no blobs cannot raise DualWriteError.
+    ("core/pipeline_execution.py", "defer_capacity_denied_run_to_awaiting_human"),
     # ('api/routes/hitl.py', 'claim_gate') removed post-rebase: main's FAR-612
     # refactored the claim status flip to the fenced ``transition_run`` helper,
     # which carries NO outputs/telemetry kwargs — the site no longer calls

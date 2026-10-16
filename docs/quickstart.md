@@ -16,8 +16,10 @@ Modulo is a self-hosted Agentic Delivery Governance platform for building govern
 ## 1. Start infrastructure
 
 ```bash
-# From the repository root
-docker compose -f docker-compose.local.yml up -d
+# From the repository root. The backend .env below logs in with password
+# `modulo`, so start Postgres with the same password (the compose default
+# is `changeme`).
+POSTGRES_PASSWORD=modulo docker compose -f docker-compose.local.yml up -d
 ```
 
 This starts:

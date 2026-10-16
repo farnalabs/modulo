@@ -101,6 +101,7 @@ from pathlib import Path
 from typing import Any
 
 from modulo.launcher.entry import PGDATA_DIRNAME
+from modulo.util import callable_label
 
 _log = logging.getLogger(__name__)
 
@@ -1612,7 +1613,12 @@ def run_doctor(
         try:
             results.append(check(data_dir, state, built))
         except Exception as exc:
-            name = _CRASH_NAMES.get(check.__name__, check.__name__.removeprefix("check_"))
+            # `callable_label`, not `check.__name__`: a check is only known to be
+            # callable, so a callable object / partial has no `__name__` and the
+            # read would raise AttributeError from inside this handler — losing
+            # the crash report and aborting the whole doctor run.
+            check_name = callable_label(check)
+            name = _CRASH_NAMES.get(check_name, check_name.removeprefix("check_"))
             results.append(CheckResult(name, False, f"check crashed: {exc}"))
     if not results:  # noqa: SIM108 — guard all() on empty iterable (semgrep all-empty-iterable)
         healthy = False

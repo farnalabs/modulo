@@ -284,9 +284,15 @@ class TestCountNotifications:
         assert await count_notifications_for_user(mock_session, org_id=_ORG_ID, user_id=_USER_ID) == 0
 
     async def test_unread_count_and_programming_error(self, mock_session: AsyncMock) -> None:
+        # FAR-247 fail-open: the read now runs the FILTERED statement first
+        # (savepoint), then RETRIES unfiltered before degrading — a genuine
+        # broken-read raises on BOTH attempts (side_effect list of three:
+        # success, filtered failure, retry failure) and the caller still
+        # answers 0.
         mock_session.execute = AsyncMock(
             side_effect=[
                 _count_result(2),
+                ProgrammingError("42P01", None, Exception("boom")),
                 ProgrammingError("42P01", None, Exception("boom")),
             ]
         )

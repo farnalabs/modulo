@@ -48,12 +48,12 @@ Lenses:
     0306_trigger_secret_encryption chains onto 0305_guardrail_escalate_action, and
     0307_runs_guardrail_override_resume_pending chains onto 0306_trigger_secret_encryption, and
     0308_runs_dispatch_phase_history chains onto 0307_runs_guardrail_override_resume_pending, and
-    0309_hitl_claims_decision_sweep chains onto 0308_runs_dispatch_phase_history, and
-    0310_library_cluster_db_hardening chains onto 0309_hitl_claims_decision_sweep, and
-    0311_library_cluster_schema_hygiene chains onto 0310_library_cluster_db_hardening, and
-    0312_memberships_active_lookups chains onto 0311_library_cluster_schema_hygiene, and
-    0313_collection_install_drop_installed_entities chains onto 0312_memberships_active_lookups, and
-    0314_policy_gate_evaluation_mode chains onto 0313_collection_install_drop_installed_entities as the
+    0313_collection_install_drop_installed_entities chains onto
+    0312_memberships_active_lookups, and
+    0314_external_agents_mcp_servers chains onto
+    0313_collection_install_drop_installed_entities, and
+    0315_policy_gate_evaluation_mode chains onto
+    0314_external_agents_mcp_servers as the
     current single linear head.
 * **Structure (mocked ``op``)** - upgrade adds BOTH columns existence-gated,
   adds the ``ck_pipelines_hitl_review_window`` CHECK (NOT VALID then VALIDATE on
@@ -80,7 +80,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0265_hitl_review_window"
 _MIGRATION_DOWN_REVISION = "0264_pipelines_max_autonomy_ge_default"
-_HEAD_MIGRATION = "0314_policy_gate_evaluation_mode"
+_HEAD_MIGRATION = "0315_policy_gate_evaluation_mode"
 _CHECK_CONSTRAINT = "ck_pipelines_hitl_review_window"
 _SWEEP_INDEX = "ix_hitl_claims_terminalize_sweep"
 _ENVELOPE = (60, 604800)

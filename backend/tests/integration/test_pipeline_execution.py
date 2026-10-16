@@ -509,3 +509,117 @@ async def test_claim_resume_run_async_parked_real_pg(
         ).fetchone()
     assert row is not None
     assert row[0] == "running", "parked run must resume into running"
+
+
+async def test_capacity_denied_resume_refunds_the_claim_real_pg(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    test_org: uuid.UUID,
+    test_pipeline: uuid.UUID,
+    test_snapshot: uuid.UUID,
+) -> None:
+    """FAR-1831 M1: repeated capacity-denied resumes never exhaust the claim cap.
+
+    Each reconcile tick claims a decided ``awaiting_human`` run for resume
+    (``claim_count++``) and the executor's atomic sandbox-capacity gate then
+    denies it; the fenced defer reset returns the row to ``awaiting_human``.
+    WITHOUT a refund every cycle burns a claim, so once ``claim_count`` reaches
+    the cap the resume claim itself silently no-ops (``claim_count < :claim_cap``)
+    and the committed decision is stranded forever ("decided + dead"). This
+    drives the loop well past a deliberately small cap and asserts the claim
+    still succeeds and the run is still resumable — the decision survives.
+    """
+    run_id = uuid.uuid4()
+    await _insert_run_with_token(
+        db_engine,
+        run_id=run_id,
+        org_id=test_org,
+        pipeline_id=test_pipeline,
+        snapshot_id=test_snapshot,
+        status="awaiting_human",
+        claim_token="tok-initial",
+    )
+
+    cap = 2
+    for cycle in range(1, cap + 4):
+        token = await pe.claim_resume_run_async(app_engine, str(run_id), str(test_org), claim_cap=cap)
+        assert token is not None, f"resume claim must still succeed on cycle {cycle} (claim refunded)"
+        # The executor's capacity gate denied the resume; the fenced defer reset
+        # returns the row to awaiting_human and refunds the claim it consumed.
+        reset = await pe.defer_capacity_denied_run_to_awaiting_human(
+            app_engine, str(run_id), str(test_org), claim_token=token
+        )
+        assert reset is True, f"the capacity-defer reset must land on cycle {cycle}"
+        assert await _claim_count(db_engine, run_id) == 0, f"claim refunded to 0 on cycle {cycle}"
+
+    async with db_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status, claim_token FROM runs WHERE id=:rid"),
+                {"rid": str(run_id)},
+            )
+        ).fetchone()
+    assert row is not None
+    # The committed decision is still resumable: back to awaiting_human, not stranded.
+    assert row[0] == "awaiting_human"
+    assert row[1] is not None
+
+
+async def test_update_run_status_refund_claim_count_fenced_real_pg(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    test_org: uuid.UUID,
+    test_pipeline: uuid.UUID,
+    test_snapshot: uuid.UUID,
+) -> None:
+    """FAR-1831 M1: the fenced writer's ``refund_claim_count`` decrements exactly
+    one claim and clamps at 0 (the ``ck_runs_claim_count_nonneg`` floor)."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from modulo.db.crud.run import update_run_status
+    from modulo.db.rls import set_rls_org
+
+    run_id = uuid.uuid4()
+    await _insert_run_with_token(
+        db_engine,
+        run_id=run_id,
+        org_id=test_org,
+        pipeline_id=test_pipeline,
+        snapshot_id=test_snapshot,
+        status="running",
+        claim_token="tok-owner",
+    )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(text("UPDATE runs SET claim_count = 3 WHERE id=:rid"), {"rid": str(run_id)})
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, test_org)
+        run = await update_run_status(
+            session,
+            run_id,
+            "awaiting_human",
+            claim_token="tok-owner",
+            from_status="running",
+            refund_claim_count=True,
+        )
+        assert run is not None
+    assert await _claim_count(db_engine, run_id) == 2
+
+    # A second refund from 0 clamps at 0 (never violates the nonneg CHECK).
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text("UPDATE runs SET claim_count = 0, status = 'running' WHERE id=:rid"), {"rid": str(run_id)}
+        )
+    async with factory() as session, session.begin():
+        await set_rls_org(session, test_org)
+        await update_run_status(
+            session,
+            run_id,
+            "awaiting_human",
+            claim_token="tok-owner",
+            from_status="running",
+            refund_claim_count=True,
+        )
+    assert await _claim_count(db_engine, run_id) == 0
