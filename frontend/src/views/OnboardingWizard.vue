@@ -8,6 +8,7 @@
           <div
             class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-medium transition-colors"
             :class="stepCircleClass(i)"
+            :aria-current="i === currentStep ? 'step' : undefined"
           >
             <Check v-if="i < currentStep" class="h-4 w-4" aria-hidden="true" />
             <span v-else>{{ i + 1 }}</span>
@@ -417,7 +418,7 @@
           {{ emptyRunWarning }}
         </div>
         <div v-if="runResult" class="rounded-lg bg-success/10 p-3 text-sm text-success">
-          {{ $t('views.OnboardingWizard.pipeline_started') }} <router-link :to="{ name: 'dashboard' }" class="underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{{ $t('views.OnboardingWizard.view_runs_on_dashboard') }}</router-link>.
+          {{ $t('views.OnboardingWizard.pipeline_started') }} <router-link :to="{ name: 'dashboard' }" data-testid="onboarding-wizard-view-runs" class="underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{{ $t('views.OnboardingWizard.view_runs_on_dashboard') }}</router-link>.
         </div>
         <div v-if="pipelineRunError" class="text-sm text-destructive">{{ pipelineRunError }}</div>
       </div>

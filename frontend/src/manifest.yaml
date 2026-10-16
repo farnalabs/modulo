@@ -3267,6 +3267,9 @@ elements:
       - testid: onboarding-wizard-run-empty-warning
         type: element
         dynamic_testid: false
+      - testid: onboarding-wizard-view-runs
+        type: element
+        dynamic_testid: false
       - testid: onboarding-wizard-next
         type: button
         dynamic_testid: false
