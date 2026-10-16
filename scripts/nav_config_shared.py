@@ -27,7 +27,7 @@ import re
 #: ``//`` and never match, and the block is cut at ``groupLabelKeyMap`` so later
 #: entries are excluded.
 _ROUTE_CONFIG_RE = re.compile(
-    r"^\s{2}['\"]?([A-Za-z][\w-]*)['\"]?:\s*\{[^}]*icon: '([^']+)'[^}]*labelKey: '([^']+)'",
+    r"^\s{2}['\"]?([A-Za-z][\w-]*)['\"]?:\s*\{\s*icon: '([^']+)'\s*,\s*labelKey: '([^']+)'",
     re.MULTILINE,
 )
 
