@@ -153,7 +153,21 @@ function isCanvasRoute(route: string): boolean {
 // getting the run cancelled with no actionable signal. A hung run is reported
 // as 'cancelled' and re-dispatches the Branch Fixer, so fail fast and loud
 // instead.
+//
+// Kept BELOW the local test budget (FAR-1876) so a dead target trips this
+// gate's actionable diagnostic rather than the generic 'Test timeout of Nms
+// exceeded'. Local runs drive the unbundled Vite dev server, where a cold
+// authenticated route mount is CPU-bound and can take well over 20s on a
+// loaded, shared machine (observed), so the bound stays at the 30s the sibling
+// specs use and LOCAL_SWEEP_TIMEOUT_MS below supplies the headroom.
 const APP_MOUNT_TIMEOUT_MS = 30_000
+
+// Local test budget for the two sweeps that call preparePage(): a cold route
+// mount on the dev server can exceed 30s under CPU contention, so the default
+// 30s budget would trip the generic deadline before APP_MOUNT_TIMEOUT_MS could
+// surface the mount diagnostic. Staging and production serve a pre-built bundle
+// and keep the config's 180s default.
+const LOCAL_SWEEP_TIMEOUT_MS = 45_000
 
 // Wait for the Vue app to mount, failing fast with the HTTP status whenever the
 // target serves an error/non-SPA page instead of the app shell. A 5xx edge
@@ -188,12 +202,21 @@ type PageReadiness = 'rendered' | 'deactivated'
 
 async function preparePage(page: Page, route: string, env: TestEnv): Promise<PageReadiness> {
   const response = await page.goto(route)
-  await page.waitForURL('**/*', { timeout: 5000 }).catch(() => {})
 
   await waitForAppMount(page, route, response)
 
-  // Content settle — not every route renders a data-loading marker.
-  await page.waitForSelector('[data-loading="false"]', { timeout: 15000 }).catch(() => {})
+  // No content settle here (FAR-1876). A blanket
+  // `waitForSelector('[data-loading="false"]')` can never succeed: only
+  // AnalyticsView and SettingsLicenseView render that marker and neither is in
+  // the sweep, so on every other route the wait burned its full 15s timeout
+  // and was then discarded by `.catch(() => {})`. Two of those (32.3s incl.
+  // navigation) overran the 30s local test budget, the deadline fired mid-wait,
+  // and the discarded rejection let the test limp into checkViewportMeta()
+  // during teardown — reported as a viewport-meta failure (`Received string:
+  // ""`) with no trace of the real cause. There is no universal content marker
+  // to wait on; `waitForAppMount` above is the readiness signal. A future
+  // settle MUST throw on timeout rather than swallow — a swallowed settle
+  // failure is indistinguishable from the page being wrong.
 
   if (env.name === 'local') {
     // Local CI: mock all /api/v1 traffic and seed the auth tokens so
@@ -208,7 +231,6 @@ async function preparePage(page: Page, route: string, env: TestEnv): Promise<Pag
       }, [MOCK_ACCESS_TOKEN, MOCK_REFRESH_TOKEN])
       const remount = await page.goto(route)
       await waitForAppMount(page, route, remount)
-      await page.waitForSelector('[data-loading="false"]', { timeout: 15000 }).catch(() => {})
     }
   } else if (page.url().includes('/login') && route !== '/login') {
     // storageState may have expired — fall back to a single real login, then
@@ -216,7 +238,6 @@ async function preparePage(page: Page, route: string, env: TestEnv): Promise<Pag
     await loginAsAdmin(page, env)
     const retry = await page.goto(route)
     await waitForAppMount(page, route, retry)
-    await page.waitForSelector('[data-loading="false"]', { timeout: 15000 }).catch(() => {})
   }
 
   const finalUrl = page.url()
@@ -562,6 +583,7 @@ test.describe('Mobile layout audit — exclusion config integrity', { tag: ['@re
 })
 
 test.describe('Mobile layout audit — full route sweep', { tag: ['@regression', '@mobile'] }, () => {
+  if (target === 'local') test.describe.configure({ timeout: LOCAL_SWEEP_TIMEOUT_MS })
   for (const route of ROUTES) {
     test(`${route} — mobile layout invariants + above-the-fold screenshot`, { tag: ['@regression', '@mobile'] }, async ({ page, env }) => {
       await runFullSweep(page, route, env)
@@ -570,6 +592,7 @@ test.describe('Mobile layout audit — full route sweep', { tag: ['@regression',
 })
 
 test.describe('Mobile layout audit — narrow viewport bounding sweep', { tag: '@mobile' }, () => {
+  if (target === 'local') test.describe.configure({ timeout: LOCAL_SWEEP_TIMEOUT_MS })
   // defaultBrowserType is stripped from the Pixel 5 spread: Playwright forbids
   // use({ defaultBrowserType }) inside a describe group (it forces a new worker).
   const pixel5 = devices['Pixel 5']

@@ -162,6 +162,23 @@ export async function setupLocalMockApi(page: Page) {
         }),
       })
     }
+    if (
+      (url.includes('/api/v1/pipeline-folders') || url.includes('/api/v1/schema-folders')) &&
+      method === 'GET'
+    ) {
+      // Folder-list endpoints return a BARE ARRAY, not the generic
+      // {items,total} envelope. The consumers type the response as
+      // FolderItem[] and iterate it in a computed — FolderTree.vue
+      // (`allFolders.value.filter`) and PipelineListView.vue /
+      // SchemaListView.vue (`for (const f of foldersList.value)`) — so the
+      // envelope makes the computed throw `TypeError: ... is not a function`
+      // / `... is not iterable` and silently blanks the folder sidebar
+      // (FAR-1876). Mirrors `list_folders` in
+      // backend/src/modulo/api/routes/{pipeline_folders,schema_folders}.py,
+      // which returns `list[FolderResponse]`. Registered BEFORE the generic
+      // GET catch-all below so it is actually reachable.
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+    }
     if (method === 'GET') {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], total: 0 }) })
     }
