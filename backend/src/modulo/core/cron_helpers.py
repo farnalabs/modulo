@@ -333,12 +333,12 @@ _CLAIM_CAP_EXHAUSTED_ERROR_DETAIL = "Claim capacity exhausted."
 _DISPATCH_FAILED_ERROR_DETAIL = "Run was never dispatched (enqueue/Redis failure)."
 # FAR-1862: the stranded-pending age backstop's detail. Written with the
 # ``no_progress`` registry code (the same truthful age-gate code the mid-graph
-# wedge gate writes) — a pending run that never reached its first claim made no
-# node progress within the bound, and its stale SAQ job (if any) is what kept
-# every reclaim leg from recovering it.
+# wedge gate writes) — a pending FOREIGN-dispatcher run that never reached its
+# first claim made no node progress within the bound, and no reclaim pass
+# re-dispatched it.
 _STRANDED_PENDING_ERROR_DETAIL = (
-    "Pending run stranded past the reconcile age bound (no reclaim leg could recover it; "
-    "stale/missing SAQ state); terminal-failed by dispatcher_reconcile's stranded-pending backstop."
+    "Pending run stranded past the reconcile age bound (foreign dispatcher, never re-dispatched); "
+    "terminal-failed by dispatcher_reconcile's stranded-pending backstop."
 )
 
 # ---------------------------------------------------------------------------
@@ -5576,8 +5576,9 @@ def _build_re_dispatch_predicate(
         # NULL ``dispatched_at``; the capacity sweep needs a capacity marker).
         # Re-dispatched as ``execute_run`` (the status-derived job type) — the
         # row is provably not executing under SAQ (a live claim flips it to
-        # ``running``), so nothing is double-executed. A permanently-present
-        # stale job is bounded by the stranded-pending age backstop below.
+        # ``running``), so nothing is double-executed. A foreign row this leg
+        # cannot re-dispatch is bounded by the stranded-pending age backstop
+        # below, which is this leg's exact complement.
         and_(
             Run.status == "pending",
             Run.dispatched_at.is_not(None),
@@ -6440,27 +6441,55 @@ async def _terminalize_stranded_pending_runs(
     max_age_minutes: int,
     max_rows: int | None = None,
 ) -> list[uuid.UUID]:
-    """FAR-1862 age backstop: terminal-fail a pending run no reclaim leg can reach.
+    """FAR-1862 age backstop: terminal-fail a stranded FOREIGN-dispatcher pending run.
 
     DB-only, org-scoped. Selection = ``pending`` + a SET ``dispatched_at`` +
-    not cancellation-requested + older than the age bound + outside the capacity
-    markers. The rows it collects are exactly the ones the composed reclaim
-    predicate cannot recover: the foreign-dispatcher shape (if a foreign row is
-    ALSO held back, e.g. by a live foreign job) and the permanently-present-
-    stale-SAQ-job shape the FAR-1649 leg's per-row ``q.job()`` gate skips
-    forever. Before this terminalizer those rows sat ``pending`` for the run's
-    whole life — never re-dispatched (good: no duplicate execution) but never
-    terminalised either (the observed defect: ``status=pending`` with a
-    heartbeat frozen for 22h and no way to diagnose it).
+    a FOREIGN dispatcher (neither NULL nor ``'saq'``) + no enqueue-failure marker
+    + not cancellation-requested + older than the age bound ANCHORED ON
+    ``dispatched_at`` + outside the capacity markers.
 
-    Uses the SAME age bound as the mid-graph wedge gate
+    Scope is deliberately the EXACT complement of the FAR-1862 foreign-dispatcher
+    reclaim leg: that leg RE-DISPATCHES a foreign row; this backstop is the
+    give-up bound for a foreign row the leg's per-row guard cannot recover. It
+    collects NOTHING else — every other pending shape is either handled by a
+    reclaim leg or is still executable by its live SAQ job:
+
+    * ``dispatcher='saq'`` + a SET ``dispatched_at`` is the NORMAL queued state:
+      ``dispatch_run`` stamps ``dispatched_at`` at ENQUEUE time while the status
+      stays ``pending`` until a worker's claim flips it to ``running``. SAQ's own
+      ``timeout`` bounds job EXECUTION only; a job merely waiting in the queue
+      has no TTL and ``sweep()`` aborts only ACTIVE jobs, so queue residency is
+      unbounded (observed prod: ``avg_queued`` ~57-60 against concurrency 5 —
+      tail queue waits of hours). An age backstop that collected this shape
+      would mass-fail runs that are still going to execute, and their job would
+      then no-op (a ``failed`` row cannot be claimed), silently losing the work.
+      What keeps that shape from being re-dispatched while its job is live is
+      the row loop's per-row ``q.job()`` gate (``_reconcile_one_row``); a
+      DB-only age backstop cannot reproduce that determination — and cannot be
+      made to, because a recovery re-dispatch enqueues under
+      ``run:{id}:{suffix}`` while that gate (and any probe here) reads the
+      unsuffixed ``run:{id}`` key, so a job-absence probe would report "absent"
+      for a healthy queued run and terminalise it.
+    * ``dispatcher IS NULL`` + a SET ``enqueue_failed_at`` is owned by
+      :func:`_reconcile_enqueue_failed`, which keeps the row ``pending`` on
+      purpose while Redis is unverifiable (``dispatch_failed`` fires only after
+      a Redis re-check succeeds). This backstop must never override that
+      fail-safe, so the marker shape is excluded.
+    * ``dispatcher IS NULL`` without the marker is the zombie leg's.
+
+    A foreign dispatcher (the only non-``'saq'`` value is historical) is
+    provably NOT executing under SAQ, so a row matched here can never be the
+    live job of an SAQ worker — that is the safe-only perimeter of this
+    backstop.
+
+    The age bound is the SAME one the mid-graph wedge gate uses
     (``saq_zero_progress_max_age_minutes``, ~135 min >> SAQ's own run timeout),
-    so a live queued run whose worker is merely slow is never touched — only one
-    whose job has outlived any plausible execution is. Capacity-marked rows are
-    excluded (``capacity_timeout`` owns their budget grace). Idempotent:
-    the single guarded UPDATE re-validates the whole predicate at execution
-    time, so a row a reclaim leg recovered (or that terminalised elsewhere)
-    between ticks no longer matches.
+    anchored on ``dispatched_at`` (NOT ``created_at``) so a run that waited a
+    long time for admission is never counted as aged from its creation.
+    Capacity-marked rows are excluded (``capacity_timeout`` owns their budget
+    grace). Idempotent: the single guarded UPDATE re-validates the whole
+    predicate at execution time, so a row a reclaim leg recovered (or that
+    terminalised elsewhere) between ticks no longer matches.
 
     FAR-746 batch cap: *max_rows* bounds the SELECT (and therefore the UPDATE)
     per tick; the predicate re-selects the remainder next tick. ``None`` (or a
@@ -6473,8 +6502,10 @@ async def _terminalize_stranded_pending_runs(
             "  SELECT ctid FROM runs "
             "  WHERE organisation_id=:oid AND status='pending' "
             "  AND dispatched_at IS NOT NULL "
+            "  AND dispatcher IS NOT NULL AND dispatcher != 'saq' "
+            "  AND enqueue_failed_at IS NULL "
             "  AND cancellation_requested=false "
-            "  AND created_at < now() - (:stranded_age_minutes * interval '1 minute') "
+            "  AND dispatched_at < now() - (:stranded_age_minutes * interval '1 minute') "
             "  AND (error_code IS NULL OR error_code NOT IN ('org_capacity_limited', 'pipeline_capacity')) "
             "  LIMIT :max_rows) "
             "RETURNING id"
@@ -6490,8 +6521,8 @@ async def _terminalize_stranded_pending_runs(
     rows = result.all()
     for (run_id,) in rows:
         _log.warning(
-            "dispatcher_reconcile: stranded pending run terminalized %s "
-            "(pending past the age bound %d min with no recoverable reclaim leg)",
+            "dispatcher_reconcile: stranded foreign-dispatcher pending run terminalized %s "
+            "(pending past the age bound %d min; no reclaim leg could recover it)",
             run_id,
             max_age_minutes,
         )
@@ -6807,11 +6838,14 @@ _TERMINALIZERS: tuple[ReconcileTerminalizer, ...] = (
         blob_keys=("dispatch_failed_terminalized", "enqueue_failed_ttl_terminalized"),
         stall_reason="dispatch_failed",
     ),
-    # FAR-1862: the stranded-pending age backstop. Makes the pending state
-    # space total: a pending row no reclaim leg can recover (foreign dispatcher
-    # held by a live job, or a permanently-present stale SAQ job the FAR-1649
-    # leg's per-row ``q.job()`` gate skips forever) is terminalised at the age
-    # bound instead of sitting ``pending`` for the run's whole life.
+    # FAR-1862: the stranded-pending age backstop. It is the EXACT complement
+    # of the foreign-dispatcher reclaim leg: a pending row with a foreign
+    # dispatcher that no reclaim pass re-dispatched is terminalised at the age
+    # bound instead of sitting ``pending`` for the run's whole life. It collects
+    # NOTHING else — a ``dispatcher='saq'`` queued row is the normal enqueued
+    # state and may still execute, and a marker-holding row is owned by
+    # ``_reconcile_enqueue_failed`` (which keeps it pending while Redis is
+    # unverifiable).
     ReconcileTerminalizer(
         key="stranded_pending",
         stats_key="stranded_pending_terminalized",
@@ -7040,15 +7074,19 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         dispatcher-NULL legs require NULL, the re-enqueue leg requires
         ``'saq'``, and the capacity-deferred leg requires a NULL
         ``dispatched_at``). A ``pending`` row is not executing under SAQ, so
-        nothing is double-executed. A stale job a reclaim leg cannot get past
-        is bounded by the stranded-pending age backstop below.
-      * pending past the age bound with a SET ``dispatched_at`` and no capacity
-        marker (FAR-1862, batch terminalizer ``stranded_pending``): the
-        stranded-pending backstop. It exists so no pending shape is
-        unrecoverable — a reclaim leg that is skipped every tick by its
-        per-row ``q.job()`` gate (a permanently-present stale SAQ job) would
-        otherwise leave the row ``pending`` for the run's whole life. Written
-        ``no_progress`` at the same age bound the mid-graph gate uses.
+        nothing is double-executed. A foreign row this leg cannot get past is
+        bounded by the stranded-pending age backstop below (its exact
+        complement: the leg reclaims, the backstop gives up).
+      * pending + a SET ``dispatched_at`` + a FOREIGN dispatcher + no
+        ``enqueue_failed_at`` marker + past the age bound + no capacity marker
+        (FAR-1862, batch terminalizer ``stranded_pending``): the stranded-
+        pending backstop. It is the complement of the foreign-dispatcher leg
+        and collects NOTHING else — a ``dispatcher='saq'`` queued row is the
+        normal enqueued state and may still execute (queue residency is
+        unbounded), and a marker-holding row is owned by
+        ``_reconcile_enqueue_failed`` (which keeps it pending while Redis is
+        unverifiable). Written ``no_progress``, anchored on ``dispatched_at``
+        at the same age bound the mid-graph gate uses.
       * running: ``dispatcher='saq'``, heartbeat stale by 2*SAQ_JOB_HEARTBEAT
         — EXCLUDING a durably node-STARTED run (``dispatch_phase=
         'first_node_dispatched'``, FAR-1649): re-dispatch would re-execute the

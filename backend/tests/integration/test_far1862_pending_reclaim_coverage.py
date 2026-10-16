@@ -1,4 +1,4 @@
-"""FAR-1862: the ``pending`` reclaim predicate must be TOTAL.
+"""FAR-1862: the ``pending`` reclaim predicate must be TOTAL — and SAFE.
 
 Observed prod incident (2026-10-16): runs sat ``pending`` with ``error_code=None``
 and a heartbeat frozen for 22h while a sibling pending run was retried every
@@ -13,20 +13,30 @@ dispatcher-NULL branches require NULL, the FAR-1649 re-enqueue branch requires
 No age backstop owned it either (the never-dispatched sweep needs a NULL
 ``dispatched_at``; the capacity sweep needs a capacity marker).
 
+Coverage is only HALF the contract. The first cut of the age backstop anchored
+its bound on ``created_at`` and matched every aged ``pending`` row with a set
+``dispatched_at`` — but ``dispatch_run`` stamps ``dispatched_at`` at ENQUEUE time
+while the status stays ``pending`` until a worker's claim, so that is the NORMAL
+queued state, and SAQ gives a queued job no TTL. A backstop that collected it
+would mass-fail runs that are still going to execute (silently losing the work
+when their job later no-ops on a ``failed`` row). The backstop is therefore the
+EXACT complement of the foreign-dispatcher reclaim leg: it collects the foreign
+shape and NOTHING else.
+
 These tests run against a REAL Postgres and drive the REAL code:
 
 * the composed reclaim predicate the 60s reconcile selects with
   (``reconciler_recovery_predicate`` AND the capacity-marker exclusion);
 * the real age backstops (``_sweep_org_stale_runs``'s never-dispatched /
-  capacity-timeout branches and the new ``_terminalize_stranded_pending_runs``).
+  capacity-timeout branches and ``_terminalize_stranded_pending_runs``).
 
 They ENUMERATE the ``pending`` cross-product of
 ``(dispatched_at, dispatcher, enqueue_failed_at, error_code, heartbeat)`` and
-assert every combination is either reclaimed by a leg or terminalised by a
-backstop — a test covering only the shape that was fixed would pass while a
-sibling gap stayed open. The precise gap shape is additionally asserted to be
-reclaimed by the new foreign-dispatcher leg, so adding the backstop alone (which
-would terminalise it eventually) does not satisfy the test.
+assert every combination is either reclaimed by a leg, terminalised by a
+backstop, or deliberately owned by the enqueue-failed handler — a test covering
+only the shape that was fixed would pass while a sibling gap stayed open. They
+additionally assert the backstop LEAVES ALONE every still-executable shape, so
+the over-reach is caught, not just the gap.
 """
 
 from __future__ import annotations
@@ -183,6 +193,16 @@ async def _reclaimed_by_scan(db_engine: AsyncEngine, org_id: uuid.UUID) -> set[u
         return {row[0] for row in (await conn.execute(stmt)).all()}
 
 
+async def _pending_run_ids(db_engine: AsyncEngine, org_id: uuid.UUID) -> set[uuid.UUID]:
+    """The ids of the org's rows still ``pending`` after a backstop pass."""
+    async with db_engine.connect() as conn:
+        result = await conn.execute(
+            text("SELECT id FROM runs WHERE organisation_id = :oid AND status = 'pending'"),
+            {"oid": str(org_id)},
+        )
+        return {row[0] for row in result.all()}
+
+
 async def _teardown_env(db_engine: AsyncEngine, env: _Env) -> None:
     async with db_engine.begin() as conn:
         await conn.execute(text("DELETE FROM runs WHERE organisation_id = :oid"), {"oid": str(env.org_id)})
@@ -240,14 +260,28 @@ async def test_every_pending_shape_is_reclaimed_or_backstopped(
     gap_id = next(run_id for run_id, combo in seeded.items() if combo == gap)
     assert gap_id in reclaimed, "the foreign-dispatcher pending shape must be reclaimed by the new leg"
 
-    # The FAR-1649 stale-job shape: ``pending`` + ``dispatcher='saq'`` + an old
-    # ``dispatched_at``. The FAR-1649 leg SELECTS it, but the row loop's per-row
-    # ``q.job()`` gate skips it every tick while its SAQ job exists — so the
-    # stranded-pending age backstop is the thing that bounds it. (Asserted below
-    # by running the real backstop.)
-    saq_stale_job_id = next(
+    # A ``dispatcher='saq'`` row with a SET ``dispatched_at`` is the NORMAL
+    # enqueued state (``dispatch_run`` stamps ``dispatched_at`` at ENQUEUE time;
+    # the status stays ``pending`` until a claim). The FAR-1649 re-enqueue leg
+    # SELECTS it, and the row loop's per-row ``q.job()`` gate protects it while
+    # its SAQ job is live — a job that may still be sitting in an unbounded
+    # queue and execute later. The age backstop must therefore NOT terminalise
+    # it (asserted below).
+    saq_queued_id = next(
         run_id for run_id, combo in seeded.items() if combo == (dispatched_old, "saq", None, None, stale)
     )
+    assert saq_queued_id in reclaimed, "the scan must still select the normal queued saq shape"
+
+    # A ``dispatcher IS NULL`` row carrying ``enqueue_failed_at`` is owned by
+    # ``_reconcile_enqueue_failed``, which deliberately keeps the row ``pending``
+    # while Redis is unverifiable (``dispatch_failed`` fires only after a Redis
+    # re-check succeeds). The backstop must never override that fail-safe.
+    marker_owned = {
+        run_id
+        for run_id, combo in seeded.items()
+        # combo = (dispatched_at, dispatcher, enqueue_failed_at, error_code, heartbeat)
+        if combo[1] is None and combo[2] is not None
+    }
 
     # Now run the real backstops over the remaining rows.
     backstopped: set[uuid.UUID] = set()
@@ -271,12 +305,117 @@ async def test_every_pending_shape_is_reclaimed_or_backstopped(
         )
     backstopped.update(stranded)
 
-    uncovered = [seeded[run_id] for run_id in seeded if run_id not in reclaimed and run_id not in backstopped]
+    # Totality: every seeded pending shape is either reclaimed by a reclaim leg,
+    # terminalised by a sweep/backstop, or owned by the enqueue-failed handler
+    # (which keeps its row ``pending`` BY DESIGN while Redis is unverifiable —
+    # those marker-owned shapes are exactly the ones the backstop must not
+    # collect, so they are the one deliberate exception to "reclaimed-or-
+    # terminalised").
+    uncovered = [
+        seeded[run_id]
+        for run_id in seeded
+        if run_id not in reclaimed and run_id not in backstopped and run_id not in marker_owned
+    ]
     assert not uncovered, f"pending shapes left with no reclaim leg and no age backstop: {uncovered}"
 
-    # The backstop terminalised the FAR-1649 stale-job shape (the sweep cannot:
-    # never-dispatched needs a NULL dispatched_at, capacity-timeout needs a
-    # capacity marker, worker-lost needs ``running``).
-    assert saq_stale_job_id in set(stranded), (
-        "the stranded-pending backstop must terminalise the FAR-1649 stale-job shape"
+    # The SAFETY half: the stranded-pending backstop is the EXACT complement of
+    # the foreign-dispatcher reclaim leg. It must not terminalise the normal
+    # queued ``dispatcher='saq'`` shape nor any marker-owned shape — either
+    # would silently lose still-executable work.
+    assert saq_queued_id not in set(stranded), (
+        "the stranded-pending backstop must NOT terminalise the normal queued saq shape"
     )
+    assert not (set(stranded) & marker_owned), (
+        "the stranded-pending backstop must NOT terminalise enqueue-failed (marker-owned) runs"
+    )
+
+
+async def test_backstop_leaves_executable_and_marker_runs_alone(
+    db_engine: AsyncEngine,
+    far1862_env: _Env,
+) -> None:
+    """The age backstop must never collect a run that is still executable.
+
+    Regression guard for the FAR-1862 over-reach. The first cut anchored the age
+    on ``created_at`` and matched every aged ``pending`` row with a set
+    ``dispatched_at``, so it terminal-failed runs that were merely QUEUED
+    (``dispatch_run`` stamps ``dispatched_at`` at enqueue time and SAQ gives a
+    queued job no TTL), and it overrode the enqueue-failed fail-safe. This test
+    pins the three still-executable shapes the backstop must leave pending, plus
+    the foreign shape it must still collect as a positive control.
+    """
+    now = datetime.now(UTC)
+    fresh = now - timedelta(seconds=5)
+    old = now - timedelta(minutes=_OLD_MINUTES)
+
+    # Created 180 min ago but dispatched only seconds ago: the exact shape the
+    # ``created_at``-anchored backstop killed on its first tick, which must
+    # survive under the ``dispatched_at`` anchor.
+    fresh_saq = await _seed_pending_row(
+        db_engine,
+        far1862_env,
+        run_number=1,
+        dispatched_at=fresh,
+        dispatcher="saq",
+        enqueue_failed_at=None,
+        error_code=None,
+        heartbeat_at=fresh,
+    )
+    # An aged, still-queued ``dispatcher='saq'`` run: a live SAQ job may still be
+    # waiting in an unbounded queue, so it is NOT the backstop's to collect.
+    aged_saq = await _seed_pending_row(
+        db_engine,
+        far1862_env,
+        run_number=2,
+        dispatched_at=old,
+        dispatcher="saq",
+        enqueue_failed_at=None,
+        error_code=None,
+        heartbeat_at=old,
+    )
+    # An aged enqueue-failed row: owned by ``_reconcile_enqueue_failed``, which
+    # keeps it pending while Redis is unverifiable.
+    aged_marker = await _seed_pending_row(
+        db_engine,
+        far1862_env,
+        run_number=3,
+        dispatched_at=old,
+        dispatcher=None,
+        enqueue_failed_at=old,
+        error_code=None,
+        heartbeat_at=fresh,
+    )
+    # Positive control: an aged FOREIGN-dispatcher run — the backstop's one
+    # legitimate target — must still be terminalised.
+    aged_foreign = await _seed_pending_row(
+        db_engine,
+        far1862_env,
+        run_number=4,
+        dispatched_at=old,
+        dispatcher="legacy",
+        enqueue_failed_at=None,
+        error_code=None,
+        heartbeat_at=old,
+    )
+
+    async with db_engine.connect() as conn, conn.begin():
+        stranded = await _terminalize_stranded_pending_runs(
+            conn,  # type: ignore[arg-type]
+            far1862_env.org_id,
+            max_age_minutes=_BACKSTOP_AGE_MINUTES,
+            max_rows=_RUNS_PER_ORG,
+        )
+    stranded_set = set(stranded)
+
+    assert aged_foreign in stranded_set, "the backstop must still terminalise the aged foreign-dispatcher run"
+    assert fresh_saq not in stranded_set, "the backstop must not terminalise a freshly-dispatched queued run"
+    assert aged_saq not in stranded_set, "the backstop must not terminalise an aged but still-queued saq run"
+    assert aged_marker not in stranded_set, (
+        "the backstop must not terminalise an enqueue-failed (Redis-unverifiable) run"
+    )
+
+    remaining = await _pending_run_ids(db_engine, far1862_env.org_id)
+    assert fresh_saq in remaining
+    assert aged_saq in remaining
+    assert aged_marker in remaining
+    assert aged_foreign not in remaining
