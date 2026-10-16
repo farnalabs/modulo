@@ -1,3 +1,4 @@
+import type { Page } from '@playwright/test'
 import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 // Structural e2e for /pipelines/:id/editor (FAR-638, batch A). The editor
@@ -132,5 +133,213 @@ test.describe('Pipeline Editor', { tag: '@regression' }, () => {
     await expect(page.locator('.vue-flow__node').first()).toBeVisible()
     // With a node present the Run button is enabled (disabled only when the graph is empty)
     await expect(page.getByTestId('pipeline-editor-run')).toBeEnabled()
+  })
+})
+
+// Mobile viewport behaviour (FAR-1841). Before the fix, at ~375x667 the editor
+// was a fixed calc(100vh - 3.5rem) block sitting below the app chrome, so the
+// canvas hung below the fold where VueFlow captures wheel/touch — nothing
+// below the fold was reachable and pinch zoomed the graph instead of the page.
+// Selecting a node then let the w-96 properties panel swallow the whole
+// viewport, crushing the canvas to 0x0 with no way to deselect. These specs
+// pin the fixed behaviour: the editor fits the leftover viewport height
+// (toolbar + canvas fully on screen, no page scroll), and the properties
+// panel opens as an overlay with a Close button that restores the canvas.
+test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
+  test.setTimeout(90_000)
+  test.use({ viewport: { width: 375, height: 667 }, hasTouch: true, isMobile: true })
+
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('assistant-panel-state', 'closed')
+    })
+  })
+
+  async function mockEditorWithNode(page: Page) {
+    await page.route(`**/api/v1/pipelines/${PIPELINE_ID}`, (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(PIPELINE) })
+      }
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+    })
+    await page.route(`**/api/v1/pipelines/${PIPELINE_ID}/graph`, (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          nodes: [{ id: 'node-1', node_type: 'agent', label: 'Reviewer Agent', position: { x: 100, y: 100 } }],
+          edges: [],
+        }),
+      })
+    })
+  }
+
+  test('editor fits the leftover viewport height — toolbar and canvas fully on screen', { tag: '@regression' }, async ({ page, env }) => {
+    await loginAsAdmin(page, env)
+    await mockEditorWithNode(page)
+
+    await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
+    await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+    const flow = page.locator('.vue-flow').first()
+    await expect(flow).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+
+    const toolbarBox = await page.getByTestId('pipeline-editor-toolbar').boundingBox()
+    const flowBox = await flow.boundingBox()
+    expect(toolbarBox).not.toBeNull()
+    expect(flowBox).not.toBeNull()
+
+    // Toolbar is fully above the fold — Save / Run are reachable with no scroll.
+    expect(toolbarBox!.y).toBeGreaterThanOrEqual(0)
+    expect(toolbarBox!.y + toolbarBox!.height).toBeLessThanOrEqual(667)
+    // The canvas has real width and ends at or above the viewport bottom —
+    // nothing hangs below the fold behind the touch-capturing canvas.
+    expect(flowBox!.width).toBeGreaterThan(200)
+    expect(flowBox!.y + flowBox!.height).toBeLessThanOrEqual(667)
+
+    // The document has no scrollable overflow while the editor is open.
+    const doc = await page.evaluate(() => ({
+      scrollHeight: document.documentElement.scrollHeight,
+      clientHeight: document.documentElement.clientHeight,
+    }))
+    expect(doc.scrollHeight).toBeLessThanOrEqual(doc.clientHeight)
+  })
+
+  test('node properties panel opens as a closable overlay without crushing the canvas', { tag: '@regression' }, async ({ page, env }) => {
+    await loginAsAdmin(page, env)
+    await mockEditorWithNode(page)
+
+    await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
+    const flow = page.locator('.vue-flow').first()
+    await expect(page.locator('.vue-flow__node').first()).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+
+    // Select the node — the properties panel must open with a Close button.
+    await page.locator('.vue-flow__node').first().click()
+    await expect(page.getByText('Node Properties')).toBeVisible()
+    const closeBtn = page.getByTestId('pipeline-editor-node-props-close')
+    await expect(closeBtn).toBeVisible()
+
+    // The canvas and toolbar keep their layout (no w-96 sibling crush).
+    const flowBox = await flow.boundingBox()
+    const toolbarBox = await page.getByTestId('pipeline-editor-toolbar').boundingBox()
+    expect(flowBox).not.toBeNull()
+    expect(toolbarBox).not.toBeNull()
+    expect(flowBox!.width).toBeGreaterThan(200)
+    expect(toolbarBox!.width).toBeGreaterThan(200)
+
+    // Close restores the editor: the panel unmounts, the canvas stays.
+    await closeBtn.click()
+    await expect(page.getByText('Node Properties')).toHaveCount(0)
+    await expect(flow).toBeVisible()
+    expect((await flow.boundingBox())!.width).toBeGreaterThan(200)
+  })
+
+  test('fit observer re-fits on chrome above the editor, not on viewport style writes', { tag: '@regression' }, async ({ page, env }) => {
+    // Count measurements of the editor root: refitMobileEditor's
+    // getBoundingClientRect is the only page code that reads that element,
+    // so each call == one scheduled re-fit of the mobile pin.
+    await page.addInitScript(() => {
+      const original = Element.prototype.getBoundingClientRect
+      ;(window as any).__rootRectMeasures = 0
+      Element.prototype.getBoundingClientRect = function (this: Element) {
+        if (this.getAttribute('data-testid') === 'pipeline-editor-root') {
+          ;(window as any).__rootRectMeasures += 1
+        }
+        return original.call(this)
+      }
+    })
+
+    await loginAsAdmin(page, env)
+    await mockEditorWithNode(page)
+    await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
+    await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+    const flow = page.locator('.vue-flow').first()
+    await expect(flow).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+
+    const root = page.getByTestId('pipeline-editor-root')
+    const measures = () => page.evaluate(() => (window as any).__rootRectMeasures as number)
+    // Flush any re-fit already scheduled in a rAF before sampling the counter.
+    const flushRefits = () =>
+      page.evaluate(
+        () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
+      )
+
+    await flushRefits()
+    // Wait until no new re-fit lands across a flush window: async chrome above
+    // the editor (onboarding banner mount, capacity poll) must have settled
+    // before we baseline, or its legitimate mount could be mistaken for a
+    // viewport-write re-fit below.
+    await expect
+      .poll(
+        async () => {
+          const before = await measures()
+          await flushRefits()
+          return (await measures()) === before
+        },
+        { timeout: 10_000, message: 'mobile fit should settle before baselining' },
+      )
+      .toBe(true)
+    const baseline = await measures()
+
+    // VueFlow's pan/zoom/node-drag hot path: the viewport transform is
+    // rewritten as an inline style on every pointermove. Replicate it across
+    // frames — none of these writes may schedule a re-measure (they used to
+    // force a synchronous layout once per animation frame via the former
+    // body-wide attribute observer).
+    const pane = page.locator('.vue-flow__transformationpane').first()
+    await expect(pane).toBeVisible()
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          const paneEl = document.querySelector<HTMLElement>('.vue-flow__transformationpane')
+          if (!paneEl) {
+            reject(new Error('vue-flow transformationpane not found'))
+            return
+          }
+          let step = 0
+          const tick = () => {
+            step += 1
+            paneEl.style.transform = `translate(${step * 6}px, ${step * 4}px) scale(1.05)`
+            if (step >= 6) {
+              // Two extra frames so a (wrongly) scheduled re-fit would land.
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+            } else {
+              requestAnimationFrame(tick)
+            }
+          }
+          requestAnimationFrame(tick)
+        }),
+    )
+    expect(await measures()).toBe(baseline)
+
+    // The pin must be active on this viewport (375px < 768px).
+    const heightBefore = parseInt((await root.evaluate((el) => (el as HTMLElement).style.height)) || '0', 10)
+    expect(heightBefore).toBeGreaterThan(0)
+
+    // A new chrome block appearing ABOVE the editor (parent childList) must
+    // re-fit: the editor pins shorter to stay below it.
+    await page.evaluate(() => {
+      const editorRoot = document.querySelector('[data-testid="pipeline-editor-root"]')
+      if (!editorRoot?.parentElement) throw new Error('editor root not mounted')
+      const spacer = document.createElement('div')
+      spacer.id = 'e2e-chrome-spacer'
+      spacer.style.height = '48px'
+      editorRoot.parentElement.insertBefore(spacer, editorRoot)
+    })
+    await expect
+      .poll(async () => parseInt((await root.evaluate((el) => (el as HTMLElement).style.height)) || '0', 10))
+      .toBeLessThan(heightBefore)
+    expect(await measures()).toBeGreaterThan(baseline)
+
+    // Later mutations INSIDE that new block must re-fit too (the observer
+    // re-scans the chrome siblings when the parent's children change).
+    const heightAfterInsert = parseInt((await root.evaluate((el) => (el as HTMLElement).style.height)) || '0', 10)
+    await page.evaluate(() => {
+      const spacer = document.getElementById('e2e-chrome-spacer')
+      if (!spacer) throw new Error('chrome spacer missing')
+      spacer.style.height = '96px'
+    })
+    await expect
+      .poll(async () => parseInt((await root.evaluate((el) => (el as HTMLElement).style.height)) || '0', 10))
+      .toBeLessThan(heightAfterInsert)
   })
 })
