@@ -42,17 +42,23 @@ from fastapi.testclient import TestClient
 from pydantic import Field, ValidationError
 from pydantic.fields import FieldInfo
 from sqlalchemy import Select
+from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
 from modulo.api.main import app
 from modulo.api.routes.pipelines import (
+    PipelineGraphEdge,
     PipelineGraphNode,
     PipelineGraphNodePatch,
     _build_node_patch_graph,
+    _edge_to_dict,
     _joined_validation_detail,
+    _stored_edge_model,
 )
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.pipeline_engine.git_content import GitContentRefError
+from modulo.db.crud.hitl_review_guard import GuardrailBindingStripDenied
 from modulo.settings import Settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -64,8 +70,9 @@ _SECRET = "sk-live-DO-NOT-LEAK-12345"
 
 #: The stored graph every ``FROM pipelines`` row read serves (the request-time
 #: team gate, the in-transaction gate and ``get_pipeline`` inside the delegated
-#: write). Reset by the ``client`` fixture's teardown.
-_STORED = SimpleNamespace(nodes=[], owner_team_id=None)
+#: write), plus the persisted ``PipelineEdge`` rows the locked graph read
+#: serves. Reset by the ``client`` fixture's teardown.
+_STORED = SimpleNamespace(nodes=[], edges=[], owner_team_id=None)
 
 
 def _sandbox_node(node_id: uuid.UUID, **extra: Any) -> dict[str, Any]:
@@ -163,10 +170,11 @@ def client() -> Generator[TestClient, None, None]:
             result.first.return_value = (None, "org")
             return result
         if "FROM pipeline_edges" in rendered:
-            # A node patch never changes topology: "no edges" is the stored
-            # graph every test here seeds.
+            # Read FRESH: tests seed ``_STORED.edges`` after this fixture runs.
+            # A node patch never changes topology, so the seeded rows pass
+            # through the read + revalidation untouched.
             result = MagicMock()
-            result.scalars.return_value = []
+            result.scalars.return_value = list(_STORED.edges)
             return result
         return default_side_effect(stmt, *args, **kwargs)
 
@@ -190,6 +198,7 @@ def client() -> Generator[TestClient, None, None]:
     yield TestClient(app)  # type: ignore[misc]
     app.dependency_overrides.clear()
     _STORED.nodes = []
+    _STORED.edges = []
     _STORED.owner_team_id = None
 
 
@@ -946,3 +955,234 @@ def test_never_patchable_fields_are_absent_from_the_allowlist() -> None:
 def test_patch_model_forbids_extra_keys() -> None:
     """The allowlist is closed at the model, not by a handler-side filter."""
     assert PipelineGraphNodePatch.model_config.get("extra") == "forbid"
+
+
+# ---------------------------------------------------------------------------
+# Stored-edge handling: a node patch must never touch an edge, and must never
+# be blocked by one that no longer validates strictly
+# ---------------------------------------------------------------------------
+
+
+def _edge_row(**overrides: Any) -> SimpleNamespace:
+    """A persisted ``PipelineEdge`` row shape, as ``_load_locked_pipeline_graph``
+    returns it (ORM attributes only — no model semantics)."""
+    row: dict[str, Any] = {
+        "id": uuid.uuid4(),
+        "source_node_id": uuid.uuid4(),
+        "target_node_id": uuid.uuid4(),
+        "edge_type": "normal",
+        "condition_expression": None,
+        "hitl_review_config": None,
+        "source_port": "out",
+        "target_port": "in",
+    }
+    row.update(overrides)
+    return SimpleNamespace(**row)
+
+
+def test_patch_preserves_the_pipeline_existing_edges(client: TestClient) -> None:
+    """THE edge-preservation wiring: the pipeline has a committed edge, the
+    patch targets one node, and the shared write must receive that edge
+    UNCHANGED (a node patch never changes topology). Before this test every
+    node-patch test seeded an empty edge list, so the whole stored-edge read →
+    revalidate → hand-over path was unpinned."""
+    target_id = uuid.uuid4()
+    other_id = uuid.uuid4()
+    target = _sandbox_node(target_id)
+    other = _agent_node(other_id)
+    _STORED.nodes = [target, other]
+    _STORED.edges = [
+        _edge_row(source_node_id=target_id, target_node_id=other_id, edge_type="normal"),
+    ]
+
+    with _graph_write_doubles(), _write_double([target, other]) as write:
+        resp = client.patch(_patch_url(target_id), json={"timeout_seconds": 900})
+
+    assert resp.status_code == 200, resp.text
+    written_edges = write.call_args.kwargs["edges"]
+    assert len(written_edges) == 1, "the stored edge must be handed to the shared write unchanged"
+    assert str(written_edges[0]["source_node_id"]) == str(target_id)
+    assert str(written_edges[0]["target_node_id"]) == str(other_id)
+    assert written_edges[0]["edge_type"] == "normal"
+    # The node order and content are still the patch's responsibility.
+    written_nodes = write.call_args.kwargs["nodes"]
+    assert [n["id"] for n in written_nodes] == [str(target_id), str(other_id)]
+    assert written_nodes[0]["timeout_seconds"] == 900
+
+
+def test_stored_edge_model_round_trips_a_valid_edge() -> None:
+    """The first tier of the stored-edge tolerance: a valid persisted row
+    re-validates STRICTLY — no legacy fallback needed — and every field the
+    node patch must not touch survives the round-trip."""
+    row = _edge_row()
+
+    model = _stored_edge_model(row)
+
+    assert model.id == row.id
+    assert model.source_node_id == row.source_node_id
+    assert model.target_node_id == row.target_node_id
+    assert model.edge_type == "normal"
+    assert model.source_port == "out"
+    assert model.target_port == "in"
+    # The strict tier really is what accepted it (the legacy tier is not
+    # doing the work): the same payload validates without any context.
+    PipelineGraphEdge.model_validate(_edge_to_dict(row))
+
+
+def test_stored_edge_model_tolerates_a_pre_farc613_gate_description_under_legacy_read() -> None:
+    """The legacy-read tier: a stored HITL gate whose description predates the
+    FAR-613 20-char minimum is rejected STRICTLY but accepted by the helper —
+    the same stored-data tolerance the stored-node path has, so an unrelated
+    one-field node patch is never blocked by a rule tightened since the edge's
+    own save time. Fails if the legacy tier is removed (the strict rejection
+    below would then escape the helper as a 422)."""
+    row = _edge_row(
+        hitl_review_config={"label": "Review", "description": "short", "claim_expiry_minutes": 30},
+    )
+    with pytest.raises(ValidationError):
+        PipelineGraphEdge.model_validate(_edge_to_dict(row))
+
+    model = _stored_edge_model(row)
+
+    assert model.hitl_review_config is not None
+    assert model.hitl_review_config.description == "short"
+
+
+def test_stored_edge_model_422s_when_no_tier_accepts_the_edge() -> None:
+    """Both tiers exhausted (an invalid ``edge_type`` fails even the legacy
+    read — the pattern is a write-time invariant, not a tightened rule): the
+    helper fails CLOSED with a 422 naming the stored edge, never a silent
+    skip or a generic 500."""
+    row = _edge_row(edge_type="bogus")
+
+    with pytest.raises(HTTPException) as exc_info:
+        _stored_edge_model(row)
+
+    assert exc_info.value.status_code == 422
+    detail = str(exc_info.value.detail)
+    assert "no longer validates" in detail
+    assert str(row.id) in detail, "the 422 must name the offending stored edge"
+
+
+def test_build_node_patch_graph_422s_on_a_merged_graph_conflict() -> None:
+    """The graph-level revalidation after the per-edge tolerance: two edges
+    that each validate alone but share one (source, target, type) path are
+    rejected by ``PipelineGraphUpdate``'s uniqueness rule, and the adapter
+    surfaces that as the 422 "Merged graph rejected" — never a 500 from the
+    model layer escaping the helper."""
+    target_id = uuid.uuid4()
+    stored = [_sandbox_node(target_id)]
+    shared_path = {"source_node_id": uuid.uuid4(), "target_node_id": uuid.uuid4(), "edge_type": "normal"}
+    dup_a = _edge_row(**shared_path)
+    dup_b = _edge_row(**shared_path)  # distinct id, identical path
+
+    with pytest.raises(HTTPException) as exc_info:
+        _build_node_patch_graph(
+            stored,
+            [dup_a, dup_b],
+            node_id=target_id,
+            patch=PipelineGraphNodePatch.model_validate({"timeout_seconds": 900}),
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "Merged graph rejected" in str(exc_info.value.detail)
+
+
+def test_build_node_patch_graph_skips_non_dict_stored_entries() -> None:
+    """The order-preserving merge loop tolerates a corrupt non-dict entry in
+    ``graph_nodes_json`` (defensive: the target-search loop already skips it)
+    by continuing past it, keeping every dict node — and the stored ORDER —
+    intact, with the target still patched."""
+    first_id = uuid.uuid4()
+    target_id = uuid.uuid4()
+    last_id = uuid.uuid4()
+    stored: list[Any] = [_agent_node(first_id), "corrupt-entry", _sandbox_node(target_id), _agent_node(last_id)]
+
+    graph = _build_node_patch_graph(
+        stored,
+        [],
+        node_id=target_id,
+        patch=PipelineGraphNodePatch.model_validate({"timeout_seconds": 900}),
+    )
+
+    assert [str(n.id) for n in graph.nodes] == [str(first_id), str(target_id), str(last_id)]
+    assert graph.nodes[1].timeout_seconds == 900
+
+
+# ---------------------------------------------------------------------------
+# The node-patch route's error arms — parity with the full-replace route
+# ---------------------------------------------------------------------------
+
+
+def test_guardrail_strip_denial_is_translated_to_403(client: TestClient) -> None:
+    """Parity with ``PUT /graph``: a ``GuardrailBindingStripDenied`` raised by
+    the delegated write is translated by the route's denial handler into the
+    denial's own HTTP status (403) + detail — never the decorator's 500."""
+    target_id = uuid.uuid4()
+    bound_id = uuid.uuid4()
+    _STORED.nodes = [_sandbox_node(target_id)]
+    denied = GuardrailBindingStripDenied(
+        stripped_node_ids=[str(bound_id)],
+        detail=(
+            "Non-admin cannot strip a guardrail binding: removing node(s) "
+            + str(bound_id)
+            + " from the graph would drop a node-bound guardrail. Only an "
+            "admin can remove a node that has a bound guardrail."
+        ),
+    )
+
+    with (
+        _graph_write_doubles(),
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph", side_effect=denied),
+    ):
+        resp = client.patch(_patch_url(target_id), json={"timeout_seconds": 900})
+
+    assert resp.status_code == 403, resp.text
+    assert "strip a guardrail binding" in resp.json()["detail"]
+
+
+def test_unpinned_git_ref_sync_failure_is_mapped_to_422(client: TestClient) -> None:
+    """Parity with ``PUT /graph``: the Agent-row command sync failing closed on
+    an unpinned git content ref inside the delegated write surfaces HTTP 422
+    (not the decorator's 500), naming the unpinned ref."""
+    target_id = uuid.uuid4()
+    agent_id = uuid.uuid4()
+    target = _sandbox_node(
+        target_id,
+        agent_id=str(agent_id),
+        agent_commands=["git+https://github.com/acme/widgets.git@main#prompts/x.md"],
+    )
+    _STORED.nodes = [target]
+    sync_error = GitContentRefError("agent_commands[0] git content ref ... is not pinned to a commit SHA")
+
+    with (
+        _graph_write_doubles(),
+        patch(
+            "modulo.api.routes.pipelines._sync_agent_row_commands",
+            new=AsyncMock(side_effect=sync_error),
+        ),
+    ):
+        resp = client.patch(_patch_url(target_id), json={"timeout_seconds": 900})
+
+    assert resp.status_code == 422, resp.text
+    assert "not pinned" in resp.json()["detail"]
+
+
+def test_db_migration_error_is_mapped_to_501(client: TestClient) -> None:
+    """Parity with ``PUT /graph``: a ``ProgrammingError`` from the delegated
+    write (a relation the current schema has not migrated yet) surfaces the
+    typed 501 "run database migrations" contract, not a generic 500."""
+    target_id = uuid.uuid4()
+    _STORED.nodes = [_sandbox_node(target_id)]
+
+    with (
+        _graph_write_doubles(),
+        patch(
+            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            side_effect=ProgrammingError("stmt", {}, Exception("relation does not exist")),
+        ),
+    ):
+        resp = client.patch(_patch_url(target_id), json={"timeout_seconds": 900})
+
+    assert resp.status_code == 501, resp.text
+    assert "migrations" in resp.json()["detail"]

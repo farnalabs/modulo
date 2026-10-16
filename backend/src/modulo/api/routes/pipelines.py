@@ -183,6 +183,7 @@ _CODE_PIPELINE_GRAPH_UPDATE = "pipeline.graph.update"
 _CODE_PIPELINE_UPDATE = "pipeline.update"
 
 _MSG_NOT_TEAM_MEMBER = "Not a member of the team that owns this resource"
+_MSG_NODE_NOT_FOUND = "Node not found"
 
 # FAR-1184: raising or clearing a pipeline's spend circuit-breaker threshold
 # requires the same org-admin permission as the circuit-breaker reset.
@@ -3463,7 +3464,7 @@ def _patched_node_models(
             target_raw = raw
             break
     if target_raw is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_NODE_NOT_FOUND)
 
     merged = dict(target_raw)
     for field_name in patch.model_fields_set:
@@ -6255,7 +6256,7 @@ async def convert_node_to_agent_endpoint(
 
             target = _find_node_in_list(nodes, node_id)
             if target is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_NODE_NOT_FOUND)
             if target.get("node_type") != "manual":
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -6369,7 +6370,7 @@ async def revert_node_to_manual_endpoint(
 
             target = _find_node_in_list(nodes, node_id)
             if target is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_NODE_NOT_FOUND)
             if target.get("node_type") != "agent":
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
