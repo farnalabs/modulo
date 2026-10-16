@@ -1,10 +1,46 @@
 # System Requirements
 
-Supported platforms, minimum resources, and database backends for running Modulo in production.
+Supported platforms, minimum resources, and database backends for running Modulo in production. Modulo v1 supports Linux hosts only.
 
 ---
 
 ## Supported Platforms
+
+Modulo v1 targets **Linux hosts**. macOS and Windows are out of scope for v1:
+this is a recorded decision, not an oversight.
+
+### Platform support matrix (v1)
+
+This matrix is about the **server host** for a production or evaluation
+deployment, not about developer workstations (see Development / Evaluation
+below).
+
+| Server host platform | v1 status |
+|----------------------|-----------|
+| **Linux** | Supported (native single-install and container paths) |
+| **macOS** | Not a supported v1 server host: no native installer, no macOS release artifact |
+| **Windows** | Not a supported v1 server host: no native installer, no Windows release artifact |
+
+Docker Desktop (see Development / Evaluation below) is a developer
+convenience on macOS and Windows: it runs the Linux containers inside a Linux
+VM, so the deployed stack is still Linux. It is not a supported production
+host.
+
+**Why macOS and Windows have no native install in v1:**
+
+- There is no macOS or Windows installer. `scripts/install.sh` refuses to run on
+  a non-Linux host, aborting with "this installer supports Linux only (P1a)" and
+  naming ADR 031 for the macOS and Windows installers that would come later.
+- There is no macOS or Windows release artifact, and no such job in the release
+  pipeline: `bundle-release.yml` builds `linux-amd64` only.
+- ADR 031 phases macOS as P2 and Windows as P3, both after v1, and records that
+  each needs its own signing work (Apple notarisation for macOS; Azure Trusted
+  Signing for Windows). Neither is part of the v1 release.
+
+A Windows-hosted deployment therefore means Windows Server running the Linux
+stack in a VM or container host, not native Windows binaries.
+
+### Install paths
 
 | Platform | Status | Documentation |
 |----------|--------|---------------|
@@ -24,21 +60,35 @@ the built SPA, laid out under `~/.local/opt/modulo/`. The table below is
 the honest v1 envelope (ADR 031; recentre on what `bundle-v*` artifacts
 actually ship - do not widen these rows until the packaging tickets land):
 
-| OS | glibc floor | Status |
-|----|-------------|--------|
+| OS | glibc | Status |
+|----|-------|--------|
 | Debian 13+ | 2.41 | Supported |
-| Ubuntu 24.04+ | 2.39+ | Supported |
-| Ubuntu 20.04-22.04 | 2.31-2.35 | Not supported (glibc below the bundled floor) |
-| macOS | - | Planned (P2) |
-| Windows | - | Planned (P3) |
+| Ubuntu 26.04+ | 2.41+ | Supported |
+| Ubuntu 24.04 and earlier | 2.39 and below | Not supported (below the bundled service-binary floor) |
+| macOS | - | Out of scope for v1 (post-v1: P2, ADR 031) |
+| Windows | - | Out of scope for v1 (post-v1: P3, ADR 031) |
+
+The hard requirement is **glibc 2.41 or newer**. The bundled PostgreSQL 16 and
+Redis 8 binaries are extracted from Debian 13 (trixie) packages, and the venv's
+own 2.39 runner floor is lower, so the service binaries set the effective floor
+(`scripts/bundle-versions.env`: "the effective bundle floor is glibc 2.41
+(Debian 13+, Ubuntu 26.04+)"; `bundle-release.yml` states the same envelope).
+An Ubuntu 24.04 host (glibc 2.39) is therefore below the floor and is not a
+supported native-install target.
 
 ### Supported architectures
 
 | Architecture | Status |
 |--------------|--------|
 | linux-amd64 (x86_64) | Supported |
-| linux-arm64 | Planned (P2) |
-| macOS / Windows | Planned (P2/P3) |
+| linux-arm64 | Planned (pins exist; no artifact published yet) |
+| macOS / Windows | Out of scope for v1 (post-v1: P2/P3, ADR 031) |
+
+`linux-arm64` is not installable yet: the bundle build matrix carries only
+`amd64`, so no `linux-arm64` tarball is published even though the arm64 pins
+already exist in `scripts/bundle-versions.env` and the matrix is structured to
+accept them. `scripts/install.sh` preflight accepts `aarch64`/`arm64` for the
+architecture case, but there is no `linux-arm64` bundle to download.
 
 ### Disk and RAM envelope
 
