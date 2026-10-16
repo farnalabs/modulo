@@ -37,7 +37,8 @@ _HEAD_MIGRATION_PATH = (
 )
 
 # Flags the old 0072 sync migration upserted (the FAR-114 sync set). The seed
-# catalog must still cover all of them.
+# catalog must still cover all of them. ``pipeline_diff_rollback`` was retired
+# (FAR-1819) and dropped from this set with the registry.
 _EXPECTED_FLAGS: set[str] = {
     "error_tracking",
     "runtime_config",
@@ -45,7 +46,6 @@ _EXPECTED_FLAGS: set[str] = {
     "email_config",
     "scim",
     "external_secrets",
-    "pipeline_diff_rollback",
     "pipeline_delete",
     "web_vitals_analytics",
 }

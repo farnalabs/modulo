@@ -48,7 +48,6 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import (
     get_db_session,
-    require_feature,
     require_permission,
     require_permission_any_credential,
     require_team_membership_or_admin,
@@ -5180,7 +5179,6 @@ async def list_snapshot_endpoint(
 @router.post(
     "/{pipeline_id}/snapshots",
     dependencies=[
-        require_feature("pipeline_diff_rollback"),
         Depends(audited("pipeline_snapshot_saved", "pipeline_snapshot", principal_dep=get_current_tenant_user)),
     ],
 )
@@ -5352,7 +5350,6 @@ async def tag_snapshot_endpoint(
 @router.post(
     "/{pipeline_id}/snapshots/{snapshot_id}/rollback",
     dependencies=[
-        require_feature("pipeline_diff_rollback"),
         Depends(audited("pipeline_snapshot_rolled_back", "pipeline_snapshot", principal_dep=get_current_tenant_user)),
     ],
 )
@@ -5486,7 +5483,6 @@ async def delete_snapshot_endpoint(
 
 @router.post(
     "/{pipeline_id}/snapshots/diff",
-    dependencies=[require_feature("pipeline_diff_rollback")],
 )
 @handle_db_errors("pipelines.diff_snapshots")
 async def diff_snapshot_endpoint(

@@ -134,11 +134,6 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="team",
     ),
     FeatureFlag(
-        name="pipeline_diff_rollback",
-        description="Diff-based pipeline version comparison and rollback",
-        tier="team",
-    ),
-    FeatureFlag(
         name="environment_profiles",
         description="Sandbox environment profiles for code execution",
         tier="team",

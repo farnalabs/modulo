@@ -74,7 +74,7 @@
               <LoaderCircleIcon v-if="savingGraph" class="h-3 w-3 animate-spin" aria-hidden="true" />
               {{ savingGraph ? $t('views.PipelineEditorView.saving_graph') : $t('views.PipelineEditorView.save') }}
             </button>
-            <button v-if="planStore.featureEnabled('pipeline_diff_rollback')" type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-version-timeline" @click="showVersionTimeline = !showVersionTimeline">
+            <button type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-version-timeline" @click="showVersionTimeline = !showVersionTimeline">
               {{ $t('views.PipelineEditorView.versions') }}
             </button>
             <div v-if="!isViewing" class="relative" @click.stop @keydown.enter.stop @keydown.space.prevent.stop>
@@ -562,7 +562,6 @@
           <p class="mt-0.5">{{ $t('views.PipelineEditorView.historic_banner_body') }}</p>
           <div class="mt-1.5 flex flex-wrap items-center gap-2">
             <button
-              v-if="planStore.featureEnabled('pipeline_diff_rollback')"
               type="button"
               :class="btnToolbarSecondary"
               data-testid="pipeline-editor-historic-restore"
