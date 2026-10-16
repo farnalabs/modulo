@@ -10328,11 +10328,6 @@ async def get_pipeline_diff(
         _check_agent_tool_scope("get_pipeline_diff")
 
         org_id = _ctx_org_id_val()
-        # REST parity: POST /pipelines/{id}/snapshots/diff is gated
-        # require_feature("pipeline_diff_rollback").
-        feat_err = await _require_plan_feature(org_id, get_settings(), "pipeline_diff_rollback")
-        if feat_err:
-            return feat_err
         pid, pid_err = _parse_uuid_param(pipeline_id, "pipeline_id")
         if pid_err:
             return pid_err

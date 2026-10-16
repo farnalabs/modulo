@@ -1986,6 +1986,139 @@ def test_deleted_production_file_fails_via_real_git_diff(tmp_path):
     assert "deletion-only" in result.skip_reason.lower()
 
 
+def test_deletion_only_diff_approved_skips_as_pass():
+    """A deletion-only diff WITH the reviewer opt-in SKIPs as a pass.
+
+    FAR-1317 override: the gate stays fail-closed by default, but when a
+    reviewer applies the PR's ``coverage: deletion-only-approved`` label the
+    CI job forwards ``--allow-deletion-only-approved`` and the purely
+    subtractive change is authorised instead of failing.  The result is
+    rendered distinctly (``deletion_only_approved``) so the override is an
+    auditable pass rather than a silent skip.
+    """
+    with (
+        patch.object(mod, "_get_changed_production_files", return_value={}),
+        patch.object(mod, "_get_production_deletions", return_value={"src/module.py": 3}),
+    ):
+        result = mod.evaluate(
+            language="Python",
+            report_path=Path("coverage.xml"),
+            compare_branch="origin/main",
+            fail_under=90,
+            allow_deletion_only=True,
+        )
+    assert result.changed_lines == 0  # deletions never enter the denominator
+    assert result.skipped is True
+    assert result.passed is True
+    assert result.deletion_only_approved is True
+    assert result.deleted_lines == 3
+    assert "deletion-only-approved" in result.skip_reason
+
+
+def test_deletion_only_override_does_not_rescue_a_failing_mixed_change(tmp_path):
+    """The override authorises a PURE deletion only — a failing mixed diff still fails.
+
+    ``allow_deletion_only`` is consulted solely by the zero-added-lines path;
+    a change that adds uncovered executable lines alongside deletions must
+    still be scored against the real threshold.  Otherwise the flag would be
+    a silent gate bypass.
+    """
+    fake_report = tmp_path / "coverage.xml"
+    fake_report.write_text("<coverage/>")
+    with (
+        patch.object(mod, "_get_changed_production_files", return_value={"src/new_module.py": 50}),
+        patch.object(mod, "_get_production_deletions", return_value={"src/new_module.py": 3}),
+        patch.object(mod, "_run_diff_cover", return_value=(1, REAL_DIFF_COVER_FAIL_COMBINED)),
+        patch.object(mod, "_get_diff_cover_json", return_value=JSON_REPORT_EMPTY),
+    ):
+        result = mod.evaluate(
+            language="Python",
+            report_path=fake_report,
+            compare_branch="origin/main",
+            fail_under=90,
+            allow_deletion_only=True,
+        )
+    assert result.passed is False
+    assert result.skipped is False
+    assert result.deletion_only_approved is False
+
+
+def test_deletion_only_approved_via_real_git_diff(tmp_path):
+    """A real deletion-only diff is authorised when the override flag is set."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = _init_repo(repo, "def f():\n    x = 1\n    return 1\n")
+    (repo / "src" / "module.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    _commit_on_feature(repo, env)
+
+    with (
+        patch.object(mod, "REPO_ROOT", repo),
+        patch.object(mod, "_get_production_deletions", _REAL_GET_PRODUCTION_DELETIONS),
+    ):
+        result = mod.evaluate(
+            language="Python",
+            report_path=None,
+            compare_branch="main",
+            fail_under=90,
+            allow_deletion_only=True,
+        )
+
+    assert result.skipped is True
+    assert result.passed is True
+    assert result.deletion_only_approved is True
+    assert result.deleted_lines == 1
+
+
+def test_parse_args_allow_deletion_only_approved_flag():
+    """The CLI flag is off by default and maps onto ``allow_deletion_only``."""
+    off = mod._parse_args([])
+    assert off.allow_deletion_only is False
+    on = mod._parse_args(["--allow-deletion-only-approved"])
+    assert on.allow_deletion_only is True
+
+
+def test_main_exits_zero_when_deletion_only_approved(tmp_path, capsys):
+    """End-to-end (main → exit code): the label override turns the FAIL into exit 0.
+
+    Mirrors ``test_main_fails_on_deletion_only_change`` but passes
+    ``--allow-deletion-only-approved`` — proving the CI-forwarded label
+    resolves the gate, and the summary renders the approved status.
+    """
+    xml = tmp_path / "coverage.xml"
+    lines = "\n".join(
+        f'<line number="{i}" hits="1" branch="true" condition-coverage="100% (2/2)"/>' for i in range(101)
+    )
+    xml.write_text(
+        "<coverage><packages><package><classes>"
+        '<class filename="a.py"><lines>' + lines + "</lines></class></package></packages></coverage>"
+    )
+    lcov = tmp_path / "lcov.info"
+    lcov.write_text("TN:\nSF:src/x.ts\nDA:1,1\nBRDA:1,0,0,1\nend_of_record\n")
+
+    with (
+        patch.object(mod, "_get_changed_production_files", return_value={}),
+        patch.object(mod, "_get_production_deletions", return_value={"src/module.py": 3}),
+        patch(
+            "sys.argv",
+            [
+                "run_coverage_gate.py",
+                "--compare-branch",
+                "origin/main",
+                "--python-report",
+                str(xml),
+                "--js-report",
+                str(lcov),
+                "--allow-deletion-only-approved",
+            ],
+        ),
+    ):
+        rc = mod.main()
+    assert rc == 0
+    out = capsys.readouterr().out.lower()
+    assert "deletion-only" in out
+    assert "authorised by reviewer" in out
+
+
 # ---------------------------------------------------------------------------
 # Branch coverage: parser unit tests
 # ---------------------------------------------------------------------------

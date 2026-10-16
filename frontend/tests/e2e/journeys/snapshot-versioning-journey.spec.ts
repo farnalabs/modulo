@@ -19,8 +19,9 @@ import {
  * pair is diffed — the persisted version chain and its structural diff, the
  * state rollback is a pointer swap into.
  *
- * The live-edit chain is feature-gated (pipeline_diff_rollback): when the
- * feature is absent on the target the journey skips loudly instead of failing.
+ * The live-edit chain is no longer feature-gated (FAR-1819 retired
+ * pipeline_diff_rollback): the journey expects 200 and fails loudly on any
+ * other status instead of skipping.
  */
 
 interface SnapshotResponse {
@@ -55,11 +56,9 @@ test.describe('Real-stack journeys: snapshot versioning', { tag: '@regression' }
       await loginAsAdmin(page, env)
 
       // Edit 1: save a live-edit snapshot of the single-node graph.
+      // No 402-skip any more: the pipeline_diff_rollback tier gate was
+      // retired (FAR-1819), so any non-200 here is a real failure.
       const save1 = await apiFetch<SnapshotResponse>(apiBase, token, 'POST', `/api/v1/pipelines/${pipeline.id}/snapshots`, {})
-      if (save1.status === 402 || save1.status === 404) {
-        test.skip(true, `live-edit snapshots are feature-gated and absent on this target (HTTP ${save1.status})`)
-        return
-      }
       expect(save1.status).toBe(200)
       const snapshotA = save1.body
       expect(snapshotA?.version_kind).toBe('edit')
