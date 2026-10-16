@@ -291,7 +291,7 @@ def _set_valid_org_license(key: str, request, client):
     with (
         patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=org),
         patch(
-            "modulo.api.routes.admin_orgs.update_org_settings_patch", new_callable=AsyncMock, return_value=org
+            "modulo.api.routes._org_settings.update_org_settings_patch", new_callable=AsyncMock, return_value=org
         ) as mock_update,
         patch("modulo.core.license.parse_and_verify", return_value=validation),
     ):
@@ -310,7 +310,7 @@ def _set_invalid_org_license(key: str, request, client):
     with (
         patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=org),
         patch(
-            "modulo.api.routes.admin_orgs.update_org_settings_patch", new_callable=AsyncMock, return_value=org
+            "modulo.api.routes._org_settings.update_org_settings_patch", new_callable=AsyncMock, return_value=org
         ) as mock_update,
         patch("modulo.core.license.parse_and_verify", return_value=validation),
     ):
@@ -326,7 +326,7 @@ def _set_license_missing_org(key: str, request, client):
     with (
         patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=None),
         patch(
-            "modulo.api.routes.admin_orgs.update_org_settings_patch", new_callable=AsyncMock, return_value=None
+            "modulo.api.routes._org_settings.update_org_settings_patch", new_callable=AsyncMock, return_value=None
         ) as mock_update,
         patch("modulo.core.license.parse_and_verify"),
     ):
@@ -344,7 +344,7 @@ def _remove_org_license(request, client):
     with (
         patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=org),
         patch(
-            "modulo.api.routes.admin_orgs.update_org_settings_patch", new_callable=AsyncMock, return_value=org
+            "modulo.api.routes._org_settings.update_org_settings_patch", new_callable=AsyncMock, return_value=org
         ) as mock_update,
     ):
         resp = client.delete(f"/api/v1/admin/orgs/{org_id}/license")
@@ -359,7 +359,7 @@ def _remove_license_missing_org(request, client):
     with (
         patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=None),
         patch(
-            "modulo.api.routes.admin_orgs.update_org_settings_patch", new_callable=AsyncMock, return_value=None
+            "modulo.api.routes._org_settings.update_org_settings_patch", new_callable=AsyncMock, return_value=None
         ) as mock_update,
     ):
         resp = client.delete(f"/api/v1/admin/orgs/{org_id}/license")
