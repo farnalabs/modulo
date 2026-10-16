@@ -2686,10 +2686,11 @@ async def confirm_org_deletion(
             # FAR-1832 (R4): append AFTER the crud call, not before it. This
             # was the one org-deletion FSM path that took a write lock BEFORE
             # the org-row ``FOR UPDATE`` (every sibling route — request, cancel,
-            # immediate delete — locks the org row first). Same transaction, so
-            # atomicity and the fail-closed property are unchanged; only the
-            # lock order is repaired to the global order (org FSM lock, then
-            # audit append).
+            # immediate delete, and (QA F6) the cross-org
+            # ``admin_orgs.admin_delete_org`` — locks/deletes the org row
+            # first). Same transaction, so atomicity and the fail-closed
+            # property are unchanged; only the lock order is repaired to the
+            # global order (org FSM lock, then audit append).
             await append_system_audit_event(
                 session,
                 event_type="org_deletion_completed",

@@ -472,10 +472,28 @@ async def admin_delete_org(
             if org is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
 
-            # FAR-1517: hard-deleting an org cascades away its entire audit
-            # trail, so the record of WHO deleted it goes to the org-independent
-            # ledger BEFORE the org row is removed — same transaction, so it
-            # commits only with the delete (a failed append aborts the delete).
+            # Capture the identity before the delete flushes (the ORM object
+            # stays readable, but taking it up front is the explicit shape).
+            org_identity = {
+                "organisation_name": org.name,
+                "organisation_slug": org.slug,
+            }
+
+            deleted = await delete_organisation(session, org_id)
+            if not deleted:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
+
+            # FAR-1517 + QA F6: hard-deleting an org cascades away its entire
+            # audit trail, so the record of WHO deleted it goes to the
+            # org-independent ledger — same transaction, so it commits only
+            # with the delete (a failed append aborts the delete). QA F6
+            # reorders this to AFTER the crud call: every in-transaction
+            # append site locks the org row FIRST (the DELETE statement's own
+            # row lock), then appends — matching confirm_org_deletion and the
+            # R6 lock order the change establishes. ``system_audit_events``
+            # carries no FK to ``organisations``, so appending after the row
+            # removal is safe (this is the FAR-1025-independent reason; the
+            # table exists precisely so the delete cannot affect the append).
             await append_system_audit_event(
                 session,
                 event_type="org_deletion_completed",
@@ -486,14 +504,9 @@ async def admin_delete_org(
                 payload_json={
                     "flow": "admin_delete_org",
                     "immediate": True,
-                    "organisation_name": org.name,
-                    "organisation_slug": org.slug,
+                    **org_identity,
                 },
             )
-
-            deleted = await delete_organisation(session, org_id)
-            if not deleted:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
     except ProgrammingError as exc:
         _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_DELETE_ORG, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:

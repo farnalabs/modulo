@@ -142,3 +142,106 @@ def test_r4_failed_confirm_never_reaches_the_append(client: TestClient, events: 
     assert resp.status_code == 409, resp.text
     assert "system_audit_append" not in events, f"a failed confirm must not append: {events}"
     assert "crud_org_lock" in events
+
+
+# ---------------------------------------------------------------------------
+# QA F6: the same invariant for DELETE /api/v1/admin/orgs/{org_id} — the
+# org-deletion crud (which takes the org row's DELETE lock) must precede the
+# system-audit append. Pre-reorder the recorded order was
+# ["system_audit_append", "crud_delete"] and every assertion below fails.
+# ---------------------------------------------------------------------------
+
+_DELETE_ORG_URL = f"/api/v1/admin/orgs/{_ORG_ID}"
+
+
+@pytest.fixture
+def system_admin_client(events: list[str]) -> Generator[TestClient, None, None]:
+    """Like ``client`` but with the ``is_system_admin`` claim the route's
+    ``require_system_permission`` gate demands."""
+    session = _make_session(events)
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="admin",
+        organisation_id=uuid.UUID(_ORG_ID),
+        account_id=uuid.UUID(_USER_ID),
+        org_role="admin",
+        is_system_admin=True,
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+def test_f6_delete_org_lock_precedes_the_system_audit_append(
+    system_admin_client: TestClient, events: list[str]
+) -> None:
+    """The crud delete (org-row lock) runs BEFORE the system-audit append —
+    global order R6, repaired by FAR-1832 QA F6."""
+
+    org = MagicMock()
+    org.name = "Doomed"
+    org.slug = "doomed"
+
+    async def _record_get(*_args, **_kwargs):
+        events.append("read_org")
+        return org
+
+    async def _record_delete(*_args, **_kwargs):
+        events.append("crud_delete")
+        return True
+
+    async def _record_append(*_args, **_kwargs):
+        events.append("system_audit_append")
+
+    with (
+        patch("modulo.api.routes.admin_orgs.get_organisation", new=_record_get),
+        patch("modulo.api.routes.admin_orgs.delete_organisation", new=_record_delete),
+        patch("modulo.core.system_audit_logger.append_system_audit_event", new=_record_append),
+    ):
+        resp = system_admin_client.delete(_DELETE_ORG_URL)
+
+    assert resp.status_code == 204, resp.text
+    assert events == ["begin-enter", "read_org", "crud_delete", "system_audit_append", "begin-exit"], (
+        "F6: the org delete must precede the system-audit append, and both must "
+        f"stay inside the same transaction: {events}"
+    )
+
+
+def test_f6_failed_delete_never_reaches_the_append(system_admin_client: TestClient, events: list[str]) -> None:
+    """A failed crud delete aborts before the append — the audit row only
+    exists for a delete that actually removed the org (fail-closed atomicity
+    unchanged after the reorder)."""
+
+    org = MagicMock()
+    org.name = "Doomed"
+    org.slug = "doomed"
+
+    async def _record_get(*_args, **_kwargs):
+        events.append("read_org")
+        return org
+
+    async def _record_delete(*_args, **_kwargs):
+        events.append("crud_delete")
+        return False
+
+    async def _record_append(*_args, **_kwargs):
+        events.append("system_audit_append")
+
+    with (
+        patch("modulo.api.routes.admin_orgs.get_organisation", new=_record_get),
+        patch("modulo.api.routes.admin_orgs.delete_organisation", new=_record_delete),
+        patch("modulo.core.system_audit_logger.append_system_audit_event", new=_record_append),
+    ):
+        resp = system_admin_client.delete(_DELETE_ORG_URL)
+
+    assert resp.status_code == 404, resp.text
+    assert "crud_delete" in events
+    assert "system_audit_append" not in events, f"a failed delete must not append: {events}"
