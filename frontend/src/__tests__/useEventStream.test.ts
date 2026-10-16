@@ -877,4 +877,16 @@ describe('reconnect backfill + reset (FAR-250 coverage)', () => {
     resetEventStreamState() // second call: no pending timer
     unsub()
   })
+
+  it('resetEventStreamState() unsubscribes the module-scope onAuthChange re-arm listener', async () => {
+    // The re-arm listener is registered once at import time; the HMR reset must
+    // drop it (FAR-1842 review) so a hot reload cannot accumulate listeners
+    // bound to a previous module closure.
+    const { resetEventStreamState } = await import('../composables/useEventStream')
+    expect(h.authListeners.length).toBe(1)
+
+    resetEventStreamState()
+
+    expect(h.authListeners.length).toBe(0)
+  })
 })

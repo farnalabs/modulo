@@ -290,8 +290,11 @@ function restartStream(): void {
 // Auth-change re-arm (FAR-1842): auth_failed is only valid for as long as the
 // session that hit it. A fresh non-null token (re-login, SSO callback, or a
 // successful refresh) supersedes the terminal stop — re-arm the stream so the
-// banner cannot outlive the condition that raised it, on ANY route.
-onAuthChange((token: string | null) => {
+// banner cannot outlive the condition that raised it, on ANY route. The
+// unsubscribe is retained so the HMR dispose hook below drops the listener
+// with the rest of the module state — otherwise a hot reload accumulates
+// listeners bound to a previous module closure.
+const disposeAuthChangeHook = onAuthChange((token: string | null) => {
   if (token && connectionState.value === 'auth_failed') {
     reconnectFeedback.value = 'idle'
     restartStream()
@@ -363,6 +366,7 @@ export { dispatchToStore }
  * (the HMR branch itself never executes under vitest).
  */
 export function resetEventStreamState(): void {
+  disposeAuthChangeHook()
   cleanup()
   clearAllHandlers()
   backfillSubscribers.clear()
