@@ -242,6 +242,7 @@ def _instance(cid: uuid.UUID, type_id: str) -> MagicMock:
     instance.id = cid
     instance.name = f"conn-{cid}"
     instance.status = "active"
+    instance.visibility = "org"
     instance.allowed_operations = []
     instance.config_json = {}
     instance.connector_type_id = type_id

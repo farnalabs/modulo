@@ -27,8 +27,8 @@ Lenses:
   ``0308_runs_dispatch_phase_history`` chains onto ``0307_runs_guardrail_override_resume_pending``, and
   ``0313_collection_install_drop_installed_entities`` chains onto
   ``0312_memberships_active_lookups``, and
-  ``0314_external_agents_mcp_servers`` chains onto
-  ``0313_collection_install_drop_installed_entities`` as the single
+  ``0315_service_accounts_lifecycle`` chains onto
+  ``0314_external_agents_mcp_servers`` as the single
   linear head; the revision id matches the filename, and neither
   branch_labels nor depends_on is set (the pre-commit check-migration-heads
   hook and every ``test_single_head_*`` pin depend on that shape).
@@ -61,7 +61,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0289_pipelines_environment_profile"
 _MIGRATION_DOWN_REVISION = "0288_runs_execution_origin"
-_HEAD_MIGRATION = "0314_external_agents_mcp_servers"
+_HEAD_MIGRATION = "0315_service_accounts_lifecycle"
 _TABLE = "pipelines"
 _COLUMN = "environment_profile_id"
 _FK_NAME = "fk_pipelines_environment_profile_id"

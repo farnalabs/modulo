@@ -3,7 +3,8 @@
 Checks:
 1. Topology: no cycles, valid edge references, reachability, max nesting depth 3
 2. Schema compatibility: output schema of each edge source matches input schema of target
-3. Connector capability: bound connector instances are active and have required operations
+3. Connector capability: bound connector instances are active and allow the
+   ACL operations their node's routed verb requires
 4. Model backend health: pinned model backends exist and are active
 5. Environment capability: bound EnvironmentProfile declares all agent required capabilities
 6. Pre-run input payload compatibility with entry node schema
@@ -26,11 +27,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo import settings
 from modulo.connectors.base import (
-    canonical_capability,
-    canonical_capability_set,
+    ConnectorACL,
+    ConnectorPermissionError,
     connector_binding_operation,
+    connector_binding_required_acl_operations,
     connector_type_supports_dispatch,
-    unrestricted_allowed_operations,
+    node_routes_binding_to_connector,
 )
 from modulo.core.graph_validator._types import (
     ValidationIssue,
@@ -2649,6 +2651,19 @@ class GraphValidator:
         )
         found: dict[uuid.UUID, ConnectorInstance] = {r.id: r for r in rows}
 
+        # FAR-1667: map graph nodes by id ONCE so each binding can read the
+        # node's ROUTED verb (the extracted binding rows carry the instance id
+        # alone). Guarded: a graph we cannot read yields an empty map, and every
+        # binding then skips its capability check (fail-open-with-log below).
+        nodes_by_id: dict[str, dict[str, Any]] = {}
+        if isinstance(graph_json, dict):
+            raw_nodes = graph_json.get("nodes")
+            if isinstance(raw_nodes, list):
+                # Reuse the module's node indexer (it already drops id-less
+                # nodes); filter to mapping nodes first so a malformed entry is
+                # dropped rather than raising on ``.get``.
+                nodes_by_id = _index_nodes_by_id([n for n in raw_nodes if isinstance(n, dict)])
+
         # FAR-1141 (MAJOR 8): a dispatch binding must target a connector whose
         # TYPE implements the CI-runner contract. Runs off the GRAPH (the
         # binding's ``operation`` / ``dispatch_action`` only live on the node —
@@ -2677,62 +2692,47 @@ class GraphValidator:
                     node_id,
                 )
 
-            required_ops: list[str] = binding.get("required_operations", [])
-            # FAR-1564: None/[] means the connector is UNRESTRICTED, so only a
-            # NON-EMPTY allowlist restricts. An unset allowlist must never be
-            # read as "missing every required operation". A MALFORMED non-list
-            # value is RESTRICTED (fail closed: every required op reads as
-            # missing) and is logged — the shared predicate keeps this decision
-            # identical to ConnectorACL's and the guardrail conformance reader's.
-            # FAR-1594/FAR-1616: a NON-EMPTY list is not tested raw — its
-            # entries are reduced to the canonical bare-capability vocabulary
-            # by the SHARED helper with the instance's own connector type
-            # threaded through, and the REQUESTED op is canonicalised too, so
-            # graph-save time grants exactly what a ConnectorACL built with
-            # the same connector type grants at runtime (same-type legacy
-            # entries grant; mis-typed ones fail closed).
-            raw_allowed: object = instance.allowed_operations
-            if not unrestricted_allowed_operations(raw_allowed):
-                if isinstance(raw_allowed, list):
-                    # FAR-1594/FAR-1616: reduce the stored allowlist to the
-                    # canonical bare-capability vocabulary with the SHARED
-                    # helper, threading the instance's OWN connector type — a
-                    # stored same-type legacy entry (``github.read``) grants
-                    # ``read`` here exactly as the hub's ConnectorACL and the
-                    # guardrail conformance reader grant it; a mis-typed entry
-                    # (``github.read`` on a filesystem connector) grants
-                    # nothing (fail closed).
-                    allowed_ops: set[str] = canonical_capability_set(
-                        raw_allowed,
-                        connector_type_id=instance.connector_type_id,
-                    )
-                else:
-                    _log.warning(
-                        "graph_validator.connector_allowed_operations_malformed",
-                        extra={
-                            "connector_instance_id": str(cid),
-                            "allowed_operations_type": type(raw_allowed).__name__,
-                        },
-                    )
-                    allowed_ops = set()
-                # Mirror ConnectorACL.check: canonicalise the REQUESTED
-                # operation too, so a stored legacy spelling grants the required
-                # op on exactly the terms the runtime ACL grants it. A
-                # non-string required op is not a capability in any spelling —
-                # report it MISSING (fail closed) rather than raising, and
-                # short-circuit before the set-membership test so an unhashable
-                # value cannot raise either.
-                missing = [
-                    op
-                    for op in required_ops
-                    if not (
-                        isinstance(op, str) and (op in allowed_ops or (canonical_capability(op) or op) in allowed_ops)
-                    )
-                ]
-                if missing:
+            # FAR-1667: derive the required ACL operations from the node's
+            # ROUTED verb — never from a declared ``required_operations`` key
+            # (no producer ever populated one, so the old check was unreachable).
+            node = nodes_by_id.get(node_id) if node_id is not None else None
+            if node is None:
+                # A binding row whose node is absent from the graph is a harness
+                # bug, not customer input: fail open with a log, never reject.
+                _log.warning(
+                    "graph_validator.connector_binding_node_missing",
+                    extra={"connector_instance_id": str(cid), "node_id": node_id},
+                )
+                continue
+            if not node_routes_binding_to_connector(node):
+                # Dead configuration (an ``agent`` node with an ``agent_id``, a
+                # ``sandbox_agent``): the engine never routes this binding, so
+                # there is no verb to gate.
+                continue
+            required_ops = connector_binding_required_acl_operations(node)
+            if not required_ops:
+                continue
+            # Ask the REAL runtime ACL so save-time validation and the hub can
+            # never disagree about what an ``allowed_operations`` value means
+            # (None/[] unrestricted, a non-empty allowlist restricts, a
+            # malformed value fails closed — the ACL owns all of it). The
+            # instance's own ``visibility`` is threaded through exactly as the
+            # hub does (``ci.visibility``); ``check`` does not enforce it today,
+            # but keeping the two construction sites identical avoids drift.
+            acl = ConnectorACL(
+                visibility=instance.visibility,
+                allowed_operations=instance.allowed_operations,
+                connector_type_id=instance.connector_type_id,
+            )
+            operation = connector_binding_operation(node)
+            for op in required_ops:
+                try:
+                    acl.check(op)
+                except ConnectorPermissionError:
                     result.error(
                         "CONNECTOR_MISSING_OPERATIONS",
-                        f"Connector {cid} missing operations: {missing}",
+                        f"Connector {cid} ({instance.name!r}) does not allow {op!r} "
+                        f"required by node's {operation!r} operation",
                         node_id,
                     )
 

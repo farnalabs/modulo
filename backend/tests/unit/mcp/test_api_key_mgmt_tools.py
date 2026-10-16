@@ -265,6 +265,21 @@ class TestCreateApiKey(AuthContext):
         assert _mock_crud.await_args.kwargs["role"] == "operator"
         assert _mock_crud.await_args.kwargs["team_id"] is None
 
+    async def test_service_ttl_ceiling_maps_to_422(self) -> None:
+        """FAR-1478: a >365d service-owned key is a client error (422), never a
+        silent clamp — the MCP surface mirrors the REST mint shape."""
+        from modulo.api.mcp_server import create_api_key
+        from modulo.auth.api_key import ApiKeyTtlError
+
+        mock_crud = AsyncMock(side_effect=ApiKeyTtlError("Keys owned by a service account expire within 365 days"))
+        with _patch_create_env() as mock_session:
+            mock_session.return_value = make_session_context(_make_create_session(_make_key()))
+            with patch("modulo.api.mcp_server.auth_create_api_key", new=mock_crud):
+                result = await create_api_key(name="CI", expires_at="2030-06-01T00:00:00")
+        assert result["error"] == "validation_error", result
+        assert result["status"] == 422, result
+        assert "365" in result["detail"]
+
 
 class _Features:
     def __init__(self, *, enabled: bool) -> None:

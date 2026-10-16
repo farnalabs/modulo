@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.permissions import parse_grants, serialize_grants
 from modulo.core.feature_flags import get_registry
+from modulo.db.models.account import KIND_SERVICE, Account
 from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import TERMINAL_STATUSES, Run
@@ -57,6 +58,21 @@ class ApiKeyScopeError(ValueError):
     """Raised when a mint or update payload carries an invalid key scope."""
 
 
+class ApiKeyTtlError(ValueError):
+    """Raised when a mint or update payload's expiry exceeds a key class's TTL ceiling.
+
+    FAR-1478 / ADR 058's tiered TTL: a key OWNED by a service principal may
+    live at most ``SERVICE_KEY_MAX_TTL_DAYS`` (the service half of the
+    resolution; the 90-day user-scoped half is FAR-1477's). Raised at the
+    mint AND update choke points (``create_api_key`` / ``update_api_key``) so
+    every surface (REST, MCP, on-behalf mint, key update) refuses the same
+    way — a cap enforced only at mint would let any runner/operator extend a
+    service-owned key arbitrarily via PUT. Callers map it to a 422 — never to
+    a silent clamp, which would mint or extend a key the caller did not ask
+    for.
+    """
+
+
 _PREFIX_LEN = 8
 _SECRET_LEN = 32  # url-safe base64 chars
 _MK_PREFIX = "mk_"
@@ -70,6 +86,11 @@ KEY_SCOPES: frozenset[str] = frozenset({"org", "user"})
 FLAG_API_KEY_GRANTS = "api_key_grants"
 # User-scoped keys: 90-day default AND maximum lifetime (grants flag ON only).
 USER_KEY_MAX_TTL_DAYS = 90
+# Service-owned keys: 365-day maximum lifetime (ADR 058 tiered TTL — the
+# service half of the 365d-service / 90d-user-scoped resolution of ADR 030's
+# deferred Phase-2 TTL decision). Shorter TTLs (e.g. the per-run sandbox
+# keys' 300s-24h window) are always fine; only a LONGER request is refused.
+SERVICE_KEY_MAX_TTL_DAYS = 365
 
 
 async def api_key_grants_enabled(org_id: uuid.UUID, *, strict: bool = False) -> bool:
@@ -150,6 +171,31 @@ def _validate_team_key_role(key: OrgApiKey) -> None:
         raise ApiKeyInvalidError("team-scoped API keys cannot have admin role")
 
 
+async def _enforce_service_key_ttl(
+    session: AsyncSession,
+    account_id: uuid.UUID,
+    expires_at: datetime | None,
+) -> None:
+    """FAR-1478 / ADR 058 tiered TTL: refuse a service-owned key beyond the ceiling.
+
+    Shared by mint (:func:`create_api_key`) and update (:func:`update_api_key`)
+    — the 365-day cap is a property of the key OWNER's kind, so every surface
+    that can SET or EXTEND a service-owned key's expiry refuses the same way.
+    ``expires_at=None`` is a no-op (nothing to check — the caller decides the
+    default, which already lands at 365 days, so only an EXPLICIT longer
+    expiry is refused). A missing owner row cannot be a service principal, so
+    it skips the cap (the FK on account_id makes a missing row impossible
+    outside tests). Boundary is strict ``>``: exactly 365 days is accepted.
+    """
+    if expires_at is None:
+        return
+    owner = await session.get(Account, account_id)
+    if owner is not None and getattr(owner, "kind", None) == KIND_SERVICE:
+        service_ceiling = datetime.now(UTC) + timedelta(days=SERVICE_KEY_MAX_TTL_DAYS)
+        if expires_at > service_ceiling:
+            raise ApiKeyTtlError(f"Keys owned by a service account expire within {SERVICE_KEY_MAX_TTL_DAYS} days")
+
+
 async def create_api_key(
     session: AsyncSession,
     *,
@@ -174,6 +220,12 @@ async def create_api_key(
     """
     if scope not in KEY_SCOPES:
         raise ApiKeyScopeError(f"Invalid API key scope '{scope}': must be one of {sorted(KEY_SCOPES)}")
+    # FAR-1478 / ADR 058 tiered TTL: a key owned by a SERVICE principal may
+    # live at most SERVICE_KEY_MAX_TTL_DAYS. Checked at this choke point so
+    # REST, MCP, on-behalf mints and any future surface all refuse the same
+    # way; the default below already lands every key (human- or service-owned)
+    # at 365 days, so only an EXPLICIT longer expiry is refused.
+    await _enforce_service_key_ttl(session, account_id, expires_at)
     if expires_at is None:
         expires_at = datetime.now(UTC) + timedelta(days=365)
     full_key, prefix, hashed = generate_api_key()
@@ -585,6 +637,10 @@ async def update_api_key(
     FAR-620: the key's caller ``scope`` ('org'/'user') is IMMUTABLE post-mint —
     this function accepts no scope parameter and update payloads carrying one
     are rejected (422) at the REST surface before reaching here.
+
+    FAR-1478 / ADR 058: setting ``expires_at`` on a SERVICE-owned key is held
+    to the same 365-day ceiling as mint (``ApiKeyTtlError``); the cap reads
+    the key owner's ``Account.kind``, never the caller's.
     """
     stmt = select(OrgApiKey).where(
         OrgApiKey.id == key_id,
@@ -596,6 +652,13 @@ async def update_api_key(
     if key is None:
         _log.info("api_key.update_not_found", extra={"key_id": str(key_id), "org_id": str(org_id)})
         return None
+    if expires_at is not None:
+        # FAR-1478 / ADR 058: the 365-day service ceiling applies to EXTENSION
+        # as well as mint — otherwise any runner/operator (api_key.revoke
+        # floor) could extend a service-owned key arbitrarily via PUT. The cap
+        # reads the key OWNER's kind, not the caller's, and runs BEFORE any
+        # mutation so a refusal leaves the key completely untouched.
+        await _enforce_service_key_ttl(session, key.account_id, expires_at)
     if name is not None:
         key.name = name
     if role is not None or team_id is not _UNSET:

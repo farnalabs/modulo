@@ -61,6 +61,8 @@ vi.mock('../lib/api/client', () => ({
   api: { GET: mockGet },
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
   clearAccessToken: vi.fn(),
+  // useEventStream registers a module-scope re-arm listener on import (FAR-1842).
+  onAuthChange: vi.fn(() => vi.fn()),
 }))
 
 import DashboardView from '../views/DashboardView.vue'
