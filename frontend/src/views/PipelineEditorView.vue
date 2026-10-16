@@ -3,7 +3,7 @@
        `mobileFitStyle` pins the editor to the leftover viewport height on
        <768px (see the script block) so nothing hangs below the fold behind
        the touch-capturing canvas. Desktop keeps the height class alone. -->
-  <div ref="editorRootRef" class="relative flex h-[calc(100vh-3.5rem)]" :style="mobileFitStyle">
+  <div ref="editorRootRef" data-testid="pipeline-editor-root" class="relative flex h-[calc(100vh-3.5rem)]" :style="mobileFitStyle">
     <div v-if="loading" class="flex flex-1 items-center justify-center">
       <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
     </div>
@@ -2806,10 +2806,17 @@ function refitMobileEditor() {
   // Document-relative top so the measurement is stable regardless of the
   // current scroll position and cannot feed back through the height set here.
   // top <= 0 means the element is not laid out yet (jsdom mounts return an
-  // all-zero rect) — skip rather than pin a bogus height.
+  // all-zero rect) — skip the measure, but also clear any previously pinned
+  // height: leaving it would keep a stale pin that no longer matches layout.
   const top = el.getBoundingClientRect().top + window.scrollY
-  if (top <= 0) return
-  mobileFitHeightPx.value = Math.max(Math.round(window.innerHeight - top), MOBILE_EDITOR_MIN_HEIGHT_PX)
+  if (top <= 0) {
+    mobileFitHeightPx.value = null
+    return
+  }
+  const next = Math.max(Math.round(window.innerHeight - top), MOBILE_EDITOR_MIN_HEIGHT_PX)
+  // The measurement above is the forced layout; skip the reactive write (and
+  // the re-render it causes) when nothing changed.
+  if (mobileFitHeightPx.value !== next) mobileFitHeightPx.value = next
 }
 
 let refitFrame = 0
@@ -2825,16 +2832,57 @@ let mobileFitObserver: MutationObserver | null = null
 onMounted(() => {
   refitMobileEditor()
   window.addEventListener('resize', scheduleMobileRefit)
-  // Banners above the editor mount and unmount asynchronously (onboarding,
-  // paused, legacy-HITL advisories), so the space above the editor changes
-  // after first paint — re-measure whenever the page DOM mutates.
-  mobileFitObserver = new MutationObserver(scheduleMobileRefit)
-  mobileFitObserver.observe(document.body, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ['class', 'style'],
-  })
+  // Re-measure only when the CHROME ABOVE the editor changes — that is the
+  // only thing that moves the editor's document-relative top. A body-wide
+  // observer (childList+subtree+attributes:class/style) also fired on
+  // VueFlow's viewport transform, which is written as an inline style on
+  // every pointermove during pan/zoom/node-drag — turning the mobile hot
+  // path into a forced synchronous layout (the getBoundingClientRect in
+  // refitMobileEditor) once per animation frame. Narrow targets instead:
+  //  - the editor's parent (AppLayout's <main>): its `class` carries the
+  //    padding-top offsets (fixed mobile header / onboarding banner) and its
+  //    direct childList catches a new chrome block inserted above the editor,
+  //    without ever descending into the editor where VueFlow lives;
+  //  - each element ABOVE the editor root inside that parent (banner
+  //    container, breadcrumb): subtree childList + class/style attributes
+  //    catch those banners mounting, unmounting and toggling asynchronously —
+  //    the behaviour the original body-wide observer existed for.
+  const root = editorRootRef.value
+  const parent = root?.parentElement ?? null
+  if (root && parent) {
+    // Stop at the first element containing the root (the root itself when it
+    // is a direct child of <main>): the editor subtree — and therefore
+    // VueFlow's viewport — is never observed, however deeply the root nests.
+    const observeChromeSiblings = () => {
+      for (
+        let sibling = parent.firstElementChild;
+        sibling && !sibling.contains(root);
+        sibling = sibling.nextElementSibling
+      ) {
+        mobileFitObserver?.observe(sibling, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['class', 'style'],
+        })
+      }
+    }
+    mobileFitObserver = new MutationObserver((mutations) => {
+      // A chrome block inserted above the editor is a new sibling — observe
+      // it too, so mutations inside it keep re-fitting (observe() on an
+      // already-observed node just refreshes its options, no duplicates).
+      if (mutations.some((m) => m.type === 'childList' && m.target === parent)) {
+        observeChromeSiblings()
+      }
+      scheduleMobileRefit()
+    })
+    mobileFitObserver.observe(parent, {
+      childList: true,
+      attributes: true,
+      attributeFilter: ['class'],
+    })
+    observeChromeSiblings()
+  }
 })
 onBeforeUnmount(() => {
   window.removeEventListener('resize', scheduleMobileRefit)

@@ -232,4 +232,114 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     await expect(flow).toBeVisible()
     expect((await flow.boundingBox())!.width).toBeGreaterThan(200)
   })
+
+  test('fit observer re-fits on chrome above the editor, not on viewport style writes', async ({ page, env }) => {
+    // Count measurements of the editor root: refitMobileEditor's
+    // getBoundingClientRect is the only page code that reads that element,
+    // so each call == one scheduled re-fit of the mobile pin.
+    await page.addInitScript(() => {
+      const original = Element.prototype.getBoundingClientRect
+      ;(window as any).__rootRectMeasures = 0
+      Element.prototype.getBoundingClientRect = function (this: Element) {
+        if (this.getAttribute('data-testid') === 'pipeline-editor-root') {
+          ;(window as any).__rootRectMeasures += 1
+        }
+        return original.call(this)
+      }
+    })
+
+    await loginAsAdmin(page, env)
+    await mockEditorWithNode(page)
+    await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
+    await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+    const flow = page.locator('.vue-flow').first()
+    await expect(flow).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+
+    const root = page.getByTestId('pipeline-editor-root')
+    const measures = () => page.evaluate(() => (window as any).__rootRectMeasures as number)
+    // Flush any re-fit already scheduled in a rAF before sampling the counter.
+    const flushRefits = () =>
+      page.evaluate(
+        () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
+      )
+
+    await flushRefits()
+    // Wait until no new re-fit lands across a flush window: async chrome above
+    // the editor (onboarding banner mount, capacity poll) must have settled
+    // before we baseline, or its legitimate mount could be mistaken for a
+    // viewport-write re-fit below.
+    await expect
+      .poll(
+        async () => {
+          const before = await measures()
+          await flushRefits()
+          return (await measures()) === before
+        },
+        { timeout: 10_000, message: 'mobile fit should settle before baselining' },
+      )
+      .toBe(true)
+    const baseline = await measures()
+
+    // VueFlow's pan/zoom/node-drag hot path: the viewport transform is
+    // rewritten as an inline style on every pointermove. Replicate it across
+    // frames — none of these writes may schedule a re-measure (they used to
+    // force a synchronous layout once per animation frame via the former
+    // body-wide attribute observer).
+    const pane = page.locator('.vue-flow__transformationpane').first()
+    await expect(pane).toBeVisible()
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          const paneEl = document.querySelector<HTMLElement>('.vue-flow__transformationpane')
+          if (!paneEl) {
+            reject(new Error('vue-flow transformationpane not found'))
+            return
+          }
+          let step = 0
+          const tick = () => {
+            step += 1
+            paneEl.style.transform = `translate(${step * 6}px, ${step * 4}px) scale(1.05)`
+            if (step >= 6) {
+              // Two extra frames so a (wrongly) scheduled re-fit would land.
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+            } else {
+              requestAnimationFrame(tick)
+            }
+          }
+          requestAnimationFrame(tick)
+        }),
+    )
+    expect(await measures()).toBe(baseline)
+
+    // The pin must be active on this viewport (375px < 768px).
+    const heightBefore = parseInt((await root.evaluate((el) => (el as HTMLElement).style.height)) || '0', 10)
+    expect(heightBefore).toBeGreaterThan(0)
+
+    // A new chrome block appearing ABOVE the editor (parent childList) must
+    // re-fit: the editor pins shorter to stay below it.
+    await page.evaluate(() => {
+      const editorRoot = document.querySelector('[data-testid="pipeline-editor-root"]')
+      if (!editorRoot?.parentElement) throw new Error('editor root not mounted')
+      const spacer = document.createElement('div')
+      spacer.id = 'e2e-chrome-spacer'
+      spacer.style.height = '48px'
+      editorRoot.parentElement.insertBefore(spacer, editorRoot)
+    })
+    await expect
+      .poll(async () => parseInt((await root.evaluate((el) => (el as HTMLElement).style.height)) || '0', 10))
+      .toBeLessThan(heightBefore)
+    expect(await measures()).toBeGreaterThan(baseline)
+
+    // Later mutations INSIDE that new block must re-fit too (the observer
+    // re-scans the chrome siblings when the parent's children change).
+    const heightAfterInsert = parseInt((await root.evaluate((el) => (el as HTMLElement).style.height)) || '0', 10)
+    await page.evaluate(() => {
+      const spacer = document.getElementById('e2e-chrome-spacer')
+      if (!spacer) throw new Error('chrome spacer missing')
+      spacer.style.height = '96px'
+    })
+    await expect
+      .poll(async () => parseInt((await root.evaluate((el) => (el as HTMLElement).style.height)) || '0', 10))
+      .toBeLessThan(heightAfterInsert)
+  })
 })
