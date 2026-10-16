@@ -645,6 +645,99 @@ def connector_binding_operation(node: Any) -> str:
     return "query"
 
 
+#: The ACL operation every GATED ``connector_hub._TracedConnector`` method is
+#: gated with — the ONE table mirroring that proxy's seven gated
+#: ``acl_operation=`` lookups (``compensate`` is deliberately ungated). The hub
+#: reads it to gate; the save-time validator
+#: reads it (through :func:`connector_binding_required_acl_operations`) to
+#: derive what a routed node requires, so the two can never drift.
+#:
+#: There is deliberately NO ``dispatch`` capability: ``trigger_run`` MUTATES the
+#: remote system (it starts a job), so it is gated ``write`` — matching the
+#: query→read / write→write convention (FAR-1141).
+ACL_OPERATION_BY_CONNECTOR_METHOD: dict[str, str] = {
+    "query": "read",
+    "write": "write",
+    "health_check": "read",
+    "trigger_run": "write",
+    "get_run_status": "read",
+    "get_run_logs": "read",
+    "list_runs": "read",
+}
+
+#: The dispatch actions the engine recognises and routes. Kept as a tuple of
+#: names (never a second op-mapping): the ACL operation for each is looked up
+#: through :data:`ACL_OPERATION_BY_CONNECTOR_METHOD`, so the mapping lives once.
+_DISPATCH_READ_ACTIONS: tuple[str, ...] = ("get_run_status", "get_run_logs", "list_runs")
+
+
+def connector_binding_required_acl_operations(node: Any) -> list[str]:
+    """The ACL operations the ENGINE exercises for *node*'s connector binding.
+
+    Derived from the ROUTED verb (:func:`connector_binding_operation`), never
+    from a declared ``required_operations`` key — no producer ever populated
+    one, so the old check was unreachable (FAR-1667). The mapping mirrors
+    ``connector_hub._TracedConnector`` 1:1 via
+    :data:`ACL_OPERATION_BY_CONNECTOR_METHOD` (the seven ``acl_operation=``
+    args), so save-time validation asks exactly what the runtime hub gates:
+
+    * ``query`` → ``read``; ``write`` → ``write``;
+    * ``dispatch`` → ``write`` (``trigger_run`` mutates the remote system —
+      there is NO ``dispatch`` ACL capability), PLUS ``read`` when the NODE
+      sets ``await_completion`` (the wait loop polls status/logs);
+    * ``dispatch`` with a read-only action (``get_run_status`` /
+      ``get_run_logs`` / ``list_runs``) → ``read``;
+    * any other NON-EMPTY verb → ``read`` (the runtime fall-through: see below).
+
+    ``await_completion`` is a NODE-level field, a SIBLING of
+    ``connector_binding`` (the engine reads ``node_def["await_completion"]``,
+    never a key inside the binding), so it is read from the node here. A
+    ``dispatch`` binding with an omitted ``dispatch_action`` is treated as
+    ``trigger_run`` — the runtime default (``node_runner._make_node_fn`` and
+    :func:`node_fires_dispatch_job` both use
+    ``binding.get("dispatch_action") or "trigger_run"``), so the write gate is
+    derived rather than skipped.
+
+    An unrecognised NON-EMPTY verb is NOT skipped: ``node_runner``'s
+    ``_run_connector_action`` routes every op that is neither ``dispatch`` nor
+    ``write`` through ``connector.query()`` (read-gated), so an unknown verb
+    requires ``read`` exactly as ``query`` does.
+
+    Returns ``[]`` only when the engine NEVER routes the node's binding to a
+    connector (dead configuration: an ``agent`` node with an ``agent_id``, a
+    ``sandbox_agent``, or a binding-less node) OR when a ``dispatch`` action is
+    an unknown NON-EMPTY value — the engine raises on the latter at graph
+    build, so guessing an operation there would invent a requirement the
+    runtime never exercises.
+    """
+    if not node_routes_binding_to_connector(node):
+        return []
+    operation = connector_binding_operation(node)
+    if operation == "query":
+        return [ACL_OPERATION_BY_CONNECTOR_METHOD["query"]]
+    if operation == "write":
+        return [ACL_OPERATION_BY_CONNECTOR_METHOD["write"]]
+    if operation == "dispatch":
+        binding = node.get("connector_binding")
+        # Mirror the runtime default: an omitted dispatch_action is trigger_run.
+        action = (binding.get("dispatch_action") or "trigger_run") if isinstance(binding, dict) else None
+        if action == "trigger_run":
+            required = [ACL_OPERATION_BY_CONNECTOR_METHOD["trigger_run"]]
+            # await_completion is NODE-level (a sibling of connector_binding),
+            # read by the engine's wait loop — which polls status/logs (read).
+            if node.get("await_completion") is True:
+                required.append(ACL_OPERATION_BY_CONNECTOR_METHOD["get_run_status"])
+            return required
+        if action in _DISPATCH_READ_ACTIONS:
+            return [ACL_OPERATION_BY_CONNECTOR_METHOD[action]]
+        # Unknown NON-EMPTY dispatch action: the engine raises at graph build.
+        return []
+    # An UNRECOGNISED NON-EMPTY verb: the engine routes any op that is neither
+    # ``dispatch`` nor ``write`` through ``connector.query()`` (read-gated), so
+    # an unknown verb requires ``read`` exactly as ``query`` does.
+    return [ACL_OPERATION_BY_CONNECTOR_METHOD["query"]]
+
+
 def node_fires_dispatch_job(node: Any) -> bool:
     """True when executing *node* FIRES a NEW job on an external substrate.
 

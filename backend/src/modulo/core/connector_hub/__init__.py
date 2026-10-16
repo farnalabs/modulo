@@ -30,6 +30,7 @@ from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
 from modulo.connectors.azure_pipelines import AzurePipelinesConnector
 from modulo.connectors.azure_repos import AzureReposConnector
 from modulo.connectors.base import (
+    ACL_OPERATION_BY_CONNECTOR_METHOD,
     CIRun,
     CIRunLog,
     CIRunStatus,
@@ -781,7 +782,7 @@ class _TracedConnector(ConnectorBase):
                 "health_check",
                 self._inner.health_check,
                 post_span=lambda span, result: span.set_attribute("connector.healthy", result.ok),
-                acl_operation="read",
+                acl_operation=ACL_OPERATION_BY_CONNECTOR_METHOD["health_check"],
             ),
         )
 
@@ -797,7 +798,7 @@ class _TracedConnector(ConnectorBase):
                 post_span=lambda span, result: (
                     span.set_attribute("connector.result_total", result.total) if result.total is not None else None
                 ),
-                acl_operation="read",
+                acl_operation=ACL_OPERATION_BY_CONNECTOR_METHOD["query"],
             ),
         )
 
@@ -814,7 +815,7 @@ class _TracedConnector(ConnectorBase):
                 self._inner.write,
                 payload,
                 extra_attrs={_OTEL_ATTR_CONNECTOR_RESOURCE: payload.resource},
-                acl_operation="write",
+                acl_operation=ACL_OPERATION_BY_CONNECTOR_METHOD["write"],
             ),
         )
 
@@ -842,7 +843,7 @@ class _TracedConnector(ConnectorBase):
                 branch=branch,
                 variables=variables,
                 extra_attrs={"connector.pipeline_id": pipeline_id},
-                acl_operation="write",
+                acl_operation=ACL_OPERATION_BY_CONNECTOR_METHOD["trigger_run"],
             ),
         )
 
@@ -857,7 +858,7 @@ class _TracedConnector(ConnectorBase):
                 ci.get_run_status,
                 run_id,
                 extra_attrs={"connector.run_id": run_id},
-                acl_operation="read",
+                acl_operation=ACL_OPERATION_BY_CONNECTOR_METHOD["get_run_status"],
             ),
         )
 
@@ -876,7 +877,7 @@ class _TracedConnector(ConnectorBase):
                 run_id,
                 cursor=cursor,
                 extra_attrs={"connector.run_id": run_id},
-                acl_operation="read",
+                acl_operation=ACL_OPERATION_BY_CONNECTOR_METHOD["get_run_logs"],
             ),
         )
 
@@ -901,7 +902,7 @@ class _TracedConnector(ConnectorBase):
                 status=status,
                 limit=limit,
                 extra_attrs=extra_attrs,
-                acl_operation="read",
+                acl_operation=ACL_OPERATION_BY_CONNECTOR_METHOD["list_runs"],
             ),
         )
 

@@ -37,8 +37,8 @@ FAR-1615 / FAR-1617 (type-binding invariant + legacy-claim detection):
   * a blocked qualified claim REPORTS its qualified name (``github.write``,
     not ``write``) so the operator can tell which binding failed;
   * the FAR-1594 behaviour change means a LEGACY guardrail whose
-    ``required_capabilities`` (or graph ``required_operations``) uses a
-    type-qualified spelling now resolves ``unknown`` and BLOCKS block-action
+    ``required_capabilities`` uses a type-qualified spelling now resolves
+    ``unknown`` and BLOCKS block-action
     guardrails where it previously loose-matched. That is deliberate and
     fail-closed — the binding is NOT weakened. Operators can find such legacy
     claims with :func:`type_qualified_claims` /
@@ -649,8 +649,9 @@ def type_qualified_claims(required_capabilities: Sequence[str]) -> list[str]:
     by a bound connector-typed surface — and therefore the claims a legacy
     configuration may carry unintentionally. Bare capabilities and
     non-connector keys (``sandbox.egress``, ``docker``, ...) are not
-    included. Works on any claim list: a guardrail's ``required_capabilities``
-    or a graph binding's ``required_operations``.
+    included. Works on any capability-claim list; a routed connector binding's
+    operation is a bare verb (``query``/``write``/``dispatch``), so it carries
+    no type qualifier.
     """
     claims: list[str] = []
     for capability in required_capabilities:
