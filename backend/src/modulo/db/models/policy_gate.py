@@ -84,7 +84,7 @@ class PolicyGate(SoftDeleteMixin, OrgScoped):
     # the existing HITL pause, and the automated evals this gate governs
     # are skipped (no EvalResult / PolicyGateDecision rows). NOT NULL with
     # a server default so OLD containers inserting during a rolling deploy
-    # (pre-0314 model knows no such column) store 'automatic' — today's
+    # (pre-0315 model knows no such column) store 'automatic' — today's
     # behaviour — rather than failing NOT NULL.
     evaluation_mode: Mapped[str] = mapped_column(
         Text,
