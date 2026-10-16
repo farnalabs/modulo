@@ -61,7 +61,10 @@ process.stdout.write(`[mobile-layout] enumerated ${ROUTES.length} routes from ma
 // enforceRoleTierVisibility + the feature_flag gate). The two environments
 // differ in three plan/auth facts:
 //   staging: real admin login → org_role=admin (roles pass), plan >= team
-//     (tier passes), dev mode OFF (private_preview redirects), real flags.
+//     (tier passes), real flags. Dev mode is ON for the staging org as of
+//     2026-10-16 (observed: every private_preview route renders for the e2e
+//     admin; server-side org flag change, not a code deploy — the deploy of
+//     FAR-1809 that day failed), so private_preview deactivates nothing.
 //   local:   mock token 'mock-access-token-for-e2e-tests' is NOT a JWT, so
 //     decodeJwtPayload returns null → every required_roles route redirects;
 //     the mock feature-flag response returns flags: [], so every
@@ -71,7 +74,9 @@ process.stdout.write(`[mobile-layout] enumerated ${ROUTES.length} routes from ma
 // licenses the skip when the route is genuinely redirected. Maintaining this
 // list: a new route may ONLY be added together with the app gate that
 // redirects it (private_preview / system_admin_only / tier / role / flag),
-// never as a blanket "skip it".
+// never as a blanket "skip it". Re-validate entries against BOTH environments
+// before trusting them — this map has already drifted once (the preview
+// entries above were removed the day staging's dev-mode flag flipped on).
 const DEACTIVATED_ROUTES: Record<string, string> = {
   // --- system_admin_only (FAR-938): SYSTEM sidebar group or route-entry flag;
   // no e2e identity (staging org admin or local mock) carries is_system_admin ---
@@ -82,18 +87,18 @@ const DEACTIVATED_ROUTES: Record<string, string> = {
   '/admin/run-retention': 'system_admin_only — SYSTEM sidebar group; e2e identities have no is_system_admin claim',
   '/settings/license': 'system_admin_only — SYSTEM sidebar group; e2e identities have no is_system_admin claim',
   '/settings/email': 'system_admin_only — SYSTEM sidebar group; e2e identities have no is_system_admin claim',
-  '/settings/observability': 'system_admin_only — SYSTEM sidebar group; also private_preview (staging dev mode off)',
-  '/admin/feature-flags': 'system_admin_only — SYSTEM sidebar group; also required_roles (local mock token is not a JWT) and private_preview',
-  '/settings/error-forwarders': 'system_admin_only — SYSTEM sidebar group; also required_roles and private_preview',
-  '/settings/rate-limits': 'system_admin_only — SYSTEM sidebar group; also required_roles and private_preview',
-  '/settings/runtime-config': 'system_admin_only — SYSTEM sidebar group; also required_roles and private_preview',
-  // --- private_preview: dev mode off for the staging e2e identity
-  // (the local mock returns dev_mode: true, so these render locally) ---
-  '/runs/diff': 'private_preview — dev mode off for the staging e2e identity (Output Diff)',
-  '/settings/monitoring': 'private_preview — dev mode off for the staging e2e identity',
-  '/feedback/inbox': 'private_preview — dev mode off for the staging e2e identity',
-  '/assistant': 'private_preview — dev mode off for the staging e2e identity (Remy)',
-  '/settings/assistant': 'private_preview — dev mode off for the staging e2e identity (Remy config)',
+  '/settings/observability': 'system_admin_only — SYSTEM sidebar group',
+  '/admin/feature-flags': 'system_admin_only — SYSTEM sidebar group; also required_roles (local mock token is not a JWT)',
+  '/settings/error-forwarders': 'system_admin_only — SYSTEM sidebar group; also required_roles',
+  '/settings/rate-limits': 'system_admin_only — SYSTEM sidebar group; also required_roles',
+  '/settings/runtime-config': 'system_admin_only — SYSTEM sidebar group; also required_roles',
+  // --- private_preview: documented mechanism, currently deactivates nothing.
+  // Both e2e identities run with dev mode on (local mock dev_mode: true;
+  // staging org flag observed on 2026-10-16), so preview routes render in
+  // both environments. The 5 routes that were listed here (/runs/diff,
+  // /settings/monitoring, /feedback/inbox, /assistant, /settings/assistant)
+  // were removed after they were observed RENDERING on staging; if the
+  // staging dev-mode flag is turned off again they must come back.
   // --- feature_flag inactive for the staging e2e identity ---
   '/admin/notification-delivery': "feature_flag 'webhook_notification_log' inactive for the staging e2e identity; local mock also lacks org_role (required_roles)",
   // --- required_roles [admin]: the local mock token is not a JWT, so the
@@ -118,10 +123,10 @@ const DEACTIVATED_ROUTES: Record<string, string> = {
   '/admin/trigger-events': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
   '/settings/teams': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
   '/settings/sso': "required_roles [admin] — local mock token is not a JWT (no org_role claim); staging renders this",
-  '/admin/assistant': "required_roles [admin] — local mock token is not a JWT; also private_preview (staging dev mode off)",
-  '/admin/node-categories': "required_roles [admin] — local mock token is not a JWT; also private_preview (staging dev mode off)",
-  '/admin/views': "required_roles [admin] — local mock token is not a JWT; also private_preview (staging dev mode off)",
-  '/admin/plugins': "required_roles [admin] — local mock token is not a JWT; also private_preview (staging dev mode off)",
+  '/admin/assistant': "required_roles [admin] — local mock token is not a JWT",
+  '/admin/node-categories': "required_roles [admin] — local mock token is not a JWT",
+  '/admin/views': "required_roles [admin] — local mock token is not a JWT",
+  '/admin/plugins': "required_roles [admin] — local mock token is not a JWT",
 }
 
 const DEACTIVATED_ROUTES_SET = new Set(Object.keys(DEACTIVATED_ROUTES))
