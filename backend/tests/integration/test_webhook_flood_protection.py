@@ -353,6 +353,17 @@ class TestWebhookFloodProtection:
         engine = TriggerEngine()
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
+        # ``test_trigger`` is a module-scoped fixture reused by every class in
+        # this file, so absolute counts are unsafe — capture the baseline this
+        # delivery must not change and assert the delta.
+        async with factory() as session, session.begin():
+            await set_rls_org(session, test_org)
+            before = await session.execute(
+                text("SELECT count(*) FROM runs WHERE trigger_id = :tid AND trigger_type = 'webhook'"),
+                {"tid": str(trigger_id)},
+            )
+            runs_before = before.scalar_one()
+
         async def _deliver() -> None:
             async with factory() as session, session.begin():
                 await set_rls_org(session, test_org)
@@ -378,7 +389,7 @@ class TestWebhookFloodProtection:
                 ),
                 {"tid": str(trigger_id)},
             )
-            assert counted.scalar_one() == 20, "The refused delivery must not create a run"
+            assert counted.scalar_one() == runs_before, "The refused delivery must not create a run"
 
     async def test_flood_protection_refusal_creates_no_run_or_accepted_event(
         self,
@@ -406,6 +417,19 @@ class TestWebhookFloodProtection:
         engine = TriggerEngine()
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
+        # ``test_trigger`` is module-scoped and shared: earlier classes commit
+        # accepted events against the same trigger, so the assertion is a delta
+        # (this refusal must add no accepted event) rather than an absolute 0.
+        async with factory() as session, session.begin():
+            await set_rls_org(session, test_org)
+            before = await session.execute(
+                text(
+                    "SELECT count(*) FROM trigger_events WHERE trigger_id = :tid AND validation_result = 'accepted'",
+                ),
+                {"tid": str(trigger_id)},
+            )
+            accepted_before = before.scalar_one()
+
         async def _deliver() -> None:
             async with factory() as session, session.begin():
                 await set_rls_org(session, test_org)
@@ -431,7 +455,7 @@ class TestWebhookFloodProtection:
                 ),
                 {"tid": str(trigger_id)},
             )
-            assert accepted.scalar_one() == 0, "The refused delivery must not record an accepted event"
+            assert accepted.scalar_one() == accepted_before, "The refused delivery must not record an accepted event"
 
 
 # ---------------------------------------------------------------------------

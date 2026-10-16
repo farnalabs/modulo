@@ -722,12 +722,17 @@ class TriggerEngine:
             # behaviour logged ``concurrency_limit_reached`` and created the run
             # anyway ("queuing anyway"), so a burst could pile unlimited runs
             # onto the trigger and the declared ``max_concurrent_runs`` never
-            # bound anything. Raising ``ConcurrentRunLimitError`` makes the
-            # declared cap bind here, exactly as ``replay_event`` and the other
-            # trigger types already do; the route maps it to 429 (the documented
-            # concurrent-run-limit rejection — never a fabricated "queued" ack
-            # with no run behind it). A 429 is reject-and-retry, so the sender
-            # can re-deliver once a slot frees.
+            # bound anything. The refusal now raises ``ConcurrentRunLimitError``
+            # exactly as ``replay_event`` and the other trigger types do, and —
+            # matching ``replay_event`` — records the ``concurrency_limit_reached``
+            # event before raising. That in-transaction write rolls back with the
+            # unwound main transaction (the PipelineBackpressureError pattern),
+            # so the receive route re-records the refused delivery + raw payload
+            # in a fresh transaction after the unwind: the refusal is auditable
+            # and replayable, never silent. The route maps the raise to 429 (the
+            # documented concurrent-run-limit rejection — never a fabricated
+            # "queued" ack with no run behind it). A 429 is reject-and-retry, so
+            # the sender can re-deliver once a slot frees.
             active_count = await self._count_active_runs(session, trigger.id)
             if active_count >= trigger.max_concurrent_runs:
                 _log.warning(
@@ -735,6 +740,13 @@ class TriggerEngine:
                     trigger_id,
                     active_count,
                     trigger.max_concurrent_runs,
+                )
+                await self._log_event(
+                    session,
+                    trigger=trigger,
+                    org_id=org_id,
+                    payload_hash=dedup_hash,
+                    result="concurrency_limit_reached",
                 )
                 raise ConcurrentRunLimitError(trigger.id, trigger.max_concurrent_runs)
 

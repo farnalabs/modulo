@@ -1046,11 +1046,12 @@ async def test_handle_webhook_undecryptable_hmac_secret_fails_closed() -> None:
             None,
             lambda: str(int(time.time())),
             # FAR-1863: at the trigger's declared bound the delivery is REFUSED
-            # at the run-creation site (no run), not queued. The route maps this
-            # to 429; no in-transaction event survives the unwound transaction,
-            # so this case asserts the raise only (expected_vr None).
+            # at the run-creation site (no run), not queued. The engine records
+            # the ``concurrency_limit_reached`` event before raising (matching
+            # ``replay_event``); the receive route maps the raise to 429 and
+            # re-records the refusal after the transaction unwinds.
             ConcurrentRunLimitError,
-            None,
+            "concurrency_limit_reached",
         ),
     ],
 )
@@ -1084,9 +1085,12 @@ async def test_handle_webhook_logs_trigger_event(
             snapshot_id=_SNAP,
         )
     if expected_vr is not None:
-        # The engine writes an in-transaction event for the validation failures;
-        # the FAR-1863 concurrency refusal raises before any write, so its
-        # expected_vr is None (the route maps the raise to 429).
+        # Every case stamps an in-transaction TriggerEvent on ``session.add`` —
+        # including the FAR-1863 concurrency refusal, which records
+        # ``concurrency_limit_reached`` before raising. (In the route that write
+        # rolls back with the unwound transaction and the refusal is
+        # re-recorded post-unwind; the engine-level contract asserted here is
+        # that a refusal is never silent.)
         found = any(getattr(c[0][0], "validation_result", None) == expected_vr for c in session.add.call_args_list)
         assert found
 
@@ -1120,6 +1124,10 @@ async def test_handle_webhook_refuses_at_concurrency_limit_without_creating_run(
     create_run.assert_not_awaited()
     assert excinfo.value.trigger_id == trigger.id
     assert excinfo.value.limit == 2
+    # The refusal is not silent: the ``concurrency_limit_reached`` event is
+    # recorded before the raise (the receive route re-records it post-unwind).
+    recorded = [c[0][0] for c in session.add.call_args_list if getattr(c[0][0], "validation_result", None)]
+    assert any(te.validation_result == "concurrency_limit_reached" for te in recorded)
 
 
 # ---------------------------------------------------------------------------
