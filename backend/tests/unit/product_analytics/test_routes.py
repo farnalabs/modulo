@@ -131,9 +131,10 @@ class TestConsentEndpoint:
         assert retry.status_code == 409, retry.text
 
     def test_consent_write_patches_only_its_block_without_prelatching(self, env) -> None:
-        """FAR-1832: the consent writer delegates to the atomic settings patch
-        with ONLY the ``product_analytics`` block and issues no ``FOR UPDATE``
-        org select of its own.
+        """FAR-1832 QA F1: the consent writer delegates to the atomic settings
+        patch with a NESTED sub-field patch for ``product_analytics`` only —
+        composed from the request alone — and issues no ``FOR UPDATE`` org
+        select of its own.
 
         Fails against the old shape two ways: the old code never called the
         patch helper (``captured`` stays empty) and its existence read took
@@ -146,7 +147,12 @@ class TestConsentEndpoint:
         async def _fake_patch(_session, org_id, patch=None, delete_keys=None, **kwargs):
             captured["patch"] = patch
             captured["delete_keys"] = delete_keys
+            captured["nested_patch"] = kwargs.get("nested_patch")
             merged = dict(org.settings_json or {})
+            for nested_key, nested_sub in (kwargs.get("nested_patch") or {}).items():
+                sub = dict(merged.get(nested_key) or {})
+                sub.update(nested_sub)
+                merged[nested_key] = sub
             merged.update(patch or {})
             org.settings_json = merged
             return merged
@@ -154,9 +160,11 @@ class TestConsentEndpoint:
         with patch.object(pa_module, "update_org_settings_patch", new=_fake_patch):
             resp = _client().post(_CONSENT_URL, json={"action": "accept"})
         assert resp.status_code == 200, resp.text
-        assert set(captured["patch"]) == {"product_analytics"}
+        assert captured["patch"] is None
+        assert set(captured["nested_patch"]) == {"product_analytics"}
         assert captured["delete_keys"] is None
         assert org.settings_json["product_analytics"]["level"] == "all"
+        assert org.settings_json["product_analytics"]["prompted"] == "yes"
         for call in session.execute.await_args_list:
             assert "FOR UPDATE" not in str(call.args[0]), f"writer must not pre-lock the org row: {call.args[0]}"
 
@@ -212,15 +220,21 @@ class TestUpdateLevelEndpoint:
         assert resp.status_code == 422, resp.text
 
     def test_put_level_patches_only_its_block_without_prelatching(self, env) -> None:
-        """FAR-1832: the admin level toggle delegates to the atomic settings
-        patch with ONLY the ``product_analytics`` block — no ``FOR UPDATE``
-        pre-lock, no whole-column write (same contract as the consent POST)."""
+        """FAR-1832 QA F1: the admin level toggle delegates to the atomic
+        settings patch with a NESTED sub-field patch for ``product_analytics``
+        only — composed from the request alone — no ``FOR UPDATE`` pre-lock,
+        no whole-block write (same contract as the consent POST)."""
         session, org = env
         captured: dict[str, object] = {}
 
         async def _fake_patch(_session, org_id, patch=None, delete_keys=None, **kwargs):
             captured["patch"] = patch
+            captured["nested_patch"] = kwargs.get("nested_patch")
             merged = dict(org.settings_json or {})
+            for nested_key, nested_sub in (kwargs.get("nested_patch") or {}).items():
+                sub = dict(merged.get(nested_key) or {})
+                sub.update(nested_sub)
+                merged[nested_key] = sub
             merged.update(patch or {})
             org.settings_json = merged
             return merged
@@ -228,7 +242,14 @@ class TestUpdateLevelEndpoint:
         with patch.object(pa_module, "update_org_settings_patch", new=_fake_patch):
             resp = _client().put(_PRODUCT_ANALYTICS_URL, json={"level": "all"})
         assert resp.status_code == 200, resp.text
-        assert set(captured["patch"]) == {"product_analytics"}
+        assert captured["patch"] is None
+        assert set(captured["nested_patch"]) == {"product_analytics"}
+        # The subpatch carries ONLY this toggle's sub-fields — never the
+        # consent writer's prompted* fields (a whole-block replace would).
+        nested = captured["nested_patch"]
+        assert isinstance(nested, dict)
+        subpatch = nested["product_analytics"]
+        assert set(subpatch) == {"level", "level_changed_at"}
         assert org.settings_json["product_analytics"]["level"] == "all"
         for call in session.execute.await_args_list:
             assert "FOR UPDATE" not in str(call.args[0]), f"writer must not pre-lock the org row: {call.args[0]}"

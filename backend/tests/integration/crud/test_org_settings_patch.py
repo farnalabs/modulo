@@ -11,6 +11,7 @@ writer wrote the whole stale column back and dropped the first writer's key.
 import json
 import uuid
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import text
@@ -726,3 +727,70 @@ async def test_otel_missing_org_keeps_the_valueerror_contract(db_engine: AsyncEn
         await update_otel_config(session, missing_id, {"otlp_endpoint": "http://q:4317"})
     await session.rollback()
     await session.close()
+
+
+# ---------------------------------------------------------------------------
+# FAR-1832 QA F1: two concurrent writers of DIFFERENT sub-fields of the
+# ``product_analytics`` block both survive. Drives the REAL route handlers:
+# the consent writer's read→compose→write window is interleaved (deterministic)
+# with a full admin level-toggle handler run on its own session/transaction.
+# Fails on the pre-fix code: the consent writer composed the whole block from
+# its stale read and the top-level jsonb || REPLACED the admin's sub-fields.
+# ---------------------------------------------------------------------------
+
+
+async def test_product_analytics_concurrent_subfield_writers_both_survive(
+    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from modulo.api.routes import product_analytics as pa_module
+    from modulo.api.routes.product_analytics import (
+        ConsentRequest,
+        LevelUpdateRequest,
+        post_consent,
+        update_product_analytics_level,
+    )
+    from modulo.auth.jwt import TenantPrincipal
+
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    principal = TenantPrincipal(
+        username="writer",
+        organisation_id=org_id,
+        account_id=uuid.uuid4(),
+        org_role="admin",
+    )
+
+    real_get_org = pa_module._get_org_or_404
+    fired = {"done": False}
+
+    # The audit append needs a real account row (FK); it is not what this test
+    # pins — the settings-write shape is — so stub it for both handlers.
+    monkeypatch.setattr(pa_module, "append_audit_event", AsyncMock())
+
+    async def _interleaving_get_org(session: Any, oid: uuid.UUID) -> Any:
+        """Run a FULL admin level-toggle handler inside the consent writer's
+        read→compose→write window (once), then return the (now stale) org."""
+        org = await real_get_org(session, oid)
+        if not fired["done"]:
+            fired["done"] = True
+            admin_session = factory()
+            await update_product_analytics_level(LevelUpdateRequest(level="all"), principal, admin_session)
+        return org
+
+    monkeypatch.setattr(pa_module, "_get_org_or_404", _interleaving_get_org)
+
+    # Writer 1: real consent handler (dismiss changes ONLY prompted*).
+    consent_session = factory()
+    response = await post_consent(ConsentRequest(action="dismiss"), principal, consent_session)
+    assert response.prompted == "dismissed", f"handler must complete: {response!r}"
+    assert fired["done"], "the interleaved admin writer must have run inside the window"
+
+    settings = await _read_settings(db_engine, org_id)
+    block = settings["product_analytics"]
+    assert block["prompted"] == "dismissed", f"the consent writer's sub-fields must survive: {block!r}"
+    assert block["prompted_at"] is not None
+    assert block["level"] == "all", (
+        "the interleaved admin level change must survive the consent writer's patch — "
+        f"pre-fix the whole-block replace clobbered it: {block!r}"
+    )
+    assert block["level_changed_at"] is not None

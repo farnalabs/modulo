@@ -319,6 +319,41 @@ async def test_update_org_json_column_patch_rejects_unknown_column(monkeypatch: 
         )
 
 
+async def test_nested_patch_rejects_more_than_one_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QA F1: at most ONE nested key per call — a multi-key compose would need
+    chained jsonb_set statements that do not yet have a caller."""
+    _stub_dependencies(monkeypatch, dialect="sqlite", bound_org=uuid.uuid4())
+    with pytest.raises(ValueError, match="at most one top-level key"):
+        await update_org_settings_patch(
+            _FakeSession(),
+            uuid.uuid4(),
+            nested_patch={"a": {"x": 1}, "b": {"y": 2}},
+        )
+
+
+async def test_nested_patch_rejects_overlap_with_top_level_patch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A key in BOTH patch and nested_patch would have an ambiguous compose
+    order — refused rather than silently resolved."""
+    _stub_dependencies(monkeypatch, dialect="sqlite", bound_org=uuid.uuid4())
+    with pytest.raises(ValueError, match="also appear in patch"):
+        await update_org_settings_patch(
+            _FakeSession(),
+            uuid.uuid4(),
+            {"block": {"whole": True}},
+            nested_patch={"block": {"sub": 1}},
+        )
+
+
+async def test_nested_patch_settings_postgres_statement_shape() -> None:
+    """The nested settings statement is a jsonb_set sub-field compose — not a
+    whole-block replace."""
+    sql = str(_pg_patch_statement("settings_json", True, nested=True)).lower()
+    assert "jsonb_set" in sql
+    assert ":nested_patch" in sql
+    assert ":nested_key" in sql
+    assert "deleted_at is null" in sql
+
+
 async def test_apply_postgres_otel_path_patches_the_otel_column_without_live_predicate() -> None:
     """The OTel Postgres branch writes ``otel_config_json`` and syncs THAT
     column on the identity map — same machinery, different column."""

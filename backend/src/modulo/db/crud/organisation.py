@@ -223,6 +223,7 @@ async def update_org_settings_patch(
     delete_keys: list[str] | None = None,
     *,
     allow_unbound_context: bool = False,
+    nested_patch: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Atomically merge (and/or remove) top-level keys of ``settings_json`` (FAR-1830).
 
@@ -244,6 +245,16 @@ async def update_org_settings_patch(
     - Generic backends (SQLite / MariaDB, tests + legacy): an equivalent
       read-merge-write under ``SELECT ... FOR UPDATE``. Dialect-gated so the
       JSONB operators never reach a backend that lacks them.
+
+    ``nested_patch`` (FAR-1832 QA F1) composes ONE top-level key at the
+    SUB-FIELD level: ``settings_json = jsonb_set(…, '{key}',
+    COALESCE(settings_json->'key','{}') || :subpatch)``. A top-level ``patch``
+    entry REPLACES the whole value of its key; a ``nested_patch`` entry MERGES
+    into the stored value's sub-fields, so two writers of DIFFERENT sub-fields
+    of the same block (e.g. the ``product_analytics`` consent writer and the
+    admin level toggle) both survive. At most ONE nested key per call, and a
+    key must not appear in BOTH ``patch`` and ``nested_patch`` (the ordering
+    would be ambiguous — refused rather than silently resolved).
 
     FAR-1832 QA F3: the implementation is SHARED with the OTel-config writer —
     this function is a thin wrapper over
@@ -285,6 +296,7 @@ async def update_org_settings_patch(
         column="settings_json",
         require_live_row=True,
         allow_unbound_context=allow_unbound_context,
+        nested_patch=nested_patch,
     )
     _invalidate_settings_derived_caches()
     return settings
@@ -299,6 +311,7 @@ async def update_org_json_column_patch(
     column: str,
     require_live_row: bool,
     allow_unbound_context: bool = False,
+    nested_patch: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Atomically merge (and/or remove) top-level keys of ONE Organisation JSON column.
 
@@ -328,6 +341,14 @@ async def update_org_json_column_patch(
     """
     if column not in ("settings_json", "otel_config_json"):
         raise ValueError(f"unsupported organisation JSON column: {column!r}")
+    nested = dict(nested_patch or {})
+    if len(nested) > 1:
+        raise ValueError(f"nested_patch supports at most one top-level key per call, got {sorted(nested)!r}")
+    overlap = set(nested) & set(patch)
+    if overlap:
+        raise ValueError(
+            f"nested_patch key(s) {sorted(overlap)!r} also appear in patch — the compose order would be ambiguous"
+        )
 
     # Normalise the target to a ``UUID``: callers occasionally pass the id as a
     # string, and both the tenant-mismatch comparison and the bound SQL /
@@ -359,6 +380,7 @@ async def update_org_json_column_patch(
             delete_keys,
             column=column,
             require_live_row=require_live_row,
+            nested_patch=nested or None,
         )
     else:
         value = await _apply_json_column_patch_generic(
@@ -368,6 +390,7 @@ async def update_org_json_column_patch(
             delete_keys,
             column=column,
             require_live_row=require_live_row,
+            nested_patch=nested or None,
         )
     return value
 
@@ -438,20 +461,46 @@ async def _settings_patch_dialect(session: AsyncSession) -> str:
     return await get_dialect_name(session)
 
 
-def _pg_patch_statement(column: str, require_live_row: bool) -> TextClause:
+def _pg_patch_statement(column: str, require_live_row: bool, *, nested: bool = False) -> TextClause:
     """The single-statement Postgres merge for one (column, live-row) configuration.
 
-    FAR-1832 QA F3: the two supported configurations are selected from
-    CONSTANT statements rather than interpolating the column name into SQL —
-    the ``raw-sql-fstring`` semgrep rule (correctly) forbids identifier
+    FAR-1832 QA F3: the supported configurations are selected from CONSTANT
+    statements rather than interpolating the column name into SQL — the
+    ``raw-sql-fstring`` semgrep rule (correctly) forbids identifier
     interpolation into ``text()``, and the cross-product of the two allowlisted
-    columns and the live-row flag is exactly two shapes: ``settings_json``
-    (with the ``deleted_at IS NULL`` predicate and the ``delete_keys`` clear
-    form) and ``otel_config_json`` (no predicate — FAR-1025 keeps a
-    pending-deletion org's OTel config writable). Anything else raises rather
-    than falling through to a third, unaudited shape.
+    columns, the live-row flag and the nested-sub-field form is a small,
+    audited set. Anything else raises rather than falling through to an
+    unaudited shape.
+
+    The ``nested=True`` variants (QA F1) wrap the base merge in a
+    ``jsonb_set`` that composes the single nested key at the SUB-FIELD level:
+    ``COALESCE(col->key, '{}') || :nested_patch`` — so a writer of one
+    sub-field of a shared block never replaces the sibling sub-fields another
+    writer committed. The base expression is repeated inside ``jsonb_set``
+    because every reference on the right-hand side of an UPDATE sees the OLD
+    row value; the nested compose therefore starts from the same base document
+    the top-level ``||`` produces.
     """
     if column == "settings_json" and require_live_row:
+        if nested:
+            # Full literal (no concatenation/f-string — bandit B608 and the
+            # semgrep raw-sql-fstring rule both reject constructed SQL; every
+            # dynamic piece is a bound parameter). The base merge expression
+            # appears twice because every reference on the right-hand side of
+            # an UPDATE sees the OLD row value: the nested compose starts from
+            # the same base document the top-level || produces.
+            return text(
+                "UPDATE organisations "
+                "SET settings_json = jsonb_set("
+                "(COALESCE(settings_json, '{}'::jsonb) || CAST(:patch AS jsonb)), "
+                "ARRAY[:nested_key]::text[], "
+                "COALESCE((COALESCE(settings_json, '{}'::jsonb) || CAST(:patch AS jsonb)) "
+                "-> CAST(:nested_key AS text), '{}'::jsonb) "
+                "|| CAST(:nested_patch AS jsonb)) "
+                "- CAST(:delete_keys AS text[]) "
+                "WHERE id = :org_id AND deleted_at IS NULL "
+                "RETURNING settings_json"
+            )
         return text(
             "UPDATE organisations "
             "SET settings_json = "
@@ -460,10 +509,11 @@ def _pg_patch_statement(column: str, require_live_row: bool) -> TextClause:
             "WHERE id = :org_id AND deleted_at IS NULL "
             "RETURNING settings_json"
         )
-    if column == "otel_config_json" and not require_live_row:
+    if column == "otel_config_json" and not require_live_row and not nested:
         # No ``deleted_at IS NULL`` predicate (FAR-1025, see
         # ``update_org_json_column_patch``); the empty ``delete_keys`` clear is
-        # a no-op and keeps ONE statement shape across both columns.
+        # a no-op and keeps ONE statement shape across both columns. The OTel
+        # writer never uses a nested sub-patch.
         return text(
             "UPDATE organisations "
             "SET otel_config_json = "
@@ -473,7 +523,8 @@ def _pg_patch_statement(column: str, require_live_row: bool) -> TextClause:
             "RETURNING otel_config_json"
         )
     raise ValueError(
-        f"unsupported org JSON patch configuration: column={column!r} require_live_row={require_live_row!r}"
+        f"unsupported org JSON patch configuration: column={column!r} "
+        f"require_live_row={require_live_row!r} nested={nested!r}"
     )
 
 
@@ -485,12 +536,21 @@ async def _apply_json_column_patch_postgres(
     *,
     column: str = "settings_json",
     require_live_row: bool = True,
+    nested_patch: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    stmt = _pg_patch_statement(column, require_live_row).bindparams(
+    stmt = _pg_patch_statement(column, require_live_row, nested=bool(nested_patch))
+    params: dict[str, Any] = {"org_id": str(organisation_id)}
+    stmt = stmt.bindparams(
         bindparam("patch", value=json.dumps(patch)),
         bindparam("delete_keys", value=delete_keys, type_=ARRAY(Text)),
     )
-    result = await session.execute(stmt, {"org_id": str(organisation_id)})
+    if nested_patch:
+        ((nested_key, nested_sub),) = nested_patch.items()
+        stmt = stmt.bindparams(
+            bindparam("nested_key", value=nested_key),
+            bindparam("nested_patch", value=json.dumps(nested_sub)),
+        )
+    result = await session.execute(stmt, params)
     row = result.first()
     if row is None:
         # No row matched: either the org does not exist OR (when
@@ -512,6 +572,7 @@ async def _apply_json_column_patch_generic(
     *,
     column: str = "settings_json",
     require_live_row: bool = True,
+    nested_patch: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if require_live_row:
         org = await get_organisation(session, organisation_id, for_update=True)
@@ -530,6 +591,14 @@ async def _apply_json_column_patch_generic(
     current = getattr(org, column)
     value = dict(current) if isinstance(current, dict) else {}
     value.update(patch)
+    # Nested sub-field compose (QA F1): merge into the CURRENT value of the
+    # key (post top-level patch — the overlap check above makes that
+    # unambiguous), exactly like the Postgres jsonb_set || does.
+    for nested_key, nested_sub in (nested_patch or {}).items():
+        existing = value.get(nested_key)
+        merged_sub = dict(existing) if isinstance(existing, dict) else {}
+        merged_sub.update(nested_sub)
+        value[nested_key] = merged_sub
     for key in delete_keys:
         value.pop(key, None)
     setattr(org, column, value)

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -31,7 +32,6 @@ from modulo.core.product_analytics.consent import (
     is_egress_allowed,
     is_instance_analytics_enabled,
     is_prompt_eligible,
-    merge_product_analytics_block,
     set_level,
 )
 from modulo.core.product_analytics.constants import DEFAULT_LEVEL, LEVEL_OFF, PRODUCT_ANALYTICS_KEY
@@ -176,22 +176,30 @@ async def post_consent(
                     detail="Consent prompt is not currently eligible. Dismissed prompts re-appear after 7 days.",
                 )
 
-            updated_consent = apply_consent_action(consent, req.action)
-            # FAR-1832: derive the final block through the canonical merge
-            # helper (the single source of truth for block-merge semantics),
-            # then emit ONLY that top-level key via the single-statement atomic
-            # patch — it replaces the ``FOR UPDATE`` whole-column
-            # read-modify-write: the block is written as one whole value while
-            # every sibling settings key survives by jsonb composition. A
-            # soft-deleted org (pending-deletion window) is refused with
-            # ``LookupError`` → the same 404 — the FAR-1830 retention-writer
-            # precedent; reads keep their FAR-1025 opt-out above.
-            final_block = merge_product_analytics_block(org.settings_json, updated_consent)[PRODUCT_ANALYTICS_KEY]
+            # FAR-1832 QA F1: NESTED sub-field patch, composed ONLY from the
+            # request — ``apply_consent_action({}, action, now)`` derives the
+            # exact sub-fields this action changes WITHOUT consulting the
+            # stored block, and the helper's ``jsonb_set(… ||
+            # :nested_patch)`` composes them into the STORED product_analytics
+            # value at the sub-field level. Option (b) over a FOR UPDATE
+            # pre-lock because the write does NOT depend on the previous
+            # stored value: each writer emits only its own sub-fields (the
+            # consent writer writes prompted*, the admin toggle writes level*),
+            # so two concurrent writers of DIFFERENT sub-fields both survive —
+            # the old whole-block patch replaced the entire product_analytics
+            # value and lost one of them. The same ``now`` feeds the response
+            # view and the stored subpatch so they cannot drift. A soft-deleted
+            # org (pending-deletion window) is refused with ``LookupError`` →
+            # the same 404 — the FAR-1830 retention-writer precedent; reads
+            # keep their FAR-1025 opt-out above.
+            now = datetime.now(UTC)
+            updated_consent = apply_consent_action(consent, req.action, now)
+            subpatch = apply_consent_action({}, req.action, now)
             try:
                 await update_org_settings_patch(
                     session,
                     current_user.organisation_id,
-                    {PRODUCT_ANALYTICS_KEY: final_block},
+                    nested_patch={PRODUCT_ANALYTICS_KEY: subpatch},
                 )
             except LookupError:
                 raise HTTPException(
@@ -283,17 +291,20 @@ async def update_product_analytics_level(
             org = await _get_org_or_404(session, current_user.organisation_id)
 
             consent = get_product_analytics_block(org.settings_json)
-            updated_consent = set_level(consent, req.level)
-            # FAR-1832: same contract as the consent POST — derive the final
-            # block through the canonical merge helper and patch ONLY that key
-            # atomically (no ``FOR UPDATE`` pre-lock, no whole-column write,
-            # sibling keys survive by composition, soft-deleted org → 404).
-            final_block = merge_product_analytics_block(org.settings_json, updated_consent)[PRODUCT_ANALYTICS_KEY]
+            now = datetime.now(UTC)
+            updated_consent = set_level(consent, req.level, now)
+            # FAR-1832 QA F1: same contract as the consent POST — the subpatch
+            # is composed ONLY from the request (``set_level({}, level, now)``
+            # emits exactly this toggle's sub-fields) and is written through
+            # the helper's nested sub-field patch, so a concurrent consent
+            # writer's prompted* sub-fields survive (no ``FOR UPDATE``
+            # pre-lock, no whole-block replace, soft-deleted org → 404).
+            subpatch = set_level({}, req.level, now)
             try:
                 await update_org_settings_patch(
                     session,
                     current_user.organisation_id,
-                    {PRODUCT_ANALYTICS_KEY: final_block},
+                    nested_patch={PRODUCT_ANALYTICS_KEY: subpatch},
                 )
             except LookupError:
                 raise HTTPException(
