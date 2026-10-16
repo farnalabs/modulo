@@ -82,4 +82,27 @@ describe('SidebarLink', () => {
     expect(wrapper.find('a').attributes('aria-current')).toBe('page')
     expect(wrapper.find('a').classes()).toContain('active')
   })
+
+  describe('touch sizing (collapsed rail)', () => {
+    it('uses the 40x40 collapsed box in default mode (no touch class)', () => {
+      const wrapper = mountLink({ collapsed: true })
+      const link = wrapper.find('a')
+      expect(link.classes()).toContain('sidebar-link--collapsed')
+      expect(link.classes()).not.toContain('sidebar-link--collapsed--touch')
+    })
+
+    it('uses the 44x44 collapsed box in touch mode', () => {
+      const wrapper = mountLink({ collapsed: true, size: 'touch' })
+      const link = wrapper.find('a')
+      expect(link.classes()).toContain('sidebar-link--collapsed')
+      expect(link.classes()).toContain('sidebar-link--collapsed--touch')
+    })
+
+    it('never applies the touch box to an expanded (non-rail) link', () => {
+      const wrapper = mountLink({ size: 'touch' })
+      const link = wrapper.find('a')
+      expect(link.classes()).not.toContain('sidebar-link--collapsed')
+      expect(link.classes()).not.toContain('sidebar-link--collapsed--touch')
+    })
+  })
 })
