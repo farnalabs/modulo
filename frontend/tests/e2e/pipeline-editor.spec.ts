@@ -174,7 +174,7 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     })
   }
 
-  test('editor fits the leftover viewport height — toolbar and canvas fully on screen', async ({ page, env }) => {
+  test('editor fits the leftover viewport height — toolbar and canvas fully on screen', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await mockEditorWithNode(page)
 
@@ -204,7 +204,7 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     expect(doc.scrollHeight).toBeLessThanOrEqual(doc.clientHeight)
   })
 
-  test('node properties panel opens as a closable overlay without crushing the canvas', async ({ page, env }) => {
+  test('node properties panel opens as a closable overlay without crushing the canvas', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await mockEditorWithNode(page)
 
@@ -233,7 +233,7 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     expect((await flow.boundingBox())!.width).toBeGreaterThan(200)
   })
 
-  test('fit observer re-fits on chrome above the editor, not on viewport style writes', async ({ page, env }) => {
+  test('fit observer re-fits on chrome above the editor, not on viewport style writes', { tag: '@regression' }, async ({ page, env }) => {
     // Count measurements of the editor root: refitMobileEditor's
     // getBoundingClientRect is the only page code that reads that element,
     // so each call == one scheduled re-fit of the mobile pin.
