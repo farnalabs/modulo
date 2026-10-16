@@ -424,6 +424,9 @@ def _handback_decision(row: Any, graph_json: Any) -> _HandbackDecision:
     policy_ok, policy_reason = _node_started_policy_allows(row)
     node_start_safe = graph_idempotent and policy_ok
 
+    # age_minutes=0 disables ONLY the age leg (a shutdown hands back runs of
+    # ANY age); the in-flight shield leg inside _is_nodeless_zombie_row stays
+    # active, so a still-dispatching row is never handed back.
     if _is_nodeless_zombie_row(row, 0):
         if _should_redispatch_nodeless(row):
             return _HandbackDecision(may_requeue=True, node_start_safe=node_start_safe, reason="")
