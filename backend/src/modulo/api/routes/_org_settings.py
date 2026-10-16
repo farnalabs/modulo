@@ -1,12 +1,12 @@
 """Shared route-layer wrapper for the canonical org-settings patch (FAR-1832 QA F7).
 
-The acceptance of FAR-1830/1832 is ONE canonical way to write org settings
-keys — yet every converted route hand-copied the same
-``except LookupError -> HTTPException(404, MSG_ORGANISATION_NOT_FOUND)``
-exit around its ``update_org_settings_patch`` call (nine sites at QA time). A
-new writer that omits the mapping surfaces a raw 500 instead of a 404, and a
-change to the not-found exception type or status would need a lockstep edit of
-every site. This helper is that ONE translation:
+FAR-1830/1832 established ONE canonical way to write org settings keys, but
+every converted route hand-copied the same
+``except LookupError -> HTTPException(404, MSG_ORGANISATION_NOT_FOUND)`` exit
+around its ``update_org_settings_patch`` call. A new writer that omits the
+mapping surfaces a raw 500 instead of a 404, and a change to the not-found
+exception type or status would need a lockstep edit of every site. This helper
+is the shared translation:
 
 .. code-block:: python
 
@@ -15,9 +15,25 @@ every site. This helper is that ONE translation:
 It lives beside the route modules (a module-level cross-route import is
 allowed — only inline/function-local route imports are blocked by semgrep)
 and imports nothing route-specific, so ``admin``, ``admin_orgs`` and
-``product_analytics`` share it without a cycle. The response shape is
-byte-identical to the hand-copied blocks it replaces: ``HTTPException(404,
-MSG_ORGANISATION_NOT_FOUND)`` raised ``from None``.
+``product_analytics`` share it without a cycle. The 404 response shape is
+byte-identical to the hand-copied blocks it replaces:
+``HTTPException(404, MSG_ORGANISATION_NOT_FOUND)`` raised ``from None``.
+
+Call-site set (FAR-1832 QA F12): the routes that write org settings through
+the atomic patch helper use this wrapper — ``admin_orgs`` (license set/clear),
+``admin`` (sandbox concurrency, HITL review window, run concurrency, retention)
+and ``product_analytics`` (consent, level). Two org-settings writers do NOT:
+``admin.admin_update_work_item_agent_minting`` and
+``admin.admin_update_community_objects`` wrap ``set_org_flag`` (a crud call
+with its own not-found path), so they keep their own ``LookupError -> 404``
+mapping deliberately. This helper is therefore the shared translation for the
+patch-helper call sites, not a universal one for every org-settings writer.
+
+Patch contract (mirrors :func:`update_org_json_column_patch`): at most ONE
+``nested_patch`` key per call, and no key may appear in BOTH ``patch`` and
+``nested_patch``, nor in ``delete_keys`` as well as either — the compose order
+would be ambiguous, so the crud entry point refuses it rather than silently
+resolving delete-wins.
 """
 
 from __future__ import annotations
@@ -47,18 +63,15 @@ async def apply_org_settings_patch_or_404(
     Wraps :func:`modulo.db.crud.organisation.update_org_settings_patch`,
     translating its ``LookupError`` (org missing or soft-deleted — the patch
     helper refuses both) into the routes' shared ``404`` with
-    ``MSG_ORGANISATION_NOT_FOUND``. ``patch`` is passed positionally through
-    so call-site spies on ``_org_settings.update_org_settings_patch`` observe
-    the same ``(session, org_id, patch)`` shape the hand-copied blocks had.
+    ``MSG_ORGANISATION_NOT_FOUND``. ``patch`` is always passed positionally so
+    call-site spies on ``_org_settings.update_org_settings_patch`` observe the
+    same ``(session, org_id, patch)`` shape the hand-copied blocks had; an
+    absent top-level patch is passed as ``None`` (one call shape, no arity
+    branch).
     """
     try:
-        if patch is not None:
-            # Positional (session, org_id, patch) — the exact call shape the
-            # hand-copied blocks used, so route-level spies and their
-            # ``call_args.args[2]`` assertions keep working unchanged.
-            return await update_org_settings_patch(
-                session, org_id, patch, delete_keys=delete_keys, nested_patch=nested_patch
-            )
-        return await update_org_settings_patch(session, org_id, delete_keys=delete_keys, nested_patch=nested_patch)
+        return await update_org_settings_patch(
+            session, org_id, patch, delete_keys=delete_keys, nested_patch=nested_patch
+        )
     except LookupError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND) from None

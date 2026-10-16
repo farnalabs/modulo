@@ -569,7 +569,10 @@ def test_remove_org_license_success(api: tuple[TestClient, AsyncMock], monkeypat
     # sibling-survives half of the old assertion is proven against a real DB
     # in tests/integration/crud/test_org_settings_patch.py).
     assert update.call_args.kwargs.get("delete_keys") == ["license_key"]
-    assert len(update.call_args.args) == 2  # (session, org_id) only
+    # QA F12: the route helper now ALWAYS passes ``patch`` positionally (None
+    # here), so the positional args are (session, org_id, None) — no blob.
+    assert len(update.call_args.args) == 3
+    assert update.call_args.args[2] is None
 
 
 def test_remove_org_license_missing_org_404(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:

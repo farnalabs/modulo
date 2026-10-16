@@ -709,12 +709,14 @@ def _license_removed(request):
     assert update_mock is not None, "update_org_settings_patch was not called"
     assert update_mock.call_count == 1, f"expected one write, got {update_mock.call_count}"
     # FAR-1832: the clear goes through the helper's ``delete_keys`` form —
-    # exactly one top-level key removed, and no whole-column blob is passed
-    # (positional args are just session + org id).
+    # exactly one top-level key removed, and no whole-column blob is passed.
+    # QA F12: the route helper always passes ``patch`` positionally now (None
+    # on this path), so the positional args are (session, org_id, None).
     assert update_mock.call_args.kwargs.get("delete_keys") == ["license_key"], (
         f"expected a delete_keys clear of license_key, got {update_mock.call_args}"
     )
-    assert len(update_mock.call_args.args) == 2, f"expected no whole-column blob, got {update_mock.call_args.args}"
+    assert len(update_mock.call_args.args) == 3, f"expected no whole-column blob, got {update_mock.call_args.args}"
+    assert update_mock.call_args.args[2] is None
 
 
 @then(parsers.parse("I receive a {status:d} {error_type} error"))

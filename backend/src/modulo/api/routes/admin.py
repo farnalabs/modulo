@@ -3928,17 +3928,17 @@ async def admin_update_retention(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            try:
-                # FAR-1830: emit ONLY the ``retention_days`` key via the atomic
-                # patch. A whole-column write from a stale read would drop every
-                # other concern's key committed in the read→write window. A
-                # soft-deleted org is refused (LookupError) — matching the patch
-                # helper's generic path.
-                await update_org_settings_patch(
-                    session, current_user.organisation_id, {"retention_days": req.retention_days}
-                )
-            except LookupError:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND) from None
+            # FAR-1830: emit ONLY the ``retention_days`` key via the atomic
+            # patch. A whole-column write from a stale read would drop every
+            # other concern's key committed in the read→write window. A
+            # soft-deleted org is refused with ``LookupError`` → the shared
+            # route helper's 404 (QA F7/F12), byte-identical to the hand-copied
+            # block it replaces.
+            await apply_org_settings_patch_or_404(
+                session,
+                current_user.organisation_id,
+                patch={"retention_days": req.retention_days},
+            )
     except asyncio.CancelledError:
         raise
     except IntegrityError:

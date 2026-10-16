@@ -642,9 +642,12 @@ class TestOrgLicenseAtomicPatch:
         self._assert_no_prelatch(get_recorder)
         # The clear goes through the patch helper's ``delete_keys`` form —
         # exactly one top-level key removed, in the same transaction — and no
-        # whole-column blob is passed (positional args are just session+org id).
+        # whole-column blob is passed. QA F12: the route helper now always
+        # passes ``patch`` positionally (as ``None`` here), so the positional
+        # args are session + org id + None; no patch blob is smuggled in.
         assert patch_recorder.call_args.kwargs.get("delete_keys") == ["license_key"]
-        assert len(patch_recorder.call_args.args) == 2
+        assert len(patch_recorder.call_args.args) == 3
+        assert patch_recorder.call_args.args[2] is None
         handler_begins = [i for i, e in enumerate(events) if e == "begin-enter"]
         last_begin = handler_begins[-1]
         exits = [i for i, e in enumerate(events) if e == "begin-exit"]
