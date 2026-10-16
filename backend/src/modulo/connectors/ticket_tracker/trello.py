@@ -48,8 +48,9 @@ class _RedactedTrelloError(Exception):
 class TrelloTicketTracker(TicketTrackerBase):
     """Trello connector for the configured board.
 
-    Board-scoped operations (:meth:`list_tickets`, :meth:`create_ticket`, and
-    the listing path of :meth:`query`) act on the configured board, while
+    :meth:`list_tickets` and the listing path of :meth:`query` act on the
+    configured board. :meth:`create_ticket` is list-scoped: its destination
+    ``idList`` is caller-supplied and Trello has no board-level default list.
     :meth:`get_ticket` and :meth:`update_ticket` address any card by id via
     ``/cards/{id}`` independent of that board.
 
