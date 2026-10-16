@@ -15,6 +15,7 @@ Org context validated per-event for streaming (SSE) connections.
 
 import asyncio
 import contextvars
+import copy
 import functools
 import json
 import logging
@@ -215,6 +216,7 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 from modulo.settings import get_settings
+from modulo.util import callable_label
 
 # NOTE: a `if TYPE_CHECKING:` block used to sit here as an empty placeholder;
 # it held no imports and was removed as a deliberate no-op (S108). Re-add it
@@ -2108,10 +2110,14 @@ async def _run_db_shell[**TOOL_SHELL_P](
       — classified by exception type (FAR-1502), ``server_error`` only when
       nothing more specific is knowable.
     """
-    # `fn.__name__` is the only per-tool identity available here —
+    # `callable_label(fn)` is the only per-tool identity available here —
     # ``cfg.log_constant`` is a "<tool> failed" log MESSAGE, not a key. The
     # classifier appends ``.session_contract_error`` itself (FAR-1482).
-    log_key = f"mcp.{fn.__name__}"
+    # ``callable_label`` (not ``fn.__name__``): the tool body is only known to
+    # be callable, and a callable object / partial has no ``__name__`` — reading
+    # it here would raise AttributeError ABOVE the ``try``, escaping the whole
+    # error ladder this wrapper exists to provide.
+    log_key = f"mcp.{callable_label(fn)}"
     try:
         return await fn(*args, **kwargs)
     except MCPAuthorizationError as exc:
@@ -3145,6 +3151,7 @@ async def _list_runs_impl(
                 return _team_scope_error("pipeline", str(pid))
         result = await db_list_runs(
             s,
+            organisation_id=org_id,
             pipeline_id=pid,
             status=status,
             page=1,
@@ -3948,6 +3955,19 @@ async def _replace_pipeline_graph_txn(
         dispatch_err = await _reject_unsupported_dispatch_bindings(s, org_id, nodes)
         if dispatch_err is not None:
             return dispatch_err
+        # FAR-1810 review (MAJOR): the MCP surface is an explicit-save surface,
+        # so it must run the SAME FAR-488a agent-command sync the REST graph
+        # endpoints run BEFORE the write mints the edit snapshot. The snapshot
+        # copy's ``_materialize_agent_fields`` OVERWRITES each bound node's
+        # ``agent_commands`` with the Agent-row value at snapshot time, so
+        # syncing first makes the live graph the write persists and the new
+        # edit snapshot agree — and any rollback replaying that snapshot pins
+        # the command the caller saved, not the pre-sync Agent-row value. The
+        # sync runs inside this transaction (``_session`` commits it with the
+        # graph write), so a failure rolls the whole save back.
+        from modulo.api.routes.pipelines import _sync_agent_row_commands
+
+        await _sync_agent_row_commands(s, org_id=org_id, nodes=nodes)
         # FAR-309 PR A review: the guardrail-binding strip guard runs in the
         # service layer (replace_pipeline_graph, under the row lock) — the
         # MCP surface inherits it via caller_type="mcp".
@@ -3961,6 +3981,9 @@ async def _replace_pipeline_graph_txn(
             caller_type="mcp",
             account_id=graph_account_id,
             is_guardrail_admin=is_guardrail_admin,
+            # FAR-1810: an MCP graph update is an explicit save — it records an
+            # immutable edit snapshot like the REST graph-write endpoints.
+            record_edit_snapshot=True,
         )
         if result is None:
             return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
@@ -4115,6 +4138,29 @@ async def _update_pipeline_graph_impl(
     }
 
 
+def _snapshot_lock_busy_error(pipeline_id: str) -> dict[str, Any]:
+    """The retryable ``snapshot_lock_busy`` envelope for a graph SAVE (FAR-1810).
+
+    A graph save that loses the bounded snapshot-lock race (the graph-copy
+    advisory lock held by a concurrent run start) is CONTENTION, not an
+    unexpected fault. Before this translation the exception escaped the tool
+    wrapper's ``except Exception`` arm and answered a generic ``server_error``,
+    reporting a transient busy lock as a server bug. The payload mirrors the
+    run-start contract ``trigger_pipeline`` already returns so a caller can
+    branch on one code across both surfaces.
+    """
+    from modulo.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS
+
+    return {
+        "error": "snapshot_lock_busy",
+        "pipeline_id": pipeline_id,
+        "detail": (
+            f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — "
+            "retry the save once the concurrent snapshot completes"
+        ),
+    }
+
+
 @mcp.tool(
     description="Set or replace the graph (nodes + edges) of an existing pipeline. "
     "Pass nodes as a list of dicts with id, node_type, agent_id, position (x, y), "
@@ -4151,6 +4197,12 @@ async def update_pipeline_graph(
         return await _update_pipeline_graph_impl(pipeline_id, nodes, edges)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except SnapshotLockNotAvailableError:
+        # FAR-1810: an edit snapshot's bounded lock wait losing its race is a
+        # retryable contention, not a server bug — without this arm the
+        # exception fell through to the generic ``Exception`` arm below.
+        _log.warning("update_pipeline_graph snapshot_lock_busy pipeline=%s", pipeline_id)
+        return _snapshot_lock_busy_error(pipeline_id)
     except ProgrammingError:
         _log.exception("update_pipeline_graph failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -4238,7 +4290,20 @@ def _apply_node_connector_binding(
             "field": "dispatch_action",
             "detail": f"dispatch_action must be one of {list(_BIND_DISPATCH_ACTIONS)}, got {dispatch_action!r}",
         }
-    nodes = list(pipeline.graph_nodes_json) if pipeline.graph_nodes_json else []
+    # WORK ON A DEEP COPY — never mutate the ORM-loaded value in place.
+    # ``pipelines.graph_nodes_json`` is a plain JSON column (no Mutable
+    # wrapper), so an in-place edit of a loaded node dict is invisible to the
+    # unit of work: the reassignment below then handed SQLAlchemy a list whose
+    # ELEMENTS were the very dicts the old value still points at, ``old ==
+    # new``, history came back UNCHANGED and the flush issued NO UPDATE at all.
+    # The tool answered ``status: "bound"`` while the stored graph never
+    # changed — and the edit snapshot minted from the in-memory object then
+    # disagreed with the row. Observed against the real ORM before this copy:
+    # ``attributes.get_history(pipeline, "graph_nodes_json").has_changes()``
+    # was False after a successful bind, and the committed row had no
+    # ``connector_binding``. The copy also makes the caller's no-op comparison
+    # (FAR-1810) genuinely pre-state vs post-state.
+    nodes = copy.deepcopy(list(pipeline.graph_nodes_json)) if pipeline.graph_nodes_json else []
     target = None
     for node in nodes:
         if uuid.UUID(node["id"]) == nid:
@@ -4413,6 +4478,37 @@ async def bind_connector_to_node(
             # validator enforces also holds on this write path.
             from modulo.connectors.base import connector_type_supports_dispatch
 
+            # FAR-1810: capture the pre-bind node payload for no-op suppression
+            # (a re-bind that changes nothing must not push a snapshot).
+            #
+            # The copy MUST be DEEP (the exact pattern ``replace_pipeline_graph``
+            # uses for the same comparison): ``_apply_node_connector_binding``
+            # builds its working list the same shallow way and then mutates each
+            # target node dict IN PLACE (``target["connector_binding"] = ...``).
+            # A shallow ``list(...)`` copies only the container, so every element
+            # is the SAME dict object the post-bind list holds — the comparison
+            # below would then compare the mutated graph against ITSELF, read
+            # "unchanged" for EVERY bind, and silently suppress every snapshot
+            # (making the fail-closed ``snapshot is None`` guard underneath it
+            # unreachable on this surface).
+            previous_nodes = copy.deepcopy(list(pipeline.graph_nodes_json or []))
+
+            # FAR-1471: attribute the write to the caller's ACCOUNT id through
+            # the same ladder ``_update_pipeline_graph_impl`` uses. Every
+            # production auth path sets ``_ctx_user_id`` to the credential's
+            # owning account; a session without one RAISES here and is caught,
+            # so the snapshot is written honestly unattributed (account_id NULL)
+            # with a warning, never silently attributed to nobody.
+            try:
+                bind_account_id: uuid.UUID | None = _ctx_user_id_val()
+            except McpAuthContextError:
+                _log.warning(
+                    "mcp.bind_connector_to_node.unattributed_write pipeline_id=%s: "
+                    "no authenticated user context for this MCP request",
+                    pipeline_id,
+                )
+                bind_account_id = None
+
             bind_error = _apply_node_connector_binding(
                 pipeline,
                 nid,
@@ -4426,6 +4522,28 @@ async def bind_connector_to_node(
             if bind_error is not None:
                 return bind_error
             await s.flush()
+
+            # FAR-1810: a connector bind mutates node binding state in the graph,
+            # so it records an edit snapshot in the SAME transaction — the bind is
+            # a real graph edit and must be restorable. The pipeline row is held
+            # FOR UPDATE, so the snapshot's allocation lock is self-reentrant (see
+            # ``_acquire_snapshot_allocation_lock``). Fail closed: a snapshot error
+            # propagates to the handler's error envelope and rolls the bind back.
+            from modulo.db.crud.pipeline import _graph_content_unchanged
+            from modulo.db.crud.pipeline_snapshot import create_snapshot_edit
+
+            if not _graph_content_unchanged(previous_nodes, [], list(pipeline.graph_nodes_json or []), []):
+                snapshot = await create_snapshot_edit(s, pipeline_id=pid, account_id=bind_account_id)
+                if snapshot is None:
+                    raise RuntimeError(
+                        f"connector bind on pipeline {pid} could not record its edit snapshot; "
+                        "refusing to commit an unversioned graph write"
+                    )
+                _log.info(
+                    "pipeline.connector_bind_snapshot_created pipeline_id=%s snapshot_version=%s",
+                    pid,
+                    snapshot.snapshot_version,
+                )
 
         response: dict[str, Any] = {
             "pipeline_id": pipeline_id,
@@ -4441,6 +4559,12 @@ async def bind_connector_to_node(
         return response
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except SnapshotLockNotAvailableError:
+        # FAR-1810: the bind's edit snapshot can lose the bounded lock race to
+        # a concurrent run start — a retryable contention, never a generic
+        # server_error (the transaction rolls the bind back with it).
+        _log.warning("bind_connector_to_node snapshot_lock_busy pipeline_id=%s", pipeline_id)
+        return _snapshot_lock_busy_error(pipeline_id)
     except ProgrammingError:
         _log.exception("bind_connector_to_node failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -4618,8 +4742,11 @@ async def trigger_pipeline(
         return _tool_exception_error("Failed to trigger pipeline", exc, "mcp.trigger_pipeline")
 
 
-async def _load_run_for_status(s: AsyncSession, rid: uuid.UUID) -> Any | None:
-    run = await get_run(s, rid)
+async def _load_run_for_status(s: AsyncSession, rid: uuid.UUID, org_id: uuid.UUID) -> Any | None:
+    # Defence-in-depth org predicate (FAR-328): the MCP session already applies
+    # RLS via ``_session(org_id)``; the explicit filter makes cross-tenant
+    # access impossible even if RLS were misconfigured.
+    run = await get_run(s, rid, organisation_id=org_id)
     if run is None:
         return None
     # The run carries its own owner_team_id (snapshot at creation) — that
@@ -4740,7 +4867,7 @@ async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
         return rid_err
     assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
     async with _session(org_id) as s:
-        run = await _load_run_for_status(s, rid)
+        run = await _load_run_for_status(s, rid, org_id)
         if run is _TEAM_SCOPE_ERROR:
             return _team_scope_error("run", run_id)
         if run is None:
@@ -4830,7 +4957,7 @@ async def _get_run_output_impl(run_id: str, node_id: str) -> dict[str, Any]:
         return rid_err
     assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
     async with _session(org_id) as s:
-        run = await get_run(s, rid)
+        run = await get_run(s, rid, organisation_id=org_id)
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
         run_owner_team_id = await _run_owner_team_id(s, run)
@@ -4891,7 +5018,7 @@ async def _get_run_evals_impl(run_id: str) -> dict[str, Any]:
     assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
 
     async with _session(org_id) as s:
-        run = await get_run(s, rid)
+        run = await get_run(s, rid, organisation_id=org_id)  # defence-in-depth org predicate (FAR-328)
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
         if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
@@ -5543,7 +5670,7 @@ async def _cancel_run_impl(run_id: str) -> dict[str, Any]:
         # ``_RETRY_DB`` retry multiplying the wait and then collapsing into a
         # generic ``database_unavailable``.
         await set_mutation_row_lock_timeout(s)
-        run = await get_run(s, rid)
+        run = await get_run(s, rid, organisation_id=org_id)  # defence-in-depth org predicate (FAR-328)
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
         if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
@@ -5823,7 +5950,7 @@ async def _get_hitl_review_impl(run_id: str, review_id: str) -> dict[str, Any]:
         return rid_err
     assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
     async with _session(org_id) as s:
-        run = await _load_hitl_run(s, rid)
+        run = await _load_hitl_run(s, rid, org_id)
         if run is _TEAM_SCOPE_ERROR:
             return _team_scope_error("run", run_id)
         if run is None:
@@ -5951,14 +6078,19 @@ def _parse_hitl_action(
 async def _load_hitl_run(
     s: AsyncSession,
     rid: uuid.UUID,
+    org_id: uuid.UUID,
 ) -> Any | None:
     """Load the HITL gate's run, enforcing the team boundary.
+
+    The read also carries the defence-in-depth org predicate (FAR-328): RLS
+    is the backstop; the explicit filter makes cross-tenant access impossible
+    even if RLS were misconfigured.
 
     Returns the run ORM object on success, ``_TEAM_SCOPE_ERROR`` when a
     team-scoped key must not act on the run, or ``None`` when the run is not
     found.
     """
-    run = await get_run(s, rid)
+    run = await get_run(s, rid, organisation_id=org_id)
     if run is None:
         return None
     if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
@@ -6454,7 +6586,7 @@ async def _review_hitl_impl(
         return {"error": "insufficient_scope", "detail": str(exc)}
 
     async with _session(org_id) as s:
-        run = await _load_hitl_run(s, rid)
+        run = await _load_hitl_run(s, rid, org_id)
         if run is _TEAM_SCOPE_ERROR:
             return _team_scope_error("run", run_id)
         if run is None:
@@ -8236,16 +8368,42 @@ async def list_connector_types() -> dict[str, Any]:
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("list_connector_types")
 
-        from modulo.connectors.base import ConnectorType
+        # FAR-1772: advertise the hub-BUILDABLE catalogue — the same set
+        # ``GET /api/v1/connectors/types`` offers (FAR-1764, the shared
+        # ``buildable_connector_type_ids()`` helper). The raw ``ConnectorType``
+        # enum also contains the abstract labels ``ci-runner`` / ``custom``
+        # that ``_build_connector`` cannot instantiate, and omits the hub-native
+        # CI-runner ids ``github_actions_ci`` / ``gitlab_ci``.
+        from modulo.connectors.base import (
+            CI_RUNNER_CAPABILITIES,
+            ConnectorType,
+            connector_type_supports_dispatch,
+        )
+        from modulo.core.connector_hub import buildable_connector_type_ids
+
+        buildable = buildable_connector_type_ids()
+        # Ordering mirrors the REST route: enum declaration order first, then
+        # hub-native/plugin ids alphabetically.
+        ordered: list[str] = [t.value for t in ConnectorType if t.value in buildable]
+        ordered += sorted(buildable - set(ordered))
 
         items: list[dict[str, Any]] = []
-        for t in ConnectorType:
+        for type_id in ordered:
+            try:
+                capabilities = sorted(c.value for c in ConnectorType(type_id).capabilities)
+            except ValueError:
+                # Hub-native CI-runner ids (github_actions_ci / gitlab_ci)
+                # implement the CI-runner capability contract; plugin-
+                # registered types are not introspectable here (empty list).
+                capabilities = (
+                    sorted(c.value for c in CI_RUNNER_CAPABILITIES) if connector_type_supports_dispatch(type_id) else []
+                )
             item: dict[str, Any] = {
-                "id": t.value,
-                "name": t.value.replace("_", " ").title(),
-                "capabilities": sorted(c.value for c in t.capabilities),
+                "id": type_id,
+                "name": type_id.replace("_", " ").title(),
+                "capabilities": capabilities,
             }
-            metadata = _connector_type_field_metadata(t.value)
+            metadata = _connector_type_field_metadata(type_id)
             if metadata is not None:
                 item["credential_fields"] = metadata["credential_fields"]
                 item["config_fields"] = metadata["config_fields"]
@@ -11815,7 +11973,9 @@ async def resource_pipeline_runs(pipeline_id: str) -> str:
             return f"Pipeline {pipeline_id} not found."
         if _team_scoped_key_mismatch(pipeline.owner_team_id):
             return _team_scope_error_str("pipeline", pipeline_id)
-        result = await list_runs(s, pipeline_id=pid, page=1, page_size=50, team_id=_ctx_team_id_val())
+        result = await list_runs(
+            s, organisation_id=org_id, pipeline_id=pid, page=1, page_size=50, team_id=_ctx_team_id_val()
+        )
         # Child-run cost+count rollup: ONE GROUP BY query for the whole page,
         # joined in Python — never a per-row aggregate (avoids N+1).
         run_ids = [r.id for r in result.items]
@@ -11999,7 +12159,7 @@ async def resource_run(run_id: str) -> str:
     except ValueError:
         return f"error: Invalid UUID format: {run_id}"
     async with _session(org_id) as s:
-        run = await get_run(s, rid)
+        run = await get_run(s, rid, organisation_id=org_id)  # defence-in-depth org predicate (FAR-328)
         if run is None:
             return f"Run {run_id} not found."
         if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
@@ -12050,9 +12210,14 @@ async def _get_hitl_review(s: AsyncSession, rid: uuid.UUID, review_id: str, org_
     return result.scalar_one_or_none()
 
 
-async def _hitl_review_scope_error(s: AsyncSession, rid: uuid.UUID, gate: HitlClaim) -> str | None:
+async def _hitl_review_scope_error(
+    s: AsyncSession,
+    rid: uuid.UUID,
+    gate: HitlClaim,
+    org_id: uuid.UUID,
+) -> str | None:
     """Return a team-scope error string when the caller's key cannot read this gate."""
-    run = await get_run(s, rid)
+    run = await get_run(s, rid, organisation_id=org_id)  # defence-in-depth org predicate (FAR-328)
     owner_team_id = (
         await _run_owner_team_id(s, run) if run is not None else await _pipeline_owner_team_id(s, gate.pipeline_id)
     )
@@ -12167,7 +12332,7 @@ async def resource_hitl_review(run_id: str, review_id: str) -> str:
         if gate is not None:
             # A team-scoped key must not read another team's gate even when
             # the gate itself is org-level (required_team_id IS NULL).
-            scope_error = await _hitl_review_scope_error(s, rid, gate)
+            scope_error = await _hitl_review_scope_error(s, rid, gate, org_id)
             if scope_error is not None:
                 return scope_error
             required_team_name = await _hitl_required_team_name(s, gate)

@@ -96,7 +96,7 @@ jobs:
               # because GitHub refuses reviews on merged PRs).
               PR_COMMENTS=$(gh api "repos/$REPO/issues/$PR/comments" \
                 --paginate \
-                --jq '[.[] | {author: .user.login, created_at: .created_at, pr_number: '$PR'}]' \
+                --jq '[.[] | {author: .user.login, created_at: .created_at, pr_number: '"$PR"'}]' \
                 2>/dev/null || echo "[]")
               # Merge into the accumulator.
               python -c "

@@ -47,8 +47,8 @@ The trigger functions are SECURITY INVOKER (the runtime role already SELECTs
 authorization guard would be the wrong shape). Deploy ordering (ADR 030):
 migrate FIRST, then roll code — old code never writes ``decommissioned_at``.
 
-Revision ID: 0314_service_accounts_lifecycle
-Revises: 0313_collection_install_drop_installed_entities
+Revision ID: 0315_service_accounts_lifecycle
+Revises: 0314_external_agents_mcp_servers
 Create Date: 2026-10-14
 """
 
@@ -57,8 +57,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0314_service_accounts_lifecycle"
-down_revision: str | None = "0313_collection_install_drop_installed_entities"
+revision: str = "0315_service_accounts_lifecycle"
+down_revision: str | None = "0314_external_agents_mcp_servers"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
@@ -71,7 +71,7 @@ _TRIGGER_NAME = "trg_org_memberships_service_role_ceiling"
 
 # DDL is deliberately built from LITERAL strings (no f-string / %-format
 # splicing — the ruff S608 gate): the identifiers above are mirrored as
-# literals here and pinned by tests/unit/db/test_migration_0314_service_accounts_lifecycle.
+# literals here and pinned by tests/unit/db/test_migration_0315_service_accounts_lifecycle.
 _FUNCTION_DDL = """
 CREATE OR REPLACE FUNCTION public.enforce_service_role_ceiling() RETURNS trigger
 LANGUAGE plpgsql

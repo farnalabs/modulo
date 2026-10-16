@@ -689,3 +689,78 @@ describe('OrgLoginView - used last time tag', () => {
     }
   })
 })
+
+describe('OrgLoginView - SSO callback error (FAR-1791)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    localStorage.clear()
+    mockRoute.query = {}
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function mountView(slug = 'test-org') {
+    mockRoute.params.slug = slug
+    return mount(OrgLoginView, {
+      global: {
+        stubs: {
+          Button: { template: '<button><slot /></button>' },
+        },
+      },
+    })
+  }
+
+  function mockOrgContext() {
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ org: { slug: 'test-org', name: 'Test Org' }, providers: [], password_enabled: true }),
+    } as Response)
+  }
+
+  it('renders the explanatory not-invited alert from ?sso_error', () => {
+    mockRoute.query = { sso_error: 'not_invited' }
+    mockOrgContext()
+
+    const wrapper = mountView()
+
+    const alert = wrapper.find('[data-testid="org-login-sso-error"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain("haven't been invited")
+  })
+
+  it('falls back to the generic copy for an unknown code and never renders the raw value', () => {
+    mockRoute.query = { sso_error: 'garbled%%code' }
+    mockOrgContext()
+
+    const wrapper = mountView()
+
+    const alert = wrapper.find('[data-testid="org-login-sso-error"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain("couldn't complete the sign-in")
+    expect(wrapper.text()).not.toContain('garbled%%code')
+  })
+
+  it('renders nothing when no sso_error is present', () => {
+    mockOrgContext()
+    const wrapper = mountView()
+    expect(wrapper.find('[data-testid="org-login-sso-error"]').exists()).toBe(false)
+  })
+
+  it('applies the shared ErrorAlert a11y contract and no Retry', () => {
+    mockRoute.query = { sso_error: 'provider_unavailable' }
+    mockOrgContext()
+
+    const wrapper = mountView()
+
+    const alert = wrapper.findComponent(ErrorAlert)
+    expect(alert.exists()).toBe(true)
+    expect(alert.props('retryable')).toBe(false)
+    expect(alert.attributes('data-testid')).toBe('org-login-sso-error')
+    expect(alert.attributes('role')).toBe('alert')
+    expect(alert.attributes('aria-live')).toBe('assertive')
+    expect(alert.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+  })
+})

@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 
 import httpx
 from defusedxml import ElementTree
+from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,6 +51,54 @@ _log = logging.getLogger(__name__)
 # Default OIDC scopes requested when a provider configures none (same default
 # in every branch of the scope resolution below).
 OIDC_DEFAULT_SCOPES = "openid email profile"
+
+
+# ---------------------------------------------------------------------------
+# SSO callback failure vocabulary + typed error (FAR-1791)
+# ---------------------------------------------------------------------------
+# The IdP navigates the BROWSER to the SSO callback routes (the OIDC callback
+# and the SAML ACS), so a failure must send it back to the login page with a
+# small, WHITELISTED error code the SPA maps to friendly copy — never a raw
+# JSON error page. The vocabulary is FIXED: exception text is NEVER placed in
+# the URL, and the frontend falls back to the ``auth_failed`` copy for an
+# unknown code.
+SSO_ERROR_NOT_INVITED = "not_invited"
+SSO_ERROR_AUTH_FAILED = "auth_failed"
+SSO_ERROR_PROVIDER_UNAVAILABLE = "provider_unavailable"
+
+
+class SsoCallbackError(HTTPException):
+    """A browser-facing SSO callback failure → a 303 redirect to the login page.
+
+    Raised by the OIDC callback / SAML ACS routes instead of RETURNING the
+    redirect, so the ``audited_system("saml_acs_attempted", ...)`` dependency
+    observes the failure and records ``outcome="error"`` for a failed sign-in
+    rather than a dishonest ``"success"`` (FAR-1791). The registered handler
+    (``modulo.api.exception_handlers.sso_callback_error_handler``) turns it into
+    the actual 303 response.
+
+    Subclasses ``HTTPException`` — deliberately NOT ``ValueError``:
+
+    * ``ValueError`` would be re-caught by the callback routes' own
+      ``except ValueError`` arm (the same ValueError-subclass trap
+      :class:`SsoProvisioningDeniedError` documents). Keeping the two error
+      types independent means a denial and a generic auth failure can never be
+      conflated by exception ordering.
+    * ``handle_db_errors`` passes ``HTTPException`` through unchanged
+      (``_translate_wrapped_exception``'s ``except HTTPException: raise`` arm),
+      so the error reaches the app's registered handler instead of being
+      mis-mapped to a generic 500.
+
+    ``code`` is drawn from the fixed vocabulary above (exception text never
+    reaches the URL); ``slug`` is a DB-resolved org slug (or ``None``), so the
+    redirect target is assembled only from server-owned values and cannot be
+    abused as an open redirect.
+    """
+
+    def __init__(self, code: str, slug: str | None = None) -> None:
+        super().__init__(status_code=status.HTTP_303_SEE_OTHER, detail=code)
+        self.code = code
+        self.slug = slug
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +341,7 @@ async def jit_provision_user(
     if invitation is not None and invitation_used:
         if not await consume_invitation(session, invitation):
             # CAS lost the race — abort atomically, identical to accept-invite.
-            raise SsoProvisioningDeniedError(Constants.MSG_SSO_JOIN_DENIED)
+            raise SsoProvisioningDeniedError(Constants.MSG_SSO_JOIN_DENIED, org_id=org_id)
         await _audit_invite_consumed_fail_open(session, org_id, invitation.id)
 
     return account, org_id, org_role
@@ -307,11 +356,20 @@ class Constants:
 class SsoProvisioningDeniedError(ValueError):
     """FAR-855 join-gate denial.
 
-    Subclass of ``ValueError`` so the SSO callback routes map it to the
-    existing 401-with-detail error surface (never a 500) without any route
-    changes. The message is user-safe and reveals nothing beyond what the
-    login page already showed.
+    Subclass of ``ValueError`` so SSO callers can distinguish a policy denial
+    from a generic authentication failure. The message is user-safe and
+    reveals nothing beyond what the login page already showed.
+
+    ``org_id`` carries the org the identity was denied entry to (known at the
+    denial site) so the callback route can resolve that org's slug and send the
+    browser back to the org-scoped login page (FAR-1791). It is optional — the
+    message stays the sole positional argument, so existing raisers and tests
+    that construct ``SsoProvisioningDeniedError("...")`` keep working.
     """
+
+    def __init__(self, message: str, *, org_id: uuid.UUID | None = None) -> None:
+        super().__init__(message)
+        self.org_id = org_id
 
 
 def _sso_verified_domain(email: str) -> str | None:
@@ -357,7 +415,7 @@ async def _deny_join(provider: SsoProvider, org_id: uuid.UUID) -> None:
             "organisation_id": str(org_id),
         },
     )
-    raise SsoProvisioningDeniedError(Constants.MSG_SSO_JOIN_DENIED) from None
+    raise SsoProvisioningDeniedError(Constants.MSG_SSO_JOIN_DENIED, org_id=org_id) from None
 
 
 async def _audit_invite_consumed_fail_open(session: AsyncSession, org_id: uuid.UUID, invitation_id: uuid.UUID) -> None:

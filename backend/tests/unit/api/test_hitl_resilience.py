@@ -296,27 +296,46 @@ class TestApproveGateLockTimeout:
 
 
 class TestApproveGateAtSandboxCapacity:
+    """FAR-1831: a full org sandbox cap must NEVER discard the committed decision.
+
+    The old pre-decision capacity gate 409'd and left the gate undecided. Now
+    the decision commits FIRST and the inline resume is attempted; a capacity
+    denial there yields a queued success (the resume transaction rolled back, so
+    the run stays ``awaiting_human`` with the committed decision, for the
+    dispatcher to resume once a slot frees).
+    """
+
     @patch("modulo.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None))
     @patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
-    @patch(
-        "modulo.api.routes.hitl.org_sandbox_capacity_free",
-        new=AsyncMock(return_value=False),
-    )
-    def test_approve_gate_at_capacity_returns_409(self, client: TestClient) -> None:
-        """At org sandbox capacity the gate is left undecided — 409, not 202."""
-        resp = client.post(
-            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve",
-            json={"claim_token": "test-token", "notes": "approved"},
-        )
-        assert resp.status_code == 409
-        assert "gate left undecided" in resp.json()["detail"]
+    def test_approve_gate_at_capacity_returns_queued_success(self, client: TestClient) -> None:
+        """At org sandbox capacity the decision is recorded and the resume is
+        queued — 200, never a 409."""
+        from modulo.core.pipeline_engine.executor import SandboxCapacityExceededError
+
+        approve = AsyncMock()
+        executor = MagicMock()
+        executor.resume = AsyncMock(side_effect=SandboxCapacityExceededError(_ORG_ID))
+        with (
+            patch("modulo.api.routes.hitl.HITLManager.approve", new=approve),
+            patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+        ):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve",
+                json={"claim_token": "test-token", "notes": "approved"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "queued"
+        # The decision was committed (before the resume attempt) — never lost.
+        approve.assert_awaited_once()
+        executor.resume.assert_awaited_once()
 
 
 class TestResumeSandboxCapacityExceeded:
-    """Executor-level (post pre-check) SandboxCapacityExceededError → 409 on each
-    of the four resume routes. Regression for the reviewer finding: the route's
-    fast-fail pre-check was mocked, but the executor's atomic gate (FAR-1306) was
-    never covered at the route layer."""
+    """FAR-1831: an executor-level ``SandboxCapacityExceededError`` on each of the
+    four resume routes returns a queued SUCCESS, never a 409. The gate decision
+    is committed and the resume is left to the dispatcher (the F6a path), which
+    capacity-gates its re-dispatch."""
 
     @staticmethod
     def _executor_raising() -> MagicMock:
@@ -349,7 +368,7 @@ class TestResumeSandboxCapacityExceeded:
             ),
         ],
     )
-    def test_resume_capacity_exceeded_returns_409(
+    def test_resume_capacity_exceeded_returns_queued_success(
         self,
         client: TestClient,
         path: str,
@@ -357,21 +376,21 @@ class TestResumeSandboxCapacityExceeded:
         hitl_method: str,
     ) -> None:
         executor = self._executor_raising()
+        manager_call = AsyncMock()
         with (
             patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None)),
             # FAR-907: the modify-approve path now validates the answer contract,
             # which resolves the gate config through the shared validator module.
             patch("modulo.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None)),
-            patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
-            patch(
-                f"modulo.api.routes.hitl.HITLManager.{hitl_method}",
-                new=AsyncMock(),
-            ),
+            patch(f"modulo.api.routes.hitl.HITLManager.{hitl_method}", new=manager_call),
             patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
         ):
             resp = client.post(f"/api/v1/runs/{_RUN_ID}/{path}", json=payload)
 
-        assert resp.status_code == 409
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "queued"
+        # The decision was committed before the (capacity-denied) resume.
+        manager_call.assert_awaited_once()
         assert executor.resume.await_count == 1
 
 
@@ -411,7 +430,6 @@ class TestResumeDataGateStamp:
         with (
             patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None)),
             patch("modulo.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None)),
-            patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
             patch("modulo.api.routes.hitl.HITLManager", return_value=manager),
             patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
         ):
@@ -805,7 +823,6 @@ class TestHumanOnlyRestEnforcement:
     def test_approve_human_only_api_key_returns_403(self, client: TestClient) -> None:
         approve = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
             patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
             patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
         ):
@@ -840,7 +857,6 @@ class TestHumanOnlyRestEnforcement:
     def test_approve_human_only_browser_jwt_passes_check(self, client: TestClient) -> None:
         approve = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
             patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
             patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
         ):
@@ -859,7 +875,6 @@ class TestHumanOnlyRestEnforcement:
         """No over-blocking: API-key principals may approve non-human_only gates."""
         approve = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
             patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
             patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
         ):
@@ -897,7 +912,6 @@ class TestHumanOnlyRestEnforcement:
         check passes it through (the manager 404s it later as before)."""
         approve = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
             patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
             patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
         ):
@@ -917,7 +931,6 @@ class TestHumanOnlyRestEnforcement:
         enforcement surface, and the claim table is not even consulted."""
         approve = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
             patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
             patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
         ):
@@ -967,7 +980,6 @@ class TestHumanOnlyRestEnforcement:
         human_only check resolves None and never over-blocks."""
         approve = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
             patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
             patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
         ):
@@ -1314,7 +1326,6 @@ class TestHumanOnlyClientKindEnforcement:
         browser and the browser hot path is unchanged."""
         approve = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
             patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
             patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
         ):
@@ -1848,7 +1859,6 @@ class TestRequireAnswerImpliesValidation:
                 _RUN_ID,
                 "gate-1",
                 enforce_human_only=False,
-                require_sandbox=False,
                 mgr_method="approve",
                 decision_payload={},
                 answer={"kind": "choice", "option_id": "opt-1"},
@@ -1879,7 +1889,6 @@ class TestRequireAnswerImpliesValidation:
                 _RUN_ID,
                 "gate-1",
                 enforce_human_only=False,
-                require_sandbox=False,
                 mgr_method="reject",
                 decision_payload={},
             )

@@ -71,7 +71,7 @@ from modulo.db.crud.last_admin_guard import (
     assert_not_last_admin,
 )
 from modulo.db.crud.org_membership import create_membership, get_membership_by_account_and_org
-from modulo.db.crud.organisation import get_organisation, update_organisation
+from modulo.db.crud.organisation import get_organisation, update_org_settings_patch, update_organisation
 from modulo.db.crud.pipeline_snapshot import (
     SnapshotLockTerminateDeniedError,
     inspect_snapshot_lock,
@@ -252,13 +252,6 @@ def _raise_unexpected(detail: str) -> NoReturn:
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail=detail,
     ) from None
-
-
-def _update_org_setting(org: Organisation, key: str, value: object) -> None:
-    """Merge ``value`` into ``org.settings_json`` under ``key`` without dropping other keys."""
-    settings = dict(org.settings_json) if org.settings_json else {}
-    settings[key] = value
-    org.settings_json = settings
 
 
 def _to_user_list_item(account: Account, org_role: str, org_membership: OrgMembership | None = None) -> "UserListItem":
@@ -1010,6 +1003,7 @@ async def admin_update_org(
 ) -> OrgProfileResponse:
     _require_admin(current_user, "update org profile")
 
+    settings_after: dict[str, object] = {}
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
@@ -1023,10 +1017,6 @@ async def admin_update_org(
             updates: dict[str, object] = {}
             if req.name is not None:
                 updates["name"] = req.name
-            if req.logo_url is not None:
-                existing_settings = dict(org.settings_json or {})
-                existing_settings["logo_url"] = req.logo_url
-                updates["settings_json"] = existing_settings
             if req.plan_id is not None:
                 updates["plan_id"] = req.plan_id
 
@@ -1034,6 +1024,16 @@ async def admin_update_org(
                 updated = await update_organisation(session, current_user.organisation_id, updates)
                 if updated is not None:
                     org = updated
+
+            settings_after = dict(org.settings_json or {})
+            if req.logo_url is not None:
+                # FAR-1830: patch ONLY the ``logo_url`` key atomically instead of
+                # writing the whole settings_json back from the stale read above
+                # (which drops every concurrent writer's keys). The helper keeps
+                # the in-session org row in sync for any later read.
+                settings_after = await update_org_settings_patch(
+                    session, current_user.organisation_id, {"logo_url": req.logo_url}
+                )
     except IntegrityError:
         logger.exception("admin_update_org IntegrityError", extra={"org_id": str(current_user.organisation_id)})
         _raise_conflict()
@@ -1045,12 +1045,11 @@ async def admin_update_org(
         logger.exception("admin_update_org SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         _raise_db_unavailable("Database error while updating org profile.")
 
-    current_settings = org.settings_json or {}
     return OrgProfileResponse(
         id=str(org.id),
         name=org.name,
         slug=org.slug,
-        logo_url=current_settings.get("logo_url"),
+        logo_url=settings_after.get("logo_url"),
         plan_id=org.plan_id,
         created_at=org.created_at.isoformat(),
     )
@@ -3917,18 +3916,17 @@ async def admin_update_retention(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            # FAR-1025: opt out of the global soft-delete filter — a
-            # pending-deletion org is still operationally live.
-            result = await session.execute(
-                include_soft_deleted(
-                    select(Organisation).where(Organisation.id == current_user.organisation_id).limit(1)
+            try:
+                # FAR-1830: emit ONLY the ``retention_days`` key via the atomic
+                # patch. A whole-column write from a stale read would drop every
+                # other concern's key committed in the read→write window. A
+                # soft-deleted org is refused (LookupError) — matching the patch
+                # helper's generic path.
+                await update_org_settings_patch(
+                    session, current_user.organisation_id, {"retention_days": req.retention_days}
                 )
-            )
-            org = result.scalar_one_or_none()
-            if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
-            _update_org_setting(org, "retention_days", req.retention_days)
-            await session.flush()
+            except LookupError:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND) from None
     except asyncio.CancelledError:
         raise
     except IntegrityError:
@@ -4537,10 +4535,12 @@ async def admin_update_run_concurrency(
                 org = await get_organisation(session, current_user.organisation_id)
                 if org is None:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
-                settings = dict(org.settings_json) if org.settings_json else {}
-                settings["run_concurrency_limit"] = req.run_concurrency_limit
-                org.settings_json = settings
-                await session.flush()
+                # FAR-1830: emit ONLY this writer's top-level key. The previous
+                # read-modify-write of the whole settings_json column silently
+                # dropped every other concern's keys written in the window.
+                await update_org_settings_patch(
+                    session, current_user.organisation_id, {"run_concurrency_limit": req.run_concurrency_limit}
+                )
             except IntegrityError:
                 logger.exception("admin.admin_update_run_concurrency")
                 raise HTTPException(

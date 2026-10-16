@@ -73,6 +73,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.audit_logger import append_audit_event
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.util import callable_label
 
 _log = logging.getLogger(__name__)
 
@@ -242,7 +243,7 @@ def mcp_audited(
         raise ValueError("mcp_audited() requires a non-empty resource_type")
 
     def decorator(fn: ToolFn) -> ToolFn:
-        tool_name = fn.__name__
+        tool_name = callable_label(fn)
 
         @functools.wraps(fn)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:

@@ -101,6 +101,17 @@ class _SecondBeginRaisesSession:
         self._begins = 0
         self._fail_after = fail_after
         self._exc = _session_error()
+        # FAR-1830: routes now call ``set_rls_org`` inside the read/write txn,
+        # which needs an active-transaction check, a bind, and the info store.
+        self.info: dict[str, object] = {}
+
+    def in_transaction(self) -> bool:
+        return True
+
+    def get_bind(self) -> object:
+        return SimpleNamespace(
+            dialect=SimpleNamespace(name="sqlite"),
+        )
 
     def begin(self) -> object:
         self._begins += 1

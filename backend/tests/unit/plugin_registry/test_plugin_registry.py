@@ -3,8 +3,9 @@
 import asyncio
 import importlib.metadata as importlib_metadata
 import types
+from functools import partial
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -1033,3 +1034,179 @@ def test_get_plugin_returns_deep_copy():
     plugin.display_name = "MUTATED"
 
     assert registry.get_plugin("p1").display_name == "P1"
+
+
+# ---------------------------------------------------------------------------
+# Callables without __name__ — builders are only known to be *callable*
+#
+# `register_connector_type` / `register_model_backend` accept any callable
+# (`callable(builder)` is the only check) and an entry point can resolve to a
+# callable object or a functools.partial. Neither defines `__name__`. Reading
+# `builder.__name__` inside the error handler made the HANDLER itself raise:
+# the caller got an opaque `AttributeError` instead of the documented
+# `RuntimeError`, and the original cause was lost entirely.
+# ---------------------------------------------------------------------------
+
+
+class _CallableObjectConnectorBuilder:
+    """A callable-object builder — valid, but has no ``__name__``."""
+
+    def __call__(self, config: dict[str, Any], creds: dict[str, Any]) -> ConnectorBase:
+        raise ValueError("connector builder exploded")
+
+
+class _CallableObjectBackendBuilder:
+    """A callable-object backend builder — valid, but has no ``__name__``."""
+
+    def __call__(self, api_key: str, model_id: str, **kwargs: Any) -> ModelBackendBase:
+        raise ValueError("backend builder exploded")
+
+
+def _exploding_function(config: dict[str, Any], creds: dict[str, Any]) -> ConnectorBase:
+    raise ValueError("connector builder exploded")
+
+
+def test_callable_label_falls_back_to_type_qualname():
+    # The helper the error handlers use.
+    from modulo.util import callable_label
+
+    assert callable_label(_exploding_function) == "_exploding_function"
+    assert callable_label(_CallableObjectConnectorBuilder()) == "_CallableObjectConnectorBuilder"
+    assert callable_label(_CallableObjectConnectorBuilder) == "_CallableObjectConnectorBuilder"
+    # functools.partial has no __name__ either.
+    assert callable_label(partial(_exploding_function, {})) == "partial"
+    # A plain object is still labelled rather than exploding.
+    assert callable_label(object()) == "object"
+
+
+def test_connector_builder_without_dunder_name_still_raises_runtime_error():
+    registry = PluginRegistry()
+    manifest = PluginManifest(PLUGIN_ID="p", display_name="P", description="", version="1")
+    registry.register_connector_type("obj_connector", _CallableObjectConnectorBuilder(), manifest)
+
+    with pytest.raises(RuntimeError, match="Connector builder for type 'obj_connector' failed") as excinfo:
+        registry.build_connector("obj_connector", {}, {})
+
+    # The real cause must survive — it is what makes the error actionable.
+    assert isinstance(excinfo.value.__cause__, ValueError)
+    assert "exploded" in str(excinfo.value.__cause__)
+
+
+def test_connector_builder_partial_still_raises_runtime_error():
+    registry = PluginRegistry()
+    manifest = PluginManifest(PLUGIN_ID="p", display_name="P", description="", version="1")
+    registry.register_connector_type("partial_connector", partial(_exploding_function, {}), manifest)
+
+    with pytest.raises(RuntimeError, match="Connector builder for type 'partial_connector' failed"):
+        registry.build_connector("partial_connector", {}, {})
+
+
+def test_model_backend_builder_without_dunder_name_still_raises_runtime_error():
+    registry = PluginRegistry()
+    manifest = PluginManifest(PLUGIN_ID="p", display_name="P", description="", version="1")
+    registry.register_model_backend("obj_backend", _CallableObjectBackendBuilder(), manifest)
+
+    with pytest.raises(RuntimeError, match="Model backend builder for provider 'obj_backend' failed") as excinfo:
+        registry.build_model_backend("obj_backend", api_key="k", model_id="m")
+
+    assert isinstance(excinfo.value.__cause__, ValueError)
+
+
+def test_callable_object_builder_still_works_on_the_happy_path():
+    # A callable object is a legitimate builder — the happy path must not regress.
+    class _GoodCallableObjectBuilder:
+        def __call__(self, config: dict[str, Any], creds: dict[str, Any]) -> ConnectorBase:
+            return _StubPluginConnector()
+
+    registry = PluginRegistry()
+    manifest = PluginManifest(PLUGIN_ID="p", display_name="P", description="", version="1")
+    registry.register_connector_type("good_obj", _GoodCallableObjectBuilder(), manifest)
+
+    assert isinstance(registry.build_connector("good_obj", {}, {}), _StubPluginConnector)
+
+
+# ---------------------------------------------------------------------------
+# Unreadable distribution METADATA must not abort startup discovery
+#
+# `dist.name` / `dist.metadata` read and parse the distribution's METADATA file
+# from disk. A corrupt or half-written .dist-info (interrupted install, stripped
+# image layer) makes that read raise. `discover_plugins` runs unguarded on the
+# startup critical path (`api/main.py::_discover_plugins`), so the escaping
+# raise made the whole instance unbootable because of one broken third-party
+# package — the exact failure the guarded `ep.load()` already prevents.
+# ---------------------------------------------------------------------------
+
+
+class _ExplodingNameDistribution:
+    """Stands in for a distribution whose METADATA file cannot be read."""
+
+    @property
+    def name(self) -> str:
+        raise FileNotFoundError("METADATA missing")
+
+    @property
+    def metadata(self) -> dict[str, str]:
+        raise FileNotFoundError("METADATA missing")
+
+
+def _entry_point(dist: Any, name: str, loads: Any = None) -> Any:
+    ep = MagicMock()
+    ep.dist = dist
+    ep.name = name
+    ep.load.side_effect = None
+    if loads is not None:
+        ep.load.return_value = loads
+    return ep
+
+
+def _entry_points_returning(eps: list[Any]) -> Any:
+    """Patch ``entry_points`` so only the connector group yields ``eps``.
+
+    ``discover_plugins`` queries all four groups; returning the same list for
+    every group would register the healthy plugin four times and make the
+    assertions about discovery counts meaningless.
+    """
+
+    def _query(*, group: str) -> list[Any]:
+        return list(eps) if group == "modulo.connectors" else []
+
+    return patch.object(importlib_metadata, "entry_points", side_effect=_query)
+
+
+def test_unreadable_distribution_metadata_does_not_abort_discovery():
+    registry = PluginRegistry()
+    broken = _entry_point(_ExplodingNameDistribution(), "broken_type")
+    healthy_dist = MagicMock()
+    healthy_dist.name = "healthy-plugin"
+    healthy_dist.metadata = {"Name": "healthy-plugin", "Summary": "s", "Version": "1.0"}
+    healthy = _entry_point(healthy_dist, "healthy_type", loads=_build_stub_connector)
+
+    with _entry_points_returning([broken, healthy]):
+        discovered = registry.discover_plugins()
+
+    # Discovery completed and the healthy sibling was still registered.
+    assert [m.PLUGIN_ID for m in discovered] == ["healthy-plugin"]
+    assert registry.has_connector_type("healthy_type")
+
+    # The broken plugin is visible AND explained — never silently dropped.
+    errors = registry.entry_point_errors
+    assert "broken_type" in errors
+    assert "Failed to read distribution metadata" in errors["broken_type"]
+
+    manifest = registry.get_plugin("broken_type")
+    assert manifest is not None
+    assert manifest.PLUGIN_ID == "broken_type"
+    assert registry.health_check("broken_type")["broken_type"].ok is False
+
+
+def test_unreadable_distribution_metadata_is_surfaced_unhealthy():
+    registry = PluginRegistry()
+    broken = _entry_point(_ExplodingNameDistribution(), "broken_type")
+
+    with _entry_points_returning([broken]):
+        assert not registry.discover_plugins()
+
+    listed = registry.list_plugins()
+    assert "broken_type" in listed
+    assert registry.health_check()["broken_type"].ok is False
+    assert "Failed to read distribution metadata" in registry.health_check()["broken_type"].detail

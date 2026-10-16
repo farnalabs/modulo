@@ -159,6 +159,11 @@ def make_mock_session() -> AsyncMock:
     # MagicMock(return_value=False) — see tests/bdd/steps/test_auth.py.
     session.in_transaction = MagicMock(return_value=True)
     session.add = MagicMock()
+    # A real AsyncSession exposes ``info`` as a plain dict; ``set_rls_org`` on a
+    # generic backend writes the org id there and the FAR-1830 settings-patch
+    # tenant guard reads it back. A bare AsyncMock child is not a dict, so the
+    # guard would see an unbound context.
+    session.info = {}
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -246,6 +251,15 @@ def make_mock_run(**kwargs: Any) -> MagicMock:
     r = MagicMock()
     r.id = kwargs.get("id", uuid.uuid4())
     r.pipeline_id = kwargs.get("pipeline_id", uuid.uuid4())
+    # ``Run.organisation_id`` is an always-present, non-null column
+    # (db/models/base.py::OrgScoped). The run-trigger route reads it back
+    # through the run_node_outputs org guard and compares it to the session's
+    # bound org, so a stand-in that left it a bare MagicMock child trips the
+    # guard once the BDD session mock exposes a real ``info`` dict for
+    # ``set_rls_org`` to bind into (FAR-1830). Default it to the ORG_ID the
+    # shared BDD clients authenticate as, so the guard is genuinely exercised;
+    # a scenario exercising another tenant overrides it explicitly.
+    r.organisation_id = kwargs.get("organisation_id", ORG_ID)
     r.status = kwargs.get("status", "pending")
     r.langgraph_thread_id = str(uuid.uuid4())
     r.error_detail = kwargs.get("error_detail")

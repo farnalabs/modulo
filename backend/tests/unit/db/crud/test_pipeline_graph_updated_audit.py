@@ -18,10 +18,10 @@ import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any, Literal
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.db.crud.pipeline import replace_pipeline_graph
@@ -379,6 +379,17 @@ class TestMcpGraphWriteAttribution:
                     "modulo.core.team_visibility.find_connector_team_mismatches",
                     new=AsyncMock(return_value=[]),
                 ),
+                # FAR-1810: the MCP graph write now records an edit snapshot in
+                # the same transaction. ``create_snapshot_edit`` takes a Postgres
+                # advisory lock (``pg_try_advisory_lock``), which in-memory SQLite
+                # cannot execute — patched out here exactly like the rollback test
+                # below patches ``create_snapshot_from_live_graph``. The audit
+                # event under test is written BEFORE the snapshot hook, so this
+                # cannot mask a missing ``graph_updated`` event.
+                patch(
+                    "modulo.db.crud.pipeline.create_snapshot_edit",
+                    new=AsyncMock(return_value=MagicMock(snapshot_version=1)),
+                ),
             ):
                 result = await ms.update_pipeline_graph(
                     pipeline_id=str(_PIPELINE_ID),
@@ -505,3 +516,116 @@ class TestRollbackGraphUpdatedAudit:
         assert payload["added_node_ids"] == [_NODE_C]
         assert not payload["removed_node_ids"]
         assert payload["agent_commands_changed_node_ids"] == [_NODE_A]
+
+
+# ---------------------------------------------------------------------------
+# FAR-1824 — the graph-replace critical section: lock scope and lock order.
+#
+# The lock-point audit (``docs/architecture/lock-point-inventory.md`` §7 risk
+# 3) flagged that ``replace_pipeline_graph`` holds the pipeline row lock across
+# the whole replace *and* an inline audit append (which itself takes the
+# per-org audit-chain-head lock). The append is DELIBERATELY kept inside the
+# write transaction (full rationale: the FAR-1824 comment above the append in
+# ``modulo.db.crud.pipeline.replace_pipeline_graph``). These tests pin the two
+# properties that make the nesting safe, so a future refactor cannot silently
+# invert either:
+#
+#   * lock ORDER — pipeline row before audit-chain-head (no deadlock cycle);
+#   * transaction SCOPE — the audit commits and rolls back with the write, so a
+#     committed graph write can never lack its event (FAR-1471).
+# ---------------------------------------------------------------------------
+
+
+class TestGraphReplaceLockScope:
+    async def test_pipeline_row_lock_precedes_audit_chain_head_lock(
+        self, engine: AsyncEngine, session: AsyncSession
+    ) -> None:
+        """The pipeline row is locked BEFORE the audit-chain-head row.
+
+        This is the ordering the deadlock analysis rests on: if the audit
+        append took the audit-chain-head lock first, a concurrent transaction
+        performing the reverse order could cycle. Driving the REAL CRUD call
+        and recording the SQL statement order proves the pipeline row is read
+        (and, on Postgres, locked) before ``audit_chain_heads`` is touched.
+
+        SQLite omits the ``FOR UPDATE`` clause, so the assertion keys on the
+        table order rather than the lock keyword — the logical acquisition
+        order is what matters and is what is pinned.
+        """
+        statements: list[str] = []
+
+        def _record(_conn: Any, _cursor: Any, statement: str, _params: Any, _ctx: Any, _many: Any) -> None:
+            statements.append(statement)
+
+        await _seed_graph(session, [_node(_NODE_A, agent_commands=["run --v1"])], with_edge=False)
+        event.listen(engine.sync_engine, "before_cursor_execute", _record)
+        try:
+            await _patch_graph(session, [_node(_NODE_A, agent_commands=["run --v2"])], [])
+        finally:
+            event.remove(engine.sync_engine, "before_cursor_execute", _record)
+
+        pipeline_read = next((i for i, s in enumerate(statements) if "from pipelines" in s.lower()), None)
+        audit_head_read = next((i for i, s in enumerate(statements) if "from audit_chain_heads" in s.lower()), None)
+        assert pipeline_read is not None, "the graph write must read the pipeline row"
+        assert audit_head_read is not None, "the audit append must touch the audit-chain-head row"
+        assert pipeline_read < audit_head_read, (
+            "lock order MUST be pipeline -> audit-chain-head; taking the audit-chain-head row "
+            "first would let a concurrent graph write form a deadlock cycle"
+        )
+
+    async def test_audit_event_commits_and_rolls_back_with_the_graph_write(self, session: AsyncSession) -> None:
+        """The audit event shares the write's transaction (scope test).
+
+        This is what pins the append INSIDE the pipeline-row lock: the event is
+        written in the same (uncommitted) transaction as the graph rows, so a
+        rollback discards both. If the append were moved to a post-commit
+        transaction, the event would survive the rollback and this test fails —
+        the regression the FAR-1471 invariant forbids.
+        """
+        nodes_v1 = [_node(_NODE_A, agent_commands=["run --v1"]), _node(_NODE_B, agent_commands=["keep"])]
+        await _seed_graph(session, nodes_v1, with_edge=True)
+        await session.commit()
+
+        # A fresh transaction: write the graph, then roll it back.
+        await _patch_graph(session, [_node(_NODE_A, agent_commands=["run --v2"])], [])
+        await session.flush()
+        assert await _graph_events(session), "the audit event must be written in the write transaction"
+
+        await session.rollback()
+
+        persisted = await session.execute(select(Pipeline).where(Pipeline.id == _PIPELINE_ID))
+        assert persisted.scalar_one().graph_nodes_json == nodes_v1, "the rollback must discard the graph write"
+        assert not await _graph_events(session), "the audit event must roll back with the graph write"
+
+        # A subsequent COMMITTED write persists BOTH the graph and its event.
+        await _patch_graph(session, [_node(_NODE_A, agent_commands=["run --v3"])], [])
+        await session.commit()
+
+        committed_events = await _graph_events(session)
+        assert len(committed_events) == 1, "the committed write must leave exactly one audit event"
+        persisted = await session.execute(select(Pipeline).where(Pipeline.id == _PIPELINE_ID))
+        assert persisted.scalar_one().graph_nodes_json == [_node(_NODE_A, agent_commands=["run --v3"])]
+
+    async def test_before_image_is_captured_pre_write_not_post_write(self, session: AsyncSession) -> None:
+        """The audit's before-image describes the PRE-write graph.
+
+        A refactor of this critical section must not let the payload read
+        ``pipeline.graph_nodes_json`` after assignment (post-write state). The
+        write here REMOVES a node, so a post-write before-image would report the
+        wrong counts and ``removed_node_ids``.
+        """
+        await _seed_graph(
+            session,
+            [_node(_NODE_A, agent_commands=["a"]), _node(_NODE_B, agent_commands=["b"])],
+            with_edge=True,
+        )
+        await _patch_graph(session, [_node(_NODE_A, agent_commands=["a"])], [])
+
+        events = await _graph_events(session)
+        assert len(events) == 1
+        payload = events[0].payload_json
+        assert payload["previous_node_count"] == 2, "the before-image must see the pre-write node count"
+        assert payload["new_node_count"] == 1
+        assert payload["removed_node_ids"] == [_NODE_B]
+        assert payload["previous_edge_count"] == 1, "the before-image must see the pre-write edge count"
+        assert payload["new_edge_count"] == 0

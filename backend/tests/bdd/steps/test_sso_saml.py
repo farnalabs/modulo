@@ -438,3 +438,16 @@ def error_detail_mentions(text: str, request: Any) -> None:
     body = resp.json()
     detail = body.get("detail", "")
     assert text.lower() in detail.lower(), f"Expected detail to mention '{text}', got '{detail}'"
+
+
+@then(parsers.parse('the login redirect reports SSO error "{code}"'))
+def login_redirect_reports_sso_error(code: str, request: Any) -> None:
+    """FAR-1791: a failed browser callback 303s to the login page with a code.
+
+    Asserted on the ``Location`` header, not a JSON body — the ACS failure no
+    longer renders a raw JSON error page.
+    """
+    resp = request.node._resp
+    location = resp.headers.get("location", "")
+    assert "/login" in location, f"Expected a login-page redirect, got '{location}'"
+    assert f"sso_error={code}" in location, f"Expected sso_error={code}, got '{location}'"

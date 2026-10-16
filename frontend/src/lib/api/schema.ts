@@ -1637,9 +1637,14 @@ export interface paths {
          *     Resolves the provider by its globally unique ``provider_id`` slug. The
          *     response is validated against THIS provider's SP entity ID and ACS URL.
          *
+         *     Because the IdP navigates the BROWSER here, a handled callback failure —
+         *     including an unknown, disabled or non-SAML ``provider_id`` — is rendered
+         *     as a 303 redirect to the login page carrying a whitelisted ``sso_error``
+         *     code (FAR-1791), never the uniform JSON 404 the non-ACS routes keep.
+         *
          *     RelayState verification (FAR-1003, defense-in-depth):
          *     - valid signed RelayState for THIS provider → proceed
-         *     - tampered / wrong provider / expired → reject (401)
+         *     - tampered / wrong provider / expired → reject (303 to the login page)
          *     - absent → do NOT fail; proceed on URL path (IdP-initiated SSO)
          *
          *     Security reasoning: with routing by URL path, a forged RelayState
@@ -2846,6 +2851,31 @@ export interface paths {
          *     tags the edit's release channel.
          */
         post: operations["save_edit_snapshot_endpoint_api_v1_pipelines__pipeline_id__snapshots_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pipelines/{pipeline_id}/snapshots/by-version/{snapshot_version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Snapshot By Version Endpoint
+         * @description Read one snapshot by its per-pipeline version number (FAR-1811).
+         *
+         *     Backs the ``?version=<n>`` deep-link: same response model and the SAME
+         *     team/pipeline scoping as the by-UUID read below (FAR-1360), so a version
+         *     belonging to another pipeline resolves to ``None`` -> 404 and never leaks.
+         *     A non-integer version path segment is a 422; an absent version is a 404.
+         */
+        get: operations["get_snapshot_by_version_endpoint_api_v1_pipelines__pipeline_id__snapshots_by_version__snapshot_version__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5555,6 +5585,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Plan Bootstrap
+         * @description Caller-scoped effective plan bootstrap, readable by any authenticated member.
+         *
+         *     FAR-1806: the client's plan/tier/feature bootstrap previously read the
+         *     instance-admin-only ``/api/v1/admin/feature-flags`` (and
+         *     ``/api/v1/admin/license``), so every non-admin ran the app on permanently
+         *     wrong defaults (tier ``community``, ``dev_mode`` false, no flags). This
+         *     endpoint serves the same caller-scoped truth — effective tier, dev mode,
+         *     licence view, and the FULL effective flag set with the org
+         *     ``feature_overrides`` overlay — with no permission beyond authentication
+         *     against the caller's own org. The admin endpoints keep their
+         *     system-admin/permission gates for the inspection and toggle UI.
+         *
+         *     Failure ladder mirrors ``viewmodel_current``: ProgrammingError -> 501,
+         *     SQLAlchemyError -> 503, HTTPException re-raised, Exception -> 500.
+         */
+        get: operations["plan_bootstrap_api_v1_plan_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/viewmodel/views": {
         parameters: {
             query?: never;
@@ -7855,6 +7918,120 @@ export interface paths {
          * @description Create an eval definition pre-populated from run output. Operator or admin (FAR-735).
          */
         post: operations["create_eval_from_run_api_v1_evals_from_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/external-agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List External Agents Endpoint */
+        get: operations["list_external_agents_endpoint_api_v1_external_agents_get"];
+        put?: never;
+        /** Create External Agent Endpoint */
+        post: operations["create_external_agent_endpoint_api_v1_external_agents_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/external-agents/{agent_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get External Agent Endpoint */
+        get: operations["get_external_agent_endpoint_api_v1_external_agents__agent_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete External Agent Endpoint */
+        delete: operations["delete_external_agent_endpoint_api_v1_external_agents__agent_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update External Agent Endpoint */
+        patch: operations["update_external_agent_endpoint_api_v1_external_agents__agent_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/mcp-servers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Mcp Servers Endpoint */
+        get: operations["list_mcp_servers_endpoint_api_v1_mcp_servers_get"];
+        put?: never;
+        /** Create Mcp Server Endpoint */
+        post: operations["create_mcp_server_endpoint_api_v1_mcp_servers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mcp-servers/{server_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Mcp Server Endpoint */
+        get: operations["get_mcp_server_endpoint_api_v1_mcp_servers__server_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Mcp Server Endpoint */
+        delete: operations["delete_mcp_server_endpoint_api_v1_mcp_servers__server_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Mcp Server Endpoint */
+        patch: operations["update_mcp_server_endpoint_api_v1_mcp_servers__server_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/mcp-servers/{server_id}/observe-tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Observe Tools Endpoint
+         * @description Record the server's observed tool definitions and apply the drift decision.
+         */
+        post: operations["observe_tools_endpoint_api_v1_mcp_servers__server_id__observe_tools_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mcp-servers/{server_id}/approve-tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve Tools Endpoint
+         * @description Approve the CURRENTLY observed tool set, pinning its canonical hash.
+         */
+        post: operations["approve_tools_endpoint_api_v1_mcp_servers__server_id__approve_tools_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -13754,6 +13931,106 @@ export interface components {
             /** Organisation Id */
             organisation_id?: string | null;
         };
+        /** ExternalAgentCreate */
+        ExternalAgentCreate: {
+            /**
+             * Visibility
+             * @default org
+             */
+            visibility: string;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Runtime Kind
+             * @default other
+             */
+            runtime_kind: string;
+            /** Host Descriptor */
+            host_descriptor?: string | null;
+            /**
+             * Status
+             * @default active
+             * @enum {string}
+             */
+            status: "active" | "inactive" | "unknown";
+            /**
+             * Discovery Provenance
+             * @default manual
+             * @enum {string}
+             */
+            discovery_provenance: "manual" | "mcp" | "webhook" | "forge";
+        };
+        /** ExternalAgentListResponse */
+        ExternalAgentListResponse: {
+            /** Items */
+            items: components["schemas"]["ExternalAgentResponse"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+        };
+        /** ExternalAgentResponse */
+        ExternalAgentResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organisation Id
+             * Format: uuid
+             */
+            organisation_id: string;
+            /** Name */
+            name: string;
+            /** Runtime Kind */
+            runtime_kind: string;
+            /** Host Descriptor */
+            host_descriptor?: string | null;
+            /** Status */
+            status: string;
+            /** Discovery Provenance */
+            discovery_provenance: string;
+            /** First Seen */
+            first_seen?: string | null;
+            /** Last Seen */
+            last_seen?: string | null;
+            /** Visibility */
+            visibility: string;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ExternalAgentUpdate */
+        ExternalAgentUpdate: {
+            /** Visibility */
+            visibility?: string | null;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Runtime Kind */
+            runtime_kind?: string | null;
+            /** Host Descriptor */
+            host_descriptor?: string | null;
+            /** Status */
+            status?: ("active" | "inactive" | "unknown") | null;
+            /** Discovery Provenance */
+            discovery_provenance?: ("manual" | "mcp" | "webhook" | "forge") | null;
+        };
         /**
          * FanOutConfig
          * @description Declares a scatter (fan-out) on an agent / sandbox_agent node.
@@ -15446,6 +15723,146 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** McpServerCreate */
+        McpServerCreate: {
+            /**
+             * Visibility
+             * @default org
+             */
+            visibility: string;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Transport
+             * @enum {string}
+             */
+            transport: "stdio" | "sse" | "http" | "websocket";
+            /** Endpoint */
+            endpoint?: string | null;
+            /** Command */
+            command?: string | null;
+            /** Declared Scopes */
+            declared_scopes?: string[];
+            /** Credentials */
+            credentials?: string | null;
+        };
+        /** McpServerListResponse */
+        McpServerListResponse: {
+            /** Items */
+            items: components["schemas"]["McpServerResponse"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+        };
+        /** McpServerObservationResponse */
+        McpServerObservationResponse: {
+            /**
+             * Server Id
+             * Format: uuid
+             */
+            server_id: string;
+            /** Tools Hash */
+            tools_hash: string;
+            /** Approval Status */
+            approval_status: string;
+            /** Drift Detected */
+            drift_detected: boolean;
+            /** Newly Drifted */
+            newly_drifted: boolean;
+            /** Previous Tools Hash */
+            previous_tools_hash?: string | null;
+        };
+        /** McpServerResponse */
+        McpServerResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organisation Id
+             * Format: uuid
+             */
+            organisation_id: string;
+            /** Name */
+            name: string;
+            /** Transport */
+            transport: string;
+            /** Endpoint */
+            endpoint?: string | null;
+            /** Command */
+            command?: string | null;
+            /** Declared Scopes */
+            declared_scopes: string[];
+            /** Owner Account Id */
+            owner_account_id?: string | null;
+            /** Has Credentials */
+            has_credentials: boolean;
+            /** Tools Json */
+            tools_json: {
+                [key: string]: unknown;
+            }[];
+            /** Tools Hash */
+            tools_hash?: string | null;
+            /** Approval Status */
+            approval_status: string;
+            /** Approved By */
+            approved_by?: string | null;
+            /** Approved At */
+            approved_at?: string | null;
+            /** Approved Hash */
+            approved_hash?: string | null;
+            /** Last Observed At */
+            last_observed_at?: string | null;
+            /** Visibility */
+            visibility: string;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * McpServerToolsObservation
+         * @description A reported MCP tool-definition set (each entry a JSON object with a name).
+         */
+        McpServerToolsObservation: {
+            /** Tools */
+            tools?: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** McpServerUpdate */
+        McpServerUpdate: {
+            /** Visibility */
+            visibility?: string | null;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Transport */
+            transport?: ("stdio" | "sse" | "http" | "websocket") | null;
+            /** Endpoint */
+            endpoint?: string | null;
+            /** Command */
+            command?: string | null;
+            /** Declared Scopes */
+            declared_scopes?: string[] | null;
+            /** Credentials */
+            credentials?: string | null;
+        };
         /** MembershipListResponse */
         MembershipListResponse: {
             /** Items */
@@ -17129,12 +17546,65 @@ export interface components {
              */
             environment_profile_id?: string | null;
         };
+        /**
+         * PlanBootstrapResponse
+         * @description Caller-scoped effective plan + feature bootstrap (FAR-1806).
+         *
+         *     Readable by ANY authenticated member of their own org (no instance-admin
+         *     permission), with the org ``feature_overrides`` overlay applied and the
+         *     FULL known flag set present — inactive flags carry
+         *     ``currently_active: false`` rather than being omitted.
+         */
+        PlanBootstrapResponse: {
+            license: components["schemas"]["PlanLicenseInfo"];
+            /** Dev Mode */
+            dev_mode: boolean;
+            /** Flags */
+            flags: components["schemas"]["PlanFlagInfo"][];
+        };
+        /**
+         * PlanFlagInfo
+         * @description One effective feature flag in the ``/api/v1/plan`` payload.
+         *
+         *     Mirrors the admin feature-flag list's ``flags[]`` vocabulary
+         *     (``currently_active`` / ``depends_on`` included) so a client reading
+         *     either endpoint maps the same field names.
+         */
+        PlanFlagInfo: {
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Tier */
+            tier: string;
+            /** Currently Active */
+            currently_active: boolean;
+            /** Depends On */
+            depends_on?: string[] | null;
+        };
         /** PlanInfo */
         PlanInfo: {
             /** Tier */
             tier: string;
             /** Daily Spend Limit */
             daily_spend_limit?: number | null;
+        };
+        /**
+         * PlanLicenseInfo
+         * @description Effective-licence view served by ``GET /api/v1/plan`` (FAR-1806).
+         *
+         *     ``tier`` is the plan context's resolved tier; ``expires_at`` / ``org_id``
+         *     come from the same licence-ladder rung the admin ``/api/v1/admin/license``
+         *     resolver walks, so a member reads the licence view without hitting an
+         *     admin-permission-gated endpoint.
+         */
+        PlanLicenseInfo: {
+            /** Tier */
+            tier: string;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Org Id */
+            org_id?: string | null;
         };
         /** PluginHealth */
         PluginHealth: {
@@ -18381,6 +18851,8 @@ export interface components {
             langgraph_thread_id: string;
             /** Snapshot Id */
             snapshot_id?: string | null;
+            /** Snapshot Version */
+            snapshot_version?: number | null;
             /** Error Detail */
             error_detail?: string | null;
             /** Error Code */
@@ -27376,6 +27848,40 @@ export interface operations {
             };
         };
     };
+    get_snapshot_by_version_endpoint_api_v1_pipelines__pipeline_id__snapshots_by_version__snapshot_version__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                pipeline_id: string;
+                snapshot_version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SnapshotDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
     get_snapshot_detail_endpoint_api_v1_pipelines__pipeline_id__snapshots__snapshot_id__get: {
         parameters: {
             query?: {
@@ -33419,6 +33925,37 @@ export interface operations {
             };
         };
     };
+    plan_bootstrap_api_v1_plan_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanBootstrapResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
     viewmodel_list_views_api_v1_viewmodel_views_get: {
         parameters: {
             query?: {
@@ -38424,6 +38961,414 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    list_external_agents_endpoint_api_v1_external_agents_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalAgentListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    create_external_agent_endpoint_api_v1_external_agents_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExternalAgentCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalAgentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_external_agent_endpoint_api_v1_external_agents__agent_id__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalAgentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    delete_external_agent_endpoint_api_v1_external_agents__agent_id__delete: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    update_external_agent_endpoint_api_v1_external_agents__agent_id__patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExternalAgentUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalAgentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    list_mcp_servers_endpoint_api_v1_mcp_servers_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    create_mcp_server_endpoint_api_v1_mcp_servers_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpServerCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_mcp_server_endpoint_api_v1_mcp_servers__server_id__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    delete_mcp_server_endpoint_api_v1_mcp_servers__server_id__delete: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    update_mcp_server_endpoint_api_v1_mcp_servers__server_id__patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpServerUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    observe_tools_endpoint_api_v1_mcp_servers__server_id__observe_tools_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpServerToolsObservation"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerObservationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    approve_tools_endpoint_api_v1_mcp_servers__server_id__approve_tools_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
             };
         };
     };

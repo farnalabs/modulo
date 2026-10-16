@@ -24,6 +24,26 @@ readers.
 - ``extend_node_type_map_from_edges`` -- stamps ``"gate"`` entries for the HITL
   gate nodes synthesized at graph-compile time (absent from
   ``graph_json.nodes``) so gate envelopes can be resolved from a type map.
+
+FAR-132 precondition for stripping the legacy tolerance
+-------------------------------------------------------
+
+The legacy branches here (``node_return`` / ``node_telemetry`` /
+``_legacy_inner_output``) exist only to read rows written BEFORE the P1 write
+flip. They may be deleted once BOTH hold:
+
+1. the P5 verify-backfill proves zero legacy rows in ``run_node_outputs``
+   (no ``__final__`` row with an outputs side present and a telemetry side
+   absent), AND
+2. a PERIODIC straggler sweep
+   (``modulo.core.agent_return_legacy.count_legacy_agent_return_rows``, run by
+   the ``legacy_agent_return_sweep`` system cron) reports zero legacy rows for
+   long enough to prove no old writer re-introduced them post-flip.
+
+Until both hold the tolerance is LIVE and load-bearing, not dual-shape debt to
+be removed speculatively. ``stored_row_is_legacy`` is the shared predicate the
+sweep uses, so the strip's "no legacy rows" condition is expressed by the same
+code the read accessors dispatch on.
 """
 
 from __future__ import annotations
@@ -46,6 +66,7 @@ __all__ = [
     "node_telemetry",
     "resolve_node_contract_output",
     "split_node_output",
+    "stored_row_is_legacy",
 ]
 
 #: Node-type value used for HITL gate envelopes in extended type maps.
@@ -257,6 +278,43 @@ def has_telemetry_entry(telemetry_json: Any, node_id: str) -> bool:
     this predicate rather than re-deriving the dispatch rule).
     """
     return isinstance(telemetry_json, dict) and node_id in telemetry_json
+
+
+def stored_row_is_legacy(*, outputs_present: bool, telemetry_present: bool) -> bool:
+    """True when a stored single-node ``run_node_outputs`` row is LEGACY-shaped.
+
+    The row-scope twin of :func:`has_telemetry_entry`, used to filter
+    ``__final__`` rows — the only row kind :func:`node_telemetry` reads. A
+    ``__final__`` row holds ONE node's value per side, so under the writers'
+    one-entry-per-side encoding the reassembled per-run telemetry dict has an
+    entry for that node iff the row's telemetry side is PRESENT. The flag form
+    therefore reports what :func:`node_telemetry` dispatches on for a
+    ``__final__`` row: outputs side PRESENT and telemetry side ABSENT.
+
+    Two scopes are deliberately NOT claimed:
+
+    * This predicate reads ONLY the two presence flags. It says nothing about
+      the rows :func:`node_telemetry` never reads — ``__``-prefixed sentinel
+      rows (``__run_meta__`` / ``__mwi_audit__``) and marker rows — which can
+      carry outputs-present/telemetry-absent flags without being a node return;
+      the FAR-132 sweep filters those out before applying it.
+    * It assumes the writer's encoding (a present telemetry side carries the
+      node's entry). A hand-written row whose telemetry side is present but
+      empty would not be flagged here even though the reassembled dict has no
+      entry for the node.
+
+    *outputs_present* / *telemetry_present* mirror
+    ``crud.run_node_outputs._ROW_COLUMNS``' ``outputs_absent`` /
+    ``telemetry_absent`` flags (SQL NULL means absent; a stored jsonb ``null``
+    is present), keeping the SQL NULL / jsonb-null distinction the round-trip
+    depends on.
+
+    Defined beside the accessors so the FAR-132 straggler sweep
+    (``core.agent_return_legacy``) and the read dispatch share ONE definition
+    of "legacy". The FAR-132 strip deletes this together with the fallback
+    branch it guards.
+    """
+    return outputs_present and not telemetry_present
 
 
 def node_telemetry(telemetry_json: Any, outputs_json: Any, node_id: str) -> Any:

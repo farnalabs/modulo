@@ -335,6 +335,34 @@ describe('AppSidebar', () => {
       expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false)
     })
 
+    it('unmounts the placeholder once the flags fetch settles unreadable — an interactive drawer renders (FAR-1805)', async () => {
+      // The mock resolves {data: null, error: undefined}: the no-payload
+      // branch. The store must go terminal 'unavailable' (logged) instead of
+      // leaving a dead, non-interactive placeholder up forever.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const wrapper = mountSidebar({}, { unresolved: true })
+        await flushPromises()
+        expect(wrapper.find(PENDING).exists()).toBe(true)
+
+        await usePlanStore().fetchPlan()
+        await flushPromises()
+
+        expect(usePlanStore().flagsSource).toBe('unavailable')
+        expect(wrapper.find(PENDING).exists()).toBe(false)
+        const hamburger = wrapper.find('[aria-controls="mobile-sidebar"]')
+        expect(hamburger.exists()).toBe(true)
+        expect(hamburger.element.tagName).toBe('BUTTON') // interactive, not the dead span
+        expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false) // drawer, not rail
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining('[plan] Feature flags request settled without a payload'),
+          null,
+        )
+      } finally {
+        warn.mockRestore()
+      }
+    })
+
     it('the placeholder occupies the fixed header slot (h-14) so resolving to the drawer shifts nothing', async () => {
       const wrapper = mountSidebar({}, { unresolved: true, attachTo: document.body })
       await flushPromises()

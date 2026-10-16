@@ -400,6 +400,14 @@ def audited(
             shares the resolution with the route's permission check.
         fail_closed: Re-raise an append failure instead of logging it.
 
+    Suppression (no-op writes): a handler that determines the request made NO
+    state change may set ``request.state.audit_no_change = True`` before it
+    returns; the success event is then skipped (the ERROR/attempt event still
+    fires). Idempotent endpoints use this so replaying a PUT that changes
+    nothing does not spam the audit chain (FAR-247 preferences PUT). The flag
+    is request-scoped and opt-in — every other route keeps the fire-always
+    behaviour.
+
     Returns:
         An async-generator dependency suitable for ``Depends(...)`` or a
         route's ``dependencies=[...]`` list.
@@ -436,14 +444,19 @@ def audited(
             )
             raise
         else:
-            await _emit(
-                session=session,
-                principal=principal,
-                event_type=event_type,
-                resource_type=resource_type,
-                payload=_coarse_payload(request, "success", principal),
-                fail_closed=fail_closed,
-            )
+            # ``audit_no_change`` (see the docstring): the handler marked this
+            # a no-op write — skip the SUCCESS event, never the attempt. Strict
+            # ``is True`` so only an explicit boolean suppresses (a truthy
+            # non-bool must never silently mute the audit chain).
+            if getattr(request.state, "audit_no_change", None) is not True:
+                await _emit(
+                    session=session,
+                    principal=principal,
+                    event_type=event_type,
+                    resource_type=resource_type,
+                    payload=_coarse_payload(request, "success", principal),
+                    fail_closed=fail_closed,
+                )
 
     return dependency
 

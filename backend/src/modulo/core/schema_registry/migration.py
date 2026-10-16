@@ -11,6 +11,8 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
+from modulo.util import callable_label
+
 _log = logging.getLogger(__name__)
 
 
@@ -324,7 +326,7 @@ def _build_step_reports(
             {
                 "source_version": mf.source_version,
                 "target_version": mf.target_version,
-                "description": mf.description or mf.func.__name__,
+                "description": mf.description or callable_label(mf.func),
                 "added_fields": added,
                 "removed_fields": removed,
                 "changed_fields": changed,
@@ -504,7 +506,7 @@ class MigrationRegistry:
             {
                 "source_version": m.source_version,
                 "target_version": m.target_version,
-                "description": m.description or m.func.__name__,
+                "description": m.description or callable_label(m.func),
             }
             for m in chain
         ], gaps
@@ -544,7 +546,7 @@ class MigrationRegistry:
             {
                 "source_version": m.source_version,
                 "target_version": m.target_version,
-                "description": m.description or m.func.__name__,
+                "description": m.description or callable_label(m.func),
             }
             for m in chain
         ]

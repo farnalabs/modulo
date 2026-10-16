@@ -274,9 +274,11 @@ jobs:
 
           if [ "$SHOULD_ALERT" = "true" ]; then
             echo "::error::merge-queue-watchdog: no SUCCESSFUL merge-queue run for ${LAST_SUCCESS_AGE} min while ${APPROVED_WAITING} approved PR(s) wait — the queue is not merging."
-            echo "stalled=true" >> "$GITHUB_OUTPUT"
-            echo "last_success_age=${LAST_SUCCESS_AGE}" >> "$GITHUB_OUTPUT"
-            echo "approved_waiting=${APPROVED_WAITING}" >> "$GITHUB_OUTPUT"
+            {
+              echo "stalled=true"
+              echo "last_success_age=${LAST_SUCCESS_AGE}"
+              echo "approved_waiting=${APPROVED_WAITING}"
+            } >> "$GITHUB_OUTPUT"
           elif [ "$LAST_SUCCESS_AGE" -lt 0 ]; then
             echo "No successful merge-queue run found (success age unmeasurable) — not alerting."
           elif [ "$APPROVED_WAITING" -eq 0 ]; then

@@ -365,9 +365,11 @@ jobs:
           )" || RECENT="ok"
           if [ "$RECENT" != "ok" ]; then
             echo "::error::deploy-watchdog: 3 consecutive failed deploys; not re-dispatching - investigate deploy.yml failures; deploy-staleness-check.yml escalates staleness independently"
-            echo "consecutive_failures=true" >> "$GITHUB_OUTPUT"
-            echo "prod_sha=${PROD_SHA}" >> "$GITHUB_OUTPUT"
-            echo "main_sha=${MAIN_SHORT}" >> "$GITHUB_OUTPUT"
+            {
+              echo "consecutive_failures=true"
+              echo "prod_sha=${PROD_SHA}"
+              echo "main_sha=${MAIN_SHORT}"
+            } >> "$GITHUB_OUTPUT"
             exit 1
           fi
 

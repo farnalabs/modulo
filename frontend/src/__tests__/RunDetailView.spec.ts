@@ -3301,3 +3301,102 @@ describe('RunDetailView cancellation reason (FAR-1233)', () => {
     wrapper.unmount()
   })
 })
+
+describe('RunDetailView pipeline-version link (FAR-1813)', () => {
+  // This file has many tests that REPLACE api.GET's implementation without
+  // restoring it (vi.clearAllMocks clears calls, not implementations), so this
+  // suite installs its own GET for every test rather than inheriting whatever
+  // the preceding test left behind.
+  let pipelineName: string | null = null
+  let snapshotId: string | null = null
+  let restoreGet: ((url: string) => unknown) | undefined
+
+  type GetMock = {
+    getMockImplementation: () => ((url: string) => unknown) | undefined
+    mockImplementation: (fn: (url: string) => unknown) => unknown
+  }
+
+  beforeEach(() => {
+    const getMock = api.GET as unknown as GetMock
+    restoreGet = getMock.getMockImplementation()
+    pipelineName = null
+    snapshotId = null
+    getMock.mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({
+          data: {
+            run_id: 'test-run-id',
+            pipeline_id: 'test-pipeline',
+            pipeline_name: pipelineName,
+            snapshot_id: snapshotId,
+            status: 'complete',
+            total_cost_usd: 1.23,
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({
+          data: { outputs_json: {}, input_payload: null, node_telemetry: null },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/runs/{run_id}/hitl/pending') {
+        return Promise.resolve({ data: { reviews: [] }, error: undefined })
+      }
+      if (url === '/api/v1/model-backends') {
+        return Promise.resolve({ data: null, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+  })
+
+  afterEach(() => {
+    if (restoreGet) (api.GET as unknown as GetMock).mockImplementation(restoreGet)
+  })
+
+  it('links the pipeline name to the version this run executed (?snapshot= from the run payload)', async () => {
+    pipelineName = 'Data Sync'
+    snapshotId = 'snap-42'
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+
+    const link = wrapper.find('a[href="/pipelines/test-pipeline/editor?snapshot=snap-42"]')
+    expect(link.exists()).toBe(true)
+    expect(link.text()).toContain('Data Sync')
+    wrapper.unmount()
+  })
+
+  it('a legacy run with no snapshot links to the live editor — never ?snapshot=null', async () => {
+    pipelineName = 'Data Sync'
+    snapshotId = null
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+
+    const link = wrapper.find('a[href="/pipelines/test-pipeline/editor"]')
+    expect(link.exists()).toBe(true)
+    expect(wrapper.find('a[href*="snapshot"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('renders plain text — no dead editor link — when the pipeline is deleted', async () => {
+    pipelineName = null
+    snapshotId = 'snap-42'
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+
+    expect(wrapper.find('a[href^="/pipelines/"]').exists()).toBe(false)
+    // The header still names the run.
+    expect(wrapper.text()).toContain('Run #test-run')
+    wrapper.unmount()
+  })
+})
