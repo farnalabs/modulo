@@ -231,9 +231,20 @@ test.describe('Real-stack journeys: pipeline lifecycle', { tag: '@regression' },
       if ((await deleteItem.count()) === 0) {
         test.skip(true, 'pipeline_delete is not enabled on this deployment')
       }
-      await clickMenuItem(deleteItem)
+      // Close the detection popup before re-opening it through the shared
+      // helper (the action-menu button remounts the Menu on every open rather
+      // than toggling, so a stray open overlay must be dismissed first).
+      await page.keyboard.press('Escape')
+
+      // Activate the Delete command through the retry-until-effect helper the
+      // rename/archive journeys use: the anchored PrimeVue popup can self-hide
+      // before the item's command lands, silently no-opping a single
+      // activation. This journey was skipped whenever pipeline_delete was
+      // unresolvable, so it never picked the helper up (see setup/row-menu.ts).
       const dialog = page.locator('dialog').filter({ hasText: 'Delete Pipeline' })
-      await expect(dialog).toBeVisible()
+      await clickRowAction(page, row, 'Delete', async () => {
+        await expect(dialog).toBeVisible({ timeout: 5_000 })
+      })
       await dialog.getByRole('button', { name: 'Delete' }).click()
       deletedThroughUi = true
 
