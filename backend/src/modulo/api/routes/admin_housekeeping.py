@@ -5,7 +5,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,7 +18,12 @@ from modulo.api.dependencies import get_db_session, require_permission, require_
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
-from modulo.core.housekeeping import ENTITY_MODEL_MAP, NON_DELETABLE_ENTITY_TYPES, scan_all
+from modulo.core.housekeeping import (
+    ENTITY_MODEL_MAP,
+    NON_DELETABLE_ENTITY_TYPES,
+    delete_one_in_savepoint,
+    scan_all,
+)
 from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
 from modulo.db.crud.run_retention import CHECKPOINT_RETENTION_DAYS, purge_terminal_checkpoints
 from modulo.db.rls import set_rls_execution_context, set_rls_org
@@ -172,24 +176,13 @@ async def perform_cleanup(
 
                 for eid in ids:
                     try:
-                        deleted = False
-                        async with session.begin_nested():
-                            stmt = select(model_cls).where(  # type: ignore[var-annotated]
-                                model_cls.id == eid,  # type: ignore[attr-defined]
-                                model_cls.organisation_id == principal.organisation_id,  # type: ignore[attr-defined]
-                            )
-                            obj = (await session.execute(stmt)).scalar_one_or_none()
-                            if obj is not None:
-                                await session.delete(obj)
-                                deleted = True
                         # FAR-1857: count only AFTER the savepoint released.
-                        # The flush happens on savepoint exit, so an FK
-                        # RESTRICT refusal raises below and rolls the row back
-                        # — counting at ``session.delete()`` time reported a
-                        # deletion that never happened. ``deleted`` is set
-                        # inside the block but only credited here, once the
-                        # savepoint has committed successfully.
-                        if deleted:
+                        # ``delete_one_in_savepoint`` returns True only once
+                        # the DELETE (flushed on savepoint exit) has committed,
+                        # so an FK RESTRICT refusal cannot be counted as a
+                        # deletion. Shared with the MCP path so the two cannot
+                        # drift.
+                        if await delete_one_in_savepoint(session, model_cls, eid, principal.organisation_id):
                             deleted_count += 1
                     except IntegrityError as exc:
                         _log.exception(_CODE_ADMIN_HOUSEKEEPING_PERFORM_CLEANUP)

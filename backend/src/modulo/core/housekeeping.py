@@ -95,6 +95,37 @@ ENTITY_MODEL_MAP: dict[str, type] = {
 NON_DELETABLE_ENTITY_TYPES: frozenset[str] = frozenset({"invalid_org_fk", "degraded_composite_template"})
 
 
+async def delete_one_in_savepoint(
+    session: AsyncSession,
+    model_cls: type[Any],
+    entity_id: str,
+    organisation_id: uuid.UUID,
+) -> bool:
+    """Delete one org-scoped row; True only if its savepoint committed.
+
+    The org-scoped ``select`` (matching ``id`` AND ``organisation_id``) lives
+    here, so both callers — the REST cleanup route and the MCP
+    ``perform_housekeeping`` tool — share one implementation and cannot drift.
+
+    The DELETE is flushed when the nested transaction releases, so an FK
+    RESTRICT refusal raises here and the row survives — callers must count
+    only a True return (FAR-1857). An absent / foreign-org row is a no-op
+    returning False; a genuine ``IntegrityError`` propagates to the caller so
+    each call site keeps its own existing error handling.
+    """
+    deleted = False
+    async with session.begin_nested():
+        stmt = select(model_cls).where(
+            model_cls.id == entity_id,
+            model_cls.organisation_id == organisation_id,
+        )
+        obj = (await session.execute(stmt)).scalar_one_or_none()
+        if obj is not None:
+            await session.delete(obj)
+            deleted = True
+    return deleted
+
+
 @dataclass(frozen=True)
 class Scanner:
     """A single housekeeping scanner registration.
