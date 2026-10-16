@@ -137,10 +137,10 @@ describe('AppSidebar', () => {
       expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false)
     })
 
-    it('gives every control in the fixed mobile header a >=44px hit area (WCAG 2.5.5/2.5.8)', async () => {
+    it('gives the four interactive controls in the fixed mobile header a >=44px hit area (WCAG 2.5.5/2.5.8)', async () => {
       // jsdom cannot measure rendered geometry — these assert the utility
-      // classes that produce the 44px box; the measured evidence is the
-      // Playwright capture at 390x844.
+      // classes that produce the 44px box. The brand home-link is deliberately
+      // out of scope (its size is unchanged by this pass).
       const wrapper = mountSidebar()
       await flushPromises()
       const header = wrapper.find('header')

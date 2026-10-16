@@ -101,7 +101,7 @@
 
        Review finding: the placeholder must read as pending NAV, not a blank
        slot. It now mirrors the drawer header's hamburger geometry (same 22px
-       Menu glyph in the same p-2 rounded box, but non-interactive with a muted
+       Menu glyph in the same 44px rounded box, but non-interactive with a muted
        tone) and is a labelled live region (`role="status"` + `aria-busy`) so
        attempted activation gets visible wait feedback instead of silence. The
        header is position:fixed, so neither it nor <main>'s offset shifts when
@@ -116,7 +116,7 @@
     >
       <span
         data-testid="mobile-nav-pending-hamburger"
-        class="rounded-md p-2 text-muted-foreground/50"
+        class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted-foreground/50"
         aria-hidden="true"
       >
         <Menu class="h-[22px] w-[22px]" />

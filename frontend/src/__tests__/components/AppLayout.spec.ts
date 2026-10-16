@@ -100,9 +100,9 @@ describe('AppLayout', () => {
       // mode here — an unresolved store must render the pending placeholder
       // instead (asserted in the FAR-1237 block below).
       usePlanStore().features['mobile_sidebar_rail'] = false
-      // The mocked onboarding API resolves ready=true with isFirstRun defaulting
-      // to true, so the banner would otherwise be active. Dismiss it to isolate
-      // the header-only offset path this test exercises.
+      // The onboarding banner renders in normal flow and reserves its own
+      // height, so its active/dismissed state does not change <main>'s padding
+      // class at all. Dismiss it here purely for determinism.
       const onboarding = useOnboardingStore()
       onboarding.dismissed = true
       await nextTick()
@@ -130,6 +130,12 @@ describe('AppLayout', () => {
       store.dismissed = false
       await nextTick()
       await nextTick()
+      // Pin the premise: the banner must actually be RENDERED for the
+      // no-offset assertions below to mean anything. The trigger button lives
+      // inside OnboardingBanner's `v-if="store.isActive"` root, so it only
+      // exists when the banner is active (same locator the active-banner and
+      // inactive-banner tests in this file use).
+      expect(wrapper.find('[data-testid="onboarding-banner-trigger"]').exists()).toBe(true)
       const main = wrapper.find('main')
       expect(main.classes()).toContain('pt-14')
       expect(main.classes()).not.toContain('pt-[calc(3.5rem+8.25rem)]')

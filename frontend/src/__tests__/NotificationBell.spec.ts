@@ -26,6 +26,14 @@ vi.mock('../lib/api/formatError', () => ({
     if (result.error) throw new Error('prefs failed')
     return result.data
   },
+  // The unmocked notifications store imports formatApiError from this module
+  // and calls it in the fetchRecent/markAllRead error paths. The mock must
+  // provide it or those paths crash with "formatApiError is not a function".
+  formatApiError: (err: unknown): string => {
+    if (err instanceof Error) return err.message
+    if (typeof err === 'string') return err
+    return 'Unknown error'
+  },
 }))
 
 // Reactive banner flag: a plain { value } object would NOT trigger a re-render
