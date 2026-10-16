@@ -88,6 +88,22 @@ describe('FeedbackInboxView', () => {
     wrapper.unmount()
   })
 
+  it('renders skeleton placeholders while the list loads', async () => {
+    // hold the inbox fetch open so the loading state is observable
+    let resolveFetch!: (value: unknown) => void
+    const pending = new Promise((resolve) => { resolveFetch = resolve })
+    const { api } = await import('../lib/api/client')
+    vi.mocked(api.GET).mockImplementationOnce(() => pending as unknown as ApiResult)
+    const wrapper = mount(FeedbackInboxView)
+    await nextTick()
+    expect(wrapper.find('[data-testid="feedback-inbox-loading"]').exists()).toBe(true)
+    resolveFetch({ data: { items: [] }, error: undefined })
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="feedback-inbox-loading"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('renders feedback records with status badges and handler labels', async () => {
     const wrapper = await mountWithList([
       record(),
@@ -95,8 +111,8 @@ describe('FeedbackInboxView', () => {
     ])
     expect(wrapper.text()).toContain('Deploy Pipeline')
     expect(wrapper.text()).toContain('Incident Triage')
-    expect(wrapper.text()).toContain('pending')
-    expect(wrapper.text()).toContain('escalated')
+    expect(wrapper.text()).toContain('Pending')
+    expect(wrapper.text()).toContain('Escalated')
     expect(wrapper.text()).toContain('Human')
     expect(wrapper.text()).toContain('AI Correction')
     // unknown handler type falls back to the raw type string
@@ -294,7 +310,7 @@ describe('FeedbackInboxView', () => {
 
     // the row badge now shows the new status
     const badge = wrapper.findAll('span').find((s) => s.classes().includes('badge'))
-    expect(badge?.text()).toBe('resolved')
+    expect(badge?.text()).toBe('Resolved')
     wrapper.unmount()
   })
 

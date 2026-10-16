@@ -2899,6 +2899,12 @@ elements:
       - testid: feedback-inbox-empty
         type: element
         dynamic_testid: false
+      - testid: feedback-inbox-loading
+        type: element
+        dynamic_testid: false
+      - testid: feedback-inbox-detail-loading
+        type: element
+        dynamic_testid: false
       - testid: feedback-inbox-toggle-expand
         type: button
         dynamic_testid: false
