@@ -52,6 +52,17 @@ export async function setupLocalMockApi(page: Page) {
     if (url.includes('/api/v1/pipelines') && method === 'GET') {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: '1', name: 'Test Pipeline', organisation_id: '1', description: 'A test pipeline', visibility: 'org', status: 'idle', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), archived_at: null }], total: 1 }) })
     }
+    if (url.includes('/api/v1/plan')) {
+      // FAR-1809: the caller-scoped GET /api/v1/plan carries the tier, dev
+      // mode, licence view and the effective flag map — it replaced the
+      // instance-admin /admin/feature-flags + /admin/license bootstrap reads.
+      // dev_mode: true so private_preview routes (evals, runs-diff, feedback
+      // inbox, saved views, node categories, feature flags, monitoring,
+      // error forwarders, runtime config, rate limits, ...) resolve on the
+      // local mock-API target instead of redirecting to the dashboard. Local
+      // e2e mirrors staging, which also runs with dev mode on.
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ flags: [], license: { tier: 'enterprise', org_id: '1', expires_at: null }, dev_mode: true }) })
+    }
     if (url.includes('/api/v1/admin/feature-flags')) {
       // dev_mode: true so private_preview routes (evals, runs-diff, feedback
       // inbox, saved views, node categories, feature flags, monitoring,

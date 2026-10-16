@@ -30,9 +30,10 @@ test.describe('Assistant-only mode at /assistant', { tag: '@smoke' }, () => {
 
     // Register the dev_mode flag AFTER loginAsAdmin: setupLocalMockApi
     // installs a catch-all **/api/v1/** route, and Playwright matches the
-    // LAST-registered route first, so a feature-flags stub registered before
-    // it would be shadowed.
-    await page.route('**/api/v1/admin/feature-flags', (route) => {
+    // LAST-registered route first, so a plan stub registered before it would be
+    // shadowed. FAR-1809: flags / dev mode now arrive from the caller-scoped
+    // GET /api/v1/plan.
+    await page.route('**/api/v1/plan', (route) => {
       route.fulfill({
         status: 200,
         contentType: 'application/json',

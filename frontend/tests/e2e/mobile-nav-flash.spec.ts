@@ -6,7 +6,7 @@ import { flagCacheKey, serializeFlagCache } from '../../src/config/flagCache'
 // feature-flags response.
 //
 // Before the fix, `mobile_sidebar_rail` was read from a store that started
-// empty and only populated after `GET /api/v1/admin/feature-flags` landed, so
+// empty and only populated after `GET /api/v1/plan` landed, so
 // every mobile load painted the legacy hamburger top-nav first and swapped to
 // the left rail when the response arrived (the slow-connection flash Duncan
 // reported). The fix resolves the mode from a persisted cache synchronously.
@@ -180,8 +180,9 @@ async function boot(page: Page, opts: { rail: boolean; cachedRail?: boolean; wai
 
   await setupLocalMockApi(page)
   // Registered after the catch-all mock — Playwright gives later-registered
-  // handlers precedence, so this one owns the flags endpoint.
-  await page.route('**/api/v1/admin/feature-flags', async (route) => {
+  // handlers precedence, so this one owns the flags endpoint. FAR-1809: the
+  // flag map now arrives from the caller-scoped GET /api/v1/plan.
+  await page.route('**/api/v1/plan', async (route) => {
     await gate
     await route.fulfill({
       status: 200,
@@ -203,7 +204,7 @@ async function boot(page: Page, opts: { rail: boolean; cachedRail?: boolean; wai
   })
 
   const response = page.waitForResponse(
-    (r) => r.url().includes('/api/v1/admin/feature-flags') && r.status() === 200,
+    (r) => r.url().includes('/api/v1/plan') && r.status() === 200,
   )
   // If a first-paint assertion fails before release(), this promise would
   // reject unhandled at the response timeout and muddy the failure output.
@@ -266,7 +267,7 @@ async function boot(page: Page, opts: { rail: boolean; cachedRail?: boolean; wai
     // The route handler is still awaiting the gate, so the response stays held
     // and the store keeps resolving.
     await page.waitForRequest(
-      (r) => r.url().includes('/api/v1/admin/feature-flags'),
+      (r) => r.url().includes('/api/v1/plan'),
       { timeout: FLAGS_BOOT_TIMEOUT_MS },
     )
     return { release, response }

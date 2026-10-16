@@ -231,9 +231,14 @@ test.describe('Real-stack journeys: pipeline lifecycle', { tag: '@regression' },
       if ((await deleteItem.count()) === 0) {
         test.skip(true, 'pipeline_delete is not enabled on this deployment')
       }
-      await clickMenuItem(deleteItem)
+      // Activate Delete through the shared retry helper: the anchored popup can
+      // self-hide before the command lands (see setup/row-menu.ts), so a single
+      // activation silently no-ops — retry until the confirm dialog actually
+      // opens, exactly as the rename/archive journeys do.
       const dialog = page.locator('dialog').filter({ hasText: 'Delete Pipeline' })
-      await expect(dialog).toBeVisible()
+      await clickRowAction(page, row, 'Delete', async () => {
+        await expect(dialog).toBeVisible({ timeout: 5_000 })
+      })
       await dialog.getByRole('button', { name: 'Delete' }).click()
       deletedThroughUi = true
 
