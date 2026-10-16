@@ -442,10 +442,4 @@ __all__ = [
     #     call sites are the relay tests' stand-ins for ops/diagnostic use) ---
     "wait_ready",  # EventRelay: awaits the subscribe-confirmation signal
     "get_active_relay",  # relay singleton accessor (diagnostic/test-referenced)
-    # --- FAR-1832 QA F1: the product_analytics route writers switched to a
-    #     request-only nested sub-field patch, so this whole-block merge
-    #     helper has no production call site left; it remains the documented
-    #     whole-block composition semantics and is unit-tested in
-    #     tests/unit/product_analytics/test_consent.py ---
-    "merge_product_analytics_block",
 ]
