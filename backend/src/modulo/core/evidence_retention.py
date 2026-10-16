@@ -22,6 +22,7 @@ from typing import Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.crud.organisation import update_org_settings_patch
 from modulo.db.models.evidence import Evidence
 from modulo.db.models.organisation import Organisation
 from modulo.db.repositories.locks import LockAcquireError, PostgresLock
@@ -113,25 +114,25 @@ async def load_policy(session: AsyncSession, org_id: Any) -> EvidenceRetentionPo
     return EvidenceRetentionPolicy()
 
 
-def _merge_org_setting(org: Organisation, key: str, value: object) -> None:
-    """Merge *value* into ``org.settings_json`` under *key* without dropping other keys."""
-    settings: dict[str, Any] = dict(org.settings_json) if org.settings_json else {}
-    settings[key] = value
-    org.settings_json = settings
-
-
 async def save_policy(
     session: AsyncSession,
     org_id: Any,
     policy: EvidenceRetentionPolicy,
 ) -> None:
-    """Persist the evidence retention policy for an org."""
-    result = await session.execute(select(Organisation).where(Organisation.id == org_id).limit(1))
-    org = result.scalar_one_or_none()
-    if org is None:
-        raise ValueError(f"Organisation {org_id} not found")
-    _merge_org_setting(org, _POLICY_KEY, policy.to_dict())
-    await session.flush()
+    """Persist the evidence retention policy for an org.
+
+    FAR-1830: emits ONLY this module's top-level key (``evidence_retention``)
+    through the atomic patch. A read-modify-write of the whole
+    ``settings_json`` column would drop every other concern's key committed in
+    the read→write window. A missing (or soft-deleted) org raises ``ValueError``
+    — the route maps it to 404 — and the caller must have bound the org RLS
+    context (``set_rls_org``) on its transaction, the standard contract for
+    every ``settings_json`` writer.
+    """
+    try:
+        await update_org_settings_patch(session, org_id, {_POLICY_KEY: policy.to_dict()})
+    except LookupError as exc:
+        raise ValueError(f"Organisation {org_id} not found") from exc
 
 
 # ── Purge sweep ──────────────────────────────────────────────────────────

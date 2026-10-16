@@ -306,10 +306,18 @@ def test_update_cost_controls_applies_all_fields(client: tuple[TestClient, Async
     org = _make_org()
     teams_result = MagicMock()
     teams_result.items = []
+
+    async def _merge_patch(session, organisation_id, patch=None, delete_keys=None):
+        settings = dict(org.settings_json or {})
+        settings.update(patch or {})
+        org.settings_json = settings
+        return settings
+
     with ExitStack() as stack:
         stack.enter_context(patch(f"{_PREFIX}get_organisation", new=AsyncMock(return_value=org)))
         stack.enter_context(patch(f"{_PREFIX}list_teams", new=AsyncMock(return_value=teams_result)))
         stack.enter_context(_rls_cm())
+        stack.enter_context(patch(f"{_PREFIX}update_org_settings_patch", new=_merge_patch))
         resp = http.put(
             "/api/v1/admin/costs/controls",
             json={
@@ -337,14 +345,40 @@ def test_update_cost_controls_applies_all_fields(client: tuple[TestClient, Async
 
 def test_update_cost_controls_no_settings_only_leaves_org_untouched() -> None:
     """A request with only unset optional fields must not rewrite settings_json."""
-    from modulo.api.routes.costs import UpdateCostControlsRequest, _apply_cost_control_updates
+    from modulo.api.routes.costs import UpdateCostControlsRequest, _cost_controls_patch
 
     org = MagicMock()
     org.daily_spend_limit = None
     org.settings_json = None
     req = UpdateCostControlsRequest(budget=None)
-    _apply_cost_control_updates(org, req)
+    assert _cost_controls_patch(org, req) is None
     assert org.settings_json is None
+
+
+def test_update_cost_controls_budget_only_returns_current_settings(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """FAR-1830: a settings-free request reads back the org's current settings.
+
+    ``_cost_controls_patch`` returns None when no settings-namespace field is
+    provided, so the route must fall back to the existing ``settings_json``
+    rather than calling the atomic patch helper (which would rewrite the column).
+    """
+    http, _session = client
+    org = _make_org()
+    teams_result = MagicMock()
+    teams_result.items = []
+    patch_mock = AsyncMock(return_value={})
+    with ExitStack() as stack:
+        stack.enter_context(patch(f"{_PREFIX}get_organisation", new=AsyncMock(return_value=org)))
+        stack.enter_context(patch(f"{_PREFIX}list_teams", new=AsyncMock(return_value=teams_result)))
+        stack.enter_context(_rls_cm())
+        stack.enter_context(patch(f"{_PREFIX}update_org_settings_patch", new=patch_mock))
+        resp = http.put("/api/v1/admin/costs/controls", json={"budget": 7})
+    assert resp.status_code == 200, resp.text
+    patch_mock.assert_not_awaited()
+    assert resp.json()["currency"] == "EUR"
+    assert org.daily_spend_limit == Decimal(7)
 
 
 # ---------------------------------------------------------------------------

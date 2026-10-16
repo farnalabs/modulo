@@ -252,6 +252,10 @@ jobs:
           echo "=== Backend log ==="
           cat backend/backend-bdd.log 2>/dev/null || true
           echo "=== Process check ==="
+          # Diagnostic listing for a failed boot: ps|grep prints the full
+          # command line of every uvicorn-ish process. pgrep would change the
+          # log shape the failure triage reads, so keep the ps form.
+          # shellcheck disable=SC2009
           ps aux | grep -i uvicorn || true
           exit 1
 

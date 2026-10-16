@@ -13,6 +13,31 @@ vi.mock('../lib/mustChangePassword', () => ({
   setMustChangePassword: vi.fn(),
 }))
 
+// FAR-1791: LoginView now reads `route.query.sso_error` via useRoute(), so the
+// router composables are mocked with a controllable route (mirrors
+// OrgLoginView.spec.ts). `mockRoute.query` is reset per test.
+const mockRoute = {
+  path: '/login',
+  fullPath: '/login',
+  params: {} as Record<string, string>,
+  query: {} as Record<string, string>,
+  hash: '',
+  matched: [],
+  name: 'login',
+  redirectedFrom: undefined,
+}
+
+const mockRouter = {
+  push: vi.fn(),
+  replace: vi.fn(),
+  currentRoute: { value: mockRoute },
+}
+
+vi.mock('vue-router', () => ({
+  useRoute: vi.fn(() => mockRoute),
+  useRouter: vi.fn(() => mockRouter),
+}))
+
 // FAR-1669: when armed, the mocked useMutation hands the view a `login` that
 // REJECTS outright — no fetch, no tanstack — so a test can pin the submit
 // handler's contract: the rejection must be caught by the handler while the
@@ -45,6 +70,7 @@ vi.mock('../composables/useMutation', async (importOriginal) => {
 
 import LoginView from '../views/LoginView.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { SSO_ERROR_CODES, normaliseSsoErrorCode, ssoErrorI18nKey } from '../lib/ssoError'
 
 describe('LoginView - login-context integration', () => {
   beforeEach(() => {
@@ -758,5 +784,161 @@ describe('LoginView - used last time tag', () => {
     } finally {
       setItemSpy.mockRestore()
     }
+  })
+})
+
+describe('LoginView - SSO callback error (FAR-1791)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    localStorage.clear()
+    mockRoute.query = {}
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  function mountView() {
+    return mount(LoginView, {
+      global: {
+        stubs: {
+          Button: { template: '<button><slot /></button>' },
+        },
+      },
+    })
+  }
+
+  function mockSingleOrgContext() {
+    vi.spyOn(global, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ multi_org: false, org: { slug: 'acme', name: 'Acme Corp' } }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ oidc: [], saml: false }),
+      } as Response)
+  }
+
+  it('renders the explanatory not-invited alert synchronously from ?sso_error', () => {
+    mockRoute.query = { sso_error: 'not_invited' }
+    mockSingleOrgContext()
+
+    const wrapper = mountView()
+
+    // Present in the first render — before login-context resolves.
+    const alert = wrapper.find('[data-testid="login-sso-error"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain("haven't been invited")
+  })
+
+  it('falls back to the generic copy for an unknown code and never renders the raw value', () => {
+    mockRoute.query = { sso_error: 'totally-bogus-code' }
+    mockSingleOrgContext()
+
+    const wrapper = mountView()
+
+    const alert = wrapper.find('[data-testid="login-sso-error"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain("couldn't complete the sign-in")
+    expect(wrapper.text()).not.toContain('totally-bogus-code')
+  })
+
+  it('applies the shared ErrorAlert a11y contract and no Retry', () => {
+    mockRoute.query = { sso_error: 'auth_failed' }
+    mockSingleOrgContext()
+
+    const wrapper = mountView()
+
+    const alert = wrapper.findComponent(ErrorAlert)
+    expect(alert.exists()).toBe(true)
+    expect(alert.props('retryable')).toBe(false)
+    expect(alert.attributes('data-testid')).toBe('login-sso-error')
+    expect(alert.attributes('role')).toBe('alert')
+    expect(alert.attributes('aria-live')).toBe('assertive')
+    expect(alert.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+  })
+
+  it('moves focus to the alert container so the state is announced', async () => {
+    mockRoute.query = { sso_error: 'auth_failed' }
+    mockSingleOrgContext()
+
+    // Attach to the real document: focus() only takes effect for an element
+    // that is in the document, and VTU's default mount is detached.
+    const wrapper = mount(LoginView, {
+      attachTo: document.body,
+      global: { stubs: { Button: { template: '<button><slot /></button>' } } },
+    })
+    await nextTick()
+
+    const container = wrapper.find('[data-testid="login-sso-error"]').element.parentElement
+    expect(container?.getAttribute('tabindex')).toBe('-1')
+    expect(document.activeElement).toBe(container)
+    wrapper.unmount()
+  })
+
+  it('shows the alert in the multi-org entry step too', async () => {
+    mockRoute.query = { sso_error: 'provider_unavailable' }
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ multi_org: true, org: null }),
+    } as Response)
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="login-org-slug"]').exists()).toBe(true)
+    })
+    const alert = wrapper.find('[data-testid="login-sso-error"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('temporarily unavailable')
+  })
+
+  it('carries sso_error through the remembered-slug auto-redirect', async () => {
+    mockRoute.query = { sso_error: 'not_invited' }
+    localStorage.setItem('modulo_login_last_org', 'acme')
+    const location = fakeLocation('http://localhost/login')
+    vi.stubGlobal('location', location)
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ multi_org: true, org: null }),
+    } as Response)
+
+    mountView()
+    await vi.waitFor(() => {
+      expect(location.href).toBe('/login/acme?sso_error=not_invited')
+    })
+  })
+})
+
+// FAR-1791 Fix 6: the vocabulary + normaliser are shared by LoginView and
+// OrgLoginView (lib/ssoError.ts). Pin the normaliser's contract directly.
+describe('lib/ssoError - normaliseSsoErrorCode (FAR-1791)', () => {
+  it('maps every whitelisted code through unchanged', () => {
+    for (const code of SSO_ERROR_CODES) {
+      expect(normaliseSsoErrorCode(code)).toBe(code)
+    }
+  })
+
+  it('returns null for absent / empty values (no alert)', () => {
+    expect(normaliseSsoErrorCode(undefined)).toBeNull()
+    expect(normaliseSsoErrorCode(null)).toBeNull()
+    expect(normaliseSsoErrorCode('')).toBeNull()
+  })
+
+  it('falls back to auth_failed for an unknown value and never returns the raw value', () => {
+    expect(normaliseSsoErrorCode('totally-bogus')).toBe('auth_failed')
+    expect(normaliseSsoErrorCode('<script>alert(1)</script>')).toBe('auth_failed')
+  })
+
+  it('uses the first element of a repeated query param', () => {
+    expect(normaliseSsoErrorCode(['not_invited', 'auth_failed'])).toBe('not_invited')
+    expect(normaliseSsoErrorCode(['bogus'])).toBe('auth_failed')
+  })
+
+  it('builds the i18n key for a code, or null when there is none', () => {
+    expect(ssoErrorI18nKey('provider_unavailable')).toBe('auth.ssoError.provider_unavailable')
+    expect(ssoErrorI18nKey(null)).toBeNull()
   })
 })

@@ -43,7 +43,7 @@ jobs:
           TIMESTAMP=$(date +%s)
           BODY=$(jq -n \
             --arg branchName "${BRANCH}" \
-            --argjson prNumber ${PR_NUMBER} \
+            --argjson prNumber "${PR_NUMBER}" \
             --arg failureDescription "${FEEDBACK}" \
             --arg repo "farnalabs/modulo" \
             '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}')
@@ -59,14 +59,14 @@ jobs:
             HTTP_CODE=$(echo "$RESPONSE" | tail -1)
             BODY_RESP=$(echo "$RESPONSE" | sed '$d')
             if [ "$HTTP_CODE" = "202" ]; then
-              echo "Branch Fixer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+              echo "Branch Fixer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
               break
             elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
               DELAY=$((2 ** (i - 1) * 5))
               echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
               sleep "$DELAY"
             else
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
+              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
               break
             fi
           done

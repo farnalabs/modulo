@@ -111,9 +111,11 @@ jobs:
           fi
 
           # Diagnostic outputs (also used by the Linear ticket step)
-          echo "head_age_hours=${AGE_H}" >> "$GITHUB_OUTPUT"
-          echo "main_sha=${MAIN_SHORT}" >> "$GITHUB_OUTPUT"
-          echo "prod_sha=${PROD_SHORT}" >> "$GITHUB_OUTPUT"
+          {
+            echo "head_age_hours=${AGE_H}"
+            echo "main_sha=${MAIN_SHORT}"
+            echo "prod_sha=${PROD_SHORT}"
+          } >> "$GITHUB_OUTPUT"
           echo "grace_hours=${GRACE_HOURS}"
           echo "prod_build_ts=${PROD_BUILD_TS:-unknown}"
 

@@ -4,6 +4,13 @@ See [Quickstart](quickstart.md) for local development setup instructions.
 See [System Requirements](system-requirements.md) for prerequisites.
 See [Deployment](deployment.md) for production deployment.
 
+## Working directories (non-negotiable)
+
+- All Python tooling (`uv run pytest` / `mypy` / `ruff` / `alembic`) runs
+  from `backend/` - never the repo root.
+- All Node tooling (`pnpm run lint` / `test:unit` / `vue-tsc`) runs from
+  `frontend/` - never the repo root.
+
 ## Required Tools
 
 - Python 3.12+

@@ -122,6 +122,9 @@ jobs:
           # harness (PR #2190; FAR-528 lesson - guards fail open WITH a
           # loud ::warning::, never silently).
           rc=0
+          # $PATHS is a space-separated path list: git diff needs each path as
+          # its own argument, so word-splitting is intended here.
+          # shellcheck disable=SC2086
           CHANGED="$(git diff --name-only "$BASE" HEAD -- $PATHS)" || rc=$?
           if [ "$rc" -ne 0 ]; then
             echo "::warning::path-filter git diff failed (rc=$rc); running Bundled Runner harness unconditionally (fail open)"

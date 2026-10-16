@@ -5,6 +5,7 @@ before calling. The session must be within an active transaction.
 """
 
 import copy
+import json
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
@@ -38,6 +39,7 @@ from modulo.db.crud.hitl_review_guard import (
 )
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.crud.pipeline_owner import ACCOUNTABILITY_OWNER_FIELDS, validate_accountability_owner
+from modulo.db.crud.pipeline_snapshot import create_snapshot_edit
 from modulo.db.crud.run import count_active_runs_for_pipeline, get_dialect_name
 from modulo.db.crud.team_scope import team_scope_clause
 from modulo.db.models.eval import Eval
@@ -2030,6 +2032,106 @@ def strip_declared_policy_gates(
     return stripped, dropped
 
 
+def _canonical_edge_projection(edge: dict[str, Any]) -> str:
+    """Stable string form of an edge's *semantic* content.
+
+    Excludes the edge ``id`` (an internal row identifier that
+    ``PipelineGraphEdge`` regenerates with a fresh UUID on every save when the
+    client omits it — so it is not stable identity and cannot participate in a
+    no-op comparison) and normalises missing ports to their defaults.
+    """
+    return json.dumps(
+        {
+            "source": str(edge.get("source_node_id")),
+            "target": str(edge.get("target_node_id")),
+            "type": edge.get("edge_type"),
+            "condition": edge.get("condition_expression"),
+            "hitl": edge.get("hitl_review_config"),
+            "source_port": edge.get("source_port") or "out",
+            "target_port": edge.get("target_port") or "in",
+        },
+        sort_keys=True,
+        default=str,
+    )
+
+
+def _graph_content_unchanged(
+    previous_nodes: list[dict[str, Any]],
+    old_edges: list[dict[str, Any]],
+    new_nodes: list[dict[str, Any]],
+    new_edges: list[dict[str, Any]],
+) -> bool:
+    """True when the incoming graph is semantically identical to the live one.
+
+    Nodes are compared as the full ordered payload (key-order-insensitive via
+    sorted-keys JSON, but list-order-sensitive — reordering ``graph_nodes_json``
+    is a real payload change and must produce a version). Edges are compared as
+    an order-insensitive multiset of the canonical semantic projection above.
+    This is the no-op suppression that caps save-driven snapshot volume and
+    keeps "at rest the live graph equals the latest snapshot" true: a save that
+    changes nothing records no new version.
+
+    Deliberately conservative: the incoming edges are compared as sent, BEFORE
+    ``_preserve_omitted_gate_config`` resolves an omitted ``hitl_review_config``
+    back to the stored value. A client that omits the key (or sends
+    ``present=False``) therefore reads as "changed" against the stored edge and
+    mints an extra edit snapshot even though the persisted graph is identical.
+    That errs toward MORE versions, never fewer — a real change can never be
+    suppressed — so the volume cap is a soft bound, not a correctness one.
+    """
+    if json.dumps(previous_nodes, sort_keys=True, default=str) != json.dumps(new_nodes, sort_keys=True, default=str):
+        return False
+    return sorted(_canonical_edge_projection(e) for e in old_edges) == sorted(
+        _canonical_edge_projection(e) for e in new_edges
+    )
+
+
+async def _record_edit_snapshot_if_needed(
+    session: AsyncSession,
+    *,
+    pipeline_id: uuid.UUID,
+    account_id: uuid.UUID | None,
+    previous_nodes: list[dict[str, Any]],
+    old_edges: list[dict[str, Any]],
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+) -> None:
+    """Record the FAR-1810 edit snapshot for an explicit graph save.
+
+    No-op suppression: a save whose incoming graph is semantically identical to
+    the live one (:func:`_graph_content_unchanged`) records no snapshot — this
+    caps save-driven volume and keeps "at rest the live graph equals the latest
+    snapshot" true. Fail closed: a snapshot that could not be allocated raises,
+    rolling the whole save back — a save that does not record history is a
+    broken save.
+
+    Extracted from :func:`replace_pipeline_graph` so that function's cognitive
+    complexity stays within budget; the row-lock/ordering context the caller
+    must hold is documented at the call site.
+    """
+    if _graph_content_unchanged(previous_nodes, old_edges, nodes, edges):
+        _log.info(
+            "pipeline.graph_edit_snapshot_suppressed pipeline_id=%s: incoming graph is unchanged",
+            pipeline_id,
+        )
+        return
+    snapshot = await create_snapshot_edit(session, pipeline_id=pipeline_id, account_id=account_id)
+    if snapshot is None:
+        # The caller holds the pipeline row under FOR UPDATE, so None here
+        # means the snapshot machinery could not allocate a version (e.g. the
+        # snapshot_version column is not migrated). Fail closed — a save that
+        # does not record history is a broken save.
+        raise RuntimeError(
+            f"graph save for pipeline {pipeline_id} could not record its edit snapshot; "
+            "refusing to commit an unversioned explicit save"
+        )
+    _log.info(
+        "pipeline.graph_edit_snapshot_created pipeline_id=%s snapshot_version=%s",
+        pipeline_id,
+        snapshot.snapshot_version,
+    )
+
+
 async def replace_pipeline_graph(
     session: AsyncSession,
     *,
@@ -2043,6 +2145,7 @@ async def replace_pipeline_graph(
     is_guardrail_admin: bool = False,
     grants_deny_privilege: bool = False,
     grants_deny_guardrail_admin: bool = False,
+    record_edit_snapshot: bool = False,
     _on_lock_acquired: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[PipelineEdge]] | None:
     """Atomically replace an editable graph while preserving first-class edges.
@@ -2067,6 +2170,20 @@ async def replace_pipeline_graph(
     audit event (actor, pipeline id, before/after node+edge summary) so every
     graph mutation is attributable — the HITL-gate-removal event below only
     fires for gate weakenings.
+
+    FAR-1810: when ``record_edit_snapshot`` is True (the explicit-save callers:
+    REST ``PATCH /{id}/graph``, ``PATCH /{id}`` with ``graph_json``, the MCP
+    ``update_pipeline_graph`` tool, and node conversion), a successful write
+    ALSO records an immutable ``version_kind='edit'`` snapshot in the SAME
+    transaction — after the graph rows and the policy-gate reconciliation, so
+    the snapshot captures the reconciled post-write state. Fail closed: a
+    snapshot failure rolls the whole save back (a save that does not record
+    history is a broken save). A write whose incoming graph is semantically
+    identical to the live one (:func:`_graph_content_unchanged`) records no
+    snapshot — no-op suppression caps save-driven volume and keeps "at rest
+    the live graph equals the latest snapshot" true. Scaffolding writers
+    (onboarding, demo-seed) leave the default False so a genesis graph does
+    not enter the primary edit history.
     """
     result = await session.execute(
         select(Pipeline)
@@ -2273,6 +2390,30 @@ async def replace_pipeline_graph(
             new_edge_count=len(edges),
         ),
     )
+
+    # FAR-1810: an explicit save records an immutable edit snapshot in the SAME
+    # transaction, AFTER the graph rows flush and the policy-gate reconciliation
+    # (so the snapshot pins the reconciled gate state — same ordering as the
+    # rollback path in ``crud.pipeline_snapshot_versioning``). Fail closed: a
+    # snapshot failure raises and rolls the whole save back with it.
+    #
+    # Lock composition (see ``_acquire_snapshot_allocation_lock``): this
+    # function already holds the ``pipelines`` row ``FOR UPDATE``; the snapshot
+    # copy takes its advisory lock on a DEDICATED connection (released before
+    # the allocation phase), then the allocation lock's ``FOR NO KEY UPDATE`` on
+    # this same session is self-reentrant under the held ``FOR UPDATE`` — no
+    # wait, no cycle, identical to the rollback path's ordering.
+    if record_edit_snapshot:
+        await _record_edit_snapshot_if_needed(
+            session,
+            pipeline_id=pipeline_id,
+            account_id=account_id,
+            previous_nodes=previous_nodes,
+            old_edges=old_edges,
+            nodes=nodes,
+            edges=edges,
+        )
+
     return list(pipeline.graph_nodes_json), persisted_edges
 
 

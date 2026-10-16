@@ -146,5 +146,12 @@ def test_force_deploy_bypass_still_deploys() -> None:
     assert force_idx < in_progress_idx, (
         "force_deploy must exit before the in-progress/throttle checks - the bypass order is the policy"
     )
-    assert 'echo "should_deploy=true" >> "$GITHUB_OUTPUT"' in script
-    assert "Force deploy requested" in script
+    # The bypass must publish should_deploy=true to $GITHUB_OUTPUT. The write
+    # may be a single individually-redirected echo, or the writes may be
+    # gathered into one redirected group (actionlint SC2129) - both emit the
+    # identical key/value, so scope the check to the force branch and accept
+    # either form rather than pinning the exact redirect layout.
+    force_branch = script[force_idx:in_progress_idx]
+    assert "should_deploy=true" in force_branch, "the force_deploy bypass must publish should_deploy=true"
+    assert '"$GITHUB_OUTPUT"' in force_branch, "the force_deploy bypass must write the output to $GITHUB_OUTPUT"
+    assert "Force deploy requested" in force_branch

@@ -1085,3 +1085,55 @@ class TestDryRun:
 
         steps = await registry.dry_run({"a": 1}, "1.0.0", "2.0.0")
         assert "rename_a_to_b" in steps[0]["description"]
+
+
+class TestCallableMigrationFuncs:
+    """A registered migration ``func`` is only known to be callable.
+
+    ``SchemaMigration.func`` is annotated ``Callable[[dict], dict]`` and
+    ``register`` accepts anything callable, so a partial or a callable object is
+    a valid migration. The step/chain descriptions read ``m.func.__name__``, so
+    describing such a migration raised AttributeError and the dry-run report
+    could not be produced at all.
+    """
+
+    class _CallableObjectMigration:
+        def __init__(self, fn: Any) -> None:
+            self._fn = fn
+
+        def __call__(self, data: dict[str, Any]) -> dict[str, Any]:
+            return self._fn(data)
+
+    async def test_dry_run_falls_back_to_type_name_for_callable_object(self) -> None:
+        registry = MigrationRegistry()
+        await registry.register(
+            "1.0.0",
+            "2.0.0",
+            self._CallableObjectMigration(rename_field("a", "b")),
+        )
+
+        steps = await registry.dry_run({"a": 1}, "1.0.0", "2.0.0")
+        assert steps[0]["description"].endswith("_CallableObjectMigration")
+        # And the migration itself still ran.
+        assert "b" in steps[0]["added_fields"]
+
+    async def test_describe_partial_chain_handles_callable_object(self) -> None:
+        registry = MigrationRegistry()
+        await registry.register(
+            "1.0.0",
+            "2.0.0",
+            self._CallableObjectMigration(rename_field("a", "b")),
+        )
+
+        descriptions, gaps = await registry.describe_partial_chain("1.0.0", "2.0.0")
+        assert gaps == []
+        assert descriptions[0]["description"].endswith("_CallableObjectMigration")
+
+    async def test_describe_chain_handles_callable_object(self) -> None:
+        from functools import partial
+
+        registry = MigrationRegistry()
+        await registry.register("1.0.0", "2.0.0", partial(rename_field("a", "b")))
+
+        descriptions = await registry.describe_chain("1.0.0", "2.0.0")
+        assert descriptions[0]["description"] == "partial"

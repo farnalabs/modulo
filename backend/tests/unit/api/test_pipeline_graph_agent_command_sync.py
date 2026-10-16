@@ -314,6 +314,80 @@ def test_patch_graph_endpoint_invokes_agent_commands_sync(client: TestClient) ->
     assert any(node.get("agent_commands") == ["opencode run -- patched"] for node in synced_nodes)
 
 
+def test_patch_graph_endpoint_syncs_agent_rows_before_the_graph_write(client: TestClient) -> None:
+    """Ordering (FAR-1810 review): the Agent-row sync must run BEFORE the
+    ``replace_pipeline_graph`` call that mints the FAR-1810 edit snapshot. The
+    snapshot copy's ``_materialize_agent_fields`` overwrites bound nodes from
+    the Agent row, so a sync that ran AFTER the write (the pre-fix order)
+    recorded a snapshot pinned to the stale command — the very defect that
+    FAR-488a exists to prevent. Fails on the pre-fix ordering."""
+    node_id = uuid.uuid4()
+    agent_id = uuid.uuid4()
+    nodes = [_node(node_id, agent_id=agent_id, agent_commands=["opencode run -- patched"])]
+    validation = MagicMock()
+    validation.issues = []
+    order: list[str] = []
+
+    async def _record_sync(*_args: Any, **_kwargs: Any) -> int:
+        order.append("sync")
+        return 1
+
+    async def _record_replace(*_args: Any, **_kwargs: Any) -> tuple[list[dict[str, Any]], list[Any]]:
+        order.append("replace")
+        return (nodes, [])
+
+    with (
+        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=_record_sync),
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph", new=_record_replace),
+        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
+        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=MagicMock(owner_team_id=None)),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": nodes, "edges": []},
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert order == ["sync", "replace"]
+
+
+async def test_save_graph_syncs_agent_rows_before_the_graph_write() -> None:
+    """Ordering (FAR-1810 review) for the node-conversion save path: the shared
+    ``_save_graph`` helper must sync the bound Agent rows BEFORE the write that
+    mints the edit snapshot. Same defect class as the PATCH /graph endpoint."""
+    from modulo.api.routes.pipelines import _save_graph
+
+    order: list[str] = []
+
+    async def _record_sync(*_args: Any, **_kwargs: Any) -> int:
+        order.append("sync")
+        return 0
+
+    async def _record_replace(*_args: Any, **_kwargs: Any) -> tuple[list[dict[str, Any]], list[Any]]:
+        order.append("replace")
+        return ([], [])
+
+    with (
+        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=_record_sync),
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph", new=_record_replace),
+    ):
+        await _save_graph(
+            AsyncMock(),
+            _PIPELINE_ID,
+            _ORG_ID,
+            [],
+            [],
+            is_privileged=True,
+            caller_type="rest",
+            record_edit_snapshot=True,
+        )
+
+    assert order == ["sync", "replace"]
+
+
 # ---------------------------------------------------------------------------
 # FAR-220: the sync write is a gated Agent write path
 # ---------------------------------------------------------------------------

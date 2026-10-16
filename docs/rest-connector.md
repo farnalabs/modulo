@@ -14,6 +14,10 @@ gate:
 | `query()` – read | `read` | `GET` (default), `HEAD` |
 | `write()` – write | `write` | `POST` (default), `PUT`, `PATCH`, `DELETE` |
 
+`OPTIONS` is also accepted when explicitly declared on either surface; the
+surface (not the verb) still fixes the ACL gate, and the per-surface
+default (`GET` / `POST`) applies when no method is declared.
+
 A `PUT` / `PATCH` / `DELETE` mutates the remote system, so it belongs on the
 **write** surface even though it is not a "create". The capability set is
 `{read, write}`.
