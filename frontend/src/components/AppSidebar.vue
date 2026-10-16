@@ -51,6 +51,7 @@
         :user-email="userEmail"
         :user-initial="userInitial"
         :is-light="isLight"
+        size="touch"
         class="h-full w-full py-2"
         @expand="mobileExpanded = true"
         @logout="$emit('logout')"
