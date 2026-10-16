@@ -85,6 +85,7 @@ from modulo.api.routes.error_notification_rules import router as error_notificat
 from modulo.api.routes.errors import router as errors_router
 from modulo.api.routes.evals import router as evals_router
 from modulo.api.routes.events import router as events_router
+from modulo.api.routes.external_agents import router as external_agents_router
 from modulo.api.routes.feedback import router as feedback_router
 from modulo.api.routes.guardrail_config import router as guardrail_config_router
 from modulo.api.routes.health import router as health_router
@@ -94,6 +95,7 @@ from modulo.api.routes.library import router as library_router
 from modulo.api.routes.lifecycle_maps import router as lifecycle_maps_router
 from modulo.api.routes.manifest import router as manifest_router
 from modulo.api.routes.mcp_oauth import router as mcp_oauth_router
+from modulo.api.routes.mcp_servers import router as mcp_servers_router
 from modulo.api.routes.mcp_setup import router as mcp_setup_router
 from modulo.api.routes.me import router as me_router
 from modulo.api.routes.metrics import router as metrics_router
@@ -1290,6 +1292,8 @@ app.include_router(product_analytics_router)
 app.include_router(registry_router)
 app.include_router(determination_router)
 app.include_router(evals_router)
+app.include_router(external_agents_router)
+app.include_router(mcp_servers_router)
 app.include_router(admin_notifications_router)
 app.include_router(admin_orgs_router)
 app.include_router(admin_assistant_router)

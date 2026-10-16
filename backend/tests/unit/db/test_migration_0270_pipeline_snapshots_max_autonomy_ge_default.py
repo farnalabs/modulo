@@ -48,8 +48,10 @@ Lenses:
     0307_runs_guardrail_override_resume_pending chains onto 0306_trigger_secret_encryption, and
     0308_runs_dispatch_phase_history chains onto 0307_runs_guardrail_override_resume_pending, and
     0313_collection_install_drop_installed_entities chains onto
-    0312_memberships_active_lookups as the single linear head. This migration
-    was originally numbered 0268; main landed
+    0312_memberships_active_lookups, and
+    0314_external_agents_mcp_servers chains onto
+    0313_collection_install_drop_installed_entities as the single linear head.
+    This migration was originally numbered 0268; main landed
   ``0268_webhook_lookup_expiry_indexes`` and
   ``0269_webhook_dedup_check_constraints`` in the meantime, claiming that slot,
   so it was renumbered onto 0270.
@@ -91,7 +93,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0270_pipeline_snapshots_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0269_webhook_dedup_check_constraints"
-_HEAD_MIGRATION = "0313_collection_install_drop_installed_entities"
+_HEAD_MIGRATION = "0314_external_agents_mcp_servers"
 _CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - 0264
