@@ -52,6 +52,13 @@ export async function setupLocalMockApi(page: Page) {
       // e2e mirrors staging, which also runs with dev mode on.
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ flags: [], license: { tier: 'enterprise' }, dev_mode: true }) })
     }
+    if (new URL(url).pathname === '/api/v1/plan') {
+      // planStore reads the caller-scoped GET /api/v1/plan (FAR-1809); the
+      // admin flag views and the mobile-nav rail test still read
+      // /api/v1/admin/feature-flags above. Same payload so dev_mode, tier and
+      // flag resolution match the pre-repoint local behaviour.
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ flags: [], license: { tier: 'enterprise' }, dev_mode: true }) })
+    }
     if (url.includes('/api/v1/admin/license')) {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ expires_at: null, org_id: '1', tier: 'enterprise' }) })
     }

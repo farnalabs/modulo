@@ -137,6 +137,31 @@ describe('NotificationBell (FAR-250)', () => {
     expect(wrapper.find('[data-testid="notification-unread-badge"]').text()).toBe('99+')
   })
 
+  it('includes the visible unread count in the button accessible name (WCAG 2.5.3)', async () => {
+    h.mockFetchUnreadCount.mockResolvedValue(7)
+    const wrapper = await mountBell()
+    const button = wrapper.find('[data-testid="notification-bell-button"]')
+    // The aria-hidden badge is still a visible label inside the button, so
+    // WCAG 2.5.3 (axe label-content-name-mismatch) requires the count to be
+    // part of the button's accessible name.
+    expect(button.attributes('aria-label')).toContain('7')
+    expect(wrapper.find('[data-testid="notification-unread-badge"]').text()).toBe('7')
+  })
+
+  it('uses the capped badge text in the button accessible name', async () => {
+    h.mockFetchUnreadCount.mockResolvedValue(150)
+    const wrapper = await mountBell()
+    expect(wrapper.find('[data-testid="notification-bell-button"]').attributes('aria-label')).toContain('99+')
+  })
+
+  it('keeps the plain accessible name when there is nothing unread', async () => {
+    h.mockFetchUnreadCount.mockResolvedValue(0)
+    const wrapper = await mountBell()
+    const button = wrapper.find('[data-testid="notification-bell-button"]')
+    expect(button.attributes('aria-label')).toBe('Notifications')
+    expect(wrapper.find('[data-testid="notification-unread-badge"]').exists()).toBe(false)
+  })
+
   it('refetches the unread count when a non-opted-out notification event arrives', async () => {
     const wrapper = await mountBell()
     const handler = h.mockSubscribe.mock.calls[0][1] as (e: Record<string, unknown>) => void

@@ -5,7 +5,7 @@
       type="button"
       data-testid="notification-bell-button"
       class="relative inline-flex items-center justify-center rounded-md p-2 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-      :aria-label="$t('components.NotificationBell.notifications')"
+      :aria-label="bellAriaLabel"
       aria-haspopup="true"
       :aria-expanded="dropdownOpen"
       aria-controls="notification-dropdown"
@@ -18,13 +18,15 @@
         aria-hidden="true"
         class="absolute -right-0.5 -top-0.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold text-destructive-foreground"
       >
-        {{ store.unreadCount > 99 ? '99+' : store.unreadCount }}
+        {{ badgeText }}
       </span>
     </button>
     <!-- Unread-count live region (FAR-249 a11y): the visual badge above is
-         aria-hidden so the button's accessible name stays "Notifications";
-         this sr-only status region announces count *changes* to screen
-         readers (WCAG 4.1.3). -->
+         aria-hidden, but its text is still a visible label inside the button,
+         so WCAG 2.5.3 (axe label-content-name-mismatch) requires it to be part
+         of the button's accessible name — hence the count is folded into
+         aria-label above. This sr-only status region separately announces
+         count *changes* to screen readers (WCAG 4.1.3). -->
     <output
       data-testid="notification-unread-live"
       :aria-label="$t('components.NotificationBell.notifications')"
@@ -71,6 +73,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { api } from "../lib/api/client";
 import { throwOnError } from "../lib/api/formatError";
 import { eventBus } from "../composables/useEventStream";
@@ -80,11 +83,22 @@ import NotificationDropdown from "./NotificationDropdown.vue";
 import { Bell } from "@lucide/vue";
 
 const store = useNotificationsStore();
+const { t } = useI18n();
 const dropdownOpen = ref(false);
 const rootRef = ref<HTMLElement | null>(null);
 const bellButtonRef = ref<HTMLButtonElement | null>(null);
 /** Categories this user opted out of (FAR-247 read-time suppression). */
 const optOutCategories = ref<Set<string>>(new Set());
+
+// Visible badge text, capped at "99+". WCAG 2.5.3 "Label in Name" requires the
+// visible label to be part of the control's accessible name, so the capped
+// count is folded into the button's aria-label below.
+const badgeText = computed(() => (store.unreadCount > 99 ? "99+" : store.unreadCount));
+const bellAriaLabel = computed(() =>
+  store.unreadCount > 0
+    ? t("components.NotificationBell.notifications_with_count", { count: badgeText.value })
+    : t("components.NotificationBell.notifications"),
+);
 
 // FAR-1842: banner visibility + feedback. The banner is shown for a terminal
 // auth stop AND while a manual restart is in flight; on success the state
