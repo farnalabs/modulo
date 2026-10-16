@@ -243,8 +243,19 @@ async function settle(page: Page): Promise<void> {
   // indistinguishable from a settled one. Wait only when a marker is actually
   // present, and let a present-but-stuck marker throw: a swallowed settle here
   // would surface later as a misleading capture assertion.
-  if ((await page.locator('[data-loading]').count()) === 0) return
-  await page.waitForSelector('[data-loading="false"]', { timeout: CONTENT_SETTLE_TIMEOUT_MS })
+  //
+  // A single waitForFunction (rather than a count check followed by a
+  // waitForSelector) closes the race where a lazily route-mounted view renders
+  // its [data-loading] root just after the count reads 0 — the predicate is
+  // re-evaluated until no marker remains or every marker reports "false".
+  await page.waitForFunction(
+    () =>
+      Array.from(document.querySelectorAll('[data-loading]')).every(
+        (el) => el.getAttribute('data-loading') === 'false',
+      ),
+    undefined,
+    { timeout: CONTENT_SETTLE_TIMEOUT_MS },
+  )
 }
 
 /**
