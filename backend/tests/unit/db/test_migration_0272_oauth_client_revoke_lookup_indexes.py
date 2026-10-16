@@ -138,9 +138,10 @@ class TestChain:
         # then 0305_guardrail_escalate_action, then 0306_trigger_secret_encryption,
         # then 0307_runs_guardrail_override_resume_pending, then
         # 0313_collection_install_drop_installed_entities, 0314_external_agents_mcp_servers and
-        # 0315_service_accounts_lifecycle and 0316_policy_gate_evaluation_mode now
-        # chain onto this migration, so the single head moved up another revision.
-        assert heads == ["0316_policy_gate_evaluation_mode"], f"expected a single head, got {heads}"
+        # 0315_service_accounts_lifecycle, 0316_policy_gate_evaluation_mode and
+        # 0317_drop_retired_pipeline_diff_rollback_flag now chain onto this migration,
+        # so the single head moved up another revision.
+        assert heads == ["0317_drop_retired_pipeline_diff_rollback_flag"], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0271_org_api_keys_revocation_sweep_indexes(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
