@@ -20,11 +20,13 @@ from modulo.db.crud.organisation import (
     OrgSettingsPatchContextAbsentError,
     OrgSettingsPatchContextUnreadableError,
     OrgSettingsPatchOrgMismatch,
-    _apply_settings_patch_generic,
-    _apply_settings_patch_postgres,
+    _apply_json_column_patch_generic,
+    _apply_json_column_patch_postgres,
     _coerce_org_uuid,
+    _pg_patch_statement,
     _strict_read_rls_org,
     _sync_identity_map,
+    update_org_json_column_patch,
     update_org_settings_patch,
 )
 from modulo.db.models.organisation import Organisation
@@ -40,6 +42,9 @@ class _FakeResult:
         return self._rows[0] if self._rows else None
 
     def first(self) -> object:
+        return self._rows[0] if self._rows else None
+
+    def scalar_one_or_none(self) -> object:
         return self._rows[0] if self._rows else None
 
 
@@ -111,8 +116,8 @@ def _stub_dependencies(
     monkeypatch.setattr(organisation_mod, "_strict_read_rls_org", AsyncMock(return_value=bound_org))
     postgres = AsyncMock(return_value={"path": "postgres"})
     generic = AsyncMock(return_value={"path": "generic"})
-    monkeypatch.setattr(organisation_mod, "_apply_settings_patch_postgres", postgres)
-    monkeypatch.setattr(organisation_mod, "_apply_settings_patch_generic", generic)
+    monkeypatch.setattr(organisation_mod, "_apply_json_column_patch_postgres", postgres)
+    monkeypatch.setattr(organisation_mod, "_apply_json_column_patch_generic", generic)
     invalidate = MagicMock()
     monkeypatch.setattr(organisation_mod, "_invalidate_settings_derived_caches", invalidate)
     return {"postgres": postgres, "generic": generic, "invalidate": invalidate}
@@ -223,35 +228,35 @@ async def test_strict_read_postgres_guc_wins_over_conflicting_session_info() -> 
 
 
 # ---------------------------------------------------------------------------
-# _apply_settings_patch_postgres
+# _apply_json_column_patch_postgres
 # ---------------------------------------------------------------------------
 
 
 async def test_apply_postgres_returns_dict_row() -> None:
     session = _FakeSession(rows=[({"a": 1},)])
-    assert await _apply_settings_patch_postgres(session, uuid.uuid4(), {"a": 1}, []) == {"a": 1}
+    assert await _apply_json_column_patch_postgres(session, uuid.uuid4(), {"a": 1}, []) == {"a": 1}
 
 
 async def test_apply_postgres_parses_json_string_row() -> None:
     session = _FakeSession(rows=[('{"a": 2}',)])
-    assert await _apply_settings_patch_postgres(session, uuid.uuid4(), {"a": 2}, []) == {"a": 2}
+    assert await _apply_json_column_patch_postgres(session, uuid.uuid4(), {"a": 2}, []) == {"a": 2}
 
 
 async def test_apply_postgres_missing_row_raises() -> None:
     session = _FakeSession(rows=[])
     with pytest.raises(LookupError):
-        await _apply_settings_patch_postgres(session, uuid.uuid4(), {}, [])
+        await _apply_json_column_patch_postgres(session, uuid.uuid4(), {}, [])
 
 
 async def test_apply_postgres_refreshes_loaded_identity() -> None:
     org = Organisation(id=uuid.uuid4(), name="Org", slug="org", settings_json={})
     session = _FakeSession(rows=[({"logo_url": "x"},)], identity_map=_IdentityMap(org))
-    assert await _apply_settings_patch_postgres(session, org.id, {"logo_url": "x"}, []) == {"logo_url": "x"}
+    assert await _apply_json_column_patch_postgres(session, org.id, {"logo_url": "x"}, []) == {"logo_url": "x"}
     assert org.settings_json == {"logo_url": "x"}
 
 
 # ---------------------------------------------------------------------------
-# _apply_settings_patch_generic
+# _apply_json_column_patch_generic
 # ---------------------------------------------------------------------------
 
 
@@ -260,7 +265,7 @@ async def test_apply_generic_merges_and_deletes(monkeypatch: pytest.MonkeyPatch)
     org.settings_json = {"keep": 1, "drop": 2}
     monkeypatch.setattr(organisation_mod, "get_organisation", AsyncMock(return_value=org))
     session = _FakeSession()
-    result = await _apply_settings_patch_generic(session, uuid.uuid4(), {"add": 3}, ["drop"])
+    result = await _apply_json_column_patch_generic(session, uuid.uuid4(), {"add": 3}, ["drop"])
     assert result == {"keep": 1, "add": 3}
     assert org.settings_json == {"keep": 1, "add": 3}
     assert session.flushed == 1
@@ -270,13 +275,89 @@ async def test_apply_generic_non_dict_settings_starts_empty(monkeypatch: pytest.
     org = MagicMock()
     org.settings_json = None
     monkeypatch.setattr(organisation_mod, "get_organisation", AsyncMock(return_value=org))
-    assert await _apply_settings_patch_generic(_FakeSession(), uuid.uuid4(), {"a": 1}, []) == {"a": 1}
+    assert await _apply_json_column_patch_generic(_FakeSession(), uuid.uuid4(), {"a": 1}, []) == {"a": 1}
 
 
 async def test_apply_generic_missing_org_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(organisation_mod, "get_organisation", AsyncMock(return_value=None))
     with pytest.raises(LookupError):
-        await _apply_settings_patch_generic(_FakeSession(), uuid.uuid4(), {"a": 1}, [])
+        await _apply_json_column_patch_generic(_FakeSession(), uuid.uuid4(), {"a": 1}, [])
+
+
+# ---------------------------------------------------------------------------
+# FAR-1832 QA F3: shared machinery parameterised over the JSON column
+# ---------------------------------------------------------------------------
+
+
+def test_pg_patch_statement_selects_the_two_supported_configurations() -> None:
+    """The shared Postgres statement is selected from CONSTANTS per
+    (column, require_live_row) — never interpolated from input."""
+    settings_sql = str(_pg_patch_statement("settings_json", True)).lower()
+    assert "settings_json" in settings_sql
+    assert "deleted_at is null" in settings_sql
+
+    otel_sql = str(_pg_patch_statement("otel_config_json", False)).lower()
+    assert "otel_config_json" in otel_sql
+    assert "deleted_at" not in otel_sql, "the FAR-1025 OTel path must carry no live-row predicate"
+
+    with pytest.raises(ValueError, match="unsupported org JSON patch configuration"):
+        _pg_patch_statement("settings_json", False)
+    with pytest.raises(ValueError, match="unsupported org JSON patch configuration"):
+        _pg_patch_statement("otel_config_json", True)
+
+
+async def test_update_org_json_column_patch_rejects_unknown_column(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_dependencies(monkeypatch, dialect="sqlite", bound_org=uuid.uuid4())
+    with pytest.raises(ValueError, match="unsupported organisation JSON column"):
+        await update_org_json_column_patch(
+            _FakeSession(),
+            uuid.uuid4(),
+            patch={},
+            delete_keys=[],
+            column="evil_column",
+            require_live_row=True,
+        )
+
+
+async def test_apply_postgres_otel_path_patches_the_otel_column_without_live_predicate() -> None:
+    """The OTel Postgres branch writes ``otel_config_json`` and syncs THAT
+    column on the identity map — same machinery, different column."""
+    org = Organisation(id=uuid.uuid4(), name="Org", slug="org", otel_config_json={"a": 1})
+    session = _FakeSession(rows=[({"a": 1, "b": 2},)], identity_map=_IdentityMap(org))
+    result = await _apply_json_column_patch_postgres(
+        session,
+        org.id,
+        {"b": 2},
+        [],
+        column="otel_config_json",
+        require_live_row=False,
+    )
+    assert result == {"a": 1, "b": 2}
+    assert org.otel_config_json == {"a": 1, "b": 2}
+
+
+async def test_apply_generic_otel_path_writes_the_otel_column_without_live_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The OTel generic branch reads via include_soft_deleted (NOT the
+    soft-delete-filtered ``get_organisation``) and writes the otel column."""
+    org = MagicMock()
+    org.otel_config_json = {"a": 1}
+
+    async def _no_settings_read(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("the OTel generic path must not use the live-row settings read")
+
+    monkeypatch.setattr(organisation_mod, "get_organisation", _no_settings_read)
+    session = _FakeSession(rows=[org])
+    result = await _apply_json_column_patch_generic(
+        session,
+        uuid.uuid4(),
+        {"b": 2},
+        [],
+        column="otel_config_json",
+        require_live_row=False,
+    )
+    assert result == {"a": 1, "b": 2}
+    assert org.otel_config_json == {"a": 1, "b": 2}
+    assert session.flushed == 1
 
 
 # ---------------------------------------------------------------------------

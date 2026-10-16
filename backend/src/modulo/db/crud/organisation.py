@@ -5,7 +5,7 @@ import logging
 import uuid
 from typing import Any
 
-from sqlalchemy import ARRAY, Text, bindparam, select, text
+from sqlalchemy import ARRAY, Text, TextClause, bindparam, select, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
@@ -245,6 +245,12 @@ async def update_org_settings_patch(
       read-merge-write under ``SELECT ... FOR UPDATE``. Dialect-gated so the
       JSONB operators never reach a backend that lacks them.
 
+    FAR-1832 QA F3: the implementation is SHARED with the OTel-config writer —
+    this function is a thin wrapper over
+    :func:`update_org_json_column_patch` pinned to ``column="settings_json"``
+    and ``require_live_row=True`` — so there is exactly one implementation of
+    the guard / lock-bound / dialect-split / identity-map machinery.
+
     Contract:
 
     - A soft-deleted org (``deleted_at IS NOT NULL``) is refused with
@@ -271,8 +277,57 @@ async def update_org_settings_patch(
 
     Returns the refreshed ``settings_json`` mapping.
     """
-    patch = patch or {}
-    delete_keys = list(delete_keys or [])
+    settings = await update_org_json_column_patch(
+        session,
+        organisation_id,
+        patch=patch or {},
+        delete_keys=list(delete_keys or []),
+        column="settings_json",
+        require_live_row=True,
+        allow_unbound_context=allow_unbound_context,
+    )
+    _invalidate_settings_derived_caches()
+    return settings
+
+
+async def update_org_json_column_patch(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    *,
+    patch: dict[str, Any],
+    delete_keys: list[str],
+    column: str,
+    require_live_row: bool,
+    allow_unbound_context: bool = False,
+) -> dict[str, Any]:
+    """Atomically merge (and/or remove) top-level keys of ONE Organisation JSON column.
+
+    The single implementation (FAR-1832 QA F3) behind both
+    :func:`update_org_settings_patch` (``settings_json``; soft-deleted orgs
+    refused) and ``db.crud.observability.update_otel_config``
+    (``otel_config_json``; soft-deleted orgs deliberately still writable per
+    FAR-1025). The legitimate differences are ARGUMENTS, not a fork:
+
+    - ``column`` — which JSONB column to patch (validated against the
+      allowlist below; never interpolated from user input).
+    - ``require_live_row`` — whether the write carries the
+      ``deleted_at IS NULL`` predicate / the generic path uses the
+      soft-delete-filtered read.
+    - ``delete_keys`` — callers that never delete keys pass ``[]``.
+
+    Everything else is shared: the bounded lock wait
+    (``set_mutation_row_lock_timeout``), the fail-closed tenant guard
+    (:func:`_strict_read_rls_org`), the single-statement Postgres merge, the
+    locked generic-dialect fallback, the ``LookupError`` for a missing /
+    soft-deleted (when ``require_live_row``) org, and the identity-map refresh.
+
+    Contract: same as :func:`update_org_settings_patch` except where the
+    arguments above deliberately diverge; in particular the tenant guard is
+    NOT opt-out-able per column — every writer must bind the org RLS context
+    (or pass ``allow_unbound_context`` for genuine boot-seed/system callers).
+    """
+    if column not in ("settings_json", "otel_config_json"):
+        raise ValueError(f"unsupported organisation JSON column: {column!r}")
 
     # Normalise the target to a ``UUID``: callers occasionally pass the id as a
     # string, and both the tenant-mismatch comparison and the bound SQL /
@@ -280,7 +335,7 @@ async def update_org_settings_patch(
     # ``str`` form).
     target_org_id = _coerce_org_uuid(organisation_id)
     if target_org_id is None:
-        raise ValueError(f"update_org_settings_patch requires a UUID organisation id, got {organisation_id!r}")
+        raise ValueError(f"org JSON column patch requires a UUID organisation id, got {organisation_id!r}")
 
     await _take_settings_patch_lock_wait(session)
     dialect = await _settings_patch_dialect(session)
@@ -297,12 +352,24 @@ async def update_org_settings_patch(
         )
 
     if dialect == "postgresql":
-        settings = await _apply_settings_patch_postgres(session, target_org_id, patch, delete_keys)
+        value = await _apply_json_column_patch_postgres(
+            session,
+            target_org_id,
+            patch,
+            delete_keys,
+            column=column,
+            require_live_row=require_live_row,
+        )
     else:
-        settings = await _apply_settings_patch_generic(session, target_org_id, patch, delete_keys)
-
-    _invalidate_settings_derived_caches()
-    return settings
+        value = await _apply_json_column_patch_generic(
+            session,
+            target_org_id,
+            patch,
+            delete_keys,
+            column=column,
+            require_live_row=require_live_row,
+        )
+    return value
 
 
 async def _strict_read_rls_org(session: AsyncSession, dialect: str) -> uuid.UUID | None:
@@ -371,55 +438,112 @@ async def _settings_patch_dialect(session: AsyncSession) -> str:
     return await get_dialect_name(session)
 
 
-async def _apply_settings_patch_postgres(
+def _pg_patch_statement(column: str, require_live_row: bool) -> TextClause:
+    """The single-statement Postgres merge for one (column, live-row) configuration.
+
+    FAR-1832 QA F3: the two supported configurations are selected from
+    CONSTANT statements rather than interpolating the column name into SQL —
+    the ``raw-sql-fstring`` semgrep rule (correctly) forbids identifier
+    interpolation into ``text()``, and the cross-product of the two allowlisted
+    columns and the live-row flag is exactly two shapes: ``settings_json``
+    (with the ``deleted_at IS NULL`` predicate and the ``delete_keys`` clear
+    form) and ``otel_config_json`` (no predicate — FAR-1025 keeps a
+    pending-deletion org's OTel config writable). Anything else raises rather
+    than falling through to a third, unaudited shape.
+    """
+    if column == "settings_json" and require_live_row:
+        return text(
+            "UPDATE organisations "
+            "SET settings_json = "
+            "(COALESCE(settings_json, '{}'::jsonb) || CAST(:patch AS jsonb)) "
+            "- CAST(:delete_keys AS text[]) "
+            "WHERE id = :org_id AND deleted_at IS NULL "
+            "RETURNING settings_json"
+        )
+    if column == "otel_config_json" and not require_live_row:
+        # No ``deleted_at IS NULL`` predicate (FAR-1025, see
+        # ``update_org_json_column_patch``); the empty ``delete_keys`` clear is
+        # a no-op and keeps ONE statement shape across both columns.
+        return text(
+            "UPDATE organisations "
+            "SET otel_config_json = "
+            "(COALESCE(otel_config_json, '{}'::jsonb) || CAST(:patch AS jsonb)) "
+            "- CAST(:delete_keys AS text[]) "
+            "WHERE id = :org_id "
+            "RETURNING otel_config_json"
+        )
+    raise ValueError(
+        f"unsupported org JSON patch configuration: column={column!r} require_live_row={require_live_row!r}"
+    )
+
+
+async def _apply_json_column_patch_postgres(
     session: AsyncSession,
     organisation_id: uuid.UUID,
     patch: dict[str, Any],
     delete_keys: list[str],
+    *,
+    column: str = "settings_json",
+    require_live_row: bool = True,
 ) -> dict[str, Any]:
-    stmt = text(
-        "UPDATE organisations "
-        "SET settings_json = "
-        "(COALESCE(settings_json, '{}'::jsonb) || CAST(:patch AS jsonb)) "
-        "- CAST(:delete_keys AS text[]) "
-        "WHERE id = :org_id AND deleted_at IS NULL "
-        "RETURNING settings_json"
-    ).bindparams(
+    stmt = _pg_patch_statement(column, require_live_row).bindparams(
         bindparam("patch", value=json.dumps(patch)),
         bindparam("delete_keys", value=delete_keys, type_=ARRAY(Text)),
     )
     result = await session.execute(stmt, {"org_id": str(organisation_id)})
     row = result.first()
     if row is None:
-        # No row matched: either the org does not exist OR it is soft-deleted.
-        # The generic path (get_organisation) applies the global soft-delete
-        # filter, so this matches its behaviour (both refuse a soft-deleted org).
+        # No row matched: either the org does not exist OR (when
+        # ``require_live_row``) it is soft-deleted. The generic path
+        # (get_organisation) applies the global soft-delete filter, so this
+        # matches its behaviour (both refuse a soft-deleted org).
         raise LookupError(f"organisation not found: {organisation_id}")
     raw = row[0]
-    settings = json.loads(raw) if isinstance(raw, str) else dict(raw)
-    _sync_identity_map(session, organisation_id, settings)
-    return settings
+    value = json.loads(raw) if isinstance(raw, str) else dict(raw)
+    _sync_identity_map(session, organisation_id, value, column=column)
+    return value
 
 
-async def _apply_settings_patch_generic(
+async def _apply_json_column_patch_generic(
     session: AsyncSession,
     organisation_id: uuid.UUID,
     patch: dict[str, Any],
     delete_keys: list[str],
+    *,
+    column: str = "settings_json",
+    require_live_row: bool = True,
 ) -> dict[str, Any]:
-    org = await get_organisation(session, organisation_id, for_update=True)
+    if require_live_row:
+        org = await get_organisation(session, organisation_id, for_update=True)
+    else:
+        # FAR-1025 / OTel path: a pending-deletion org stays writable, so the
+        # read opts out of the global soft-delete filter (same include_
+        # soft_deleted contract the observability reader uses).
+        from modulo.db.soft_delete import include_soft_deleted
+
+        result = await session.execute(
+            include_soft_deleted(select(Organisation).where(Organisation.id == organisation_id).with_for_update())
+        )
+        org = result.scalar_one_or_none()
     if org is None:
         raise LookupError(f"organisation not found: {organisation_id}")
-    settings = dict(org.settings_json) if isinstance(org.settings_json, dict) else {}
-    settings.update(patch)
+    current = getattr(org, column)
+    value = dict(current) if isinstance(current, dict) else {}
+    value.update(patch)
     for key in delete_keys:
-        settings.pop(key, None)
-    org.settings_json = settings
+        value.pop(key, None)
+    setattr(org, column, value)
     await session.flush()
-    return settings
+    return value
 
 
-def _sync_identity_map(session: AsyncSession, organisation_id: uuid.UUID, settings: dict[str, Any]) -> None:
+def _sync_identity_map(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    value: dict[str, Any],
+    *,
+    column: str = "settings_json",
+) -> None:
     """Refresh an already-loaded org row to the merged value without dirtying it."""
     identity_map = getattr(session, "identity_map", None)
     getter = getattr(identity_map, "get", None)
@@ -427,7 +551,7 @@ def _sync_identity_map(session: AsyncSession, organisation_id: uuid.UUID, settin
         return
     org = getter(identity_key(Organisation, organisation_id))
     if isinstance(org, Organisation):
-        set_committed_value(org, "settings_json", settings)
+        set_committed_value(org, column, value)
 
 
 def _invalidate_settings_derived_caches() -> None:

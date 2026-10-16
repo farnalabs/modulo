@@ -1,13 +1,10 @@
 """CRUD for organisation observability/OTel config stored on Organisation."""
 
-import json
 import uuid
 from typing import Any
 
-from sqlalchemy import bindparam, select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm.attributes import set_committed_value
-from sqlalchemy.orm.util import identity_key
 
 from modulo.db.models.organisation import Organisation
 
@@ -32,83 +29,43 @@ async def update_otel_config(
 ) -> dict[str, Any]:
     """Atomically merge ``config`` into the stored OTel config and return it.
 
-    FAR-1832: replaces the ``SELECT ... FOR UPDATE`` read-modify-write with a
-    single atomic statement on Postgres (``otel_config_json = COALESCE(...) ||
-    :patch``) — the read and the write are one statement, so no interleaving
-    writer's keys can be lost and the org row is not pre-locked across the
-    read→write window. The row-lock wait is bounded via
-    ``set_mutation_row_lock_timeout`` (R5).
+    FAR-1832 (QA F3): routes through the SHARED atomic JSON-column patch
+    machinery (:func:`modulo.db.crud.organisation.update_org_json_column_patch`)
+    — one implementation of the bounded lock wait, the fail-closed tenant
+    guard, the dialect split, the ``LookupError`` for a missing org and the
+    identity-map refresh, exactly as the settings writer uses. The two
+    legitimate OTel differences are ARGUMENTS, not a fork:
 
-    **DELIBERATE DIVERGENCE from** :func:`modulo.db.crud.organisation.update_org_settings_patch`
-    (FAR-1832 D1) — do not "fix" this back:
+    - ``column="otel_config_json"`` — a different column;
+    - ``require_live_row=False`` — FAR-1025 keeps a pending-deletion org's
+      OTel config **writable** during the confirmation window, so this path
+      deliberately carries no ``deleted_at IS NULL`` predicate on either
+      dialect (the settings helper refuses soft-deleted orgs; inheriting that
+      refusal here would silently regress FAR-1025);
+    - it never uses ``delete_keys`` (an empty clear list is passed).
 
-    - it patches ``otel_config_json``, a DIFFERENT column, so it cannot route
-      through the settings helper without changing the column contract; and
-    - it deliberately carries NO ``deleted_at IS NULL`` predicate, because
-      FAR-1025 says a pending-deletion org's OTel config must remain
-      **writable** during the confirmation window. The settings helper instead
-      refuses soft-deleted orgs on both dialect paths (the FAR-1830 parity
-      decision) — inheriting that refusal here would silently regress
-      FAR-1025.
+    The tenant guard APPLIES here (FAR-1832 QA F3): the caller must have bound
+    the org RLS context (``set_rls_org``) for this org — the same contract as
+    every settings writer. ``organisations`` is NOT RLS-scoped, so this guard
+    is the only tenant control on the raw ``UPDATE organisations … WHERE id =
+    :org_id``; before F3 this function trusted the ``org_id`` argument
+    verbatim. A session bound to a different org is refused with
+    ``OrgSettingsPatchOrgMismatch``; an unbound/unreadable context is refused
+    with the ``OrgSettingsPatchContext*`` errors.
+
+    Missing org raises ``ValueError("Organisation not found")`` (unchanged
+    contract — the CRUD's ``LookupError`` is translated at this boundary).
     """
-    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
-    from modulo.db.crud.run import get_dialect_name
-    from modulo.db.soft_delete import include_soft_deleted
+    from modulo.db.crud.organisation import update_org_json_column_patch
 
-    # Bound the row-lock wait BEFORE the write takes one (FAR-1313 ordering).
-    await set_mutation_row_lock_timeout(session)
-    dialect = await get_dialect_name(session)
-
-    if dialect == "postgresql":
-        # One statement: merge + read-back. The raw UPDATE bypasses the ORM
-        # soft-delete listener, which is exactly the include_soft_deleted
-        # contract above (no ``deleted_at`` predicate — see the docstring).
-        stmt = text(
-            "UPDATE organisations "
-            "SET otel_config_json = "
-            "(COALESCE(otel_config_json, '{}'::jsonb) || CAST(:patch AS jsonb)) "
-            "WHERE id = :org_id "
-            "RETURNING otel_config_json"
-        ).bindparams(bindparam("patch", value=json.dumps(config)))
-        result = await session.execute(stmt, {"org_id": str(org_id)})
-        row = result.first()
-        if row is None:
-            raise ValueError("Organisation not found")
-        raw = row[0]
-        merged = json.loads(raw) if isinstance(raw, str) else dict(raw)
-        _sync_identity_map(session, org_id, merged)
-        return merged
-
-    # Generic backends (SQLite / MariaDB, tests + legacy): no jsonb ``||``, so
-    # the equivalent read-merge-write still needs the row lock. Dialect-gated
-    # so the JSONB operators never reach a backend that lacks them, and kept
-    # include_soft_deleted so BOTH paths behave identically (soft-delete
-    # parity — the FAR-1830 lesson).
-    result = await session.execute(
-        include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
-    )
-    org = result.scalar_one_or_none()
-    if org is None:
-        raise ValueError("Organisation not found")
-    merged = {**org.otel_config_json, **config}
-    org.otel_config_json = merged
-    await session.flush()
-    return merged
-
-
-def _sync_identity_map(session: AsyncSession, org_id: uuid.UUID, merged: dict[str, Any]) -> None:
-    """Refresh an already-loaded org row to the merged value without dirtying it.
-
-    Mirrors ``db.crud.organisation._sync_identity_map`` for the
-    ``otel_config_json`` column: the Postgres path writes via raw SQL, so an
-    in-session ``Organisation`` would otherwise keep serving the pre-merge
-    config (a follow-up whole-column write from that stale value would drop the
-    merge).
-    """
-    identity_map = getattr(session, "identity_map", None)
-    getter = getattr(identity_map, "get", None)
-    if getter is None:
-        return
-    org = getter(identity_key(Organisation, org_id))
-    if isinstance(org, Organisation):
-        set_committed_value(org, "otel_config_json", merged)
+    try:
+        return await update_org_json_column_patch(
+            session,
+            org_id,
+            patch=config,
+            delete_keys=[],
+            column="otel_config_json",
+            require_live_row=False,
+        )
+    except LookupError:
+        raise ValueError("Organisation not found") from None

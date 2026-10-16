@@ -132,8 +132,14 @@ async def test_update_otel_config_merges_into_opted_in_read() -> None:
     session = AsyncMock()
     session.execute = AsyncMock(return_value=_result(scalar=org))
     session.flush = AsyncMock()
+    # FAR-1832 QA F3: the OTel writer now runs through the shared patch
+    # machinery, whose fail-closed tenant guard requires a bound org context
+    # (``set_rls_org`` in production; the info key here — this session
+    # presents a non-Postgres dialect, where info is the authoritative store).
+    org_id = uuid.uuid4()
+    session.info = {"org_id": str(org_id)}
 
-    merged = await update_otel_config(session, uuid.uuid4(), {"sampling": 0.5})
+    merged = await update_otel_config(session, org_id, {"sampling": 0.5})
 
     assert merged == {"endpoint": "http://otel-collector:4317", "sampling": 0.5}
     assert org.otel_config_json == merged

@@ -20,7 +20,7 @@ from modulo.db.crud.organisation import (
     OrgSettingsPatchContextAbsentError,
     OrgSettingsPatchContextUnreadableError,
     OrgSettingsPatchOrgMismatch,
-    _apply_settings_patch_generic,
+    _apply_json_column_patch_generic,
     get_organisation,
     update_org_settings_patch,
 )
@@ -233,7 +233,7 @@ async def test_soft_deleted_org_is_refused_on_both_paths(db_engine: AsyncEngine)
         await update_org_settings_patch(session, org_id, {"k": 1})
     # Generic path, driven directly against the same engine.
     with pytest.raises(LookupError):
-        await _apply_settings_patch_generic(session, org_id, {"k": 1}, [])
+        await _apply_json_column_patch_generic(session, org_id, {"k": 1}, [])
     await session.rollback()
     await session.close()
 
@@ -601,3 +601,128 @@ async def test_licence_set_path_patches_only_license_key(
     assert settings.get("retention_days") == 30, f"sibling settings must survive the set: {settings!r}"
     assert recorded.get("patch") == {"license_key": "new.key"}, f"the write must emit only its own key: {recorded!r}"
     assert not recorded.get("delete_keys"), f"the set path must not delete keys: {recorded!r}"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1832 QA F3: the OTel-config writer runs through the SHARED patch
+# machinery — real-Postgres round-trip plus the tenant guard it previously
+# lacked (``organisations`` is not RLS-scoped, so that guard is the only
+# tenant control on the raw UPDATE).
+# ---------------------------------------------------------------------------
+
+
+async def _read_otel(db_engine: AsyncEngine, org_id: uuid.UUID) -> dict[str, Any]:
+    async with db_engine.connect() as conn:
+        result = await conn.execute(
+            text("SELECT otel_config_json FROM organisations WHERE id = :oid"),
+            {"oid": str(org_id)},
+        )
+        raw = result.scalar_one()
+    if isinstance(raw, str):
+        return json.loads(raw)
+    return raw if isinstance(raw, dict) else {}
+
+
+async def test_otel_postgres_round_trip_merges_and_keeps_sibling_keys(db_engine: AsyncEngine) -> None:
+    """The OTel Postgres branch (now the shared machinery) merges atomically:
+    a second write composes with the first, and unrelated keys survive."""
+    from modulo.db.crud.observability import update_otel_config
+
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    session = factory()
+    await session.begin()
+    await set_rls_org(session, org_id)
+    first = await update_otel_config(session, org_id, {"otlp_endpoint": "http://x:4317", "langsmith_enabled": True})
+    await session.commit()
+
+    # New transaction: the GUC is SET LOCAL, so the context must be re-bound.
+    await session.begin()
+    await set_rls_org(session, org_id)
+    second = await update_otel_config(session, org_id, {"export_interval_seconds": 15000})
+    await session.commit()
+    await session.close()
+
+    assert first["otlp_endpoint"] == "http://x:4317"
+    assert second["otlp_endpoint"] == "http://x:4317", f"sibling keys must survive: {second!r}"
+    assert second["export_interval_seconds"] == 15000
+    assert await _read_otel(db_engine, org_id) == second
+
+
+async def test_otel_soft_deleted_org_stays_writable(db_engine: AsyncEngine) -> None:
+    """FAR-1025 divergence preserved: unlike settings_json, the OTel column
+    remains writable during the pending-deletion window (require_live_row=False)."""
+    from modulo.db.crud.observability import update_otel_config
+
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    await _soft_delete_org(db_engine, org_id)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    session = factory()
+    await session.begin()
+    await set_rls_org(session, org_id)
+    merged = await update_otel_config(session, org_id, {"otlp_endpoint": "http://y:4317"})
+    await session.commit()
+    await session.close()
+
+    assert merged["otlp_endpoint"] == "http://y:4317"
+    assert (await _read_otel(db_engine, org_id))["otlp_endpoint"] == "http://y:4317"
+
+
+async def test_otel_cross_org_patch_is_refused(db_engine: AsyncEngine) -> None:
+    """QA F3: the OTel writer gains the same fail-closed tenant guard — a
+    session bound to org B cannot write org A's OTel config."""
+    from modulo.db.crud.observability import update_otel_config
+
+    org_a = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    org_b = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    session = factory()
+    await session.begin()
+    await set_rls_org(session, org_b)
+    with pytest.raises(OrgSettingsPatchOrgMismatch):
+        await update_otel_config(session, org_a, {"otlp_endpoint": "http://evil:4317"})
+    await session.rollback()
+    await session.close()
+
+    assert not await _read_otel(db_engine, org_a)
+    assert not await _read_otel(db_engine, org_b)
+
+
+async def test_otel_unbound_context_is_refused(db_engine: AsyncEngine) -> None:
+    """QA F3: an unbound session is refused — the OTel path trusts no raw
+    org_id without a bound RLS context."""
+    from modulo.db.crud.observability import update_otel_config
+
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    session = factory()
+    await session.begin()
+    with pytest.raises(OrgSettingsPatchContextAbsentError):
+        await update_otel_config(session, org_id, {"otlp_endpoint": "http://z:4317"})
+    await session.rollback()
+    await session.close()
+
+    assert not await _read_otel(db_engine, org_id)
+
+
+async def test_otel_missing_org_keeps_the_valueerror_contract(db_engine: AsyncEngine) -> None:
+    """A missing org still surfaces as ``ValueError("Organisation not found")``
+    from the OTel writer (the CRUD ``LookupError`` is translated at the
+    boundary; every existing caller and test relies on this shape)."""
+    from modulo.db.crud.observability import update_otel_config
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    missing_id = uuid.uuid4()
+    session = factory()
+    await session.begin()
+    # Bind the RLS context to the SAME (nonexistent) target so the tenant
+    # guard passes and the row-lookup miss is what surfaces as ValueError.
+    await set_rls_org(session, missing_id)
+    with pytest.raises(ValueError, match="Organisation not found"):
+        await update_otel_config(session, missing_id, {"otlp_endpoint": "http://q:4317"})
+    await session.rollback()
+    await session.close()
