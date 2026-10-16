@@ -49,9 +49,12 @@ on:
         type: string
         required: true
 
+# Least privilege at the workflow level: the only write scopes are granted on
+# the job that needs them (SonarCloud githubactions:S8233). Only the `release`
+# job pushes tags / the CHANGELOG commit and dispatches rc-validate.yml; the
+# dry-run, build-images and stub jobs are strictly read-only.
 permissions:
-  contents: write
-  actions: write
+  contents: read
 
 concurrency:
   group: release-process
@@ -62,6 +65,12 @@ jobs:
     name: Release (${{ inputs.action }})
     runs-on: ubicloud-standard-2
     timeout-minutes: 10
+    # contents: write - push the RC/GA/release-freeze tags, push the CHANGELOG
+    #   commit to main, and create the GitHub Release.
+    # actions: write  - `gh workflow run rc-validate.yml` (workflow_dispatch).
+    permissions:
+      contents: write
+      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

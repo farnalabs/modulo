@@ -13,7 +13,7 @@ Every release action runs through one workflow, `.github/workflows/release.yml` 
 | `action` | One of `cut`, `recut`, `release`, `dry-run` |
 | `version` | The plain numeric version being released, e.g. `0.4.0` |
 
-The workflow runs with workflow-level `permissions: contents: write` and `actions: write`, and a `release-process` concurrency group with `cancel-in-progress: false`, so two release actions can never interleave.
+The workflow defaults to workflow-level `permissions: contents: read`, with write scopes granted only on the job that needs them: the `release` job carries `contents: write` (push tags and the CHANGELOG commit, create the GitHub Release) and `actions: write` (`gh workflow run rc-validate.yml`). The `dry-run` and build jobs are read-only. A `release-process` concurrency group with `cancel-in-progress: false` ensures two release actions can never interleave.
 
 ## The four modes
 
