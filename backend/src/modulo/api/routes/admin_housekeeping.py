@@ -172,6 +172,7 @@ async def perform_cleanup(
 
                 for eid in ids:
                     try:
+                        deleted = False
                         async with session.begin_nested():
                             stmt = select(model_cls).where(  # type: ignore[var-annotated]
                                 model_cls.id == eid,  # type: ignore[attr-defined]
@@ -180,7 +181,16 @@ async def perform_cleanup(
                             obj = (await session.execute(stmt)).scalar_one_or_none()
                             if obj is not None:
                                 await session.delete(obj)
-                                deleted_count += 1
+                                deleted = True
+                        # FAR-1857: count only AFTER the savepoint released.
+                        # The flush happens on savepoint exit, so an FK
+                        # RESTRICT refusal raises below and rolls the row back
+                        # — counting at ``session.delete()`` time reported a
+                        # deletion that never happened. ``deleted`` is set
+                        # inside the block but only credited here, once the
+                        # savepoint has committed successfully.
+                        if deleted:
+                            deleted_count += 1
                     except IntegrityError as exc:
                         _log.exception(_CODE_ADMIN_HOUSEKEEPING_PERFORM_CLEANUP)
                         _log.warning("IntegrityError cleaning up %s %s", entity_type, eid)
