@@ -808,6 +808,24 @@ def test_type_declaration_modules_are_excluded_from_the_gate():
     assert mod._is_excluded("frontend/src/components/NotificationBell.vue") is False
 
 
+def test_frontend_build_config_files_are_excluded_from_the_gate():
+    """Frontend build-config files are never instrumented by the vitest scan.
+
+    Regression for PR #1881 (FAR-1858): a licence-lift helper added to
+    ``frontend/vite.config.ts`` was charged as unmeasured lines at 0% even
+    though the v8 scan never imports Node-side build config, so those changed
+    lines never reach the LCOV report. Build config must be out of scope;
+    client source elsewhere stays gated.
+    """
+    assert mod._is_excluded("frontend/vite.config.ts") is True
+    assert mod._is_excluded("frontend/playwright.config.ts") is True
+    assert mod._is_excluded("frontend/tailwind.config.cjs") is True
+    assert mod._is_excluded("frontend/eslint.config.mjs") is True
+    # Client source must still be gated.
+    assert mod._is_excluded("frontend/src/main.ts") is False
+    assert mod._is_excluded("frontend/src/composables/useEnv.ts") is False
+
+
 def test_changed_production_files_uses_merge_base_range():
     """Regression: ``git diff`` must use the three-dot merge-base range.
 
