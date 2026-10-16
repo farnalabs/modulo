@@ -1,3 +1,12 @@
+"""Loader for the product-map manifest (``frontend/src/manifest.yaml``, ADR 008).
+
+The manifest describes the UI's routes, elements and sidebar groups. It is
+loaded once per process and cached in ``_MANIFEST``: every call after the first
+serves the same object, so a change to the YAML on disk is not picked up until
+the process restarts. The loader rejects literal duplicate mapping keys (merge
+keys are exempt) so a mistyped entry cannot silently override an existing one.
+"""
+
 import os
 from pathlib import Path
 from typing import Any
@@ -60,6 +69,7 @@ def _load_manifest_yaml(path: Path) -> Any:
 
 
 def get_manifest_path() -> Path:
+    """Resolve the manifest file: ``MANIFEST_PATH`` env, ``/app/manifest.yaml``, else repo path."""
     env_path = os.environ.get("MANIFEST_PATH")
     if env_path:
         return Path(env_path)
@@ -71,6 +81,13 @@ def get_manifest_path() -> Path:
 
 
 def load_manifest() -> Manifest:
+    """Load and cache the manifest from disk.
+
+    Raises ``RuntimeError`` when the file exists but cannot be parsed (YAML
+    error, I/O error, or a non-mapping root). When the file is absent, caches
+    and returns an empty manifest (empty ``routes``/``elements``/
+    ``sidebar_groups``) rather than raising.
+    """
     global _MANIFEST
     path = get_manifest_path()
     if path.exists():
@@ -87,6 +104,7 @@ def load_manifest() -> Manifest:
 
 
 def get_manifest() -> Manifest:
+    """Return the cached manifest, loading it lazily on first access."""
     if _MANIFEST is None:
         return load_manifest()
     return _MANIFEST
