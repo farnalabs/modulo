@@ -58,6 +58,7 @@ Controls a 98% hard-stop that refuses new runs when database capacity is nearly 
 | `MODULO_ADMIN_SECRET` | No | – | **CLI-only**. Shared secret for `modulo-migrate` CLI auth bypass (not part of the Settings class; read directly by the CLI tool) |
 | `MODULO_ADMIN_TOKEN` | No | – | **CLI-only**. Admin JWT for `modulo-migrate` CLI (alternative to env; not part of the Settings class) |
 | `MODULO_SECRETS_BACKEND` | No | `fernet` | Secrets backend: `fernet`, `vault`, or `aws` |
+| `GUARDRAIL_DESTROY_PEPPER` | For destroy-mode redaction | `""` | HMAC pepper used by guardrails in `destroy` redaction mode to key replacement tokens. Empty (the default) leaves it unset, and a guardrail that declares a destroy-mode redaction rule then fails closed - the rule is rejected at save time and the block is terminal at the edge. Never logged. Rotating it breaks cross-run linkage of already-destroyed tokens by design. |
 | `INVITATION_EXPIRY_HOURS` | No | `72` | How long an in-app invitation token stays consumable |
 
 See [`docs/deployment-security.md`](./deployment-security.md) for key rotation procedures and [`docs/security/secret-management.md`](./security/secret-management.md) for backend-specific configuration.
@@ -154,6 +155,7 @@ Team-tier feature (requires valid `MODULO_LICENSE_KEY`). Configurable via env va
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `MODULO_PUBLIC_URL` | For SSO | `http://localhost:8000` | Public-facing URL for OAuth redirects, webhook callbacks, email links |
+| `MODULO_FRONTEND_URL` | No | `""` | Browser-facing SPA base URL for SSO post-login redirects and MCP OAuth authorize links. Set only for a split-origin deployment (SPA and API on different origins); empty falls back to `MODULO_PUBLIC_URL`, then `http://localhost:5173`. CORS origins are not used for post-login routing. |
 | `CORS_ORIGINS` | No | `http://localhost:5173` | Comma-separated allowed CORS origins |
 | `CORS_MAX_AGE` | No | `600` | Preflight cache max-age in seconds |
 | `MODULO_LOG_LEVEL` | No | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
@@ -276,6 +278,7 @@ mutation transaction, including the clone's separate-connection step-(a)
 | `MODULO_TELEMETRY_ENABLED` | No | `false` | Enable OpenTelemetry instrumentation |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | – | OTel gRPC exporter endpoint (e.g. `http://otel-collector:4317`) |
 | `MODULO_OTEL_SERVICE_NAME` | No | `modulo` | OTel service name attribute |
+| `MODULO_SLOW_CALLBACK_WARN_MS` | No | `0` | When greater than `0` (milliseconds), process startup arms asyncio's slow-callback warning at this threshold and starts a low-frequency sampler that records the loop thread's stack, so the readiness stall log can name the blocking callback (`file:line`) - the FAR-1439 class where a synchronous call freezes the event loop and starves every async DB op at once. `0` (the default) is a zero-cost no-op. |
 
 Telemetry is opt-in. With default settings, Modulo makes **zero** external network calls. See [`docs/operations/network-egress.md`](./operations/network-egress.md).
 
@@ -344,6 +347,14 @@ The knobs are Decimal-typed; all comparisons are Decimal (a float/Decimal
 (`MODULO_MAX_REPORTABLE_USD_MIN < MODULO_MAX_SELF_REPORTED_USD`), the
 floor-vs-band guard, and the knob-below-band guard are enforced at Settings
 LOAD.
+
+---
+
+## Work-Item Refs
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_WORK_ITEM_REFS_CAP` | No | `100` | Unified cap (clamped to `[1, 100000]`) on work-item references carried through the refs pipeline: self-report normalisation, the finalise merge, and node-input injection all read this one value. When more refs are supplied, drops drain lowest-provenance first (agent → derived → caller, then array position) and are counted. A pipeline declaring `work_item_refs_required: true` in its `run_context_defaults` refuses a delivery that supplied no refs (HTTP 422 `work_item_refs_required` on the REST, MCP, and webhook paths). |
 
 ---
 
