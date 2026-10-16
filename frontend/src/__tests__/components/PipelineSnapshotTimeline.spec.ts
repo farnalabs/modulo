@@ -232,6 +232,22 @@ describe('PipelineSnapshotTimeline', () => {
     expect(wrapper.text()).toContain('No snapshots yet')
   })
 
+  it('emits view with the snapshot id from the per-row View action (FAR-1812)', async () => {
+    const wrapper = await flushMount([
+      makeSnapshot(),
+      makeSnapshot({ id: 'snap-2', snapshot_version: 2, version_kind: 'run', tag: null }),
+    ])
+    const viewBtn = wrapper.find('[data-testid="snapshot-timeline-view-snap-2"]')
+    expect(viewBtn.exists()).toBe(true)
+    expect(viewBtn.attributes('aria-label')).toContain('version 2')
+    await viewBtn.trigger('click')
+    expect(wrapper.emitted('view')).toEqual([['snap-2']])
+    // The row button keeps its own meaning: select for diff/rollback.
+    await rowFor(wrapper, 'snap-2').trigger('click')
+    const rollbackBtn = wrapper.find('[data-testid="snapshot-timeline-rollback"]')
+    expect(rollbackBtn.attributes('disabled')).toBeUndefined()
+  })
+
   it('emits close from the close button', async () => {
     const wrapper = await flushMount([makeSnapshot()])
     await wrapper.find('[data-testid="snapshot-timeline-close"]').trigger('click')
