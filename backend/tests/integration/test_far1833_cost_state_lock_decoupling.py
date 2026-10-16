@@ -17,6 +17,7 @@ Both need a live Postgres: no mock produces the lock interaction or the SQLSTATE
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from datetime import UTC, datetime
@@ -28,6 +29,9 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from modulo.api.routes import costs as costs_routes
+from modulo.api.routes.costs import UpdateCostControlsRequest
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.cost_controller.finalize import _ledger_block
 from modulo.core.runner_capacity import lock_org_cost_state
 from modulo.db.sqlstates import sqlstate_of
@@ -41,26 +45,46 @@ _BOUNDED_WAIT_TIMEOUT_SECONDS = 10.0
 _SHORT_LOCK_TIMEOUT_MS = 300
 
 
-async def _seed(db_engine: AsyncEngine) -> dict[str, Any]:
-    """One org (with a cost-state row) plus one terminal run."""
+async def _seed(
+    db_engine: AsyncEngine,
+    *,
+    spend_ceiling_cents: int | None = None,
+    cumulative_cents: int = 0,
+    auto_stop: bool = False,
+) -> dict[str, Any]:
+    """One org (with a cost-state row) plus one terminal run.
+
+    ``spend_ceiling_cents`` / ``auto_stop`` are the P2-2 knobs: with a real
+    ceiling AND the cost-controls "Auto-stop" toggle ON, a run that CROSSES the
+    ceiling makes the finalize gate reach its auto-pause ``organisations``-row
+    write — the second half of the ABBA cycle (advisory → org row). A seed with
+    NULL ceilings never reaches it.
+    """
     org_id = uuid.uuid4()
     account_id = uuid.uuid4()
     pipeline_id = uuid.uuid4()
     snapshot_id = uuid.uuid4()
     run_id = uuid.uuid4()
+    settings_json = json.dumps({"cost_controls": {"circuit_breaker_enabled": True}}) if auto_stop else json.dumps({})
     async with db_engine.begin() as conn:
         await conn.execute(
             text(
                 "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
-                "VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"
+                "VALUES (:id, :name, :slug, CAST(:settings AS json), '{}'::json)"
             ),
-            {"id": str(org_id), "name": "FAR-1833 cost-state org", "slug": f"far1833-{org_id.hex[:8]}"},
+            {
+                "id": str(org_id),
+                "name": "FAR-1833 cost-state org",
+                "slug": f"far1833-{org_id.hex[:8]}",
+                "settings": settings_json,
+            },
         )
         await conn.execute(
             text(
-                "INSERT INTO organisation_cost_state (org_id, org_cumulative_spend_cents) VALUES (:id, 0)",
+                "INSERT INTO organisation_cost_state "
+                "(org_id, spend_ceiling_cents, org_cumulative_spend_cents) VALUES (:id, :ceiling, :cumulative)",
             ),
-            {"id": str(org_id)},
+            {"id": str(org_id), "ceiling": spend_ceiling_cents, "cumulative": cumulative_cents},
         )
         await conn.execute(
             text(
@@ -237,3 +261,74 @@ async def test_contended_cost_state_lock_degrades_to_bounded_55p03_not_40p01(
     )
     # Bounded: the wait was capped by the (short) lock_timeout, not unbounded.
     assert elapsed < _BOUNDED_WAIT_TIMEOUT_SECONDS, f"lock wait not bounded (elapsed {elapsed:.2f}s)"
+
+
+async def _org_triggers_paused(engine: AsyncEngine, org_id: uuid.UUID) -> bool:
+    async with engine.connect() as conn:
+        value = await conn.scalar(
+            text("SELECT triggers_paused FROM organisations WHERE id = :oid"),
+            {"oid": str(org_id)},
+        )
+    return bool(value)
+
+
+async def test_finalize_ceiling_crossing_auto_pause_no_deadlock_with_endpoint(
+    db_engine: AsyncEngine,
+) -> None:
+    """P2-2: the finalize auto-pause ``organisations``-row write actually fires,
+    and it never deadlocks (40P01) against the REAL ceiling endpoint.
+
+    The previous ``_seed`` used NULL ceilings and no auto-stop, so the finalize
+    gate never reached ``_auto_pause_org_triggers`` — the org-row write that is
+    the other half of the ABBA cycle. Here the run CROSSES the org ceiling
+    ($1.00 > $0.50) with the cost-controls "Auto-stop" toggle ON, so the finalize
+    takes the advisory and then writes ``organisations.triggers_paused``, while
+    the REAL ``update_cost_controls`` route runs concurrently. Both must
+    complete without a 40P01 deadlock, and the auto-pause must be observable.
+    """
+    seed = await _seed(db_engine, spend_ceiling_cents=50, cumulative_cents=0, auto_stop=True)
+    org_id: uuid.UUID = seed["org_id"]
+    run_id: uuid.UUID = seed["run_id"]
+    principal = TenantPrincipal(
+        username="far1833-p2-2",
+        organisation_id=org_id,
+        account_id=seed["account_id"],
+        org_role="admin",
+    )
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
+
+    async def finalize_half() -> None:
+        async with factory() as session, session.begin():
+            await _ledger_block(
+                session,
+                run_id=run_id,
+                org_id=org_id,
+                status="complete",
+                total=_RUN_COST_USD,  # $1.00 > the $0.50 ceiling → auto-pause fires
+                owner_team_id=None,
+                run_date=_RUN_DATE,
+                finalize_fields={},
+                session_factory=None,
+            )
+
+    async def endpoint_half() -> object:
+        async with factory() as session:
+            req = UpdateCostControlsRequest(budget=5.0, max_run_cost=1.0)
+            return await costs_routes.update_cost_controls(req, None, principal, session)
+
+    try:
+        completed = await asyncio.wait_for(
+            asyncio.gather(finalize_half(), endpoint_half(), return_exceptions=True),
+            _BOUNDED_WAIT_TIMEOUT_SECONDS * 3,
+        )
+        paused = await _org_triggers_paused(db_engine, org_id)
+    finally:
+        await _cleanup(db_engine, seed)
+
+    for label, result in zip(("finalize", "endpoint"), completed, strict=True):
+        if isinstance(result, BaseException):
+            assert sqlstate_of(result) != "40P01", f"the {label} half deadlocked (40P01): {result!r}"
+            raise AssertionError(f"the {label} half failed: {result!r}")
+
+    # The racy org-row write was actually reached (proving the seed exercises it).
+    assert paused is True, "the finalize ceiling crossing did not auto-pause the org (org write not reached)"

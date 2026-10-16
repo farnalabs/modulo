@@ -23,9 +23,16 @@ __all__ = [
 
 # The only columns an upsert may name. A caller naming anything else has a bug
 # (a typo, or a column this module does not own), so refuse rather than write.
-_ALLOWED_UPSERT_COLUMNS: frozenset[str] = frozenset(
-    {"max_run_cost_cents", "spend_ceiling_cents", "org_cumulative_spend_cents"}
-)
+#
+# ``org_cumulative_spend_cents`` is DELIBERATELY NOT here: the cumulative spend
+# is written ONLY by ``increment_org_cumulative_spend`` — a single atomic
+# ``INSERT ... ON CONFLICT DO UPDATE SET col = col + delta`` statement. Allowing
+# an absolute upsert of the cumulative would make the atomic-accrual guarantee
+# caller discipline rather than structural: a future "reset/import spend" caller
+# could absolute-write the cumulative concurrently with an accrual and silently
+# lose an update. Keeping it out of the allowlist makes that impossible (FAR-1833
+# P2-1).
+_ALLOWED_UPSERT_COLUMNS: frozenset[str] = frozenset({"max_run_cost_cents", "spend_ceiling_cents"})
 
 
 async def get_org_cost_state(session: AsyncSession, org_id: uuid.UUID) -> OrganisationCostState | None:
@@ -47,12 +54,17 @@ async def upsert_org_cost_state(
     """Insert or patch the org's cost-state row, writing ONLY the named columns.
 
     ``provided`` maps a column name (one of ``max_run_cost_cents``,
-    ``spend_ceiling_cents``, ``org_cumulative_spend_cents``) to its new value;
-    an explicit ``None`` clears a nullable ceiling. The ``ON CONFLICT DO UPDATE``
-    sets only the named columns, so a ceiling patch never clobbers the
-    cumulative spend and an accrual write never clobbers a ceiling. On a first
-    write for an org the INSERT creates the row with the named columns, and the
-    unnamed ones take their column defaults (cumulative 0).
+    ``spend_ceiling_cents``) to its new value; an explicit ``None`` clears a
+    nullable ceiling. The ``ON CONFLICT DO UPDATE`` sets only the named columns,
+    so a ceiling patch never clobbers the cumulative spend and an accrual write
+    never clobbers a ceiling. On a first write for an org the INSERT creates the
+    row with the named columns, and the unnamed ones take their column defaults
+    (cumulative 0).
+
+    ``org_cumulative_spend_cents`` is NOT an accepted column: the cumulative is
+    written exclusively by :func:`increment_org_cumulative_spend` (the atomic
+    accrued-plus-delta statement). Naming it here raises ``ValueError`` so the
+    atomic-accrual invariant is structural, not caller-dependent (FAR-1833 P2-1).
 
     Raises ``ValueError`` for an empty mapping or an unknown column name — a
     silent no-op or an accidental extra column would both hide a caller bug.
