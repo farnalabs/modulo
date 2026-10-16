@@ -455,7 +455,9 @@ async def admin_create_org_user(
     # FAR-1517: NO audited() dependency — this handler hard-deletes the org, so
     # a post-commit org-scoped append can never satisfy the audit_events FK
     # (fail-open, recording nothing). The durable org-independent record is
-    # written IN-transaction before the delete instead.
+    # written IN-transaction AFTER ``delete_organisation`` (QA F6 moved it from
+    # before the delete so the org-row lock is taken first), before the
+    # transaction commits.
     status_code=status.HTTP_204_NO_CONTENT,
 )
 @handle_db_errors("admin.orgs.admin_delete_org")

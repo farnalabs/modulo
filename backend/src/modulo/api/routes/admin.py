@@ -2685,13 +2685,15 @@ async def confirm_org_deletion(
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
             # FAR-1832 (R4): append AFTER the crud call, not before it. This
-            # was the one org-deletion FSM path that took a write lock BEFORE
-            # the org-row ``FOR UPDATE`` (every sibling route — request, cancel,
-            # immediate delete, and (QA F6) the cross-org
+            # was the one org-deletion FSM path that performed an in-transaction
+            # write BEFORE the org-row ``FOR UPDATE`` (every sibling route —
+            # request, cancel, immediate delete, and (QA F6) the cross-org
             # ``admin_orgs.admin_delete_org`` — locks/deletes the org row
-            # first). Same transaction, so atomicity and the fail-closed
-            # property are unchanged; only the lock order is repaired to the
-            # global order (org FSM lock, then audit append).
+            # first). ``system_audit_events`` is deliberately not hash-chained,
+            # so ``append_system_audit_event`` takes no chain-head lock; it is a
+            # plain INSERT. Same transaction, so atomicity and the fail-closed
+            # property are unchanged; only the ordering is repaired to the
+            # global order (org FSM lock, then the audit append).
             await append_system_audit_event(
                 session,
                 event_type="org_deletion_completed",

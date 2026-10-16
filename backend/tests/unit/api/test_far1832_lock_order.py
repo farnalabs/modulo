@@ -3,9 +3,12 @@
 ``POST /api/v1/admin/org/deletion-confirm`` used to append the durable
 org-independent system-audit event BEFORE calling
 ``db.crud.org_deletion.confirm_org_deletion`` — the one org-deletion FSM path
-whose write lock (the org-row ``FOR UPDATE`` inside the crud call) was taken
-AFTER another write in the same transaction. Every sibling FSM route (request,
-cancel, immediate delete) locks the org row first and appends afterwards.
+that performed an in-transaction write before the org-row ``FOR UPDATE`` inside
+the crud call. The append itself took NO lock: ``system_audit_events`` is
+deliberately not hash-chained and ``append_system_audit_event`` is a plain
+INSERT, so there is no chain-head lock on this path. Every sibling FSM route
+(request, cancel, immediate delete) locks the org row first and appends
+afterwards.
 
 These tests pin the repaired order: the crud call (org lock) precedes the
 system-audit append, both still inside the same transaction (so atomicity and

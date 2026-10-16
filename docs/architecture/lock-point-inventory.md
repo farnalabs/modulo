@@ -25,10 +25,14 @@ grep -rn '\.with_for_update(' backend/src/modulo --include='*.py' | wc -l   # 58
 grep -rn 'with_for_update='  backend/src/modulo --include='*.py' | wc -l   #  2  (session.get kwargs)
 # total SQLAlchemy row-lock call sites: 60
 
-# (2) raw SQL `FOR UPDATE` in locking DML (SQL text, not prose):
+# (2) raw SQL `FOR UPDATE` occurrences. NOTE: the filter is LOOSE — it also
+#     matches docstring/prose mentions of `FOR UPDATE`, so do not read the raw
+#     hit count as the locking-site count (see the note below the command):
 grep -rn 'FOR UPDATE' backend/src/modulo --include='*.py' \
   | grep -E '"[^"]*FOR UPDATE|sql_text\(' | grep -v '^\s*#'
-# 2 locking sites; 1 non-locking DDL clause (see §4)
+# 5 hits (measured 2026-10-16): 2 LOCKING DML sites (core/runner_capacity.py,
+# core/pipeline_engine/node_runner.py), 1 non-locking DDL clause (§4), and
+# 2 docstring/prose mentions (db/crud/account.py, core/trigger_engine/__init__.py)
 ```
 
 Cross-check: a full `grep -rn 'with_for_update' backend/src/modulo --include='*.py'`
@@ -49,13 +53,16 @@ hit; the raw `file:line` set is exactly reproducible from command (1).
 | Non-locking `FOR UPDATE` occurrence (RLS policy DDL) | 1 |
 
 > **Count corrections.** The original audit recorded 63 SQLAlchemy `.with_for_update(`
-> sites; re-measurement on 2026-10-15/16 found **62** — FAR-1822 (PR #1842, merged
-> 2026-10-15) removed the `cron_helpers` scheduled-report lock (D7) after the audit was
-> written. **FAR-1832** (Land 1b of FAR-1823) then removed four more — the
+> sites; re-measurement on 2026-10-15/16 found **62** `.with_for_update(` sites —
+> note this is a *different quantity* from the headline table's **62 total row-lock
+> sites** (60 SQLAlchemy call sites, incl. the 2 `session.get` kwargs, plus 2 raw SQL);
+> the equal value is arithmetic coincidence, not the same count. FAR-1822 (PR #1842,
+> merged 2026-10-15) removed the `cron_helpers` scheduled-report lock (D7) after the
+> audit was written. **FAR-1832** (Land 1b of FAR-1823) then removed four more — the
 > sandbox-concurrency and HITL-window writers (old C2/C3), the product-analytics
 > consent read (old C1) and the org-runtime-flags writer (old D14) are now
 > single-statement atomic settings patches with no `SELECT … FOR UPDATE` pre-lock —
-> giving the **58** measured above. See §10.
+> giving the **58** `.with_for_update(` sites measured above. See §10.
 
 ---
 
@@ -89,16 +96,16 @@ unrelated writer or is held across non-lock work.
 | A3 | `api/routes/pipelines.py:3400` | `_reapply_team_gate_inside_mutation_txn` | FOR UPDATE | mutation txn, bounded | Same team-gate TOCTOU re-check (the route-side twin of A2). | no. |
 | A4 | `db/crud/pipeline_snapshot.py:441` | `_acquire_snapshot_allocation_lock` | FOR NO KEY UPDATE (`key_share=True`) | caller txn, bounded by `set_mutation_row_lock_timeout` | Snapshot-allocation slot; deliberately the weakest key-preserving lock so it does not conflict with FK-only writers. Timeout → `SnapshotLockNotAvailableError` (retryable 503). | no. |
 | A5 | `db/crud/run.py:2469` | `coalesce_pending_run` | FOR UPDATE **SKIP LOCKED** | caller txn | Non-blocking claim of a pending run to coalesce; never waits. | no. |
-| A6 | `db/crud/run.py:3580` | `update_run_status` | FOR UPDATE | caller txn (executor/cron; fenced variant used on the hot path) | Read-then-write of run status; serialises against the park sweep and concurrent terminalisers. | no – but see §7 run-row hotspot. |
-| A7 | `db/crud/run.py:3942` | `request_cancellation` | FOR UPDATE | caller txn (**now bounded** – both callers issue `set_mutation_row_lock_timeout` first, FAR-1610) | Sets cancel-wins fields on the run row. Bounding is deliberately the caller's job: `api/routes/runs.py:_cancel_run` and `api/mcp_server.py:_cancel_run_impl` each call `set_mutation_row_lock_timeout` **before** the first lock, so a contended row yields a `55P03` the caller maps to a visible 409 (REST) or a branchable `lock_timeout` result (MCP), never an unbounded wait. | no – gap closed (FAR-1610). |
+| A6 | `db/crud/run.py:3600` | `update_run_status` | FOR UPDATE | caller txn (executor/cron; fenced variant used on the hot path) | Read-then-write of run status; serialises against the park sweep and concurrent terminalisers. | no – but see §7 run-row hotspot. |
+| A7 | `db/crud/run.py:3970` | `request_cancellation` | FOR UPDATE | caller txn (**now bounded** – both callers issue `set_mutation_row_lock_timeout` first, FAR-1610) | Sets cancel-wins fields on the run row. Bounding is deliberately the caller's job: `api/routes/runs.py:_cancel_run` and `api/mcp_server.py:_cancel_run_impl` each call `set_mutation_row_lock_timeout` **before** the first lock, so a contended row yields a `55P03` the caller maps to a visible 409 (REST) or a branchable `lock_timeout` result (MCP), never an unbounded wait. | no – gap closed (FAR-1610). |
 | A8 | `db/crud/variant_group.py:158` | `increment_run_count` | FOR UPDATE | caller txn | Serialises the run-count increment for an A/B variant group. | no. |
 | A9 | `db/crud/variant_group.py:218` | `_lock_variant_group` | FOR UPDATE | caller txn | Shared variant-group lock used by the A/B assignment path. | no. |
-| A10 | `db/crud/pipeline_snapshot_versioning.py:252` | `rollback_to_snapshot` | FOR UPDATE | caller txn | Pipeline row held across version rollback (snapshot pointer/version bump). | watch – held across snapshot version work; see §7. |
+| A10 | `db/crud/pipeline_snapshot_versioning.py:281` | `rollback_to_snapshot` | FOR UPDATE | caller txn | Pipeline row held across version rollback (snapshot pointer/version bump). | watch – held across snapshot version work; see §7. |
 | A11 | `db/crud/pipeline.py:429` | `check_pipeline_name_available` | FOR UPDATE | caller txn (clone/create), bounded by the clone endpoint's `set_mutation_row_lock_timeout` | Locks the target-name row so two concurrent creates cannot both pass the uniqueness check. | no. |
 | A12 | `db/crud/pipeline.py:1415` | `_read_clone_source_snapshot` | **FOR SHARE** (`read=True`) | separate connection, bounded | Shared lock on the clone *source* pipeline; permits concurrent readers, blocks the source graph writer. | no. |
-| A13 | `db/crud/pipeline.py:2074` | `replace_pipeline_graph` | FOR UPDATE | caller txn | Pipeline row held across the *entire* graph replace: HITL-gate guard, edge/node snapshot, delete+insert of all edges/nodes, and an inline `pipeline.graph_updated` audit append. | **watch** – long critical section (see §7). |
+| A13 | `db/crud/pipeline.py:2191` | `replace_pipeline_graph` | FOR UPDATE | caller txn | Pipeline row held across the *entire* graph replace: HITL-gate guard, edge/node snapshot, delete+insert of all edges/nodes, and an inline `pipeline.graph_updated` audit append. | **watch** – long critical section (see §7). |
 | A14 | `db/crud/run_node_outputs.py:1014` | `_read_run_markers_fenced_rows` | FOR UPDATE **OF runs** (`of=Run`) | caller txn | Scoped run-row lock (not the joined output rows) for the fenced marker read. | no. |
-| A15 | `core/pipeline_engine/node_runner.py:2384` | `_write_raw_output_marker` | FOR UPDATE | caller txn | Run-row lock for the raw-output marker write; the counterpart of A16. | no. |
+| A15 | `core/pipeline_engine/node_runner.py:2414` | `_write_raw_output_marker` | FOR UPDATE | caller txn | Run-row lock for the raw-output marker write; the counterpart of A16. | no. |
 | A16 | `core/pipeline_engine/recovery.py:431` | `_fetch_locked_run` | FOR UPDATE | caller txn, `include_soft_deleted` | Locks the *pipeline* row to single-flight run recovery; re-reads the run after the lock. | no. |
 | A17 | `core/pipeline_engine/recovery.py:712` | `guardrail_override` | FOR UPDATE | caller txn, `include_soft_deleted` | Pipeline lock so a guardrail override cannot race a graph edit. | no. |
 | A18 | `core/pipeline_engine/classify.py:1283` | `_reconcile_classify_run` | FOR UPDATE + `populate_existing` | **own** `session.begin()` | Per-run re-read to terminalise/classify exactly once; each DB call bounded by `asyncio.wait_for(_CLASSIFICATION_WRITE_TIMEOUT_SECONDS)`. | no. |
@@ -134,7 +141,7 @@ unrelated writer or is held across non-lock work.
 | C5 | `db/crud/organisation.py:89` | `get_organisation` | FOR UPDATE (opt-in) | caller txn | Generic org row lock used by org-updating callers. Marks itself FAR-1624: intentionally plain `FOR UPDATE`, not `FOR NO KEY UPDATE`. Since FAR-1830/1832 its only caller is the atomic settings patch's **generic-dialect (SQLite/MariaDB) fallback** (`_apply_json_column_patch_generic`) — on Postgres the patch is a single `UPDATE` and never takes this. | **watch** – Organisation row (Postgres never reaches it). |
 | C6 | `db/crud/observability.py:28` (`update_otel_config` → shared `db/crud/organisation.py` machinery) | `update_otel_config` | FOR UPDATE (generic-dialect fallback only) | caller txn | **FAR-1832 (QA F3):** routes through the shared atomic JSON-column patch (`update_org_json_column_patch`) — the Postgres path is a single-statement atomic `otel_config_json = COALESCE(…) || :patch` write with no pre-lock; the `FOR UPDATE` survives only on the SQLite/MariaDB fallback branch (`_apply_json_column_patch_generic`, which never runs on Postgres). Deliberately `require_live_row=False` (still `include_soft_deleted` on the generic read) — FAR-1025 keeps OTel config writable during the pending-deletion window (unlike `settings_json`, whose writers now refuse soft-deleted orgs). QA F3 also gave this path the same fail-closed tenant guard as the settings writer (it previously trusted `org_id` verbatim — and `organisations` is not RLS-scoped, so that guard is the only tenant control). | no – never reached on Postgres. |
 | C7 | `db/crud/parameter_set.py:84` | `update_set` | FOR UPDATE | caller txn | Parameter-set version bump RMW. | no. |
-| C8 | `db/crud/account.py:86` | `_get_account_locked` | FOR UPDATE (`session.get`) | caller txn | The account-preferences serialisation point (documented): all preference writers serialise here. | **watch** – Account row shared with key quota B9. |
+| C8 | `db/crud/account.py:121` | `_get_account_locked` | FOR UPDATE (`session.get`) | caller txn | The account-preferences serialisation point (documented): all preference writers serialise here. | **watch** – Account row shared with key quota B9. |
 | C9 | `db/crud/node_observation.py:36` | `observe_node` | FOR UPDATE | caller txn | Idempotent node-observation upsert (insert if absent). | no. |
 | C10 | `db/crud/node_composite.py:27` | `set_parent_node` | FOR UPDATE | caller txn | Locks the node being re-parented. | no. |
 | C11 | `db/crud/node_composite.py:33` | `set_parent_node` | FOR UPDATE | caller txn | Locks the (new) parent node in the same txn – cycle/self-parent guard. | no. |
@@ -179,8 +186,8 @@ unrelated writer or is held across non-lock work.
 
 | # | file:line | enclosing function | category | context | assessment |
 |---|---|---|---|---|---|
-| R1 | `core/runner_capacity.py:491` | `acquire_runner_dispatch_slot` (the `"FOR UPDATE"` fragment of the own-row `SELECT claim_count … FOR UPDATE`) | **D** | `async with session_factory() as session, session.begin()`; **bounded** by a transaction-scoped `SET LOCAL lock_timeout` set unconditionally *before* the lock (FAR-1601), then an optional per-org `pg_advisory_xact_lock`, then a claim-token-fenced marker `UPDATE`. | Well-bounded claim-token fence on the hot `runs` row. The lock is deliberate and the wait is capped in both feature-flag states. **no** over-serialisation. |
-| R2 | `core/pipeline_engine/node_runner.py:2750` | `_read_connector_idempotency_gate_state` (raw `SELECT id, idempotency_key FROM runs … FOR UPDATE`) | **A** | `async with session_factory() as session, session.begin()`; **bounded client-side** by `asyncio.wait_for(_read(), _IDEMPOTENCY_GATE_READ_TIMEOUT)` (3 s), failing **open** to `(None, None)` with a WARNING. | Correctly bounded and fail-open so a contended run-row lock never blocks a connector write. The docstring is explicit that the residual concurrent-double-write window is *intentional* (a `write_started` lease would fail-closed and block legitimate recovery). **no** over-serialisation, but note as an accepted semantic risk. |
+| R1 | `core/runner_capacity.py:500` | `acquire_runner_dispatch_slot` (the `"FOR UPDATE"` fragment of the own-row `SELECT claim_count … FOR UPDATE`) | **D** | `async with session_factory() as session, session.begin()`; **bounded** by a transaction-scoped `SET LOCAL lock_timeout` set unconditionally *before* the lock (FAR-1601), then an optional per-org `pg_advisory_xact_lock`, then a claim-token-fenced marker `UPDATE`. | Well-bounded claim-token fence on the hot `runs` row. The lock is deliberate and the wait is capped in both feature-flag states. **no** over-serialisation. |
+| R2 | `core/pipeline_engine/node_runner.py:2780` | `_read_connector_idempotency_gate_state` (raw `SELECT id, idempotency_key FROM runs … FOR UPDATE`) | **A** | `async with session_factory() as session, session.begin()`; **bounded client-side** by `asyncio.wait_for(_read(), _IDEMPOTENCY_GATE_READ_TIMEOUT)` (3 s), failing **open** to `(None, None)` with a WARNING. | Correctly bounded and fail-open so a contended run-row lock never blocks a connector write. The docstring is explicit that the residual concurrent-double-write window is *intentional* (a `write_started` lease would fail-closed and block legitimate recovery). **no** over-serialisation, but note as an accepted semantic risk. |
 
 ### Non-locking occurrence (not counted)
 
@@ -276,7 +283,7 @@ serialising. What still locks the `organisations` row:
 The residual *hold-time* watch item is D4 (org export can run long under its FSM lock).
 
 ### 3. `replace_pipeline_graph` holds the pipeline row across the whole replace + an audit append (A13)
-`db/crud/pipeline.py:2074` locks the `Pipeline` row and then performs the HITL-gate guard, a
+`db/crud/pipeline.py:2191` locks the `Pipeline` row and then performs the HITL-gate guard, a
 full before-image snapshot of edges and nodes, delete-all + insert-all of edges/nodes, and an
 inline `pipeline.graph_updated` audit event – all before the transaction commits. That one
 critical section is the longest pipeline-row hold in the inventory: it blocks graph writers
@@ -397,9 +404,10 @@ shipped behaviour. The corrections:
    **FIXED — FAR-1832:** the append now runs after the crud call, same transaction (atomicity
    and the fail-closed append property unchanged), pinned by
    `backend/tests/unit/api/test_far1832_lock_order.py`.
-3. **Measured counts moved (FAR-1822 + FAR-1832).** Re-measuring §1 on 2026-10-16 gives 58
-   `.with_for_update(` sites (60 SQLAlchemy call sites total, 62 with raw SQL) — the audit's
-   original 63 was already stale by one when FAR-1822 (PR #1842) removed the `cron_helpers`
-   lock, and FAR-1832 removed four more (old C1, C2, C3, D14 — the locked settings writers are
-   now single-statement atomic patches). §3/§5/§7 carry the post-change shape; removed row IDs
-   are left as gaps so cross-references stay stable.
+ 3. **Measured counts moved (FAR-1822 + FAR-1832).** Re-measuring §1 on 2026-10-16 gives 58
+    `.with_for_update(` sites (60 SQLAlchemy call sites total once the 2 `session.get` kwargs
+    are included, 62 total row-lock sites with the 2 raw SQL sites) — the audit's
+    original 63 was already stale by one when FAR-1822 (PR #1842) removed the `cron_helpers`
+    lock, and FAR-1832 removed four more (old C1, C2, C3, D14 — the locked settings writers are
+    now single-statement atomic patches). §3/§5/§7 carry the post-change shape; removed row IDs
+    are left as gaps so cross-references stay stable.
