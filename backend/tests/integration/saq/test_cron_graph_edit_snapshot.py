@@ -254,12 +254,14 @@ async def _execute_cron_fire(captured: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-async def _snapshot_count(db_engine: AsyncEngine, pipeline_id: uuid.UUID) -> int:
+async def _snapshot_count(db_engine: AsyncEngine, pipeline_id: uuid.UUID, *, version_kind: str | None = None) -> int:
+    query = "SELECT count(*) FROM pipeline_snapshots WHERE pipeline_id = :pid"
+    params: dict[str, Any] = {"pid": str(pipeline_id)}
+    if version_kind is not None:
+        query += " AND version_kind = :vk"
+        params["vk"] = version_kind
     async with db_engine.connect() as conn:
-        result = await conn.execute(
-            text("SELECT count(*) FROM pipeline_snapshots WHERE pipeline_id = :pid"),
-            {"pid": str(pipeline_id)},
-        )
+        result = await conn.execute(text(query), params)
         return int(result.scalar_one())
 
 
@@ -411,19 +413,22 @@ async def test_cron_fire_after_graph_edit_executes_the_edited_graph(
 
         # --- Edit the graph through the REAL route (enterprise plan context:
         # every feature, including pipeline_diff_rollback, is enabled here).
-        snapshots_before_edit = await _snapshot_count(db_engine, pipeline_id)
+        edit_snapshots_before = await _snapshot_count(db_engine, pipeline_id, version_kind="edit")
         await _patch_graph(integration_client, test_org, test_user, pipeline_id, "v2", schema_id)
         assert await _live_node_label(db_engine, pipeline_id) == "v2"
 
         # FAR-1810: an explicit graph save records an immutable
-        # version_kind='edit' snapshot in the same transaction. The save
-        # changed the graph, so exactly one new snapshot appears — this
+        # version_kind='edit' snapshot in the same transaction. Count only
+        # ``version_kind='edit'`` rows so the assertion pins the exact kind the
+        # docstring claims (a plain row count could be satisfied by any
+        # snapshot kind), and assert the delta so it stays meaningful. This
         # supersedes the FAR-1519 H1 premise that the edit path attempts no
         # save (the plan feature that once gated saves is enabled here).
-        snapshots_after_edit = await _snapshot_count(db_engine, pipeline_id)
-        assert snapshots_after_edit == snapshots_before_edit + 1, (
-            "an explicit graph save must record exactly one FAR-1810 edit snapshot "
-            f"(before={snapshots_before_edit}, after={snapshots_after_edit})"
+        edit_snapshots_after = await _snapshot_count(db_engine, pipeline_id, version_kind="edit")
+        assert edit_snapshots_after == edit_snapshots_before + 1, (
+            "an explicit graph save must record exactly one FAR-1810 "
+            "version_kind='edit' snapshot "
+            f"(before={edit_snapshots_before}, after={edit_snapshots_after})"
         )
 
         # --- Second fire: the cron run must execute the EDITED graph.
