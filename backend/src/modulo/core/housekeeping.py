@@ -387,6 +387,71 @@ async def _scan_orphan_snapshots(session: AsyncSession, org_id: uuid.UUID) -> li
 EDIT_SNAPSHOT_RETENTION_LIMIT = 200
 
 
+def _canonical_snapshot_id(raw: object) -> uuid.UUID | None:
+    """Return ``raw`` as a canonical snapshot id, or ``None`` if it is not one.
+
+    REST stores trigger/variant pins verbatim and unvalidated while the fire
+    paths accept anything ``uuid.UUID(str(...))`` accepts (uppercase, braced and
+    ``urn:`` forms), so pins are canonicalised in Python rather than compared as
+    raw SQL strings — a string comparison would miss non-canonical stored forms.
+    """
+    if raw is None:
+        return None
+    try:
+        return uuid.UUID(str(raw))
+    except (ValueError, TypeError):
+        return None
+
+
+async def _trigger_pinned_snapshot_ids(session: AsyncSession, org_id: uuid.UUID) -> set[uuid.UUID]:
+    """Canonical snapshot ids pinned by any of the org's triggers.
+
+    A trigger pins a specific snapshot via ``config_json.snapshot_id`` — a
+    non-FK reference; a missing pin yields an explicit ``no_pipeline`` skip
+    rather than a silent auto-create, so any pinned snapshot must be excluded
+    from the retention pool. Reads the Core ``triggers`` table rather than the
+    ORM entity so the global soft-delete filter cannot hide a
+    soft-deleted-but-restorable trigger's pin (``/triggers/{id}/restore``).
+    """
+    trigger_table = Trigger.__table__
+    configs = (
+        await session.execute(select(trigger_table.c.config_json).where(trigger_table.c.organisation_id == org_id))
+    ).scalars()
+    pinned: set[uuid.UUID] = set()
+    for config in configs:
+        snapshot_id = _canonical_snapshot_id((config or {}).get("snapshot_id"))
+        if snapshot_id is not None:
+            pinned.add(snapshot_id)
+    return pinned
+
+
+async def _variant_pinned_snapshot_ids(session: AsyncSession, org_id: uuid.UUID) -> set[uuid.UUID]:
+    """Canonical snapshot ids pinned by any variant group's ``variants`` array.
+
+    A group pins one snapshot per variant via a ``variants`` JSON entry carrying
+    ``snapshot_id`` — a non-FK reference; deleting the row breaks the group's
+    next fire. Reads the Core ``variant_groups`` table rather than the ORM entity
+    so the soft-delete filter cannot hide a soft-deleted group's pin (matching
+    the trigger leg), and walks the JSON in Python so the check is
+    dialect-portable across the JSON storage differences.
+    """
+    variant_table = VariantGroup.__table__
+    variant_lists = (
+        await session.execute(select(variant_table.c.variants).where(variant_table.c.organisation_id == org_id))
+    ).scalars()
+    pinned: set[uuid.UUID] = set()
+    for variants in variant_lists:
+        if not isinstance(variants, list):
+            continue
+        for entry in variants:
+            if not isinstance(entry, dict):
+                continue
+            snapshot_id = _canonical_snapshot_id(entry.get("snapshot_id"))
+            if snapshot_id is not None:
+                pinned.add(snapshot_id)
+    return pinned
+
+
 async def _scan_edit_snapshot_retention(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
     """Surface edit snapshots beyond the newest ``EDIT_SNAPSHOT_RETENTION_LIMIT`` per pipeline.
 
@@ -452,48 +517,8 @@ async def _scan_edit_snapshot_retention(session: AsyncSession, org_id: uuid.UUID
     propagates to :func:`scan_all`, which logs it with the stack trace and
     still returns the other categories.
     """
-    # M1: a trigger's pinned ``config_json.snapshot_id`` is a non-FK reference;
-    # deleting the row silently breaks the trigger at fire time. REST stores
-    # the pin verbatim and unvalidated (the fire path accepts anything
-    # ``uuid.UUID(str(...))`` accepts — uppercase, braced, ``urn:`` forms), so
-    # pins are canonicalised in Python (``uuid.UUID`` — case- and
-    # format-insensitive) rather than compared as raw SQL strings; a string
-    # comparison misses non-canonical stored forms. Core table so the
-    # soft-delete filter cannot hide a restorable trigger's pin.
-    trigger_pins = Trigger.__table__
-    trigger_rows = (
-        await session.execute(select(trigger_pins.c.config_json).where(trigger_pins.c.organisation_id == org_id))
-    ).scalars()
-    trigger_pinned: set[uuid.UUID] = set()
-    for config in trigger_rows:
-        raw = (config or {}).get("snapshot_id")
-        if raw is None:
-            continue
-        try:
-            trigger_pinned.add(uuid.UUID(str(raw)))
-        except (ValueError, TypeError):
-            continue
-    # M1 (variant leg): ``variant_groups.variants`` is a JSON array of variant
-    # dicts, each optionally carrying ``snapshot_id`` — a non-FK reference.
-    # Core table so the soft-delete filter cannot hide a soft-deleted group's
-    # pin (matching the trigger leg); Python-side ``uuid.UUID`` parse keeps the
-    # check dialect-portable across the JSON storage differences.
-    variant_pins = VariantGroup.__table__
-    variant_rows = (
-        await session.execute(select(variant_pins.c.variants).where(variant_pins.c.organisation_id == org_id))
-    ).scalars()
-    variant_pinned: set[uuid.UUID] = set()
-    for variants in variant_rows:
-        for entry in variants if isinstance(variants, list) else []:
-            if not isinstance(entry, dict):
-                continue
-            raw = entry.get("snapshot_id")
-            if raw is None:
-                continue
-            try:
-                variant_pinned.add(uuid.UUID(str(raw)))
-            except (ValueError, TypeError):
-                continue
+    trigger_pinned = await _trigger_pinned_snapshot_ids(session, org_id)
+    variant_pinned = await _variant_pinned_snapshot_ids(session, org_id)
     # Pool predicates: the (a) channel + (b) trigger + (c) variant exclusions
     # from the docstring, applied BEFORE ranking so the newest-200 bound counts
     # only genuinely deletable rows. Each not-in predicate joins only when its

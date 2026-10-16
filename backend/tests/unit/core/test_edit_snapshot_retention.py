@@ -27,7 +27,12 @@ from collections.abc import AsyncGenerator
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.housekeeping import SCANNERS_BY_CATEGORY, _scan_edit_snapshot_retention, scan_all
+from modulo.core.housekeeping import (
+    SCANNERS_BY_CATEGORY,
+    _canonical_snapshot_id,
+    _scan_edit_snapshot_retention,
+    scan_all,
+)
 from modulo.db.models.base import Base
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
@@ -301,3 +306,93 @@ class TestEditSnapshotRetentionReferenceSafety:
 
         assert str(by_version[pinned_version]) not in candidate_ids
         assert candidate_ids == {str(by_version[version]) for version in (2, 3, 4, 6, 7, 8)}
+
+
+class TestEditSnapshotRetentionPinParsing:
+    """FAR-1815: absent / non-canonical / malformed pins are tolerated.
+
+    REST stores trigger pins verbatim and unvalidated and variant entries come
+    from hand-editable JSON, so the exclusion legs must canonicalise what they
+    can and skip what they cannot — a junk pin must never crash the sweep, and
+    must never silently exclude a genuinely deletable row. Each test seeds the
+    same 207-row provenance-edit pool, so with the junk pins excluding nothing
+    the delete band stays exactly v2..v8.
+    """
+
+    def test_canonical_snapshot_id_normalises_accepts_and_rejects(self) -> None:
+        snapshot_id = uuid.uuid4()
+        assert _canonical_snapshot_id(None) is None
+        # Non-canonical (uppercase) stored forms still resolve to the same id.
+        assert _canonical_snapshot_id(str(snapshot_id).upper()) == snapshot_id
+        assert _canonical_snapshot_id("not-a-uuid") is None
+
+    async def test_absent_and_malformed_trigger_pins_do_not_break_the_sweep(
+        self,
+        session: AsyncSession,
+    ) -> None:
+        pipeline, by_version = await _seed_history(session)
+        session.add_all(
+            [
+                # config_json carries no snapshot_id at all.
+                Trigger(
+                    id=uuid.uuid4(),
+                    organisation_id=_ORG,
+                    pipeline_id=pipeline.id,
+                    name="no-pin",
+                    trigger_type="cron",
+                    account_id=_ACCOUNT,
+                    config_json={"cron_expression": "0 * * * *"},
+                ),
+                # config_json carries a snapshot_id that is not a UUID.
+                Trigger(
+                    id=uuid.uuid4(),
+                    organisation_id=_ORG,
+                    pipeline_id=pipeline.id,
+                    name="bad-pin",
+                    trigger_type="manual",
+                    account_id=_ACCOUNT,
+                    config_json={"snapshot_id": "not-a-uuid"},
+                ),
+            ]
+        )
+        await session.commit()
+
+        candidates = await _scan_edit_snapshot_retention(session, _ORG)
+
+        # Neither junk pin resolves to a real id, so nothing is excluded and the
+        # unfiltered delete band (v2..v8) is surfaced unchanged.
+        assert {c.id for c in candidates} == {str(by_version[v]) for v in range(2, 9)}
+
+    async def test_non_list_and_malformed_variant_entries_do_not_break_the_sweep(
+        self,
+        session: AsyncSession,
+    ) -> None:
+        pipeline, by_version = await _seed_history(session)
+        session.add_all(
+            [
+                # ``variants`` is not a JSON array at all.
+                VariantGroup(
+                    id=uuid.uuid4(),
+                    organisation_id=_ORG,
+                    pipeline_id=pipeline.id,
+                    name="non-list",
+                    variants={"snapshot_id": str(by_version[5])},
+                ),
+                # A JSON array whose entries are not dicts, carry no pin, or
+                # carry a non-UUID pin — all must be skipped, not fatal.
+                VariantGroup(
+                    id=uuid.uuid4(),
+                    organisation_id=_ORG,
+                    pipeline_id=pipeline.id,
+                    name="junk-entries",
+                    variants=["not-a-dict", {"name": "no-pin"}, {"snapshot_id": "not-a-uuid"}],
+                ),
+            ]
+        )
+        await session.commit()
+
+        candidates = await _scan_edit_snapshot_retention(session, _ORG)
+
+        # No junk entry resolves to a real pinned id, so the pool is untouched
+        # and the delete band (v2..v8) is surfaced unchanged.
+        assert {c.id for c in candidates} == {str(by_version[v]) for v in range(2, 9)}
