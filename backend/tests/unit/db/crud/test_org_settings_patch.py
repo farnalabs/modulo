@@ -344,7 +344,7 @@ async def test_nested_patch_rejects_overlap_with_top_level_patch(monkeypatch: py
         )
 
 
-async def test_nested_patch_settings_postgres_statement_shape() -> None:
+def test_nested_patch_settings_postgres_statement_shape() -> None:
     """The nested settings statement is a jsonb_set sub-field compose — not a
     whole-block replace."""
     sql = str(_pg_patch_statement("settings_json", True, nested=True)).lower()
