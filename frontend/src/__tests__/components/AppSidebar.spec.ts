@@ -167,6 +167,24 @@ describe('AppSidebar', () => {
       expect(bell.classes()).toContain('w-11')
     })
 
+    it('gates the tier badge off below 440px in the drawer header', async () => {
+      // The badge must override PrimeVue's default `inline-flex` so it stays
+      // hidden in the narrow (<440px) drawer header and only appears from
+      // 440px up. Tailwind v4's documented syntax is the trailing important
+      // modifier (`hidden!`, `min-[440px]:inline-flex!`). jsdom cannot
+      // evaluate Tailwind, so pin the utility classes the gate depends on -
+      // the same approach the >=44px hit-area test above uses.
+      const wrapper = mountSidebar()
+      const store = usePlanStore()
+      store.currentTier = 'team'
+      await flushPromises()
+
+      const badge = wrapper.find('header .p-badge')
+      expect(badge.exists()).toBe(true)
+      expect(badge.classes()).toContain('hidden!')
+      expect(badge.classes()).toContain('min-[440px]:inline-flex!')
+    })
+
     it('opens the mobile drawer when the hamburger button is clicked', async () => {
       const wrapper = mountSidebar()
       await flushPromises()
