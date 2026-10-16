@@ -60,6 +60,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "org_api_keys",
         "org_daily_run_counts",
         "org_memberships",
+        "organisation_cost_state",
         "organisations",
         "pipeline_edges",
         "pipeline_folders",
@@ -126,6 +127,13 @@ def test_all_resource_tables_are_organisation_scoped() -> None:
             # collection_install table; access is always via the parent's
             # install_id, so it deliberately carries no organisation_id of its own.
             "collection_install_entity",
+            # organisation_cost_state (FAR-1833) is a one-row-per-org child keyed
+            # by ``org_id`` (its primary key), not ``organisation_id``: the RLS
+            # regime and the ORM tenant filter both key on the exact column name
+            # ``organisation_id``, so a ``org_id``-keyed row is deliberately
+            # outside that regime (the same naming rule system_audit_events
+            # documents). Access is always by an explicit organisation id.
+            "organisation_cost_state",
         ):
             assert "organisation_id" in table.c, f"{name} is missing organisation_id"
 
