@@ -15,6 +15,7 @@ IntegrityError 409, ValueError 404, unexpected 500 — and the success bodies.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -288,15 +289,70 @@ def _lock_timeout_operational() -> OperationalError:
 def test_update_policy_lock_timeout_is_409(client: tuple[TestClient, AsyncMock]) -> None:
     """FAR-1832 QA F16: ``save_policy`` writes through the bounded-lock
     org-settings patch, so 55P03 is reachable on this route. Pre-F16 the local
-    ``except SQLAlchemyError`` arm collapsed it to a 503 outage reply — and this
-    route carries no ``@handle_db_errors`` backstop, so that arm was the only
-    translation."""
+    ``except SQLAlchemyError`` arm collapsed it to a 503 outage reply.
+
+    FAR-1905 added a ``@handle_db_errors`` backstop to this route, so the arm is
+    no longer the only translation — but the arm still PRE-EMPTS it (it raises an
+    ``HTTPException``, which the backstop re-raises unchanged). The companion
+    ``test_update_policy_lock_timeout_arm_pre_empts_backstop`` pins that
+    precedence directly."""
     http, _ = client
     with patch.object(retention_routes, "save_policy", new_callable=AsyncMock, side_effect=_lock_timeout_operational()):
         resp = http.put(_BASE_URL, json={"max_age_days": 30})
 
     assert resp.status_code == 409, resp.text
     assert "another change is in progress" in resp.json()["detail"]
+
+
+def test_update_policy_lock_timeout_arm_pre_empts_backstop(
+    client: tuple[TestClient, AsyncMock], caplog: pytest.LogCaptureFixture
+) -> None:
+    """FAR-1905: the PUT arm's own 55P03 -> 409 verdict wins over the backstop.
+
+    The ORIGINAL FAR-1905 acceptance criterion — "the 55P03 -> 409 classification
+    on the PUT arm still works and is not shadowed by ``@handle_db_errors``" — was
+    previously unverifiable because FAR-1832/PR #1899 had not landed. It has now,
+    so this test pins it against the merged file.
+
+    Non-vacuity: the arm and the backstop produce the SAME status (409) and the
+    SAME detail (``_MSG_LOCK_TIMEOUT``), so status/detail alone cannot tell the
+    two paths apart. The discriminator is the emitted log key — the arm calls the
+    classifier with its own route key (``admin_evidence_retention.…``), whereas
+    the backstop would log the dotted prefix it was constructed with
+    (``admin.evidence.retention.…``). This test asserts the arm's key fired AND
+    the backstop's did NOT, plus a wraps-spy proving the arm's classifier ran.
+
+    Fails if (a) the arm's ``raise_lock_timeout_conflict_if`` call is removed —
+    the raw error then reaches the backstop, which still answers 409 with the
+    same detail, but logs the dotted key and never invokes the arm's classifier;
+    or (b) the backstop is ever changed to remap a propagating ``HTTPException``
+    instead of re-raising it — the arm's detail would no longer survive.
+    """
+    http, _ = client
+    real_classifier = retention_routes.raise_lock_timeout_conflict_if
+    arm_calls: list[str] = []
+
+    def _spy(exc: SQLAlchemyError, log_key: str) -> None:
+        arm_calls.append(log_key)
+        real_classifier(exc, log_key)
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch.object(retention_routes, "raise_lock_timeout_conflict_if", new=_spy),
+        patch.object(retention_routes, "save_policy", new_callable=AsyncMock, side_effect=_lock_timeout_operational()),
+    ):
+        resp = http.put(_BASE_URL, json={"max_age_days": 30})
+
+    assert resp.status_code == 409, resp.text
+    assert "another change is in progress" in resp.json()["detail"]
+
+    # The arm's own classifier ran, with the arm's own route key — i.e. the arm
+    # handled the 55P03 and the backstop never had to.
+    assert arm_calls == ["admin_evidence_retention.update_evidence_retention"]
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert "admin_evidence_retention.update_evidence_retention.lock_timeout" in messages
+    assert "admin.evidence.retention.update_evidence_retention.lock_timeout" not in messages
 
 
 # ---------------------------------------------------------------------------
