@@ -820,6 +820,201 @@ def test_receive_webhook_concurrent_limit_refusal_records_event_after_unwind(cli
     assert len(kwargs["payload_hash"]) == 64
 
 
+def test_receive_webhook_required_refs_missing_records_event_after_unwind(client: TestClient) -> None:
+    """FAR-1916 gap 2 receive path: a delivery refused by a
+    ``work_item_refs_required`` pipeline returns the typed 422 AND the
+    ``required_refs_missing`` TriggerEvent is re-recorded AFTER the unwind.
+
+    The engine writes that event inside the main transaction, which the 422
+    unwinds — so the route re-records it (with the raw body) in a FRESH
+    transaction after the unwind, mirroring the concurrency/backpressure
+    pattern. Without this the 422 was silent (the record rolled back)."""
+    from modulo.core.trigger_engine import WorkItemRefsRequiredHTTPError
+
+    session = _make_mock_session()
+    begin_cm = session.begin.return_value
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    app.dependency_overrides[get_db_session] = override_session
+    try:
+        with (
+            patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks._record_refused_delivery", new_callable=AsyncMock) as record,
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+        ):
+            m.side_effect = WorkItemRefsRequiredHTTPError(uuid.uuid4())
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+                json={"event": "test"},
+                headers={"X-Modulo-Timestamp": "1700000000"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["code"] == "work_item_refs_required"
+    # The main transaction UNWOUND with the refusal.
+    aexit = begin_cm.__aexit__
+    assert aexit.await_args.args[0] is WorkItemRefsRequiredHTTPError
+    # The refusal + raw payload were re-recorded AFTER the unwind, in a fresh
+    # transaction, BEFORE the 422 was raised.
+    record.assert_awaited_once()
+    kwargs = record.await_args.kwargs
+    assert kwargs["trigger_id"] == _TRIGGER_ID
+    assert kwargs["org_id"] == _ORG_ID
+    assert kwargs["trigger_type"] == "webhook"
+    assert kwargs["validation_result"] == "required_refs_missing"
+    assert kwargs["raw_payload"] == {"event": "test"}
+    assert kwargs["raw_body"].startswith(b'{"event"')
+    assert len(kwargs["payload_hash"]) == 64
+
+
+def test_receive_webhook_rate_limited_persists_event_and_returns_429(client: TestClient) -> None:
+    """FAR-1916 gap 1 (receive mirror): a delivery refused by the pipeline's
+    rate limit returns 429 AND the ``rate_limited`` TriggerEvent + raw payload
+    survive the refusal.
+
+    The engine writes the ``rate_limited`` event INSIDE the main transaction at
+    both raise sites, so that write rolls back with the unwound transaction —
+    a rate-limited receive was refused but invisible. The route now re-records
+    the refusal (with the raw body) in a FRESH transaction AFTER the unwind,
+    exactly like the concurrency/backpressure/required-refs arms. This test runs
+    the REAL post-unwind recorder against a fake fresh session and asserts the
+    persisted event + payload rows — not merely that a helper was called."""
+    from modulo.core.trigger_engine import PipelineRateLimitError
+    from modulo.db.models.webhook import WebhookPayload
+
+    session = _make_mock_session()
+    begin_cm = session.begin.return_value
+
+    fresh_session = AsyncMock()
+    fresh_begin_cm = AsyncMock()
+    fresh_begin_cm.__aenter__ = AsyncMock(return_value=None)
+    fresh_begin_cm.__aexit__ = AsyncMock(return_value=False)
+    fresh_session.begin = MagicMock(return_value=fresh_begin_cm)
+    fresh_session.in_transaction = MagicMock(return_value=True)
+    fresh_session.add = MagicMock()
+
+    @asynccontextmanager
+    async def _fresh_factory() -> AsyncGenerator[AsyncMock, None]:
+        yield fresh_session
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    app.dependency_overrides[get_db_session] = override_session
+    try:
+        with (
+            patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+            patch("modulo.api.trigger_busy.async_sessionmaker", return_value=_fresh_factory),
+            patch("modulo.api.trigger_busy.get_or_create_engine", return_value=MagicMock()),
+            patch("modulo.api.trigger_busy.get_settings", return_value=_make_settings()),
+            patch("modulo.api.trigger_busy.set_rls_org", new_callable=AsyncMock),
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+        ):
+            m.side_effect = PipelineRateLimitError(uuid.uuid4(), "k", 3, 60)
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+                json={"event": "test"},
+                headers={"X-Modulo-Timestamp": "1700000000"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+
+    # The 429 contract is preserved exactly — detail, and NO Retry-After (the
+    # receive rate-limit arm has never carried one).
+    assert resp.status_code == 429, resp.text
+    assert "rate limit exceeded" in resp.json()["detail"]
+    assert "Retry-After" not in resp.headers
+
+    # The main route transaction UNWOUND with the rate-limit refusal — the
+    # engine's in-transaction ``rate_limited`` write never persisted there.
+    begin_kinds = [call.args[0] for call in begin_cm.__aexit__.await_args_list]
+    assert sum(1 for kind in begin_kinds if kind is PipelineRateLimitError) == 1
+    assert begin_kinds[-1] is PipelineRateLimitError
+
+    # ...but the refusal SURVIVED in the fresh transaction opened after the
+    # unwind: exactly one rate_limited TriggerEvent, scoped to trigger + org,
+    # carrying a hash that matches the stored raw payload row.
+    added = [call.args[0] for call in fresh_session.add.call_args_list]
+    events = [obj for obj in added if isinstance(obj, TriggerEvent)]
+    assert len(events) == 1
+    recorded_event = events[0]
+    assert recorded_event.validation_result == "rate_limited"
+    assert recorded_event.trigger_id == _TRIGGER_ID
+    assert recorded_event.organisation_id == _ORG_ID
+    payloads = [obj for obj in added if isinstance(obj, WebhookPayload)]
+    assert len(payloads) == 1
+    assert payloads[0].raw_body.startswith(b'{"event"')
+    assert recorded_event.raw_payload_hash == hashlib.sha256(payloads[0].raw_body).hexdigest()
+    # The fresh transaction COMMITTED — begin() exited cleanly (no rollback).
+    fresh_aexit = fresh_begin_cm.__aexit__
+    assert fresh_aexit.await_count == 1
+    assert fresh_aexit.await_args.args == (None, None, None)
+
+
+async def test_record_rejected_delivery_busy_forwards_source_event_id() -> None:
+    """FAR-1904 follow-up: the ``busy`` branch must forward ``source_event_id``.
+
+    The payload-source XOR guard admits the replay shape (no raw body, only
+    ``source_event_id``) for EVERY kind, and ``record_busy_delivery`` documents
+    and supports it — but the busy branch used to drop it, so a busy call with
+    only ``source_event_id`` wrote a TriggerEvent with an empty
+    ``raw_payload_hash`` and no payload row (the silent-empty-record class the
+    guard exists to prevent). This runs the REAL recorder and asserts the busy
+    event inherits the source event's payload hash, with no empty-hash row and
+    no duplicate payload."""
+    from modulo.api.routes.webhooks import _record_rejected_delivery
+
+    source_event_id = uuid.uuid4()
+    original_hash = "f" * 64
+
+    fresh_session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    fresh_session.begin = MagicMock(return_value=begin_cm)
+    fresh_session.in_transaction = MagicMock(return_value=True)
+    fresh_session.add = MagicMock()
+    hash_result = MagicMock()
+    hash_result.scalar_one_or_none.return_value = original_hash
+    fresh_session.execute = AsyncMock(return_value=hash_result)
+
+    @asynccontextmanager
+    async def _fresh_factory() -> AsyncGenerator[AsyncMock, None]:
+        yield fresh_session
+
+    with (
+        patch("modulo.api.trigger_busy.async_sessionmaker", return_value=_fresh_factory),
+        patch("modulo.api.trigger_busy.get_or_create_engine", return_value=MagicMock()),
+        patch("modulo.api.trigger_busy.get_settings", return_value=_make_settings()),
+        patch("modulo.api.trigger_busy.set_rls_org", new_callable=AsyncMock),
+    ):
+        result = await _record_rejected_delivery(
+            kind="busy",
+            trigger_id=_TRIGGER_ID,
+            org_id=_ORG_ID,
+            source_event_id=source_event_id,
+        )
+
+    from modulo.db.models.webhook import WebhookPayload
+
+    assert result is True
+    added = [call.args[0] for call in fresh_session.add.call_args_list]
+    events = [obj for obj in added if isinstance(obj, TriggerEvent)]
+    assert len(events) == 1
+    busy_event = events[0]
+    assert busy_event.validation_result == "concurrency_limit_reached"
+    assert busy_event.trigger_id == _TRIGGER_ID
+    # The source event's payload hash is inherited — never the empty string the
+    # dropped-source_event_id shape used to persist.
+    assert busy_event.raw_payload_hash == original_hash
+    # No duplicate payload row: the original event's payload is the artefact.
+    assert not any(isinstance(obj, WebhookPayload) for obj in added)
+
+
 def test_receive_webhook_archived_pipeline_returns_409(client: TestClient) -> None:
     """FAR-1528: an archived/soft-deleted pipeline refuses the delivery with
     409 at the create_run choke point - never a generic 500, never a fake

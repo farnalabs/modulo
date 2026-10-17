@@ -1,23 +1,18 @@
 <template>
   <div class="relative mx-auto flex min-h-screen max-w-md items-center justify-center overflow-x-hidden p-6">
     <div
+      aria-hidden="true"
       class="pointer-events-none fixed inset-0 -z-10"
       style="background-image: radial-gradient(circle at 1px 1px, var(--dot-color) 1px, transparent 0); background-size: 32px 32px;"
     />
 
-    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] rounded-full bg-primary/3 blur-3xl pointer-events-none" />
+    <div aria-hidden="true" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] rounded-full bg-primary/3 blur-3xl pointer-events-none" />
 
     <div class="relative w-full space-y-6">
       <div class="text-center">
         <div class="mb-4 flex justify-center">
           <div class="flex h-14 w-14 items-center justify-center rounded-xl bg-primary/10 border border-primary/20">
-            <svg width="32" height="32" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" :aria-label="$t('components.LogoMark.modulo_logo')">
-              <g stroke="#00FFD1" stroke-width="7" fill="none" stroke-linejoin="round" stroke-linecap="round">
-                <line x1="30" y1="84.64" x2="70" y2="15.36" />
-                <polygon points="36,28 31,36.66 21,36.66 16,28 21,19.34 31,19.34" />
-                <polygon points="84,72 79,80.66 69,80.66 64,72 69,63.34 79,63.34" />
-              </g>
-            </svg>
+            <LogoMark :size="32" transparent />
           </div>
         </div>
         <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.LoginView.modulo') }}</h1>
@@ -142,7 +137,7 @@
               data-testid="login-sso-saml"
               @click="rememberSsoMethod('saml')"
             >
-              SAML
+              {{ $t('views.LoginView.saml') }}
               <span
                 v-if="lastUsedMethod === 'saml'"
                 class="inline-flex shrink-0 items-center rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-muted-foreground"
@@ -167,6 +162,7 @@ import { setAccessToken } from '../lib/api/client'
 import { setMustChangePassword } from '../lib/mustChangePassword'
 import type { components } from '../lib/api/schema'
 import SsoBrandMark from '../components/SsoBrandMark.vue'
+import LogoMark from '../components/LogoMark.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { normaliseSsoErrorCode, ssoErrorI18nKey } from '../lib/ssoError'
 

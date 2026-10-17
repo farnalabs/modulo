@@ -557,6 +557,35 @@ def _ctx_is_system_admin_val() -> bool:
     return bool(_ctx_is_system_admin.get(False))
 
 
+def _system_admin_denied(tool_name: str) -> dict[str, Any]:
+    """Log and build the refusal for a system-admin-gated MCP tool (FAR-1879).
+
+    Both MCP housekeeping tools mirror REST routes whose real gate is
+    ``require_system_permission`` — an admin org-role floor (pinned in the MCP
+    scope map) AND a strict ``is_system_admin`` claim. The shared scope
+    resolver (``resolve_tool_access``) has no system-admin concept, so each
+    such tool re-checks the claim in its own body; ``list_feature_flags``
+    carries the same inline shape. That per-tool duplication is ticketed for
+    centralisation, deliberately NOT done here because the shared resolver is
+    used by every MCP tool.
+
+    The refusal is logged because ``mcp_audited`` records only a coarse
+    ``outcome="error"`` with no call-site line: without this, a stream of
+    refusals is invisible in logs and indistinguishable from operational
+    errors. The reason code is log-only — the caller-facing envelope is
+    unchanged, so a caller cannot tell an absent auth context from a
+    non-system-admin denial (which leaks nothing about the deployment).
+    """
+    # ``_ctx_role`` has no default, so an unset role means the request never
+    # populated the auth context at all (stdio / an unsupported transport).
+    reason = "no_auth_context" if _ctx_role.get(None) is None else "system_admin_required"
+    _log.warning("MCP tool '%s' refused: %s", tool_name, reason)
+    return {
+        "error": "insufficient_scope",
+        "detail": f"{tool_name} requires system admin role",
+    }
+
+
 def _check_agent_tool_scope(tool_name: str, action: str | None = None) -> None:
     """Reuse the ``check_tool_scope`` chokepoint with node-level allowed_tools (FAR-436).
 
@@ -11785,7 +11814,11 @@ async def validate_payload(
 @mcp.tool(
     description="List housekeeping cleanup candidates for the organisation. "
     "Returns categories of potential cleanup items such as orphan secrets, "
-    "unbound connectors, stale pipelines, and other candidates.",
+    "unbound connectors, stale pipelines, and other candidates. "
+    "(mirrors GET /api/v1/admin/housekeeping — requires an ADMIN org role AND "
+    "a system-admin claim; a system admin whose org role is below admin is "
+    "also refused. API-key and OAuth callers always fail this check, so only "
+    "a JWT-authenticated session can invoke it.)",
 )
 @_RETRY_DB
 async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
@@ -11793,6 +11826,14 @@ async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("list_housekeeping")
+        # FAR-1879: same posture as ``perform_housekeeping`` below. The REST
+        # list route is gated by ``require_permission`` (admin org-role floor,
+        # pinned in the scope map) AND ``require_system_permission`` (a strict
+        # is_system_admin gate with no org-role fall-through). This check is
+        # that load-bearing gate: the scan surfaces org-wide secret NAMES and
+        # other entities, so a runner/operator credential must not reach it.
+        if not _ctx_is_system_admin_val():
+            return _system_admin_denied("list_housekeeping")
         from modulo.core.housekeeping import scan_all as hk_scan_all
 
         org_id = _ctx_org_id_val()
@@ -11835,21 +11876,6 @@ def _group_housekeeping_items(items: list[dict[str, str]], errors: list[dict[str
     return grouped
 
 
-async def _delete_housekeeping_entity(s: AsyncSession, model_cls: Any, eid: str, org_id: uuid.UUID) -> bool:
-    """Delete a single entity by id under a savepoint. Returns True if deleted."""
-    from sqlalchemy import select as _sa_select
-
-    stmt = _sa_select(model_cls).where(
-        model_cls.id == eid,
-        model_cls.organisation_id == org_id,
-    )
-    obj = (await s.execute(stmt)).scalar_one_or_none()
-    if obj is not None:
-        await s.delete(obj)
-        return True
-    return False
-
-
 async def _delete_housekeeping_group(
     s: AsyncSession,
     entity_type: str,
@@ -11859,12 +11885,18 @@ async def _delete_housekeeping_group(
     errors: list[dict[str, str]],
 ) -> int:
     """Delete each id in *ids* under a savepoint. Returns the number deleted."""
+    from modulo.core.housekeeping import delete_one_in_savepoint
+
     deleted_count = 0
     for eid in ids:
         try:
-            async with s.begin_nested():
-                if await _delete_housekeeping_entity(s, model_cls, eid, org_id):
-                    deleted_count += 1
+            # FAR-1857: count only AFTER the savepoint released.
+            # ``delete_one_in_savepoint`` returns True only once the DELETE
+            # (flushed on savepoint exit) has committed, so an FK RESTRICT
+            # refusal cannot be counted as a deletion. Shared with the REST
+            # route so the two cannot drift.
+            if await delete_one_in_savepoint(s, model_cls, eid, org_id):
+                deleted_count += 1
         except IntegrityError as exc:
             _log.warning("IntegrityError cleaning up %s %s", entity_type, eid)
             from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
@@ -11915,7 +11947,11 @@ async def _delete_housekeeping_groups(
     "Valid entity types: secret, connector, model_backend, pipeline, "
     "pipeline_snapshot, trigger, webhook_dedup, environment_profile, "
     "org_api_key, sso_provider, team, parameter_schema, schema, lifecycle_map. "
-    "Deletions are grouped by entity type with per-group savepoints.",
+    "Deletions are grouped by entity type with per-group savepoints. "
+    "(mirrors POST /api/v1/admin/housekeeping/cleanup — requires an ADMIN org "
+    "role AND a system-admin claim; a system admin whose org role is below "
+    "admin is also refused. API-key and OAuth callers always fail this check, "
+    "so only a JWT-authenticated session can invoke it.)",
 )
 @mcp_audited("housekeeping_performed", "housekeeping", fail_closed=True)
 async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
@@ -11923,6 +11959,16 @@ async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("perform_housekeeping")
+        # FAR-1879: the REST cleanup route is ``require_permission`` (admin
+        # org-role floor, pinned in the scope map) AND ``require_system_permission``
+        # — a STRICT is_system_admin gate with no org-role fall-through. This
+        # check is that load-bearing gate (API keys and OAuth tokens always
+        # fail it), so the destructive MCP path matches REST. The gate is
+        # duplicated per tool because the shared scope resolver has no
+        # system-admin concept; centralising it there is ticketed, not done in
+        # this security-tightening change.
+        if not _ctx_is_system_admin_val():
+            return _system_admin_denied("perform_housekeeping")
         from modulo.core.housekeeping import ENTITY_MODEL_MAP as HK_ENTITY_MAP
 
         org_id = _ctx_org_id_val()

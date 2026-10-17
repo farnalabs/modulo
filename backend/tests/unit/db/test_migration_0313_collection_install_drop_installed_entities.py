@@ -35,7 +35,7 @@ from modulo.db.models.collection_install import CollectionInstall, CollectionIns
 
 _MIGRATION_REVISION = "0313_collection_install_drop_installed_entities"
 _MIGRATION_DOWN_REVISION = "0312_memberships_active_lookups"
-_HEAD_MIGRATION = "0317_drop_retired_pipeline_diff_rollback_flag"
+_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
 
 _DROPPED_COLUMN = "installed_entities"
 _INSTALL_TABLE = "collection_install"

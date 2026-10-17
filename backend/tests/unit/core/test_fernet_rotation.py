@@ -451,7 +451,15 @@ class TestRotateTriggers:
 
 class TestRotateOtelConfig:
     @pytest.mark.asyncio
-    async def test_re_encrypts_langsmith_key(self) -> None:
+    async def test_re_encrypts_langsmith_key_via_narrow_jsonb_set(self) -> None:
+        """FAR-1832 QA F5: the rotation writes ONLY the rotated key through
+        ``jsonb_set`` — never the whole ``otel_config_json`` document (the
+        whole-column write dropped a concurrent operator save's other keys).
+
+        Fails against the pre-fix shape: there the UPDATE bound the whole
+        config blob as ``params['config']`` and there is no ``jsonb_set`` in
+        the statement.
+        """
         new_fernet = Fernet(_new_key())
         old_fernet = Fernet(_new_key())
         old_ct = old_fernet.encrypt(b"langsmith-key").decode()
@@ -466,10 +474,13 @@ class TestRotateOtelConfig:
         assert "langsmith_api_key_ciphertext" in select_sql
         update_sql, params = session.calls[1]
         assert "UPDATE organisations" in update_sql
+        assert "jsonb_set" in update_sql
+        assert "langsmith_api_key_ciphertext" in update_sql
+        # Narrow write: the only bound value is the new ciphertext (plus the
+        # row id) — no whole-document ``config`` blob.
+        assert set(params) == {"ct", "id"}
         assert params["id"] == "o-1"
-        updated = json.loads(params["config"])
-        assert updated["other"] == "kept"
-        assert new_fernet.decrypt(updated["langsmith_api_key_ciphertext"].encode()) == b"langsmith-key"
+        assert new_fernet.decrypt(params["ct"].encode()) == b"langsmith-key"
 
     @pytest.mark.asyncio
     async def test_skips_row_with_empty_stored_value(self) -> None:

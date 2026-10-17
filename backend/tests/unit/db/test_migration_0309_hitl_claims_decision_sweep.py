@@ -47,7 +47,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0309_hitl_claims_decision_sweep"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0308_runs_dispatch_phase_history"
-_HEAD_MIGRATION = "0317_drop_retired_pipeline_diff_rollback_flag"
+_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
 
 _TABLE = "hitl_claims"
 _INDEX_NAME = "ix_hitl_claims_sweep_actor_window"

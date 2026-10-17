@@ -40,7 +40,7 @@ from modulo.db.models.library_primitive import LibraryPrimitive
 
 _MIGRATION_REVISION = "0310_library_cluster_db_hardening"
 _MIGRATION_DOWN_REVISION = "0309_hitl_claims_decision_sweep"
-_HEAD_MIGRATION = "0317_drop_retired_pipeline_diff_rollback_flag"
+_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
 
 _INSTALL_UNIQUE_INDEX = "uq_collection_install_org_collection"
 _COMPOSITE_UNIQUE_INDEX = "uq_composite_templates_org_name"

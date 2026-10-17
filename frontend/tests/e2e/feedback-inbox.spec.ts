@@ -55,7 +55,10 @@ test.describe('Feedback Inbox', { tag: "@regression" }, () => {
     await mockFeedbackInboxApi(page, 200)
     await page.goto('/feedback/inbox')
 
-    await expect(page.getByTestId('feedback-inbox-pipeline-select')).toHaveAttribute('aria-label', 'Pipeline')
+    // PrimeVue's Select forwards `aria-label` to its inner focusable element,
+    // which is the element assistive tech actually announces — the root that
+    // carries the testid never receives the attribute.
+    await expect(page.getByTestId('feedback-inbox-pipeline-select').getByRole('combobox')).toHaveAttribute('aria-label', 'Pipeline')
     await expect(page.getByTestId('feedback-inbox-date-from')).toHaveAttribute('aria-label', 'From')
     await expect(page.getByTestId('feedback-inbox-date-to')).toHaveAttribute('aria-label', 'To')
   })
@@ -102,7 +105,10 @@ test.describe('Feedback Inbox', { tag: "@regression" }, () => {
     await page.getByTestId('feedback-inbox-save-annotation').click()
 
     const status = page.getByText('Annotation saved.')
-    await expect(status).toHaveAttribute('role', 'status')
+    // The message renders as `<output aria-live="polite">` (FeedbackInboxView),
+    // which HAS no literal `role` attribute — its `status` role is implicit, so
+    // assert the EFFECTIVE role rather than the attribute's presence.
+    await expect(status).toHaveRole('status')
     await expect(status).toHaveAttribute('aria-live', 'polite')
   })
 })

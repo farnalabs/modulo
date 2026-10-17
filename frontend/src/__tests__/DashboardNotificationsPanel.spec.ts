@@ -1,13 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick, ref } from 'vue'
+import { createPinia, setActivePinia } from 'pinia'
 
-const { mockFetchNotifications, mockReviewLater, mockFetchUnreadCount, mockRegisterHandler, mockDismissNotification } = vi.hoisted(() => ({
+const { mockFetchNotifications, mockReviewLater, mockFetchUnreadCount, mockRegisterHandler, mockDismissNotification, mockMarkAllRead, mockFetchDashboardNotifications } = vi.hoisted(() => ({
   mockFetchNotifications: vi.fn(),
   mockReviewLater: vi.fn(),
   mockFetchUnreadCount: vi.fn(),
   mockRegisterHandler: vi.fn((_event: string, _cb: () => void) => vi.fn()),
   mockDismissNotification: vi.fn(),
+  mockMarkAllRead: vi.fn(),
+  mockFetchDashboardNotifications: vi.fn(),
 }))
 
 type DNPVm = {
@@ -30,15 +33,27 @@ vi.mock('../lib/api/notifications', () => ({
   reviewLater: mockReviewLater,
   fetchUnreadCount: mockFetchUnreadCount,
   dismissNotification: mockDismissNotification,
+  // The shared notifications store (FAR-1926 dismissAll) also imports these
+  // two — the panel now routes its "Dismiss all" through that store action.
+  markAllNotificationsRead: mockMarkAllRead,
+  fetchDashboardNotifications: mockFetchDashboardNotifications,
 }))
 
 vi.mock('../stores/syncRegistry', () => ({
   registerHandler: mockRegisterHandler,
 }))
 
-vi.mock('../lib/api/formatError', () => ({
-  formatApiError: (e: unknown) => (e instanceof Error ? e.message : 'Unknown error'),
-}))
+vi.mock('../lib/api/formatError', async (importOriginal) => {
+  // Re-export the real module (it has no imports of its own) so any component
+  // mounted here — e.g. the notifications page imported for the cross-surface
+  // assertion below — can resolve names like isProblemDetail, and override
+  // only the formatter under test.
+  const actual = await importOriginal<typeof import('../lib/api/formatError')>()
+  return {
+    ...actual,
+    formatApiError: (e: unknown) => (e instanceof Error ? e.message : 'Unknown error'),
+  }
+})
 
 vi.mock('@vueuse/core', () => ({
   useStorage: (_key: string, defaultValue: boolean) => {
@@ -47,6 +62,10 @@ vi.mock('@vueuse/core', () => ({
 }))
 
 import DashboardNotificationsPanel from '../components/DashboardNotificationsPanel.vue'
+// QA FAR-1926 — cross-surface assertion: a failure raised on the panel must
+// not render on a DIFFERENT mounted surface (the notifications page).
+import NotificationsPage from '../views/NotificationsPage.vue'
+import { useNotificationsStore } from '../stores/notifications'
 
 function makeNotifications(count: number) {
   return Array.from({ length: count }, (_, i) => ({
@@ -91,7 +110,13 @@ async function mountAndExpand(notifications: unknown[] = [], total = 0, unreadCo
 describe('DashboardNotificationsPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    setActivePinia(createPinia())
     mockFetchUnreadCount.mockResolvedValue(0)
+    // The panel now uses the shared notifications store (FAR-1926); give the
+    // store's own two API legs sensible defaults so unrelated tests never hit
+    // an unconfigured mock.
+    mockMarkAllRead.mockResolvedValue({ status: 'marked_read', marked: 0 })
+    mockFetchDashboardNotifications.mockResolvedValue({ notifications: [], total_unread: 0 })
   })
 
   it('always renders the "View all notifications" link when expanded', async () => {
@@ -332,5 +357,132 @@ describe('DashboardNotificationsPanel', () => {
     await nextTick()
     expect(vm.page).toBe(1)
     expect(mockFetchNotifications).toHaveBeenLastCalledWith({ page: 1, page_size: 10, status: 'active' })
+  })
+
+  // FAR-1926 — Dismiss all in the expanded-content header.
+  it('renders Dismiss all in the expanded content, disabled when there is nothing to dismiss', async () => {
+    const wrapper = await mountAndExpand([], 0)
+
+    const button = wrapper.find('[data-testid="panel-dismiss-all"]')
+    expect(button.exists()).toBe(true)
+    expect(button.text()).toBe('Dismiss all')
+    expect((button.element as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('Dismiss all posts the shared per-user bulk action, then reloads list and badge from the server post-state', async () => {
+    const wrapper = await mountAndExpand(makeNotifications(3), 3, 3)
+    const button = wrapper.find('[data-testid="panel-dismiss-all"]')
+    expect((button.element as HTMLButtonElement).disabled).toBe(false)
+
+    // The server post-state after the write: nothing active, badge 0.
+    mockMarkAllRead.mockResolvedValue({ status: 'marked_read', marked: 3 })
+    mockFetchNotifications.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 10 })
+    mockFetchUnreadCount.mockResolvedValue(0)
+
+    await button.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    // The ONE shared action path — the store's dismissAll — hit the endpoint.
+    expect(mockMarkAllRead).toHaveBeenCalledTimes(1)
+    // The panel re-reads its OWN list + badge from the server (not a local clear).
+    expect(mockFetchNotifications).toHaveBeenLastCalledWith({ page: 1, page_size: 10, status: 'active' })
+    expect(mockFetchUnreadCount).toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="panel-dismiss-all-success"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="panel-dismiss-all-error"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('No notifications')
+
+    const vm = wrapper.vm as unknown as DNPVm
+    expect(vm.unreadCount).toBe(0)
+  })
+
+  it('Dismiss all failure surfaces a role=alert and never shows a falsely cleared list', async () => {
+    const wrapper = await mountAndExpand(makeNotifications(2), 2, 2)
+    mockMarkAllRead.mockRejectedValue(new Error('boom'))
+    mockFetchNotifications.mockClear()
+
+    await wrapper.find('[data-testid="panel-dismiss-all"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const alert = wrapper.find('[data-testid="panel-dismiss-all-error"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.attributes('role')).toBe('alert')
+    // The store throws an Error carrying the FORMATTED API message, and the
+    // panel renders its own local ref (never a shared store error).
+    expect(alert.text()).toBe('boom')
+    expect(wrapper.find('[data-testid="panel-dismiss-all-success"]').exists()).toBe(false)
+    // The list is untouched — no clear, no post-failure reload.
+    expect(wrapper.findAll('.notification-card')).toHaveLength(2)
+    expect(mockFetchNotifications).not.toHaveBeenCalled()
+  })
+
+  // QA FAR-1926 — truthful copy: the SERVER's marked count picks the outcome.
+  it('shows "Nothing to dismiss" instead of a success claim when the server marks zero rows', async () => {
+    const wrapper = await mountAndExpand(makeNotifications(2), 2, 2)
+    mockMarkAllRead.mockResolvedValue({ status: 'marked_read', marked: 0 })
+
+    await wrapper.find('[data-testid="panel-dismiss-all"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(mockMarkAllRead).toHaveBeenCalledTimes(1)
+    const nothing = wrapper.find('[data-testid="panel-dismiss-all-nothing"]')
+    expect(nothing.exists()).toBe(true)
+    expect(nothing.text()).toBe('Nothing to dismiss')
+    expect(nothing.attributes('aria-live')).toBe('polite')
+    expect(wrapper.find('[data-testid="panel-dismiss-all-success"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="panel-dismiss-all-error"]').exists()).toBe(false)
+  })
+
+  // QA FAR-1926 — the dismiss-all error is LOCAL to the surface that raised
+  // it (the store holds no error state any more) and retires on that
+  // surface's own next successful attempt.
+  it('scopes a dismiss-all failure to this surface: another mounted surface never renders it, and it clears on the next success', async () => {
+    const wrapper = await mountAndExpand(makeNotifications(2), 2, 2)
+    mockMarkAllRead.mockRejectedValue(new Error('boom'))
+
+    await wrapper.find('[data-testid="panel-dismiss-all"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="panel-dismiss-all-error"]').exists()).toBe(true)
+
+    // A DIFFERENT surface mounting on the SAME store must not render the
+    // stale error (pre-fix the shared store ref made the page show it).
+    mockFetchNotifications.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 })
+    const page = mount(NotificationsPage)
+    await flushPromises()
+    await nextTick()
+    expect(page.find('[data-testid="notifications-dismiss-all-error"]').exists()).toBe(false)
+    page.unmount()
+
+    // The local error retires on this surface's own next successful attempt.
+    mockMarkAllRead.mockResolvedValue({ status: 'marked_read', marked: 2 })
+    mockFetchNotifications.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 10 })
+    mockFetchUnreadCount.mockResolvedValue(0)
+    await wrapper.find('[data-testid="panel-dismiss-all"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="panel-dismiss-all-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="panel-dismiss-all-success"]').exists()).toBe(true)
+  })
+
+  it('renders a non-Error rejection through String() when dismiss-all fails unexpectedly', async () => {
+    // Defensive arm of `e instanceof Error ? e.message : String(e)`: the shared
+    // store action normally throws an Error, but a non-Error throw (e.g. a
+    // rejected string) must still surface a readable message.
+    const wrapper = await mountAndExpand(makeNotifications(2), 2, 2)
+    const store = useNotificationsStore()
+    vi.spyOn(store, 'dismissAll').mockRejectedValue('string failure')
+
+    await wrapper.find('[data-testid="panel-dismiss-all"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const alert = wrapper.find('[data-testid="panel-dismiss-all-error"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toBe('string failure')
+    expect(wrapper.find('[data-testid="panel-dismiss-all-success"]').exists()).toBe(false)
   })
 })

@@ -593,6 +593,7 @@ export default {
       "enter_your_password": "Enter your password",
       "modulo": "Modulo",
       "or_continue_with": "or continue with",
+      "saml": "SAML",
       "sign_in_to_org": "Sign in to {orgName}",
       "sign_in_with": "Sign in with {provider}",
       "used_last_time": "Used last time"
@@ -627,7 +628,12 @@ export default {
       "apply_filters": "Apply Filters",
       "failed_to_dismiss_notification": "Failed to dismiss notification",
       "loading_notifications": "Loading notifications",
-      "request_timed_out": "Notifications request timed out after 30s"
+      "request_timed_out": "Notifications request timed out after 30s",
+      "dismiss_all": "Dismiss all",
+      "dismissing_all": "Dismissing…",
+      "dismissed_all_status": "All notifications dismissed for you",
+      "failed_to_dismiss_all": "Failed to dismiss all notifications",
+      "nothing_to_dismiss": "Nothing to dismiss"
     },
     "EnvironmentProfileForm": {
       "back_to_profiles": "Back to environment profiles",
@@ -4100,7 +4106,7 @@ export default {
       "open_navigation": "Open navigation",
       "collapse_sidebar": "Collapse sidebar",
       "expand_sidebar": "Expand sidebar",
-      "user_profile": "User profile",
+      "user_profile_link": "User profile {label}",
       "main_navigation": "Main navigation",
       "loading_navigation": "Loading navigation"
     },
@@ -4430,10 +4436,11 @@ export default {
     },
     "NotificationDropdown": {
       "title": "Notifications",
-      "mark_all_read": "Mark all as read",
-      "marking_all_read": "Marking…",
-      "marked_all_read_status": "All notifications marked as read",
-      "failed_to_mark_all_read": "Failed to mark all as read",
+      "dismiss_all": "Dismiss all",
+      "dismissing_all": "Dismissing…",
+      "dismissed_all_status": "All notifications dismissed for you",
+      "failed_to_dismiss_all": "Failed to dismiss all notifications",
+      "nothing_to_dismiss": "Nothing to dismiss",
       "failed_to_load": "Couldn't load notifications",
       "retry": "Retry",
       "no_notifications": "No notifications",
@@ -4458,7 +4465,12 @@ export default {
       "no_notifications": "No notifications",
       "page_x_of_y": "Page {current} of {total}",
       "previous_page": "Previous page",
-      "next_page": "Next page"
+      "next_page": "Next page",
+      "dismiss_all": "Dismiss all",
+      "dismissing_all": "Dismissing…",
+      "dismissed_all_status": "All notifications dismissed for you",
+      "failed_to_dismiss_all": "Failed to dismiss all notifications",
+      "nothing_to_dismiss": "Nothing to dismiss"
     },
     "PipelineSnapshotTimeline": {
       "version_timeline": "Version timeline",

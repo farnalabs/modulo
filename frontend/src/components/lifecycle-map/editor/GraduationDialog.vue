@@ -86,6 +86,11 @@ import Select from '../../shared/AppSelect.vue'
 import ErrorAlert from '../../shared/ErrorAlert.vue'
 import type { PipelineSummary } from '../../../types/lifecycleMap'
 
+// FAR-1908: a dialog's content box scrolls (`overflow-y: auto`), which clips an
+// in-place AppSelect overlay and hides its lower options behind the footer.
+// AppSelect detects that container from the rendered DOM and portals its
+// overlays to <body> automatically, so no host declaration is needed here.
+
 const props = defineProps<{
   open: boolean
   stageName: string

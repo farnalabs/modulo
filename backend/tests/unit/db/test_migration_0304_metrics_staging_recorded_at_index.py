@@ -41,7 +41,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0304_metrics_staging_recorded_at_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0303_feedback_records_lookup_indexes"
-_CHAIN_HEAD_MIGRATION = "0317_drop_retired_pipeline_diff_rollback_flag"
+_CHAIN_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
 _INDEX_NAME = "ix_metrics_staging_recorded_at"
 
 

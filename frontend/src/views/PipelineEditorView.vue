@@ -1615,7 +1615,6 @@
   :aria-label="$t('views.PipelineEditorView.agent_select_label')"
   :title="$t('views.PipelineEditorView.agent_select_hint')"
   v-model="pickerAgentId"
-  append-to="self"
   @update:model-value="onAgentChange"
   :placeholder="$t('views.PipelineEditorView.select_agent_placeholder')"
   data-testid="pipeline-editor-agent-select"
@@ -1634,7 +1633,6 @@
             <Select
   :aria-label="$t('views.PipelineEditorView.connector')"
   v-model="pickerConnectorId"
-  append-to="self"
   :placeholder="$t('views.PipelineEditorView.select_connector_placeholder')"
   data-testid="pipeline-editor-connector-select"
   class="w-full"
@@ -1682,7 +1680,6 @@
           <Select
   :aria-label="$t('views.PipelineEditorView.snapshot_label')"
   v-model="revertSnapshotId"
-  append-to="self"
   :placeholder="$t('views.PipelineEditorView.select_snapshot_placeholder')"
   data-testid="pipeline-editor-snapshot-select"
   class="w-full"

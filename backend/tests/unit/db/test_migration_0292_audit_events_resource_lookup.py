@@ -42,7 +42,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0292_audit_events_resource_lookup"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0291_invitations_lookup_constraints"
-_HEAD_MIGRATION = "0317_drop_retired_pipeline_diff_rollback_flag"
+_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
 
 _INDEX = "ix_audit_events_org_resource"
 _TABLE = "audit_events"
