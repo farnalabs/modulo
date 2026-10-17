@@ -17,12 +17,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // are the behaviour under test. The real-router path (hook wiring + lazy route
 // chunks) is covered by app-bootstrap.spec.ts, which runs after this one.
 
-const { loadBackendsMock, isReadyMock, initLocaleMock, captureErrorMock } = vi.hoisted(() => ({
-  loadBackendsMock: vi.fn(),
-  isReadyMock: vi.fn(),
-  initLocaleMock: vi.fn(),
-  captureErrorMock: vi.fn(),
-}))
+const { loadBackendsMock, isReadyMock, initLocaleMock, captureErrorMock, i18nTMock } = vi.hoisted(
+  () => ({
+    loadBackendsMock: vi.fn(),
+    isReadyMock: vi.fn(),
+    initLocaleMock: vi.fn(),
+    captureErrorMock: vi.fn(),
+    i18nTMock: vi.fn(),
+  }),
+)
 
 const APP_MARKER = '[data-testid="app-mounted"]'
 
@@ -39,6 +42,14 @@ describe('main bootstrap', () => {
     isReadyMock.mockResolvedValue(undefined)
     initLocaleMock.mockReset()
     captureErrorMock.mockReset()
+    // `t` behaviour is driven by ONE hoisted spy, never by re-registering the
+    // '../i18n' mock inside a test. Re-doing `vi.doMock` for the same path
+    // raced the module registry under concurrent worker load (the second
+    // factory was intermittently ignored, so the default `t:${key}` won the
+    // assertion). A single registration + per-test spy behaviour is
+    // deterministic.
+    i18nTMock.mockReset()
+    i18nTMock.mockImplementation((key: string) => `t:${key}`)
 
     // The router resolves the initial navigation in every test except the one
     // that pins a rejected navigation.
@@ -69,7 +80,7 @@ describe('main bootstrap', () => {
     vi.doMock('../i18n', () => ({
       default: {
         install: vi.fn(),
-        global: { t: (key: string) => `t:${key}` },
+        global: { t: i18nTMock },
       },
     }))
 
@@ -260,9 +271,9 @@ describe('main bootstrap', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     // An i18n plugin with no usable composer: resolving either message throws.
-    vi.doMock('../i18n', () => ({
-      default: { install: vi.fn() },
-    }))
+    i18nTMock.mockImplementation(() => {
+      throw new Error('i18n unavailable')
+    })
     initLocaleMock.mockImplementation(() => {
       throw new Error('locale store exploded')
     })
@@ -289,9 +300,7 @@ describe('main bootstrap', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     // A key can resolve to an empty string (missing/blank catalogue entry);
     // an empty message would render an invisible surface, so the literal wins.
-    vi.doMock('../i18n', () => ({
-      default: { install: vi.fn(), global: { t: () => '' } },
-    }))
+    i18nTMock.mockReturnValue('')
     initLocaleMock.mockImplementation(() => {
       throw new Error('locale store exploded')
     })
