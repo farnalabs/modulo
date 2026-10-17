@@ -15,6 +15,17 @@ would report a clean scan as incomplete. The final test asserts the old bare
 substring *would* have mislabelled that text — so this suite fails if the
 detector is reverted to it (prove-the-fix).
 
+The suite also pins the WINDOWS-path contract at the `_run_windows` level, so
+the two conditions can never be swapped silently:
+
+- a REPORTED per-rule timeout (JSON ``Timeout`` payload, and the anchored text
+  signature) — including through the real ``_run_windows`` code path — returns
+  non-zero;
+- a WALL-CLOCK KILL (``subprocess.TimeoutExpired``) returns **0** with a loud
+  warning: it is a machine-load / changed-file-count condition, not a detected
+  skip, and CI (Linux) is the authoritative full scan;
+- a genuine tool error (missing binary, spawn failure) returns 0 with a warning.
+
 The module is loaded from the repo-root ``scripts/`` directory (not a package)
 via ``SourceFileLoader``, matching the sibling ``tests/unit/scripts/`` suite
 (e.g. ``test_run_validate_semgrep_rules.py``).
@@ -23,9 +34,13 @@ via ``SourceFileLoader``, matching the sibling ``tests/unit/scripts/`` suite
 from __future__ import annotations
 
 import json
+import subprocess
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
+from unittest import mock
+
+import pytest
 
 for parent in Path(__file__).resolve().parents:
     script_path = parent / "scripts" / "run_semgrep.py"
@@ -162,3 +177,97 @@ def test_anchoring_prevents_the_legacy_mislabel() -> None:
     detector is reverted to the legacy form, the second assertion fails."""
     assert _legacy_skipped_files(_FINDING_QUOTING_PHRASE)
     assert not mod._semgrep_skipped_files(_FINDING_QUOTING_PHRASE)
+
+
+# ---------------------------------------------------------------------------
+# Windows path — the wall-clock kill fails OPEN, a REPORTED skip fails CLOSED
+# ---------------------------------------------------------------------------
+#
+# ``_run_windows`` is platform-independent code (only ``main`` gates on
+# ``sys.platform``), so it is exercised directly here. Each case fakes the git
+# change-detection call and the semgrep ``subprocess.run`` so the branch under
+# test runs without invoking a real scan.
+
+_CHANGED = ["backend/src/modulo/api/mcp_server.py"]
+
+
+def _completed(returncode: int, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(args=["semgrep"], returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+def test_run_windows_wall_clock_kill_warns_and_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
+    """A process kill is environmental: exit 0, but LOUDLY not silently."""
+    with (
+        mock.patch.object(mod, "_get_changed_py_files", return_value=(_CHANGED, None)),
+        mock.patch.object(
+            mod.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired(cmd="semgrep", timeout=mod._SEMGREP_TIMEOUT),
+        ),
+    ):
+        rc = mod._run_windows()
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "did NOT complete on Windows" in captured.err
+    assert "No per-rule timeout was reported" in captured.err
+    assert "CI (Linux)" in captured.err
+    # It must be a warning, never reported as a hard FAILURE.
+    assert "reported as a FAILURE" not in captured.err
+
+
+def test_run_windows_reported_text_timeout_fails(capsys: pytest.CaptureFixture[str]) -> None:
+    """A REPORTED per-rule timeout still fails through the real Windows path."""
+    with (
+        mock.patch.object(mod, "_get_changed_py_files", return_value=(_CHANGED, None)),
+        mock.patch.object(mod.subprocess, "run", return_value=_completed(0, stdout=_TIMEOUT_WARNING)),
+    ):
+        rc = mod._run_windows()
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "reported as a FAILURE" in captured.err
+
+
+def test_run_windows_reported_json_timeout_fails(capsys: pytest.CaptureFixture[str]) -> None:
+    """The JSON primary detector also fails through the real Windows path."""
+    captured_json: list[str] = []
+
+    def _fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        json_arg = next(arg for arg in cmd if arg.startswith("--json-output="))
+        json_path = json_arg.split("=", 1)[1]
+        Path(json_path).write_text(json.dumps({"errors": [{"type": "Timeout"}], "results": []}), encoding="utf-8")
+        captured_json.append(json_path)
+        return _completed(0, stdout="Scan completed successfully.\n")
+
+    with (
+        mock.patch.object(mod, "_get_changed_py_files", return_value=(_CHANGED, None)),
+        mock.patch.object(mod.subprocess, "run", side_effect=_fake_run),
+    ):
+        rc = mod._run_windows()
+    exit_output = capsys.readouterr()
+    assert captured_json
+    assert rc == 1
+    assert "reported as a FAILURE" in exit_output.err
+
+
+def test_run_windows_spawn_failure_fails_open(capsys: pytest.CaptureFixture[str]) -> None:
+    with (
+        mock.patch.object(mod, "_get_changed_py_files", return_value=(_CHANGED, None)),
+        mock.patch.object(
+            mod.subprocess, "run", return_value=_completed(1, stderr="Failed to spawn: program not found")
+        ),
+    ):
+        rc = mod._run_windows()
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "WARNING" in captured.err
+
+
+def test_run_windows_missing_binary_fails_open(capsys: pytest.CaptureFixture[str]) -> None:
+    with (
+        mock.patch.object(mod, "_get_changed_py_files", return_value=(_CHANGED, None)),
+        mock.patch.object(mod.subprocess, "run", side_effect=FileNotFoundError("uv")),
+    ):
+        rc = mod._run_windows()
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "WARNING" in captured.err

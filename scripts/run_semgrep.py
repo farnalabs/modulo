@@ -19,21 +19,34 @@ loudly so the developer is not blocked by a broken tool.  We are NEVER
 fail-open on FINDINGS: if semgrep runs and finds violations, we exit
 non-zero.
 
-We are also NEVER fail-open on an INCOMPLETE scan. Two distinct shapes
-count as incomplete, and BOTH return non-zero:
+We are NEVER fail-open on a REPORTED incomplete scan — the silent-decay hole
+FAR-1859 exists to close:
 
 1. A per-rule timeout on a file: semgrep skips that file and still exits 0,
    printing only a ``Warning: ... timeout error(s) ...`` line. Detected from
    the structured ``--json-output`` ``errors`` stream (an entry of type
-   ``Timeout``) with an anchored text fallback.
-2. A wall-clock kill of the whole process (``subprocess.TimeoutExpired``):
-   the scan was cut off mid-way, so no result it produced can be trusted —
-   the exit-code path below is not even reached, and the branch fails closed.
+   ``Timeout``) with an anchored text fallback. A REPORTED skip returns
+   non-zero on EVERY path (the Windows convenience path and the Linux path).
 
-Genuine tool errors keep the fail-open behaviour above. ``PartialParsing``
-is deliberately NOT treated as incomplete — ``mcp_server.py`` reports it on
-every run because of a pre-existing PEP 695 parse skip (FAR-1933), so
-failing on it would make the gate permanently red for an unrelated reason.
+A wall-clock kill of the whole process (``subprocess.TimeoutExpired``) is a
+DIFFERENT shape, and the two paths treat it differently:
+
+2. On Windows the scan runs over every changed ``backend/src/**.py`` file in a
+   single invocation, so the outer ``subprocess.run`` timeout is a PROCESS-level
+   bound across all of them. It can fire from machine load or a large change
+   WITHOUT semgrep reporting any per-rule timeout. That is an environmental
+   condition — not a defect in the change and not a detected skip — so the
+   Windows path fails OPEN with a loud warning: the changed files were not fully
+   checked locally, and CI (Linux) remains the authoritative full scan. It never
+   reports a misleading "incomplete scan" FAILURE for a condition the developer
+   cannot fix (which would only push them toward ``--no-verify``).
+
+3. Genuine tool errors (missing binary, spawn failure, unexpected exception)
+   keep the fail-open-with-warning behaviour above.
+
+``PartialParsing`` is deliberately NOT treated as incomplete — ``mcp_server.py``
+reports it on every run because of a pre-existing PEP 695 parse skip (FAR-1933),
+so failing on it would make the gate permanently red for an unrelated reason.
 """
 
 from __future__ import annotations
@@ -85,13 +98,22 @@ _GIT_STATE_ENV = {
 
 #: Wall-clock kill bound for the whole subprocess (Windows path only). This is
 #: NOT semgrep's per-rule ``--timeout``: it is the outer ``subprocess.run``
-#: timeout. The semgrep invocations use ``--timeout 120 --timeout-threshold 1``,
-#: so a single per-rule timeout drops the file on its FIRST occurrence and the
-#: worst case is bounded at ``1 x 120s`` — comfortably under this 180s process
-#: kill. If either number moves, keep ``--timeout x threshold < _SEMGREP_TIMEOUT``
-#: or a slow file can be killed mid-scan (an incomplete scan) instead of being
-#: reported by semgrep's own timeout machinery.
-_SEMGREP_TIMEOUT = 180  # seconds — scoped scan on a handful of files
+#: timeout, and it bounds the ENTIRE scan.
+#:
+#: ``_run_windows`` passes every changed file to ONE invocation with
+#: ``--timeout 120 --timeout-threshold 1``. Semgrep documents BOTH flags as
+#: PER FILE ("Maximum time to spend running a rule on a single file" /
+#: "Maximum number of rules that can time out on a file before the file is
+#: skipped"), so the per-file budget is ``--timeout x --timeout-threshold`` =
+#: 1 x 120s — but the PROCESS-level worst case is ``len(changed) x 120s``,
+#: which can exceed this 180s kill on a large change or a loaded machine
+#: WITHOUT semgrep reporting any per-rule timeout at all.
+#:
+#: A kill in that case is an environmental condition, not a defect in the
+#: change and not a detected skip, so ``_run_windows`` fails OPEN with a loud
+#: warning and the authoritative scan is left to CI (Linux). A REPORTED
+#: per-rule timeout is a different, real failure and still returns non-zero.
+_SEMGREP_TIMEOUT = 180  # seconds — outer process bound for the scoped Windows scan
 
 #: The backend source tree semgrep scans (rule ``paths:`` filters target it).
 _BACKEND_SRC = "backend/src/"
@@ -116,6 +138,23 @@ run_semgrep.py: semgrep scan is INCOMPLETE — reported as a FAILURE.
 
   Reason: {reason}
 ========================================================================"""
+
+_SEMGREP_WALLCLOCK_WARN = """\
+=======================================================================
+run_semgrep.py WARNING: semgrep scan did NOT complete on Windows — the
+process wall-clock kill fired.
+
+  No per-rule timeout was reported by semgrep, so this is NOT a skipped
+  file and NOT a finding. The kill is a function of machine load and the
+  number of changed files, not of your change, so it is treated as an
+  environmental condition on this convenience path.
+
+  Your changed files were NOT fully checked locally. CI (Linux) runs the
+  authoritative full scan on push — do NOT claim lint-clean on the
+  strength of this run.
+
+  Detail: {detail}
+======================================================================="""
 
 
 def _semgrep_skipped_files(output: str) -> bool:
@@ -231,10 +270,12 @@ def _run_windows() -> int:
             # rather than blocking the developer.
             #
             # --timeout-threshold 1: drop a file on its FIRST per-rule timeout
-            #   instead of the default 3, so the worst case is 1 x 120s — under
-            #   the _SEMGREP_TIMEOUT wall-clock kill above. --timeout 120 is
-            #   measured (0/48 timeouts at 16-way contention vs 28/32 at the 5s
-            #   default); do not lower it without a fresh measurement.
+            #   instead of the default 3, so a slow file is reported promptly
+            #   rather than burning up to 3 x 120s per file. Both flags are
+            #   PER FILE; the process-level worst case across every changed file
+            #   is len(changed) x 120s (see _SEMGREP_TIMEOUT above). --timeout
+            #   120 is measured (0/48 timeouts at 16-way contention vs 28/32 at
+            #   the 5s default); do not lower it without a fresh measurement.
             cmd = [
                 "uv",
                 "run",
@@ -288,15 +329,20 @@ def _run_windows() -> int:
                 return 1
             return result.returncode
     except subprocess.TimeoutExpired:
-        # A wall-clock kill cut the scan off mid-way, so nothing it produced can
-        # be trusted. This is an INCOMPLETE scan, not a tool error: fail CLOSED.
+        # The wall-clock kill fired. This is an environmental condition on this
+        # convenience path — a function of machine load and the number of changed
+        # files — NOT evidence of a defect in the change and NOT a reported skip:
+        # semgrep's own per-rule timeout detector (JSON errors[].type == "Timeout"
+        # plus the anchored text net) did not fire, so the silent-pass hole
+        # FAR-1859 closed is NOT reopened here. Fail OPEN with a loud warning; the
+        # authoritative full scan runs in CI (Linux).
         print(
-            _SEMGREP_INCOMPLETE.format(
-                reason=f"the semgrep process was killed after {_SEMGREP_TIMEOUT}s scanning {len(changed)} file(s)"
+            _SEMGREP_WALLCLOCK_WARN.format(
+                detail=f"process killed after {_SEMGREP_TIMEOUT}s scanning {len(changed)} file(s)"
             ),
             file=sys.stderr,
         )
-        return 1
+        return 0
     except FileNotFoundError:
         print(
             _SEMGREP_WARN.format(reason="semgrep or uv not found on PATH"),
