@@ -2173,7 +2173,7 @@ class GraphWriteRecording:
     patched_fields: list[str] | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class GraphWriteActor:
     """The request-resolved actor/auth context for a graph write.
 

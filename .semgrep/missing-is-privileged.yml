@@ -1,13 +1,22 @@
 rules:
   - id: graph-write-missing-is-privileged
     patterns:
+      # Cheap narrowing step: restrict candidates to the two graph-write call
+      # shapes before the (more expensive) nested negative match runs.
       - pattern-either:
           - pattern: replace_pipeline_graph(...)
           - pattern: rollback_to_snapshot(...)
-      - pattern-not: |
-          replace_pipeline_graph(..., actor=GraphWriteActor(..., is_privileged=$P, ..., caller_type=$CT, ...), ...)
-      - pattern-not: |
-          rollback_to_snapshot(..., is_privileged=$P, ..., caller_type=$CT, ...)
+      # A single negated pass. The call is suppressed ONLY when BOTH guards are
+      # present, which is a De Morgan rewrite (NOT A AND NOT B == NOT (A OR B))
+      # of the previous two independent `pattern-not` entries. Collapsing them
+      # into one `pattern-not` halves the number of deep `...` matching passes
+      # over the ~13k-line files this rule protects, keeping it well inside
+      # semgrep's default 5s per-rule-per-file budget so the file holding the
+      # MCP call site is never skipped as a timeout.
+      - pattern-not:
+          pattern-either:
+            - pattern: replace_pipeline_graph(..., actor=GraphWriteActor(..., is_privileged=$P, ..., caller_type=$CT, ...), ...)
+            - pattern: rollback_to_snapshot(..., is_privileged=$P, ..., caller_type=$CT, ...)
     message: >
       ADR 047 service-layer backstop + hitl-gate-removal-guard-plan.md v19:
       replace_pipeline_graph() takes a required actor=GraphWriteActor(...) whose
