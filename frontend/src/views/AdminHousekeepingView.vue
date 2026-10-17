@@ -11,8 +11,25 @@
         </template>
       </PageHeader>
 
-      <div v-if="loading" class="flex justify-center py-12">
-        <LoadingSpinner />
+      <div v-if="loading" class="space-y-4">
+        <div
+          v-for="n in 3"
+          :key="`hk-skeleton-${n}`"
+          class="rounded-lg border bg-card shadow-sm"
+        >
+          <div class="flex items-center gap-3 border-b px-4 py-3">
+            <SkeletonBlock height-class="h-4 w-4" />
+            <div class="flex-1 space-y-2">
+              <SkeletonBlock height-class="h-4 w-40" />
+              <SkeletonBlock height-class="h-3 w-64" />
+            </div>
+            <SkeletonBlock height-class="h-4 w-16" />
+          </div>
+          <div class="space-y-3 px-4 py-3">
+            <SkeletonBlock height-class="h-3 w-full" />
+            <SkeletonBlock height-class="h-3 w-5/6" />
+          </div>
+        </div>
       </div>
 
       <ErrorAlert
@@ -97,8 +114,8 @@
               <p class="truncate text-sm font-medium">{{ c.name }}</p>
               <p class="truncate text-xs text-muted-foreground">{{ c.detail }}</p>
             </div>
-            <span v-if="c.created_at" class="whitespace-nowrap text-xs text-muted-foreground">
-              {{ formatDate(c.created_at) }}
+            <span class="whitespace-nowrap text-xs text-muted-foreground">
+              {{ c.created_at ? formatDate(c.created_at) : '—' }}
             </span>
             <span
               class="rounded bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
@@ -193,7 +210,7 @@ import { useI18n } from 'vue-i18n'
 import { useApi } from '../composables/useApi'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
