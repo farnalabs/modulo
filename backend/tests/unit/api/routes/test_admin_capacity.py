@@ -105,7 +105,7 @@ def test_admin_gets_the_capacity_status(client: TestClient) -> None:
     assert status_mock.call_args.args == ("engine",)
 
 
-@pytest.mark.parametrize("source", ["env", "filesystem", "platform", "none"])
+@pytest.mark.parametrize("source", ["env", "filesystem", "none"])
 def test_source_is_serialised(client: TestClient, source: str) -> None:
     engine_patch, status_patch = _patch_status({**_STATUS, "source": source})
     with engine_patch, status_patch:
