@@ -1,9 +1,12 @@
 <template>
   <!-- `relative` anchors the mobile properties-panel overlay (FAR-1841);
-       `mobileFitStyle` pins the editor to the leftover viewport height on
-       <768px (see the script block) so nothing hangs below the fold behind
-       the touch-capturing canvas. Desktop keeps the height class alone. -->
-  <div ref="editorRootRef" data-testid="pipeline-editor-root" class="relative flex h-[calc(100vh-3.5rem)]" :style="mobileFitStyle">
+       `editorFitStyle` pins the editor to the height actually left in the
+       viewport below the app chrome (see the script block) so nothing hangs
+       below the fold behind the touch-capturing canvas on mobile (FAR-1841)
+       and the editor does not overflow the fold behind the breadcrumb on
+       desktop (FAR-1851). The `h-[calc(100vh-3.5rem)]` class is only the
+       pre-measurement fallback. -->
+  <div ref="editorRootRef" data-testid="pipeline-editor-root" class="relative flex h-[calc(100vh-3.5rem)] overflow-hidden" :style="editorFitStyle">
     <div v-if="loading || historicResolving" class="flex flex-1 items-center justify-center">
       <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
     </div>
@@ -31,9 +34,20 @@
       <ErrorAlert :message="pageError" :on-retry="reloadPage" />
     </div>
     <template v-else>
-      <div class="flex min-w-0 flex-1 flex-col">
-        <!-- Docked toolbar: in-flow above the canvas so it never covers node details -->
-        <div class="flex flex-wrap items-center gap-x-2 gap-y-2 border-b bg-card px-3 py-2" data-testid="pipeline-editor-toolbar">
+      <!-- The content column is the editor's INTERNAL scroll container
+           (FAR-1861). The root is pinned to the space left below the app
+           chrome and clips (`overflow-hidden`); if that space is smaller than
+           the toolbar's own min-content height (a short landscape viewport with
+           the chrome stack active), the toolbar would otherwise paint below
+           the pinned box and out of reach. Scrolling this column instead of
+           the page keeps every control reachable while holding the
+           no-page-scroll invariant for the whole band. -->
+      <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto" data-testid="pipeline-editor-content">
+        <!-- Docked toolbar: in-flow above the canvas so it never covers node details.
+             `shrink-0`: when the content column is shorter than the wrapped
+             toolbar, the toolbar must keep its min-content height (scroll the
+             column to reach it) rather than being squeezed. -->
+        <div class="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-2 border-b bg-card px-3 py-2" data-testid="pipeline-editor-toolbar">
           <!-- Group: identity -->
           <div class="flex min-w-0 items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-identity">
             <h2 class="truncate text-sm font-semibold">{{ pipeline?.name || $t('views.PipelineEditorView.pipeline_editor') }}</h2>
@@ -565,6 +579,19 @@
           role="alert"
           data-testid="pipeline-editor-folder-error"
         />
+        <!-- FAR-1816: transient success notice after a restore. A plain toast
+             would be unmounted the moment the view navigates back to latest,
+             so it lives here as a persistent-until-explicit status region
+             (role=status announces it; the timer clears it). Names the exact
+             outcome: which version was restored and which new version was
+             created. -->
+        <output
+          v-if="restoreNotice"
+          class="block border-b bg-success/10 px-3 py-2 text-xs text-success"
+          data-testid="pipeline-editor-restore-notice"
+        >
+          {{ restoreNotice }}
+        </output>
         <!-- FAR-1812: persistent historical-version banner. Amber/warning tint
              (NOT destructive red — nothing here is being destroyed), always
              visible while a historic version is on screen, with BOTH actions
@@ -587,7 +614,7 @@
               type="button"
               :class="btnToolbarSecondary"
               data-testid="pipeline-editor-historic-restore"
-              @click="openRestoreConfirm"
+              @click="openRestoreConfirm()"
             >
               {{ $t('views.PipelineEditorView.historic_restore') }}
             </button>
@@ -673,7 +700,14 @@
             </button>
           </div>
         </div>
-        <div class="relative min-h-0 flex-1">
+        <!-- Canvas region. `min-h-[8rem]` (replacing the old `min-h-0`) keeps a
+             real, focusable canvas even when the pinned height is smaller than
+             the wrapped toolbar: the toolbar + this minimum make the content
+             column scroll internally (never the page), so both stay reachable.
+             `tabindex="-1"` makes it the focus-restore fallback for a properties
+             sheet whose trigger (a VueFlow node/edge wrapper) is not focusable
+             (FAR-1861). -->
+        <div ref="canvasRef" class="relative min-h-[8rem] flex-1" tabindex="-1" data-testid="pipeline-editor-canvas">
         <!-- Empty-state overlay on top of the canvas (latest mode only — its
              rename/archive/delete/add-node row is all write affordances, so a
              historical view of an empty graph shows the canvas alone). -->
@@ -841,13 +875,20 @@
            As a flex sibling its fixed w-96 swallowed the whole viewport and
            crushed the canvas to 0x0 — and with the canvas gone there was no
            pane-click target to deselect, trapping the user in the panel.
-           Desktop keeps the docked side panel unchanged. -->
+           Desktop keeps the docked side panel unchanged. Below the desktop
+           breakpoint the sheet is a modal dialog (FAR-1861): labelled
+           `role="dialog"`, Escape + focus-trap handled by `onSheetKeydown`,
+           focus moved in on open / restored on close (see the script block). -->
+      <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions --><!-- mobile node sheet: a role="dialog" container whose Escape/Tab focus-trap needs the keydown handler -->
       <aside
         v-if="selectedNodeData && !selectedEdgeData"
+        ref="nodePanelRef"
+        v-bind="sheetDialogAttrs(NODE_SHEET_TITLE_ID)"
         class="w-96 overflow-y-auto border-l bg-card p-4 max-md:absolute max-md:inset-0 max-md:z-40 max-md:w-auto max-md:border-l-0"
+        @keydown="onSheetKeydown"
       >
         <div class="mb-4 flex items-center justify-between">
-          <h2 class="text-base font-semibold">{{ $t('views.PipelineEditorView.node_properties') }}</h2>
+          <h2 :id="NODE_SHEET_TITLE_ID" class="text-base font-semibold">{{ $t('views.PipelineEditorView.node_properties') }}</h2>
           <button
             type="button"
             class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
@@ -1288,15 +1329,22 @@
       </aside>
       <!-- Edge Properties Panel (with HITL gate config). Mobile (FAR-1841):
            same overlay-sheet treatment as the node panel above — a flex
-           sibling of this width crushes the canvas to 0x0 on a phone. The
-           header Close (mobile-only) mirrors the node panel; the existing
-           bottom Close button remains for every breakpoint. -->
+           sibling of this width crushes the canvas to 0x0 on a phone. Like the
+           node panel it carries exactly ONE Close affordance, the conventional
+           header X (mobile-only; desktop is a docked panel dismissed by
+           clicking the canvas, matching the node panel) — the duplicated
+           bottom Close was removed in FAR-1861. Below the desktop breakpoint
+           it is a modal dialog with the same semantics as the node sheet. -->
+      <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions --><!-- mobile edge sheet: a role="dialog" container whose Escape/Tab focus-trap needs the keydown handler -->
       <aside
         v-if="selectedEdgeData"
+        ref="edgePanelRef"
+        v-bind="sheetDialogAttrs(EDGE_SHEET_TITLE_ID)"
         class="w-96 overflow-y-auto border-l bg-card p-4 max-md:absolute max-md:inset-0 max-md:z-40 max-md:w-auto max-md:border-l-0"
+        @keydown="onSheetKeydown"
       >
         <div class="mb-4 flex items-center justify-between">
-          <h2 class="text-base font-semibold">{{ $t('views.PipelineEditorView.edge_properties') }}</h2>
+          <h2 :id="EDGE_SHEET_TITLE_ID" class="text-base font-semibold">{{ $t('views.PipelineEditorView.edge_properties') }}</h2>
           <button
             type="button"
             class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
@@ -1529,14 +1577,6 @@
             <Button v-if="!isViewing" type="button" data-testid="pipeline-editor-save-edge" class="flex-1" :disabled="savingEdge" @click="saveEdgeConfig">
               {{ savingEdge ? $t('views.PipelineEditorView.saving') : $t('views.PipelineEditorView.save_edge') }}
             </Button>
-            <button
-              type="button"
-              class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
-              data-testid="pipeline-editor-edge-panel-close"
-              @click="selectedEdgeData = null"
-            >
-              {{ $t('views.PipelineEditorView.close') }}
-            </button>
           </div>
           <!-- retry = click Save Edge again; no separate loader -->
           <ErrorAlert v-if="edgeSaveError" :message="edgeSaveError" :retryable="false" :compact="true" />
@@ -1731,10 +1771,14 @@
       <ErrorAlert v-if="deleteError" :message="deleteError" :retryable="false" class="mb-4" :compact="true" />
     </FormDialog>
 
-    <!-- FAR-1812: restore confirmation for the banner's "Restore this
-         version" — the SAME rollback endpoint the timeline wires. FAR-1816
-         replaces this shell with the shared restore dialog; the seam is
-         openRestoreConfirm/confirmRestore. -->
+    <!-- FAR-1816: the SHARED restore dialog — used by the historic banner AND
+         the version timeline's "Restore this version" action. It shows the
+         old-vs-latest change summary (from the diff endpoint) and the real
+         consequences of restoring before the user confirms. Confirmation is a
+         plain confirm (no typed phrase): restore is reversible because it
+         creates a NEW version rather than rewriting history. The server's own
+         guards (HITL-gate weakening, guardrail strip, connector-team mismatch)
+         remain the backstop and their refusals are surfaced as human copy. -->
     <FormDialog
       :open="showRestoreConfirm"
       @update:open="showRestoreConfirm = false"
@@ -1744,9 +1788,107 @@
       @confirm="confirmRestore"
     >
       <p class="text-sm text-muted-foreground">
-        {{ $t('views.PipelineEditorView.historic_restore_dialog_body', { version: viewSnapshot?.snapshot_version ?? '' }) }}
+        {{ $t('views.PipelineEditorView.historic_restore_dialog_intro', { version: restoreTargetVersion ?? '' }) }}
       </p>
-      <ErrorAlert v-if="restoreError" :message="restoreError" :retryable="false" :compact="true" />
+
+      <!-- Change summary: what restoring this version does to the live config.
+           C2: EVERY reachable state renders something truthful. The box never
+           shows its title with nothing under it, and "no changes" is asserted
+           only from a real diff every class of which is empty. -->
+      <div class="mt-3 rounded-md border bg-muted/30 p-2" data-testid="pipeline-editor-restore-diff">
+        <p class="text-xs font-medium">{{ $t('views.PipelineEditorView.historic_restore_diff_title') }}</p>
+        <p v-if="restoreDiffLoading" class="mt-1 text-[11px] text-muted-foreground">
+          {{ $t('views.PipelineEditorView.historic_restore_diff_loading') }}
+        </p>
+        <div v-else-if="restoreDiffError" class="mt-1 space-y-1">
+          <p role="alert" class="text-[11px] text-muted-foreground" data-testid="pipeline-editor-restore-diff-error">
+            {{ $t('views.PipelineEditorView.historic_restore_diff_failed') }}
+          </p>
+          <Button
+            size="small"
+            class="text-xs"
+            data-testid="pipeline-editor-restore-diff-retry"
+            @click="loadRestoreDiff"
+          >
+            {{ $t('views.PipelineEditorView.historic_restore_diff_retry') }}
+          </Button>
+        </div>
+        <p
+          v-else-if="restoreDiffIsCurrent"
+          class="mt-1 text-[11px] text-muted-foreground"
+          data-testid="pipeline-editor-restore-diff-current"
+        >
+          {{ $t('views.PipelineEditorView.historic_restore_diff_is_current') }}
+        </p>
+        <div v-else-if="restoreDiffNoBaseline" class="mt-1 space-y-1">
+          <p class="text-[11px] text-muted-foreground" data-testid="pipeline-editor-restore-diff-no-baseline">
+            {{ $t('views.PipelineEditorView.historic_restore_diff_no_baseline') }}
+          </p>
+          <Button
+            size="small"
+            class="text-xs"
+            data-testid="pipeline-editor-restore-diff-reload"
+            @click="loadRestoreDiff"
+          >
+            {{ $t('views.PipelineEditorView.historic_restore_diff_retry') }}
+          </Button>
+        </div>
+        <template v-else-if="restoreDiffSummary">
+          <p
+            v-if="!restoreDiffSummary.hasChanges"
+            class="mt-1 text-[11px] text-muted-foreground"
+          >
+            {{ $t('views.PipelineEditorView.historic_restore_diff_no_changes') }}
+          </p>
+          <ul v-else class="mt-1 list-disc space-y-0.5 pl-4 text-[11px] text-muted-foreground">
+            <li v-if="restoreDiffSummary.nodesRestored > 0">
+              {{ $t('views.PipelineEditorView.historic_restore_diff_nodes_restored', restoreDiffSummary.nodesRestored) }}
+            </li>
+            <li v-if="restoreDiffSummary.nodesRemoved > 0">
+              {{ $t('views.PipelineEditorView.historic_restore_diff_nodes_removed', restoreDiffSummary.nodesRemoved) }}
+            </li>
+            <li v-if="restoreDiffSummary.nodesModified > 0">
+              {{ $t('views.PipelineEditorView.historic_restore_diff_nodes_modified', restoreDiffSummary.nodesModified) }}
+            </li>
+            <li v-if="restoreDiffSummary.edgesRestored > 0">
+              {{ $t('views.PipelineEditorView.historic_restore_diff_edges_restored', restoreDiffSummary.edgesRestored) }}
+            </li>
+            <li v-if="restoreDiffSummary.edgesRemoved > 0">
+              {{ $t('views.PipelineEditorView.historic_restore_diff_edges_removed', restoreDiffSummary.edgesRemoved) }}
+            </li>
+            <li v-if="restoreDiffSummary.edgesModified > 0">
+              {{ $t('views.PipelineEditorView.historic_restore_diff_edges_modified', restoreDiffSummary.edgesModified) }}
+            </li>
+            <li v-if="restoreDiffSummary.impacted > 0">
+              {{ $t('views.PipelineEditorView.historic_restore_diff_impacted', restoreDiffSummary.impacted) }}
+            </li>
+            <li
+              v-for="(b, i) in restoreDiffSummary.breaking"
+              :key="i"
+              :class="b.severity === 'block' ? 'text-destructive' : 'text-warning-text'"
+            >
+              {{ $t('views.PipelineEditorView.historic_restore_diff_breaking', { severity: b.severity, reason: b.reason }) }}
+            </li>
+          </ul>
+        </template>
+        <!-- Defensive catch-all: reachable only if a state transition left the
+             model in no state at all, but it guarantees the box is never bare. -->
+        <p v-else class="mt-1 text-[11px] text-muted-foreground">
+          {{ $t('views.PipelineEditorView.historic_restore_diff_unavailable') }}
+        </p>
+      </div>
+
+      <!-- The real risks of restoring, in plain language. -->
+      <ul class="mt-3 list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+        <li>{{ $t('views.PipelineEditorView.historic_restore_effect_runs') }}</li>
+        <li>{{ $t('views.PipelineEditorView.historic_restore_effect_edits') }}</li>
+        <li>{{ $t('views.PipelineEditorView.historic_restore_effect_history') }}</li>
+        <li>{{ $t('views.PipelineEditorView.historic_restore_effect_in_progress') }}</li>
+      </ul>
+      <p class="mt-2 text-xs text-muted-foreground">
+        {{ $t('views.PipelineEditorView.historic_restore_blocked_note') }}
+      </p>
+      <ErrorAlert v-if="restoreError" :message="restoreError" :retryable="false" :compact="true" class="mt-3" />
     </FormDialog>
     <!-- FAR-1812: unsaved-changes guard — never silently discard live edits
          when the user navigates into a historic version. -->
@@ -1762,14 +1904,17 @@
 
     <PipelineSnapshotTimeline
       v-if="showVersionTimeline"
+      ref="timelineRef"
       :pipeline-id="pipelineId"
       @close="showVersionTimeline = false"
       @view="requestViewSnapshot"
+      @restore="openRestoreConfirm"
     />
   </div>
 </template>
 <script setup lang="ts">
 import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { useMediaQuery } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { VueFlow, useVueFlow, Position } from '@vue-flow/core'
@@ -1777,6 +1922,7 @@ import { Background } from '@vue-flow/background'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import { useDataFetch } from '../composables/useDataFetch'
+import { trapTabInElement } from '../composables/useFocusTrap'
 import { formatApiError, throwOnError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 
@@ -1802,6 +1948,7 @@ import { useProductAnalytics } from '../composables/useProductAnalytics'
 import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
 import { useEnvironmentProfilesStore } from '../stores/environmentProfiles'
 import { runnerTierLabelKeyForProvider } from '../lib/runnerTiers'
+import { currentSubstantiveVersion, SNAPSHOT_PAGE_SIZE } from '../lib/pipelineVersion'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 import { Pencil as PencilIcon, LoaderCircle as LoaderCircleIcon, Download as DownloadIcon, Play as PlayIcon, Plus as PlusIcon, Maximize2 as Maximize2Icon, X as XIcon, ExternalLink as ExternalLinkIcon } from '@lucide/vue'
@@ -2796,6 +2943,14 @@ async function loadGraph() {
 // resolveVersionAlias()'s own bounded search over the same endpoint (page 1
 // at page_size=100 + a binary search), so a partial or failed catalog load
 // can never make an existing deep version read as missing.
+//
+// FAR-1816/1817 parity: fetch the SAME widened window the timeline fetches
+// (lib/pipelineVersion SNAPSHOT_PAGE_SIZE), never the endpoint's 20-row
+// default. With the default, a run-heavy recent history (one `run` snapshot
+// per run) pushes the newest substantive version off page 1 and
+// currentSubstantiveVersion returns null, so the chip silently disappears
+// while the 100-row timeline still shows that version. One shared constant
+// keeps the two surfaces reading the same history.
 async function loadCatalog() {
   pageError.value = null
   try {
@@ -2805,7 +2960,7 @@ async function loadCatalog() {
       withTimeout((signal) => api.GET('/api/v1/model-backends', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
       withTimeout((signal) => api.GET('/api/v1/schemas', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
       withTimeout((signal) => api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
-        params: { path: { pipeline_id: pipelineId } },
+        params: { path: { pipeline_id: pipelineId }, query: { page_size: SNAPSHOT_PAGE_SIZE } },
         signal,
       }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
       withTimeout((signal) => api.GET('/api/v1/parameter-schemas', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
@@ -3003,31 +3158,32 @@ function onPaneClick() {
   capabilityContextInput.value = ''
 }
 
-// --- Mobile viewport fit (FAR-1841) ---------------------------------------
-// On mobile the editor sits BELOW the app chrome (fixed header offset,
-// banners, breadcrumb) but was always calc(100vh - 3.5rem) tall, so its
-// lower portion — the canvas — hung below the fold. VueFlow captures
-// wheel/touch over the canvas, so the page could not be scrolled from that
-// region (pinch zoomed the graph instead of revealing the UI) and the bottom
-// of the canvas was unreachable. Pin the editor to the space actually left
-// in the viewport below the chrome (<768px only): the whole editor — toolbar
-// plus canvas — then lands on screen and the document has nothing left to
-// scroll, so no touch is ever trapped. Desktop is untouched: the inline
-// height stays unset at >=768px and the h-[calc(100vh-3.5rem)] class applies.
-const MOBILE_EDITOR_MIN_HEIGHT_PX = 240
+// --- Editor viewport fit (FAR-1841 mobile, FAR-1851 desktop) --------------
+// The editor root is pinned to the space actually left in the viewport below
+// the app chrome (banners, breadcrumb, fixed mobile header) at EVERY
+// breakpoint, measured at runtime rather than guessed with a `100vh - fixed`
+// height. On mobile that stops the canvas hanging below the fold where VueFlow
+// captures wheel/touch (FAR-1841); on desktop the same pin stops the editor
+// overflowing the fold by the height of the breadcrumb row above it (FAR-1851
+// — the `h-[calc(100vh-3.5rem)]` fallback only ever accounted for the mobile
+// fixed header). The 240px usability floor the mobile fix introduced yields to
+// the viewport (FAR-1861): on a viewport shorter than the chrome stack the
+// editor shrinks to whatever is left instead of spilling below the fold and
+// re-introducing a trapped page scroll.
 const editorRootRef = ref<HTMLElement | null>(null)
-const mobileFitHeightPx = ref<number | null>(null)
-const mobileFitStyle = computed(() =>
-  mobileFitHeightPx.value != null ? { height: `${mobileFitHeightPx.value}px` } : undefined,
+// The canvas region. Focusable (`tabindex="-1"`) so it can receive focus as the
+// fallback return target when a properties sheet's trigger was not focusable
+// (FAR-1861 — a VueFlow node/edge wrapper carries no tabindex, so capturing
+// `document.activeElement` at open yields <body> and restoring it is a no-op).
+const canvasRef = ref<HTMLElement | null>(null)
+const editorFitHeightPx = ref<number | null>(null)
+const editorFitStyle = computed(() =>
+  editorFitHeightPx.value != null ? { height: `${editorFitHeightPx.value}px` } : undefined,
 )
 
-function refitMobileEditor() {
+function refitEditorFit() {
   const el = editorRootRef.value
   if (!el) return
-  if (window.matchMedia('(min-width: 768px)').matches) {
-    mobileFitHeightPx.value = null
-    return
-  }
   // Document-relative top so the measurement is stable regardless of the
   // current scroll position and cannot feed back through the height set here.
   // top <= 0 means the element is not laid out yet (jsdom mounts return an
@@ -3035,32 +3191,36 @@ function refitMobileEditor() {
   // height: leaving it would keep a stale pin that no longer matches layout.
   const top = el.getBoundingClientRect().top + window.scrollY
   if (top <= 0) {
-    mobileFitHeightPx.value = null
+    editorFitHeightPx.value = null
     return
   }
-  const next = Math.max(Math.round(window.innerHeight - top), MOBILE_EDITOR_MIN_HEIGHT_PX)
+  const available = Math.floor(window.innerHeight - top)
+  // available <= 0 (chrome taller than the viewport) falls back to the height
+  // class: there is no space to fit into and a zero-height editor would be
+  // worse than a page that scrolls.
+  const next = available > 0 ? available : null
   // The measurement above is the forced layout; skip the reactive write (and
   // the re-render it causes) when nothing changed.
-  if (mobileFitHeightPx.value !== next) mobileFitHeightPx.value = next
+  if (editorFitHeightPx.value !== next) editorFitHeightPx.value = next
 }
 
 let refitFrame = 0
-function scheduleMobileRefit() {
+function scheduleEditorRefit() {
   if (refitFrame) return
   refitFrame = window.requestAnimationFrame(() => {
     refitFrame = 0
-    refitMobileEditor()
+    refitEditorFit()
   })
 }
 
-let mobileFitObserver: MutationObserver | null = null
+let editorFitObserver: MutationObserver | null = null
 // Re-measure only when the CHROME ABOVE the editor changes — that is the
 // only thing that moves the editor's document-relative top. A body-wide
 // observer (childList+subtree+attributes:class/style) also fired on
 // VueFlow's viewport transform, which is written as an inline style on
 // every pointermove during pan/zoom/node-drag — turning the mobile hot
 // path into a forced synchronous layout (the getBoundingClientRect in
-// refitMobileEditor) once per animation frame. Narrow targets instead:
+// refitEditorFit) once per animation frame. Narrow targets instead:
 //  - the editor's parent (AppLayout's <main>): its `class` carries the
 //    padding-top offsets (fixed mobile header / onboarding banner) and its
 //    direct childList catches a new chrome block inserted above the editor,
@@ -3071,7 +3231,7 @@ let mobileFitObserver: MutationObserver | null = null
 //    the behaviour the original body-wide observer existed for.
 // Extracted from onMounted so each guard (root / parent present) is
 // unit-testable; `root` is null only in the defensive detached case.
-function setupMobileFitObserver(root: HTMLElement | null) {
+function setupEditorFitObserver(root: HTMLElement | null) {
   const parent = root?.parentElement ?? null
   if (root && parent) {
     // Stop at the first element containing the root (the root itself when it
@@ -3083,7 +3243,7 @@ function setupMobileFitObserver(root: HTMLElement | null) {
         sibling && !sibling.contains(root);
         sibling = sibling.nextElementSibling
       ) {
-        mobileFitObserver?.observe(sibling, {
+        editorFitObserver?.observe(sibling, {
           childList: true,
           subtree: true,
           attributes: true,
@@ -3091,16 +3251,16 @@ function setupMobileFitObserver(root: HTMLElement | null) {
         })
       }
     }
-    mobileFitObserver = new MutationObserver((mutations) => {
+    editorFitObserver = new MutationObserver((mutations) => {
       // A chrome block inserted above the editor is a new sibling — observe
       // it too, so mutations inside it keep re-fitting (observe() on an
       // already-observed node just refreshes its options, no duplicates).
       if (mutations.some((m) => m.type === 'childList' && m.target === parent)) {
         observeChromeSiblings()
       }
-      scheduleMobileRefit()
+      scheduleEditorRefit()
     })
-    mobileFitObserver.observe(parent, {
+    editorFitObserver.observe(parent, {
       childList: true,
       attributes: true,
       attributeFilter: ['class'],
@@ -3109,14 +3269,94 @@ function setupMobileFitObserver(root: HTMLElement | null) {
   }
 }
 
+// --- Mobile properties sheets as modal dialogs (FAR-1861) ------------------
+// Below the desktop breakpoint each properties aside renders as a full-screen
+// overlay sheet, and must behave as a modal dialog for keyboard/AT users
+// (ux-conformance A11Y): exposed as a labelled `role="dialog"` with
+// `aria-modal`, Escape closes it, focus moves into it on open and returns to
+// the trigger on close, and Tab is trapped inside so it can never reach the
+// content behind it. On desktop the identical element is a docked, non-modal
+// side panel, so none of the dialog semantics apply. `useMediaQuery` keeps the
+// breakpoint reactive so a resize/rotation across 768px re-applies the right
+// semantics.
+const DESKTOP_MEDIA_QUERY = '(min-width: 768px)'
+const isDesktopViewport = useMediaQuery(DESKTOP_MEDIA_QUERY)
+const isMobileSheet = computed(() => !isDesktopViewport.value)
+
+const NODE_SHEET_TITLE_ID = 'pipeline-editor-node-sheet-title'
+const EDGE_SHEET_TITLE_ID = 'pipeline-editor-edge-sheet-title'
+
+const nodePanelRef = ref<HTMLElement | null>(null)
+const edgePanelRef = ref<HTMLElement | null>(null)
+// The element focus is returned to when the sheet closes — captured at open.
+let sheetReturnFocus: HTMLElement | null = null
+
+// Spread onto a properties aside: the mobile sheet is a labelled modal dialog;
+// the desktop docked panel gets no dialog attrs (and stays out of the tab
+// order's focus entry points, hence tabindex only on the sheet).
+function sheetDialogAttrs(titleId: string): Record<string, string> {
+  return isMobileSheet.value
+    ? { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId, tabindex: '-1' }
+    : {}
+}
+
+// The properties sheet currently rendered — edge wins when both are set (the
+// node aside is `selectedNodeData && !selectedEdgeData`); null when neither pane
+// is open.
+function activeSheetElement(): HTMLElement | null {
+  return selectedEdgeData.value ? edgePanelRef.value : nodePanelRef.value
+}
+
+function onSheetKeydown(event: KeyboardEvent) {
+  if (!isMobileSheet.value) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    onPaneClick()
+    return
+  }
+  if (event.key !== 'Tab') return
+  const panel = activeSheetElement()
+  if (!panel) return
+  // The Tab-cycle (including the freshly-opened panel-container case and the
+  // zero-focusable guard) lives in the shared helper so the algorithm and its
+  // selector have a single owner — see `src/composables/useFocusTrap.ts`.
+  trapTabInElement(event, panel)
+}
+
+// Move focus into a sheet when it opens and return it to the trigger when it
+// closes. Skipped entirely on desktop (docked panels keep the normal tab flow).
+// `flush: 'post'` matters: the sheet's template ref only points at the rendered
+// element after the DOM update, so a default (pre) flush would read a stale ref
+// and miss the open.
+watch([selectedNodeData, selectedEdgeData], () => {
+  if (!isMobileSheet.value) return
+  const panel = activeSheetElement()
+  if (!panel) {
+    sheetReturnFocus?.focus()
+    sheetReturnFocus = null
+    return
+  }
+  // Focus already inside the sheet (e.g. the selection changed while it was
+  // open) — nothing to move or to remember.
+  if (!panel.contains(document.activeElement)) {
+    // The real triggers (VueFlow node/edge wrappers) carry no tabindex, so a
+    // canvas click leaves `document.activeElement` on <body>; restoring <body>
+    // is a no-op. Fall back to the focusable canvas so focus actually returns
+    // somewhere sensible when the sheet closes (FAR-1861).
+    const active = document.activeElement as HTMLElement | null
+    sheetReturnFocus = active && active !== document.body ? active : canvasRef.value
+    panel.focus()
+  }
+}, { flush: 'post' })
+
 onMounted(() => {
-  refitMobileEditor()
-  window.addEventListener('resize', scheduleMobileRefit)
-  setupMobileFitObserver(editorRootRef.value)
+  refitEditorFit()
+  window.addEventListener('resize', scheduleEditorRefit)
+  setupEditorFitObserver(editorRootRef.value)
 })
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', scheduleMobileRefit)
-  mobileFitObserver?.disconnect()
+  window.removeEventListener('resize', scheduleEditorRefit)
+  editorFitObserver?.disconnect()
   if (refitFrame) window.cancelAnimationFrame(refitFrame)
 })
 
@@ -3843,7 +4083,7 @@ const requestedVersion = computed(() => {
 // exact promise the feature exists to keep. The search here is BOUNDED by
 // construction:
 //
-//   * page 1 at SNAPSHOT_LOOKUP_PAGE_SIZE — a single request covers the top
+//   * page 1 at SNAPSHOT_PAGE_SIZE — a single request covers the top
 //     100 versions (every pipeline up to 100 versions), and
 //   * for deeper versions, a binary search over the remaining pages — at
 //     most log2(pageCount) further requests, hard-capped at
@@ -3854,7 +4094,10 @@ const requestedVersion = computed(() => {
 // latency change for the canonical link. Nothing depends on loadCatalog's
 // page-1 list, so a partial or failed catalog load cannot make an existing
 // deep version read as missing either.
-const SNAPSHOT_LOOKUP_PAGE_SIZE = 100
+//
+// FAR-1816/1817: SNAPSHOT_PAGE_SIZE is the shared window both the chip and
+// the timeline fetch (lib/pipelineVersion), so the lookup, the catalog and the
+// timeline can never drift onto three different page sizes.
 const SNAPSHOT_LOOKUP_MAX_PROBES = 12
 
 type VersionLookupStatus = 'idle' | 'loading' | 'found' | 'absent' | 'failed'
@@ -3869,7 +4112,7 @@ async function fetchSnapshotLookupPage(
 ): Promise<{ items: components['schemas']['SnapshotResponse'][]; total: number }> {
   const { data, error } = await withTimeout((signal) =>
     api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
-      params: { path: { pipeline_id: pipelineId }, query: { page, page_size: SNAPSHOT_LOOKUP_PAGE_SIZE } },
+      params: { path: { pipeline_id: pipelineId }, query: { page, page_size: SNAPSHOT_PAGE_SIZE } },
       signal,
     }),
   )
@@ -3905,7 +4148,7 @@ async function findSnapshotIdByVersion(version: number): Promise<string | null> 
   }
   // Below page 1: binary search the remaining pages by the range each spans.
   let lo = 2
-  let hi = Math.ceil(pageOne.total / SNAPSHOT_LOOKUP_PAGE_SIZE)
+  let hi = Math.ceil(pageOne.total / SNAPSHOT_PAGE_SIZE)
   let probes = 0
   while (lo <= hi) {
     if (probes >= SNAPSHOT_LOOKUP_MAX_PROBES) {
@@ -3919,7 +4162,7 @@ async function findSnapshotIdByVersion(version: number): Promise<string | null> 
     // bound can never truncate the search below the target's new rank (a
     // false "no longer available" of exactly the kind this search exists to
     // prevent). Termination is unaffected: `probes` still caps the loop.
-    hi = Math.max(hi, Math.ceil(page.total / SNAPSHOT_LOOKUP_PAGE_SIZE))
+    hi = Math.max(hi, Math.ceil(page.total / SNAPSHOT_PAGE_SIZE))
     if (page.items.length === 0) {
       hi = mid - 1 // past the end (list shrank) — search earlier
       continue
@@ -4052,13 +4295,16 @@ const historicResolving = computed(
     versionDetailStatus.value !== 'failed',
 )
 
-// Version chip: the VIEWED version while viewing, the newest snapshot (the
-// current version — the list is ordered version-descending server-side and
-// loadCatalog filters version 0) otherwise. Hidden only when there is no
-// version at all yet.
+// Version chip: the VIEWED version while viewing, otherwise the pipeline's
+// current SUBSTANTIVE version. FAR-1817: a version is a substantive snapshot
+// (created_kind initial/edit/rollback) — run snapshots are NOT versions, so
+// the chip must NOT label the newest snapshot (which after any run is a run
+// snapshot) as the current version. The predicate is shared with the timeline
+// (lib/pipelineVersion) so the two surfaces can never disagree. loadCatalog
+// filters version 0. Hidden only when there is no substantive version yet.
 const versionChipSnapshot = computed(() => {
   if (isViewing.value) return viewSnapshot.value
-  return snapshots.value[0] ?? null
+  return currentSubstantiveVersion(snapshots.value)
 })
 
 const viewedVersionDate = computed(() => formatDateShort(viewSnapshot.value?.created_at ?? null))
@@ -4212,46 +4458,220 @@ function openVersionTimeline(): void {
   showVersionTimeline.value = true
 }
 
-// --- Restore (banner action) ----------------------------------------------
-// FAR-1816 will supply the shared restore dialog; this wires the banner
-// button to the SAME rollback path the timeline uses, behind a confirmation.
+// --- Restore (shared dialog: banner + timeline) ---------------------------
+// FAR-1816: one restore dialog, backed by the existing POST
+// /snapshots/{id}/rollback endpoint. Restore replays the chosen version's
+// graph into the live pipeline and creates a NEW version from it (history is
+// never rewritten), and the server's own guards still refuse a weakening
+// restore. The dialog shows the old-vs-latest change summary from the diff
+// endpoint and names the consequences before the user confirms.
 const showRestoreConfirm = ref(false)
 const restoreLoading = ref(false)
 const restoreError = ref<string | null>(null)
+const restoreTargetId = ref<string | null>(null)
+const restoreTargetVersion = ref<number | null>(null)
+const restoreNotice = ref<string | null>(null)
+let restoreNoticeTimer: ReturnType<typeof setTimeout> | null = null
 
-function openRestoreConfirm(): void {
+// The change summary between the version being restored (target) and the
+// current live version (latest). `snapshot_a` is the live/latest graph and
+// `snapshot_b` the target, so the diff's `nodes_added`/`edges_added` are what
+// restoring brings back and `*_removed` what it drops; `*_modified` are
+// in-place config changes (agent, prompt, commands, timeout, label, ports).
+const restoreDiff = ref<Record<string, any> | null>(null)
+const restoreDiffLoading = ref(false)
+const restoreDiffError = ref<string | null>(null)
+// C2: the early-return outcomes. Both must render an explicit message — never
+// a bare "Change summary" title that reads as "nothing will change".
+const restoreDiffIsCurrent = ref(false)
+const restoreDiffNoBaseline = ref(false)
+// M6: sequence guard so an earlier dialog's diff cannot land after a later one.
+let restoreDiffRequestSeq = 0
+
+interface RestoreBreakingChange {
+  severity: string
+  reason: string
+}
+
+interface RestoreDiffSummary {
+  nodesRestored: number
+  nodesRemoved: number
+  nodesModified: number
+  edgesRestored: number
+  edgesRemoved: number
+  edgesModified: number
+  impacted: number
+  breaking: RestoreBreakingChange[]
+  /** True only when EVERY change class the endpoint reports is empty. */
+  hasChanges: boolean
+}
+
+const restoreDiffSummary = computed<RestoreDiffSummary | null>(() => {
+  const d = restoreDiff.value
+  if (!d) return null
+  const count = (value: unknown): number => (Array.isArray(value) ? value.length : 0)
+  const nodesRestored = count(d.nodes_added)
+  const nodesRemoved = count(d.nodes_removed)
+  const nodesModified = count(d.nodes_modified)
+  const edgesRestored = count(d.edges_added)
+  const edgesRemoved = count(d.edges_removed)
+  const edgesModified = count(d.edges_modified)
+  const impacted = count(d.semantic?.impacted_nodes)
+  const breaking = (Array.isArray(d.semantic?.breaking_changes) ? d.semantic.breaking_changes : []) as RestoreBreakingChange[]
+  // C1: "no differences" may only be concluded when EVERY class is empty —
+  // otherwise a config-only edit (nodes/edges modified, nothing added) would
+  // falsely read as "no configuration differences".
+  const hasChanges =
+    nodesRestored + nodesRemoved + nodesModified + edgesRestored + edgesRemoved + edgesModified + impacted > 0 ||
+    breaking.length > 0
+  return {
+    nodesRestored, nodesRemoved, nodesModified,
+    edgesRestored, edgesRemoved, edgesModified,
+    impacted, breaking, hasChanges,
+  }
+})
+
+const timelineRef = ref<InstanceType<typeof PipelineSnapshotTimeline> | null>(null)
+
+function setRestoreNotice(message: string): void {
+  restoreNotice.value = message
+  if (restoreNoticeTimer !== null) clearTimeout(restoreNoticeTimer)
+  restoreNoticeTimer = setTimeout(() => {
+    restoreNotice.value = null
+    restoreNoticeTimer = null
+  }, 8000)
+}
+
+/**
+ * Build the success notice without ever emitting an empty version ("Restored
+ * v. Created v."). Each half is included only when the value is known.
+ */
+function restoreSuccessNotice(restored: number | null, created: number | null): string {
+  if (restored != null && created != null) {
+    return t('views.PipelineEditorView.historic_restore_success', { restored, created })
+  }
+  if (restored != null) {
+    return t('views.PipelineEditorView.historic_restore_success_no_created', { restored })
+  }
+  if (created != null) {
+    return t('views.PipelineEditorView.historic_restore_success_no_restored', { created })
+  }
+  return t('views.PipelineEditorView.historic_restore_success_generic')
+}
+
+async function loadRestoreDiff(): Promise<void> {
+  const seq = ++restoreDiffRequestSeq
+  restoreDiff.value = null
+  restoreDiffError.value = null
+  restoreDiffIsCurrent.value = false
+  restoreDiffNoBaseline.value = false
+  const target = restoreTargetId.value
+  // The newest snapshot is the closest representation of the live/current
+  // config. Without it (or when the target IS the current snapshot) there is
+  // nothing to compare — but that outcome must still be stated explicitly
+  // (C2), never left as an empty box.
+  const latest = snapshots.value[0]?.id as string | undefined
+  if (!target || !latest) {
+    restoreDiffNoBaseline.value = true
+    return
+  }
+  if (target === latest) {
+    restoreDiffIsCurrent.value = true
+    return
+  }
+  restoreDiffLoading.value = true
+  try {
+    const { data, error } = await withTimeout((signal) =>
+      api.POST('/api/v1/pipelines/{pipeline_id}/snapshots/diff', {
+        params: { path: { pipeline_id: pipelineId } },
+        body: { snapshot_a_id: latest, snapshot_b_id: target },
+        signal,
+      }),
+    )
+    // C2/M6: an earlier dialog's response must not land after a later one.
+    if (seq !== restoreDiffRequestSeq) return
+    if (error) {
+      console.warn('[PipelineEditorView] failed to load restore diff', formatApiError(error))
+      restoreDiffError.value = formatApiError(error)
+      return
+    }
+    restoreDiff.value = (data as Record<string, any>) ?? null
+  } catch (e: unknown) {
+    if (seq !== restoreDiffRequestSeq) return
+    console.warn('[PipelineEditorView] failed to load restore diff', formatApiError(e))
+    restoreDiffError.value = formatApiError(e)
+  } finally {
+    if (seq === restoreDiffRequestSeq) restoreDiffLoading.value = false
+  }
+}
+
+/**
+ * FAR-1816: turn a restore refusal into human language. The server refuses a
+ * restore that would weaken a HITL gate, strip a node-bound guardrail, or pin
+ * another team's connector — those must read as plain sentences, never the raw
+ * server string. Any UNCLASSIFIED refusal gets generic human copy too (the
+ * detail is logged for diagnostics); the raw server text is never rendered.
+ */
+function describeRestoreRefusal(err: unknown): string {
+  const raw = formatApiError(err)
+  if (/connector_team_mismatch/i.test(raw)) {
+    return t('views.PipelineEditorView.historic_restore_blocked_connector')
+  }
+  if (/gate weakening denied/i.test(raw)) {
+    return t('views.PipelineEditorView.historic_restore_blocked_hitl')
+  }
+  if (/guardrail/i.test(raw)) {
+    return t('views.PipelineEditorView.historic_restore_blocked_guardrail')
+  }
+  // M8: never surface the raw server string as user-facing copy.
+  console.warn('[PipelineEditorView] restore refused', raw)
+  return t('views.PipelineEditorView.historic_restore_failed_generic')
+}
+
+async function openRestoreConfirm(snapshotId?: string, snapshotVersion?: number): Promise<void> {
+  // Reuse the same unsaved-changes guard the "view historic version" path
+  // runs: restoring replaces the live graph, so unsaved edits must not be
+  // silently discarded.
+  if (isGraphDirty.value && !(await confirmLeaveUnsaved())) return
+  restoreTargetId.value = snapshotId ?? resolvedSnapshotId.value
+  restoreTargetVersion.value = snapshotVersion ?? viewSnapshot.value?.snapshot_version ?? null
   restoreError.value = null
+  restoreDiff.value = null
+  restoreDiffError.value = null
   showRestoreConfirm.value = true
+  void loadRestoreDiff()
 }
 
 async function confirmRestore(): Promise<void> {
-  const snapshotId = resolvedSnapshotId.value
+  const snapshotId = restoreTargetId.value ?? resolvedSnapshotId.value
   if (!snapshotId) return
+  const restoredVersion = restoreTargetVersion.value ?? viewSnapshot.value?.snapshot_version ?? null
   restoreLoading.value = true
   restoreError.value = null
   try {
-    const { error } = await withTimeout((signal) =>
+    const { data, error } = await withTimeout((signal) =>
       api.POST('/api/v1/pipelines/{pipeline_id}/snapshots/{snapshot_id}/rollback', {
         params: { path: { pipeline_id: pipelineId, snapshot_id: snapshotId } },
         signal,
       }),
     )
     if (error) {
-      restoreError.value = t('views.PipelineEditorView.historic_restore_failed', {
-        error: formatApiError(error),
-      })
+      restoreError.value = describeRestoreRefusal(error)
       return
     }
+    const createdVersion = (data as { snapshot_version?: number } | null)?.snapshot_version ?? null
     showRestoreConfirm.value = false
-    // A rollback replays this version into the LIVE graph and creates a new
-    // version from it — reload both, then land back in the latest editor.
+    setRestoreNotice(restoreSuccessNotice(restoredVersion, createdVersion))
+    // A restore replays this version into the LIVE graph and creates a new
+    // version from it — reload the graph, the catalog (for the version chip)
+    // and the timeline (so the new version shows as a rollback entry), then
+    // land back in the latest editor with the historic banner gone.
     await loadGraph()
     await loadCatalog()
+    await timelineRef.value?.reload()
     viewLatest()
   } catch (e: unknown) {
-    restoreError.value = t('views.PipelineEditorView.historic_restore_failed', {
-      error: formatApiError(e),
-    })
+    restoreError.value = describeRestoreRefusal(e)
   } finally {
     restoreLoading.value = false
   }
@@ -4288,6 +4708,7 @@ async function copyHistoricLink(): Promise<void> {
 
 onBeforeUnmount(() => {
   if (copyLinkResetTimer !== null) clearTimeout(copyLinkResetTimer)
+  if (restoreNoticeTimer !== null) clearTimeout(restoreNoticeTimer)
   if (unsavedConfirmResolve) {
     unsavedConfirmResolve(false)
     unsavedConfirmResolve = null

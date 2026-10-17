@@ -9,17 +9,23 @@ the record survives the delete.
 
 Contract for callers
 --------------------
-* **Call it INSIDE the deleting transaction, BEFORE the org row is removed.**
-  The record then commits atomically with the delete (or rolls back with it),
-  so there is no post-commit FK problem and no window where the audit says
-  "deleted" but the delete has not happened.
+* **Call it INSIDE the deleting transaction** — either before or after the org
+  row's flush, as the caller's lock ordering requires (FAR-1832 R4: the
+  deletion-confirm path appends AFTER the crud call so the org-row
+  ``FOR UPDATE`` lock is taken first, matching every sibling FSM path; the
+  request path appends after its own lock-taking crud call too). Either
+  position commits atomically with the delete (or rolls back with it), so
+  there is no post-commit FK problem and no window where the audit says
+  "deleted" but the delete has not happened — this table deliberately carries
+  no FK to ``organisations`` at all, so the row's removal cannot affect the
+  append.
 * **Fail closed: there is deliberately NO try/except here.** An append failure
   raises out of the caller's ``async with session.begin()`` block, which rolls
   the whole transaction back — a destructive act that cannot be recorded must
   not happen. Route-level handlers already map the raised ``SQLAlchemyError``
   family to a 5xx.
-* The insert is a Core statement rather than ``session.add`` so the write
-  needs no flush ordering against the delete that follows it.
+* The insert is a Core statement rather than ``session.add`` so the write needs
+  no flush ordering against the delete in the same transaction.
 """
 
 from __future__ import annotations

@@ -78,18 +78,6 @@ def is_org_consenting(settings_json: Any) -> bool:
     return org_consent_level(settings_json) == LEVEL_ALL
 
 
-def merge_product_analytics_block(
-    org_settings_json: dict[str, Any] | None,
-    updates: dict[str, Any],
-) -> dict[str, Any]:
-    """Return a new settings_json dict with the product_analytics block merged."""
-    settings = dict(org_settings_json or {})
-    existing = dict(settings.get(PRODUCT_ANALYTICS_KEY) or {})
-    existing.update(updates)
-    settings[PRODUCT_ANALYTICS_KEY] = existing
-    return settings
-
-
 # ---------------------------------------------------------------------------
 # Prompt eligibility
 # ---------------------------------------------------------------------------

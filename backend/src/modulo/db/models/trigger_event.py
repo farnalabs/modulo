@@ -43,6 +43,14 @@ VALIDATION_RESULT_VALUES: tuple[str, ...] = (
     # from the event-type gate (accepted_events).  A distinct label lets
     # operators tell which gate rejected a delivery.
     "event_value_filter_not_accepted",
+    # FAR-1916: a ``work_item_refs_required`` pipeline refused a delivery that
+    # supplied no work-item refs (FAR-794 slice 2b). The engine wrote this
+    # value at its raise site but it was never added to the constraint
+    # vocabulary, so the write raised a CHECK violation (IntegrityError -> a
+    # 503 where a 422 was intended) and no refusal event could ever persist.
+    # Added here plus the widening migration 0318 — the value a write site
+    # emits MUST be in the vocabulary in the same change (AGENTS.md lesson).
+    "required_refs_missing",
 )
 
 _TRIGGER_EVENT_VALIDATION_SQL = f"validation_result IN {tuple(VALIDATION_RESULT_VALUES)}"

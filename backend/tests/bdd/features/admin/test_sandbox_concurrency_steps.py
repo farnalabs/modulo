@@ -43,6 +43,11 @@ def _make_org_session(org_settings: dict) -> AsyncMock:
     nested_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
     session.begin_nested = MagicMock(return_value=nested_cm)
+    # Real SQLAlchemy sessions expose ``info`` as a dict; the route binds RLS
+    # via ``set_rls_org`` which stores the org id here on generic backends, and
+    # the FAR-1830/FAR-1832 patch helper (behind the PUT handler) reads it
+    # back through its strict fail-closed tenant guard.
+    session.info = {}
     session.execute.return_value = result
     session.flush = AsyncMock()
     return session

@@ -31,6 +31,27 @@ const EMPTY_GRAPH = { nodes: [], edges: [] }
 // real-stack journey budget.
 const EDITOR_READY_TIMEOUT = 30_000
 
+// Mock the pipeline + graph GETs (structural specs only — no seeded data).
+// One node so the properties panels can be opened (node/edge selection).
+async function mockEditorWithNode(page: Page) {
+  await page.route(`**/api/v1/pipelines/${PIPELINE_ID}`, (route) => {
+    if (route.request().method() === 'GET') {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(PIPELINE) })
+    }
+    return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+  })
+  await page.route(`**/api/v1/pipelines/${PIPELINE_ID}/graph`, (route) => {
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        nodes: [{ id: 'node-1', node_type: 'agent', label: 'Reviewer Agent', position: { x: 100, y: 100 } }],
+        edges: [],
+      }),
+    })
+  })
+}
+
 test.describe('Pipeline Editor', { tag: '@regression' }, () => {
   // Local runs need a generous timeout: the first SPA bundle compile on the
   // dev server (plus Vue Flow) can exceed the 30s default before any
@@ -155,25 +176,6 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     })
   })
 
-  async function mockEditorWithNode(page: Page) {
-    await page.route(`**/api/v1/pipelines/${PIPELINE_ID}`, (route) => {
-      if (route.request().method() === 'GET') {
-        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(PIPELINE) })
-      }
-      return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
-    })
-    await page.route(`**/api/v1/pipelines/${PIPELINE_ID}/graph`, (route) => {
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          nodes: [{ id: 'node-1', node_type: 'agent', label: 'Reviewer Agent', position: { x: 100, y: 100 } }],
-          edges: [],
-        }),
-      })
-    })
-  }
-
   test('editor fits the leftover viewport height — toolbar and canvas fully on screen', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await mockEditorWithNode(page)
@@ -202,6 +204,98 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
       clientHeight: document.documentElement.clientHeight,
     }))
     expect(doc.scrollHeight).toBeLessThanOrEqual(doc.clientHeight)
+  })
+
+  test('a short viewport yields the 240px floor instead of scrolling the page', { tag: '@regression' }, async ({ page, env }) => {
+    // 640x480 (short landscape) is where the chrome stack above the editor
+    // exceeds the 240px usability floor the original mobile fix introduced:
+    // with a hard floor the editor was forced to 240px and spilled ~80px below
+    // the fold, re-introducing the trapped page scroll FAR-1841 removed. The
+    // floor must yield to the viewport (FAR-1861) — the editor shrinks to the
+    // space left instead of overflowing.
+    await loginAsAdmin(page, env)
+    await mockEditorWithNode(page)
+    await page.setViewportSize({ width: 640, height: 480 })
+
+    await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
+    await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+    const flow = page.locator('.vue-flow').first()
+    await expect(flow).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+
+    // The fit resolves async (chrome above the editor mounts/measures on its
+    // own schedule) — poll until the document settles with no vertical scroll.
+    await expect
+      .poll(
+        async () => page.evaluate(() => document.documentElement.scrollHeight - document.documentElement.clientHeight),
+        { timeout: 15_000, message: 'short viewport must not scroll the page' },
+      )
+      .toBeLessThanOrEqual(0)
+
+    const viewportHeight = await page.evaluate(() => document.documentElement.clientHeight)
+    const rootBox = await page.getByTestId('pipeline-editor-root').boundingBox()
+    expect(rootBox).not.toBeNull()
+    // The 240px floor yielded: the editor is shorter than 240px here.
+    expect(rootBox!.height).toBeLessThan(240)
+    // …and ends at or above the fold, so nothing is trapped below it.
+    expect(rootBox!.y + rootBox!.height).toBeLessThanOrEqual(viewportHeight + 1)
+  })
+
+  test('a short landscape viewport scrolls the editor internally, never the page', { tag: '@regression' }, async ({ page, env }) => {
+    // 640x360 (short landscape) is where the chrome stack above the editor
+    // leaves less space than the wrapped toolbar's own min-content height
+    // (measured ~124px at 640px wide, at root-top ≈322px → ~38px left). Pinning
+    // the root there used to paint the toolbar below the fold with no page
+    // scroll to reach it (FAR-1861). The fix clips the root and makes the
+    // editor's content column the scroll container, so both the toolbar and the
+    // canvas stay reachable without ever scrolling the page.
+    await loginAsAdmin(page, env)
+    await mockEditorWithNode(page)
+    await page.setViewportSize({ width: 640, height: 360 })
+
+    await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
+    await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+    const flow = page.locator('.vue-flow').first()
+    await expect(flow).toHaveCount(1, { timeout: EDITOR_READY_TIMEOUT })
+
+    // The fit resolves async (chrome above mounts/measures on its own schedule).
+    await expect
+      .poll(
+        async () => page.evaluate(() => document.documentElement.scrollHeight - document.documentElement.clientHeight),
+        { timeout: 15_000, message: 'short landscape viewport must not scroll the page' },
+      )
+      .toBeLessThanOrEqual(0)
+
+    // The root clips — nothing paints below the pinned box.
+    const root = page.getByTestId('pipeline-editor-root')
+    expect(await root.evaluate((el) => getComputedStyle(el).overflow)).toBe('hidden')
+
+    // The editor's own content column is the scroll container, so the
+    // sub-toolbar pinned height does not strand any control.
+    const content = page.getByTestId('pipeline-editor-content')
+    const { clientHeight, scrollHeight } = await content.evaluate((el) => ({
+      clientHeight: el.clientHeight,
+      scrollHeight: el.scrollHeight,
+    }))
+    expect(scrollHeight).toBeGreaterThan(clientHeight)
+
+    const viewportHeight = await page.evaluate(() => document.documentElement.clientHeight)
+
+    // Scroll the toolbar's bottom edge to the fold: every toolbar row is
+    // reachable (it is not silently clipped away).
+    const toolbarBox = await page.getByTestId('pipeline-editor-toolbar').boundingBox()
+    expect(toolbarBox).not.toBeNull()
+    await content.evaluate((el, dy) => { el.scrollTop = dy }, Math.max(0, toolbarBox!.height - clientHeight))
+    const toolbarReached = await page.getByTestId('pipeline-editor-toolbar').boundingBox()
+    expect(toolbarReached).not.toBeNull()
+    expect(toolbarReached!.y + toolbarReached!.height).toBeLessThanOrEqual(viewportHeight + 1)
+
+    // Scroll to the bottom: the canvas is reachable too, with real height.
+    await content.evaluate((el) => { el.scrollTop = el.scrollHeight })
+    await expect(flow).toBeVisible()
+    const flowBox = await flow.boundingBox()
+    expect(flowBox).not.toBeNull()
+    expect(flowBox!.height).toBeGreaterThan(0)
+    expect(flowBox!.y + flowBox!.height).toBeLessThanOrEqual(viewportHeight + 1)
   })
 
   test('node properties panel opens as a closable overlay without crushing the canvas', { tag: '@regression' }, async ({ page, env }) => {
@@ -233,10 +327,32 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     expect((await flow.boundingBox())!.width).toBeGreaterThan(200)
   })
 
+  test('the mobile sheet is a labelled dialog and Escape closes it', { tag: '@regression' }, async ({ page, env }) => {
+    await loginAsAdmin(page, env)
+    await mockEditorWithNode(page)
+
+    await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
+    await expect(page.locator('.vue-flow__node').first()).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+    await page.locator('.vue-flow__node').first().click()
+
+    const sheet = page.locator('aside', { has: page.getByTestId('pipeline-editor-node-props-close') })
+    await expect(sheet).toBeVisible()
+    // FAR-1861: the overlay sheet must announce itself as a labelled modal
+    // dialog so AT/keyboard users are not left tabbing behind it.
+    await expect(sheet).toHaveAttribute('role', 'dialog')
+    await expect(sheet).toHaveAttribute('aria-modal', 'true')
+    await expect(sheet).toHaveAttribute('aria-labelledby', 'pipeline-editor-node-sheet-title')
+
+    // Focus moved into the sheet on open, so Escape lands on it and closes.
+    await page.keyboard.press('Escape')
+    await expect(page.getByText('Node Properties')).toHaveCount(0)
+    await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible()
+  })
+
   test('fit observer re-fits on chrome above the editor, not on viewport style writes', { tag: '@regression' }, async ({ page, env }) => {
-    // Count measurements of the editor root: refitMobileEditor's
+    // Count measurements of the editor root: refitEditorFit's
     // getBoundingClientRect is the only page code that reads that element,
-    // so each call == one scheduled re-fit of the mobile pin.
+    // so each call == one scheduled re-fit of the editor height pin.
     await page.addInitScript(() => {
       const original = Element.prototype.getBoundingClientRect
       ;(window as any).__rootRectMeasures = 0
@@ -341,5 +457,46 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     await expect
       .poll(async () => parseInt((await root.evaluate((el) => (el as HTMLElement).style.height)) || '0', 10))
       .toBeLessThan(heightAfterInsert)
+  })
+})
+
+// Desktop fold fit (FAR-1851). The editor root used `h-[calc(100vh-3.5rem)]`,
+// which accounted only for the mobile fixed header — but the breadcrumb row (and
+// any banners) render ABOVE the editor, so the editor overflowed the fold by the
+// chrome height (~50px in production, more with banners). The fix pins the
+// editor to the space actually left below that chrome, at every breakpoint.
+test.describe('Pipeline Editor desktop', { tag: '@regression' }, () => {
+  test.setTimeout(90_000)
+  test.use({ viewport: { width: 1280, height: 720 } })
+
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('assistant-panel-state', 'closed')
+    })
+  })
+
+  test('editor fits the fold — no vertical page scroll on desktop', { tag: '@regression' }, async ({ page, env }) => {
+    await loginAsAdmin(page, env)
+    await mockEditorWithNode(page)
+
+    await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
+    await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+    await expect(page.locator('.vue-flow').first()).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+
+    // Chrome above the editor resolves asynchronously (banners mount/measure),
+    // and each change re-fits — poll until the document settles with no
+    // vertical scroll.
+    await expect
+      .poll(
+        async () => page.evaluate(() => document.documentElement.scrollHeight - document.documentElement.clientHeight),
+        { timeout: 15_000, message: 'desktop editor must fit the fold with no vertical page scroll' },
+      )
+      .toBeLessThanOrEqual(0)
+
+    const viewportHeight = await page.evaluate(() => document.documentElement.clientHeight)
+    const rootBox = await page.getByTestId('pipeline-editor-root').boundingBox()
+    expect(rootBox).not.toBeNull()
+    // The editor's bottom edge is within the viewport.
+    expect(rootBox!.y + rootBox!.height).toBeLessThanOrEqual(viewportHeight + 1)
   })
 })

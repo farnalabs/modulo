@@ -75,6 +75,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatDateShort } from '../../lib/formatDate'
 import { shortId } from '../../utils/format'
+import { createdKindLabel } from '../../lib/pipelineVersion'
 
 /** Shape the chip consumes — structurally satisfied by SnapshotDetailResponse. */
 interface VersionChipSnapshot {
@@ -109,21 +110,13 @@ const chipClass = computed(() =>
 
 const createdLabel = computed(() => formatDateShort(props.snapshot.created_at))
 
-// created_kind is a closed server vocabulary (initial/edit/rollback/run) with
-// a known evolution ahead of it, so an unknown future value falls back to the
-// raw value (STATE-6) instead of rendering the i18n key or an empty cell.
-const CREATED_KIND_KEYS: Record<string, string> = {
-  initial: 'components.PipelineVersionChip.kind_initial',
-  edit: 'components.PipelineVersionChip.kind_edit',
-  rollback: 'components.PipelineVersionChip.kind_rollback',
-  run: 'components.PipelineVersionChip.kind_run',
-}
-
-const kindLabel = computed(() => {
-  const key = CREATED_KIND_KEYS[props.snapshot.created_kind]
-  if (key) return t(key)
-  return props.snapshot.created_kind || t('components.PipelineVersionChip.no_value')
-})
+// created_kind is a closed server vocabulary (initial/edit/rollback/run); the
+// label mapping is shared with the version timeline (lib/pipelineVersion) so
+// the two surfaces can never disagree. An unknown future value falls back to
+// the raw value (STATE-6) instead of rendering the i18n key or an empty cell.
+const kindLabel = computed(() =>
+  createdKindLabel(props.snapshot.created_kind, t, t('components.PipelineVersionChip.no_value')),
+)
 
 // The snapshot API exposes the author as an account id; there is no general
 // member-directory endpoint every viewer may call, so the id renders short

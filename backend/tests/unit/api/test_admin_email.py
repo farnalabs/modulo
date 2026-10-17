@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.exc import OperationalError
 
 import modulo.api.routes.admin_email as admin_email_mod
 from modulo.api.dependencies import get_db_session, get_plan_context
@@ -45,6 +46,15 @@ SYSTEM_ADMIN_PRINCIPAL = AuthenticatedPrincipal(
 )
 
 FERNET_KEY = base64.urlsafe_b64encode(b"a" * 32).decode()  # valid Fernet key
+
+
+def _lock_timeout_operational() -> OperationalError:
+    """An ``OperationalError`` whose driver error carries SQLSTATE 55P03."""
+
+    class _PgError(Exception):
+        sqlstate = "55P03"
+
+    return OperationalError("UPDATE organisations ...", {}, _PgError("canceling statement due to lock timeout"))
 
 
 def _make_settings() -> Settings:
@@ -292,6 +302,35 @@ class TestPutEmailSettings:
         finally:
             admin_email.get_organisation = original_get
             admin_email.update_org_settings_patch = original_patch
+
+    async def test_put_settings_lock_timeout_returns_409(self, client_admin, mock_session):
+        """FAR-1832 QA F10: 55P03 from the bounded settings-patch lock is a 409,
+        not the generic 503 the write arm's ``except SQLAlchemyError`` answers."""
+        from modulo.api.routes import admin_email
+        from modulo.db.models.organisation import Organisation
+
+        org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={})
+        with (
+            patch.object(admin_email, "get_organisation", AsyncMock(return_value=org)),
+            patch.object(
+                admin_email,
+                "update_org_settings_patch",
+                new=AsyncMock(side_effect=_lock_timeout_operational()),
+            ),
+            patch.object(admin_email, "set_rls_org", AsyncMock()),
+        ):
+            resp = await client_admin.put(
+                f"/api/v1/admin/org/{ORG_ID}/email-settings",
+                json={
+                    "smtp_host": "smtp.new.com",
+                    "smtp_port": 465,
+                    "smtp_username": "u",
+                    "smtp_password": "p",
+                    "email_from": "a@example.com",
+                },
+            )
+        assert resp.status_code == 409, resp.text
+        assert "another change is in progress" in resp.json()["detail"]
 
     async def test_put_binds_target_org_rls_context(self, client_admin, mock_session):
         """FAR-1830: the write path must bind the TARGET org's RLS context.
