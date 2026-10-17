@@ -14,6 +14,16 @@ const baseURL = getBaseUrl(target)
 const localServerUrl = getLocalE2eBaseUrl()
 const localServerPort = getLocalE2ePort()
 
+// Resolved Playwright worker count — the rationale lives with the `workers`
+// property below. Staging is serial; a local run is capped; app and CI keep
+// Playwright's default (undefined). `--workers=N` still overrides on the CLI.
+let workers: number | undefined
+if (target === 'staging') {
+  workers = 1
+} else if (target === 'local') {
+  workers = 2
+}
+
 export default defineConfig({
   testDir: './tests/e2e',
   retries: target !== 'local' ? 2 : 0,
@@ -53,7 +63,7 @@ export default defineConfig({
   //
   // Staging stays serial (1); app keeps Playwright's default; `--workers=N`
   // still overrides on the CLI (e.g. the `test:e2e:mobile` script).
-  workers: target === 'staging' ? 1 : target === 'local' ? 2 : undefined,
+  workers,
   use: {
     baseURL,
     trace: 'on-first-retry',  // capture trace on first retry for debugging
