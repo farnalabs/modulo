@@ -34,17 +34,18 @@
  *     pnpm exec playwright test polish-capture.spec.ts
  *
  *   # Against staging — no local web server; global-setup health-checks the
- *   # target, seeds data and logs in once, writing storageState-staging.json.
+ *   # target and logs in once, writing storageState-staging.json. E2E_SKIP_SEED=1
+ *   # makes the run read-only (see CAUTION below).
  *   # NOTE: staging carries NO real data by design, so it is useless for a
  *   # real-data polish pass — use `app` below:
- *   E2E_TARGET=staging E2E_NO_WEBSERVER=true \
+ *   E2E_TARGET=staging E2E_NO_WEBSERVER=true E2E_SKIP_SEED=1 \
  *     E2E_ADMIN_EMAIL=<admin> E2E_ADMIN_PASSWORD=<password> \
  *     POLISH_ROUTE=/pipelines pnpm exec playwright test polish-capture.spec.ts
  *
  *   # Against production (app.modulo.run) — the ONLY real-data deployment, so
  *   # the one to capture when polish findings must be adjudicated on real data.
  *   # Same shape as staging, target `app`:
- *   E2E_TARGET=app E2E_NO_WEBSERVER=true \
+ *   E2E_TARGET=app E2E_NO_WEBSERVER=true E2E_SKIP_SEED=1 \
  *     E2E_ADMIN_EMAIL=<admin> E2E_ADMIN_PASSWORD=<password> \
  *     POLISH_ROUTE=/pipelines POLISH_OUT_DIR=/tmp/polish/pipelines-real \
  *     pnpm exec playwright test polish-capture.spec.ts
@@ -52,11 +53,11 @@
  *   # CAUTION — real targets are not read-only by default: for ANY non-local
  *   # target `tests/e2e/setup/global-setup.ts` runs the data seeder, which
  *   # WRITES to the target (an E2E Test Pipeline plus retention / email / cost
- *   # settings). This spec itself only logs in and loads pages, so for a
- *   # READ-ONLY capture of a real deployment point `E2E_API_URL` at a closed
- *   # address to stop the seeder authenticating (it skips on auth failure); the
- *   # spec's own UI login does not use E2E_API_URL:
- *   E2E_TARGET=app E2E_NO_WEBSERVER=true E2E_API_URL=http://127.0.0.1:1 \
+ *   # settings). A capture must be read-only, so set E2E_SKIP_SEED=1 — it skips
+ *   # ONLY the seeder; the health check and the spec's own UI login still run.
+ *   # (The older workaround — point `E2E_API_URL` at a closed address so the
+ *   # seeder's auth fails — still works but is now unnecessary.)
+ *   E2E_TARGET=app E2E_NO_WEBSERVER=true E2E_SKIP_SEED=1 \
  *     E2E_ADMIN_EMAIL=<admin> E2E_ADMIN_PASSWORD=<password> \
  *     POLISH_ROUTE=/pipelines POLISH_OUT_DIR=/tmp/polish/pipelines-real \
  *     pnpm exec playwright test polish-capture.spec.ts
@@ -79,6 +80,14 @@
  *   E2E_TARGET     (optional) Target selector — `local` (default, mock API),
  *                               `staging` (no real data) or `app`
  *                               (app.modulo.run — the real-data target).
+ *   E2E_SKIP_SEED  (optional) Non-local targets only. `1` / `true` / `yes` /
+ *                               `on` (trimmed, case-insensitive) makes the run
+ *                               READ-ONLY by skipping global-setup's data
+ *                               seeder — otherwise it writes an E2E Test
+ *                               Pipeline plus retention / email / cost settings
+ *                               into the target. Unset/empty/anything else
+ *                               seeds as before. The health check and the login
+ *                               step still run.
  *
  * TARGET SELECTION — the real mechanism (tests/e2e/setup/env.ts)
  *   `getTarget()` reads `process.env.E2E_TARGET` and lowercases it; valid
