@@ -6,7 +6,8 @@ the same first-class coverage. It pins the four things a reviewer needs to trust
 the migration without a live DB:
 
 * **Revision chain** - 0314 revises ``0313_collection_install_drop_installed_entities``; the
-  migrations directory has exactly one head (``0317_drop_retired_pipeline_diff_rollback_flag``, which
+  migrations directory has exactly one head (``0320_organisation_cost_state``, which
+  chains onto ``0317_drop_retired_pipeline_diff_rollback_flag``, which
   chains onto ``0316_policy_gate_evaluation_mode``, which
   chains onto ``0315_service_accounts_lifecycle``, which chains onto
   ``0314_external_agents_mcp_servers``), the revision id matches the filename,
@@ -48,7 +49,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0314_external_agents_mcp_servers"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0313_collection_install_drop_installed_entities"
-_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
+_HEAD_MIGRATION = "0320_organisation_cost_state"
 
 _EXTERNAL_AGENTS = "external_agents"
 _MCP_SERVERS = "mcp_servers"
@@ -143,7 +144,7 @@ def _joined(rec: _Recorder) -> str:
 
 
 class TestChain:
-    def test_single_head_is_0317_drop_retired_pipeline_diff_rollback_flag(self) -> None:
+    def test_single_head_is_0320_organisation_cost_state(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 

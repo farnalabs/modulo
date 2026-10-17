@@ -64,8 +64,13 @@ Lenses:
     0316_policy_gate_evaluation_mode chains onto
     0315_service_accounts_lifecycle, and
     0317_drop_retired_pipeline_diff_rollback_flag chains onto
-    0316_policy_gate_evaluation_mode as the
-    single linear head.
+    0316_policy_gate_evaluation_mode, and
+    0318_trigger_event_required_refs_missing chains onto
+    0317_drop_retired_pipeline_diff_rollback_flag, and
+    0319_trigger_event_parse_failed chains onto
+    0318_trigger_event_required_refs_missing, and
+    0320_organisation_cost_state chains onto
+    0319_trigger_event_parse_failed as the single linear head.
 * **Structure (mocked ``op``)** - upgrade emits FOUR existence-gated DO blocks
   (add NOT VALID, then VALIDATE, for each of the two columns) carrying the full
   vocabulary and a TABLE-QUALIFIED ``conrelid`` gate; downgrade is the
@@ -90,7 +95,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0259_pipeline_snapshot_max_autonomy_check"
 _MIGRATION_DOWN_REVISION = "0258_pipeline_accountability_owners"
-_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
+_HEAD_MIGRATION = "0320_organisation_cost_state"
 _MAX_CEILING_CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_level"
 _DEFAULT_LEVEL_CONSTRAINT = "ck_pipeline_snapshots_default_autonomy_level"
 _CONSTRAINTS = (_MAX_CEILING_CONSTRAINT, _DEFAULT_LEVEL_CONSTRAINT)

@@ -191,11 +191,12 @@ _MIGRATION_PATH = (
 # 0317_drop_retired_pipeline_diff_rollback_flag chained onto 0316_policy_gate_evaluation_mode, and
 # 0318_trigger_event_required_refs_missing (FAR-1916) chained onto 0317, and
 # 0319_trigger_event_parse_failed (Slack parse-failure drift fix) chained onto
-# 0318 as the chain head.
+# 0318, and 0320_organisation_cost_state (FAR-1823 Land 2) chained onto
+# 0319 as the chain head.
 # (_MIGRATION_NAME above is pinned to the migration that owns the widened
 # constraint under test — the Slack parse-failure fix moved that ownership to
 # 0319_trigger_event_parse_failed.)
-_CHAIN_HEAD_MIGRATION_NAME = "0319_trigger_event_parse_failed"
+_CHAIN_HEAD_MIGRATION_NAME = "0320_organisation_cost_state"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

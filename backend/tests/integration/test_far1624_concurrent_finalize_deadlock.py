@@ -1,33 +1,33 @@
-"""FAR-1624: concurrent run finalisations must not deadlock on the org row.
+"""FAR-1624 / FAR-1833: concurrent run finalisations must not deadlock.
 
 Reproduced on production 2026-10-09 (20:05Z): 5 of 8 simultaneous trivial runs
 failed after ~12s with asyncpg ``deadlock detected`` (SQLSTATE 40P01). Every
 finalising transaction had already inserted rows that FK-reference the
 organisation (taking ``FOR KEY SHARE`` on the org tuple), and then the
-spend-ceiling gate (``_apply_spend_ceiling_gate``) requested ``FOR UPDATE`` on
-that same tuple. Several backends each held ``FOR KEY SHARE`` and waited for
-the others' ``FOR UPDATE`` upgrade — a classic foreign-key ``FOR KEY SHARE`` ->
-``FOR UPDATE`` lock-upgrade cycle.
+spend-ceiling gate (``_apply_spend_ceiling_gate``) requested a row lock on that
+same tuple. Several backends each held ``FOR KEY SHARE`` and waited for the
+lock upgrade — a classic foreign-key ``FOR KEY SHARE`` -> row-lock lock-upgrade
+cycle.
 
-The gate now requests ``FOR NO KEY UPDATE`` (SQLAlchemy
-``with_for_update(key_share=True)``), which does NOT conflict with
-``FOR KEY SHARE`` and still conflicts with itself, so concurrent spend accrual
-remains serialised while the upgrade deadlock is removed. The gate acquires the
-lock and returns the accrual it decided on; the lifetime
-``org_cumulative_spend_cents`` increment itself rides the ledger savepoint in
-``_record_ledger_with_retry`` (FAR-391/#1499 money-correctness), which is
-invoked by ``_ledger_block`` while the org lock is still held.
+FAR-1624 first weakened the gate to ``FOR NO KEY UPDATE`` (compatible with
+``FOR KEY SHARE``). FAR-1833 removed the org-row lock from the path entirely:
+the ceiling/cumulative moved to ``organisation_cost_state``, the gate
+serialises on a per-org advisory lock (``lock_org_cost_state``), and the
+accrual is a single atomic increment (``increment_org_cumulative_spend``)
+inside the ledger savepoint. The org row is read but NEVER locked, so the D9
+lock coupling with the ceiling endpoints' org-row write is gone.
 
 Why this is an integration test
 -------------------------------
-The defect is a real Postgres row-lock interaction: no mock produces a 40P01.
-The test drives the REAL terminal ledger block (``_ledger_block``, which
-invokes ``_apply_spend_ceiling_gate`` and the ledger-savepoint accrual) from N
+The defect is a real Postgres lock interaction: no mock produces a 40P01. The
+test drives the REAL terminal ledger block (``_ledger_block``, which invokes
+``_apply_spend_ceiling_gate`` and the ledger-savepoint accrual) from N
 independent sessions/transactions, each holding a real FK ``FOR KEY SHARE`` on
 the org (via an ``audit_events`` insert, exactly as a finalising run records
 facts). A barrier synchronises every session so ALL N hold their share lock
-before ANY requests the org row lock, which makes the old ``FOR UPDATE`` code
-deadlock deterministically.
+before ANY takes the gate lock. Under the old org-row-lock shape this
+deadlocked; under the FAR-1833 cost-state advisory lock it serialises cleanly
+and every run accrues exactly once.
 """
 
 from __future__ import annotations
@@ -63,11 +63,15 @@ async def _seed(engine: AsyncEngine) -> dict[str, Any]:
     async with engine.begin() as conn:
         await conn.execute(
             text(
-                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json, "
-                "org_cumulative_spend_cents) "
-                "VALUES (:id, :name, :slug, '{}'::json, '{}'::json, 0)"
+                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
+                "VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"
             ),
             {"id": str(org_id), "name": "FAR-1624 deadlock org", "slug": f"far1624-{org_id.hex[:8]}"},
+        )
+        # FAR-1833: the cumulative total lives on the cost-state row.
+        await conn.execute(
+            text("INSERT INTO organisation_cost_state (org_id, org_cumulative_spend_cents) VALUES (:id, 0)"),
+            {"id": str(org_id)},
         )
         await conn.execute(
             text(
@@ -160,10 +164,10 @@ async def _finalise_one(
         await barrier.wait()
         run = await session.get(Run, run_id)
         assert run is not None
-        # The REAL terminal ledger block: the ceiling gate acquires the org
-        # FOR NO KEY UPDATE lock, then the lifetime accrual is applied inside
-        # the ledger savepoint — all within this transaction, exactly as
-        # production finalisation does.
+        # The REAL terminal ledger block: the ceiling gate takes the per-org
+        # cost-state advisory lock (no org row lock), then the lifetime accrual
+        # is applied as a single atomic increment inside the ledger savepoint —
+        # all within this transaction, exactly as production finalisation does.
         await _ledger_block(
             session,
             run_id=run_id,
@@ -199,10 +203,11 @@ async def test_concurrent_finalisations_do_not_deadlock(db_engine: AsyncEngine) 
 
         async with db_engine.connect() as conn:
             accrued = await conn.scalar(
-                text("SELECT org_cumulative_spend_cents FROM organisations WHERE id = :oid"),
+                text("SELECT org_cumulative_spend_cents FROM organisation_cost_state WHERE org_id = :oid"),
                 {"oid": str(org_id)},
             )
-        # Every run accrued exactly once — the NU lock serialised the RMW.
+        # Every run accrued exactly once — the cost-state advisory lock + the
+        # atomic increment serialised the accrual without an org-row lock.
         assert accrued == _RUN_COST_CENTS * _N_RUNS
     finally:
         await _cleanup(db_engine, seed)

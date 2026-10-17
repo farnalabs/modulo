@@ -102,6 +102,7 @@ from modulo.core.node_output_split import (
     split_node_output,
 )
 from modulo.core.run_outputs_dualwrite import guard_dual_write
+from modulo.core.runner_capacity import lock_org_cost_state
 from modulo.core.spend_ceiling import (
     ORG_CEILING_EXCEEDED,
     SpendCeilingDecision,
@@ -109,6 +110,7 @@ from modulo.core.spend_ceiling import (
     evaluate_spend_ceilings,
 )
 from modulo.db.crud.daily_run_count import org_level_predicate
+from modulo.db.crud.organisation_cost_state import get_org_cost_state, increment_org_cumulative_spend
 from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.run import update_run_status
 from modulo.db.crud.run_node_outputs import DualWriteError, read_run_blobs
@@ -1361,18 +1363,6 @@ class _LedgerWriteRetryError(Exception):
         self.reason = reason
 
 
-def _read_accrued_base(accrued_org: Organisation | None) -> int:
-    """The locked org's lifetime consumed total, read ONCE before the retry loop.
-
-    Reading it once (rather than per attempt) is deliberate: a savepoint rollback
-    EXPIRES the Organisation, so a per-attempt attribute read would trigger a lazy
-    refresh outside a greenlet and raise ``MissingGreenlet``.
-    """
-    if accrued_org is None:
-        return 0
-    return accrued_org.org_cumulative_spend_cents or 0
-
-
 async def _attempt_ledger_write(
     session: AsyncSession,
     *,
@@ -1381,8 +1371,6 @@ async def _attempt_ledger_write(
     team_id: uuid.UUID | None,
     run_id: uuid.UUID,
     run_date: date,
-    accrued_org: Organisation | None,
-    accrued_base: int,
     accrued_cents: int,
 ) -> tuple[bool, str | None]:
     """One savepoint-guarded ledger write (a single retry-loop attempt).
@@ -1392,6 +1380,13 @@ async def _attempt_ledger_write(
     ledger. Re-raises a whole-tx abort and ``CancelledError`` untouched; wraps any
     other contained failure as ``_LedgerWriteRetryError`` for the caller's bounded
     retry loop.
+
+    FAR-1833: the accrual is a SINGLE atomic statement
+    (``increment_org_cumulative_spend``) against ``organisation_cost_state``, so
+    there is no in-Python read-modify-write to protect from a savepoint-expired
+    ORM attribute: a savepoint rollback restores the cost-state row, and a retry
+    re-applies the increment from that restored value — exactly once per
+    committed ledger write.
     """
     savepoint = await session.begin_nested()
     try:
@@ -1403,11 +1398,12 @@ async def _attempt_ledger_write(
             run_id=run_id,
             run_date=run_date,
         )
-        if accrued_org is not None and accrued_cents:
-            # Absolute assignment from the pre-loop base — NEVER re-read the
-            # (possibly savepoint-expired) attribute inside the loop.
-            accrued_org.org_cumulative_spend_cents = accrued_base + accrued_cents
-            await session.flush()
+        if accrued_cents:
+            # Single atomic DB increment — the addition is computed by the
+            # database in the same statement that reads the old value, so a
+            # retry cannot double-count and a concurrent accrual cannot lose an
+            # update.
+            await increment_org_cumulative_spend(session, org_id, delta_cents=accrued_cents)
     except asyncio.CancelledError:
         await savepoint.rollback()
         raise
@@ -1434,7 +1430,6 @@ async def _record_ledger_with_retry(
     run_id: uuid.UUID,
     run_date: date,
     attempts: int = 3,
-    accrued_org: Organisation | None = None,
     accrued_cents: int = 0,
 ) -> tuple[bool, str | None]:
     """Record the terminal spend with BOUNDED RETRY (``begin_nested`` savepoints).
@@ -1445,28 +1440,20 @@ async def _record_ledger_with_retry(
     failure — the refused amount was already persisted by
     ``check_and_record_spend``).
 
-    ``accrued_org`` / ``accrued_cents`` (money-correctness): the org's lifetime
-    consumed total is incremented INSIDE this savepoint — the SAME atomic unit
-    as the ledger write — instead of in the outer transaction. A contained
-    ledger-write failure (or any retry) therefore rolls the accrual back WITH
-    the ledger, so a later re-finalisation of the same run cannot double-count.
-    The accrual is written after ``check_and_record_spend`` returns (a clean
-    daily-limit refusal still commits it, preserving prior behaviour — only a
-    genuine write FAILURE drops it).
+    ``accrued_cents`` (money-correctness): the org's lifetime consumed total is
+    incremented INSIDE this savepoint — the SAME atomic unit as the ledger write
+    — instead of in the outer transaction. A contained ledger-write failure (or
+    any retry) therefore rolls the accrual back WITH the ledger, so a later
+    re-finalisation of the same run cannot double-count. The accrual is written
+    after ``check_and_record_spend`` returns (a clean daily-limit refusal still
+    commits it, preserving prior behaviour — only a genuine write FAILURE drops
+    it).
 
-    The org's BASE cumulative is read ONCE here, BEFORE the retry loop, and the
-    absolute value ``base + accrued_cents`` is assigned on every attempt. This
-    is deliberate: when the accrual's own ``flush()`` fails, the savepoint
-    rollback EXPIRES the Organisation (SQLAlchemy drops its loaded state), so a
-    per-attempt attribute READ on the next attempt would trigger a lazy refresh
-    outside a greenlet and raise ``MissingGreenlet`` — a NON-abort error that
-    would exhaust the retries and lose the ledger to the reduced escape. The row
-    is held ``FOR ... UPDATE`` by the ceiling gate for the whole transaction, so
-    the pre-loop base cannot be changed concurrently and the absolute
-    assignment is idempotent under savepoint rollback.
+    FAR-1833: the accrual is a single atomic ``increment_org_cumulative_spend``
+    statement, so there is no pre-read base to capture and no savepoint-expired
+    ORM attribute to dodge (the old ``_read_accrued_base`` exists no more); a
+    savepoint rollback simply restores the cost-state row for the retry.
     """
-    # Read the locked org's base ONCE, before any savepoint can expire it.
-    accrued_base = _read_accrued_base(accrued_org)
     last_reason: str | None = None
     for attempt in range(attempts):
         try:
@@ -1477,8 +1464,6 @@ async def _record_ledger_with_retry(
                 team_id=team_id,
                 run_id=run_id,
                 run_date=run_date,
-                accrued_org=accrued_org,
-                accrued_base=accrued_base,
                 accrued_cents=accrued_cents,
             )
         except _LedgerWriteRetryError as exc:
@@ -1543,6 +1528,7 @@ async def _ceiling_auto_pause_if_org_crossing(
     session: AsyncSession,
     *,
     org_row: Organisation,
+    spend_ceiling_cents: int | None,
     decision: SpendCeilingDecision,
     run_id: uuid.UUID,
 ) -> None:
@@ -1553,6 +1539,11 @@ async def _ceiling_auto_pause_if_org_crossing(
     that trips it (per-run ceiling refusals are a single-run cap and never
     pause the org). Fail-open: a pause failure must not fail the terminal
     write.
+
+    FAR-1833: the ceiling value is passed in from the cost-state row
+    (``organisation_cost_state``); the gate no longer reads it off the
+    ``organisations`` row. ``org_row`` is still needed for the toggle
+    (``settings_json``) and the ``triggers_paused`` write.
     """
     if decision.reason != ORG_CEILING_EXCEEDED:
         return
@@ -1562,7 +1553,7 @@ async def _ceiling_auto_pause_if_org_crossing(
             org=org_row,
             reason=AUTO_PAUSE_REASON_SPEND_CEILING,
             spend_cents=decision.projected_org_cumulative_cents,
-            limit_cents=org_row.spend_ceiling_cents,
+            limit_cents=spend_ceiling_cents,
             run_id=run_id,
         )
     except asyncio.CancelledError:
@@ -1579,7 +1570,7 @@ async def _apply_spend_ceiling_gate(
     total: Decimal,
     run_id: uuid.UUID,
     metric_sink: FinalizeMetricSink | None = None,
-) -> tuple[bool, Organisation | None, int]:
+) -> tuple[bool, int]:
     """FAR-391: hard spend-ceiling gate (per-run + per-org).
 
     Runs BEFORE the daily-ledger write so a ceiling breach refuses the ledger
@@ -1588,14 +1579,11 @@ async def _apply_spend_ceiling_gate(
     halted (never resumed to spawn further billable steps), and an org at its
     lifetime budget stops spawning new runs.
 
-    Returns ``(skip_ledger, accrual_org, accrual_cents)`` — ``skip_ledger`` is
-    True when the ledger write must be SKIPPED (the run was refused at its
-    ceiling); ``accrual_org`` is the LOCKED Organisation row whose lifetime
-    consumed total must be incremented by this run's cost, or ``None`` when no
-    accrual is due (the org row vanished, or the run was refused); and
+    Returns ``(skip_ledger, accrual_cents)`` — ``skip_ledger`` is True when the
+    ledger write must be SKIPPED (the run was refused at its ceiling);
     ``accrual_cents`` is the SAME rounded-down cents value this gate compared
-    against the ceiling, so the value decided on IS the value accrued (the
-    ledger block must not recompute it independently).
+    against the ceiling (0 when no accrual is due), so the value decided on IS
+    the value accrued (the ledger block must not recompute it independently).
 
     The accrual is deliberately NOT performed here (money-correctness): it is
     applied INSIDE the ledger write's savepoint by
@@ -1610,43 +1598,53 @@ async def _apply_spend_ceiling_gate(
     the org's ceiling and the lifetime spend under-counts (the accrual rides
     the ledger savepoint, which this gate gates).
 
-    FAR-1624: the org row is locked with ``FOR NO KEY UPDATE`` (SQLAlchemy
-    ``with_for_update(key_share=True)``), NOT ``FOR UPDATE``.  The
-    finalisation transaction has already inserted/updated rows that
-    FK-reference the organisation (taking ``FOR KEY SHARE`` on the org tuple),
-    so requesting the stronger ``FOR UPDATE`` here deadlocked up to 8
-    concurrent finalisations (SQLSTATE 40P01): each held ``FOR KEY SHARE`` and
-    each waited for the others' ``FOR UPDATE`` upgrade.  ``FOR NO KEY UPDATE``
-    is compatible with ``FOR KEY SHARE`` and still conflicts with itself, so
-    concurrent spend accrual remains serialised — while the gate only ever
-    writes the non-key column ``org_cumulative_spend_cents``.
+    FAR-1833: the ceiling/cumulative state lives on ``organisation_cost_state``
+    and the gate's serialisation point is the per-org cost-state advisory lock
+    (``lock_org_cost_state``), NOT a row lock on ``organisations``. This
+    replaces the FAR-1624 A22 ``with_for_update(key_share=True)`` org-row lock
+    whose coupling with the ceiling endpoints' org-row write was the D9
+    deadlock. The lock order (R6) is preserved: the run row ``FOR UPDATE`` is
+    already held by ``_ledger_block`` before this gate, so the acquisition
+    sequence is run row -> cost advisory -> FSM ``FOR UPDATE`` -> chain-head
+    appends. The advisory-lock wait is bounded by
+    ``set_mutation_row_lock_timeout`` (issued at the ``finalize_cost`` entry
+    point), so contention degrades to a retryable SQLSTATE 55P03 rather than
+    an unbounded wait or a 40P01 abort.
     """
     from modulo.db.soft_delete import include_soft_deleted
 
+    # Cost-state advisory lock — replaces the A22 organisations-row KEY-SHARE
+    # lock. Transaction-scoped (released on COMMIT/ROLLBACK).
+    await lock_org_cost_state(session, org_id)
+    # The org row is read WITHOUT a row lock: it is not the ceiling source, it
+    # only establishes that the org still exists (a deleted org's cost-state row
+    # is gone via the FK CASCADE, so a missing org means no gate and no accrual).
     org_row = (
-        await session.execute(
-            include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update(key_share=True))
-        )
+        await session.execute(include_soft_deleted(select(Organisation).where(Organisation.id == org_id)))
     ).scalar_one_or_none()
     if org_row is None:
-        return False, None, 0
+        return False, 0
+    state = await get_org_cost_state(session, org_id)
+    spend_ceiling_cents = state.spend_ceiling_cents if state is not None else None
     # Use the same ROUND_HALF_UP cents conversion as the API boundary so the
     # gate value and the persisted org cumulative never diverge on sub-cent
     # run costs (the accrual in ``_record_ledger_with_retry`` uses the same
-    # ``cents_from_usd``).
-    total_cents = cents_from_usd(total) or 0
+    # ``cents_from_usd``). Clamp to >= 0 so the accrual delta agrees with the
+    # decision path (``evaluate_spend_ceilings`` clamps its inputs to >= 0): a
+    # negative run cost can never decrement the org's lifetime spend or trip
+    # the ``ck_organisation_cost_state_cum_spend`` CHECK (FAR-1833 P3-1).
+    total_cents = max(cents_from_usd(total) or 0, 0)
     decision = evaluate_spend_ceilings(
         run_cost_so_far_cents=total_cents,
         estimated_next_step_cents=0,
-        max_run_cost_cents=org_row.max_run_cost_cents,
-        org_cumulative_spend_cents=org_row.org_cumulative_spend_cents or 0,
-        spend_ceiling_cents=org_row.spend_ceiling_cents,
+        max_run_cost_cents=state.max_run_cost_cents if state is not None else None,
+        org_cumulative_spend_cents=(state.org_cumulative_spend_cents or 0) if state is not None else 0,
+        spend_ceiling_cents=spend_ceiling_cents,
     )
     if decision.allowed:
-        # Billable: hand the LOCKED org row AND the decision cents back so the
-        # ledger savepoint accrues exactly the value this gate decided on,
-        # atomically with the ledger row.
-        return False, org_row, total_cents
+        # Billable: hand the decision cents back so the ledger savepoint accrues
+        # exactly the value this gate decided on, atomically with the ledger row.
+        return False, total_cents
     # Preserve an explicit terminal CANCEL (B6 / user-requested halt) so
     # the ceiling refuse does NOT overwrite it and feed the wrong status
     # to journey advancement. The ledger is still refused (the run is not
@@ -1655,7 +1653,7 @@ async def _apply_spend_ceiling_gate(
         locked.ledger_refused_at = datetime.now(UTC)
         _emit_limit_refused("spend_ceiling", metric_sink)
         await session.flush()
-        return True, None, 0
+        return True, 0
     locked.ledger_refused_at = datetime.now(UTC)
     locked.status = "cost_ceiling_exceeded"
     locked.error_code = decision.reason
@@ -1670,9 +1668,15 @@ async def _apply_spend_ceiling_gate(
         },
     )
     _emit_limit_refused("spend_ceiling", metric_sink)
-    await _ceiling_auto_pause_if_org_crossing(session, org_row=org_row, decision=decision, run_id=run_id)
+    await _ceiling_auto_pause_if_org_crossing(
+        session,
+        org_row=org_row,
+        spend_ceiling_cents=spend_ceiling_cents,
+        decision=decision,
+        run_id=run_id,
+    )
     await session.flush()
-    return True, None, 0
+    return True, 0
 
 
 async def _ledger_block(
@@ -1711,7 +1715,7 @@ async def _ledger_block(
 
     # --- FAR-391: hard spend-ceiling gate (per-run + per-org), see
     # ``_apply_spend_ceiling_gate`` — it runs BEFORE the daily-ledger write.
-    skip_ledger, accrual_org, accrual_cents = await _apply_spend_ceiling_gate(
+    skip_ledger, accrual_cents = await _apply_spend_ceiling_gate(
         session, locked, org_id=org_id, total=total, run_id=run_id, metric_sink=metric_sink
     )
     if skip_ledger:
@@ -1726,11 +1730,11 @@ async def _ledger_block(
             run_id=run_id,
             run_date=run_date,
             attempts=3,
-            # Accrual rides the ledger savepoint (same atomic unit) so a
-            # contained write failure cannot commit it without the ledger.
-            accrued_org=accrual_org,
-            # The cents the ceiling gate already compared — never recomputed
-            # here, so the value decided on IS the value accrued.
+            # The accrual rides the ledger savepoint (same atomic unit) as a
+            # single atomic cost-state increment, so a contained write failure
+            # cannot commit it without the ledger. ``accrual_cents`` is the
+            # value the ceiling gate already compared — never recomputed here,
+            # so the value decided on IS the value accrued.
             accrued_cents=accrual_cents,
         )
     except asyncio.CancelledError:
@@ -2563,11 +2567,11 @@ async def finalize_cost(
     instead (the same statement is guard-atomic for the concurrent case).
 
     FAR-1313 / FAR-1592 lock bound: ``set_mutation_row_lock_timeout`` is issued
-    FIRST, before ANY row lock this finalisation takes — it bounds (SET LOCAL)
-    the org ``FOR ... UPDATE`` in ``_apply_spend_ceiling_gate`` and the Run
-    ``FOR UPDATE`` in ``_ledger_block`` for the REST of the caller's transaction,
-    so a contended finalisation surfaces as a bounded 55P03
-    (``is_row_lock_timeout``) rather than queuing on wall-clock past the
+    FIRST, before ANY lock this finalisation takes — it bounds (SET LOCAL) the
+    Run ``FOR UPDATE`` in ``_ledger_block`` and the per-org cost-state advisory
+    lock wait in ``_apply_spend_ceiling_gate`` (FAR-1833) for the REST of the
+    caller's transaction, so a contended finalisation surfaces as a bounded
+    55P03 (``is_row_lock_timeout``) rather than queuing on wall-clock past the
     gateway's session window. The executor's ownership layer retries that
     bounded failure (40P01/55P03) and otherwise terminalises truthfully.
 
