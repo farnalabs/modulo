@@ -1,5 +1,5 @@
 import { type FullConfig, chromium } from '@playwright/test'
-import { getTarget, getBaseUrl, getTestEnv } from './env'
+import { getTarget, getBaseUrl, getTestEnv, shouldSkipSeed } from './env'
 import { completeLoginForm } from './fixtures'
 import { seedTargetEnvironment } from './seeder'
 
@@ -49,9 +49,17 @@ async function globalSetup(_config: FullConfig) {
   await waitForTargetHealth(target, baseURL, healthUrl)
 
   const env = getTestEnv()
-  process.stdout.write(`[global-setup] Seeding data for ${target}...\n`)
-  const ctx = await seedTargetEnvironment(env)
-  process.stdout.write(`[global-setup] Seeder result: pipelineId=${ctx.pipelineId}, pipelineName=${ctx.pipelineName}\n`)
+  // Single decision point: seeding is the only write this setup performs, so
+  // an explicit opt-out here makes a non-local run read-only without touching
+  // the health check or the login/storageState step below. Unset flag ⇒ the
+  // seeding path is byte-for-byte the previous behaviour.
+  if (shouldSkipSeed()) {
+    process.stdout.write(`[global-setup] E2E_SKIP_SEED set — skipping data seeding for ${target}\n`)
+  } else {
+    process.stdout.write(`[global-setup] Seeding data for ${target}...\n`)
+    const ctx = await seedTargetEnvironment(env)
+    process.stdout.write(`[global-setup] Seeder result: pipelineId=${ctx.pipelineId}, pipelineName=${ctx.pipelineName}\n`)
+  }
 
   process.stdout.write(`[global-setup] Logging in once for ${target}...\n`)
   const browser = await chromium.launch()
