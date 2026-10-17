@@ -6,9 +6,9 @@ import { GrafanaFaroMonitorBackend } from './backends/grafana-faro'
 import { SentryMonitorBackend } from './backends/sentry'
 
 // Each backend's `init()` pulls in its SDK over the network, so it can hang
-// indefinitely (a stalled chunk fetch). The loop is sequential, so one stuck
-// init would starve every backend registered after it — bound each init and
-// drop only the backend that did not come up in time (FAR-1892).
+// indefinitely (a stalled chunk fetch). Bound each init independently and drop
+// only the backend that did not come up in time, so one stalled SDK can never
+// withhold the others (FAR-1892).
 const MONITOR_BACKEND_INIT_TIMEOUT_MS = 5_000
 
 export function loadMonitorConfig(): MonitorConfig {
@@ -60,7 +60,11 @@ export async function loadBackends(
     grafana_faro: () => new GrafanaFaroMonitorBackend(),
   }
 
-  const backends: MonitorBackend[] = []
+  // Initialise every backend concurrently but keep the configured order in the
+  // result (Promise.all preserves input order). Bounding each init independently
+  // means a stalled SDK chunk fetch drops only that backend, never the ones
+  // beside it (FAR-1892).
+  const pending: Promise<MonitorBackend | null>[] = []
   for (const key of config.monitorBackends) {
     const create = factories[key]
     if (!create) {
@@ -68,15 +72,17 @@ export async function loadBackends(
       continue
     }
     const backend = create()
-    try {
-      if (await withTimeout(backend.init(config), initTimeoutMs, `${backend.key}.init`)) {
-        backends.push(backend)
-      }
-    } catch (error) {
-      // Fail open WITH a log: a monitoring backend is best-effort and must
-      // never take down the app or the other backends.
-      console.warn(`[monitor] Backend ${backend.key} init failed; continuing without it`, error)
-    }
+    pending.push(
+      withTimeout(backend.init(config), initTimeoutMs, `${backend.key}.init`)
+        .then((ready) => (ready ? backend : null))
+        .catch((error) => {
+          // Fail open WITH a log: a monitoring backend is best-effort and must
+          // never take down the app or the other backends.
+          console.warn(`[monitor] Backend ${backend.key} init failed; continuing without it`, error)
+          return null
+        }),
+    )
   }
-  return backends
+  const initialised = await Promise.all(pending)
+  return initialised.filter((backend): backend is MonitorBackend => backend !== null)
 }

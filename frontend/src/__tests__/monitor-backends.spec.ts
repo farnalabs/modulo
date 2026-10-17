@@ -596,8 +596,9 @@ describe('monitor/index', () => {
 
   it('loadBackends drops a backend whose init never settles', { timeout: 2000 }, async () => {
     // A dynamic import whose module factory never resolves models a stalled
-    // SDK chunk fetch: init() awaits forever. The loop is sequential, so
-    // without a per-backend bound this hangs the whole list (FAR-1892).
+    // SDK chunk fetch: init() awaits forever. Backends initialise concurrently,
+    // so without a per-backend bound Promise.all never settles and the whole
+    // list hangs (FAR-1892).
     vi.doMock('@grafana/faro-web-sdk', () => new Promise(() => {}))
 
     const backends = await loadBackends(
