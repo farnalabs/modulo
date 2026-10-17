@@ -155,6 +155,8 @@ def _run_windows() -> int:
         "scan",
         "--config=.semgrep/",
         "--error",
+        "--timeout",
+        "120",
         *changed,
     ]
 
