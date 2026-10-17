@@ -89,12 +89,23 @@ second-guessed, so a deliberately-small override still enforces.
 
 #### Failure behaviour
 
-Detection failure never blocks a run. With no source resolved, or when a probe or query
-fails, the status reports `capacity_percent: null` and `source: "none"`, the alert level
-stays `ok`, and the hard-stop remains inert - a capacity measurement is a safety
-advisory, not a reason to stop working. The resolved source is reported by
-`GET /api/v1/admin/db-capacity` so an operator can see which mechanism is active
-(`env`, `filesystem`, or `none`).
+Detection failure never **raises** - every failure fails open - but it does not always
+leave the monitor inert, because the two failure kinds differ:
+
+- **No source resolved, or the filesystem probe itself fails** - `capacity_percent:
+  null`, `source: "none"`, alert level `ok`, hard-stop inert.
+- **A `pg_database_size` query failure** - the resolved source still resolves. For `env`
+  the capacity comes from `DB_CAPACITY_BYTES` with the numerator unknown, so the status
+  reads `source: "env"` and `capacity_percent: null`, and the hard-stop is inert. For
+  `filesystem` the numerator is the mount's own `total - free`, which does not depend on
+  the database, so the percent and alert level stay real and the hard-stop **stays
+  armed**.
+
+On the default self-hosted Compose deployment `filesystem` is the source that resolves,
+so a database blip on a near-full volume does not disarm the gate - new runs can still
+be refused. Detection is a safety advisory, and it fails open. The resolved source is
+reported by `GET /api/v1/admin/db-capacity` so an operator can see which mechanism is
+active (`env`, `filesystem`, or `none`).
 
 `DB_CAPACITY_BYTES` is therefore optional everywhere: set it to pin capacity explicitly
 (pair it with `DB_CAPACITY_SOURCE=env` to pin it exclusively), or leave it unset and let

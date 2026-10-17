@@ -353,7 +353,7 @@ class Settings(BaseSettings):
     # Env var: DB_CAPACITY_BYTES.
     db_capacity_bytes: int | None = Field(default=None)
     # Path to the Postgres data volume, mounted READ-ONLY into the app
-    # container. The filesystem probe statvfses it to derive the volume's TRUE
+    # container. The filesystem probe uses `statvfs` to derive the volume's TRUE
     # capacity (total) and usage (total - free) — so WAL, temp files and any
     # other database sharing the volume are counted, which ``pg_database_size``
     # alone misses. Only consulted when the app and the database share a
