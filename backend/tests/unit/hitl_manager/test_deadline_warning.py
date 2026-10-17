@@ -32,6 +32,8 @@ from modulo.core.hitl_manager.deadline_warning import (
 )
 from modulo.db.models.hitl_claim import HitlClaim
 
+from .conftest import mock_begin as _mock_begin
+
 _ORG = uuid.uuid4()
 _RUN = uuid.uuid4()
 _PIPE = uuid.uuid4()
@@ -236,13 +238,6 @@ async def test_fire_once_without_redis_uses_memory_backstop() -> None:
 # ---------------------------------------------------------------------------
 # Dispatch flow (mocked sessions)
 # ---------------------------------------------------------------------------
-
-
-def _mock_begin(session: AsyncMock) -> None:
-    begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin = MagicMock(return_value=begin_cm)
 
 
 def _cm(session: AsyncMock) -> MagicMock:

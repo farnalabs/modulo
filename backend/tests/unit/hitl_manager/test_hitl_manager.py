@@ -1743,29 +1743,38 @@ async def test_approve_jwt_invalid_signature_raises_invalid():
 
 
 async def test_approve_with_modification_valid_token_and_audit():
-    """approve_with_modification records decision, logs audit, and sets delivered_at."""
+    """approve_with_modification records the decision and appends BOTH audit
+    events (``hitl.output_modified`` before ``hitl.output_delivered``), carrying
+    the modified output, then marks the gate delivered."""
     future = datetime.now(UTC) + timedelta(minutes=5)
     gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
     gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     modified = {"summary": "Modified output from human review"}
 
-    mgr = HITLManager()
-    result = await mgr.approve_with_modification(
-        session,
-        run_id=_RUN,
-        review_id=_GATE,
-        org_id=_ORG,
-        claim_token="good-token",
-        modified_output=modified,
-        actor_id=_USER,
-    )
+    with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+        mgr = HITLManager()
+        result = await mgr.approve_with_modification(
+            session,
+            run_id=_RUN,
+            review_id=_GATE,
+            org_id=_ORG,
+            claim_token="good-token",
+            modified_output=modified,
+            actor_id=_USER,
+        )
+
     assert result.decision == "approved"
     assert result.claim_token is None
     assert result.account_id is None
 
-    # Verify that two audit events were appended: output_modified + output_delivered
-    assert session.add.call_count >= 2
+    # Exactly two audit events, in order: output_modified then output_delivered.
+    assert [call.kwargs["event_type"] for call in mock_audit.await_args_list] == [
+        "hitl.output_modified",
+        "hitl.output_delivered",
+    ]
+    assert mock_audit.await_args_list[0].kwargs["payload_json"]["modified_output"] == modified
+    assert gate_decided.delivered_at is not None
 
 
 async def test_approve_with_modification_wrong_token_raises():
@@ -2399,8 +2408,6 @@ async def test_list_pending_never_returns_decided_gates():
 
 
 async def test_list_overdue_returns_overdue_gates():
-    from datetime import timedelta
-
     now = datetime.now(UTC)
     past = now - timedelta(minutes=45)
     gate = _gate(account_id=_USER, claim_token="tok", expires_at=past, claimed_at=past)
@@ -2416,21 +2423,30 @@ async def test_list_overdue_returns_overdue_gates():
     overdue = await mgr.list_overdue(session, _ORG, threshold_minutes=30)
     assert len(overdue) == 1
     assert overdue[0]["review_id"] == _GATE
+    assert overdue[0]["run_id"] == _RUN
+    assert overdue[0]["claimed_by"] == _USER
+    # minutes_overdue is derived from claimed_at: a 45-minute-old claim reports 45.
+    assert overdue[0]["minutes_overdue"] == 45
 
 
-async def test_list_overdue_below_threshold_returns_empty():
-    # The DB WHERE clause (claimed_at < now - threshold) excludes the recent gate.
-    # The mock simulates the DB returning no rows, as it would in production.
+async def test_list_overdue_query_filters_claimed_undecided_and_over_threshold():
+    """The overdue SELECT carries the full predicate: org-scoped, claimed-only
+    (``account_id IS NOT NULL``), undecided (``decision IS NULL``) and past the
+    ``claimed_at < now - threshold`` cutoff. A mock returning no rows would pass
+    even if the threshold were never applied, so pin the compiled SQL instead."""
     session = AsyncMock()
-    scalars = MagicMock()
-    scalars.__iter__ = lambda self: iter([])
-    execute_result = MagicMock()
-    execute_result.scalars.return_value = scalars
-    session.execute = AsyncMock(return_value=execute_result)
+    result = MagicMock()
+    result.scalars.return_value = []
+    session.execute = AsyncMock(return_value=result)
 
     mgr = HITLManager()
     overdue = await mgr.list_overdue(session, _ORG, threshold_minutes=30)
     assert overdue == []
+    sql = str(session.execute.call_args[0][0].compile())
+    assert "hitl_claims.organisation_id" in sql
+    assert "hitl_claims.account_id IS NOT NULL" in sql
+    assert "hitl_claims.decision IS NULL" in sql
+    assert "hitl_claims.claimed_at <" in sql
 
 
 async def test_count_overdue_returns_zero():
@@ -2442,6 +2458,25 @@ async def test_count_overdue_returns_zero():
     mgr = HITLManager()
     count = await mgr.count_overdue(session, _ORG, threshold_minutes=30)
     assert count == 0
+
+
+async def test_count_overdue_returns_count_and_scopes_query():
+    """A non-zero count is returned verbatim (``result.scalar()``) and the
+    counting query applies the same org/claimed/undecided/threshold predicate
+    as ``list_overdue``."""
+    session = AsyncMock()
+    result = MagicMock()
+    result.scalar.return_value = 3
+    session.execute = AsyncMock(return_value=result)
+
+    mgr = HITLManager()
+    count = await mgr.count_overdue(session, _ORG, threshold_minutes=30)
+    assert count == 3
+    sql = str(session.execute.call_args[0][0].compile())
+    assert "hitl_claims.organisation_id" in sql
+    assert "hitl_claims.account_id IS NOT NULL" in sql
+    assert "hitl_claims.decision IS NULL" in sql
+    assert "hitl_claims.claimed_at <" in sql
 
 
 # ---------------------------------------------------------------------------

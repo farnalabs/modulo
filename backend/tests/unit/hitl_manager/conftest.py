@@ -7,6 +7,22 @@ from unittest.mock import AsyncMock, MagicMock
 from modulo.db.models.hitl_claim import HitlClaim
 
 
+def mock_begin(session: AsyncMock) -> None:
+    """Attach an async no-op ``session.begin()`` context manager to *session*."""
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+
+
+def session_factory(session: AsyncMock) -> MagicMock:
+    """Build a session-factory mock returning *session* from ``__aenter__``."""
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return MagicMock(return_value=cm)
+
+
 def _session_decide(
     *,
     update_returns_id: uuid.UUID | None = None,
