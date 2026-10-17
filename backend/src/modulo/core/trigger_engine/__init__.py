@@ -223,6 +223,32 @@ class EventNotAcceptedError(RuntimeError):
         self.reason = reason
 
 
+class WorkItemRefsRequiredHTTPError(HTTPException):
+    """422 for a ``work_item_refs_required`` pipeline that received no refs.
+
+    FAR-794 slice 2b: a pipeline whose ``run_context_defaults`` declares
+    ``work_item_refs_required: true`` refuses a webhook/replay delivery that
+    supplied no work-item refs. The refusal is REJECT-and-retry, not
+    acked-as-accepted, so the delivery must answer a typed 422.
+
+    Subclasses ``HTTPException`` (status 422, detail
+    ``{"error": "work_item_refs_required", "pipeline_id": ...}``) so every
+    existing caller's ``except HTTPException`` passthrough still surfaces the
+    refusal verbatim, while the webhook receive + replay routes can distinguish
+    it from any other 422 and re-record the ``required_refs_missing``
+    TriggerEvent AFTER the main transaction unwinds (FAR-1916). The engine's
+    own in-transaction write rolls back with the unwinding 422, so without the
+    post-unwind re-record the refusal would be silent.
+    """
+
+    def __init__(self, pipeline_id: uuid.UUID) -> None:
+        super().__init__(
+            status_code=422,
+            detail={"error": "work_item_refs_required", "pipeline_id": str(pipeline_id)},
+        )
+        self.pipeline_id = pipeline_id
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -1672,11 +1698,20 @@ class TriggerEngine:
         except WorkItemRefsRequiredError as exc:
             # FAR-794 slice 2b: a required-refs pipeline refused a delivery that
             # supplied no work-item refs. The delivery is REJECT-and-retry, not
-            # acked-as-accepted: raise a 422 HTTPException — the webhook route's
+            # acked-as-accepted: raise a typed 422 — the webhook route's
             # passthrough ``except HTTPException: raise`` (the same contract
             # core.trigger_validation already relies on) surfaces it verbatim as
             # ``422 work_item_refs_required`` so the SENDER can react; it must
             # never become a 500.
+            #
+            # FAR-1916: the class is ``WorkItemRefsRequiredHTTPError`` — an
+            # ``HTTPException`` SUBCLASS — so the webhook receive + replay routes
+            # can distinguish this 422 from any other and re-record the
+            # ``required_refs_missing`` refusal AFTER the main transaction
+            # unwinds. The in-transaction ``_log_event`` below is the engine's own
+            # refusal record (mirroring the backpressure pattern); it rolls back
+            # with the unwinding 422, so the route re-records it in a fresh
+            # transaction — without that the refusal was silent (FAR-1916).
             _log.warning(
                 "Required work-item refs missing for pipeline %s",
                 delivery.trigger.pipeline_id,
@@ -1689,13 +1724,7 @@ class TriggerEngine:
                 result="required_refs_missing",
                 error_detail=str(exc),
             )
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "error": "work_item_refs_required",
-                    "pipeline_id": str(delivery.trigger.pipeline_id),
-                },
-            ) from exc
+            raise WorkItemRefsRequiredHTTPError(delivery.trigger.pipeline_id) from exc
 
         # Audit log + store raw payload for replay (re-replay support)
         trigger_event = await self._log_event(

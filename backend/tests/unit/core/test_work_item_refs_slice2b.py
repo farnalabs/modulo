@@ -363,6 +363,13 @@ class TestWebhookRequiredRefs422:
             )
 
         assert exc_info.value.status_code == 422
+        # FAR-1916: the class is a DISTINGUISHABLE HTTPException subclass, so the
+        # webhook receive + replay routes can catch this specific refusal and
+        # re-record the ``required_refs_missing`` event post-unwind — while every
+        # other caller's ``except HTTPException`` passthrough is unchanged.
+        from modulo.core.trigger_engine import WorkItemRefsRequiredHTTPError
+
+        assert isinstance(exc_info.value, WorkItemRefsRequiredHTTPError)
         detail = exc_info.value.detail
         assert detail["error"] == "work_item_refs_required"
         # A rejection event is recorded BEFORE the raise so the delivery is
