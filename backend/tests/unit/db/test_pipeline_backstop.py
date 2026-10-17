@@ -212,6 +212,7 @@ _CALL_SITE_FILES = (
     "api/routes/pipelines.py",
     "api/routes/onboarding.py",
     "api/mcp_server.py",
+    "db/seed_demo.py",
 )
 
 _GUARDED_CALLS = ("replace_pipeline_graph", "rollback_to_snapshot")

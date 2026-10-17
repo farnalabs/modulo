@@ -169,17 +169,26 @@ jobs:
       - name: Semgrep (block new findings)
         # --timeout 120 matches the budget scripts/run_semgrep.py already uses
         # locally; semgrep's default is 5s, which the ~13k-line graph-write
-        # files can exceed under CI CPU contention. When a rule times out on a
-        # file, semgrep SKIPS that file and still exits 0, printing only
-        # "Warning: N timeout error(s) ...". So this step captures the scan
-        # output and fails CLOSED when a skipped-file timeout is reported —
-        # otherwise the gate can report green while having silently not run a
-        # rule against the very file it protects (mcp_server.py holds the only
-        # MCP replace_pipeline_graph call site). We deliberately do NOT fail on
-        # "Partially analyzed": mcp_server.py reports that on every run because
-        # of a pre-existing PEP 695 parse skip (FAR-1933 section 3), so matching
-        # it would make CI permanently red. `--error` semantics are unchanged:
-        # the step still propagates semgrep's own exit code for real findings.
+        # files can exceed under CI CPU contention (measured on the pinned
+        # semgrep: 28/32 runs skipped at the 5s default vs 0/48 at 120s).
+        # --timeout-threshold 1 drops a file on its FIRST per-rule timeout so
+        # the worst case stays bounded at 1 x 120s.
+        # When a rule times out on a file, semgrep SKIPS that file and still
+        # exits 0, printing only "Warning: N timeout error(s) ...". So this
+        # step captures the scan output and fails CLOSED when a skipped-file
+        # timeout is reported — otherwise the gate can report green while
+        # having silently not run a rule against the very file it protects
+        # (mcp_server.py holds the only MCP replace_pipeline_graph call site).
+        # Detection is PRIMARY from the structured --json-output errors stream
+        # (an entry of type "Timeout"); the text signatures are a SECONDARY net
+        # and are ANCHORED to semgrep's own line prefixes, so a finding that
+        # merely quotes the phrase (pipelines.py contains the literal
+        # "dispatch.wait_timeout error") cannot false-trigger. We deliberately
+        # do NOT fail on "Partially analyzed": mcp_server.py reports that on
+        # every run because of a pre-existing PEP 695 parse skip (FAR-1933
+        # section 3), so matching it would make CI permanently red. `--error`
+        # semantics are unchanged: the step still propagates semgrep's own exit
+        # code for real findings.
         working-directory: .
         shell: bash
         run: |
@@ -190,15 +199,37 @@ jobs:
           else
             baseline=""
           fi
+          SEMGREP_LOG=/tmp/semgrep-scan.log
+          SEMGREP_JSON=/tmp/semgrep-scan.json
           set +e
           if [ -n "$baseline" ]; then
-            uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit "$baseline" --error --timeout 120 . 2>&1 | tee /tmp/semgrep-scan.log
+            uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit "$baseline" --error --timeout 120 --timeout-threshold 1 --json-output="$SEMGREP_JSON" . 2>&1 | tee "$SEMGREP_LOG"
           else
-            uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --error --timeout 120 . 2>&1 | tee /tmp/semgrep-scan.log
+            uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --error --timeout 120 --timeout-threshold 1 --json-output="$SEMGREP_JSON" . 2>&1 | tee "$SEMGREP_LOG"
           fi
           rc=${PIPESTATUS[0]}
+          incomplete=0
+          # PRIMARY: the structured JSON error stream — a skipped file is an
+          # errors[] entry of type "Timeout". A missing/malformed payload exits
+          # non-zero here and falls through to the text net below.
+          if uv run --no-build --project backend --no-sync python - "$SEMGREP_JSON" <<'PY'
+          import json, sys
+          try:
+              payload = json.load(open(sys.argv[1], encoding="utf-8"))
+          except (OSError, ValueError):
+              sys.exit(1)
+          errors = payload.get("errors") if isinstance(payload, dict) else None
+          sys.exit(0 if isinstance(errors, list) and any(isinstance(e, dict) and e.get("type") == "Timeout" for e in errors) else 1)
+          PY
+          then
+            incomplete=1
+          fi
+          # SECONDARY net: anchored to semgrep's own line prefixes.
+          if grep -Eq '^Warning: [0-9]+ timeout error|^Semgrep stopped running rules' "$SEMGREP_LOG"; then
+            incomplete=1
+          fi
           set -e
-          if grep -Eiq "timeout error|stopped running rules" /tmp/semgrep-scan.log; then
+          if [ "$incomplete" -ne 0 ]; then
             echo "::error::semgrep skipped one or more files after a per-rule timeout; the scan is incomplete and must not be treated as passing (FAR-1859)."
             exit 1
           fi

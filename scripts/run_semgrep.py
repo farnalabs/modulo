@@ -13,30 +13,59 @@ in the files the developer is actually touching — the highest-value subset
 out).  CI (Linux) still runs the full baseline scan on every push, so no
 enforcement is lost.
 
-The Windows path is fail-open on TOOL errors (timeout, crash, missing
-semgrep): if semgrep cannot run, we warn loudly and exit 0 so the
-developer is not blocked by a broken tool.  We are NEVER fail-open on
-FINDINGS: if semgrep runs and finds violations, we exit non-zero.
+The Windows path is fail-open on TOOL errors that prevent semgrep from
+running at all — a crash, a missing binary, or a spawn failure — and warn
+loudly so the developer is not blocked by a broken tool.  We are NEVER
+fail-open on FINDINGS: if semgrep runs and finds violations, we exit
+non-zero.
 
-We are also NEVER fail-open on an INCOMPLETE scan: when a rule times out
-on a file, semgrep skips that file and still exits 0 (printing only a
-``Warning: ... timeout error(s) ...`` line).  That is a failure of the
-security gate, not a tool error, so both paths treat it as a non-zero
-result (see ``_semgrep_skipped_files``).  Genuine tool errors keep the
-fail-open behaviour above.
+We are also NEVER fail-open on an INCOMPLETE scan. Two distinct shapes
+count as incomplete, and BOTH return non-zero:
+
+1. A per-rule timeout on a file: semgrep skips that file and still exits 0,
+   printing only a ``Warning: ... timeout error(s) ...`` line. Detected from
+   the structured ``--json-output`` ``errors`` stream (an entry of type
+   ``Timeout``) with an anchored text fallback.
+2. A wall-clock kill of the whole process (``subprocess.TimeoutExpired``):
+   the scan was cut off mid-way, so no result it produced can be trusted —
+   the exit-code path below is not even reached, and the branch fails closed.
+
+Genuine tool errors keep the fail-open behaviour above. ``PartialParsing``
+is deliberately NOT treated as incomplete — ``mcp_server.py`` reports it on
+every run because of a pre-existing PEP 695 parse skip (FAR-1933), so
+failing on it would make the gate permanently red for an unrelated reason.
 """
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
 #: Semgrep exits 0 when a per-rule match times out on a file — the offending
 #: file is silently skipped. That is an incomplete scan and a FAILURE of the
 #: gate, not a tool error, so it must block rather than warn-and-pass.
-#: These are the two signatures semgrep prints in that case.
-_SEMGREP_TIMEOUT_MARKERS = ("timeout error", "stopped running rules")
+#:
+#: PRIMARY detection is the structured ``--json-output`` payload (see
+#: ``_semgrep_json_timeout``). These text patterns are a SECONDARY net for the
+#: case where the JSON is unavailable, and they are ANCHORED to semgrep's own
+#: line prefixes: an unanchored ``"timeout error"`` substring false-positives
+#: on a finding that merely quotes the phrase (``pipelines.py`` contains the
+#: literal ``dispatch.wait_timeout error``), which would mislabel a clean scan
+#: as incomplete.
+_SEMGREP_TIMEOUT_PATTERNS = (
+    re.compile(r"^Warning: \d+ timeout error", re.MULTILINE),
+    re.compile(r"^Semgrep stopped running rules", re.MULTILINE),
+)
+
+#: ``errors[].type`` values in the semgrep JSON that mean the scan did NOT
+#: cover every target. ``PartialParsing`` is deliberately absent (see the
+#: module docstring): it is expected on ``mcp_server.py`` and must not fail.
+_SEMGREP_JSON_FATAL_ERROR_TYPES = frozenset({"Timeout"})
 
 # Git-state env vars inherited from a running `git commit` (e.g. the relative
 # `GIT_INDEX_FILE=.git/index`) break semgrep's `--baseline-commit` scan, which
@@ -54,6 +83,14 @@ _GIT_STATE_ENV = {
     "GIT_CEILING_DIRECTORIES",
 }
 
+#: Wall-clock kill bound for the whole subprocess (Windows path only). This is
+#: NOT semgrep's per-rule ``--timeout``: it is the outer ``subprocess.run``
+#: timeout. The semgrep invocations use ``--timeout 120 --timeout-threshold 1``,
+#: so a single per-rule timeout drops the file on its FIRST occurrence and the
+#: worst case is bounded at ``1 x 120s`` — comfortably under this 180s process
+#: kill. If either number moves, keep ``--timeout x threshold < _SEMGREP_TIMEOUT``
+#: or a slow file can be killed mid-scan (an incomplete scan) instead of being
+#: reported by semgrep's own timeout machinery.
 _SEMGREP_TIMEOUT = 180  # seconds — scoped scan on a handful of files
 
 #: The backend source tree semgrep scans (rule ``paths:`` filters target it).
@@ -69,17 +106,56 @@ run_semgrep.py WARNING: semgrep did NOT complete on Windows.
   Reason: {reason}
 ========================================================================"""
 
+_SEMGREP_INCOMPLETE = """\
+========================================================================
+run_semgrep.py: semgrep scan is INCOMPLETE — reported as a FAILURE.
+
+  One or more files were NOT fully checked, so a clean result cannot be
+  trusted. This is not a tool error and is NOT fail-open — fix the cause
+  and re-run the scan.
+
+  Reason: {reason}
+========================================================================"""
+
 
 def _semgrep_skipped_files(output: str) -> bool:
-    """Return True when semgrep skipped a file after a per-rule timeout.
+    """Return True when semgrep's text output reports a per-rule timeout skip.
 
     Semgrep reports this as a warning and still exits 0, so a caller that only
-    reads the exit code treats an incomplete scan as clean. Matching the
-    signature lets both scan paths fail closed instead. The check is on the
-    combined stdout+stderr of the semgrep invocation.
+    reads the exit code treats an incomplete scan as clean. The patterns are
+    anchored to semgrep's own line prefixes (see ``_SEMGREP_TIMEOUT_PATTERNS``)
+    so a finding that merely quotes the phrase cannot false-trigger. The check
+    is on the combined stdout+stderr of the semgrep invocation.
     """
-    lowered = output.lower()
-    return any(marker in lowered for marker in _SEMGREP_TIMEOUT_MARKERS)
+    return any(pattern.search(output) for pattern in _SEMGREP_TIMEOUT_PATTERNS)
+
+
+def _semgrep_json_timeout(json_path: str | os.PathLike[str]) -> bool:
+    """Return True when the semgrep ``--json-output`` payload is incomplete.
+
+    A per-rule timeout is serialised as an ``errors`` entry with
+    ``"type": "Timeout"`` while the process still exits 0, so the exit code is
+    not evidence of a complete scan. A missing or malformed payload, or one
+    whose errors are all non-fatal (e.g. ``PartialParsing``), returns ``False``
+    — the anchored text net still covers the missing-payload case, and a
+    genuine tool failure is handled by the fail-open branches.
+    """
+    try:
+        with Path(json_path).open(encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError):
+        return False
+    errors = payload.get("errors") if isinstance(payload, dict) else None
+    if not isinstance(errors, list):
+        return False
+    return any(isinstance(err, dict) and err.get("type") in _SEMGREP_JSON_FATAL_ERROR_TYPES for err in errors)
+
+
+def _semgrep_scan_incomplete(output: str, json_path: str | os.PathLike[str] | None = None) -> bool:
+    """True when either detector sees an incomplete scan (JSON primary, text net)."""
+    if json_path is not None and _semgrep_json_timeout(json_path):
+        return True
+    return _semgrep_skipped_files(output)
 
 
 def _get_changed_py_files() -> tuple[list[str], str | None]:
@@ -139,73 +215,88 @@ def _run_windows() -> int:
         return 0
 
     env = {k: v for k, v in os.environ.items() if k not in _GIT_STATE_ENV}
-    # On Windows, semgrep's pip package may not install a .exe wrapper, so
-    # `uv run semgrep` fails with "Failed to spawn: program not found".
-    # `python -m semgrep` is a dead stub (prints deprecation + exits 2).
-    # CI (Linux) runs the full baseline scan on every push, so the local
-    # Windows check is a convenience gate — fail open with a loud warning
-    # rather than blocking the developer.
-    cmd = [
-        "uv",
-        "run",
-        "--project",
-        "backend",
-        "--no-sync",
-        "semgrep",
-        "scan",
-        "--config=.semgrep/",
-        "--error",
-        "--timeout",
-        "120",
-        *changed,
-    ]
 
     def _is_spawn_failure(result: subprocess.CompletedProcess[str]) -> bool:
         """Return True when uv failed because the tool binary was not found."""
         return result.returncode != 0 and "Failed to spawn" in (result.stderr or "")
 
     try:
-        result = subprocess.run(
-            cmd,
-            env=env,
-            check=False,
-            timeout=_SEMGREP_TIMEOUT,
-            capture_output=True,
-            text=True,
-        )
-        if _is_spawn_failure(result):
-            print(
-                _SEMGREP_WARN.format(
-                    reason=(
-                        "semgrep binary not found in venv (no .exe wrapper on "
-                        "Windows). CI (Linux) still runs the full scan on push."
-                    )
-                ),
-                file=sys.stderr,
+        with tempfile.TemporaryDirectory(prefix="run-semgrep-") as tmpdir:
+            json_path = str(Path(tmpdir) / "semgrep.json")
+            # On Windows, semgrep's pip package may not install a .exe wrapper, so
+            # `uv run semgrep` fails with "Failed to spawn: program not found".
+            # `python -m semgrep` is a dead stub (prints deprecation + exits 2).
+            # CI (Linux) runs the full baseline scan on every push, so the local
+            # Windows check is a convenience gate — fail open with a loud warning
+            # rather than blocking the developer.
+            #
+            # --timeout-threshold 1: drop a file on its FIRST per-rule timeout
+            #   instead of the default 3, so the worst case is 1 x 120s — under
+            #   the _SEMGREP_TIMEOUT wall-clock kill above. --timeout 120 is
+            #   measured (0/48 timeouts at 16-way contention vs 28/32 at the 5s
+            #   default); do not lower it without a fresh measurement.
+            cmd = [
+                "uv",
+                "run",
+                "--project",
+                "backend",
+                "--no-sync",
+                "semgrep",
+                "scan",
+                "--config=.semgrep/",
+                "--error",
+                "--timeout",
+                "120",
+                "--timeout-threshold",
+                "1",
+                f"--json-output={json_path}",
+                *changed,
+            ]
+            result = subprocess.run(
+                cmd,
+                env=env,
+                check=False,
+                timeout=_SEMGREP_TIMEOUT,
+                capture_output=True,
+                text=True,
             )
-            return 0
-        # Semgrep ran successfully — print its output and propagate its exit code.
-        if result.stdout:
-            print(result.stdout, end="")
-        if result.stderr:
-            print(result.stderr, end="", file=sys.stderr)
-        # A per-rule timeout silently skips a file but exits 0. Treat that as a
-        # FAILURE (incomplete scan), never a pass.
-        if _semgrep_skipped_files((result.stdout or "") + (result.stderr or "")):
-            print(
-                "run_semgrep.py: semgrep reported a per-rule timeout and "
-                "skipped one or more files — the scan is INCOMPLETE and is "
-                "reported as a failure (FAR-1859). Re-run the scan.",
-                file=sys.stderr,
-            )
-            return 1
-        return result.returncode
+            if _is_spawn_failure(result):
+                print(
+                    _SEMGREP_WARN.format(
+                        reason=(
+                            "semgrep binary not found in venv (no .exe wrapper on "
+                            "Windows). CI (Linux) still runs the full scan on push."
+                        )
+                    ),
+                    file=sys.stderr,
+                )
+                return 0
+            # Semgrep ran successfully — print its output and propagate its exit code.
+            if result.stdout:
+                print(result.stdout, end="")
+            if result.stderr:
+                print(result.stderr, end="", file=sys.stderr)
+            # A per-rule timeout silently skips a file but exits 0. Treat that as
+            # a FAILURE (incomplete scan), never a pass.
+            if _semgrep_scan_incomplete((result.stdout or "") + (result.stderr or ""), json_path):
+                print(
+                    _SEMGREP_INCOMPLETE.format(
+                        reason="semgrep reported a per-rule timeout and skipped one or more files (FAR-1859)"
+                    ),
+                    file=sys.stderr,
+                )
+                return 1
+            return result.returncode
     except subprocess.TimeoutExpired:
+        # A wall-clock kill cut the scan off mid-way, so nothing it produced can
+        # be trusted. This is an INCOMPLETE scan, not a tool error: fail CLOSED.
         print(
-            _SEMGREP_WARN.format(reason=f"semgrep timed out after {_SEMGREP_TIMEOUT}s scanning {len(changed)} file(s)"),
+            _SEMGREP_INCOMPLETE.format(
+                reason=f"the semgrep process was killed after {_SEMGREP_TIMEOUT}s scanning {len(changed)} file(s)"
+            ),
             file=sys.stderr,
         )
-        return 0
+        return 1
     except FileNotFoundError:
         print(
             _SEMGREP_WARN.format(reason="semgrep or uv not found on PATH"),
@@ -236,45 +327,55 @@ def main() -> int:
     # --max-memory 2048: hard cap at 2 GB; semgrep exits gracefully instead of
     #   the OS OOM-killer taking the process (and potentially other agents).
     # --timeout 120: per-file timeout; prevents a single pathological file from
-    #   blocking the whole hook indefinitely.
+    #   blocking the whole hook indefinitely. Measured: 0/48 timeouts at 16-way
+    #   contention vs 28/32 skips at semgrep's 5s default — do not lower it
+    #   without a fresh measurement.
+    # --timeout-threshold 1: drop a file on its FIRST per-rule timeout instead
+    #   of the default 3, so a slow file is reported promptly rather than
+    #   burning up to 3 x 120s.
     # CI (Linux, Ubicloud 2-core) runs the full scan without these bounds and
     # has more headroom — the bounds here are a LOCAL-ONLY safety net.
-    cmd = [
-        "uv",
-        "run",
-        "--project",
-        "backend",
-        "--no-sync",
-        "semgrep",
-        "scan",
-        "--config=.semgrep/",
-        "--error",
-        "--jobs",
-        "1",
-        "--max-memory",
-        "2048",
-        "--timeout",
-        "120",
-        "--baseline-commit=HEAD",
-        _BACKEND_SRC,
-    ]
-    result = subprocess.run(cmd, env=env, check=False, capture_output=True, text=True)
-    if result.stdout:
-        print(result.stdout, end="")
-    if result.stderr:
-        print(result.stderr, end="", file=sys.stderr)
-    # A per-rule timeout silently skips a file but exits 0. Treat that as a
-    # FAILURE (incomplete scan), never a pass. This is not a tool error, so it
-    # is deliberately not covered by the fail-open branches above.
-    if _semgrep_skipped_files((result.stdout or "") + (result.stderr or "")):
-        print(
-            "run_semgrep.py: semgrep reported a per-rule timeout and skipped "
-            "one or more files — the scan is INCOMPLETE and is reported as a "
-            "failure (FAR-1859). Re-run the scan.",
-            file=sys.stderr,
-        )
-        return 1
-    return result.returncode
+    with tempfile.TemporaryDirectory(prefix="run-semgrep-") as tmpdir:
+        json_path = str(Path(tmpdir) / "semgrep.json")
+        cmd = [
+            "uv",
+            "run",
+            "--project",
+            "backend",
+            "--no-sync",
+            "semgrep",
+            "scan",
+            "--config=.semgrep/",
+            "--error",
+            "--jobs",
+            "1",
+            "--max-memory",
+            "2048",
+            "--timeout",
+            "120",
+            "--timeout-threshold",
+            "1",
+            f"--json-output={json_path}",
+            "--baseline-commit=HEAD",
+            _BACKEND_SRC,
+        ]
+        result = subprocess.run(cmd, env=env, check=False, capture_output=True, text=True)
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.stderr:
+            print(result.stderr, end="", file=sys.stderr)
+        # A per-rule timeout silently skips a file but exits 0. Treat that as a
+        # FAILURE (incomplete scan), never a pass. This is not a tool error, so
+        # it is deliberately not covered by any fail-open branch.
+        if _semgrep_scan_incomplete((result.stdout or "") + (result.stderr or ""), json_path):
+            print(
+                _SEMGREP_INCOMPLETE.format(
+                    reason="semgrep reported a per-rule timeout and skipped one or more files (FAR-1859)"
+                ),
+                file=sys.stderr,
+            )
+            return 1
+        return result.returncode
 
 
 if __name__ == "__main__":
