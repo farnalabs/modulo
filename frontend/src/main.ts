@@ -22,7 +22,15 @@ import '@fontsource-variable/jetbrains-mono'
 import './style.css'
 import 'overlayscrollbars/styles/overlayscrollbars.css'
 
-const APP_ROOT_ID = 'app'
+// The pre-mount bootstrap surface lives OUTSIDE #app on purpose. The mobile
+// first-paint contract (and the e2e suite that encodes it) treats "#app has
+// children" as "the app has mounted": an empty #app is a blank page. A splash
+// rendered into #app would make that signal true from the very first frame, so
+// a stalled bootstrap would look mounted and every mount-ordering assertion
+// would pass on a page that never actually mounted. Keeping the splash in its
+// own body-level element preserves the signal — #app stays empty until Vue
+// mounts, at which point the surface is removed.
+const BOOTSTRAP_SURFACE_ID = 'modulo-bootstrap-surface'
 
 // FAR-1892: router.isReady() has no timeout of its own. A navigation guard
 // awaiting a promise that never settles, or a lazily-imported route chunk
@@ -32,8 +40,17 @@ const APP_ROOT_ID = 'app'
 // a permanent blank screen.
 const ROUTER_READY_TIMEOUT_MS = 10_000
 
-function appRoot(): HTMLElement | null {
-  return document.getElementById(APP_ROOT_ID)
+function bootstrapSurface(): HTMLElement {
+  const existing = document.getElementById(BOOTSTRAP_SURFACE_ID)
+  if (existing) return existing
+  const surface = document.createElement('div')
+  surface.id = BOOTSTRAP_SURFACE_ID
+  document.body.appendChild(surface)
+  return surface
+}
+
+function removeBootstrapSurface(): void {
+  document.getElementById(BOOTSTRAP_SURFACE_ID)?.remove()
 }
 
 // Resolve a pre-mount message from the catalogue, falling back to a literal.
@@ -50,13 +67,12 @@ function bootstrapMessage(key: string, fallback: string): string {
   }
 }
 
-// Render a pre-mount loading/error message into #app. The message is a child
-// element rather than #app itself, so Vue does not inherit a live-region role
-// (which would make the whole application an announcement region) when it
-// takes over the container.
+// Render a pre-mount loading/error message into the bootstrap surface. The
+// live-region role lives on the message element, never on #app itself, so Vue
+// does not inherit it (which would make the whole application an announcement
+// region) when it takes over the container.
 function renderBootstrapMessage(text: string, variant: 'loading' | 'error'): void {
-  const root = appRoot()
-  if (!root) return
+  const surface = bootstrapSurface()
 
   const message = document.createElement('div')
   message.setAttribute('role', variant === 'error' ? 'alert' : 'status')
@@ -78,7 +94,7 @@ function renderBootstrapMessage(text: string, variant: 'loading' | 'error'): voi
   paragraph.textContent = text
   message.appendChild(paragraph)
 
-  root.replaceChildren(message)
+  surface.replaceChildren(message)
 }
 
 function toError(value: unknown): Error {
@@ -167,8 +183,10 @@ async function main() {
     errorTracker.captureError(toError(error), { phase: 'router.isReady' })
   }
 
-  // Drop the loading placeholder before Vue takes ownership of #app.
-  appRoot()?.replaceChildren()
+  // Drop the bootstrap splash before Vue takes ownership of #app. Removing it
+  // (rather than rendering it inside #app) is what keeps "#app has children" a
+  // truthful "the app has mounted" signal for the e2e mount waits.
+  removeBootstrapSurface()
 
   app.mount('#app')
 

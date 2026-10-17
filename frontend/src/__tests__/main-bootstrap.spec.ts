@@ -5,8 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 //   - a stalled or rejecting monitor backend can no longer withhold the app
 //     (they initialise after mount now, never on the mount path);
 //   - a rejected initial navigation still mounts the app;
-//   - a genuinely fatal bootstrap failure is LOGGED *and* drawn into #app, so
-//     the user never faces an unexplained blank page.
+//   - a genuinely fatal bootstrap failure is LOGGED *and* drawn into the
+//     bootstrap surface (a sibling of #app, so it never makes #app look
+//     mounted), so the user never faces an unexplained blank page.
 //
 // main() itself stays REAL — every assertion depends on main.ts's own wiring.
 // Only the dependencies whose concern lives outside that wiring are mocked,
@@ -158,8 +159,10 @@ describe('main bootstrap', () => {
     await vi.waitFor(() => {
       expect(document.querySelector(APP_MARKER)).not.toBeNull()
     })
-    // Vue owns #app now, so the pre-mount placeholder must be gone.
+    // The pre-mount splash lives OUTSIDE #app (so "#app has children" stays a
+    // truthful mount signal) and must be removed once Vue takes ownership.
     expect(document.querySelector('#app [role="status"]')).toBeNull()
+    expect(document.getElementById('modulo-bootstrap-surface')).toBeNull()
   })
 
   it('mounts and reports it when monitor backend initialisation rejects', async () => {
@@ -225,7 +228,7 @@ describe('main bootstrap', () => {
       )
     })
 
-    const surface = document.querySelector('#app [role="alert"]')
+    const surface = document.querySelector('#modulo-bootstrap-surface [role="alert"]')
     expect(surface).not.toBeNull()
     expect(surface?.textContent).toBe('t:common.failed_to_load')
     // The failure is surfaced instead of the half-built app.
@@ -252,7 +255,7 @@ describe('main bootstrap', () => {
       )
     })
 
-    const surface = document.querySelector('#app [role="alert"]')
+    const surface = document.querySelector('#modulo-bootstrap-surface [role="alert"]')
     expect(surface).not.toBeNull()
     expect(surface?.textContent).toBe('The application failed to load. Please reload the page.')
     expect(consoleWarn).toHaveBeenCalledWith(
