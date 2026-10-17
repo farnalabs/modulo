@@ -752,6 +752,27 @@ async def test_ack_slack_busy_delivery_unresolvable_org_refuses_429() -> None:
     assert headers["Retry-After"] == "5"
 
 
+async def test_record_slack_rate_limit_refusal_unresolvable_org_skips_recording() -> None:
+    """Defensive arm (changed-lines coverage): a rate-limit refusal with no
+    resolved org has no tenant to scope the event to, so the recorder skips the
+    write (best-effort, logged) rather than persist an unscoped row or raise.
+
+    ``org_id`` is always resolved by the time the engine can raise
+    ``PipelineRateLimitError``; the route still raises its unchanged 429 after
+    the helper returns — this only pins the helper's defensive arm."""
+    from modulo.api.routes.slack import _record_slack_rate_limit_refusal
+
+    with patch("modulo.api.routes.slack._record_refused_delivery", new_callable=AsyncMock) as record:
+        await _record_slack_rate_limit_refusal(
+            trigger_id=_TRIGGER_ID,
+            org_id=None,
+            raw_body=b"{}",
+            raw_payload={},
+        )
+
+    record.assert_not_awaited()
+
+
 def _dispatch_trigger_mock() -> MagicMock:
     trigger = MagicMock()
     trigger.id = _TRIGGER_ID

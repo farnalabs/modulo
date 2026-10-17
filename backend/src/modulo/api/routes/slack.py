@@ -488,6 +488,44 @@ async def _ack_slack_busy_delivery(
     ) from None
 
 
+async def _record_slack_rate_limit_refusal(
+    *,
+    trigger_id: uuid.UUID,
+    org_id: uuid.UUID | None,
+    raw_body: bytes,
+    raw_payload: dict[str, Any],
+) -> None:
+    """Re-record an app_mention refused by the pipeline's configured rate limit.
+
+    MUST run AFTER the route transaction has unwound: the engine writes its
+    ``rate_limited`` TriggerEvent INSIDE that transaction at both raise sites,
+    so the write rolls back with the refusal (FAR-1916 slack mirror). Records
+    the refusal + raw payload in a FRESH transaction via the shared
+    ``_record_refused_delivery`` writer (the same post-unwind recorder the
+    webhook receive path uses), or a rate-limited delivery is refused but
+    invisible in the event log.
+
+    ``org_id`` is always resolved by the time the engine can raise
+    ``PipelineRateLimitError`` (it runs after ``_verify_slack_delivery``), so
+    the guard is defensive only: with no tenant to scope the event to there is
+    nothing to record, and the recording is best-effort — log the loss rather
+    than let it turn the refusal response into a 500.
+    """
+    if org_id is None:
+        _log.error("slack.receive_event.rate_limited_unresolvable trigger=%s", trigger_id)
+        return
+    await _record_refused_delivery(
+        trigger_id=trigger_id,
+        org_id=org_id,
+        trigger_type="slack_app_mention",
+        validation_result=_RATE_LIMIT_REFUSAL_VALIDATION_RESULT,
+        error_detail=_RATE_LIMIT_REFUSAL_ERROR_DETAIL,
+        payload_hash=sha256_hex(raw_body),
+        raw_body=raw_body,
+        raw_payload=raw_payload,
+    )
+
+
 # FAR-1472 exemption (kept in audit_coverage_baseline.txt): the principal here
 # is OPTIONAL - the event authenticates with Slack's X-Slack-Signature, not a
 # Modulo credential, so there is no guaranteed actor for
@@ -634,10 +672,11 @@ async def receive_slack_event(
         # the app_mention delivery. The engine writes the ``rate_limited``
         # TriggerEvent INSIDE the main transaction (both raise sites), so that
         # write rolls back with the unwound transaction — re-record the refusal
-        # + raw payload in a FRESH transaction AFTER the unwind (the shared
-        # ``_record_refused_delivery`` writer, the same post-unwind recorder the
-        # webhook receive path uses), or a rate-limited delivery is refused but
-        # invisible in the event log. Slack app_mention deliveries are not
+        # + raw payload in a FRESH transaction AFTER the unwind (via the
+        # ``_record_slack_rate_limit_refusal`` helper wrapping the shared
+        # ``_record_refused_delivery`` writer the webhook receive path uses), or
+        # a rate-limited delivery is refused but invisible in the event log.
+        # Slack app_mention deliveries are not
         # replayable, so there is no ``source_event_id`` to forward: the route
         # passes the raw body + parsed payload it already holds. The 429
         # status/detail contract is unchanged, and unlike the busy refusal this
@@ -648,17 +687,12 @@ async def receive_slack_event(
             trigger_id,
             exc.pipeline_id,
         )
-        if org_id is not None:
-            await _record_refused_delivery(
-                trigger_id=trigger_id,
-                org_id=org_id,
-                trigger_type="slack_app_mention",
-                validation_result=_RATE_LIMIT_REFUSAL_VALIDATION_RESULT,
-                error_detail=_RATE_LIMIT_REFUSAL_ERROR_DETAIL,
-                payload_hash=sha256_hex(raw_body),
-                raw_body=raw_body,
-                raw_payload=raw_payload,
-            )
+        await _record_slack_rate_limit_refusal(
+            trigger_id=trigger_id,
+            org_id=org_id,
+            raw_body=raw_body,
+            raw_payload=raw_payload,
+        )
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=str(exc),
