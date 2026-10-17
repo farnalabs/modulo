@@ -199,7 +199,11 @@ async function boot(page: Page, opts: { rail: boolean; cachedRail?: boolean; wai
             depends_on: null,
           },
         ],
-        license: { tier: 'enterprise' },
+        // Real catalog tier (community/team). An invented 'enterprise' rank is
+        // absent from a real deployment's catalog, which would fail the
+        // dashboard route's community required_tier and self-redirect-loop the
+        // guard; see notifications.spec.ts for the staging incident.
+        license: { tier: 'team' },
         dev_mode: true,
       }),
     })
