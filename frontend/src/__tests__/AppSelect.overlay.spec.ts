@@ -10,11 +10,26 @@ const innerSelect = { name: 'Select' }
 
 // A dialog renders its body inside `.p-dialog-content`, the scroll container
 // that clips an in-place overlay (FAR-1908). Mounting AppSelect inside this
-// host reproduces that DOM shape without needing PrimeVue's Dialog.
+// host reproduces that DOM shape without needing PrimeVue's Dialog. The host is
+// deliberately class-only: the unit environment does not load PrimeVue's
+// stylesheet, so the container is recognised from that class contract (see the
+// fallback in AppSelect.vue) - which is exactly the DOM a browser would give
+// us with the real stylesheet applied.
 const InsideDialogContent = defineComponent({
   components: { AppSelect },
   props: { appendTo: { type: String, default: undefined } },
   template: '<div class="p-dialog-content"><AppSelect :model-value="\'\'" :append-to="appendTo" /></div>',
+})
+
+// FAR-1920: a non-dialog clipping container — a custom panel with a clipped,
+// bounded scroll area (`overflow: auto`) — must resolve to `'body'` too. The
+// host deliberately carries no PrimeVue class, so this pins the predicate as
+// general rather than class-specific.
+const InsideCustomClippingPanel = defineComponent({
+  components: { AppSelect },
+  props: { appendTo: { type: String, default: undefined } },
+  template:
+    '<div class="custom-panel" style="overflow: auto"><AppSelect :model-value="\'\'" :append-to="appendTo" /></div>',
 })
 
 const OutsideDialogContent = defineComponent({
@@ -108,6 +123,53 @@ describe('AppSelect overlay append target (FAR-1908)', () => {
   it('falls back to self when mounted with no dialog ancestor (FAR-851)', () => {
     const wrapper = mount(AppSelect, { props: { modelValue: '' } })
     expect(wrapper.findComponent(innerSelect).props('appendTo')).toBe('self')
+  })
+})
+
+describe('AppSelect overlay append target — any clipping ancestor (FAR-1920)', () => {
+  it('portals to body inside a non-dialog custom overflow panel', async () => {
+    // The durable predicate is "does this Select sit inside a clipping
+    // ancestor", not "is it in a dialog". A custom `overflow: auto` panel is
+    // the same defect class one container over, and must be covered without a
+    // new special case.
+    const wrapper = mount(InsideCustomClippingPanel)
+    await wrapper.vm.$nextTick()
+    expect(wrapper.findComponent(innerSelect).props('appendTo')).toBe('body')
+  })
+
+  it('portals to body when the clipping ancestor is several levels up', async () => {
+    // A Drawer / sidebar wraps its content, so the clipping box is not always
+    // the Select's direct parent. Detection walks the whole chain.
+    const Nested = defineComponent({
+      components: { AppSelect },
+      template:
+        '<div style="overflow: hidden"><div class="drawer-body"><div><AppSelect :model-value="\'\'" /></div></div></div>',
+    })
+    const wrapper = mount(Nested)
+    await wrapper.vm.$nextTick()
+    expect(wrapper.findComponent(innerSelect).props('appendTo')).toBe('body')
+  })
+
+  it('keeps self when every ancestor is unclipped, whatever their classes', () => {
+    // A recognised "dialog-ish" class on an ancestor that does NOT clip must
+    // not force body: the decision is the computed overflow, not the class.
+    const Unclipped = defineComponent({
+      components: { AppSelect },
+      template:
+        '<div class="p-dialog-content page-shell"><div class="drawer-surface"><AppSelect :model-value="\'\'" /></div></div>',
+    })
+    const wrapper = mount(Unclipped)
+    expect(wrapper.findComponent(innerSelect).props('appendTo')).toBe('self')
+  })
+
+  it('portals to body for a clipping ancestor even without a recognised class', async () => {
+    const Clipped = defineComponent({
+      components: { AppSelect },
+      template: '<div class="page-shell" style="overflow: hidden"><AppSelect :model-value="\'\'" /></div>',
+    })
+    const wrapper = mount(Clipped)
+    await wrapper.vm.$nextTick()
+    expect(wrapper.findComponent(innerSelect).props('appendTo')).toBe('body')
   })
 })
 
