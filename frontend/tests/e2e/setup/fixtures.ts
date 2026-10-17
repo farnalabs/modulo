@@ -329,12 +329,16 @@ function b64url(input: unknown): string {
  * Mint a real JWT whose payload marks the principal as a system admin
  * (is_system_admin + org_role admin). The local mock login token is not a JWT,
  * so the router guard cannot read the claim off it.
+ *
+ * `sub` defaults to the mock admin id; pass a specific value when a test needs
+ * a particular principal (e.g. a UUID `sub`, which is what the backend mints
+ * and what populates the sidebar's visible identity text).
  */
-export function systemAdminJwt(): string {
+export function systemAdminJwt(sub = '1'): string {
   const header = b64url({ alg: 'HS256', typ: 'JWT' })
   const now = Math.floor(Date.now() / 1000)
   const payload = b64url({
-    sub: '1',
+    sub,
     email: 'admin@example.com',
     name: 'Admin',
     org_role: 'admin',

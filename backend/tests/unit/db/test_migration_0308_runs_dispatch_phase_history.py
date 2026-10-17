@@ -36,7 +36,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0308_runs_dispatch_phase_history"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0307_runs_guardrail_override_resume_pending"
-_CHAIN_HEAD_MIGRATION = "0317_drop_retired_pipeline_diff_rollback_flag"
+_CHAIN_HEAD_MIGRATION = "0318_trigger_event_required_refs_missing"
 _HISTORY_COLUMN = "dispatch_phase_history"
 _DROPS_COLUMN = "dispatch_phase_write_drops"
 

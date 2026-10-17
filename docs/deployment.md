@@ -5,7 +5,7 @@
 | Requirement | Use |
 |-------------|-----|
 | Server or production deployment, multiple operators, replicas, reverse proxy | **Docker Compose** (this guide's main path) |
-| Workstation or single-machine evaluation, no Docker installed | **Native install** (`scripts/install.sh`) |
+| Workstation or single-machine evaluation on Linux, no Docker installed | **Native install** (`scripts/install.sh`) |
 
 The support split is deliberate: Compose is the server/production path
 (vertical scaling, reverse proxy, observability stack), while the native
@@ -16,20 +16,29 @@ the launcher command surface starts at `modulo start`.
 
 ---
 
-## Prerequisites
+## Running from source (development only)
+
+This is the develop-from-source path, not a deployment path. For a server or
+production install use Docker Compose (*Docker Compose (single-server,
+multi-user)* below); for a workstation evaluation use the native install
+(`scripts/install.sh`, Linux only - requirements in
+[system-requirements.md](./system-requirements.md)). The full local-development
+setup is in [quickstart.md](./quickstart.md).
+
+### Prerequisites
 
 - Python 3.12+
 - PostgreSQL 16+
 - Redis 8+ (required for the SAQ task queue, scheduling, and coordination)
 
-## Installation
+### Installation
 
 ```bash
 cd backend
 uv sync
 ```
 
-## Configuration
+### Configuration
 
 Set environment variables in `.env`:
 
@@ -39,7 +48,7 @@ SECRET_KEY=<random-64-char-string>
 FERNET_KEY=<random-44-char-base64>
 ```
 
-## Running
+### Running
 
 ```bash
 # Apply database migrations first
@@ -48,6 +57,8 @@ uv run alembic upgrade heads
 # Start the API server
 uv run uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000
 ```
+
+---
 
 ## Observability Stack
 

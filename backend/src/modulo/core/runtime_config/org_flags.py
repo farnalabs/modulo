@@ -32,8 +32,6 @@ import time
 import uuid
 from typing import Any
 
-from sqlalchemy import select
-
 _log = logging.getLogger(__name__)
 
 # ── Flag keys (settings_json keys; never rename once shipped) ──────────────
@@ -127,10 +125,16 @@ async def is_org_flag_enabled(session: Any, org_id: uuid.UUID, flag_name: str) -
 async def set_org_flag(session: Any, org_id: uuid.UUID, flag_name: str, value: bool) -> None:
     """Persist an org flag to ``Organisation.settings_json``.
 
-    Row-level lock (``SELECT ... FOR UPDATE``) so the read-modify-write
-    cannot drop a concurrent settings writer's change. The caller owns the
-    transaction (``session.begin()`` / commit) — the minting route wraps
-    this in its own transaction and records the audit event after it.
+    FAR-1832: delegates to the atomic settings patch (FAR-1830) — a
+    single-statement ``settings_json = settings || {flag: value}`` replaces
+    the ``SELECT ... FOR UPDATE`` read-modify-write. The patch emits ONLY this
+    flag's key, so no concurrent settings writer's keys can be dropped and the
+    org row is no longer pre-locked; on the generic (non-Postgres) dialects the
+    helper's own fallback keeps the row lock it needs. The helper's fail-closed
+    tenant guard applies: the caller must have bound the org RLS context
+    (``set_rls_org``) — same contract as before. Raises ``LookupError`` when
+    the organisation is missing or soft-deleted, exactly like the old locked
+    read did.
 
     On success the writing process's cache entry is refreshed immediately;
     other processes see the change within ``_CACHE_TTL_SECONDS``.
@@ -138,23 +142,11 @@ async def set_org_flag(session: Any, org_id: uuid.UUID, flag_name: str, value: b
     if not isinstance(value, bool):
         raise TypeError(f"org flag value must be bool, got {type(value).__name__}")
     if flag_name not in _KNOWN_FLAGS:
-        raise ValueError(f"unknown org flag: {flag_name!r}")
+        raise ValueError(f"unknown org flag: {flag_name}")
 
-    from modulo.db.models.organisation import Organisation
+    from modulo.db.crud.organisation import update_org_settings_patch
 
-    # FAR-1624 org-lock audit: intentionally `FOR UPDATE`, NOT `FOR NO KEY
-    # UPDATE` — this read-modify-write acquires the org lock FIRST (no pre-held
-    # FK `KEY SHARE` on the org), so it cannot hit the KEY-SHARE->FOR-UPDATE
-    # upgrade cycle.
-    result = await session.execute(select(Organisation).where(Organisation.id == org_id).limit(1).with_for_update())
-    org = result.scalar_one_or_none()
-    if org is None:
-        raise LookupError(f"organisation not found: {org_id}")
-
-    settings = dict(org.settings_json) if org.settings_json else {}
-    settings[flag_name] = value
-    org.settings_json = settings
-    await session.flush()
+    await update_org_settings_patch(session, org_id, {flag_name: value})
 
     _flag_cache[(org_id, flag_name)] = (value, time.monotonic() + _CACHE_TTL_SECONDS)
     _log.info(

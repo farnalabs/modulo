@@ -73,6 +73,7 @@ from modulo.core.trigger_engine import (  # noqa: F401
     TriggerEngine,
     TriggerInactiveError,
     TriggerNotFoundError,
+    WorkItemRefsRequiredHTTPError,
     _sha256_hex,
     _verify_hmac,
     _verify_timestamp,
@@ -298,10 +299,28 @@ _CONCURRENCY_REFUSAL_ERROR_DETAIL = (
     "Concurrent run limit reached — the trigger already has its maximum concurrent runs active; delivery not executed"
 )
 
+# FAR-1916: the refused-delivery outcome recorded when a delivery (receive or
+# replay) hits the pipeline's configured rate limit. Reuses the engine's own
+# ``rate_limited`` vocabulary value (the engine writes it in-transaction at both
+# raise sites, and that transaction rolls back with the refusal), so the refusal
+# is stored with its raw payload / original event hash and is replayable with no
+# schema change.
+_RATE_LIMIT_REFUSAL_VALIDATION_RESULT = "rate_limited"
+_RATE_LIMIT_REFUSAL_ERROR_DETAIL = "Pipeline rate limit reached — delivery not executed"
+
+# FAR-1916: the refused-delivery outcome recorded when a
+# ``work_item_refs_required`` pipeline rejects a delivery that supplied no
+# work-item refs. Reuses the engine's ``required_refs_missing`` vocabulary value
+# (the engine writes it in-transaction before raising the typed 422; that
+# transaction unwinds with the refusal, so the route re-records it in a fresh
+# transaction).
+_REQUIRED_REFS_REFUSAL_VALIDATION_RESULT = "required_refs_missing"
+_REQUIRED_REFS_REFUSAL_ERROR_DETAIL = "Required work-item refs missing — delivery not executed"
+
 
 async def _record_rejected_delivery(
     *,
-    kind: Literal["backpressure", "busy", "concurrency"],
+    kind: Literal["backpressure", "busy", "concurrency", "rate_limited", "required_refs_missing"],
     trigger_id: uuid.UUID,
     org_id: uuid.UUID | None,
     raw_body: bytes | None = None,
@@ -315,23 +334,27 @@ async def _record_rejected_delivery(
     survive the refusal: ``busy`` (the engine raises ``TriggerBusyError``
     BEFORE any TriggerEvent is written), ``backpressure`` (the engine's
     ``backpressure_skipped`` write rolls back with the unwound main
-    transaction), and ``concurrency`` (FAR-1863 — the engine's
-    ``concurrency_limit_reached`` write likewise rolls back). All are
-    deliberately NOT swallowed inside the begin-block, which would commit the
-    dedup insert and break the sender-retry contract.
+    transaction), ``concurrency`` (FAR-1863 — the engine's
+    ``concurrency_limit_reached`` write likewise rolls back), ``rate_limited``
+    (FAR-1916 — the engine's ``rate_limited`` write rolls back) and
+    ``required_refs_missing`` (FAR-1916 — the engine's refusal write rolls back
+    with the unwinding 422). All are deliberately NOT swallowed inside the
+    begin-block, which would commit the dedup insert and break the
+    sender-retry contract.
+
+    Two caller shapes share this helper. The RECEIVE path holds the refused
+    delivery's raw body, so it passes ``raw_body``/``raw_payload`` and the
+    recorder stores a fresh payload row (replayable from the event log). The
+    REPLAY path (FAR-1904, extended by FAR-1916's rate-limit and
+    required-refs families) holds no raw body — the original event's payload
+    already exists — so it passes ``source_event_id`` instead: the recorder
+    carries the ORIGINAL event's payload hash onto the refusal row and stores
+    no duplicate payload row (the ``_replay_busy_path`` busy-replay shape).
 
     MUST run AFTER the main request transaction has unwound — the call site
     is the route's outer handler ladder, never the in-transaction block. The
     underlying recorders open their own session from the shared engine and
     never raise; this helper is the same shape.
-
-    Two caller shapes share this helper. The RECEIVE path holds the refused
-    delivery's raw body, so it passes ``raw_body``/``raw_payload`` and the
-    recorder stores a fresh payload row (replayable from the event log). The
-    REPLAY path (FAR-1904) holds no raw body — the original event's payload
-    already exists — so it passes ``source_event_id`` instead: the recorder
-    carries the ORIGINAL event's payload hash onto the refusal row and stores
-    no duplicate payload row (the ``_replay_busy_path`` busy-replay shape).
 
     Exactly ONE payload source is required: the receive path passes
     ``raw_body``/``raw_payload``; the replay path passes ``source_event_id``.
@@ -386,6 +409,35 @@ async def _record_rejected_delivery(
             trigger_type="webhook",
             validation_result=_CONCURRENCY_REFUSAL_VALIDATION_RESULT,
             error_detail=_CONCURRENCY_REFUSAL_ERROR_DETAIL,
+            payload_hash=payload_hash,
+            source_event_id=source_event_id,
+            raw_body=raw_body,
+            raw_payload=raw_payload,
+        )
+    elif kind == "rate_limited":
+        # FAR-1916: the pipeline's configured rate limit refused the delivery.
+        # Same post-unwind shape as the concurrency refusal.
+        await _record_refused_delivery(
+            trigger_id=trigger_id,
+            org_id=org_id,
+            trigger_type="webhook",
+            validation_result=_RATE_LIMIT_REFUSAL_VALIDATION_RESULT,
+            error_detail=_RATE_LIMIT_REFUSAL_ERROR_DETAIL,
+            payload_hash=payload_hash,
+            source_event_id=source_event_id,
+            raw_body=raw_body,
+            raw_payload=raw_payload,
+        )
+    elif kind == "required_refs_missing":
+        # FAR-1916: a ``work_item_refs_required`` pipeline refused a delivery
+        # carrying no work-item refs. The engine's in-transaction write rolled
+        # back with the unwinding 422, so re-record it here.
+        await _record_refused_delivery(
+            trigger_id=trigger_id,
+            org_id=org_id,
+            trigger_type="webhook",
+            validation_result=_REQUIRED_REFS_REFUSAL_VALIDATION_RESULT,
+            error_detail=_REQUIRED_REFS_REFUSAL_ERROR_DETAIL,
             payload_hash=payload_hash,
             source_event_id=source_event_id,
             raw_body=raw_body,
@@ -1055,6 +1107,29 @@ async def receive_webhook(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
         ) from None
+    except WorkItemRefsRequiredHTTPError as exc:
+        # FAR-1916: a ``work_item_refs_required`` pipeline refused the delivery.
+        # The engine's in-transaction ``required_refs_missing`` write rolls back
+        # with the unwinding 422, so re-record the refusal (with the raw body)
+        # in a FRESH transaction AFTER the unwind — the rejected delivery stays
+        # auditable, never silent. The typed 422 is re-raised for the sender.
+        #
+        # This is a thin subclass of ``HTTPException`` (422) so it MUST be
+        # caught BEFORE the generic passthrough arm below; the pass-through
+        # contract for every other HTTPException is unchanged.
+        _log.info(
+            "webhooks.receive_webhook.required_refs_missing trigger=%s pipeline=%s",
+            trigger_id,
+            exc.pipeline_id,
+        )
+        await _record_rejected_delivery(
+            kind="required_refs_missing",
+            trigger_id=trigger_id,
+            org_id=org_id,
+            raw_body=raw_body,
+            raw_payload=raw_payload,
+        )
+        raise
     except HTTPException:
         raise
     except Exception:
@@ -1369,6 +1444,52 @@ async def replay_webhook(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
         ) from None
+    except PipelineRateLimitError as exc:
+        # FAR-1916: the pipeline's configured rate limit refused the replay.
+        # The engine's in-transaction ``rate_limited`` write rolls back with the
+        # unwound main transaction, so re-record the refusal + the original
+        # event's payload hash in a FRESH transaction AFTER the unwind (the
+        # _replay_busy_path shape: no duplicate payload row) — the refused
+        # replay stays auditable, never silent. 429 reject-and-retry, so it
+        # carries a Retry-After consistent with the receive path's refusals.
+        _log.info(
+            "webhooks.replay_webhook.rate_limited trigger=%s pipeline=%s",
+            trigger_id,
+            exc.pipeline_id,
+        )
+        await _record_rejected_delivery(
+            kind="rate_limited",
+            trigger_id=trigger_id,
+            org_id=org_id,
+            source_event_id=event_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc),
+            headers={"Retry-After": "5"},
+        ) from exc
+    except WorkItemRefsRequiredHTTPError as exc:
+        # FAR-1916: a ``work_item_refs_required`` pipeline refused the replay.
+        # The engine's in-transaction ``required_refs_missing`` write rolls back
+        # with the unwinding 422, so re-record the refusal AFTER the unwind in a
+        # fresh transaction — carrying the ORIGINAL event's payload hash via
+        # ``source_event_id`` (the _replay_busy_path busy-replay shape, no
+        # duplicate payload row). The typed 422 is re-raised for the sender.
+        #
+        # A thin subclass of ``HTTPException`` (422), so it MUST be caught
+        # BEFORE the generic passthrough arm below.
+        _log.info(
+            "webhooks.replay_webhook.required_refs_missing trigger=%s pipeline=%s",
+            trigger_id,
+            exc.pipeline_id,
+        )
+        await _record_rejected_delivery(
+            kind="required_refs_missing",
+            trigger_id=trigger_id,
+            org_id=org_id,
+            source_event_id=event_id,
+        )
+        raise
     except HTTPException:
         raise
     except Exception:

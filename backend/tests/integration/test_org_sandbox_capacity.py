@@ -1116,6 +1116,7 @@ async def _seed_saq_running_run(
     snapshot_id: uuid.UUID,
     *,
     claim_count: int = 1,
+    status: str = "running",
     dispatcher: str | None = "saq",
     heartbeat_at: datetime | None = None,
     started_at: datetime | None = None,
@@ -1123,6 +1124,12 @@ async def _seed_saq_running_run(
     dispatch_phase: str | None = None,
     sandbox_dispatch_state: str | None = None,
 ) -> uuid.UUID:
+    """Seed a SAQ-dispatched run.
+
+    ``status`` defaults to ``running`` (the helper's original shape); FAR-1903
+    needs a ``pending`` row at the claim cap, so the status is a parameter
+    rather than a hard-coded literal.
+    """
     from sqlalchemy import insert
 
     from modulo.db.models.run import Run
@@ -1135,7 +1142,7 @@ async def _seed_saq_running_run(
         "pipeline_id": pipeline_id,
         "snapshot_id": snapshot_id,
         "trigger_type": "manual",
-        "status": "running",
+        "status": status,
         "input_hash": _hash(_next_run_number()),
         "langgraph_thread_id": _thread_id(org_id, run_id),
         "run_number": _next_run_number(),
@@ -1253,6 +1260,87 @@ async def test_claim_cap_spares_live_capped_run_with_fresh_heartbeat(
 
     status, _code = await _run_state(db_engine, org_id, run)
     assert status == "running"
+
+
+async def test_claim_cap_terminalizes_stale_capped_pending_run_under_rls(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+) -> None:
+    """FAR-1903: a ``pending`` SAQ run at ``claim_count >= cap`` with a STALE
+    heartbeat is terminal-failed ``claim_cap_exhausted``.
+
+    The claim UPDATE is gated ``AND claim_count < :claim_cap``, so at the cap
+    no claim can ever succeed — the row is provably unrecoverable and, before
+    this regression fix, was outside the ``running``-only predicate (every
+    enqueue was a silent no-op that wedged it ``pending`` forever).
+    """
+    from modulo.core.cron_helpers import _terminalize_claim_cap_exhausted
+
+    org_id, user_id = await _seed_org_account(db_engine, "CapPendingOrg", cap=None)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeCapPending", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+    now = datetime.now(UTC)
+    run = await _seed_saq_running_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        claim_count=2,
+        status="pending",
+        heartbeat_at=now - timedelta(minutes=30),
+    )
+
+    count = await _terminalize_count(
+        app_engine,
+        org_id,
+        _terminalize_claim_cap_exhausted,
+        claim_cap=2,
+        stale_seconds=600,
+    )
+    assert count == 1
+
+    status, code = await _run_state(db_engine, org_id, run)
+    assert status == "failed"
+    assert code == "claim_cap_exhausted"
+
+
+async def test_claim_cap_spares_stale_pending_run_below_the_cap(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+) -> None:
+    """FAR-1903 guard: a ``pending`` run at ``claim_count = cap - 1`` with a
+    STALE heartbeat is still CLAIMABLE (the claim SQL only requires
+    ``claim_count < cap``), so it must be left alone — widening the predicate
+    to ``pending`` must not weaken the recoverability boundary."""
+    from modulo.core.cron_helpers import _terminalize_claim_cap_exhausted
+
+    org_id, user_id = await _seed_org_account(db_engine, "CapBelowOrg", cap=None)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeCapBelow", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+    now = datetime.now(UTC)
+    run = await _seed_saq_running_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        claim_count=1,
+        status="pending",
+        heartbeat_at=now - timedelta(minutes=30),
+    )
+
+    count = await _terminalize_count(
+        app_engine,
+        org_id,
+        _terminalize_claim_cap_exhausted,
+        claim_cap=2,
+        stale_seconds=600,
+    )
+    assert count == 0
+
+    status, _code = await _run_state(db_engine, org_id, run)
+    assert status == "pending"
 
 
 async def test_mid_graph_wedge_terminalizes_age_bound_run_under_rls(

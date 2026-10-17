@@ -5,7 +5,7 @@ import logging
 import uuid
 from typing import Any
 
-from sqlalchemy import ARRAY, Text, bindparam, select, text
+from sqlalchemy import ARRAY, Text, TextClause, bindparam, select, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
@@ -67,6 +67,18 @@ class OrgSettingsPatchContextUnreadableError(OrgSettingsPatchContextError):
 
 # Sentinel org IDs that must never resolve a login page.
 _SENTINEL_ORG_IDS: frozenset[uuid.UUID] = frozenset({SYSTEM_ORG_ID, MODULO_REGISTRY_ORG_ID})
+
+# The (column, require_live_row) POLICY TABLE (FAR-1832 QA F13a) — ONE source
+# of truth shared by both dialects. ``settings_json`` MUST refuse a soft-deleted
+# org (require_live_row=True); the FAR-1025 OTel column MUST stay writable
+# during the pending-deletion window (require_live_row=False). Validating the
+# pair here means the generic path can no longer accept the forbidden
+# ``("settings_json", False)`` combination that writes through
+# ``include_soft_deleted`` — exactly the soft-deleted-org settings write
+# FAR-1830 forbids.
+_VALID_JSON_COLUMN_LIVE_ROW: frozenset[tuple[str, bool]] = frozenset(
+    {("settings_json", True), ("otel_config_json", False)}
+)
 
 
 async def get_organisation(
@@ -190,6 +202,35 @@ async def update_organisation(
     org_id: uuid.UUID,
     updates: dict[str, object],
 ) -> Organisation | None:
+    """Apply whole-column ORM updates to an organisation row.
+
+    FAR-1832: ``settings_json`` is FORBIDDEN here, and (QA F14) so is the twin
+    tenant JSON column ``otel_config_json``. Writing a whole JSON column through
+    this generic helper is the lost-update shape the atomic patch replaced (read
+    the column, merge one key in Python, write the WHOLE column back — dropping
+    every concurrent writer's keys committed in the window). Settings concerns
+    write their own top-level key through :func:`update_org_settings_patch` and
+    the OTel writer through ``db.crud.observability.update_otel_config``.
+    Raising here rather than silently routing the write makes the dumper shape
+    impossible to reintroduce by copy-paste; legitimate non-JSON callers
+    (``name``, ``plan_id``, ...) are unaffected.
+    """
+    if "settings_json" in updates:
+        raise ValueError(
+            "update_organisation cannot write settings_json (whole-column settings writes lose "
+            "concurrent writers' keys); use update_org_settings_patch(session, org_id, {key: value}, "
+            "delete_keys=[...]) for atomic per-key settings writes instead (FAR-1830/FAR-1832)"
+        )
+    if "otel_config_json" in updates:
+        # FAR-1832 QA F14: the twin tenant JSON column. No caller writes it here
+        # today (only ``name``/``plan_id``), but leaving it writable is a
+        # copy-paste hazard that reintroduces the same whole-column dumper the
+        # settings_json guard above exists to prevent.
+        raise ValueError(
+            "update_organisation cannot write otel_config_json (whole-column writes lose concurrent "
+            "writers' keys); use db.crud.observability.update_otel_config(session, org_id, {key: value}) "
+            "for atomic per-key OTel writes instead (FAR-1025/FAR-1832)"
+        )
     org = await get_organisation(session, org_id)
     if org is None:
         return None
@@ -205,6 +246,7 @@ async def update_org_settings_patch(
     delete_keys: list[str] | None = None,
     *,
     allow_unbound_context: bool = False,
+    nested_patch: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Atomically merge (and/or remove) top-level keys of ``settings_json`` (FAR-1830).
 
@@ -226,6 +268,22 @@ async def update_org_settings_patch(
     - Generic backends (SQLite / MariaDB, tests + legacy): an equivalent
       read-merge-write under ``SELECT ... FOR UPDATE``. Dialect-gated so the
       JSONB operators never reach a backend that lacks them.
+
+    ``nested_patch`` (FAR-1832 QA F1) composes ONE top-level key at the
+    SUB-FIELD level: ``settings_json = jsonb_set(…, '{key}',
+    COALESCE(settings_json->'key','{}') || :subpatch)``. A top-level ``patch``
+    entry REPLACES the whole value of its key; a ``nested_patch`` entry MERGES
+    into the stored value's sub-fields, so two writers of DIFFERENT sub-fields
+    of the same block (e.g. the ``product_analytics`` consent writer and the
+    admin level toggle) both survive. At most ONE nested key per call, and a
+    key must not appear in BOTH ``patch`` and ``nested_patch`` (the ordering
+    would be ambiguous — refused rather than silently resolved).
+
+    FAR-1832 QA F3: the implementation is SHARED with the OTel-config writer —
+    this function is a thin wrapper over
+    :func:`update_org_json_column_patch` pinned to ``column="settings_json"``
+    and ``require_live_row=True`` — so there is exactly one implementation of
+    the guard / lock-bound / dialect-split / identity-map machinery.
 
     Contract:
 
@@ -253,8 +311,94 @@ async def update_org_settings_patch(
 
     Returns the refreshed ``settings_json`` mapping.
     """
-    patch = patch or {}
-    delete_keys = list(delete_keys or [])
+    settings = await update_org_json_column_patch(
+        session,
+        organisation_id,
+        patch=patch or {},
+        delete_keys=list(delete_keys or []),
+        column="settings_json",
+        require_live_row=True,
+        allow_unbound_context=allow_unbound_context,
+        nested_patch=nested_patch,
+    )
+    _invalidate_settings_derived_caches()
+    return settings
+
+
+async def update_org_json_column_patch(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    *,
+    patch: dict[str, Any],
+    delete_keys: list[str],
+    column: str,
+    require_live_row: bool,
+    allow_unbound_context: bool = False,
+    nested_patch: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Atomically merge (and/or remove) top-level keys of ONE Organisation JSON column.
+
+    The single implementation (FAR-1832 QA F3) behind both
+    :func:`update_org_settings_patch` (``settings_json``; soft-deleted orgs
+    refused) and ``db.crud.observability.update_otel_config``
+    (``otel_config_json``; soft-deleted orgs deliberately still writable per
+    FAR-1025). The legitimate differences are ARGUMENTS, not a fork:
+
+    - ``column`` — which JSONB column to patch (validated against the
+      allowlist below; never interpolated from user input).
+    - ``require_live_row`` — whether the write carries the
+      ``deleted_at IS NULL`` predicate / the generic path uses the
+      soft-delete-filtered read.
+    - ``delete_keys`` — callers that never delete keys pass ``[]``.
+
+    Everything else is shared: the bounded lock wait
+    (``set_mutation_row_lock_timeout``), the fail-closed tenant guard
+    (:func:`_strict_read_rls_org`), the single-statement Postgres merge, the
+    locked generic-dialect fallback, the ``LookupError`` for a missing /
+    soft-deleted (when ``require_live_row``) org, and the identity-map refresh.
+
+    Contract: same as :func:`update_org_settings_patch` except where the
+    arguments above deliberately diverge; in particular the tenant guard is
+    NOT opt-out-able per column — every writer must bind the org RLS context
+    (or pass ``allow_unbound_context`` for genuine boot-seed/system callers).
+
+    WARNING: ``allow_unbound_context=True`` is for boot-seed / system callers
+    ONLY — an organisation must normally have ``set_rls_org`` bound before its
+    settings are patched. It never masks a *corrupt* context: a non-empty
+    ``app.organisation_id`` that fails UUID coercion fails closed
+    (:class:`OrgSettingsPatchContextUnreadableError`) regardless of this flag.
+    """
+    if column not in ("settings_json", "otel_config_json"):
+        raise ValueError(f"unsupported organisation JSON column: {column!r}")
+    if (column, require_live_row) not in _VALID_JSON_COLUMN_LIVE_ROW:
+        # QA F13a: the (column, require_live_row) pairing is a fixed policy, not
+        # a free cross-product. Validating it HERE — before any dialect branch —
+        # closes the generic path's acceptance of ("settings_json", False),
+        # which would write a soft-deleted org's settings via
+        # ``include_soft_deleted``: the exact write FAR-1830 forbids.
+        raise ValueError(
+            f"unsupported org JSON patch configuration: column={column!r} "
+            f"require_live_row={require_live_row!r} — settings_json requires "
+            f"require_live_row=True and otel_config_json requires require_live_row=False"
+        )
+    nested = dict(nested_patch or {})
+    if len(nested) > 1:
+        raise ValueError(f"nested_patch supports at most one top-level key per call, got {sorted(nested)!r}")
+    overlap = set(nested) & set(patch)
+    if overlap:
+        raise ValueError(
+            f"nested_patch key(s) {sorted(overlap)!r} also appear in patch — the compose order would be ambiguous"
+        )
+    # QA F13c: a key in BOTH delete_keys and patch/nested_patch is equally
+    # ambiguous (delete-wins was never a documented contract), so it is refused
+    # for the same reason the patch/nested overlap is — rather than silently
+    # letting the delete win.
+    delete_overlap = set(delete_keys) & (set(patch) | set(nested))
+    if delete_overlap:
+        raise ValueError(
+            f"key(s) {sorted(delete_overlap)!r} appear in both delete_keys and patch/nested_patch — "
+            "the compose order would be ambiguous"
+        )
 
     # Normalise the target to a ``UUID``: callers occasionally pass the id as a
     # string, and both the tenant-mismatch comparison and the bound SQL /
@@ -262,7 +406,7 @@ async def update_org_settings_patch(
     # ``str`` form).
     target_org_id = _coerce_org_uuid(organisation_id)
     if target_org_id is None:
-        raise ValueError(f"update_org_settings_patch requires a UUID organisation id, got {organisation_id!r}")
+        raise ValueError(f"org JSON column patch requires a UUID organisation id, got {organisation_id!r}")
 
     await _take_settings_patch_lock_wait(session)
     dialect = await _settings_patch_dialect(session)
@@ -279,12 +423,26 @@ async def update_org_settings_patch(
         )
 
     if dialect == "postgresql":
-        settings = await _apply_settings_patch_postgres(session, target_org_id, patch, delete_keys)
+        value = await _apply_json_column_patch_postgres(
+            session,
+            target_org_id,
+            patch,
+            delete_keys,
+            column=column,
+            require_live_row=require_live_row,
+            nested_patch=nested or None,
+        )
     else:
-        settings = await _apply_settings_patch_generic(session, target_org_id, patch, delete_keys)
-
-    _invalidate_settings_derived_caches()
-    return settings
+        value = await _apply_json_column_patch_generic(
+            session,
+            target_org_id,
+            patch,
+            delete_keys,
+            column=column,
+            require_live_row=require_live_row,
+            nested_patch=nested or None,
+        )
+    return value
 
 
 async def _strict_read_rls_org(session: AsyncSession, dialect: str) -> uuid.UUID | None:
@@ -297,20 +455,34 @@ async def _strict_read_rls_org(session: AsyncSession, dialect: str) -> uuid.UUID
     :class:`OrgSettingsPatchContextUnreadableError`; only a genuinely-absent context
     returns ``None``.
 
-    Generic backends store the org in ``session.info['org_id']`` and have no
-    ``app.organisation_id`` GUC, so on a non-Postgres dialect the info lookup is
-    authoritative and its absence is genuinely-unbound (not a read error). On
-    Postgres the ``current_setting`` read is authoritative.
+    FAR-1832 QA F4: the branch is on the DIALECT FIRST. On Postgres the
+    ``current_setting('app.organisation_id', true)`` GUC read is the ONLY
+    authoritative source — ``set_rls_org`` sets the GUC, never
+    ``session.info``, so an ``info['org_id']`` value on a Postgres session is
+    unrelated to the transaction's actual RLS context and must not satisfy the
+    guard (a session carrying a stale/planted info value would otherwise pass
+    the tenant check while the GUC — the real boundary — is unset or different,
+    defeating :class:`OrgSettingsPatchContextUnreadableError` entirely). A
+    failed GUC read always raises (fail closed); ``session.info`` is consulted
+    ONLY on non-Postgres dialects, where it is what ``set_rls_org`` writes and
+    its absence is genuinely-unbound (not a read error).
     """
-    info = getattr(session, "info", None)
-    if isinstance(info, dict):
-        value = info.get(_RLS_TENANT_KEY)
-        if value is not None:
-            parsed = _coerce_org_uuid(value)
-            if parsed is not None:
-                return parsed
-    if dialect != "postgresql":
-        return None
+    if dialect == "postgresql":
+        return await _read_postgres_rls_org(session)
+    return _read_session_info_rls_org(session)
+
+
+async def _read_postgres_rls_org(session: AsyncSession) -> uuid.UUID | None:
+    """Read the bound org from the Postgres ``app.organisation_id`` GUC.
+
+    Split out of :func:`_strict_read_rls_org` (FAR-1832) so the dialect
+    dispatch stays a single branch. A failed GUC read raises (fail closed); an
+    absent/blank GUC is genuinely unbound and returns ``None``; a NON-EMPTY
+    value that fails UUID coercion is a CORRUPT context and raises
+    (:class:`OrgSettingsPatchContextUnreadableError`) rather than being treated
+    as unbound — otherwise ``allow_unbound_context=True`` would permit a write
+    against an unknown tenant boundary.
+    """
     try:
         result = await session.execute(text("SELECT current_setting('app.organisation_id', true)"))
     except Exception as exc:
@@ -322,7 +494,28 @@ async def _strict_read_rls_org(session: AsyncSession, dialect: str) -> uuid.UUID
         return None
     if isinstance(raw, str) and raw.strip() == "":
         return None
-    return _coerce_org_uuid(raw)
+    coerced = _coerce_org_uuid(raw)
+    if coerced is None:
+        raise OrgSettingsPatchContextUnreadableError(
+            f"the session's app.organisation_id RLS context is not a valid UUID: {raw!r}"
+        )
+    return coerced
+
+
+def _read_session_info_rls_org(session: AsyncSession) -> uuid.UUID | None:
+    """Read the bound org from ``session.info`` (non-Postgres dialects only).
+
+    ``set_rls_org`` writes the tenant id to ``session.info`` on generic
+    backends; its absence is genuinely-unbound (not a read error), so an
+    absent key or a non-``dict`` ``info`` both return ``None``.
+    """
+    info = getattr(session, "info", None)
+    if not isinstance(info, dict):
+        return None
+    value = info.get(_RLS_TENANT_KEY)
+    if value is None:
+        return None
+    return _coerce_org_uuid(value)
 
 
 def _coerce_org_uuid(value: object) -> uuid.UUID | None:
@@ -346,55 +539,167 @@ async def _settings_patch_dialect(session: AsyncSession) -> str:
     return await get_dialect_name(session)
 
 
-async def _apply_settings_patch_postgres(
+def _pg_patch_statement(column: str, require_live_row: bool, *, nested: bool = False) -> TextClause:
+    """The single-statement Postgres merge for one (column, live-row) configuration.
+
+    FAR-1832 QA F3: the supported configurations are selected from CONSTANT
+    statements rather than interpolating the column name into SQL — the
+    ``raw-sql-fstring`` semgrep rule (correctly) forbids identifier
+    interpolation into ``text()``, and the cross-product of the two allowlisted
+    columns, the live-row flag and the nested-sub-field form is a small,
+    audited set. Anything else raises rather than falling through to an
+    unaudited shape.
+
+    The ``nested=True`` variants (QA F1) wrap the base merge in a
+    ``jsonb_set`` that composes the single nested key at the SUB-FIELD level:
+    ``COALESCE(col->key, '{}') || :nested_patch`` — so a writer of one
+    sub-field of a shared block never replaces the sibling sub-fields another
+    writer committed. QA F13b: the key's stored value is healed through
+    ``jsonb_typeof(...) = 'object'`` (a CASE), not a bare ``COALESCE`` — a bare
+    ``COALESCE`` catches only SQL NULL, so a stored JSON ``null`` or any
+    non-object block fell through to ``jsonb || jsonb`` and corrupted into an
+    array. The heal now matches the generic path's ``isinstance(existing, dict)``.
+    The base expression is repeated inside ``jsonb_set`` because every reference
+    on the right-hand side of an UPDATE sees the OLD row value; the nested
+    compose therefore starts from the same base document the top-level ``||``
+    produces.
+    """
+    if column == "settings_json" and require_live_row:
+        if nested:
+            # Full literal (no concatenation/f-string — bandit B608 and the
+            # semgrep raw-sql-fstring rule both reject constructed SQL; every
+            # dynamic piece is a bound parameter). The base merge expression
+            # appears twice because every reference on the right-hand side of
+            # an UPDATE sees the OLD row value: the nested compose starts from
+            # the same base document the top-level || produces.
+            return text(
+                "UPDATE organisations "
+                "SET settings_json = jsonb_set("
+                "(COALESCE(settings_json, '{}'::jsonb) || CAST(:patch AS jsonb)), "
+                "ARRAY[:nested_key]::text[], "
+                "CASE WHEN jsonb_typeof("
+                "(COALESCE(settings_json, '{}'::jsonb) || CAST(:patch AS jsonb)) "
+                "-> CAST(:nested_key AS text)) = 'object' "
+                "THEN (COALESCE(settings_json, '{}'::jsonb) || CAST(:patch AS jsonb)) "
+                "-> CAST(:nested_key AS text) "
+                "ELSE '{}'::jsonb END "
+                "|| CAST(:nested_patch AS jsonb)) "
+                "- CAST(:delete_keys AS text[]) "
+                "WHERE id = :org_id AND deleted_at IS NULL "
+                "RETURNING settings_json"
+            )
+        return text(
+            "UPDATE organisations "
+            "SET settings_json = "
+            "(COALESCE(settings_json, '{}'::jsonb) || CAST(:patch AS jsonb)) "
+            "- CAST(:delete_keys AS text[]) "
+            "WHERE id = :org_id AND deleted_at IS NULL "
+            "RETURNING settings_json"
+        )
+    if column == "otel_config_json" and not require_live_row and not nested:
+        # No ``deleted_at IS NULL`` predicate (FAR-1025, see
+        # ``update_org_json_column_patch``); the empty ``delete_keys`` clear is
+        # a no-op and keeps ONE statement shape across both columns. The OTel
+        # writer never uses a nested sub-patch.
+        return text(
+            "UPDATE organisations "
+            "SET otel_config_json = "
+            "(COALESCE(otel_config_json, '{}'::jsonb) || CAST(:patch AS jsonb)) "
+            "- CAST(:delete_keys AS text[]) "
+            "WHERE id = :org_id "
+            "RETURNING otel_config_json"
+        )
+    raise ValueError(
+        f"unsupported org JSON patch configuration: column={column!r} "
+        f"require_live_row={require_live_row!r} nested={nested!r}"
+    )
+
+
+async def _apply_json_column_patch_postgres(
     session: AsyncSession,
     organisation_id: uuid.UUID,
     patch: dict[str, Any],
     delete_keys: list[str],
+    *,
+    column: str = "settings_json",
+    require_live_row: bool = True,
+    nested_patch: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    stmt = text(
-        "UPDATE organisations "
-        "SET settings_json = "
-        "(COALESCE(settings_json, '{}'::jsonb) || CAST(:patch AS jsonb)) "
-        "- CAST(:delete_keys AS text[]) "
-        "WHERE id = :org_id AND deleted_at IS NULL "
-        "RETURNING settings_json"
-    ).bindparams(
+    stmt = _pg_patch_statement(column, require_live_row, nested=bool(nested_patch))
+    params: dict[str, Any] = {"org_id": str(organisation_id)}
+    stmt = stmt.bindparams(
         bindparam("patch", value=json.dumps(patch)),
         bindparam("delete_keys", value=delete_keys, type_=ARRAY(Text)),
     )
-    result = await session.execute(stmt, {"org_id": str(organisation_id)})
+    if nested_patch:
+        ((nested_key, nested_sub),) = nested_patch.items()
+        stmt = stmt.bindparams(
+            bindparam("nested_key", value=nested_key),
+            bindparam("nested_patch", value=json.dumps(nested_sub)),
+        )
+    result = await session.execute(stmt, params)
     row = result.first()
     if row is None:
-        # No row matched: either the org does not exist OR it is soft-deleted.
-        # The generic path (get_organisation) applies the global soft-delete
-        # filter, so this matches its behaviour (both refuse a soft-deleted org).
+        # No row matched: either the org does not exist OR (when
+        # ``require_live_row``) it is soft-deleted. The generic path
+        # (get_organisation) applies the global soft-delete filter, so this
+        # matches its behaviour (both refuse a soft-deleted org).
         raise LookupError(f"organisation not found: {organisation_id}")
     raw = row[0]
-    settings = json.loads(raw) if isinstance(raw, str) else dict(raw)
-    _sync_identity_map(session, organisation_id, settings)
-    return settings
+    value = json.loads(raw) if isinstance(raw, str) else dict(raw)
+    _sync_identity_map(session, organisation_id, value, column=column)
+    return value
 
 
-async def _apply_settings_patch_generic(
+async def _apply_json_column_patch_generic(
     session: AsyncSession,
     organisation_id: uuid.UUID,
     patch: dict[str, Any],
     delete_keys: list[str],
+    *,
+    column: str = "settings_json",
+    require_live_row: bool = True,
+    nested_patch: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    org = await get_organisation(session, organisation_id, for_update=True)
+    if require_live_row:
+        org = await get_organisation(session, organisation_id, for_update=True)
+    else:
+        # FAR-1025 / OTel path: a pending-deletion org stays writable, so the
+        # read opts out of the global soft-delete filter (same include_
+        # soft_deleted contract the observability reader uses).
+        from modulo.db.soft_delete import include_soft_deleted
+
+        result = await session.execute(
+            include_soft_deleted(select(Organisation).where(Organisation.id == organisation_id).with_for_update())
+        )
+        org = result.scalar_one_or_none()
     if org is None:
         raise LookupError(f"organisation not found: {organisation_id}")
-    settings = dict(org.settings_json) if isinstance(org.settings_json, dict) else {}
-    settings.update(patch)
+    current = getattr(org, column)
+    value = dict(current) if isinstance(current, dict) else {}
+    value.update(patch)
+    # Nested sub-field compose (QA F1): merge into the CURRENT value of the
+    # key (post top-level patch — the overlap check above makes that
+    # unambiguous), exactly like the Postgres jsonb_set || does.
+    for nested_key, nested_sub in (nested_patch or {}).items():
+        existing = value.get(nested_key)
+        merged_sub = dict(existing) if isinstance(existing, dict) else {}
+        merged_sub.update(nested_sub)
+        value[nested_key] = merged_sub
     for key in delete_keys:
-        settings.pop(key, None)
-    org.settings_json = settings
+        value.pop(key, None)
+    setattr(org, column, value)
     await session.flush()
-    return settings
+    return value
 
 
-def _sync_identity_map(session: AsyncSession, organisation_id: uuid.UUID, settings: dict[str, Any]) -> None:
+def _sync_identity_map(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    value: dict[str, Any],
+    *,
+    column: str = "settings_json",
+) -> None:
     """Refresh an already-loaded org row to the merged value without dirtying it."""
     identity_map = getattr(session, "identity_map", None)
     getter = getattr(identity_map, "get", None)
@@ -402,7 +707,7 @@ def _sync_identity_map(session: AsyncSession, organisation_id: uuid.UUID, settin
         return
     org = getter(identity_key(Organisation, organisation_id))
     if isinstance(org, Organisation):
-        set_committed_value(org, "settings_json", settings)
+        set_committed_value(org, column, value)
 
 
 def _invalidate_settings_derived_caches() -> None:
