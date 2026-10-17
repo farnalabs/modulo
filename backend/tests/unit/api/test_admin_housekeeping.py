@@ -523,6 +523,17 @@ class TestSystemAdminRequired:
         resp = non_sys_admin_client.get("/api/v1/admin/housekeeping")
         assert resp.status_code == 403
 
+    def test_list_housekeeping_403_for_operator(self, operator_client: TestClient) -> None:
+        """The REST list route's admin org-role floor (FAR-1879 parity).
+
+        ``operator_client`` sets ``is_system_admin=True`` deliberately, so this
+        proves ``require_permission`` — not the system-admin gate — denies an
+        operator. It mirrors the MCP ``TestListHousekeepingAuthz`` case of the
+        same name.
+        """
+        resp = operator_client.get("/api/v1/admin/housekeeping")
+        assert resp.status_code == 403
+
     def test_cleanup_403_for_org_admin(self, non_sys_admin_client: TestClient) -> None:
         resp = non_sys_admin_client.post("/api/v1/admin/housekeeping/cleanup", json={"items": []})
         assert resp.status_code == 403
@@ -533,12 +544,18 @@ class TestSystemAdminRequired:
 
 
 class TestCleanupAuthzParity:
-    """FAR-1879: REST cleanup authz, paired with the MCP tool's authz suite.
+    """FAR-1879: REST housekeeping authz, paired with the MCP tools' suites.
 
-    The REST cleanup surface requires an admin org role (``require_permission``)
-    AND ``is_system_admin`` (``require_system_permission``). These two
-    assertions mirror the MCP ``TestPerformHousekeepingAuthz`` tests so the two
-    surfaces cannot drift again.
+    The REST housekeeping surfaces require an admin org role
+    (``require_permission``) AND ``is_system_admin``
+    (``require_system_permission``).
+
+    NOTE: these assertions exercise REST code this change did NOT touch — the
+    REST floor/gate already existed. They are pinned here as a PARITY GUARD, so
+    a future change that tightens the MCP side but weakens (or vice versa) the
+    REST side fails a test. They do not, and are not claimed to, prove the MCP
+    change; that proof lives in ``TestPerformHousekeepingAuthz`` and
+    ``TestListHousekeepingAuthz`` in ``tests/unit/mcp/test_mcp_config_tools.py``.
     """
 
     URL = "/api/v1/admin/housekeeping/cleanup"

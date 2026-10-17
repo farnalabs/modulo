@@ -1,9 +1,11 @@
 """Unit tests for the get_org_config / get_available_features / get_integration_status /
 search_documentation / list_housekeeping / perform_housekeeping MCP tools."""
 
+import logging
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 
 from modulo.api.mcp_server import (
@@ -415,7 +417,7 @@ class TestSearchDocumentationSuccess(AuthContext):
 # ---------------------------------------------------------------------------
 
 
-class TestListHousekeepingErrors(AuthContext):
+class TestListHousekeepingErrors(_SystemAdminContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await list_housekeeping()
@@ -455,7 +457,7 @@ class TestListHousekeepingErrors(AuthContext):
         assert result["error"] == "migration_required"
 
 
-class TestListHousekeepingSuccess(AuthContext):
+class TestListHousekeepingSuccess(_SystemAdminContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.core.housekeeping.scan_all")
@@ -484,6 +486,127 @@ class TestListHousekeepingSuccess(AuthContext):
         assert category["label"] == "Orphan Secrets"
         assert category["count"] == 1
         assert category["candidates"] == [candidate.to_dict()]
+
+
+class TestListHousekeepingAuthz(AuthContext):
+    """FAR-1879: the MCP housekeeping LIST tool matches its REST twin.
+
+    ``GET /api/v1/admin/housekeeping`` is gated by
+    ``require_permission("housekeeping.manage")`` (admin) AND
+    ``require_system_permission(...)`` (system admin). These tests drive the
+    REAL ``_check_agent_tool_scope`` chokepoint (not a stubbed scope check) so
+    a runner/operator or a non-system-admin org admin is rejected, and a
+    system admin is accepted.
+    """
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.core.housekeeping.scan_all")
+    async def test_operator_rejected(
+        self,
+        mock_scan: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        # AuthContext's default role is "operator" — below the admin floor.
+        mock_session.return_value = make_session_context(AsyncMock())
+        mock_scan.return_value = []
+        result = await list_housekeeping()
+        assert result["error"] == "insufficient_scope"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.core.housekeeping.scan_all")
+    async def test_operator_with_system_admin_rejected_by_org_role_floor(
+        self,
+        mock_scan: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """A mapping regression to a runner/operator key must fail HERE.
+
+        ``_ctx_is_system_admin`` is True, so the in-body gate cannot mask a
+        scope-map regression: if ``list_housekeeping`` ever resolves below
+        admin again, the scope chokepoint passes and the listing succeeds.
+        """
+        from modulo.api.mcp_server import _ctx_is_system_admin
+
+        mock_session.return_value = make_session_context(AsyncMock())
+        mock_scan.return_value = []
+        _ctx_is_system_admin.set(True)
+        try:
+            result = await list_housekeeping()
+        finally:
+            _ctx_is_system_admin.set(False)
+        assert result["error"] == "insufficient_scope"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.core.housekeeping.scan_all")
+    async def test_org_admin_without_system_admin_rejected(
+        self,
+        mock_scan: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from modulo.api.mcp_server import _ctx_role
+
+        mock_session.return_value = make_session_context(AsyncMock())
+        mock_scan.return_value = []
+        _ctx_role.set("admin")  # passes the org-role floor, but is NOT system admin
+        result = await list_housekeeping()
+        assert result["error"] == "insufficient_scope"
+        assert "system admin" in result["detail"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.core.housekeeping.scan_all")
+    async def test_system_admin_accepted(
+        self,
+        mock_scan: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
+
+        mock_scan.return_value = []
+        mock_session.return_value = make_session_context(AsyncMock())
+        _ctx_role.set("admin")
+        _ctx_is_system_admin.set(True)
+        try:
+            result = await list_housekeeping()
+        finally:
+            _ctx_is_system_admin.set(False)
+        assert result == {"categories": [], "total_count": 0}
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.core.housekeeping.scan_all")
+    async def test_refusal_logs_warning(
+        self,
+        mock_scan: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """FAR-1879: a system-admin refusal is visible in the logs.
+
+        The audit decorator records only a coarse ``outcome="error"`` with no
+        call-site line, so without the warning a stream of refusals would be
+        indistinguishable from operational errors.
+        """
+        from modulo.api.mcp_server import _ctx_role
+
+        mock_session.return_value = make_session_context(AsyncMock())
+        mock_scan.return_value = []
+        _ctx_role.set("admin")  # org admin, but NOT system admin
+        with caplog.at_level(logging.WARNING, logger="modulo.api.mcp_server"):
+            result = await list_housekeeping()
+        assert result["error"] == "insufficient_scope"
+        assert any(
+            "list_housekeeping" in rec.getMessage() and "system_admin_required" in rec.getMessage()
+            for rec in caplog.records
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -643,6 +766,34 @@ class TestPerformHousekeepingAuthz(AuthContext):
     async def test_operator_rejected(self, mock_validate_auth: AsyncMock) -> None:
         # AuthContext's default role is "operator" — below the admin floor.
         result = await perform_housekeeping(items=[{"id": "x", "entity_type": "secret"}])
+        assert result["error"] == "insufficient_scope"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.core.housekeeping.ENTITY_MODEL_MAP", {"secret": Secret})
+    async def test_operator_with_system_admin_rejected_by_org_role_floor(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """A mapping regression to an operator-scoped key must fail HERE.
+
+        ``_ctx_is_system_admin`` is True, so the in-body gate cannot mask a
+        scope-map regression: if ``perform_housekeeping`` ever resolves below
+        admin again, the scope chokepoint passes and the delete body runs.
+        """
+        from modulo.api.mcp_server import _ctx_is_system_admin
+
+        mock_sesh = _make_housekeeping_session()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = MagicMock()
+        mock_sesh.execute = AsyncMock(return_value=mock_result)
+        mock_session.return_value = make_session_context(mock_sesh)
+        _ctx_is_system_admin.set(True)
+        try:
+            result = await perform_housekeeping(items=[{"id": "x", "entity_type": "secret"}])
+        finally:
+            _ctx_is_system_admin.set(False)
         assert result["error"] == "insufficient_scope"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)

@@ -1364,6 +1364,8 @@ class TestSimpleToolErrorHandlers(_AuthContext):
     async def test_list_housekeeping_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            # FAR-1879: pass the in-body system-admin gate to reach the body.
+            patch.object(ms, "_ctx_is_system_admin_val", return_value=True),
             patch("modulo.core.housekeeping.scan_all", side_effect=RuntimeError("boom")),
         ):
             result = await list_housekeeping()

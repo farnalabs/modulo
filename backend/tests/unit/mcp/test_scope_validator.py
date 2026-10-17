@@ -39,7 +39,10 @@ class TestCheckToolScope:
             ("runner", "cancel_run"),
             ("runner", "list_pending_hitl"),
             ("runner", "copy_library_primitive"),
-            ("runner", "list_housekeeping"),
+            # FAR-1879: the MCP housekeeping LIST tool now shares the admin
+            # org-role floor of its REST twin (GET /api/v1/admin/housekeeping),
+            # so only an admin passes the scope-map leg.
+            ("admin", "list_housekeeping"),
             ("admin", "perform_housekeeping"),
             ("operator", "create_connector"),
             ("admin", "create_connector"),
@@ -65,7 +68,7 @@ class TestCheckToolScope:
             "runner-cancel_run",
             "runner-list_pending_hitl",
             "runner-copy_library_primitive",
-            "runner-list_housekeeping",
+            "admin-list_housekeeping",
             "admin-perform_housekeeping",
             "operator-create_connector",
             "admin-create_connector",
@@ -98,6 +101,23 @@ class TestCheckToolScope:
         for role in ("viewer", "runner", "operator", "admin"):
             assert check_tool_scope(role, "query_analytics") is None
 
+    def test_housekeeping_tools_resolve_to_admin(self) -> None:
+        """FAR-1879: both MCP housekeeping tools pin the admin org-role floor.
+
+        This is the mapping-level pin (``test_mcp_config_tools`` pins the
+        handler-level behaviour); a regression of either mapping to a
+        runner/operator key fails here independently of the in-body gate.
+        """
+        from modulo.auth.permissions import resolve_required
+        from modulo.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
+
+        for tool in ("list_housekeeping", "perform_housekeeping"):
+            assert TOOL_SCOPE_REQUIREMENTS[tool] == "housekeeping.manage"
+            assert resolve_required("housekeeping.manage") == "admin"
+            assert check_tool_scope("admin", tool) is None
+            with pytest.raises(MCPAuthorizationError):
+                check_tool_scope("operator", tool)
+
     @pytest.mark.parametrize(
         ("role", "tool"),
         [
@@ -107,11 +127,13 @@ class TestCheckToolScope:
             ("viewer", "copy_library_primitive"),
             ("viewer", "review_hitl"),
             ("viewer", "list_housekeeping"),
+            ("runner", "list_housekeeping"),
+            ("operator", "list_housekeeping"),
             ("runner", "review_hitl"),
             ("runner", "perform_housekeeping"),
-            # FAR-1879: the MCP housekeeping tool now requires the admin
-            # org-role floor (housekeeping.manage), matching the REST cleanup
-            # route — an operator must be rejected.
+            # FAR-1879: both MCP housekeeping tools now require the admin
+            # org-role floor (housekeeping.manage), matching their REST twins —
+            # a runner or operator must be rejected.
             ("operator", "perform_housekeeping"),
             ("viewer", "create_connector"),
             ("runner", "create_connector"),
@@ -131,6 +153,8 @@ class TestCheckToolScope:
             "viewer-copy_library_primitive",
             "viewer-review_hitl",
             "viewer-list_housekeeping",
+            "runner-list_housekeeping",
+            "operator-list_housekeeping",
             "runner-review_hitl",
             "runner-perform_housekeeping",
             "operator-perform_housekeeping",
