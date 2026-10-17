@@ -430,26 +430,47 @@ async function collectMountDiagnostics(page: Page, diag: MountDiagnostics, route
   return lines.join('\n')
 }
 
+// Stack-preferred rendering of an unknown thrown value. The dump path runs
+// while an unrelated failure is already in flight, so it wants the loudest
+// available detail.
+function describeError(err: unknown): string {
+  return err instanceof Error ? (err.stack ?? err.message) : String(err)
+}
+
+// BEST-EFFORT BY CONTRACT (FAR-1890): this is called from inside the
+// mount-failure catch, so it must never reject. A rejection here would REPLACE
+// the mount error being reported and destroy the very evidence this exists to
+// collect, so every step is guarded and a dump failure is reported on the
+// console instead of propagating.
 async function writeMountDiagnostics(page: Page, route: string, reason: string): Promise<void> {
-  const diag = diagnosticsByPage.get(page)
-  if (!diag) return
-  let report: string
   try {
-    report = await collectMountDiagnostics(page, diag, route)
+    const diag = diagnosticsByPage.get(page)
+    if (!diag) return
+    let report: string
+    try {
+      report = await collectMountDiagnostics(page, diag, route)
+    } catch (err) {
+      report = `[FAR-1890] diagnostics collection itself failed for ${route}:\n${describeError(err)}`
+    }
+    let file = '(not written)'
+    try {
+      fs.mkdirSync(DIAG_DIR, { recursive: true })
+      file = path.join(DIAG_DIR, `${route.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '') || 'root'}-${Date.now()}.log`)
+      fs.writeFileSync(file, `reason: ${reason}\n${report}\n`)
+    } catch (err) {
+      file = `(write failed: ${describeError(err)})`
+    }
+    process.stdout.write(`\n${report}\ndiagnostics file: ${file}\n\n`)
   } catch (err) {
-    const detail = err instanceof Error ? (err.stack ?? err.message) : String(err)
-    report = `[FAR-1890] diagnostics collection itself failed for ${route}:\n${detail}`
+    // Never rethrow — see the contract above.
+    console.warn(`[FAR-1890] mount diagnostics dump failed: ${describeError(err)}`)
+  } finally {
+    try {
+      diagnosticsByPage.get(page)?.dispose()
+    } catch {
+      // Listener teardown is best-effort; the page may already be gone.
+    }
   }
-  let file = '(not written)'
-  try {
-    fs.mkdirSync(DIAG_DIR, { recursive: true })
-    file = path.join(DIAG_DIR, `${route.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '') || 'root'}-${Date.now()}.log`)
-    fs.writeFileSync(file, `reason: ${reason}\n${report}\n`)
-  } catch (err) {
-    file = `(write failed: ${err instanceof Error ? err.message : String(err)})`
-  }
-  process.stdout.write(`\n${report}\ndiagnostics file: ${file}\n\n`)
-  diag.dispose()
 }
 
 // Wait for the Vue app to mount, failing fast with the HTTP status whenever the
@@ -470,7 +491,14 @@ async function waitForAppMount(page: Page, route: string, response: Response | n
       { timeout: APP_MOUNT_TIMEOUT_MS },
     )
   } catch {
-    await writeMountDiagnostics(page, route, `did not mount within ${APP_MOUNT_TIMEOUT_MS}ms`)
+    // The dump must never MASK the mount error below — that error is the signal
+    // this whole diagnostic exists to serve. A failing dump is reported loudly
+    // and then stepped over, so the original failure always propagates (FAR-1890).
+    try {
+      await writeMountDiagnostics(page, route, `did not mount within ${APP_MOUNT_TIMEOUT_MS}ms`)
+    } catch (dumpErr) {
+      console.warn(`[FAR-1890] mount diagnostics dump threw: ${describeError(dumpErr)}`)
+    }
     throw new Error(
       `[mobile-layout] ${route} did not mount within ${APP_MOUNT_TIMEOUT_MS}ms (${page.url()}) — ` +
         'the target returned an error/non-SPA page; aborting route checks. ' +
