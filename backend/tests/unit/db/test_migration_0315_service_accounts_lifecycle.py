@@ -5,10 +5,11 @@ the real trigger + DDL are exercised against real Postgres in
 ``tests/integration/db/test_migration_0315_service_accounts_lifecycle.py``):
 
 * **Revision chain** — 0315 revises ``0314_external_agents_mcp_servers``
-  (which revises ``0312_memberships_active_lookups``); the
-  migrations directory has exactly one head (``0315_service_accounts_lifecycle``,
-  pinned by all sibling chain tests), the revision id matches the filename, and
-  neither ``branch_labels`` nor ``depends_on`` is set.
+  (which revises ``0312_memberships_active_lookups``); the graph's single,
+  linear head is asserted by the shared
+  ``_migration_graph.assert_single_linear_head`` helper (never a hard-coded head
+  value), the revision id matches the filename, and neither ``branch_labels``
+  nor ``depends_on`` is set.
 * **Source shape** — the upgrade adds ``accounts.decommissioned_at`` + the
   ``ck_accounts_decommissioned_service`` CHECK, creates the
   ``enforce_service_role_ceiling`` trigger function (plpgsql, SECURITY INVOKER,

@@ -3,11 +3,11 @@
 Structural + SQLite-model contract (no Postgres / Testcontainers needed):
 
 * **Revision chain** — 0309 revises ``0308_runs_dispatch_phase_history``; the
-  migrations directory has exactly one head (``0317_drop_retired_pipeline_diff_rollback_flag``,
-  pinned by all sibling chain tests), the revision id matches the filename, and
-  neither ``branch_labels`` nor ``depends_on`` is set (the pre-commit
-  check-migration-heads hook and every ``test_single_head_*`` pin depend on
-  that shape).
+  graph's single, linear head is asserted by the shared
+  ``_migration_graph.assert_single_linear_head`` helper (never a hard-coded head
+  value), the revision id matches the filename, and neither ``branch_labels``
+  nor ``depends_on`` is set (the pre-commit check-migration-heads hook and this
+  file's ``test_no_branch_labels_or_depends_on`` depend on that shape).
 * **Index shape (mocked ``op``)** — the upgrade emits exactly one idempotent
   ``CREATE INDEX IF NOT EXISTS`` for ``ix_hitl_claims_sweep_actor_window`` on
   ``hitl_claims(organisation_id, decided_by, decision_at)`` carrying the

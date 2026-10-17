@@ -3,11 +3,11 @@
 Structural contract (no Postgres needed):
 
 * **Revision chain** — 0304 revises ``0303_feedback_records_lookup_indexes``; the
-  migrations directory has exactly one head (``0317_drop_retired_pipeline_diff_rollback_flag``,
-  pinned by all sibling chain tests), the revision id matches the filename, and
-  neither ``branch_labels`` nor ``depends_on`` is set (the pre-commit
-  check-migration-heads hook and every ``test_single_head_*`` pin depend on
-  that shape).
+  graph's single, linear head is asserted by the shared
+  ``_migration_graph.assert_single_linear_head`` helper (never a hard-coded head
+  value), the revision id matches the filename, and neither ``branch_labels``
+  nor ``depends_on`` is set (the pre-commit check-migration-heads hook and this
+  file's ``test_no_branch_labels_or_depends_on`` depend on that shape).
 * **Index shape (mocked ``op``)** — the upgrade emits exactly one
   ``CREATE INDEX`` for ``ix_metrics_staging_recorded_at`` on
   ``metrics_staging(recorded_at)``, and the downgrade drops it.

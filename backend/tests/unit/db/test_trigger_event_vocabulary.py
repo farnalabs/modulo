@@ -13,10 +13,10 @@ constraint with the FULL 21-value vocabulary. This file asserts:
 * the widening migration's hardcoded vocabulary stays in sync with the
   model (the single source of truth) — a value added to one side and not the
   other breaks the constraint/model contract,
-* the chain: this migration's own parent is pinned by ``_MIGRATION_NAME`` /
-  ``_MIGRATION_PATH`` below; the graph's single linear head, and its
-  completeness, are asserted by
-  ``_migration_graph.assert_single_linear_head``.
+* the chain: the graph's single, linear head and its completeness are asserted
+  by ``_migration_graph.assert_single_linear_head``; ``_MIGRATION_NAME`` /
+  ``_MIGRATION_PATH`` above identify the migration whose constraint this file
+  checks (this file pins no ``down_revision`` edge of its own).
 
 The old SQLite round-trip (which ran the migration's upgrade/downgrade against
 a mock ``op``) is obsolete: the reconciliation migration expresses the

@@ -3,10 +3,11 @@
 Structural + SQLite-model contract (no Postgres / Testcontainers needed):
 
 * **Revision chain** — the revision/down_revision pin this migration onto the
-  0290_scheduled_reports_due_scan parent; the migrations directory has exactly
-  one head (0317_drop_retired_pipeline_diff_rollback_flag, pinned by all sibling chain
-  tests) so the pre-commit check-migration-heads hook can never be ambushed by
-  a renumber.
+  0290_scheduled_reports_due_scan parent; the graph's single, linear head and
+  its completeness are asserted by the shared
+  ``_migration_graph.assert_single_linear_head`` helper (never a hard-coded
+  head value), so the pre-commit check-migration-heads hook can never be
+  ambushed by a renumber.
 * **Index shape (mocked ``op``)** — the upgrade emits exactly the two
   idempotent ``CREATE INDEX IF NOT EXISTS`` statements the live-invite read
   paths (``crud.invitations._live_conditions``) are written against:

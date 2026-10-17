@@ -6,16 +6,25 @@ the *value* of the head, so every PR that added a migration had to edit ~28
 unrelated test modules (FAR-1929). These helpers assert the *shape* of the graph
 instead -- the properties a head pin was standing in for:
 
-* exactly one head -- the chain has not branched into two divergent tips;
+* exactly one head;
+* strictly linear -- no branch point (a revision with two children) and no merge
+  point (a revision reconciled by two parents / tuple ``down_revision``);
 * no dangling ``down_revision`` -- every parent a migration names exists;
-* no orphaned migration -- every ``versions`` file is represented in the graph
-  and every graph revision has a backing file.
+* no duplicate ``revision`` id across files;
+* no orphan or ghost -- every ``versions`` file the scan reads is represented in
+  the graph Alembic walks, and every graph revision has a backing file.
 
 Alembic still owns the graph (``ScriptDirectory.get_heads`` /
 ``walk_revisions``). The static scan supplies per-file identity and lets the
 dangling-link check name the offender, because Alembic's graph APIs raise a bare
 ``KeyError`` on a dangling link rather than a message naming the child that
 declared it.
+
+The scan and the Alembic walk read a *different* file set on purpose: the scan
+recurses (``rglob``) and skips ``_``-prefixed files, while Alembic lists the top
+level of ``versions/`` only and reads every ``.py`` there. The orphan/ghost
+check is what makes that divergence fail loudly instead of silently dropping a
+migration.
 
 File identity is each file's declared ``revision`` (not its filename stem): one
 real migration -- ``0152_add_indexes.py`` declares
@@ -34,9 +43,15 @@ _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / 
 _MIGRATIONS_DIR = _VERSIONS_DIR.parent
 
 
-def script_directory() -> ScriptDirectory:
-    """Return the :class:`ScriptDirectory` for this repo's migration tree."""
-    return ScriptDirectory(str(_MIGRATIONS_DIR))
+def script_directory(*, migrations_dir: Path | None = None) -> ScriptDirectory:
+    """Return the :class:`ScriptDirectory` for this repo's migration tree.
+
+    ``migrations_dir`` overrides the repo's real migrations directory so tests
+    can point the helper at a synthetic tree; production call sites pass
+    ``script_directory()`` and get the real one.
+    """
+    target = _MIGRATIONS_DIR if migrations_dir is None else migrations_dir
+    return ScriptDirectory(str(target))
 
 
 def _literal_str(value: ast.expr, path: Path, field: str) -> str:
@@ -88,15 +103,21 @@ def _parents(down_revision: str | tuple[str, ...] | None) -> tuple[str, ...]:
     return down_revision
 
 
-def assert_single_linear_head(script: ScriptDirectory) -> str:
-    """Assert the migration graph is a single, complete, linear chain.
+def assert_single_linear_head(script: ScriptDirectory, *, versions_dir: Path | None = None) -> str:
+    """Assert the migration graph is a single, linear, complete chain.
 
     Returns the (only) head revision id. Raises ``AssertionError`` naming the
-    offending value when the graph has branched, when a file is not wired into
+    offending value when the graph has branched (two heads, or a branch/merge
+    point), when a revision id is declared twice, when a file is not wired into
     the graph, or when a ``down_revision`` points at a revision no file declares.
+
+    ``versions_dir`` overrides the directory the static scan reads; it defaults
+    to the repo's real ``versions`` directory so every production call site is
+    ``assert_single_linear_head(script_directory())``.
     """
+    scan_dir = _VERSIONS_DIR if versions_dir is None else versions_dir
     declared: dict[str, tuple[Path, str | tuple[str, ...] | None]] = {}
-    for path in sorted(_VERSIONS_DIR.rglob("*.py")):
+    for path in sorted(scan_dir.rglob("*.py")):
         if path.name == "__init__.py" or path.name.startswith("_"):
             continue
         revision, down_revision = _read_revision(path)
@@ -117,7 +138,14 @@ def assert_single_linear_head(script: ScriptDirectory) -> str:
     heads = script.get_heads()
     assert len(heads) == 1, f"expected exactly one migration head, got {heads!r}"
 
-    graph_revisions = {script_rev.revision for script_rev in script.walk_revisions()}
+    revisions = list(script.walk_revisions())
+    branchy = sorted(rev.revision for rev in revisions if rev.is_branch_point or rev.is_merge_point)
+    assert not branchy, (
+        f"migration graph is not linear: {branchy!r} are branch/merge points; "
+        "the chain has diverged and been reconciled"
+    )
+
+    graph_revisions = {rev.revision for rev in revisions}
     orphans = sorted(set(declared) - graph_revisions)
     ghosts = sorted(graph_revisions - set(declared))
     assert not orphans, f"migration files present on disk but absent from the graph: {orphans!r}"

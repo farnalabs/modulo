@@ -3,11 +3,11 @@
 Structural contract (no Postgres needed):
 
 * **Revision chain** - 0305 revises ``0304_metrics_staging_recorded_at_index``;
-  the migrations directory has exactly one head
-  (``0317_drop_retired_pipeline_diff_rollback_flag``, pinned by all sibling chain tests), the
-  revision id matches the filename, and neither ``branch_labels`` nor
-  ``depends_on`` is set (the pre-commit check-migration-heads hook and every
-  ``test_single_head_*`` pin depend on that shape).
+  the graph's single, linear head is asserted by the shared
+  ``_migration_graph.assert_single_linear_head`` helper (never a hard-coded head
+  value), the revision id matches the filename, and neither ``branch_labels``
+  nor ``depends_on`` is set (the pre-commit check-migration-heads hook and this
+  file's ``test_no_branch_labels_or_depends_on`` depend on that shape).
 * **Upgrade (mocked ``op``)** - Postgres drops + recreates BOTH action CHECKs
   widened with ``'escalate'`` (``NOT VALID`` then ``VALIDATE``); SQLite does the
   same through batch mode (SQLite has no ``ALTER TABLE ... ADD CHECK``).

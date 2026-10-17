@@ -3,11 +3,11 @@
 Structural contract (no Postgres needed):
 
 * **Revision chain** — 0307 revises ``0306_trigger_secret_encryption``;
-  the migrations directory has exactly one head
-  (``0317_drop_retired_pipeline_diff_rollback_flag``, pinned by all sibling chain
-  tests), the revision id matches the filename, and neither ``branch_labels``
-  nor ``depends_on`` is set (the pre-commit check-migration-heads hook and
-  every ``test_single_head_*`` pin depend on that shape).
+  the graph's single, linear head is asserted by the shared
+  ``_migration_graph.assert_single_linear_head`` helper (never a hard-coded head
+  value), the revision id matches the filename, and neither ``branch_labels``
+  nor ``depends_on`` is set (the pre-commit check-migration-heads hook and this
+  file's ``test_no_branch_labels_or_depends_on`` depend on that shape).
 * **Column shape (mocked ``op``)** — the upgrade emits exactly one
   ``add_column`` for ``runs.guardrail_override_resume_pending`` as a
   ``BOOLEAN NOT NULL`` with server default ``false``; the downgrade drops it.

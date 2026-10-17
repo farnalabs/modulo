@@ -3,9 +3,10 @@
 Structural + behavioural contract (no Postgres needed — the bind is mocked):
 
 * **Revision chain** — 0306 revises ``0305_guardrail_escalate_action``
-  (the migrations directory has exactly one head, pinned by every sibling
-  chain test), the revision id matches the filename, and neither
-  ``branch_labels`` nor ``depends_on`` is set.
+  (the graph's single, linear head is asserted by the shared
+  ``_migration_graph.assert_single_linear_head`` helper, never a hard-coded head
+  value), the revision id matches the filename, and neither ``branch_labels``
+  nor ``depends_on`` is set.
 * **Skip semantics (mocked bind)** — the upgrade rewrites ONLY rows whose
   ``hmac_secret``/``signing_secret`` are PLAINTEXT strings: values that are
   already Fernet tokens, the sensitive-value mask sentinel, empty strings,

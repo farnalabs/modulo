@@ -3,11 +3,11 @@
 Structural contract (no Postgres needed):
 
 * **Revision chain** — 0312 revises ``0311_library_cluster_schema_hygiene``; the
-  migrations directory has exactly one head (``0317_drop_retired_pipeline_diff_rollback_flag``,
-  pinned by all sibling chain tests), the revision id matches the filename, and
-  neither ``branch_labels`` nor ``depends_on`` is set (the pre-commit
-  check-migration-heads hook and every ``test_single_head_*`` pin depend on
-  that shape).
+  graph's single, linear head is asserted by the shared
+  ``_migration_graph.assert_single_linear_head`` helper (never a hard-coded head
+  value), the revision id matches the filename, and neither ``branch_labels``
+  nor ``depends_on`` is set (the pre-commit check-migration-heads hook and this
+  file's ``test_no_branch_labels_or_depends_on`` depend on that shape).
 * **Upgrade (mocked ``op``)** — emits exactly one ``create_index`` for
   ``ix_org_memberships_org_role_active`` on ``(organisation_id, role)`` with the
   partial predicate ``deactivated_at IS NULL`` (``postgresql_where``) and

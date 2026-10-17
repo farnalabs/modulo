@@ -2,12 +2,12 @@
 
 Structural contract (no Postgres needed):
 
-* **Revision chain** — 0307 revises ``0307_runs_guardrail_override_resume_pending``;
-  the migrations directory has exactly one head (``0317_drop_retired_pipeline_diff_rollback_flag``,
-  pinned by all sibling chain tests), the revision id matches the filename, and
-  neither ``branch_labels`` nor ``depends_on`` is set (the pre-commit
-  check-migration-heads hook and every ``test_single_head_*`` pin depend on
-  that shape).
+* **Revision chain** — 0308 revises ``0307_runs_guardrail_override_resume_pending``;
+  the graph's single, linear head is asserted by the shared
+  ``_migration_graph.assert_single_linear_head`` helper (never a hard-coded head
+  value), the revision id matches the filename, and neither ``branch_labels``
+  nor ``depends_on`` is set (the pre-commit check-migration-heads hook and this
+  file's ``test_no_branch_labels_or_depends_on`` depend on that shape).
 * **Column shape (mocked ``op``)** — the upgrade emits EXACTLY two
   ``add_column`` calls on ``runs``: ``dispatch_phase_history`` (nullable,
   JSON on the generic dialect / JSONB compiled on Postgres) and
