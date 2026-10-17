@@ -38,7 +38,7 @@ from modulo.db.models.team_membership import TeamMembership
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATION_REVISION = "0312_memberships_active_lookups"
 _MIGRATION_DOWN_REVISION = "0311_library_cluster_schema_hygiene"
-_CHAIN_HEAD_MIGRATION = "0318_trigger_event_required_refs_missing"
+_CHAIN_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
 
 _INDEX_NAME = "ix_org_memberships_org_role_active"
 _INDEX_TABLE = "org_memberships"

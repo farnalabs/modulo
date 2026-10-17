@@ -51,6 +51,13 @@ VALIDATION_RESULT_VALUES: tuple[str, ...] = (
     # Added here plus the widening migration 0318 — the value a write site
     # emits MUST be in the vocabulary in the same change (AGENTS.md lesson).
     "required_refs_missing",
+    # The Slack ``app_mention`` payload could not be parsed
+    # (``slack_app_mention._parse_mention``), so the delivery was refused and
+    # the failure audited. The write site emitted this value but it was never
+    # added to the vocabulary, so the INSERT raised a CHECK violation
+    # (IntegrityError) and no parse-failure event could ever persist. Added
+    # here plus the widening migration 0319.
+    "parse_failed",
 )
 
 _TRIGGER_EVENT_VALIDATION_SQL = f"validation_result IN {tuple(VALIDATION_RESULT_VALUES)}"

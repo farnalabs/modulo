@@ -84,7 +84,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0265_hitl_review_window"
 _MIGRATION_DOWN_REVISION = "0264_pipelines_max_autonomy_ge_default"
-_HEAD_MIGRATION = "0318_trigger_event_required_refs_missing"
+_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
 _CHECK_CONSTRAINT = "ck_pipelines_hitl_review_window"
 _SWEEP_INDEX = "ix_hitl_claims_terminalize_sweep"
 _ENVELOPE = (60, 604800)

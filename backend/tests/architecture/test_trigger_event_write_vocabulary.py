@@ -17,9 +17,10 @@ That exact class of bug shipped twice:
   refusal event had ever persisted (fixed in PR #1938, which added the value
   plus migration ``0318``).
 * ``slack_app_mention._parse_mention`` writes ``result="parse_failed"`` for a
-  malformed Slack ``app_mention`` payload. That value is still absent from the
-  vocabulary / CHECK constraint, so the write raises ``IntegrityError`` and no
-  audit row persists (see the known-drift ledger below).
+  malformed Slack ``app_mention`` payload. That value was likewise absent from
+  the vocabulary / CHECK constraint, so the write raised ``IntegrityError`` and
+  no audit row could persist (fixed by adding the value plus migration
+  ``0319``).
 
 This test statically resolves the value at every write site and asserts every
 one is in the vocabulary. It fails naming the offending file, line and value.
@@ -48,24 +49,6 @@ _CONSTRUCTOR_KEYWORD = "validation_result"
 
 #: The shared writer helpers thread the value through a ``result`` keyword.
 _HELPER_KEYWORD = "result"
-
-# ---------------------------------------------------------------------------
-# Known, reviewed drift awaiting a migration.
-#
-# ``parse_failed`` is genuinely written (slack_app_mention._parse_mention) but
-# is NOT in VALIDATION_RESULT_VALUES / the DB CHECK. Adding it to the model
-# without a widening migration would put the ORM constraint ahead of the DB
-# constraint and break the model<->migration parity tests, so the value is
-# deliberately NOT added here: it needs a widening migration, and migration
-# numbering is sequenced by the Conductor separately from this guard.
-#
-# This ledger is strictly checked: the test fails if the observed drift is not
-# exactly this set. A NEW drifted value fails (naming it); once the migration
-# lands and ``parse_failed`` joins the vocabulary, this entry becomes stale and
-# the test fails again until the entry is removed. There is therefore no state
-# in which this ledger silently hides drift.
-# ---------------------------------------------------------------------------
-_KNOWN_PENDING_MIGRATION_DRIFT = {"parse_failed"}
 
 
 class _WriteSite(NamedTuple):
@@ -279,14 +262,11 @@ def test_trigger_event_write_values_are_in_the_vocabulary() -> None:
     sites = _collect_write_sites()
     resolved = [site for site in sites if site.value is not None]
     offenders = [site for site in resolved if site.value not in VALIDATION_RESULT_VALUES]
-    drift = {site.value for site in offenders if site.value is not None}
-    assert drift == _KNOWN_PENDING_MIGRATION_DRIFT, (
+    assert not offenders, (
         "TriggerEvent.validation_result values written but absent from "
         "VALIDATION_RESULT_VALUES (a write raises IntegrityError on every real "
         "database, so the event never persists):\n"
         + _format_sites(offenders)
-        + "\nUnexpected drift is a bug: add the value to VALIDATION_RESULT_VALUES "
-        "AND a widening migration in the same change. If the known entry "
-        "('parse_failed') has since been added to the vocabulary, remove it "
-        "from _KNOWN_PENDING_MIGRATION_DRIFT in this test."
+        + "\nAny new drift is a bug: add the value to VALIDATION_RESULT_VALUES "
+        "AND a widening migration in the same change."
     )
