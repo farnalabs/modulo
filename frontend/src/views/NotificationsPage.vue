@@ -34,6 +34,7 @@
     <div
       v-if="loading"
       class="space-y-2"
+      role="status"
       aria-busy="true"
       :aria-label="$t('views.NotificationsPage.loading_notifications')"
       data-testid="notifications-loading"

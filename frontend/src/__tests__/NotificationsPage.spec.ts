@@ -80,6 +80,10 @@ describe('NotificationsPage', () => {
 
     const skeleton = wrapper.find('[data-testid="notifications-loading"]')
     expect(skeleton.exists()).toBe(true)
+    // A bare aria-label on a role-less div is a WCAG AA violation (axe
+    // aria-prohibited-attr) — the loading region must carry a live-region role
+    // so its accessible name is permitted (matches AppSidebar / AdminErrorDetail).
+    expect(skeleton.attributes('role')).toBe('status')
     expect(skeleton.attributes('aria-busy')).toBe('true')
     expect(wrapper.find('.animate-spin').exists()).toBe(false)
   })
