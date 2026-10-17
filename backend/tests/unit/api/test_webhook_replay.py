@@ -945,7 +945,7 @@ def test_replay_webhook_concurrent_limit_refusal_persists_event_after_unwind(cli
             patch("modulo.api.trigger_busy.async_sessionmaker", return_value=_fresh_factory),
             patch("modulo.api.trigger_busy.get_or_create_engine", return_value=MagicMock()),
             patch("modulo.api.trigger_busy.get_settings", return_value=_make_settings()),
-            patch("modulo.api.trigger_busy.set_rls_org", new_callable=AsyncMock),
+            patch("modulo.api.trigger_busy.set_rls_org", new_callable=AsyncMock) as rls_mock,
             patch("modulo.api.routes.webhooks.set_rls_org"),
             patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
         ):
@@ -988,7 +988,53 @@ def test_replay_webhook_concurrent_limit_refusal_persists_event_after_unwind(cli
     # replayable artefact (hash inherited via source_event_id).
     assert not any(isinstance(obj, WebhookPayload) for obj in added)
 
+    # The security-critical step: the fresh post-unwind session had the
+    # caller's org pinned BEFORE it wrote. Without this the recorder would
+    # write across the tenancy boundary, so assert the RLS pin was awaited
+    # exactly once with the trigger's org — not merely that a session opened.
+    rls_mock.assert_awaited_once()
+    assert rls_mock.await_args.args[1] == _ORG_ID
+
     # The refusal response matches the receive path's shape: the 429 rejects
     # and retries, so it carries the same detail + Retry-After.
     assert resp.json()["detail"] == "Concurrent run limit of 3 reached"
     assert resp.headers["Retry-After"] == "5"
+
+
+@pytest.mark.parametrize(
+    ("raw_body", "source_event_id"),
+    [
+        pytest.param(None, None, id="no_payload_source"),
+        pytest.param(b'{"event": "x"}', uuid.uuid4(), id="ambiguous_two_sources"),
+    ],
+)
+async def test_record_rejected_delivery_rejects_invalid_payload_source(
+    raw_body: bytes | None,
+    source_event_id: uuid.UUID | None,
+) -> None:
+    """FAR-1904: a refused delivery must carry exactly ONE payload source.
+
+    With neither, the recorder would persist a TriggerEvent with an empty
+    ``raw_payload_hash`` and no ``WebhookPayload`` row — the silent-empty-record
+    class the receive path exists to avoid. With both, which source is
+    authoritative is ambiguous. Either shape is refused (returns False) and the
+    recorder is never reached, so no empty event is written. Without the guard
+    the recorder WOULD be awaited for both shapes and this test fails on
+    ``assert_not_awaited``.
+    """
+    from modulo.api.routes.webhooks import _record_rejected_delivery
+
+    with patch(
+        "modulo.api.routes.webhooks._record_refused_delivery",
+        new_callable=AsyncMock,
+    ) as record:
+        result = await _record_rejected_delivery(
+            kind="concurrency",
+            trigger_id=_TRIGGER_ID,
+            org_id=_ORG_ID,
+            raw_body=raw_body,
+            source_event_id=source_event_id,
+        )
+
+    assert result is False
+    record.assert_not_awaited()

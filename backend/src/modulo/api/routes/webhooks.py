@@ -333,9 +333,34 @@ async def _record_rejected_delivery(
     carries the ORIGINAL event's payload hash onto the refusal row and stores
     no duplicate payload row (the ``_replay_busy_path`` busy-replay shape).
 
+    Exactly ONE payload source is required: the receive path passes
+    ``raw_body``/``raw_payload``; the replay path passes ``source_event_id``.
+    A call with neither would write a TriggerEvent with an empty
+    ``raw_payload_hash`` and no ``WebhookPayload`` row — the silent-empty-record
+    class this path exists to avoid — so it is refused (logged) rather than
+    silently persisted. A call with both is equally refused: the two sources
+    are mutually exclusive by design, and accepting both would leave which one
+    is authoritative ambiguous.
+
     Returns ``True`` when a re-record was attempted (the org was resolved),
-    ``False`` when there is nothing to record against. Never raises.
+    ``False`` when there is nothing to record against (no org, or an invalid
+    payload-source shape). Never raises.
     """
+    if (raw_body is None) == (source_event_id is None):
+        # Reject the shape that would silently persist an empty refusal:
+        # exactly one payload source is required (see the docstring). Logged
+        # loudly — a swallowed programming error here is exactly the
+        # silent-empty-record failure this guard exists to prevent.
+        _log.warning(
+            "webhooks.record_rejected_delivery.invalid_payload_source "
+            "kind=%s trigger=%s has_raw_body=%s has_source_event_id=%s "
+            "— exactly one payload source is required",
+            kind,
+            trigger_id,
+            raw_body is not None,
+            source_event_id is not None,
+        )
+        return False
     if org_id is None:
         return False
     # The receive path holds the raw body and hashes it; the replay path omits
