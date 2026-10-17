@@ -393,7 +393,8 @@ export default {
       "visibility_team": "Team",
       "pipeline_name_placeholder": "Pipeline name",
       "delete_confirm": "Are you sure? This permanently deletes the pipeline and all its runs.",
-      "failed_to_load_folders": "Failed to load folders: {error}"
+      "failed_to_load_folders": "Failed to load folders: {error}",
+      "invalid_folder_list_response": "The server returned an invalid folder list."
     },
     "SettingsRateLimitsView": {
       "rate_limits": "Rate Limits",
@@ -3269,6 +3270,7 @@ export default {
     "SchemaListView": {
       "deprecate_schema": "Deprecate schema",
       "failed_to_load_folders": "Failed to load folders:",
+      "invalid_folder_list_response": "The server returned an invalid folder list.",
       "deprecating": "Deprecating...",
       "manage_schemas_and_deprecate_outdated_definitions": "Manage schemas and deprecate outdated definitions",
       "no_schemas_found": "No schemas found",

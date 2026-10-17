@@ -538,17 +538,20 @@ describe('SchemaListView', () => {
 
   it('shows the folder load error and no folder list when the folder endpoint returns a non-array', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
-    // useApi.get is an unchecked `get<T>()` cast and returns `undefined as T` on
-    // a 204; foldersList is dereferenced (foldersList.length / spread iteration)
-    // on every render, so a non-array must be rejected, not assigned.
-    getMock.mockResolvedValue(undefined)
-    const wrapper = mountView()
-    await flushPromises()
-    await nextTick()
-    expect(wrapper.exists()).toBe(true)
-    expect(wrapper.findAll('[data-testid="schema-list-mobile-folder-select"]')).toHaveLength(0)
-    expect(wrapper.text()).toContain('The server returned an invalid folder list.')
-    expect(consoleError).toHaveBeenCalled()
-    consoleError.mockRestore()
+    try {
+      // useApi.get is an unchecked `get<T>()` cast and returns `undefined as T` on
+      // a 204; foldersList is dereferenced (foldersList.length / spread iteration)
+      // on every render, so a non-array must be rejected, not assigned.
+      getMock.mockResolvedValue(undefined)
+      const wrapper = mountView()
+      await flushPromises()
+      await nextTick()
+      expect(wrapper.exists()).toBe(true)
+      expect(wrapper.findAll('[data-testid="schema-list-mobile-folder-select"]')).toHaveLength(0)
+      expect(wrapper.text()).toContain('The server returned an invalid folder list.')
+      expect(consoleError).toHaveBeenCalled()
+    } finally {
+      consoleError.mockRestore()
+    }
   })
 })

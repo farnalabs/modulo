@@ -344,7 +344,7 @@ async function loadFolders() {
       console.error(
         `[SchemaListView] Invalid folder list response from /api/v1/schema-folders: expected an array of folder objects, received ${response === null ? 'null' : typeof response}`,
       )
-      folderError.value = t('components.pipelines.FolderTree.invalid_list_response')
+      folderError.value = t('views.SchemaListView.invalid_folder_list_response')
       return
     }
     foldersList.value = response

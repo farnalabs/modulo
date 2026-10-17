@@ -600,7 +600,7 @@ async function loadFolders() {
       console.error(
         `[PipelineListView] Invalid folder list response from /api/v1/pipeline-folders: expected an array of folder objects, received ${response === null ? 'null' : typeof response}`,
       )
-      folderError.value = t('components.pipelines.FolderTree.invalid_list_response')
+      folderError.value = t('views.PipelineListView.invalid_folder_list_response')
       return
     }
     foldersList.value = response
