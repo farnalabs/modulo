@@ -4,7 +4,7 @@ FAR-604 D2 (HITL capacity) adds the non-terminal ``hitl_parked`` run status to
 the ``ck_runs_status`` CHECK constraint (migration ``0180_hitl_parked_status``,
 renumbered from 0177, re-parented onto main's ``0177_invitations`` after the
 first collision, then renumbered to 0180 and re-parented onto main's
-``0179_drop_workspace_leases`` (the current head) after the second collision).
+``0179_drop_workspace_leases`` after the second collision).
 This file asserts:
 
 * the model status sets (``db.models.run``) contain ``hitl_parked`` and the

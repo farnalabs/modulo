@@ -542,7 +542,9 @@ def test_migration_is_reversible_single_head() -> None:
 
 
 def test_single_migration_head() -> None:
-    """Exactly one migration chains off each predecessor, and the head is 0212_variant_batch_state_updated_at."""
+    """Exactly one migration chains off each walked predecessor — a single,
+    linear chain. The head value itself is never pinned here (it moves as later
+    migrations land on top)."""
     import re
 
     revisions = {}

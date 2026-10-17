@@ -3,9 +3,11 @@
 Structural + model-parity contract (no Postgres / Testcontainers needed):
 
 * **Revision chain** — the revision/down_revision pin this migration onto the
-  0293_oauth_clients_team_id parent, and the migrations directory has
-  exactly one head (this migration), so the pre-commit ``check-migration-heads``
-  hook can never be ambushed by a renumber.
+  0293_oauth_clients_team_id parent, and the tree has exactly one head of which
+  this migration is a member; the head value is never named (0294 is
+  mid-chain) and the same single-linear-head shape is asserted by the shared
+  ``_migration_graph.assert_single_linear_head`` helper, so the pre-commit
+  ``check-migration-heads`` hook can never be ambushed by a renumber.
 * **Composite FK emission (mocked ``op``)** — on Postgres the upgrade swaps the
   single-column ``eval_results_eval_id_fkey`` for the composite
   ``fk_eval_results_eval_org`` over ``(eval_id, organisation_id)``; the

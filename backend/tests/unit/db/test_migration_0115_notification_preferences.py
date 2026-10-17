@@ -4,9 +4,9 @@ Structural contract (no Postgres needed):
 
 * **Revision chain** — 0115 revises ``0114_org_api_keys_run_id``; the tree has
   exactly one head and 0115 is on that chain. 0115 is mid-chain, so the tip
-  legitimately moves as later migrations land on top; the exact head is pinned
-  by the sibling chain tests, not here. The revision id matches the filename;
-  no branch labels.
+  legitimately moves as later migrations land on top; this module asserts only
+  the head's existence and 0115's membership, never the head's value. The
+  revision id matches the filename; no branch labels.
 * **Upgrade (mocked ``op``)** — creates ``notification_preferences`` with the
   org/account/category unique constraint and a ``String(100)`` category (NO
   CHECK — the vocabulary is code-driven), then — on Postgres — runs the 0066
