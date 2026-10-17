@@ -4759,6 +4759,11 @@ async def _load_run_for_status(s: AsyncSession, rid: uuid.UUID, org_id: uuid.UUI
 
 
 def _run_status_base(run: Run) -> dict[str, Any]:
+    # FAR-1862: share the REST serialiser's defensive coercions rather than a
+    # second copy (a MagicMock column value must degrade to None, never fail
+    # the response).
+    from modulo.api.routes.runs import _int_or_none, _iso_or_none, _str_or_none
+
     result: dict[str, Any] = {
         "run_id": str(run.id),
         "pipeline_id": str(run.pipeline_id),
@@ -4770,6 +4775,18 @@ def _run_status_base(run: Run) -> dict[str, Any]:
         # (FAR-1565), never a hand-rolled copy.
         **run_provenance_fields(run),
         "created_at": run.created_at.isoformat(),
+        # FAR-1862: the dispatch-state columns dispatcher_reconcile's recovery
+        # decisions are computed from. Present on the BASE response (not only
+        # detail) so a run whose status has not moved is diagnosable from a
+        # plain ``get_run_status`` — the 2026-10-16 incident saw two runs sit
+        # ``pending`` for 22h with no read surface exposing WHY. Additive and
+        # unmasked: operational state, never a credential. Coercion is shared
+        # with the REST serialiser (no second copy to drift).
+        "dispatcher": _str_or_none(getattr(run, "dispatcher", None)),
+        "dispatched_at": _iso_or_none(getattr(run, "dispatched_at", None)),
+        "dispatch_phase": _str_or_none(getattr(run, "dispatch_phase", None)),
+        "claim_count": _int_or_none(getattr(run, "claim_count", None)),
+        "enqueue_failed_at": _iso_or_none(getattr(run, "enqueue_failed_at", None)),
     }
     if run.started_at:
         result["started_at"] = run.started_at.isoformat()

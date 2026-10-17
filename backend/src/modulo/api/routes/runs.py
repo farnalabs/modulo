@@ -640,6 +640,36 @@ async def _load_snapshot_versions(session: AsyncSession, runs: list[Run]) -> dic
     return versions
 
 
+def _str_or_none(value: Any) -> str | None:
+    """The value when it is a ``str``, else ``None`` (FAR-1862 coercion)."""
+    return value if isinstance(value, str) else None
+
+
+def _int_or_none(value: Any) -> int | None:
+    """The value when it is an ``int``, else ``None`` (FAR-1862 coercion).
+
+    Guards the dispatch-state read against a test double (MagicMock /
+    SimpleNamespace) carrying a non-int where a count belongs — a raw value
+    would fail ``RunResponse``'s ``int | None`` validation.
+    """
+    return value if isinstance(value, int) else None
+
+
+def _dt_or_none(value: Any) -> datetime | None:
+    """The value when it is a ``datetime``, else ``None`` (FAR-1862 coercion)."""
+    return value if isinstance(value, datetime) else None
+
+
+def _iso_or_none(value: Any) -> str | None:
+    """ISO-8601 string for a datetime column value, else ``None``.
+
+    A real ``datetime`` serialises; any other value (a test double standing in
+    for the column) degrades to ``None`` rather than raising or leaking.
+    """
+    dt = _dt_or_none(value)
+    return dt.isoformat() if dt is not None else None
+
+
 def _build_list_item(run: Run, ctx: _ListPageContext) -> dict[str, Any]:
     """Build one runs-list item dict from a Run row + the shared page context."""
     pipeline_name = run.pipeline.name if run.pipeline else None
@@ -695,6 +725,18 @@ def _build_list_item(run: Run, ctx: _ListPageContext) -> dict[str, Any]:
         "input_payload": _mask_output_value(run.input_payload) if run.input_payload else None,
         "trigger_actor": trigger_actor,
         "heartbeat_at": run.heartbeat_at.isoformat() if run.heartbeat_at else None,
+        # FAR-1862: the dispatch-state columns the reconciler's recovery
+        # decisions are computed from. Exposed additively (they are operational
+        # state, not credentials) so a stranded run is diagnosable from the
+        # product instead of requiring DB access — the 2026-10-16 incident had
+        # two runs sitting ``pending`` for 22h with no read surface exposing
+        # WHY. Read defensively (a test double may omit them); a non-datetime
+        # timestamp value degrades to None rather than leaking a MagicMock.
+        "dispatcher": _str_or_none(getattr(run, "dispatcher", None)),
+        "dispatched_at": _iso_or_none(getattr(run, "dispatched_at", None)),
+        "dispatch_phase": _str_or_none(getattr(run, "dispatch_phase", None)),
+        "claim_count": _int_or_none(getattr(run, "claim_count", None)),
+        "enqueue_failed_at": _iso_or_none(getattr(run, "enqueue_failed_at", None)),
         "capacity": capacity,
         "warnings_count": warnings_count,
     }
@@ -1015,6 +1057,19 @@ class RunResponse(BaseModel):
     trigger_actor: str | None = None
     trigger_id: uuid.UUID | None = None
     heartbeat_at: datetime | None = None
+    # FAR-1862: the dispatch-state columns dispatcher_reconcile's recovery
+    # decisions are computed from — ``dispatcher`` (where the job went),
+    # ``dispatched_at`` (the per-attempt clock), ``dispatch_phase`` (how far the
+    # claim got), ``claim_count`` (attempts so far), and ``enqueue_failed_at``
+    # (the durable enqueue-failure marker). Additive/nullable; operational
+    # state, never a credential. These make a stranded run diagnosable from the
+    # product (the 2026-10-16 incident: two runs sat ``pending`` for 22h with
+    # ``error_code=None`` and no read surface exposing the reconciler's inputs).
+    dispatcher: str | None = None
+    dispatched_at: datetime | None = None
+    dispatch_phase: str | None = None
+    claim_count: int | None = None
+    enqueue_failed_at: datetime | None = None
     work_item_refs: list[dict[str, Any]] | None = None
     child_runs: list[dict[str, Any]] | None = None
     capacity: dict[str, Any] | None = None
@@ -1253,6 +1308,13 @@ def _build_run_response(
         **run_provenance_fields(run),
         trigger_id=ctx.trigger_id if ctx.trigger_id is not None else getattr(run, "trigger_id", None),
         heartbeat_at=ctx.heartbeat_at if ctx.heartbeat_at is not None else getattr(run, "heartbeat_at", None),
+        # FAR-1862: the reconciler's dispatch-state inputs, additive/nullable.
+        # Coerced defensively so a test double cannot fail response validation.
+        dispatcher=_str_or_none(getattr(run, "dispatcher", None)),
+        dispatched_at=_dt_or_none(getattr(run, "dispatched_at", None)),
+        dispatch_phase=_str_or_none(getattr(run, "dispatch_phase", None)),
+        claim_count=_int_or_none(getattr(run, "claim_count", None)),
+        enqueue_failed_at=_dt_or_none(getattr(run, "enqueue_failed_at", None)),
         work_item_refs=ctx.work_item_refs,
         child_runs=ctx.child_runs,
         capacity=ctx.capacity,
