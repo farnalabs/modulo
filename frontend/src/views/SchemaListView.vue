@@ -253,7 +253,7 @@ import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useApi } from '../composables/useApi'
 import { formatApiError } from '../lib/api/formatError'
-import { isFolderList, type FolderItem } from '../lib/api/folders'
+import { invalidFolderListMessage, isFolderList, type FolderItem } from '../lib/api/folders'
 import type { components } from '../lib/api/client'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
@@ -341,9 +341,7 @@ async function loadFolders() {
     // every render — a non-array would crash the view. Do NOT coerce to []:
     // that would hide a real contract violation behind an empty list.
     if (!isFolderList(response)) {
-      console.error(
-        `[SchemaListView] Invalid folder list response from /api/v1/schema-folders: expected an array of folder objects, received ${response === null ? 'null' : typeof response}`,
-      )
+      console.error(invalidFolderListMessage('/api/v1/schema-folders', response))
       folderError.value = t('views.SchemaListView.invalid_folder_list_response')
       return
     }

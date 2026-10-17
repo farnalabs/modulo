@@ -3100,10 +3100,10 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     wrapper.unmount()
   })
 
-  it('loadFolders handles a response wrapped in { items: [...] } shape', async () => {
+  it('loadFolders assigns a bare array response (the real endpoint contract)', async () => {
     useApiFns.get.mockImplementation((url: string) => {
       if (url.includes('/lifecycle-maps')) return Promise.resolve([])
-      if (url.includes('/pipeline-folders')) return Promise.resolve({ items: [{ id: 'f-1', name: 'Prod', parent_id: null }] })
+      if (url.includes('/pipeline-folders')) return Promise.resolve([{ id: 'f-1', name: 'Prod', parent_id: null }])
       return Promise.resolve({ items: [] })
     })
     router.push('/pipelines/test-pipeline-id/editor')
@@ -3114,6 +3114,60 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     await flushPromises()
     expect(vm.folders).toEqual([{ id: 'f-1', name: 'Prod', parent_id: null }])
     wrapper.unmount()
+  })
+
+  it('loadFolders rejects a { items: [...] } envelope instead of coercing it', async () => {
+    // /api/v1/pipeline-folders returns a BARE array (backend `list[FolderResponse]`,
+    // generated contract `FolderResponse[]`). The { items } tolerance this view
+    // carried was copy-paste from loadLifecycleMaps (which genuinely returns an
+    // envelope). A non-array must not be coerced to [] and must surface.
+    useApiFns.get.mockImplementation((url: string) => {
+      if (url.includes('/lifecycle-maps')) return Promise.resolve([])
+      if (url.includes('/pipeline-folders')) return Promise.resolve({ items: [{ id: 'f-1', name: 'Prod', parent_id: null }] })
+      return Promise.resolve({ items: [] })
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      router.push('/pipelines/test-pipeline-id/editor')
+      await router.isReady()
+      const wrapper = await mountEditorLoaded()
+      const vm = wrapper.vm as any
+      await vm.loadFolders()
+      await flushPromises()
+      expect(vm.folders).toEqual([])
+      expect(consoleError).toHaveBeenCalled()
+      wrapper.unmount()
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it('loadFolders leaves the list intact and surfaces a [null] element instead of crashing the render', async () => {
+    // Array.isArray([null]) is true, so the old `Array.isArray(response) ? response : ...`
+    // stored [null]; the folderPath computed then did folders.find(f => f.id ...)
+    // and threw "Cannot read properties of null (reading 'id')" on every render.
+    useApiFns.get.mockImplementation((url: string) => {
+      if (url.includes('/lifecycle-maps')) return Promise.resolve([])
+      if (url.includes('/pipeline-folders')) return Promise.resolve([null])
+      return Promise.resolve({ items: [] })
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      router.push('/pipelines/test-pipeline-id/editor')
+      await router.isReady()
+      const wrapper = await mountEditorLoaded()
+      const vm = wrapper.vm as any
+      await vm.loadFolders()
+      await flushPromises()
+      expect(vm.folders).toEqual([])
+      expect(consoleError).toHaveBeenCalled()
+      // Re-render the toolbar (where folderPath is read) to prove no crash.
+      await nextTick()
+      expect(wrapper.find('[data-testid="pipeline-editor-toolbar"]').exists()).toBe(true)
+      wrapper.unmount()
+    } finally {
+      consoleError.mockRestore()
+    }
   })
 
   it('onParamSetChange selects a set and populates overrides', async () => {

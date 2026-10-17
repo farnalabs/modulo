@@ -210,8 +210,11 @@ describe('FolderTree list-shape guard', () => {
   it('renders the error state instead of crashing when an element is missing required fields', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
-      // [{}] is an object but has no string name/id, so rendering would call
-      // .localeCompare on undefined and throw.
+      // [{}] is an object but has no string name/id. Pre-fix it was accepted
+      // and rendered as a ghost row (folder-tree-item-undefined) rather than
+      // throwing: Array.prototype.sort only invokes its comparator for arrays
+      // of two or more elements, so a single-element array never calls
+      // .localeCompare. The guard must still reject it.
       getMock.mockResolvedValue([{}])
       const wrapper = mountTree()
       await flushPromises()

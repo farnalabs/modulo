@@ -423,7 +423,7 @@ import { FOCUSABLE_SELECTOR, trapTabInElement } from '../composables/useFocusTra
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { ChevronRight, Folder, FolderOpen, MoreVertical, FileStack } from '@lucide/vue'
 import { formatApiError, throwOnError } from '../lib/api/formatError'
-import { isFolderList, type FolderItem } from '../lib/api/folders'
+import { invalidFolderListMessage, isFolderList, type FolderItem } from '../lib/api/folders'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 import Menu from 'primevue/menu'
@@ -597,9 +597,7 @@ async function loadFolders() {
     // every render — a non-array would crash the view. Do NOT coerce to []:
     // that would hide a real contract violation behind an empty list.
     if (!isFolderList(response)) {
-      console.error(
-        `[PipelineListView] Invalid folder list response from /api/v1/pipeline-folders: expected an array of folder objects, received ${response === null ? 'null' : typeof response}`,
-      )
+      console.error(invalidFolderListMessage('/api/v1/pipeline-folders', response))
       folderError.value = t('views.PipelineListView.invalid_folder_list_response')
       return
     }

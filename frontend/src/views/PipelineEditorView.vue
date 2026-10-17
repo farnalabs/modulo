@@ -1776,6 +1776,7 @@ import { formatDateShort } from '../lib/formatDate'
 import { CANVAS_EDGE_STROKE } from '../constants/canvas'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/schema'
+import { invalidFolderListMessage, isFolderList, type FolderItem } from '../lib/api/folders'
 import type { LocationQueryRaw } from 'vue-router'
 import { useApi } from '../composables/useApi'
 import { useCurrentUser } from '../composables/useCurrentUser'
@@ -2318,7 +2319,7 @@ async function saveRetryPolicy() {
   }
 }
 
-const folders = ref<any[]>([])
+const folders = ref<FolderItem[]>([])
 const linkedLifecycleMaps = ref<any[]>([])
 
 const folderPath = computed(() => {
@@ -3727,12 +3728,24 @@ async function triggerRun() {
 
 async function loadFolders() {
   try {
-    const response = await get<any[] | { items?: any[] }>('/api/v1/pipeline-folders')
-    // Accept both the raw-array and { items: [...] } response shapes — the
-    // folderPath computed iterates folders.value unconditionally, so a
-    // non-array payload would throw on every render (see loadLifecycleMaps
-    // for the same tolerance pattern).
-    folders.value = Array.isArray(response) ? response : (response.items ?? [])
+    const response = await get<FolderItem[]>('/api/v1/pipeline-folders')
+    // Guard before assigning: `get<FolderItem[]>` is an unchecked cast and
+    // useApi returns `undefined as T` on a 204, while the folderPath computed
+    // iterates folders.value (and dereferences f.id / f.parent_id) on every
+    // render — a non-array or a bad element would throw on every render.
+    // /api/v1/pipeline-folders returns a BARE array (backend `list[FolderResponse]`,
+    // generated contract `FolderResponse[]`), so the `{ items: [...] }` envelope
+    // this view used to tolerate was copy-paste from loadLifecycleMaps (which
+    // genuinely returns an envelope) and is rejected here like every other
+    // folder consumer. Do NOT coerce to []: that hides a real contract
+    // violation. This view has no folder-specific error surface (pageError
+    // replaces the whole page, which a degraded breadcrumb must not do), so a
+    // bad shape is logged loudly and the previous list is left intact.
+    if (!isFolderList(response)) {
+      console.error(invalidFolderListMessage('/api/v1/pipeline-folders', response))
+      return
+    }
+    folders.value = response
   } catch (e) {
     console.warn('Failed to load folders', e)
   }

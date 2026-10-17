@@ -181,7 +181,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useApi } from '@/composables/useApi'
 import { formatApiError } from '../../lib/api/formatError'
-import { isFolderList, type FolderItem } from '../../lib/api/folders'
+import { invalidFolderListMessage, isFolderList, type FolderItem } from '../../lib/api/folders'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
@@ -314,9 +314,7 @@ async function loadFolders() {
     // every element; surface a bad shape as the error state instead of silently
     // coercing it to [] (which would hide a real contract violation).
     if (!isFolderList(response)) {
-      console.error(
-        `[FolderTree] Invalid folder list response from ${apiBase.value}: expected an array of folder objects, received ${response === null ? 'null' : typeof response}`,
-      )
+      console.error(invalidFolderListMessage(apiBase.value, response))
       error.value = t('components.pipelines.FolderTree.invalid_list_response')
       return
     }
