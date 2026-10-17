@@ -1,9 +1,12 @@
 <template>
   <!-- `relative` anchors the mobile properties-panel overlay (FAR-1841);
-       `mobileFitStyle` pins the editor to the leftover viewport height on
-       <768px (see the script block) so nothing hangs below the fold behind
-       the touch-capturing canvas. Desktop keeps the height class alone. -->
-  <div ref="editorRootRef" data-testid="pipeline-editor-root" class="relative flex h-[calc(100vh-3.5rem)]" :style="mobileFitStyle">
+       `editorFitStyle` pins the editor to the height actually left in the
+       viewport below the app chrome (see the script block) so nothing hangs
+       below the fold behind the touch-capturing canvas on mobile (FAR-1841)
+       and the editor does not overflow the fold behind the breadcrumb on
+       desktop (FAR-1851). The `h-[calc(100vh-3.5rem)]` class is only the
+       pre-measurement fallback. -->
+  <div ref="editorRootRef" data-testid="pipeline-editor-root" class="relative flex h-[calc(100vh-3.5rem)] overflow-hidden" :style="editorFitStyle">
     <div v-if="loading || historicResolving" class="flex flex-1 items-center justify-center">
       <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
     </div>
@@ -31,9 +34,20 @@
       <ErrorAlert :message="pageError" :on-retry="reloadPage" />
     </div>
     <template v-else>
-      <div class="flex min-w-0 flex-1 flex-col">
-        <!-- Docked toolbar: in-flow above the canvas so it never covers node details -->
-        <div class="flex flex-wrap items-center gap-x-2 gap-y-2 border-b bg-card px-3 py-2" data-testid="pipeline-editor-toolbar">
+      <!-- The content column is the editor's INTERNAL scroll container
+           (FAR-1861). The root is pinned to the space left below the app
+           chrome and clips (`overflow-hidden`); if that space is smaller than
+           the toolbar's own min-content height (a short landscape viewport with
+           the chrome stack active), the toolbar would otherwise paint below
+           the pinned box and out of reach. Scrolling this column instead of
+           the page keeps every control reachable while holding the
+           no-page-scroll invariant for the whole band. -->
+      <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto" data-testid="pipeline-editor-content">
+        <!-- Docked toolbar: in-flow above the canvas so it never covers node details.
+             `shrink-0`: when the content column is shorter than the wrapped
+             toolbar, the toolbar must keep its min-content height (scroll the
+             column to reach it) rather than being squeezed. -->
+        <div class="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-2 border-b bg-card px-3 py-2" data-testid="pipeline-editor-toolbar">
           <!-- Group: identity -->
           <div class="flex min-w-0 items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-identity">
             <h2 class="truncate text-sm font-semibold">{{ pipeline?.name || $t('views.PipelineEditorView.pipeline_editor') }}</h2>
@@ -655,7 +669,14 @@
             </button>
           </div>
         </div>
-        <div class="relative min-h-0 flex-1">
+        <!-- Canvas region. `min-h-[8rem]` (replacing the old `min-h-0`) keeps a
+             real, focusable canvas even when the pinned height is smaller than
+             the wrapped toolbar: the toolbar + this minimum make the content
+             column scroll internally (never the page), so both stay reachable.
+             `tabindex="-1"` makes it the focus-restore fallback for a properties
+             sheet whose trigger (a VueFlow node/edge wrapper) is not focusable
+             (FAR-1861). -->
+        <div ref="canvasRef" class="relative min-h-[8rem] flex-1" tabindex="-1" data-testid="pipeline-editor-canvas">
         <!-- Empty-state overlay on top of the canvas (latest mode only — its
              rename/archive/delete/add-node row is all write affordances, so a
              historical view of an empty graph shows the canvas alone). -->
@@ -823,13 +844,20 @@
            As a flex sibling its fixed w-96 swallowed the whole viewport and
            crushed the canvas to 0x0 — and with the canvas gone there was no
            pane-click target to deselect, trapping the user in the panel.
-           Desktop keeps the docked side panel unchanged. -->
+           Desktop keeps the docked side panel unchanged. Below the desktop
+           breakpoint the sheet is a modal dialog (FAR-1861): labelled
+           `role="dialog"`, Escape + focus-trap handled by `onSheetKeydown`,
+           focus moved in on open / restored on close (see the script block). -->
+      <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions --><!-- mobile node sheet: a role="dialog" container whose Escape/Tab focus-trap needs the keydown handler -->
       <aside
         v-if="selectedNodeData && !selectedEdgeData"
+        ref="nodePanelRef"
+        v-bind="sheetDialogAttrs(NODE_SHEET_TITLE_ID)"
         class="w-96 overflow-y-auto border-l bg-card p-4 max-md:absolute max-md:inset-0 max-md:z-40 max-md:w-auto max-md:border-l-0"
+        @keydown="onSheetKeydown"
       >
         <div class="mb-4 flex items-center justify-between">
-          <h2 class="text-base font-semibold">{{ $t('views.PipelineEditorView.node_properties') }}</h2>
+          <h2 :id="NODE_SHEET_TITLE_ID" class="text-base font-semibold">{{ $t('views.PipelineEditorView.node_properties') }}</h2>
           <button
             type="button"
             class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
@@ -1270,15 +1298,22 @@
       </aside>
       <!-- Edge Properties Panel (with HITL gate config). Mobile (FAR-1841):
            same overlay-sheet treatment as the node panel above — a flex
-           sibling of this width crushes the canvas to 0x0 on a phone. The
-           header Close (mobile-only) mirrors the node panel; the existing
-           bottom Close button remains for every breakpoint. -->
+           sibling of this width crushes the canvas to 0x0 on a phone. Like the
+           node panel it carries exactly ONE Close affordance, the conventional
+           header X (mobile-only; desktop is a docked panel dismissed by
+           clicking the canvas, matching the node panel) — the duplicated
+           bottom Close was removed in FAR-1861. Below the desktop breakpoint
+           it is a modal dialog with the same semantics as the node sheet. -->
+      <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions --><!-- mobile edge sheet: a role="dialog" container whose Escape/Tab focus-trap needs the keydown handler -->
       <aside
         v-if="selectedEdgeData"
+        ref="edgePanelRef"
+        v-bind="sheetDialogAttrs(EDGE_SHEET_TITLE_ID)"
         class="w-96 overflow-y-auto border-l bg-card p-4 max-md:absolute max-md:inset-0 max-md:z-40 max-md:w-auto max-md:border-l-0"
+        @keydown="onSheetKeydown"
       >
         <div class="mb-4 flex items-center justify-between">
-          <h2 class="text-base font-semibold">{{ $t('views.PipelineEditorView.edge_properties') }}</h2>
+          <h2 :id="EDGE_SHEET_TITLE_ID" class="text-base font-semibold">{{ $t('views.PipelineEditorView.edge_properties') }}</h2>
           <button
             type="button"
             class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
@@ -1511,14 +1546,6 @@
             <Button v-if="!isViewing" type="button" data-testid="pipeline-editor-save-edge" class="flex-1" :disabled="savingEdge" @click="saveEdgeConfig">
               {{ savingEdge ? $t('views.PipelineEditorView.saving') : $t('views.PipelineEditorView.save_edge') }}
             </Button>
-            <button
-              type="button"
-              class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
-              data-testid="pipeline-editor-edge-panel-close"
-              @click="selectedEdgeData = null"
-            >
-              {{ $t('views.PipelineEditorView.close') }}
-            </button>
           </div>
           <!-- retry = click Save Edge again; no separate loader -->
           <ErrorAlert v-if="edgeSaveError" :message="edgeSaveError" :retryable="false" :compact="true" />
@@ -1752,6 +1779,7 @@
 </template>
 <script setup lang="ts">
 import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { useMediaQuery } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { VueFlow, useVueFlow, Position } from '@vue-flow/core'
@@ -1759,6 +1787,7 @@ import { Background } from '@vue-flow/background'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import { useDataFetch } from '../composables/useDataFetch'
+import { trapTabInElement } from '../composables/useFocusTrap'
 import { formatApiError, throwOnError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 
@@ -2980,31 +3009,32 @@ function onPaneClick() {
   capabilityContextInput.value = ''
 }
 
-// --- Mobile viewport fit (FAR-1841) ---------------------------------------
-// On mobile the editor sits BELOW the app chrome (fixed header offset,
-// banners, breadcrumb) but was always calc(100vh - 3.5rem) tall, so its
-// lower portion — the canvas — hung below the fold. VueFlow captures
-// wheel/touch over the canvas, so the page could not be scrolled from that
-// region (pinch zoomed the graph instead of revealing the UI) and the bottom
-// of the canvas was unreachable. Pin the editor to the space actually left
-// in the viewport below the chrome (<768px only): the whole editor — toolbar
-// plus canvas — then lands on screen and the document has nothing left to
-// scroll, so no touch is ever trapped. Desktop is untouched: the inline
-// height stays unset at >=768px and the h-[calc(100vh-3.5rem)] class applies.
-const MOBILE_EDITOR_MIN_HEIGHT_PX = 240
+// --- Editor viewport fit (FAR-1841 mobile, FAR-1851 desktop) --------------
+// The editor root is pinned to the space actually left in the viewport below
+// the app chrome (banners, breadcrumb, fixed mobile header) at EVERY
+// breakpoint, measured at runtime rather than guessed with a `100vh - fixed`
+// height. On mobile that stops the canvas hanging below the fold where VueFlow
+// captures wheel/touch (FAR-1841); on desktop the same pin stops the editor
+// overflowing the fold by the height of the breadcrumb row above it (FAR-1851
+// — the `h-[calc(100vh-3.5rem)]` fallback only ever accounted for the mobile
+// fixed header). The 240px usability floor the mobile fix introduced yields to
+// the viewport (FAR-1861): on a viewport shorter than the chrome stack the
+// editor shrinks to whatever is left instead of spilling below the fold and
+// re-introducing a trapped page scroll.
 const editorRootRef = ref<HTMLElement | null>(null)
-const mobileFitHeightPx = ref<number | null>(null)
-const mobileFitStyle = computed(() =>
-  mobileFitHeightPx.value != null ? { height: `${mobileFitHeightPx.value}px` } : undefined,
+// The canvas region. Focusable (`tabindex="-1"`) so it can receive focus as the
+// fallback return target when a properties sheet's trigger was not focusable
+// (FAR-1861 — a VueFlow node/edge wrapper carries no tabindex, so capturing
+// `document.activeElement` at open yields <body> and restoring it is a no-op).
+const canvasRef = ref<HTMLElement | null>(null)
+const editorFitHeightPx = ref<number | null>(null)
+const editorFitStyle = computed(() =>
+  editorFitHeightPx.value != null ? { height: `${editorFitHeightPx.value}px` } : undefined,
 )
 
-function refitMobileEditor() {
+function refitEditorFit() {
   const el = editorRootRef.value
   if (!el) return
-  if (window.matchMedia('(min-width: 768px)').matches) {
-    mobileFitHeightPx.value = null
-    return
-  }
   // Document-relative top so the measurement is stable regardless of the
   // current scroll position and cannot feed back through the height set here.
   // top <= 0 means the element is not laid out yet (jsdom mounts return an
@@ -3012,32 +3042,36 @@ function refitMobileEditor() {
   // height: leaving it would keep a stale pin that no longer matches layout.
   const top = el.getBoundingClientRect().top + window.scrollY
   if (top <= 0) {
-    mobileFitHeightPx.value = null
+    editorFitHeightPx.value = null
     return
   }
-  const next = Math.max(Math.round(window.innerHeight - top), MOBILE_EDITOR_MIN_HEIGHT_PX)
+  const available = Math.floor(window.innerHeight - top)
+  // available <= 0 (chrome taller than the viewport) falls back to the height
+  // class: there is no space to fit into and a zero-height editor would be
+  // worse than a page that scrolls.
+  const next = available > 0 ? available : null
   // The measurement above is the forced layout; skip the reactive write (and
   // the re-render it causes) when nothing changed.
-  if (mobileFitHeightPx.value !== next) mobileFitHeightPx.value = next
+  if (editorFitHeightPx.value !== next) editorFitHeightPx.value = next
 }
 
 let refitFrame = 0
-function scheduleMobileRefit() {
+function scheduleEditorRefit() {
   if (refitFrame) return
   refitFrame = window.requestAnimationFrame(() => {
     refitFrame = 0
-    refitMobileEditor()
+    refitEditorFit()
   })
 }
 
-let mobileFitObserver: MutationObserver | null = null
+let editorFitObserver: MutationObserver | null = null
 // Re-measure only when the CHROME ABOVE the editor changes — that is the
 // only thing that moves the editor's document-relative top. A body-wide
 // observer (childList+subtree+attributes:class/style) also fired on
 // VueFlow's viewport transform, which is written as an inline style on
 // every pointermove during pan/zoom/node-drag — turning the mobile hot
 // path into a forced synchronous layout (the getBoundingClientRect in
-// refitMobileEditor) once per animation frame. Narrow targets instead:
+// refitEditorFit) once per animation frame. Narrow targets instead:
 //  - the editor's parent (AppLayout's <main>): its `class` carries the
 //    padding-top offsets (fixed mobile header / onboarding banner) and its
 //    direct childList catches a new chrome block inserted above the editor,
@@ -3048,7 +3082,7 @@ let mobileFitObserver: MutationObserver | null = null
 //    the behaviour the original body-wide observer existed for.
 // Extracted from onMounted so each guard (root / parent present) is
 // unit-testable; `root` is null only in the defensive detached case.
-function setupMobileFitObserver(root: HTMLElement | null) {
+function setupEditorFitObserver(root: HTMLElement | null) {
   const parent = root?.parentElement ?? null
   if (root && parent) {
     // Stop at the first element containing the root (the root itself when it
@@ -3060,7 +3094,7 @@ function setupMobileFitObserver(root: HTMLElement | null) {
         sibling && !sibling.contains(root);
         sibling = sibling.nextElementSibling
       ) {
-        mobileFitObserver?.observe(sibling, {
+        editorFitObserver?.observe(sibling, {
           childList: true,
           subtree: true,
           attributes: true,
@@ -3068,16 +3102,16 @@ function setupMobileFitObserver(root: HTMLElement | null) {
         })
       }
     }
-    mobileFitObserver = new MutationObserver((mutations) => {
+    editorFitObserver = new MutationObserver((mutations) => {
       // A chrome block inserted above the editor is a new sibling — observe
       // it too, so mutations inside it keep re-fitting (observe() on an
       // already-observed node just refreshes its options, no duplicates).
       if (mutations.some((m) => m.type === 'childList' && m.target === parent)) {
         observeChromeSiblings()
       }
-      scheduleMobileRefit()
+      scheduleEditorRefit()
     })
-    mobileFitObserver.observe(parent, {
+    editorFitObserver.observe(parent, {
       childList: true,
       attributes: true,
       attributeFilter: ['class'],
@@ -3086,14 +3120,94 @@ function setupMobileFitObserver(root: HTMLElement | null) {
   }
 }
 
+// --- Mobile properties sheets as modal dialogs (FAR-1861) ------------------
+// Below the desktop breakpoint each properties aside renders as a full-screen
+// overlay sheet, and must behave as a modal dialog for keyboard/AT users
+// (ux-conformance A11Y): exposed as a labelled `role="dialog"` with
+// `aria-modal`, Escape closes it, focus moves into it on open and returns to
+// the trigger on close, and Tab is trapped inside so it can never reach the
+// content behind it. On desktop the identical element is a docked, non-modal
+// side panel, so none of the dialog semantics apply. `useMediaQuery` keeps the
+// breakpoint reactive so a resize/rotation across 768px re-applies the right
+// semantics.
+const DESKTOP_MEDIA_QUERY = '(min-width: 768px)'
+const isDesktopViewport = useMediaQuery(DESKTOP_MEDIA_QUERY)
+const isMobileSheet = computed(() => !isDesktopViewport.value)
+
+const NODE_SHEET_TITLE_ID = 'pipeline-editor-node-sheet-title'
+const EDGE_SHEET_TITLE_ID = 'pipeline-editor-edge-sheet-title'
+
+const nodePanelRef = ref<HTMLElement | null>(null)
+const edgePanelRef = ref<HTMLElement | null>(null)
+// The element focus is returned to when the sheet closes — captured at open.
+let sheetReturnFocus: HTMLElement | null = null
+
+// Spread onto a properties aside: the mobile sheet is a labelled modal dialog;
+// the desktop docked panel gets no dialog attrs (and stays out of the tab
+// order's focus entry points, hence tabindex only on the sheet).
+function sheetDialogAttrs(titleId: string): Record<string, string> {
+  return isMobileSheet.value
+    ? { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId, tabindex: '-1' }
+    : {}
+}
+
+// The properties sheet currently rendered — edge wins when both are set (the
+// node aside is `selectedNodeData && !selectedEdgeData`); null when neither pane
+// is open.
+function activeSheetElement(): HTMLElement | null {
+  return selectedEdgeData.value ? edgePanelRef.value : nodePanelRef.value
+}
+
+function onSheetKeydown(event: KeyboardEvent) {
+  if (!isMobileSheet.value) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    onPaneClick()
+    return
+  }
+  if (event.key !== 'Tab') return
+  const panel = activeSheetElement()
+  if (!panel) return
+  // The Tab-cycle (including the freshly-opened panel-container case and the
+  // zero-focusable guard) lives in the shared helper so the algorithm and its
+  // selector have a single owner — see `src/composables/useFocusTrap.ts`.
+  trapTabInElement(event, panel)
+}
+
+// Move focus into a sheet when it opens and return it to the trigger when it
+// closes. Skipped entirely on desktop (docked panels keep the normal tab flow).
+// `flush: 'post'` matters: the sheet's template ref only points at the rendered
+// element after the DOM update, so a default (pre) flush would read a stale ref
+// and miss the open.
+watch([selectedNodeData, selectedEdgeData], () => {
+  if (!isMobileSheet.value) return
+  const panel = activeSheetElement()
+  if (!panel) {
+    sheetReturnFocus?.focus()
+    sheetReturnFocus = null
+    return
+  }
+  // Focus already inside the sheet (e.g. the selection changed while it was
+  // open) — nothing to move or to remember.
+  if (!panel.contains(document.activeElement)) {
+    // The real triggers (VueFlow node/edge wrappers) carry no tabindex, so a
+    // canvas click leaves `document.activeElement` on <body>; restoring <body>
+    // is a no-op. Fall back to the focusable canvas so focus actually returns
+    // somewhere sensible when the sheet closes (FAR-1861).
+    const active = document.activeElement as HTMLElement | null
+    sheetReturnFocus = active && active !== document.body ? active : canvasRef.value
+    panel.focus()
+  }
+}, { flush: 'post' })
+
 onMounted(() => {
-  refitMobileEditor()
-  window.addEventListener('resize', scheduleMobileRefit)
-  setupMobileFitObserver(editorRootRef.value)
+  refitEditorFit()
+  window.addEventListener('resize', scheduleEditorRefit)
+  setupEditorFitObserver(editorRootRef.value)
 })
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', scheduleMobileRefit)
-  mobileFitObserver?.disconnect()
+  window.removeEventListener('resize', scheduleEditorRefit)
+  editorFitObserver?.disconnect()
   if (refitFrame) window.cancelAnimationFrame(refitFrame)
 })
 
