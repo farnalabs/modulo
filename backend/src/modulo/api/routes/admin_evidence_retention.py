@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_UNEXPECTED_ERROR
-from modulo.api.db_error_handling import raise_session_contract_error
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import (
     get_db_session,
     require_system_or_org_admin,
@@ -115,6 +115,7 @@ def _resolve_org_id(principal: TenantPrincipal, organisation_id: uuid.UUID | Non
 
 
 @router.get("")
+@handle_db_errors("admin.evidence_retention.get_evidence_retention")
 async def get_evidence_retention(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     organisation_id: Annotated[uuid.UUID | None, Query()] = None,
@@ -166,6 +167,7 @@ async def get_evidence_retention(
     ],
     status_code=http_status.HTTP_200_OK,
 )
+@handle_db_errors("admin.evidence_retention.update_evidence_retention")
 async def update_evidence_retention(
     req: UpdateEvidenceRetentionPolicyRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
@@ -252,6 +254,7 @@ async def update_evidence_retention(
     ],
     status_code=http_status.HTTP_200_OK,
 )
+@handle_db_errors("admin.evidence_retention.purge_evidence_retention")
 async def purge_evidence_retention(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     organisation_id: Annotated[uuid.UUID | None, Query()] = None,

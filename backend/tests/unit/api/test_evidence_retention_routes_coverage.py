@@ -19,6 +19,7 @@ import uuid
 from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
@@ -370,3 +371,92 @@ def test_purge_success_passes_org_id_to_the_sweep(client: tuple[TestClient, Asyn
     assert sweep.await_args is not None
     org_id_arg: object = sweep.await_args.args[1]
     assert org_id_arg == _ORG_ID
+
+
+# ---------------------------------------------------------------------------
+# @handle_db_errors backstop (FAR-1905)
+# ---------------------------------------------------------------------------
+#
+# The three handlers already have hand-written ``except`` arms that translate
+# the DB errors raised INSIDE their ``try`` block (ProgrammingError -> 501,
+# SQLAlchemyError -> 503, IntegrityError -> 409 on update, Exception -> 500),
+# so a DB error raised in-transaction is mapped with or without the backstop.
+# The backstop's distinguishing job is to catch a DB error that ESCAPES the
+# handler's own arms — the "unexpected DB error relies solely on its
+# hand-written arms" gap in FAR-1905. ``_resolve_org_id`` is the one seam each
+# handler calls BEFORE its ``try`` block, so raising from it is the faithful
+# way to exercise exactly that class of escape (there is no DB call outside the
+# handler's own ``try``, which is why the hand-written arms cannot cover it).
+
+
+def _issue(client: TestClient, method: str, url: str, body: dict[str, int] | None) -> httpx.Response:
+    """Issue one request for a parametrised route (keeps ``**kwargs`` out of mypy)."""
+    if method == "get":
+        return client.get(url)
+    if method == "put":
+        return client.put(url, json=body)
+    return client.post(url)
+
+
+@pytest.mark.parametrize(
+    ("method", "url", "body"),
+    [
+        ("get", _BASE_URL, None),
+        ("put", _BASE_URL, {"max_age_days": 30}),
+        ("post", _BASE_URL + "/purge", None),
+    ],
+    ids=["get", "put", "purge"],
+)
+@pytest.mark.parametrize(
+    ("exc", "expected", "detail"),
+    [(_SQL, 503, _MSG_503), (_PROG, 501, _MSG_501)],
+    ids=["sqlalchemy-503", "programming-501"],
+)
+def test_backstop_maps_escaping_db_error_to_standard_status(
+    method: str, url: str, body: dict[str, int] | None, exc: Exception, expected: int, detail: str
+) -> None:
+    """FAR-1905 prove-the-fix: an unexpected DB error escaping the handler body.
+
+    ``_resolve_org_id`` runs before each handler's ``try``, so a DB error raised
+    from it is exactly the error class the hand-written arms do NOT cover. Only
+    the ``@handle_db_errors`` backstop maps it: 503 for a generic
+    ``SQLAlchemyError``, 501 for a ``ProgrammingError`` (the decorator's
+    contract, matching the in-transaction arms' statuses). Without the
+    decorator the error escapes to the app's catch-all handler, which answers
+    500 with the generic internal-error detail — so this assertion fails.
+
+    ``raise_server_exceptions=False`` lets that catch-all 500 be observed as a
+    status code instead of TestClient re-raising it (the default).
+    """
+    session = _make_session()
+    _install_overrides(session)
+    try:
+        with patch.object(retention_routes, "_resolve_org_id", side_effect=exc):
+            resp = _issue(TestClient(app, raise_server_exceptions=False), method, url, body)
+        assert resp.status_code == expected, resp.text
+        assert resp.json()["detail"] == detail
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_backstop_does_not_shadow_update_arm_conflict_verdict(client: tuple[TestClient, AsyncMock]) -> None:
+    """The PUT arm's own IntegrityError -> 409 verdict survives the backstop.
+
+    ``handle_db_errors`` maps ``IntegrityError`` -> 409 with its own detail
+    ("Resource conflict. The operation could not be completed."). The route's
+    hand-written arm raises ``HTTPException(409, "Resource conflict. The policy
+    could not be updated.")`` first, inside its ``try``; the decorator re-raises
+    an ``HTTPException`` unchanged, so the arm's exact detail must win. Asserting
+    that specific detail (which differs from the backstop's) is the
+    discriminating check that the new backstop did not shadow the route's own
+    classification — the same precedence that preserves the PUT arm's
+    lock-timeout (55P03 -> 409) handling once it is present.
+    """
+    session = _make_session(begin_exc=_INTEGRITY)
+    _install_overrides(session)
+    try:
+        resp = TestClient(app).put(_BASE_URL, json={"max_age_days": 30})
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"] == "Resource conflict. The policy could not be updated."
+    finally:
+        app.dependency_overrides.clear()
