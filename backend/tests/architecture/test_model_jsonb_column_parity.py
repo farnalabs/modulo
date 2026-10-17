@@ -44,8 +44,8 @@ Two structural invariants are enforced:
    which the dialect-parity check alone would accept while silently breaking
    SQLite/MariaDB parity.
 
-Both tests are static (no database): they read the migration, the ORM metadata
-and the source tree.
+All three checks are static (no database): they read the migration, the ORM
+metadata and the source tree.
 """
 
 from __future__ import annotations
