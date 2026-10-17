@@ -18,9 +18,10 @@ This test proves, on real Postgres:
   the listing ``admin_feature_flags.list_feature_flags`` builds) STOPS
   reporting it — the actual admin-UI symptom;
 * re-running the REAL migration ``upgrade()`` a second time is a no-op (idempotent);
-* the structural invariant the admin listing depends on — every remaining
-  ``feature_flag_catalog`` row corresponds to a name in the current code
-  registry — holds after the sweep;
+* the sweep is COMPLETE, not an enumerate-only list: a sentinel row whose name is
+  in NEITHER the live registry NOR the retired-name list is removed by the real
+  ``upgrade()`` (the old enumerate-only migration left it behind), and every
+  remaining row is a live code flag;
 * on a database where the row was never seeded the upgrade completes with no
   error and leaves the catalog table intact;
 * on a database where the catalog table (or its ``name`` column) is absent, or
@@ -61,6 +62,11 @@ MIGRATION_REV = "0317_drop_retired_pipeline_diff_rollback_flag"
 PREV_REV = "0316_policy_gate_evaluation_mode"
 RETIRED_FLAG = "pipeline_diff_rollback"
 SIBLING_FLAG = "email_config"
+
+#: A name in NEITHER the live registry NOR the retired-name list. Only a sweep
+#: that DERIVES its stale set (rather than enumerating retired names) removes
+#: it — the assertion that makes the completeness test non-tautological.
+UNKNOWN_SENTINEL = "zzz_far1875_unknown_sentinel"
 
 #: The live code registry — the invariant source of truth for the structural test.
 LIVE_FLAG_NAMES: frozenset[str] = frozenset(str(flag["name"]) for flag in FLAGS)
@@ -249,22 +255,33 @@ async def test_upgrade_deletes_the_retired_flag_row(prev_rev_db_url: str) -> Non
 async def test_after_upgrade_every_catalog_row_is_a_live_code_flag(prev_rev_db_url: str) -> None:
     """Structural invariant: the catalog may only contain live code-flag names.
 
-    The admin Feature Flags listing is built straight from the catalog, so any
-    row whose name is absent from the current registry is a dead flag. Seed the
-    live names alongside the known-stale set and assert the sweep leaves exactly
-    the live names.
+    Non-tautological: the sentinel is named by NEITHER the retired list NOR the
+    live registry, so an enumerate-only sweep leaves it behind. Only a sweep
+    that derives its stale set from the (frozen) registry snapshot removes it.
     """
-    seeded = tuple(sorted(LIVE_FLAG_NAMES | set(_migration_module().RETIRED_FLAG_NAMES)))
+    module = _migration_module()
+    seeded = tuple(sorted(LIVE_FLAG_NAMES | set(module.RETIRED_FLAG_NAMES) | {UNKNOWN_SENTINEL}))
     await _seed_catalog(prev_rev_db_url, flags=seeded)
 
     before = await _table_flag_names(prev_rev_db_url)
-    assert set(_migration_module().RETIRED_FLAG_NAMES) <= before
+    assert set(module.RETIRED_FLAG_NAMES) <= before
+    assert UNKNOWN_SENTINEL in before
 
     _run_alembic(prev_rev_db_url, "upgrade", MIGRATION_REV)
 
     remaining = await _table_flag_names(prev_rev_db_url)
+
+    # Completeness: the sentinel was never enumerated anywhere, yet is gone.
+    assert UNKNOWN_SENTINEL not in remaining
+    # The structural invariant the admin listing depends on: no row survives
+    # whose name the current code registry does not know.
     assert remaining <= LIVE_FLAG_NAMES
-    assert remaining == set(LIVE_FLAG_NAMES)
+    # The sweep must not over-delete: every name in the frozen registry snapshot
+    # that was seeded survives (this catches a delete predicate that eats a live
+    # flag). Together with ``remaining <= LIVE_FLAG_NAMES`` this pins the result
+    # without re-deriving it, so a future registry addition cannot make the test
+    # tautologically re-assert the migration's own input.
+    assert set(module.LIVE_FLAG_NAMES_SNAPSHOT) <= remaining
 
 
 async def test_repeated_migration_upgrade_is_idempotent(prev_rev_db_url: str) -> None:
@@ -311,8 +328,8 @@ async def test_guarded_sql_is_noop_when_catalog_table_absent(db_url: str) -> Non
             async with engine.begin() as conn:
                 # No ``feature_flag_catalog`` table exists — both directions must
                 # short-circuit on the information_schema guard rather than raise.
-                await conn.execute(text(module._DELETE_RETIRED_FLAGS_SQL))
-                await conn.execute(text(module._RESTORE_RETIRED_FLAGS_SQL))
+                swept = await conn.run_sync(lambda sync: module.sweep_stale_catalog_rows(sync))
+                restored = await conn.run_sync(lambda sync: module.restore_retired_catalog_rows(sync))
             async with engine.connect() as conn:
                 catalog_oid = (
                     await conn.execute(text("SELECT to_regclass('public.feature_flag_catalog')"))
@@ -323,7 +340,9 @@ async def test_guarded_sql_is_noop_when_catalog_table_absent(db_url: str) -> Non
         # Guard held: no catalog table was created AND the pre-existing state is
         # exactly as seeded (an unguarded statement would have raised 42P01).
         assert catalog_oid is None
-        assert [tuple(row) for row in tiers] == [("team", "Team")]
+        assert sorted(tiers) == [("team", "Team")]
+        assert swept == 0
+        assert restored == 0
     finally:
         await _drop_db(db_url, db_name)
 
@@ -341,8 +360,8 @@ async def test_guarded_sql_is_noop_when_name_column_absent(db_url: str) -> None:
                 await conn.execute(text('CREATE TABLE public."feature_flag_catalog" (legacy_id integer)'))
                 await conn.execute(text('INSERT INTO public."feature_flag_catalog" (legacy_id) VALUES (42)'))
             async with engine.begin() as conn:
-                await conn.execute(text(module._DELETE_RETIRED_FLAGS_SQL))
-                await conn.execute(text(module._RESTORE_RETIRED_FLAGS_SQL))
+                swept = await conn.run_sync(lambda sync: module.sweep_stale_catalog_rows(sync))
+                restored = await conn.run_sync(lambda sync: module.restore_retired_catalog_rows(sync))
             async with engine.connect() as conn:
                 sentinels = (
                     (await conn.execute(text('SELECT legacy_id FROM public."feature_flag_catalog"'))).scalars().all()
@@ -350,6 +369,8 @@ async def test_guarded_sql_is_noop_when_name_column_absent(db_url: str) -> None:
         finally:
             await engine.dispose()
         assert list(sentinels) == [42]
+        assert swept == 0
+        assert restored == 0
     finally:
         await _drop_db(db_url, db_name)
 
@@ -371,14 +392,17 @@ async def test_restore_is_noop_when_tier_catalog_table_absent(db_url: str) -> No
                     )
                 )
             async with engine.begin() as conn:
-                await conn.execute(text(module._RESTORE_RETIRED_FLAGS_SQL))
+                restored = await conn.run_sync(lambda sync: module.restore_retired_catalog_rows(sync))
             async with engine.connect() as conn:
                 tier_oid = (await conn.execute(text("SELECT to_regclass('public.tier_catalog')"))).scalar_one()
-                restored = (await conn.execute(text('SELECT count(*) FROM public."feature_flag_catalog"'))).scalar_one()
+                remaining = (
+                    await conn.execute(text('SELECT count(*) FROM public."feature_flag_catalog"'))
+                ).scalar_one()
         finally:
             await engine.dispose()
         assert tier_oid is None
         assert restored == 0
+        assert remaining == 0
     finally:
         await _drop_db(db_url, db_name)
 
