@@ -49,6 +49,7 @@ vi.mock('../composables/useDataFetch', async () => {
 import NotificationsPage from '../views/NotificationsPage.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import NotificationCard from '../components/NotificationCard.vue'
+import { useNotificationsStore } from '../stores/notifications'
 
 function pageResponse(items: unknown[] = [], total = 0, page = 1) {
   return { items, total, page, page_size: 20 }
@@ -331,5 +332,47 @@ describe('NotificationsPage', () => {
 
     expect(wrapper.find('[data-testid="notifications-dismiss-all-error"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="notifications-dismiss-all-success"]').exists()).toBe(true)
+  })
+
+  it('blocks a programmatic dismiss-all from a dismissed view via the in-function guard', async () => {
+    // The button is :disabled under a dismissed filter, so a click never
+    // reaches the handler — this exercises the in-function guard directly
+    // (the programmatic-invocation path the guard exists for).
+    mockFetchNotifications.mockResolvedValue(pageResponse([makeNotification('n-1')], 1, 1))
+    const wrapper = mount(NotificationsPage)
+    await flushPromises()
+    await nextTick()
+
+    const filterBar = wrapper.findComponent(FilterBar)
+    await filterBar.vm.$emit('update:filter', 'status', 'dismissed_self')
+    await flushPromises()
+    await nextTick()
+
+    await (wrapper.vm as unknown as { onDismissAll: () => Promise<void> }).onDismissAll()
+    await flushPromises()
+
+    // The guard returned before the write and before any local state change.
+    expect(mockMarkAllRead).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="notifications-dismiss-all-error"]').exists()).toBe(false)
+  })
+
+  it('renders a non-Error rejection through String() when dismiss-all fails unexpectedly', async () => {
+    // Defensive arm of `e instanceof Error ? e.message : String(e)`.
+    mockFetchNotifications.mockResolvedValue(pageResponse([makeNotification('n-1')], 1, 1))
+    const wrapper = mount(NotificationsPage)
+    await flushPromises()
+    await nextTick()
+
+    const store = useNotificationsStore()
+    vi.spyOn(store, 'dismissAll').mockRejectedValue('page failure')
+
+    await wrapper.find('[data-testid="notifications-dismiss-all"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const alert = wrapper.find('[data-testid="notifications-dismiss-all-error"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toBe('page failure')
+    expect(wrapper.find('[data-testid="notifications-dismiss-all-success"]').exists()).toBe(false)
   })
 })

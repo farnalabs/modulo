@@ -230,6 +230,27 @@ describe('NotificationDropdown (FAR-249)', () => {
     expect(wrapper.findAll('[data-testid="notification-dropdown"] li')).toHaveLength(1)
   })
 
+  it('renders a non-Error rejection through String() when dismiss-all fails unexpectedly', async () => {
+    // Defensive arm of `e instanceof Error ? e.message : String(e)`: the store
+    // normally throws an Error, but a non-Error throw must still surface a
+    // readable message rather than an empty alert.
+    h.mockFetchDashboard.mockResolvedValue({
+      notifications: [notification()],
+      total_unread: 1,
+    })
+    const wrapper = await mountDropdown()
+    const store = useNotificationsStore()
+    vi.spyOn(store, 'dismissAll').mockRejectedValue('plain failure')
+
+    await wrapper.find('[data-testid="notification-mark-all-read"]').trigger('click')
+    await flushPromises()
+
+    const alert = wrapper.find('[data-testid="notification-mark-all-read-error"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toBe('plain failure')
+    expect(wrapper.find('[data-testid="notification-mark-all-read-success"]').exists()).toBe(false)
+  })
+
   // QA FAR-1926 — truthful copy: the SERVER's marked count picks the outcome.
   it('shows "Nothing to dismiss" instead of a success claim when the server marks zero rows', async () => {
     h.mockFetchDashboard.mockResolvedValue({
@@ -393,6 +414,21 @@ describe('NotificationDropdown (FAR-249)', () => {
       expect(style.width).toBe('284px') // 300 - 2*8
       expect(style.left).toBe('8px')
       // 8 + 284 = 292 <= 300 — fully inside the viewport.
+    })
+
+    it('bails out of repositioning when the panel has no anchor to measure (defensive)', async () => {
+      const wrapper = await mountDropdown()
+      const panel = wrapper.find('[data-testid="notification-dropdown"]').element as HTMLElement
+      // Detach the panel so it has no parentElement to anchor to. `dropdownRef`
+      // still points at the element, so this exercises the guard that skips
+      // positioning when no anchor exists — a resize must not throw.
+      panel.remove()
+      panel.style.position = 'absolute'
+      window.dispatchEvent(new Event('resize'))
+      await nextTick()
+
+      // The guard returned before writing positionStyle, so the sentinel stands.
+      expect(panel.style.position).toBe('absolute')
     })
   })
 })

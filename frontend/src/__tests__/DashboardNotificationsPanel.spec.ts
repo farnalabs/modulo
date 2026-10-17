@@ -65,6 +65,7 @@ import DashboardNotificationsPanel from '../components/DashboardNotificationsPan
 // QA FAR-1926 — cross-surface assertion: a failure raised on the panel must
 // not render on a DIFFERENT mounted surface (the notifications page).
 import NotificationsPage from '../views/NotificationsPage.vue'
+import { useNotificationsStore } from '../stores/notifications'
 
 function makeNotifications(count: number) {
   return Array.from({ length: count }, (_, i) => ({
@@ -465,5 +466,23 @@ describe('DashboardNotificationsPanel', () => {
 
     expect(wrapper.find('[data-testid="panel-dismiss-all-error"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="panel-dismiss-all-success"]').exists()).toBe(true)
+  })
+
+  it('renders a non-Error rejection through String() when dismiss-all fails unexpectedly', async () => {
+    // Defensive arm of `e instanceof Error ? e.message : String(e)`: the shared
+    // store action normally throws an Error, but a non-Error throw (e.g. a
+    // rejected string) must still surface a readable message.
+    const wrapper = await mountAndExpand(makeNotifications(2), 2, 2)
+    const store = useNotificationsStore()
+    vi.spyOn(store, 'dismissAll').mockRejectedValue('string failure')
+
+    await wrapper.find('[data-testid="panel-dismiss-all"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const alert = wrapper.find('[data-testid="panel-dismiss-all-error"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toBe('string failure')
+    expect(wrapper.find('[data-testid="panel-dismiss-all-success"]').exists()).toBe(false)
   })
 })

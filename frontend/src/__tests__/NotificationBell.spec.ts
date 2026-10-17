@@ -495,6 +495,24 @@ describe('NotificationBell (FAR-250)', () => {
     addSpy.mockRestore()
   })
 
+  it('ignores an outside-click event that carries no target (defensive)', async () => {
+    const addSpy = vi.spyOn(document, 'addEventListener')
+    const wrapper = await mountBell()
+    await wrapper.find('[data-testid="notification-bell-button"]').trigger('click')
+    expect(wrapper.find('[data-testid="notification-dropdown"]').exists()).toBe(true)
+
+    const clickCall = addSpy.mock.calls.find(([type]) => type === 'click')
+    const handler = clickCall![1] as unknown as (e: MouseEvent) => void
+
+    // A synthetic event with no target must bail out (never throw, never be
+    // treated as an outside click that closes the panel).
+    expect(() => handler({ target: null } as unknown as MouseEvent)).not.toThrow()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="notification-dropdown"]').exists()).toBe(true)
+    addSpy.mockRestore()
+  })
+
   it('removes the document click listener when unmounted', async () => {
     const removeSpy = vi.spyOn(document, 'removeEventListener')
     const wrapper = await mountBell()
