@@ -37,12 +37,14 @@ Metric-correctness notes (deliberate, and different from older readers):
   is not mistaken for a leak of executing runs. The leak/stall signal therefore
   requires the **executing** total to hold the cap (FAR-1343 M2): a cap held
   only by human-waiting rows is never reported as ``stall_suspected``.
-* The active-run health section is computed from an **org-wide** row set, not
-  the caller's team-scoped one (FAR-1343 M3). Its denominator
+* The active-run health **totals** are computed from an **org-wide** row set,
+  not the caller's team-scoped one (FAR-1343 M3). The denominator
   (``org_run_concurrency_limit``) is org-wide and the panel labels it "Org cap
   use", so the numerator must be org-wide too — comparing a team's runs against
   the org's cap reported a false utilisation and a false ``cap_held``. The
-  queue/drain/series sections stay team-scoped.
+  per-pipeline ``attribution`` breakdown is restricted to the caller-visible
+  pipeline set (FAR-1343 M5): a team viewer must never see a foreign team's live
+  slot counts or oldest age. The queue/drain/series sections stay team-scoped.
 
 The scan is bounded (``CAPACITY_MAX_RAW_ROWS``); overflow is a typed validation
 error telling the caller to narrow the window — never a silent truncation (a
@@ -245,6 +247,12 @@ def build_capacity_health_query(org_id: uuid.UUID, *, window_start: datetime) ->
     Includes every currently-live status (a long-running leaked slot older than
     the window must still be attributed) PLUS any run completed inside the
     window (the trailing zero-completion signal the stall detector reads).
+
+    The query stays genuinely org-wide so the TOTALS are correct; the
+    per-pipeline ``attribution`` derived from these rows is restricted to the
+    caller-visible pipeline set downstream (FAR-1343 M5) — the totals must not be
+    narrowed to team scope, but neither may the attribution name a foreign
+    team's pipelines.
     """
     return (
         sa.select(
@@ -441,11 +449,21 @@ def _active_health_counts(
     now: datetime,
     stale_heartbeat_seconds: int,
     pipeline_name: dict[str, Any],
+    visible_pipeline_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Count the gate/executing/parked rows and build per-pipeline attribution.
 
     Extracted so the org-wide health row set can be counted independently of
     the (team-scoped) queue row set — see ``build_capacity_health_query``.
+
+    The TOTALS (gate/executing/running/parked/cancelling and the heartbeat
+    count) are always computed over every supplied row — the caller passes the
+    org-wide row set so the org-cap ratio is correct (FAR-1343 M3).
+    ``visible_pipeline_ids`` filters ONLY the returned ``attribution`` list to
+    the caller-visible pipeline set (FAR-1343 M5): ``None`` means unconstrained
+    (an org admin), otherwise a team viewer receives no foreign-team pipeline's
+    live slot counts. The ``stale_heartbeat_count`` total is taken BEFORE the
+    filter, so it stays org-wide like the other totals.
     """
     executing_total = 0
     running_total = 0
@@ -496,6 +514,11 @@ def _active_health_counts(
                 att["stale_heartbeat_count"] += 1
 
     attribution_list = sorted(attribution.values(), key=lambda a: (-a["executing"], a["pipeline_name"] or ""))
+    # Org-wide heartbeat total is taken before the team filter so the aggregate
+    # stays org-wide (FAR-1343 M5); only the per-pipeline breakdown is filtered.
+    stale_heartbeat_count = sum(a["stale_heartbeat_count"] for a in attribution_list)
+    if visible_pipeline_ids is not None:
+        attribution_list = [a for a in attribution_list if a["pipeline_id"] in visible_pipeline_ids]
     return {
         "gate_total": gate_total,
         "executing_total": executing_total,
@@ -503,7 +526,7 @@ def _active_health_counts(
         "parked_total": parked_total,
         "cancelling_total": cancelling_total,
         "attribution": attribution_list,
-        "stale_heartbeat_count": sum(a["stale_heartbeat_count"] for a in attribution_list),
+        "stale_heartbeat_count": stale_heartbeat_count,
     }
 
 
@@ -578,14 +601,19 @@ def compute_capacity_report(
     stall_intervals: int,
     stale_heartbeat_seconds: int,
     health_rows: list[Any] | None = None,
+    visible_pipeline_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Build the whole capacity report from already-fetched rows (pure).
 
     *rows* drive the team-scoped queue/drain/series sections. *health_rows*
-    (defaulting to *rows*) drive the org-wide active-run health section — the
+    (defaulting to *rows*) drive the org-wide active-run health TOTALS — the
     caller passes a genuinely org-wide row set when the queue rows are
     team-scoped, so the org cap ratio and the leak/stall signal are computed
     against the org-wide cap they are labelled with (FAR-1343 M3).
+    *visible_pipeline_ids* restricts only the returned per-pipeline
+    ``attribution`` to the caller-visible pipeline set — ``None`` is
+    unconstrained (org admin); a team viewer must never be attributed a foreign
+    team's pipeline (FAR-1343 M5).
     """
     now = to_utc_aware(now)
     window_start = to_utc_aware(window_start)
@@ -617,9 +645,13 @@ def compute_capacity_report(
         )
     pending_by_pipeline.sort(key=lambda item: (-item["pending_count"], item["pipeline_name"] or ""))
 
-    # --- active-run health (ORG-WIDE — see build_capacity_health_query) ----
+    # --- active-run health (ORG-WIDE totals; team-scoped attribution) ------
     health = _active_health_counts(
-        active_rows, now=now, stale_heartbeat_seconds=stale_heartbeat_seconds, pipeline_name=pipeline_name
+        active_rows,
+        now=now,
+        stale_heartbeat_seconds=stale_heartbeat_seconds,
+        pipeline_name=pipeline_name,
+        visible_pipeline_ids=visible_pipeline_ids,
     )
     gate_total = health["gate_total"]
     executing_total = health["executing_total"]
@@ -865,9 +897,11 @@ async def run_capacity_query(
 
     Two row scans are issued: the team-scoped queue scan (``params``) and an
     org-wide active-health scan (``build_capacity_health_query``). The health
-    section's denominator is the org-wide ``org_run_concurrency_limit``, so its
-    numerator must be org-wide too (FAR-1343 M3) — a team viewer otherwise saw
-    their team's runs measured against the whole org's cap.
+    section's TOTALS keep the org-wide numerator because its denominator is the
+    org-wide ``org_run_concurrency_limit`` (FAR-1343 M3) — a team viewer
+    otherwise saw their team's runs measured against the whole org's cap. Its
+    per-pipeline ``attribution`` is restricted to the caller-visible pipeline set
+    (FAR-1343 M5), so the org-wide scan never names a foreign team's pipelines.
     """
     params = validate_capacity_params(params)
     if _rate_limited(str(org_id)):
@@ -906,6 +940,11 @@ async def run_capacity_query(
     except Exception as exc:  # pragma: no cover - defensive; _guarded_session maps DB errors
         raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from exc
 
+    # The caller-visible pipeline set for the attribution breakdown: ``None``
+    # (org admin) leaves it unconstrained; otherwise it is exactly the
+    # team-scoped, pipeline-filtered meta set, so the org-wide health scan can
+    # never attribute a slot to a pipeline outside the caller's boundary.
+    visible_pipeline_ids = None if params.team_ids is None else {str(_field(p, "id")) for p in pipelines}
     return compute_capacity_report(
         rows=rows,
         pipelines=pipelines,
@@ -919,6 +958,7 @@ async def run_capacity_query(
         stall_intervals=params.stall_intervals,
         stale_heartbeat_seconds=int(stale_heartbeat_seconds),
         health_rows=health_rows,
+        visible_pipeline_ids=visible_pipeline_ids,
     )
 
 

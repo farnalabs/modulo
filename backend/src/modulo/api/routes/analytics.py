@@ -764,9 +764,11 @@ async def analytics_capacity(
       leak/stall signature with per-pipeline attribution.
 
     **Observability only — signal, never a refusal.** A repeated ``pipeline_id``
-    narrows the scope; otherwise the report is org-wide. ``window_minutes``
-    bounds the scan; an oversized scan is a 422 asking the caller to narrow it,
-    never a silently truncated series.
+    narrows the queue, drain and series sections; the ACTIVE-RUN health totals
+    are always org-wide (their denominator is the org cap), and its
+    per-pipeline attribution lists only the pipelines visible to the caller's
+    team scope. ``window_minutes`` bounds the scan; an oversized scan is a 422
+    asking the caller to narrow it, never a silently truncated series.
     """
     org_id = _require_org(principal)
     params = CapacityParams(

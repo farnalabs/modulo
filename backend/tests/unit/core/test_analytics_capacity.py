@@ -82,6 +82,7 @@ def _compute(
     sandbox_active: int = 0,
     pipelines: list[dict[str, Any]] | None = None,
     health_rows: list[Any] | None = None,
+    visible_pipeline_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     health_kwargs: dict[str, Any] = {} if health_rows is None else {"health_rows": health_rows}
     return compute_capacity_report(
@@ -101,6 +102,7 @@ def _compute(
         interval_seconds=interval_seconds,
         stall_intervals=stall_intervals,
         stale_heartbeat_seconds=1800,
+        visible_pipeline_ids=visible_pipeline_ids,
         **health_kwargs,
     )
 
@@ -514,6 +516,81 @@ class TestActiveHealth:
         assert health["cap_held"] is True
         # The queue section stays team-scoped: only the caller's pending run.
         assert report["pending"]["total"] == 1
+
+    def test_team_scope_filters_attribution_but_keeps_org_wide_totals(self) -> None:
+        # Regression (FAR-1343 M5): a team viewer's ``rows`` are team-scoped,
+        # but the health TOTALS are org-wide (M3) — and the previous code fed
+        # those org-wide rows straight into the attribution breakdown, so the
+        # viewer received a foreign team's live executing count and oldest age.
+        # The fix restricts ``attribution`` to the caller-visible pipeline set
+        # while leaving every org-wide total untouched.
+        team_rows = [
+            _row(
+                pipeline_id=_P1,
+                status="running",
+                created_at=_minutes_before(_NOW, 30),
+                started_at=_minutes_before(_NOW, 25),
+                heartbeat_at=_NOW,
+            )
+        ]
+        org_rows = list(team_rows) + [
+            _row(
+                pipeline_id=_P2,  # a pipeline OUTSIDE the caller's team
+                status="running",
+                created_at=_minutes_before(_NOW, 30),
+                started_at=_minutes_before(_NOW, 25),
+                heartbeat_at=_NOW,
+            )
+            for _ in range(3)
+        ]
+        report = _compute(
+            team_rows,
+            org_run_limit=4,
+            health_rows=org_rows,
+            pipelines=[{"id": _P1, "name": "alpha", "max_concurrent_runs": 5}],
+            visible_pipeline_ids={str(_P1)},
+        )
+        health = report["active_health"]
+        # Org-wide totals are unchanged by the attribution scope.
+        assert health["gate_total"] == 4
+        assert health["executing_total"] == 4
+        assert health["running_total"] == 4
+        assert health["utilisation"] == 1.0
+        assert health["cap_held"] is True
+        # Attribution names only the caller-visible pipeline.
+        assert [a["pipeline_id"] for a in health["attribution"]] == [str(_P1)]
+        assert str(_P2) not in {a["pipeline_id"] for a in health["attribution"]}
+
+    def test_team_scope_filter_keeps_stale_heartbeat_total_org_wide(self) -> None:
+        # The heartbeat aggregate is a NUMBER, so it stays org-wide like the
+        # other totals even though the per-pipeline attribution is filtered.
+        stale_start = _minutes_before(_NOW, 120)
+        stale_beat = _minutes_before(_NOW, 60)
+        org_rows = [
+            _row(
+                pipeline_id=_P1,
+                status="running",
+                created_at=stale_start,
+                started_at=stale_start,
+                heartbeat_at=stale_beat,
+            ),
+            _row(
+                pipeline_id=_P2,
+                status="running",
+                created_at=stale_start,
+                started_at=stale_start,
+                heartbeat_at=stale_beat,
+            ),
+        ]
+        report = _compute(
+            [org_rows[0]],
+            health_rows=org_rows,
+            pipelines=[{"id": _P1, "name": "alpha", "max_concurrent_runs": 5}],
+            visible_pipeline_ids={str(_P1)},
+        )
+        health = report["active_health"]
+        assert health["stale_heartbeat_count"] == 2
+        assert [a["pipeline_id"] for a in health["attribution"]] == [str(_P1)]
 
 
 class TestBinding:
