@@ -943,6 +943,9 @@ elements:
       - testid: panel-dismiss-all-success
         type: element
         dynamic_testid: false
+      - testid: panel-dismiss-all-nothing
+        type: element
+        dynamic_testid: false
       - testid: sparkline
         type: element
         dynamic_testid: false
@@ -3188,6 +3191,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: notifications-dismiss-all-success
+        type: element
+        dynamic_testid: false
+      - testid: notifications-dismiss-all-nothing
         type: element
         dynamic_testid: false
       - testid: notifications-reset-filters
