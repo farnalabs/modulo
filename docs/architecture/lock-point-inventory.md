@@ -391,7 +391,7 @@ row lock with a per-org **advisory** lock (`modulo.core.runner_capacity.lock_org
 it does not belong in this row-lock inventory; D9 is retired from §3/§5 and the row-lock
 counts drop by one. On the finalize path the gate takes NO *cost-column* read or write on the
 `organisations` row — it reads the row only for existence, and the ceiling/cumulative values
-come from `organisation_cost_state`. Migration `0317` deliberately LEAVES the three physical
+come from `organisation_cost_state`. Migration `0318` deliberately LEAVES the three physical
 `organisations` cost columns in place (the expand half of an expand/contract cutover, so the
 rolling deploy never serves old code against a dropped column); a follow-up migration drops
 them once this release is live.

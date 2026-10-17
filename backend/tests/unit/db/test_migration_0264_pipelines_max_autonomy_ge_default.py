@@ -60,7 +60,10 @@ Lenses:
     0314_external_agents_mcp_servers, and
     0316_policy_gate_evaluation_mode chains onto
     0315_service_accounts_lifecycle, and
-    0317_organisation_cost_state chains onto
+    0317_drop_retired_pipeline_diff_rollback_flag chains onto
+    0316_policy_gate_evaluation_mode, and
+    0318_organisation_cost_state chains onto
+    0317_drop_retired_pipeline_diff_rollback_flag as the
     0316_policy_gate_evaluation_mode as the
     single linear head (0259's test documents the run-up through 0288).
 * **Structure (mocked ``op``)** - upgrade emits THREE statements IN ORDER: the
@@ -97,7 +100,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0264_pipelines_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0263_evidence_layer"
-_HEAD_MIGRATION = "0317_organisation_cost_state"
+_HEAD_MIGRATION = "0318_organisation_cost_state"
 _CONSTRAINT = "ck_pipelines_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - a

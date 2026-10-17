@@ -62,7 +62,7 @@ class Organisation(SoftDeleteMixin, Base):
         # Retained ONLY so the ORM metadata keeps matching the live schema
         # (tests/integration/test_initial_migration.py::test_migrated_schema_matches_orm_metadata).
         # The physical columns + this CHECK are dropped by the follow-up
-        # migration once the additive 0317 release is live — see the cost-column
+        # migration once the additive 0318 release is live — see the cost-column
         # comment below. Nothing in production code reads or writes them.
         CheckConstraint("org_cumulative_spend_cents >= 0", name="ck_organisations_cum_spend"),
         Index(
@@ -122,7 +122,7 @@ class Organisation(SoftDeleteMixin, Base):
     # endpoints.
     #
     # The three columns are STILL MAPPED here (and the CHECK above still
-    # declared) only for expand/contract: migration 0317 deliberately leaves the
+    # declared) only for expand/contract: migration 0318 deliberately leaves the
     # physical columns in place so a rolling deploy never serves old code against
     # a dropped column, and the ORM metadata must keep matching that live schema
     # (test_migrated_schema_matches_orm_metadata). No production code reads or

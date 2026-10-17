@@ -140,12 +140,10 @@ async def list_library_primitives(
         logger.exception("count query failed")
         raise
 
+    offset = (page - 1) * page_size
     try:
         items_stmt = (
-            select(LibraryPrimitive)
-            .order_by(LibraryPrimitive.created_at.desc())
-            .offset((page - 1) * page_size)
-            .limit(page_size)
+            select(LibraryPrimitive).order_by(LibraryPrimitive.created_at.desc()).offset(offset).limit(page_size)
         )
         if conditions:
             items_stmt = items_stmt.where(*conditions)
@@ -155,7 +153,8 @@ async def list_library_primitives(
         logger.exception("items query failed")
         raise
 
-    return PageResult(items=items, total=total, page=page, page_size=page_size)
+    has_more = (offset + len(items)) < total
+    return PageResult(items=items, total=total, page=page, page_size=page_size, has_more=has_more)
 
 
 async def create_library_primitive(

@@ -64,6 +64,7 @@ async def list_publishers(
         term = f"%{search.strip()}%"
         conditions.append(Publisher.name.ilike(term))
 
+    offset = (page - 1) * page_size
     try:
         count_q = select(func.count()).select_from(Publisher).where(*conditions)
         total = (await session.execute(count_q)).scalar() or 0
@@ -72,14 +73,15 @@ async def list_publishers(
             select(Publisher)
             .where(*conditions)
             .order_by(Publisher.trust_tier, Publisher.name)
-            .offset((page - 1) * page_size)
+            .offset(offset)
             .limit(page_size)
         )
         items = list((await session.execute(items_stmt)).scalars())
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
 
-    return PageResult(items=items, total=total, page=page, page_size=page_size)
+    has_more = (offset + len(items)) < total
+    return PageResult(items=items, total=total, page=page, page_size=page_size, has_more=has_more)
 
 
 async def create_publisher(

@@ -4,7 +4,10 @@
       ref="bellButtonRef"
       type="button"
       data-testid="notification-bell-button"
-      class="relative inline-flex items-center justify-center rounded-md p-2 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+      :class="[
+        'relative inline-flex shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors',
+        props.size === 'touch' ? 'h-11 w-11' : 'p-2',
+      ]"
       :aria-label="bellAriaLabel"
       aria-haspopup="true"
       :aria-expanded="dropdownOpen"
@@ -39,7 +42,12 @@
     <!-- FAR-250: classified-reconnect banner — shown when the SSE stream
          stopped on a terminal 401/403. Stays visible while a manual restart
          is in flight ('attempting') so the click is acknowledged, and shows
-         an explicit failure message when recovery is impossible (FAR-1842). -->
+         an explicit failure message when recovery is impossible (FAR-1842).
+         The 'failed' copy tells the user to sign in again, so the button is
+         disabled alongside it (FAR-1861): a Reconnect click without a fresh
+         token would only re-run the refresh+retry that just failed, and the
+         auth-change re-arm restarts the stream automatically the moment a
+         fresh token lands. -->
     <div
       v-if="showReconnectBanner"
       data-testid="sse-reconnect-banner"
@@ -58,7 +66,7 @@
         type="button"
         data-testid="sse-reconnect-button"
         class="rounded bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-60"
-        :disabled="reconnectFeedback === 'attempting'"
+        :disabled="reconnectFeedback === 'attempting' || reconnectFeedback === 'failed'"
         @click="eventBus.reconnect()"
       >
         {{
@@ -81,6 +89,12 @@ import { useNotificationsStore } from "../stores/notifications";
 import type { EventBusEvent } from "../types/events";
 import NotificationDropdown from "./NotificationDropdown.vue";
 import { Bell } from "@lucide/vue";
+
+// `touch` sizes the trigger to a 44x44 minimum hit area for compact mobile
+// chrome (the drawer header); `default` keeps the desktop rail/sidebar sizing.
+const props = withDefaults(defineProps<{ size?: "default" | "touch" }>(), {
+  size: "default",
+});
 
 const store = useNotificationsStore();
 const { t } = useI18n();

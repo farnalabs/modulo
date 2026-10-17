@@ -579,6 +579,89 @@ async def test_list_primitives_custom_excluded_tiers_filters_modulo():
     assert preview_prim not in result.items
 
 
+async def test_list_primitives_has_more_reflects_the_narrowed_page():
+    """``source``/``excluded_tiers`` narrow AFTER the offset query, so the org page's
+    own ``has_more`` can contradict the returned items (FAR-1881). The envelope must
+    describe the page actually returned: a full org page forwarded verbatim would
+    claim a next page for a response that is smaller than its own page size.
+    """
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    org_prim = _fake_primitive()
+    org_prim.source = "local"
+    # The org query saw a full page, so it believes a next page exists...
+    org_page: PageResult = PageResult(items=[org_prim], total=100, page=1, page_size=20, has_more=True)
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page),
+    ):
+        # ...but ?source=community narrows to the in-memory community set.
+        result = await list_primitives(session, org_id, source="community")
+
+    assert len(result.items) == len(_EXPECTED_COMMUNITY_SLUGS)
+    assert len(result.items) < result.page_size
+    assert result.has_more is False
+
+
+async def test_list_primitives_has_more_true_when_the_org_page_has_a_next_page():
+    """With ``excluded_tiers=[]`` the org total is preserved, so a full org page whose
+    total exceeds what it returned genuinely has more rows to fetch.
+
+    This exercises the NON-DEFAULT ``excluded_tiers=[]`` path only; the route's default
+    path (``excluded_tiers`` omitted → ``["in_dev"]``) is pinned separately by
+    ``test_list_primitives_default_path_has_more_tracks_the_org_total`` below.
+    """
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    org_items = [_fake_primitive() for _ in range(20)]
+    org_page: PageResult = PageResult(items=org_items, total=100, page=1, page_size=20, has_more=True)
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page),
+    ):
+        result = await list_primitives(session, org_id, page_size=20, excluded_tiers=[])
+
+    assert result.has_more is True
+    assert len(result.items) >= 20
+
+
+async def test_list_primitives_default_path_has_more_tracks_the_org_total():
+    """The route's DEFAULT path (``excluded_tiers`` omitted → ``["in_dev"]``) must still paginate.
+
+    Regression guard: collapsing ``org_total`` to the page-slice length inside
+    ``_exclude_tiers`` made ``total == len(all_items)`` on this path, so ``has_more``
+    was ``False`` on every page even when the org total spanned many pages.
+    """
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    page_size = 20
+    org_rows = [_fake_primitive() for _ in range(100)]
+
+    first_page: PageResult = PageResult(
+        items=org_rows[:page_size], total=len(org_rows), page=1, page_size=page_size, has_more=True
+    )
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=first_page),
+    ):
+        first = await list_primitives(session, org_id, page=1, page_size=page_size)
+
+    last_page: PageResult = PageResult(
+        items=org_rows[-page_size:], total=len(org_rows), page=5, page_size=page_size, has_more=False
+    )
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=last_page),
+    ):
+        last = await list_primitives(session, org_id, page=5, page_size=page_size)
+
+    assert first.has_more is True
+    assert first.total >= len(org_rows)
+    assert last.has_more is False
+
+
 # ---------------------------------------------------------------------------
 # copy_to_adapt
 # ---------------------------------------------------------------------------

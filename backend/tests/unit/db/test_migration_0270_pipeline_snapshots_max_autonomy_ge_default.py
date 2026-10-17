@@ -55,7 +55,10 @@ Lenses:
     0314_external_agents_mcp_servers, and
     0316_policy_gate_evaluation_mode chains onto
     0315_service_accounts_lifecycle, and
-    0317_organisation_cost_state chains onto
+    0317_drop_retired_pipeline_diff_rollback_flag chains onto
+    0316_policy_gate_evaluation_mode, and
+    0318_organisation_cost_state chains onto
+    0317_drop_retired_pipeline_diff_rollback_flag as the
     0316_policy_gate_evaluation_mode as the single linear head.
     This migration was originally numbered 0268; main landed
   ``0268_webhook_lookup_expiry_indexes`` and
@@ -99,7 +102,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0270_pipeline_snapshots_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0269_webhook_dedup_check_constraints"
-_HEAD_MIGRATION = "0317_organisation_cost_state"
+_HEAD_MIGRATION = "0318_organisation_cost_state"
 _CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - 0264

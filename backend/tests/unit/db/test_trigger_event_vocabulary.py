@@ -182,10 +182,11 @@ _MIGRATION_PATH = (
 # 0314_external_agents_mcp_servers chained onto 0313_collection_install_drop_installed_entities, and
 # 0315_service_accounts_lifecycle chained onto 0314_external_agents_mcp_servers, and
 # 0316_policy_gate_evaluation_mode chained onto 0315_service_accounts_lifecycle, and
-# 0317_organisation_cost_state chained onto 0316_policy_gate_evaluation_mode as the chain head.
+# 0317_drop_retired_pipeline_diff_rollback_flag chained onto 0316_policy_gate_evaluation_mode, and
+# 0318_organisation_cost_state chained onto 0317_drop_retired_pipeline_diff_rollback_flag as the chain head.
 # (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
 # migration under test, not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0317_organisation_cost_state"
+_CHAIN_HEAD_MIGRATION_NAME = "0318_organisation_cost_state"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

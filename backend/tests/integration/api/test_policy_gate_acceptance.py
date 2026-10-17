@@ -751,13 +751,16 @@ async def test_pg_spec_c18_versions_bump_monotonically_with_snapshot(
     body2 = second.json()
     assert body2["version"] == 2
     assert body2["action"] == "block"
-    assert body2["pre_version_raw"] == {"action": "warn"}
+    # FAR-939: the snapshot key set equals the mutable-field set, which now
+    # includes ``evaluation_mode`` (defaults to "automatic"; omitted on the
+    # wire preserves the live mode, so both writes stay "automatic").
+    assert body2["pre_version_raw"] == {"action": "warn", "evaluation_mode": "automatic"}
 
     third = await client.put(f"/api/v1/evals/{eval_id}/policy-gate", json={"action": "warn"}, headers=env.headers)
     assert third.status_code == 200, third.text
     body3 = third.json()
     assert body3["version"] == 3
-    assert body3["pre_version_raw"] == {"action": "block"}
+    assert body3["pre_version_raw"] == {"action": "block", "evaluation_mode": "automatic"}
 
     # DB state mirrors the API surface
     rows = await _load_gates(db_engine, env.org_id, eval_id, live_only=True)

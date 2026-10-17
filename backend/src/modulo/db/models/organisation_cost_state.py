@@ -8,7 +8,7 @@ This table is the cutover of FAR-1823 Land 2: the finalize gate+accrual and
 the admin ceiling set/clear endpoints read and write it under a per-org
 advisory lock (``modulo.core.runner_capacity.lock_org_cost_state``), so the hot
 path never updates — and never takes a row lock on — the ``organisations`` row
-(the FAR-1823 / D9 lock-coupling shape). Migration ``0317`` creates and
+(the FAR-1823 / D9 lock-coupling shape). Migration ``0318`` creates and
 backfills it. The three same-named ``organisations`` columns are deliberately
 LEFT IN PLACE by that migration (the expand half of an expand/contract cutover);
 a follow-up migration drops them once this release is live, so no rolling-deploy
@@ -16,7 +16,7 @@ window is created.
 
 The table is deliberately keyed ``org_id`` and NOT ``organisation_id``, so it
 sits outside the generic ``organisation_id`` RLS sweep by construction. It is
-STILL row-level-secured: migration ``0317`` ENABLEs (and FORCEs) RLS with an
+STILL row-level-secured: migration ``0318`` ENABLEs (and FORCEs) RLS with an
 explicit ``org_id`` policy, because on Postgres the ORM tenant filter is a no-op
 (``db/rls.py`` returns early for ``postgres``), so RLS is the only DB-level
 backstop. Every production path here (the admin cost routes, the finalize

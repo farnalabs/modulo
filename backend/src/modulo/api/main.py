@@ -12,7 +12,7 @@ import anyio
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import PlainTextResponse
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -1169,6 +1169,31 @@ async def _seed_tier_catalog() -> None:
                     """),
                 params,
             )
+
+        # Reconcile: prune every catalog row whose name is not in the current
+        # code registry. Retiring a flag is a code-only change and the INSERT
+        # above is upsert-only (``ON CONFLICT DO NOTHING``), so without this a
+        # retired flag's row lingers and stays user-visible in the DB-backed
+        # admin Feature Flags listing (the FAR-1875 defect). No table holds a
+        # foreign key to ``feature_flag_catalog`` (verified against the fully
+        # migrated schema: its only constraints are its own PK on ``name`` and
+        # its FK to ``tier_catalog``), so this DELETE cannot raise an FK
+        # violation and crash application boot. Idempotent: the predicate is a
+        # pure function of the code registry.
+        prune = await session.execute(
+            text("DELETE FROM feature_flag_catalog WHERE name NOT IN :names").bindparams(
+                bindparam("names", expanding=True)
+            ),
+            {"names": [flag["name"] for flag in FLAGS]},
+        )
+        # Observability: report the swept count so a 0-row prune is
+        # distinguishable in the boot log from a wrong database. ``rowcount``
+        # is present on the DML cursor result but not on the ``Result`` typing.
+        pruned_rows = prune.rowcount if hasattr(prune, "rowcount") else 0
+        logger.info(
+            "startup.tier_catalog_pruned_stale_flags",
+            extra={"pruned_rows": pruned_rows},
+        )
 
 
 app = FastAPI(

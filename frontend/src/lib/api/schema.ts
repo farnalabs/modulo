@@ -19121,6 +19121,16 @@ export interface components {
             trigger_id?: string | null;
             /** Heartbeat At */
             heartbeat_at?: string | null;
+            /** Dispatcher */
+            dispatcher?: string | null;
+            /** Dispatched At */
+            dispatched_at?: string | null;
+            /** Dispatch Phase */
+            dispatch_phase?: string | null;
+            /** Claim Count */
+            claim_count?: number | null;
+            /** Enqueue Failed At */
+            enqueue_failed_at?: string | null;
             /** Work Item Refs */
             work_item_refs?: {
                 [key: string]: unknown;
@@ -20547,7 +20557,7 @@ export interface components {
         };
         /**
          * SystemAuditEventPage
-         * @description Repo-standard offset page envelope (items / total / page / page_size).
+         * @description Repo-standard offset page envelope (items / total / page / page_size / has_more).
          */
         SystemAuditEventPage: {
             /** Items */
@@ -20558,6 +20568,11 @@ export interface components {
             page: number;
             /** Page Size */
             page_size: number;
+            /**
+             * Has More
+             * @default false
+             */
+            has_more: boolean;
         };
         /** TargetInjection */
         TargetInjection: {

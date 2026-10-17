@@ -31,7 +31,10 @@ database, plus ORM parity for both new columns:
    0314_external_agents_mcp_servers, and
    0316_policy_gate_evaluation_mode chains onto
    0315_service_accounts_lifecycle, and
-   0317_organisation_cost_state chains onto
+   0317_drop_retired_pipeline_diff_rollback_flag chains onto
+   0316_policy_gate_evaluation_mode, and
+   0318_organisation_cost_state chains onto
+   0317_drop_retired_pipeline_diff_rollback_flag as the single linear head;
    0316_policy_gate_evaluation_mode as the single linear head;
 2. the upgrade adds EXACTLY two nullable ``varchar(20)`` columns with NO
    server default and NO backfill (metadata-only on the hot ``runs`` table);
@@ -63,7 +66,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0288_runs_execution_origin"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0287_team_rls_lifecycle_evals"
-_CHAIN_HEAD_MIGRATION = "0317_organisation_cost_state"
+_CHAIN_HEAD_MIGRATION = "0318_organisation_cost_state"
 
 #: (table, column) pairs the upgrade must add — the two read surfaces ADR-042
 #: needs: the run row itself and the self-contained analytics fact.

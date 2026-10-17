@@ -48,6 +48,11 @@ The script fails loudly (non-zero exit, nothing written) if any mirror has drift
 
 ### Native single-install (Linux)
 
+The native single-install path is **Linux-only**, so this upgrade path is too.
+macOS and Windows are out of scope for v1: `scripts/install.sh` refuses a
+non-Linux host, and no macOS/Windows bundle exists to upgrade. See the platform
+support matrix in [`docs/system-requirements.md`](./system-requirements.md).
+
 The native upgrade swaps the `current` symlink after a verified data
 snapshot; migrations run through the new bundle's boot lifespan. Two entry
 points perform the same swap:
@@ -259,6 +264,7 @@ When upgrading, check for changes to:
 
 | Topic | Document |
 |-------|----------|
+| System requirements (platform support matrix) | [`docs/system-requirements.md`](./system-requirements.md) |
 | Deployment guide | [`docs/deployment.md`](./deployment.md) |
 | Deployment security | [`docs/deployment-security.md`](./deployment-security.md) §7 |
 | Backup & restore | [`docs/operations/backup.md`](./operations/backup.md) |

@@ -27,17 +27,6 @@ KNOWN_AGENTS: set[str] = {
     if isinstance(entry, dict) and entry.get("node_type") == "agent"
 } | {_kebab(COMPLEXITY_REVIEWER["name"])}
 
-VALID_CONNECTOR_TYPES: set[str] = {
-    "source_control",
-    "ci_runner",
-    "ci_cd",
-    "incident_management",
-    "issue_tracking",
-    "filesystem",
-    "monitoring",
-    "messaging",
-}
-
 # Every workflow primitive exported by the definitions module, keyed by its
 # canonical constant name so parametrized tests can identify failures.
 WORKFLOWS: dict[str, dict[str, Any]] = {
@@ -51,6 +40,26 @@ REQUIRED_WORKFLOW_KEYS = {"name", "description", "version", "author", "tags", "p
 VALID_PROPERTY_TYPES = {"string", "number", "integer", "boolean", "object", "array"}
 
 VALID_FORMATS = {"date", "date-time"}
+
+VALID_CONNECTOR_BINDING_TYPES: set[str] = {
+    "source_control",
+    "ci_runner",
+    "ci_cd",
+    "incident_management",
+    "issue_tracking",
+    "filesystem",
+    "monitoring",
+    "messaging",
+    "devops",
+    "security",
+    "code_quality",
+    "containers",
+    "documentation",
+    "observability",
+    "infrastructure",
+    "automation",
+    "integration",
+}
 
 
 def _string_value(prop_schema: dict[str, Any]) -> str:
