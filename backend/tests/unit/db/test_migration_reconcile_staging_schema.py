@@ -26,7 +26,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 
 _MIGRATION_0006 = "0108_schema_org_identity"
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
-_HEAD_MIGRATION = "0120_org_fk_hardening"
+_MIGRATION_UNDER_TEST = "0120_org_fk_hardening"
 
 
 def _source(name: str) -> str:
@@ -111,14 +111,14 @@ class TestScheduledReportsSurface:
 
 class TestOrgFkHardeningMigration:
     def test_uses_cascade_not_restrict(self) -> None:
-        source = _source(_HEAD_MIGRATION)
+        source = _source(_MIGRATION_UNDER_TEST)
         assert "ON DELETE CASCADE" in source
         assert "ON DELETE RESTRICT" not in source
 
     def test_upgrade_is_postgres_guarded(self) -> None:
-        source = _source(_HEAD_MIGRATION)
+        source = _source(_MIGRATION_UNDER_TEST)
         assert 'op.get_context().dialect.name == "postgresql"' in source
 
     def test_is_child_of_0119(self) -> None:
-        source = _source(_HEAD_MIGRATION)
+        source = _source(_MIGRATION_UNDER_TEST)
         assert 'down_revision = "0119_analytics_batch_id"' in source

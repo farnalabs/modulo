@@ -30,6 +30,13 @@ File identity is each file's declared ``revision`` (not its filename stem): one
 real migration -- ``0152_add_indexes.py`` declares
 ``revision = "0152_dismissed_by_user_id_index"`` -- has a stem that differs from
 its revision id, so a filename comparison would false-positive here.
+
+Deliberately stricter than ``scripts/run_check_migration_heads.py``: that
+pre-commit check tolerates an *intentional fork* (a migration whose id appears
+as a parent in a merge migration's tuple ``down_revision``) and treats multiple
+heads as a non-fatal WARNING, whereas this helper hard-asserts strict
+linearity. The current graph has zero merge migrations; any future relaxation of
+that rule belongs here, not in a second hand-rolled scan.
 """
 
 from __future__ import annotations
@@ -139,9 +146,16 @@ def assert_single_linear_head(script: ScriptDirectory, *, versions_dir: Path | N
     assert len(heads) == 1, f"expected exactly one migration head, got {heads!r}"
 
     revisions = list(script.walk_revisions())
-    branchy = sorted(rev.revision for rev in revisions if rev.is_branch_point or rev.is_merge_point)
-    assert not branchy, (
-        f"migration graph is not linear: {branchy!r} are branch/merge points; "
+    graph_points = sorted(
+        (rev.revision, "branch point" if rev.is_branch_point else "merge point")
+        for rev in revisions
+        if rev.is_branch_point or rev.is_merge_point
+    )
+    plural = len(graph_points) != 1
+    branchy_text = ", ".join(f"{revision!r} ({kind})" for revision, kind in graph_points)
+    assert not graph_points, (
+        f"migration graph is not linear: {branchy_text} "
+        f"{'are' if plural else 'is a'} branch/merge point{'s' if plural else ''}; "
         "the chain has diverged and been reconciled"
     )
 

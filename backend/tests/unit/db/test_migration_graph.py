@@ -1,6 +1,6 @@
 """Tests for the shared migration-graph helper (``_migration_graph``).
 
-Far-1929 replaced hard-coded chain-head constants across ~30 migration test
+FAR-1929 replaced hard-coded chain-head constants across ~30 migration test
 modules with a single delegation: ``assert_single_linear_head(script_directory())``.
 Those call sites exercise only the *pass* path, so a regression in one of the
 helper's failure branches would leave the whole suite green while the assertion
@@ -204,3 +204,53 @@ def test_ghost_migration_underscore_prefixed_fails(tmp_path: Path) -> None:
     message = str(excinfo.value)
     assert "no backing file on disk" in message
     assert "'c'" in message
+
+
+def test_non_string_literal_revision_fails(tmp_path: Path) -> None:
+    """A ``revision`` that is not a string literal is an error naming the file.
+
+    Guards the ``_literal_str`` branch: an integer (or any other non-string
+    constant) must be rejected rather than silently coerced into a revision id.
+    """
+    migrations_dir, versions_dir = _build_tree(
+        tmp_path,
+        {"bad.py": "revision = 123\ndown_revision = None\n"},
+    )
+    with pytest.raises(AssertionError, match="is not a string literal") as excinfo:
+        assert_single_linear_head(_script(migrations_dir), versions_dir=versions_dir)
+    message = str(excinfo.value)
+    assert "is not a string literal" in message
+    assert "bad.py" in message
+
+
+def test_unsupported_down_revision_form_fails(tmp_path: Path) -> None:
+    """A ``down_revision`` that is neither ``None``, a string literal nor a tuple
+    of string literals (here a name reference) is an error naming the file.
+
+    Guards the ``_parse_down_revision`` fall-through branch.
+    """
+    migrations_dir, versions_dir = _build_tree(
+        tmp_path,
+        {"bad.py": 'revision = "bad"\ndown_revision = SOME_PARENT\n'},
+    )
+    with pytest.raises(AssertionError, match="unsupported form") as excinfo:
+        assert_single_linear_head(_script(migrations_dir), versions_dir=versions_dir)
+    message = str(excinfo.value)
+    assert "unsupported form" in message
+    assert "bad.py" in message
+
+
+def test_file_declaring_no_revision_fails(tmp_path: Path) -> None:
+    """A scanned file that declares no ``revision`` id is an error naming it.
+
+    Guards the ``_read_revision`` "declares no revision id" branch.
+    """
+    migrations_dir, versions_dir = _build_tree(
+        tmp_path,
+        {"bad.py": "down_revision = None\n"},
+    )
+    with pytest.raises(AssertionError, match="declares no revision id") as excinfo:
+        assert_single_linear_head(_script(migrations_dir), versions_dir=versions_dir)
+    message = str(excinfo.value)
+    assert "declares no revision id" in message
+    assert "bad.py" in message

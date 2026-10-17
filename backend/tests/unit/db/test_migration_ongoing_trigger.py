@@ -34,7 +34,7 @@ from tests.unit.db._migration_graph import assert_single_linear_head, script_dir
 
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _MIGRATION_0113 = "0113_guardrail_summary"
-_HEAD_MIGRATION = "0213_runs_rerun_trigger_type"
+_MIGRATION_UNDER_TEST = "0213_runs_rerun_trigger_type"
 _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
 _SPEND_PARTIAL = "trigger_type <> 'ongoing' OR (daily_spend_limit IS NOT NULL AND daily_spend_limit > 0)"
@@ -130,11 +130,11 @@ class TestRerunTriggerTypeWiden:
 
     @pytest.fixture
     def migration_0213(self) -> ModuleType:
-        path = _VERSIONS_DIR / f"{_HEAD_MIGRATION}.py"
+        path = _VERSIONS_DIR / f"{_MIGRATION_UNDER_TEST}.py"
         assert path.exists(), f"Migration file missing: {path}"
         import importlib.util
 
-        spec = importlib.util.spec_from_file_location(f"migration_{_HEAD_MIGRATION}", path)
+        spec = importlib.util.spec_from_file_location(f"migration_{_MIGRATION_UNDER_TEST}", path)
         assert spec is not None
         assert spec.loader is not None
         module = importlib.util.module_from_spec(spec)
