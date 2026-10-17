@@ -6,7 +6,8 @@ Storage:     lookup_prefix = first 8 chars after "mk_"
 
 Alpha scopes:
   operator — read + trigger + HITL
-  runner   — trigger only
+  runner   — trigger/list runs, plus run.cancel, run.evals,
+             api_key.create/update/revoke, hitl.claim/list and library.copy
 
 Team-scoped enforcement:
   When an API key has a non-null ``team_id``, all operations performed
