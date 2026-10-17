@@ -269,35 +269,14 @@ async def decode_stored_secret_scoped(
 async def _read_rls_org_id(session: "AsyncSession") -> uuid.UUID | None:
     """Read the RLS org id currently bound to *session*, or ``None``.
 
-    Generic backends store the org in ``session.info['org_id']``; Postgres reads
-    ``current_setting('app.organisation_id', true)`` (empty string when unset).
-    A value that cannot be coerced to a UUID is treated as absent.
+    FAR-1884: delegates to :func:`modulo.db.rls.read_rls_org`, which selects the
+    authoritative source by the session DIALECT FIRST — the Postgres
+    ``current_setting('app.organisation_id', true)`` GUC (never ``session.info``)
+    on Postgres, ``session.info['org_id']`` on generic backends. One
+    implementation is deliberate: the two orderings this helper and its sibling
+    used to maintain separately could drift, and a drifted ordering on Postgres
+    would resolve the decrypt against a stale or foreign org.
     """
-    from sqlalchemy import text
+    from modulo.db.rls import read_rls_org
 
-    info = getattr(session, "info", None)
-    if isinstance(info, dict):
-        value = info.get("org_id")
-        if value is not None:
-            parsed = _coerce_org_id(value)
-            if parsed is not None:
-                return parsed
-
-    try:
-        result = await session.execute(text("SELECT current_setting('app.organisation_id', true)"))
-    except Exception:
-        return None
-    raw: object = result.scalar()
-    if raw is None:
-        return None
-    if isinstance(raw, str) and raw.strip() == "":
-        return None
-    return _coerce_org_id(raw)
-
-
-def _coerce_org_id(value: object) -> uuid.UUID | None:
-    """Return a ``UUID`` when *value* is a valid UUID/str, else ``None``."""
-    try:
-        return uuid.UUID(str(value).strip())
-    except (ValueError, AttributeError, TypeError):
-        return None
+    return await read_rls_org(session)
