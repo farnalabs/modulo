@@ -197,6 +197,27 @@ describe('main bootstrap', () => {
     expect(captureErrorMock).toHaveBeenCalledWith(expect.any(Error), { phase: 'router.isReady' })
   })
 
+  it('wraps a non-Error navigation rejection into an Error for the tracker', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // A guard can reject with a non-Error (a string, an API error body). The
+    // tracker's contract takes an Error, so toError must convert it.
+    isReadyMock.mockRejectedValue('navigation stalled')
+
+    await import('../main')
+
+    await vi.waitFor(() => {
+      expect(captureErrorMock).toHaveBeenCalled()
+    })
+    const [wrapped] = captureErrorMock.mock.calls[0]
+    expect(wrapped).toBeInstanceOf(Error)
+    expect((wrapped as Error).message).toBe('navigation stalled')
+    expect(captureErrorMock).toHaveBeenCalledWith(expect.any(Error), { phase: 'router.isReady' })
+    expect(consoleError).toHaveBeenCalledWith(
+      'Initial navigation did not complete; mounting anyway',
+      'navigation stalled',
+    )
+  })
+
   it('logs a fatal error when the application bootstrap rejects', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     initLocaleMock.mockImplementation(() => {
@@ -260,6 +281,31 @@ describe('main bootstrap', () => {
     expect(surface?.textContent).toBe('The application failed to load. Please reload the page.')
     expect(consoleWarn).toHaveBeenCalledWith(
       '[bootstrap] i18n unavailable; using a literal message',
+      expect.any(Error),
+    )
+  })
+
+  it('falls back to a literal message when the catalogue resolves an empty string', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // A key can resolve to an empty string (missing/blank catalogue entry);
+    // an empty message would render an invisible surface, so the literal wins.
+    vi.doMock('../i18n', () => ({
+      default: { install: vi.fn(), global: { t: () => '' } },
+    }))
+    initLocaleMock.mockImplementation(() => {
+      throw new Error('locale store exploded')
+    })
+
+    await import('../main')
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('#modulo-bootstrap-surface [role="alert"]')).not.toBeNull()
+    })
+
+    const surface = document.querySelector('#modulo-bootstrap-surface [role="alert"]')
+    expect(surface?.textContent).toBe('The application failed to load. Please reload the page.')
+    expect(consoleError).toHaveBeenCalledWith(
+      'Fatal: application bootstrap failed',
       expect.any(Error),
     )
   })
