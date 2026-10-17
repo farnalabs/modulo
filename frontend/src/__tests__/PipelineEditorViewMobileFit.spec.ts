@@ -871,4 +871,40 @@ describe('PipelineEditorView — toolbar popover anchoring (FAR-1899 changed-lin
 
     wrapper.unmount()
   })
+
+  it('closes the save-as-template menu on Escape and returns focus to the toggle', async () => {
+    const wrapper = mountEditor(document.body)
+    await flushPromises()
+    setViewport(800)
+    stubToggleRect(wrapper, 'pipeline-editor-save-as-template', { top: 60, right: 140, bottom: 100, left: 40 })
+
+    const trigger = wrapper.get('[data-testid="pipeline-editor-save-as-template"]')
+    await trigger.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-save-as-dropdown"]').exists()).toBe(true)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }))
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-save-as-dropdown"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(trigger.element)
+
+    wrapper.unmount()
+  })
+
+  it('leaves the save-as-template menu open on a non-Escape key', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+    setViewport(800)
+    stubToggleRect(wrapper, 'pipeline-editor-save-as-template', { top: 60, right: 140, bottom: 100, left: 40 })
+
+    await wrapper.get('[data-testid="pipeline-editor-save-as-template"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-save-as-dropdown"]').exists()).toBe(true)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }))
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-save-as-dropdown"]').exists()).toBe(true)
+
+    wrapper.unmount()
+  })
 })

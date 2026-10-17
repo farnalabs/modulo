@@ -2555,7 +2555,7 @@ function unbindSaveAsDropdownPositioning() {
 
 function toggleSaveAsDropdown() {
   if (showSaveAsDropdown.value) {
-    showSaveAsDropdown.value = false
+    closeSaveAsDropdown()
     return
   }
   // Anchor before paint so the menu never flashes at its static in-column
@@ -2564,15 +2564,34 @@ function toggleSaveAsDropdown() {
   showSaveAsDropdown.value = true
 }
 
+// FAR-1899 review note: the save-as menu was the only toolbar popover without
+// an Escape handler, so a keyboard user had to reach the toggle (or pick an
+// item) to dismiss it. Same open/Escape/focus-return shape as the retry-policy
+// and autonomy panels: Escape closes it and returns focus to the toggle.
+function closeSaveAsDropdown() {
+  showSaveAsDropdown.value = false
+  saveAsDropdownTriggerRef.value?.focus()
+}
+
+function onSaveAsDropdownKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && showSaveAsDropdown.value) {
+    event.preventDefault()
+    closeSaveAsDropdown()
+  }
+}
+
 watch(showSaveAsDropdown, (open) => {
   if (open) {
+    document.addEventListener('keydown', onSaveAsDropdownKeydown)
     bindSaveAsDropdownPositioning()
   } else {
+    document.removeEventListener('keydown', onSaveAsDropdownKeydown)
     unbindSaveAsDropdownPositioning()
   }
 })
 
 onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onSaveAsDropdownKeydown)
   unbindSaveAsDropdownPositioning()
 })
 
