@@ -46,7 +46,10 @@ const SIZED_CONTROLS = [
   { name: 'theme toggle button', selector: '[aria-label="Toggle theme"]' },
 ] as const
 
-const AVATAR_SELECTOR = 'a[aria-label="User profile"]'
+// Selector is deliberately label- AND locale-independent (FAR-1907): the
+// avatar's accessible name now contains its visible initial, so keying on the
+// English label string would be doubly fragile.
+const AVATAR_SELECTOR = 'a.avatar-ring'
 const BELL_SELECTOR = '[data-testid="rail-bell"]'
 
 const railProps = {
@@ -192,6 +195,9 @@ describe('SidebarRail touch targets', () => {
         expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(true)
         expect(wrapper.find('a[aria-label="Modulo"]').exists()).toBe(true)
         expect(wrapper.find(AVATAR_SELECTOR).exists()).toBe(true)
+        // WCAG 2.5.3: the accessible name must contain the visible text (the
+        // initial), otherwise axe raises label-content-name-mismatch.
+        expect(wrapper.find(AVATAR_SELECTOR).attributes('aria-label')).toContain(railProps.userInitial)
         expect(wrapper.find('[aria-label="Search pages"]').exists()).toBe(true)
         expect(wrapper.find('[aria-label="Toggle theme"]').exists()).toBe(true)
 
