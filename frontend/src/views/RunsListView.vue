@@ -184,7 +184,7 @@
                 v-if="isNonTerminalStatus(row.status as string)"
                 :disabled="cancellingIds.has(row.run_id as string)"
                 :data-testid="`runs-list-cancel-${row.run_id}`"
-                class="inline-flex items-center gap-1 whitespace-nowrap rounded-lg border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50"
+                class="inline-flex items-center gap-1 whitespace-nowrap rounded-lg border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive-text hover:bg-destructive/20 disabled:opacity-50"
                 @click.stop="cancelRun(row as RunListItem)"
                 @keydown.stop
               >

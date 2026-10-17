@@ -49,7 +49,7 @@
           <span class="sr-only" id="variant-batch-partial-label">{{ $t('views.variantBatch.aria_partial_results') }}</span>
           {{ $t('views.variantBatch.partialResults') }}
         </output>
-        <output v-if="batchFailed" data-testid="variant-batch-failed" aria-labelledby="variant-batch-failed-label" class="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+        <output v-if="batchFailed" data-testid="variant-batch-failed" aria-labelledby="variant-batch-failed-label" class="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive-text">
           <span class="sr-only" id="variant-batch-failed-label">{{ $t('views.variantBatch.aria_batch_failed') }}</span>
           {{ $t('views.variantBatch.batchFailed') }}
         </output>

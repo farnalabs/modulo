@@ -257,13 +257,13 @@ describe('AssistantPanel', () => {
     const wrapper = await mountPanelOpen()
     store.error = 'Something broke'
     await nextTick()
-    const banner = wrapper.find('.assistant-panel .text-destructive')
+    const banner = wrapper.find('.assistant-panel .text-destructive-text')
     expect(banner.exists()).toBe(true)
     expect(banner.text()).toContain('Something broke')
     await wrapper.find('button[aria-label="Dismiss error"]').trigger('click')
     expect(store.error).toBeNull()
     await nextTick()
-    expect(wrapper.find('.assistant-panel .text-destructive').exists()).toBe(false)
+    expect(wrapper.find('.assistant-panel .text-destructive-text').exists()).toBe(false)
   })
 
   it('styles rate-limit errors with the warning palette', async () => {

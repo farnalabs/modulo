@@ -1,3 +1,10 @@
+// FAR-1913 — this spec's name promises a contrast gate; until now the shared
+// `filterViolations()` allowlist dropped `color-contrast` from every scan, so it
+// could not see one. That rule id is no longer tolerated: the failed-status
+// badge it found (destructive text on a destructive tint) is fixed via the
+// `--destructive-text` token, and every remaining destructive-text-on-tint
+// pairing was swept to it. The only entry still filtered is `aria-hidden-focus`
+// (documented, PrimeVue-internal) — see tests/e2e/setup/wcag.ts.
 import { test, expect, systemAdminJwt } from './setup/fixtures'
 import AxeBuilder from '@axe-core/playwright'
 import { WCAG_TAGS, filterViolations } from './setup/wcag'

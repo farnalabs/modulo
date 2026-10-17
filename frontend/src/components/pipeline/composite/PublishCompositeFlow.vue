@@ -191,7 +191,7 @@ function goToLibrary() {
               <span class="text-sm font-medium">{{ port.label }}</span>
               <span
                 v-if="port.required"
-                class="ml-2 rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] text-destructive"
+                class="ml-2 rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] text-destructive-text"
                 >required</span
               >
             </div>

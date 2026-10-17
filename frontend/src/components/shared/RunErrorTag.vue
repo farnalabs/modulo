@@ -14,14 +14,14 @@ const { t } = useI18n()
 // its class (agent / harness / sandbox / node / connector / capacity / eval /
 // config / contract / run). Unknown classes fall back to muted.
 const CLASS_STYLES: Record<string, string> = {
-  agent: 'bg-destructive/10 text-destructive',
+  agent: 'bg-destructive/10 text-destructive-text',
   harness: 'bg-muted text-muted-foreground',
   sandbox: 'bg-warning/10 text-warning-text',
   node: 'bg-warning/10 text-warning-text',
   connector: 'bg-warning/10 text-warning-text',
   capacity: 'bg-primary/10 text-primary',
   provider: 'bg-warning/10 text-warning-text',
-  eval: 'bg-destructive/10 text-destructive',
+  eval: 'bg-destructive/10 text-destructive-text',
   config: 'bg-warning/10 text-warning-text',
   contract: 'bg-warning/10 text-warning-text',
   run: 'bg-muted text-muted-foreground',

@@ -157,7 +157,7 @@ describe('RunnersProfilesTab', () => {
     await flushPromises()
 
     expect(wrapper.find(`[data-testid="runner-profile-health-p-bundled"]`).text()).toBe('engine unreachable')
-    expect(wrapper.find(`[data-testid="runner-profile-health-p-bundled"]`).classes()).toContain('text-destructive')
+    expect(wrapper.find(`[data-testid="runner-profile-health-p-bundled"]`).classes()).toContain('text-destructive-text')
   })
 
   it('marks a bundled runner whose image is not pulled', async () => {
