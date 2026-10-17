@@ -118,6 +118,29 @@ class TestDeleteHousekeepingGroupDecisionBlock:
         session.delete.assert_awaited_once_with(found)
 
     @pytest.mark.asyncio
+    async def test_absent_row_is_not_counted(self) -> None:
+        """An id the org-scoped SELECT cannot find is a no-op, not a deletion.
+
+        ``delete_one_in_savepoint``'s SELECT matches ``id`` AND
+        ``organisation_id``; a missing / foreign-org id yields ``None``, so the
+        helper returns False and ``_delete_housekeeping_group``'s
+        count-only-after-release guard must leave the counter untouched
+        (FAR-1857). This is the False arm the FK-refusal tests never reach —
+        they find a row and fail later at the savepoint release.
+        """
+        errors: list[dict[str, str]] = []
+        session = _mock_session()
+        session.execute.return_value.scalar_one_or_none = MagicMock(return_value=None)
+
+        deleted = await _delete_housekeeping_group(
+            session, "pipelines", [str(uuid.uuid4())], Pipeline, uuid.uuid4(), errors
+        )
+
+        assert deleted == 0
+        assert not errors
+        session.delete.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_substring_guard_does_not_overclassify_unrelated_constraints(self) -> None:
         """Only constraint names matching the decision-record FK vocabulary (exact or
         by substring) get the blocked_with_reason treatment; anything else is generic."""
