@@ -467,8 +467,9 @@ async function writeMountDiagnostics(page: Page, route: string, reason: string):
   } finally {
     try {
       diagnosticsByPage.get(page)?.dispose()
-    } catch {
+    } catch (err) {
       // Listener teardown is best-effort; the page may already be gone.
+      console.warn(`[FAR-1890] listener teardown failed: ${describeError(err)}`)
     }
   }
 }
