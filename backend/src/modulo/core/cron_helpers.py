@@ -6410,8 +6410,16 @@ async def _terminalize_claim_cap_exhausted(
     unterminalisable (observed on prod: two eval runs wedged ``pending`` at
     ``claim_count = cap``, outside every sibling leg). At the cap the row is
     provably unrecoverable, so terminalising it is safe by the same argument as
-    the ``running`` leg — and the stale-heartbeat gate is still required, so a
-    ``pending`` row at ``cap - 1`` (still claimable) is left alone.
+    the ``running`` leg.
+
+    The recoverability boundary for a ``pending`` row is ``claim_count >=
+    :claim_cap`` — NOT the heartbeat arm. A ``pending`` row's ``heartbeat_at``
+    is normally NULL and the arm matches NULL (``heartbeat_at IS NULL OR
+    heartbeat_at < now() - ...``), so the heartbeat gate is effectively a
+    no-op for ``pending``; what leaves a still-claimable ``pending`` row at
+    ``cap - 1`` alone is the ``claim_count >= :claim_cap`` predicate on its
+    own. The heartbeat arm remains meaningful for ``running``, where a fresh
+    heartbeat evidences a live executor.
 
     FAR-746 batch cap: *max_rows* bounds the UPDATE per tick (see
     :func:`_terminalize_mid_graph_wedges`); overflow drains next tick.
@@ -7217,8 +7225,13 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         claim is never killed. The ``pending`` arm (FAR-1903) is safe because
         the claim UPDATE is gated ``AND claim_count < :claim_cap``: at the cap
         no claim can ever succeed, so the row is unrecoverable and would
-        otherwise wedge forever. A ``pending`` row at ``cap - 1`` is still
-        claimable and is left alone.
+        otherwise wedge forever. The recoverability boundary for a ``pending``
+        row is therefore ``claim_count >= cap`` — NOT the heartbeat arm, which
+        a ``pending`` row (``heartbeat_at`` NULL) satisfies by definition and
+        which no longer discriminates for ``pending``. A still-claimable
+        ``pending`` row at ``cap - 1`` is left alone by the ``claim_count >=
+        cap`` predicate, not the heartbeat arm; the arm still guards
+        ``running`` rows.
       * FAR-648 gate-expiry: any ``awaiting_human`` row whose every undecided
         gate is UNCLAIMED and past its review deadline (FAR-1257: the stamped
         ``hitl_claims.terminalize_at``, or for legacy unstamped rows
