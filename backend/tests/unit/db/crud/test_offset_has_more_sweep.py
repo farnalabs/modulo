@@ -441,3 +441,69 @@ async def test_final_offset_page_reports_no_more(session: AsyncSession, setup: S
     assert page.total == _COUNT
     assert len(page.items) == _COUNT - _PAGE_SIZE
     assert page.has_more is False
+
+
+# ---------------------------------------------------------------------------
+# FAR-1897: the ``source`` filter must narrow the COUNT, not only the rows.
+#
+# ``list_primitives`` used to narrow the org page to the requested source in
+# Python, AFTER ``list_library_primitives`` had already counted the unfiltered
+# page — so ``total`` (and therefore ``has_more``) described a different
+# universe from the rows actually returned. With 45 rows of which 45 matched
+# ``?source=local``, ``total`` was collapsed to the length of one page (20) and
+# ``has_more`` claimed there was nothing more, hiding two thirds of the library.
+# The filter now travels into the shared SQL ``conditions`` so the COUNT, the
+# row page and the cursor path all narrow together. These tests drive the REAL
+# CRUD function against in-memory SQLite, so the SQL filter is exercised for
+# real (a mocked session cannot see it).
+# ---------------------------------------------------------------------------
+
+_SOURCE_MIX: dict[str, int] = {"local": 3, "modulo": 2}
+
+
+async def _setup_library_primitives_mixed_source(session: AsyncSession) -> None:
+    # ``source='local'``/``'modulo'`` rows must leave every registry-only field
+    # NULL (ck_library_primitives_source_fields), which is the column default —
+    # so no explicit NULLs are needed here.
+    for source, count in _SOURCE_MIX.items():
+        for i in range(count):
+            session.add(
+                LibraryPrimitive(
+                    organisation_id=_ORG,
+                    source=source,
+                    primitive_type="agent",
+                    name=f"{source} primitive {i}",
+                    slug=f"{source}-primitive-{i}",
+                    author="tester",
+                    version="1.0.0",
+                    content_json={},
+                )
+            )
+    await session.flush()
+
+
+async def test_library_primitive_source_filter_narrows_count_and_rows(session: AsyncSession) -> None:
+    await _setup_library_primitives_mixed_source(session)
+
+    local_page = await list_library_primitives(session, org_id=_ORG, source="local", page=1, page_size=10)
+    modulo_page = await list_library_primitives(session, org_id=_ORG, source="modulo", page=1, page_size=10)
+
+    assert local_page.total == _SOURCE_MIX["local"]
+    assert [primitive.source for primitive in local_page.items] == ["local"] * _SOURCE_MIX["local"]
+    assert modulo_page.total == _SOURCE_MIX["modulo"]
+    assert [primitive.source for primitive in modulo_page.items] == ["modulo"] * _SOURCE_MIX["modulo"]
+
+
+async def test_library_primitive_source_filter_has_more_tracks_filtered_total(session: AsyncSession) -> None:
+    await _setup_library_primitives_mixed_source(session)
+
+    first_page = await list_library_primitives(session, org_id=_ORG, source="local", page=1, page_size=2)
+    final_page = await list_library_primitives(session, org_id=_ORG, source="local", page=2, page_size=2)
+    unfiltered_page = await list_library_primitives(session, org_id=_ORG, page=1, page_size=2)
+
+    assert first_page.total == _SOURCE_MIX["local"]
+    assert len(first_page.items) == 2
+    assert first_page.has_more is True
+    assert final_page.total == _SOURCE_MIX["local"]
+    assert final_page.has_more is False
+    assert unfiltered_page.total == sum(_SOURCE_MIX.values())

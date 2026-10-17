@@ -318,11 +318,10 @@ class FeedbackManager:
         pipeline_id: UUID | None = None,
         page: int = 1,
         page_size: int = _DEFAULT_PAGE_SIZE,
-        include_total: bool = True,
     ) -> dict[str, Any]:
         conditions = _build_org_scoped_conditions(self._org_id, status, pipeline_id)
-        rows, total = await paginate_feedback_records(self._session, conditions, page, page_size, include_total)
-        return _paginated_response(rows, total, page, page_size, include_total=include_total)
+        rows, total = await paginate_feedback_records(self._session, conditions, page, page_size)
+        return _paginated_response(rows, total, page, page_size)
 
     @_rls
     async def get_feedback_record(self, record_id: UUID) -> FeedbackRecord | None:
@@ -816,7 +815,6 @@ class FeedbackManager:
         date_to: datetime | None = None,
         page: int = 1,
         page_size: int = _DEFAULT_PAGE_SIZE,
-        include_total: bool = True,
     ) -> dict[str, Any]:
         conditions = _build_org_scoped_conditions(self._org_id, status, pipeline_id)
         if handler_type:
@@ -826,24 +824,21 @@ class FeedbackManager:
         if date_to:
             conditions.append(FeedbackRecord.created_at <= date_to)
 
-        rows, total = await paginate_feedback_records(self._session, conditions, page, page_size, include_total)
+        rows, total = await paginate_feedback_records(self._session, conditions, page, page_size)
         pipeline_map = await _enrich_with_pipeline_names(self._session, rows)
 
-        return _paginated_response(
-            rows, total, page, page_size, extra={"pipeline_map": pipeline_map}, include_total=include_total
-        )
+        return _paginated_response(rows, total, page, page_size, extra={"pipeline_map": pipeline_map})
 
     @_rls
     async def get_eval_proposals(
         self,
         page: int = 1,
         page_size: int = _DEFAULT_PAGE_SIZE,
-        include_total: bool = True,
     ) -> dict[str, Any]:
         conditions = [
             FeedbackRecord.organisation_id == self._org_id,
             FeedbackRecord.eval_gap.is_(True),
             FeedbackRecord.feedback_status.in_(["pending", "routing"]),
         ]
-        rows, total = await paginate_feedback_records(self._session, conditions, page, page_size, include_total)
-        return _paginated_response(rows, total, page, page_size, include_total=include_total)
+        rows, total = await paginate_feedback_records(self._session, conditions, page, page_size)
+        return _paginated_response(rows, total, page, page_size)
