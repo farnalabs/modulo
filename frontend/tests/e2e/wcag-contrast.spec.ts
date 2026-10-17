@@ -187,9 +187,16 @@ function jwtWithSub(sub: string): string {
   return `${header}.${payload}.mocked-signature`
 }
 
-test.describe('authenticated shell — sidebar profile links (FAR-1907)', { tag: "@regression" }, () => {
-  test('profile link names contain the visible text for a UUID sub', { tag: "@regression" }, async ({ page, env }) => {
-    test.skip(env.name !== 'local', 'Uses setupLocalMockApi — only runs locally')
+// Tagged @local-mock rather than @regression: these tests drive the
+// setupLocalMockApi target, so they run in the `Frontend and WCAG` CI job
+// (which selects this file by name, with the default local target) but must
+// NOT run in the deployed-build @regression gate. That gate checks out main
+// and runs against the live staging APIs; a mock-backed test there would
+// assert the runner's fixtures against the deployed bundle, and it would fail
+// for any branch whose fix is not yet deployed. A tag keeps that separation
+// declarative instead of leaving a runtime environment gate in the test body.
+test.describe('authenticated shell — sidebar profile links (FAR-1907)', { tag: "@local-mock" }, () => {
+  test('profile link names contain the visible text for a UUID sub', { tag: "@local-mock" }, async ({ page, env }) => {
     const { setupLocalMockApi, loginAsAdmin } = await import('./setup/fixtures')
     await setupLocalMockApi(page)
     await page.addInitScript(() => { try { localStorage.setItem('assistant-panel-state', 'closed') } catch (err) { console.warn(err) } })
@@ -229,8 +236,7 @@ test.describe('authenticated shell — sidebar profile links (FAR-1907)', { tag:
   })
 
   for (const path of AUTHENTICATED_ROUTES) {
-    test(`authenticated ${path} has no unexpected WCAG AA violations`, { tag: "@regression" }, async ({ page, env }) => {
-      test.skip(env.name !== 'local', 'Uses setupLocalMockApi — only runs locally')
+    test(`authenticated ${path} has no unexpected WCAG AA violations`, { tag: "@local-mock" }, async ({ page, env }) => {
       const { setupLocalMockApi, loginAsAdmin } = await import('./setup/fixtures')
       await setupLocalMockApi(page)
       await page.addInitScript(() => { try { localStorage.setItem('assistant-panel-state', 'closed') } catch (err) { console.warn(err) } })
