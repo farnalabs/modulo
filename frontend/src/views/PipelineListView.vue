@@ -41,23 +41,20 @@
         @move-pipeline="onMovePipeline"
       />
       <main class="flex-1 page-wide min-w-0 overflow-y-auto">
-        <!-- Folder-list load failure. Rendered as the first child of <main>
-             (never as a flex sibling of the sidebar, which would squeeze it into
-             a vertical column between the tree and the table) and as a live
-             region so a screen reader announces it. The failure is recoverable:
-             retry re-fetches; the table keeps rendering underneath.
-             This surface is md:hidden — the complement of FolderTree's
-             `hidden md:flex` — so exactly one folder-error live region is ever
-             visible/announced: the sidebar owns >=md, this one owns <md. It is
-             deliberately NOT dismissible: dismissing the first load failure
-             would strand the folder list empty with no retry until reload. -->
-        <ErrorAlert
+        <!-- Folder-list load failure. First child of <main> — never a flex
+             sibling of the sidebar, which would squeeze it into a vertical
+             column between the tree and the table. This is the <md owner of the
+             folder-error live region (the FolderTree sidebar owns >=md), hence
+             `gated`; the table keeps rendering underneath. The shared contract
+             — single live region, non-dismissible, retry re-fetches — lives in
+             FolderListError.vue. -->
+        <FolderListError
           v-if="folderError"
           :message="$t('views.PipelineListView.failed_to_load_folders', { error: folderError })"
           :on-retry="loadFolders"
-          class="mb-4 md:hidden"
-          role="alert"
-          data-testid="pipeline-list-folder-error"
+          gated
+          class="mb-4"
+          :data-testid="'pipeline-list-folder-error'"
         />
         <!-- retry = re-drop / re-save the move; banner is dismissible, no separate loader -->
         <ErrorAlert
@@ -431,6 +428,7 @@ import { useI18n } from 'vue-i18n'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import FolderTree from '../components/pipelines/FolderTree.vue'
+import FolderListError from '../components/pipelines/FolderListError.vue'
 import { useDataFetch } from '../composables/useDataFetch'
 import { usePlanStore } from '../stores/planStore'
 import { FOCUSABLE_SELECTOR, trapTabInElement } from '../composables/useFocusTrap'

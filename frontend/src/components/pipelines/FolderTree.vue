@@ -43,14 +43,14 @@
       </div>
 
       <div v-else-if="error" class="px-3 py-2">
-        <!-- Failure is recoverable: retry re-fetches (ErrorAlert supplies the
-             retry label). A live region so the bad shape is announced. -->
-        <ErrorAlert
+        <!-- Folder-list load failure inside the `hidden md:flex` sidebar, so it
+             is already >=md only (no `gated`). Failure is recoverable: retry
+             re-fetches. The shared contract lives in FolderListError.vue. -->
+        <FolderListError
           :message="error"
           :on-retry="loadFolders"
-          :compact="true"
-          role="alert"
-          data-testid="folder-tree-error"
+          compact
+          :data-testid="'folder-tree-error'"
         />
       </div>
 
@@ -195,6 +195,7 @@ import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import Select from '../shared/AppSelect.vue'
 import ErrorAlert from '../shared/ErrorAlert.vue'
+import FolderListError from './FolderListError.vue'
 
 interface FlatTreeItem {
   folder: FolderItem

@@ -3301,6 +3301,47 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     }
   })
 
+  it('clears the folder-error alert after a successful retry', async () => {
+    // Recovery path for the editor's folder-error surface: the load fails (the
+    // alert is visible), then Retry SUCCEEDS. loadFolders clears folderError on
+    // entry, so the alert unmounts and the recovered list is stored.
+    const recovered = [{ id: 'f-1', name: 'Prod', parent_id: null }]
+    let foldersResponse: () => Promise<unknown> = () =>
+      Promise.reject(new Error('folder backend down'))
+    useApiFns.get.mockImplementation((url: string) => {
+      if (url.includes('/lifecycle-maps')) return Promise.resolve([])
+      if (url.includes('/pipeline-folders')) return foldersResponse()
+      return Promise.resolve({ items: [] })
+    })
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      router.push('/pipelines/test-pipeline-id/editor')
+      await router.isReady()
+      const wrapper = await mountEditorLoaded()
+      const vm = wrapper.vm as any
+
+      // First attempt fails — the alert is visible.
+      await vm.loadFolders()
+      await flushPromises()
+      await nextTick()
+      expect(wrapper.find('[data-testid="pipeline-editor-folder-error"]').exists()).toBe(true)
+
+      // The retry succeeds — the fetch is re-invoked, the alert clears.
+      foldersResponse = () => Promise.resolve(recovered)
+      await wrapper
+        .find('[data-testid="pipeline-editor-folder-error"] [data-testid="error-alert-retry"]')
+        .trigger('click')
+      await flushPromises()
+      await nextTick()
+
+      expect(vm.folders).toEqual(recovered)
+      expect(wrapper.find('[data-testid="pipeline-editor-folder-error"]').exists()).toBe(false)
+      wrapper.unmount()
+    } finally {
+      consoleWarn.mockRestore()
+    }
+  })
+
   it('onParamSetChange selects a set and populates overrides', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()

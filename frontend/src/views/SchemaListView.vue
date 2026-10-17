@@ -22,19 +22,16 @@
       />
 
       <div class="flex-1 min-w-0">
-        <!-- Folder-list load failure. md:hidden is the complement of
-             FolderTree's `hidden md:flex`, so exactly one folder-error live
-             region is visible/announced per breakpoint (sidebar owns >=md,
-             this one owns <md) — the same contract as PipelineListView. It is
-             not dismissible: dismissing would strand the list empty with no
-             retry until reload. -->
-        <ErrorAlert
+        <!-- Folder-list load failure. The <md owner of the folder-error live
+             region (FolderTree's sidebar owns >=md), hence `gated`. The shared
+             contract — single live region, non-dismissible, retry re-fetches —
+             lives in FolderListError.vue. -->
+        <FolderListError
           v-if="folderError"
           :message="`${$t('views.SchemaListView.failed_to_load_folders')} ${folderError}`"
           :on-retry="loadFolders"
-          class="md:hidden"
-          role="alert"
-          data-testid="schema-list-folder-error"
+          gated
+          :data-testid="'schema-list-folder-error'"
         />
 
         <!-- Retry is deliberately omitted (retryable=false): a failed move can only
@@ -266,6 +263,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FolderTree from '../components/pipelines/FolderTree.vue'
+import FolderListError from '../components/pipelines/FolderListError.vue'
 import { ChevronRight, Folder, FolderOpen, MoreVertical } from '@lucide/vue'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'

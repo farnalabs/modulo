@@ -561,23 +561,19 @@
             </button>
           </div>
         </div>
-        <!-- Folder-list load failure. Rendered in-flow directly beneath the
-             toolbar — never absolutely positioned and never inside the
-             fixed-height canvas — because a degraded breadcrumb must not
-             replace the page with pageError, yet must still be visible.
-             Deliberately NOT breakpoint-gated (no md:hidden): the sibling
-             list views hide their alert at >=md only because they also render
-             FolderTree, whose own alert owns desktop; this view renders no
-             FolderTree, so a gate here would hide the failure on desktop —
-             exactly where it occurs. Deliberately NOT dismissible: dismissing
-             would strand a wrong/absent breadcrumb with no retry. -->
-        <ErrorAlert
+        <!-- Folder-list load failure. In-flow directly beneath the toolbar —
+             never absolutely positioned and never inside the fixed-height
+             canvas, because a degraded breadcrumb must not replace the page
+             with pageError yet must still be visible. NOT breakpoint-gated: this
+             view renders no FolderTree, so a gate would hide the failure at
+             >=md — exactly where it occurs. The shared contract lives in
+             FolderListError.vue. -->
+        <FolderListError
           v-if="folderError"
           :message="folderError"
           :on-retry="loadFolders"
           class="mx-3 my-2"
-          role="alert"
-          data-testid="pipeline-editor-folder-error"
+          :data-testid="'pipeline-editor-folder-error'"
         />
         <!-- FAR-1816: transient success notice after a restore. A plain toast
              would be unmounted the moment the view navigates back to latest,
@@ -1928,6 +1924,7 @@ import { usePlanStore } from '../stores/planStore'
 
 import FormDialog from '../components/shared/FormDialog.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import FolderListError from '../components/pipelines/FolderListError.vue'
 import FlowControls from '../components/shared/FlowControls.vue'
 import PipelineSnapshotTimeline from '../components/pipeline/PipelineSnapshotTimeline.vue'
 import PipelineVersionChip from '../components/pipeline/PipelineVersionChip.vue'
