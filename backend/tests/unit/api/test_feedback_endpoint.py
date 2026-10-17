@@ -269,24 +269,46 @@ class TestListFeedback:
         ):
             mock_list.return_value = {
                 "items": [mock_record],
-                "total": 1,
+                "total": 41,
                 "page": 1,
                 "page_size": 20,
+                "has_more": True,
             }
 
             resp = client.get("/api/v1/feedback")
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["total"] == 1
+        assert body["total"] == 41
         assert len(body["items"]) == 1
+        # The handler used to rebuild the envelope and drop ``has_more``; it must
+        # forward the manager's value untouched (FAR-1881).
+        assert body["has_more"] is True
+
+    def test_exposes_has_more_false_on_last_page(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_records") as mock_list,
+        ):
+            mock_list.return_value = {
+                "items": [_make_mock_record()],
+                "total": 21,
+                "page": 2,
+                "page_size": 20,
+                "has_more": False,
+            }
+
+            resp = client.get("/api/v1/feedback?page=2&page_size=20")
+
+        assert resp.status_code == 200
+        assert resp.json()["has_more"] is False
 
     def test_filters_by_status(self, client: TestClient) -> None:
         with (
             patch("modulo.api.routes.feedback.set_rls_org"),
             patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_records") as mock_list,
         ):
-            mock_list.return_value = {"items": [], "total": 0, "page": 1, "page_size": 20}
+            mock_list.return_value = {"items": [], "total": 0, "page": 1, "page_size": 20, "has_more": False}
 
             resp = client.get("/api/v1/feedback?status=pending")
 
@@ -294,6 +316,7 @@ class TestListFeedback:
         _, kwargs = mock_list.call_args
         assert kwargs.get("status") == "pending"
         assert resp.json()["total"] == 0
+        assert resp.json()["has_more"] is False
 
 
 class TestGetFeedback:
@@ -603,17 +626,19 @@ class TestListFeedbackInbox:
             mock_inbox.return_value = {
                 "items": [mock_record],
                 "pipeline_map": {},
-                "total": 1,
+                "total": 41,
                 "page": 1,
                 "page_size": 20,
+                "has_more": True,
             }
 
             resp = client.get("/api/v1/feedback/inbox")
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["total"] == 1
+        assert body["total"] == 41
         assert len(body["items"]) == 1
+        assert body["has_more"] is True
 
     def test_filters_by_type_and_status(self, client: TestClient) -> None:
         with (
@@ -626,12 +651,14 @@ class TestListFeedbackInbox:
                 "total": 0,
                 "page": 1,
                 "page_size": 20,
+                "has_more": False,
             }
 
             resp = client.get("/api/v1/feedback/inbox?type=human&status=pending")
 
         assert resp.status_code == 200
         assert resp.json()["total"] == 0
+        assert resp.json()["has_more"] is False
 
     def test_filters_by_date_range(self, client: TestClient) -> None:
         with (
@@ -644,6 +671,7 @@ class TestListFeedbackInbox:
                 "total": 0,
                 "page": 1,
                 "page_size": 20,
+                "has_more": False,
             }
 
             resp = client.get("/api/v1/feedback/inbox?date_from=2025-01-01T00:00:00&date_to=2025-12-31T23:59:59")
@@ -916,29 +944,32 @@ class TestListEvalProposals:
         ):
             mock_proposals.return_value = {
                 "items": [mock_record],
-                "total": 1,
+                "total": 41,
                 "page": 1,
                 "page_size": 20,
+                "has_more": True,
             }
 
             resp = client.get("/api/v1/feedback/proposals")
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["total"] == 1
+        assert body["total"] == 41
         assert len(body["items"]) == 1
+        assert body["has_more"] is True
 
     def test_returns_empty_when_no_proposals(self, client: TestClient) -> None:
         with (
             patch("modulo.api.routes.feedback.set_rls_org"),
             patch("modulo.api.routes.feedback.FeedbackManager.get_eval_proposals") as mock_proposals,
         ):
-            mock_proposals.return_value = {"items": [], "total": 0, "page": 1, "page_size": 20}
+            mock_proposals.return_value = {"items": [], "total": 0, "page": 1, "page_size": 20, "has_more": False}
 
             resp = client.get("/api/v1/feedback/proposals")
 
         assert resp.status_code == 200
         assert resp.json()["total"] == 0
+        assert resp.json()["has_more"] is False
 
 
 class TestPublishEvalProposal:

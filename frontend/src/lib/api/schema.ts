@@ -20557,7 +20557,7 @@ export interface components {
         };
         /**
          * SystemAuditEventPage
-         * @description Repo-standard offset page envelope (items / total / page / page_size).
+         * @description Repo-standard offset page envelope (items / total / page / page_size / has_more).
          */
         SystemAuditEventPage: {
             /** Items */
@@ -20568,6 +20568,11 @@ export interface components {
             page: number;
             /** Page Size */
             page_size: number;
+            /**
+             * Has More
+             * @default false
+             */
+            has_more: boolean;
         };
         /** TargetInjection */
         TargetInjection: {

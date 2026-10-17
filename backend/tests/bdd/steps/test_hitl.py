@@ -345,6 +345,7 @@ def get_feedback_list(client, request):
                 "total": 1,
                 "page": 1,
                 "page_size": 20,
+                "has_more": False,
             }
         )
         resp = client.get("/api/v1/feedback")
