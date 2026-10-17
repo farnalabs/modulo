@@ -97,18 +97,21 @@
             </button>
             <div v-if="!isViewing" class="relative" @click.stop @keydown.enter.stop @keydown.space.prevent.stop>
               <button
+                ref="saveAsDropdownTriggerRef"
                 type="button"
                 :class="btnToolbarSecondary"
                 :aria-expanded="showSaveAsDropdown"
                 aria-haspopup="menu"
                 data-testid="pipeline-editor-save-as-template"
-                @click="showSaveAsDropdown = !showSaveAsDropdown"
+                @click="toggleSaveAsDropdown()"
               >
                 {{ $t('views.PipelineEditorView.save_as_template') }}
               </button>
               <div
                 v-if="showSaveAsDropdown"
-                class="absolute left-0 top-full z-30 mt-1 w-48 rounded-lg border bg-card py-1 shadow-lg"
+                class="fixed z-30 max-h-[calc(100vh-1rem)] w-48 overflow-y-auto overscroll-contain rounded-lg border bg-card py-1 shadow-lg"
+                :style="saveAsDropdownStyle"
+                data-testid="pipeline-editor-save-as-dropdown"
               >
                 <button
                   type="button"
@@ -258,7 +261,8 @@
                 open
                 :id="autonomyPanelDialogId"
                 ref="autonomyPanelDialogRef"
-                class="absolute right-0 left-auto top-full z-50 mt-1 w-80 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-card p-3 shadow-lg"
+                class="fixed z-50 max-h-[calc(100vh-1rem)] w-80 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-lg border border-border bg-card p-3 shadow-lg"
+                :style="autonomyPanelStyle"
                 tabindex="-1"
                 :aria-label="$t('views.PipelineEditorView.autonomy_panel_title')"
                 data-testid="pipeline-editor-autonomy-panel-dialog"
@@ -374,7 +378,8 @@
                 open
                 :id="retryPolicyPanelId"
                 ref="retryPolicyPanelRef"
-                class="absolute right-0 left-auto top-full z-50 mt-1 w-72 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-card p-3 shadow-lg"
+                class="fixed z-50 max-h-[calc(100vh-1rem)] w-72 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-lg border border-border bg-card p-3 shadow-lg"
+                :style="retryPolicyPanelStyle"
                 tabindex="-1"
                 :aria-label="$t('views.PipelineEditorView.retry_policy')"
                 data-testid="pipeline-editor-retry-policy-panel"
@@ -533,7 +538,7 @@
                 option-label="label"
                 option-value="value"
                 class="toolbar-select w-40 text-xs"
-                append-to="self"
+                append-to="body"
                 :aria-label="$t('views.PipelineEditorView.new_node_type')"
                 :title="$t('views.PipelineEditorView.new_node_type_hint')"
                 data-testid="pipeline-editor-node-type-select"
@@ -710,8 +715,9 @@
               option-label="label"
               option-value="value"
               class="toolbar-select w-40 text-xs"
-              append-to="self"
+              append-to="body"
               :aria-label="$t('views.PipelineEditorView.new_node_type')"
+              data-testid="pipeline-editor-empty-node-type-select"
             />
             <Button severity="secondary" outlined size="small" type="button" class="text-xs" @click="addNode()">{{ $t('views.PipelineEditorView.add_node') }}</Button>
           </div>
@@ -1353,7 +1359,7 @@
   :aria-label="$t('views.PipelineEditorView.edge_type')"
   v-model="edgeForm.edge_type"
   :disabled="isViewing"
-  append-to="self"
+  append-to="body"
   :placeholder="$t('views.PipelineEditorView.normal')"
   class="w-full"
   :options="[{ value: 'normal', label: $t('views.PipelineEditorView.normal') }, { value: 'reject', label: $t('views.PipelineEditorView.reject') }, { value: 'conditional', label: $t('views.PipelineEditorView.conditional') }, { value: 'loop', label: $t('views.PipelineEditorView.loop') }, { value: 'llm', label: $t('views.PipelineEditorView.llm_routing') }]"
@@ -1485,7 +1491,7 @@
   :aria-label="$t('views.PipelineEditorView.condition_type')"
   v-model="edgeForm.condition_type"
   :disabled="isViewing"
-  append-to="self"
+  append-to="body"
   :placeholder="$t('views.PipelineEditorView.none_always_gate')"
   class="w-full"
   :options="[{ value: 'none', label: $t('views.PipelineEditorView.none_always_gate') }, { value: 'jmespath', label: $t('views.PipelineEditorView.jmespath_expression') }, { value: 'eval', label: $t('views.PipelineEditorView.eval_reference') }]"
@@ -1538,7 +1544,7 @@
   :aria-label="$t('views.PipelineEditorView.operator')"
   v-model="edgeForm.eval_operator"
   :disabled="isViewing"
-  append-to="self"
+  append-to="body"
   :placeholder="$t('views.PipelineEditorView.eval_operator_placeholder')"
   class="w-full"
   :options="[{ value: 'lt', label: $t('views.PipelineEditorView.eval_operator_lt') }, { value: 'gt', label: $t('views.PipelineEditorView.eval_operator_gt') }, { value: 'lte', label: $t('views.PipelineEditorView.eval_operator_lte') }, { value: 'gte', label: $t('views.PipelineEditorView.eval_operator_gte') }, { value: 'eq', label: $t('views.PipelineEditorView.eval_operator_eq') }, { value: 'neq', label: $t('views.PipelineEditorView.eval_operator_neq') }]"
@@ -1987,6 +1993,8 @@ const singlePrPerRun = computed<boolean>({
 })
 const selectedEdgeData = ref<any | null>(null)
 const showSaveAsDropdown = ref(false)
+const saveAsDropdownTriggerRef = ref<HTMLButtonElement | null>(null)
+const saveAsDropdownStyle = ref<Record<string, string>>({})
 const nodeTypes = { agent: 'agent', manual: 'manual', router: 'router', hitl: 'hitl', dispatch: 'dispatch' }
 const { fitView, onPaneReady } = useVueFlow()
 
@@ -2166,6 +2174,76 @@ const ownerlessGateAdvisory = computed(() => {
   return !selectedEdgeData.value.hitl_review_config?.required_team_id
 })
 
+/**
+ * Viewport-anchored positioning for the toolbar popovers (FAR-1899).
+ *
+ * FAR-1861 made the editor content column the internal scroll container
+ * (`overflow-y-auto`) and clipped the editor root (`overflow-hidden`). A
+ * popover that stays in-tree is therefore clipped to the column's box, which
+ * in the sub-fit band (a viewport shorter than the wrapped toolbar's
+ * min-content height) is only a few pixels tall — the panel is reachable by
+ * scrolling the column but can never be seen whole. A `position: fixed`
+ * popover escapes that clipping (no ancestor establishes a containing block
+ * for it — the editor root only sets height), so it is anchored to the
+ * trigger's viewport rect and its height clamped to the room actually
+ * available: the panel scrolls its own content rather than being cut off.
+ * Returns {} when the trigger ref is not bound yet (jsdom mounts), leaving the
+ * CSS class fallback in charge.
+ *
+ * `preferredWidth` is the panel's CSS width in px (w-80 = 320, w-72 = 288,
+ * w-48 = 192), clamped here by the same `max-w-[calc(100vw-1rem)]` the class
+ * applies. With the default `align: 'right'` the panel is RIGHT-aligned to the
+ * trigger's right edge; when that would push its LEFT edge off-screen (a
+ * trigger near the left edge — the w-80/w-72 panels are wider than the room
+ * left of a left-edge trigger), it falls back to LEFT-anchoring with the left
+ * edge clamped inside the margin, so both edges stay on screen. `align: 'left'`
+ * (the save-as-template menu, which hangs off the left edge of its trigger)
+ * always left-anchors, clamping the left edge inside the margin so a trigger
+ * near the right edge does not push the panel off-screen.
+ */
+function anchoredPopoverStyle(
+  trigger: HTMLElement | null,
+  preferredWidth: number,
+  align: 'left' | 'right' = 'right',
+): Record<string, string> {
+  if (!trigger) return {}
+  const rect = trigger.getBoundingClientRect()
+  const margin = 8
+  const gap = 4
+  const spaceBelow = window.innerHeight - rect.bottom - gap - margin
+  const spaceAbove = rect.top - gap - margin
+  // Stay below unless that leaves less than a usable panel AND there is
+  // genuinely more room above (so a tall viewport keeps the familiar
+  // below-the-trigger placement).
+  const openUp = spaceBelow < 160 && spaceAbove > spaceBelow
+  const available = openUp ? spaceAbove : spaceBelow
+  const maxHeight = Math.max(120, Math.min(available, window.innerHeight - margin * 2))
+  // Effective panel width: the class width, capped by the viewport cap.
+  const width = Math.min(preferredWidth, window.innerWidth - margin * 2)
+  let left: string
+  let right: string
+  if (align === 'left') {
+    // Left-anchored to the trigger's left edge, clamped inside the margin.
+    left = `${Math.max(margin, Math.min(rect.left, window.innerWidth - margin - width))}px`
+    right = 'auto'
+  } else {
+    // Right-aligned by default; left-anchor when the panel would overflow the
+    // left edge (a trigger within one panel-width of the viewport's left edge).
+    const overflowsLeft = rect.right - width < margin
+    left = overflowsLeft
+      ? `${Math.max(margin, Math.min(rect.left, window.innerWidth - margin - width))}px`
+      : 'auto'
+    right = overflowsLeft ? 'auto' : `${Math.max(margin, window.innerWidth - rect.right)}px`
+  }
+  return {
+    left,
+    right,
+    top: openUp ? 'auto' : `${rect.bottom + gap}px`,
+    bottom: openUp ? `${Math.max(margin, window.innerHeight - rect.top + gap)}px` : 'auto',
+    maxHeight: `${maxHeight}px`,
+  }
+}
+
 const retryPolicyOpen = ref(false)
 const retryPolicySaving = ref(false)
 // FAR-649: coverage mode. 'all' = All errors (the default; saves the policy
@@ -2181,8 +2259,31 @@ const retryPolicyLegacyBackoff = ref<number | undefined>(undefined)
 const retryPolicyError = ref<string | null>(null)
 const retryPolicyToggleRef = ref<HTMLButtonElement | null>(null)
 const retryPolicyPanelRef = ref<HTMLElement | null>(null)
+const retryPolicyPanelStyle = ref<Record<string, string>>({})
 const retryPolicyToggleId = 'pipeline-editor-retry-policy-toggle'
 const retryPolicyPanelId = 'pipeline-editor-retry-policy-panel'
+
+// Panel widths in px for the horizontal clamp: `w-72` = 18rem, `w-80` = 20rem
+// (16px root). Keep in sync with the class on each panel.
+const RETRY_POLICY_PANEL_WIDTH = 288
+const AUTONOMY_PANEL_WIDTH = 320
+
+function positionRetryPolicyPanel() {
+  retryPolicyPanelStyle.value = anchoredPopoverStyle(retryPolicyToggleRef.value, RETRY_POLICY_PANEL_WIDTH)
+}
+
+// Capture phase: scroll does not bubble, so this also catches the content
+// column's own scroll while the panel is open (keeping it pinned to its
+// trigger) — not just the window's.
+function bindRetryPolicyPositioning() {
+  document.addEventListener('scroll', positionRetryPolicyPanel, true)
+  window.addEventListener('resize', positionRetryPolicyPanel)
+}
+
+function unbindRetryPolicyPositioning() {
+  document.removeEventListener('scroll', positionRetryPolicyPanel, true)
+  window.removeEventListener('resize', positionRetryPolicyPanel)
+}
 const retryPolicyOptions = [
   { value: 'stall', labelKey: 'views.PipelineEditorView.retry_policy_stall' },
   { value: 'timeout', labelKey: 'views.PipelineEditorView.retry_policy_timeout' },
@@ -2322,15 +2423,19 @@ function syncRetryPolicyFromPipeline() {
 }
 
 function toggleRetryPolicy() {
-  retryPolicyOpen.value = !retryPolicyOpen.value
   if (retryPolicyOpen.value) {
-    syncRetryPolicyFromPipeline()
-    nextTick(() => {
-      retryPolicyPanelRef.value?.focus()
-    })
-  } else {
+    retryPolicyOpen.value = false
     retryPolicyToggleRef.value?.focus()
+    return
   }
+  syncRetryPolicyFromPipeline()
+  // Anchor BEFORE the panel paints so it never flashes at its static
+  // in-column position for a frame.
+  positionRetryPolicyPanel()
+  retryPolicyOpen.value = true
+  nextTick(() => {
+    retryPolicyPanelRef.value?.focus()
+  })
 }
 
 function closeRetryPolicy() {
@@ -2348,13 +2453,16 @@ function onRetryPolicyKeydown(event: KeyboardEvent) {
 watch(retryPolicyOpen, (open) => {
   if (open) {
     document.addEventListener('keydown', onRetryPolicyKeydown)
+    bindRetryPolicyPositioning()
   } else {
     document.removeEventListener('keydown', onRetryPolicyKeydown)
+    unbindRetryPolicyPositioning()
   }
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onRetryPolicyKeydown)
+  unbindRetryPolicyPositioning()
 })
 
 // FAR-1696 (ADR 043 S5): progressive-autonomy panel popover. Same
@@ -2365,16 +2473,34 @@ const autonomyPanelDialogId = 'pipeline-editor-autonomy-panel-dialog'
 const autonomyPanelOpen = ref(false)
 const autonomyPanelToggleRef = ref<HTMLButtonElement | null>(null)
 const autonomyPanelDialogRef = ref<HTMLDialogElement | null>(null)
+const autonomyPanelStyle = ref<Record<string, string>>({})
+
+function positionAutonomyPanel() {
+  autonomyPanelStyle.value = anchoredPopoverStyle(autonomyPanelToggleRef.value, AUTONOMY_PANEL_WIDTH)
+}
+
+function bindAutonomyPanelPositioning() {
+  document.addEventListener('scroll', positionAutonomyPanel, true)
+  window.addEventListener('resize', positionAutonomyPanel)
+}
+
+function unbindAutonomyPanelPositioning() {
+  document.removeEventListener('scroll', positionAutonomyPanel, true)
+  window.removeEventListener('resize', positionAutonomyPanel)
+}
 
 function toggleAutonomyPanel() {
-  autonomyPanelOpen.value = !autonomyPanelOpen.value
   if (autonomyPanelOpen.value) {
-    nextTick(() => {
-      autonomyPanelDialogRef.value?.focus()
-    })
-  } else {
+    autonomyPanelOpen.value = false
     autonomyPanelToggleRef.value?.focus()
+    return
   }
+  // Same FAR-1899 anchor-before-paint as the retry-policy panel above.
+  positionAutonomyPanel()
+  autonomyPanelOpen.value = true
+  nextTick(() => {
+    autonomyPanelDialogRef.value?.focus()
+  })
 }
 
 function closeAutonomyPanel() {
@@ -2392,13 +2518,81 @@ function onAutonomyPanelKeydown(event: KeyboardEvent) {
 watch(autonomyPanelOpen, (open) => {
   if (open) {
     document.addEventListener('keydown', onAutonomyPanelKeydown)
+    bindAutonomyPanelPositioning()
   } else {
     document.removeEventListener('keydown', onAutonomyPanelKeydown)
+    unbindAutonomyPanelPositioning()
   }
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onAutonomyPanelKeydown)
+  unbindAutonomyPanelPositioning()
+})
+
+// FAR-1899 follow-up: the save-as-template menu is a plain in-tree popover in
+// the SAME clipped content column as the retry-policy and autonomy panels, so
+// it carries the same sub-fit clipping (FAR-1861). It gets the same
+// `position: fixed` viewport anchoring, but LEFT-anchored (the menu hangs off
+// the left edge of its trigger) rather than right-aligned like the panels —
+// hence the explicit `align`. `w-48` = 12rem = 192px (16px root); keep in sync
+// with the class on the menu.
+const SAVE_AS_DROPDOWN_WIDTH = 192
+
+function positionSaveAsDropdown() {
+  saveAsDropdownStyle.value = anchoredPopoverStyle(saveAsDropdownTriggerRef.value, SAVE_AS_DROPDOWN_WIDTH, 'left')
+}
+
+function bindSaveAsDropdownPositioning() {
+  document.addEventListener('scroll', positionSaveAsDropdown, true)
+  window.addEventListener('resize', positionSaveAsDropdown)
+}
+
+function unbindSaveAsDropdownPositioning() {
+  document.removeEventListener('scroll', positionSaveAsDropdown, true)
+  window.removeEventListener('resize', positionSaveAsDropdown)
+}
+
+function toggleSaveAsDropdown() {
+  if (showSaveAsDropdown.value) {
+    closeSaveAsDropdown()
+    return
+  }
+  // Anchor before paint so the menu never flashes at its static in-column
+  // position for a frame (same FAR-1899 anchor-before-paint as the panels).
+  positionSaveAsDropdown()
+  showSaveAsDropdown.value = true
+}
+
+// FAR-1899 review note: the save-as menu was the only toolbar popover without
+// an Escape handler, so a keyboard user had to reach the toggle (or pick an
+// item) to dismiss it. Same open/Escape/focus-return shape as the retry-policy
+// and autonomy panels: Escape closes it and returns focus to the toggle.
+function closeSaveAsDropdown() {
+  showSaveAsDropdown.value = false
+  saveAsDropdownTriggerRef.value?.focus()
+}
+
+function onSaveAsDropdownKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && showSaveAsDropdown.value) {
+    event.preventDefault()
+    closeSaveAsDropdown()
+  }
+}
+
+watch(showSaveAsDropdown, (open) => {
+  if (open) {
+    document.addEventListener('keydown', onSaveAsDropdownKeydown)
+    bindSaveAsDropdownPositioning()
+  } else {
+    document.removeEventListener('keydown', onSaveAsDropdownKeydown)
+    unbindSaveAsDropdownPositioning()
+  }
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onSaveAsDropdownKeydown)
+  unbindSaveAsDropdownPositioning()
 })
 
 // A manual demote/promote writes earned_autonomy_level server-side; refetch

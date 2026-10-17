@@ -3663,6 +3663,9 @@ elements:
       - testid: pipeline-editor-save-as-template
         type: button
         dynamic_testid: false
+      - testid: pipeline-editor-save-as-dropdown
+        type: element
+        dynamic_testid: false
       - testid: pipeline-editor-toolbar-group-run
         type: element
         dynamic_testid: false
@@ -3691,6 +3694,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: pipeline-editor-node-type-select
+        type: select
+        dynamic_testid: false
+      - testid: pipeline-editor-empty-node-type-select
         type: select
         dynamic_testid: false
       - testid: pipeline-editor-add-node
