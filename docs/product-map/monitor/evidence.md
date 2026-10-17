@@ -6,7 +6,7 @@ code:
   - backend/src/modulo/api/routes/evidence.py
   - backend/src/modulo/core/evidence_redaction.py
   - backend/src/modulo/db/models/evidence_redaction_rule.py
-  - backend/src/modulo/db/migrations/versions/0319_evidence_redaction_rules.py
+  - backend/src/modulo/db/migrations/versions/0320_evidence_redaction_rules.py
   - frontend/src/views/EvidenceView.vue
 unit-tests:
   - backend/tests/unit/api/test_evidence_routes.py
@@ -46,7 +46,7 @@ The `/evidence` route renders under the MONITOR sidebar group.
       `evidence.redaction.manage` (admin) via `require_system_or_org_admin`,
       with unknown redaction classes rejected 422 (a rule can never be a silent
       no-op); writes are audited (`evidence_redaction_rule_upserted`)
-- [x] Migration `0319_evidence_redaction_rules` creates `evidence_redaction_rules`
+- [x] Migration `0320_evidence_redaction_rules` creates `evidence_redaction_rules`
       (OrgScoped + soft-delete, `UNIQUE (organisation_id, key_pattern, role)`,
       role CHECK in admin/operator/viewer), applies the four-step RLS pattern,
       and seeds the mandatory catch-all row `key_pattern='*'` / `role='viewer'` /

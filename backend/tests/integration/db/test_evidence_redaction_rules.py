@@ -43,7 +43,7 @@ _MIGRATION_PATH = (
     / "db"
     / "migrations"
     / "versions"
-    / "0319_evidence_redaction_rules.py"
+    / "0320_evidence_redaction_rules.py"
 )
 
 _BOTH_CLASSES = frozenset({"sensitive_output", "internal_metadata"})
@@ -61,7 +61,7 @@ async def _create_org(db_engine: AsyncEngine) -> uuid.UUID:
 
 
 def _load_migration() -> Any:
-    spec = importlib.util.spec_from_file_location("mig_0319_evidence_redaction_rules", _MIGRATION_PATH)
+    spec = importlib.util.spec_from_file_location("mig_0320_evidence_redaction_rules", _MIGRATION_PATH)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
