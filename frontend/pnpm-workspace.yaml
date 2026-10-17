@@ -193,3 +193,5 @@ minimumReleaseAgeExclude:
   - '@datadog/browser-rum@7.16.0'
   - '@datadog/js-core@0.0.17'
   - '@axe-core/playwright@4.14.0'
+  - '@lucide/vue@1.58.0'
+  - 'eslint@10.13.0'
