@@ -76,22 +76,24 @@ async def get_library_primitive(session: AsyncSession, primitive_id: uuid.UUID) 
     return result.scalar_one_or_none()
 
 
-async def list_library_primitives(
-    session: AsyncSession,
+def _build_list_conditions(
     *,
-    org_id: uuid.UUID | None = None,
-    page: int = 1,
-    page_size: int = 20,
-    primitive_type: str | None = None,
-    primitive_types: list[str] | None = None,
-    search: str | None = None,
-    source: str | None = None,
-    cursor: str | None = None,
-    excluded_tiers: list[str] | None = None,
-) -> PageResult[LibraryPrimitive]:
+    org_id: uuid.UUID | None,
+    primitive_type: str | None,
+    primitive_types: list[str] | None,
+    search: str | None,
+    source: str | None,
+    excluded_tiers: list[str] | None,
+) -> list[ColumnElement[bool]]:
+    """Build the WHERE predicates shared by the cursor and offset list paths.
 
-    if excluded_tiers is None:
-        excluded_tiers = ["in_dev"]
+    Both branches narrow with exactly this chain, so the COUNT, the offset row
+    page and the keyset page all describe the same universe.
+
+    The returned list always holds at least the soft-delete predicate, so
+    callers may apply ``.where(*conditions)`` unconditionally.
+    """
+    tiers = ["in_dev"] if excluded_tiers is None else excluded_tiers
 
     conditions: list[ColumnElement[bool]] = [LibraryPrimitive.deleted_at.is_(None)]
 
@@ -113,35 +115,49 @@ async def list_library_primitives(
         # Python-side post-filter cannot make ``total`` exact.
         conditions.append(LibraryPrimitive.source == source)
 
-    if excluded_tiers:
-        conditions.append(~LibraryPrimitive.tier.in_(excluded_tiers))
+    if tiers:
+        conditions.append(~LibraryPrimitive.tier.in_(tiers))
 
-    if cursor is not None:
-        paginator = CursorPaginator()
-        stmt = select(LibraryPrimitive)
-        if conditions:
-            stmt = stmt.where(*conditions)
-        cp = await paginator.paginate(
-            session,
-            stmt,
-            cursor=cursor,
-            limit=page_size,
-            model=LibraryPrimitive,
-            compute_total=True,
-        )
-        return PageResult(
-            items=cp.items,
-            total=cp.total or 0,
-            page=page,
-            page_size=page_size,
-            next_cursor=cp.next_cursor,
-            has_more=cp.has_more,
-        )
+    return conditions
 
+
+async def _page_by_cursor(
+    session: AsyncSession,
+    *,
+    conditions: list[ColumnElement[bool]],
+    cursor: str,
+    page: int,
+    page_size: int,
+) -> PageResult[LibraryPrimitive]:
+    paginator = CursorPaginator()
+    stmt = select(LibraryPrimitive).where(*conditions)
+    cp = await paginator.paginate(
+        session,
+        stmt,
+        cursor=cursor,
+        limit=page_size,
+        model=LibraryPrimitive,
+        compute_total=True,
+    )
+    return PageResult(
+        items=cp.items,
+        total=cp.total or 0,
+        page=page,
+        page_size=page_size,
+        next_cursor=cp.next_cursor,
+        has_more=cp.has_more,
+    )
+
+
+async def _page_by_offset(
+    session: AsyncSession,
+    *,
+    conditions: list[ColumnElement[bool]],
+    page: int,
+    page_size: int,
+) -> PageResult[LibraryPrimitive]:
     try:
-        count_stmt = select(func.count()).select_from(LibraryPrimitive)
-        if conditions:
-            count_stmt = count_stmt.where(*conditions)
+        count_stmt = select(func.count()).select_from(LibraryPrimitive).where(*conditions)
         total = (await session.execute(count_stmt)).scalar_one()
     except SQLAlchemyError:
         logger.exception("count query failed")
@@ -150,11 +166,12 @@ async def list_library_primitives(
     offset = (page - 1) * page_size
     try:
         items_stmt = (
-            select(LibraryPrimitive).order_by(LibraryPrimitive.created_at.desc()).offset(offset).limit(page_size)
+            select(LibraryPrimitive)
+            .where(*conditions)
+            .order_by(LibraryPrimitive.created_at.desc())
+            .offset(offset)
+            .limit(page_size)
         )
-        if conditions:
-            items_stmt = items_stmt.where(*conditions)
-
         items = list((await session.execute(items_stmt)).scalars())
     except SQLAlchemyError:
         logger.exception("items query failed")
@@ -162,6 +179,41 @@ async def list_library_primitives(
 
     has_more = (offset + len(items)) < total
     return PageResult(items=items, total=total, page=page, page_size=page_size, has_more=has_more)
+
+
+async def list_library_primitives(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID | None = None,
+    page: int = 1,
+    page_size: int = 20,
+    primitive_type: str | None = None,
+    primitive_types: list[str] | None = None,
+    search: str | None = None,
+    source: str | None = None,
+    cursor: str | None = None,
+    excluded_tiers: list[str] | None = None,
+) -> PageResult[LibraryPrimitive]:
+
+    conditions = _build_list_conditions(
+        org_id=org_id,
+        primitive_type=primitive_type,
+        primitive_types=primitive_types,
+        search=search,
+        source=source,
+        excluded_tiers=excluded_tiers,
+    )
+
+    if cursor is not None:
+        return await _page_by_cursor(
+            session,
+            conditions=conditions,
+            cursor=cursor,
+            page=page,
+            page_size=page_size,
+        )
+
+    return await _page_by_offset(session, conditions=conditions, page=page, page_size=page_size)
 
 
 async def create_library_primitive(
