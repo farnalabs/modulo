@@ -339,7 +339,7 @@ describe('SchemaListView', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    const alert = wrapper.find('[data-testid="error-alert"]')
+    const alert = wrapper.find('[data-testid="schema-list-folder-error"]')
     expect(alert.exists()).toBe(true)
     expect(alert.text()).toContain('Failed to load folders')
     expect(alert.text()).toContain('boom')
@@ -358,7 +358,7 @@ describe('SchemaListView', () => {
     await flushPromises()
     expect(getMock.mock.calls.length).toBeGreaterThan(getCallCountBefore)
     // loadFolders clears folderError on entry, so the alert unmounts.
-    expect(wrapper.find('[data-testid="error-alert"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="schema-list-folder-error"]').exists()).toBe(false)
   })
 
   it('does not offer a dismiss control on the folder-load failure alert (FAR-1655, revised)', async () => {
@@ -373,7 +373,7 @@ describe('SchemaListView', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    const alert = wrapper.find('[data-testid="error-alert"]')
+    const alert = wrapper.find('[data-testid="schema-list-folder-error"]')
     expect(alert.exists()).toBe(true)
     expect(alert.find('[data-testid="error-alert-dismiss"]').exists()).toBe(false)
     // Retry is the only recovery affordance, and it is present.
@@ -382,7 +382,35 @@ describe('SchemaListView', () => {
     // The alert stays put — the failure cannot be dismissed away.
     await nextTick()
     await flushPromises()
-    expect(wrapper.find('[data-testid="error-alert"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="schema-list-folder-error"]').exists()).toBe(true)
+  })
+
+  it('updates the folder-error message when a retry fails differently', async () => {
+    // First get() is the FolderTree's own fetch; the second is loadFolders.
+    getMock.mockResolvedValueOnce([
+      { id: 'folder-1', organisation_id: 'org-1', name: 'Analytics', parent_id: null, sort_order: 0 },
+    ])
+    getMock.mockRejectedValueOnce(new Error('boom'))
+    const wrapper = mountView()
+    await flushPromises()
+
+    const alert = wrapper.find('[data-testid="schema-list-folder-error"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('Failed to load folders: boom')
+
+    // The retry fails DIFFERENTLY — the message must track the latest failure,
+    // not stay frozen at the first one.
+    getMock.mockRejectedValueOnce(new Error('second boom'))
+    const getCallCountBefore = getMock.mock.calls.length
+    await alert.find('[data-testid="error-alert-retry"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(getMock.mock.calls.length).toBeGreaterThan(getCallCountBefore)
+    const alertAfter = wrapper.find('[data-testid="schema-list-folder-error"]')
+    expect(alertAfter.exists()).toBe(true)
+    expect(alertAfter.text()).toContain('second boom')
+    expect(alertAfter.text()).not.toContain('Failed to load folders: boom')
   })
 
   it('splits the folder-error live region by breakpoint: main-panel alert is md:hidden, the sidebar alert is not', async () => {
@@ -394,13 +422,11 @@ describe('SchemaListView', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    const mainAlert = wrapper
-      .findAll('[data-testid="error-alert"]')
-      .find(a => a.text().includes('Failed to load folders'))
-    expect(mainAlert).toBeDefined()
-    expect(mainAlert!.attributes('role')).toBe('alert')
-    expect(mainAlert!.classes()).toContain('md:hidden')
-    expect(mainAlert!.find('[data-testid="error-alert-dismiss"]').exists()).toBe(false)
+    const mainAlert = wrapper.find('[data-testid="schema-list-folder-error"]')
+    expect(mainAlert.exists()).toBe(true)
+    expect(mainAlert.attributes('role')).toBe('alert')
+    expect(mainAlert.classes()).toContain('md:hidden')
+    expect(mainAlert.find('[data-testid="error-alert-dismiss"]').exists()).toBe(false)
 
     const sidebarAlert = wrapper.find('[data-testid="folder-tree-error"]')
     expect(sidebarAlert.exists()).toBe(true)

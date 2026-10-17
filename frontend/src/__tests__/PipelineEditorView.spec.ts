@@ -3185,6 +3185,122 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     }
   })
 
+  it('surfaces a bad folder-list shape as a retryable, non-dismissible alert with no breakpoint gate', async () => {
+    useApiFns.get.mockImplementation((url: string) => {
+      if (url.includes('/lifecycle-maps')) return Promise.resolve([])
+      if (url.includes('/pipeline-folders')) return Promise.resolve({ items: [{ id: 'f-1', name: 'Prod', parent_id: null }] })
+      return Promise.resolve({ items: [] })
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      router.push('/pipelines/test-pipeline-id/editor')
+      await router.isReady()
+      const wrapper = await mountEditorLoaded()
+      const vm = wrapper.vm as any
+      // Seed a valid list first so "left intact" has something to preserve.
+      const seededFolders = [{ id: 'f-0', name: 'Kept', parent_id: null }]
+      vm.folders = seededFolders
+      await vm.loadFolders()
+      await flushPromises()
+      await nextTick()
+
+      const alert = wrapper.find('[data-testid="pipeline-editor-folder-error"]')
+      expect(alert.exists()).toBe(true)
+      expect(alert.attributes('role')).toBe('alert')
+      expect(alert.text()).toContain('The server returned an invalid folder list.')
+      // Recoverable: retry re-invokes the loader.
+      expect(alert.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+      // Not dismissible: dismissing would strand a degraded breadcrumb with no
+      // retry until reload.
+      expect(alert.find('[data-testid="error-alert-dismiss"]').exists()).toBe(false)
+      // NO breakpoint gate. The sibling list views are md:hidden only because
+      // they also render FolderTree, whose own alert owns >=md; this view
+      // renders no FolderTree, so a gate here would hide the failure on
+      // desktop — exactly where the bug occurs.
+      expect(alert.classes()).not.toContain('md:hidden')
+      // A bad shape is never coerced to [] — the previous list survives.
+      expect(vm.folders).toEqual(seededFolders)
+      wrapper.unmount()
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it('surfaces a network folder-list failure with the API error text', async () => {
+    useApiFns.get.mockImplementation((url: string) => {
+      if (url.includes('/lifecycle-maps')) return Promise.resolve([])
+      if (url.includes('/pipeline-folders')) return Promise.reject(new Error('folder backend down'))
+      return Promise.resolve({ items: [] })
+    })
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      router.push('/pipelines/test-pipeline-id/editor')
+      await router.isReady()
+      const wrapper = await mountEditorLoaded()
+      const vm = wrapper.vm as any
+      await vm.loadFolders()
+      await flushPromises()
+      await nextTick()
+
+      const alert = wrapper.find('[data-testid="pipeline-editor-folder-error"]')
+      expect(alert.exists()).toBe(true)
+      expect(alert.text()).toContain('folder backend down')
+      expect(alert.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+      expect(alert.find('[data-testid="error-alert-dismiss"]').exists()).toBe(false)
+      wrapper.unmount()
+    } finally {
+      consoleWarn.mockRestore()
+    }
+  })
+
+  it('updates the folder-error message when a retry fails differently', async () => {
+    let foldersResponse: () => Promise<unknown> = () =>
+      Promise.resolve({ items: [{ id: 'f-1', name: 'Prod', parent_id: null }] })
+    useApiFns.get.mockImplementation((url: string) => {
+      if (url.includes('/lifecycle-maps')) return Promise.resolve([])
+      if (url.includes('/pipeline-folders')) return foldersResponse()
+      return Promise.resolve({ items: [] })
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      router.push('/pipelines/test-pipeline-id/editor')
+      await router.isReady()
+      const wrapper = await mountEditorLoaded()
+      const vm = wrapper.vm as any
+      const folderCalls = () =>
+        useApiFns.get.mock.calls.filter(c => String(c[0]).includes('/pipeline-folders')).length
+
+      // First attempt: a bad shape.
+      await vm.loadFolders()
+      await flushPromises()
+      await nextTick()
+      expect(wrapper.find('[data-testid="pipeline-editor-folder-error"]').text()).toContain(
+        'The server returned an invalid folder list.',
+      )
+
+      // The retry fails DIFFERENTLY (the network path) — the message must
+      // track the latest failure, not stay frozen at the first one.
+      foldersResponse = () => Promise.reject(new Error('folder backend down'))
+      const before = folderCalls()
+      await wrapper
+        .find('[data-testid="pipeline-editor-folder-error"] [data-testid="error-alert-retry"]')
+        .trigger('click')
+      await flushPromises()
+      await nextTick()
+
+      expect(folderCalls()).toBe(before + 1)
+      const alertAfter = wrapper.find('[data-testid="pipeline-editor-folder-error"]')
+      expect(alertAfter.exists()).toBe(true)
+      expect(alertAfter.text()).toContain('folder backend down')
+      expect(alertAfter.text()).not.toContain('The server returned an invalid folder list.')
+      wrapper.unmount()
+    } finally {
+      consoleError.mockRestore()
+      consoleWarn.mockRestore()
+    }
+  })
+
   it('onParamSetChange selects a set and populates overrides', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()

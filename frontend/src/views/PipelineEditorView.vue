@@ -547,6 +547,24 @@
             </button>
           </div>
         </div>
+        <!-- Folder-list load failure. Rendered in-flow directly beneath the
+             toolbar — never absolutely positioned and never inside the
+             fixed-height canvas — because a degraded breadcrumb must not
+             replace the page with pageError, yet must still be visible.
+             Deliberately NOT breakpoint-gated (no md:hidden): the sibling
+             list views hide their alert at >=md only because they also render
+             FolderTree, whose own alert owns desktop; this view renders no
+             FolderTree, so a gate here would hide the failure on desktop —
+             exactly where it occurs. Deliberately NOT dismissible: dismissing
+             would strand a wrong/absent breadcrumb with no retry. -->
+        <ErrorAlert
+          v-if="folderError"
+          :message="folderError"
+          :on-retry="loadFolders"
+          class="mx-3 my-2"
+          role="alert"
+          data-testid="pipeline-editor-folder-error"
+        />
         <!-- FAR-1812: persistent historical-version banner. Amber/warning tint
              (NOT destructive red — nothing here is being destroyed), always
              visible while a historic version is on screen, with BOTH actions
@@ -2320,6 +2338,10 @@ async function saveRetryPolicy() {
 }
 
 const folders = ref<FolderItem[]>([])
+// A failed folder-list load must be visible AND retryable: the folder
+// breadcrumb is derived from this list, so a silent failure leaves it wrong or
+// absent with no way to recover short of a reload. Mirrors PipelineListView.
+const folderError = ref<string | null>(null)
 const linkedLifecycleMaps = ref<any[]>([])
 
 const folderPath = computed(() => {
@@ -3727,6 +3749,7 @@ async function triggerRun() {
 }
 
 async function loadFolders() {
+  folderError.value = null
   try {
     const response = await get<FolderItem[]>('/api/v1/pipeline-folders')
     // Guard before assigning: `get<FolderItem[]>` is an unchecked cast and
@@ -3738,15 +3761,17 @@ async function loadFolders() {
     // this view used to tolerate was copy-paste from loadLifecycleMaps (which
     // genuinely returns an envelope) and is rejected here like every other
     // folder consumer. Do NOT coerce to []: that hides a real contract
-    // violation. This view has no folder-specific error surface (pageError
-    // replaces the whole page, which a degraded breadcrumb must not do), so a
-    // bad shape is logged loudly and the previous list is left intact.
+    // violation. A bad shape is logged loudly AND surfaced as a retryable
+    // alert below the toolbar (pageError replaces the whole page, which a
+    // degraded breadcrumb must not do), and the previous list is left intact.
     if (!isFolderList(response)) {
       console.error(invalidFolderListMessage('/api/v1/pipeline-folders', response))
+      folderError.value = t('views.PipelineEditorView.invalid_folder_list_response')
       return
     }
     folders.value = response
   } catch (e) {
+    folderError.value = formatApiError(e)
     console.warn('Failed to load folders', e)
   }
 }

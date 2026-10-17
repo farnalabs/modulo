@@ -1355,6 +1355,7 @@ export default {
       "empty_run_warning": "No input provided — this pipeline will run with an empty input payload. Are you sure?",
       "failed_to_load_graph": "Failed to load graph: {error}",
       "failed_to_load_pipeline": "Failed to load pipeline: {error}",
+      "invalid_folder_list_response": "The server returned an invalid folder list.",
       "failed_to_archive_pipeline": "Failed to archive pipeline: {error}",
       "failed_to_unarchive_pipeline": "Failed to unarchive pipeline: {error}",
       "failed_to_update_max_duration": "Failed to update max duration: {error}",

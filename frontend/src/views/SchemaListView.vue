@@ -34,6 +34,7 @@
           :on-retry="loadFolders"
           class="md:hidden"
           role="alert"
+          data-testid="schema-list-folder-error"
         />
 
         <!-- Retry is deliberately omitted (retryable=false): a failed move can only
