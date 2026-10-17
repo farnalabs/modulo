@@ -17,6 +17,13 @@ The Windows path is fail-open on TOOL errors (timeout, crash, missing
 semgrep): if semgrep cannot run, we warn loudly and exit 0 so the
 developer is not blocked by a broken tool.  We are NEVER fail-open on
 FINDINGS: if semgrep runs and finds violations, we exit non-zero.
+
+We are also NEVER fail-open on an INCOMPLETE scan: when a rule times out
+on a file, semgrep skips that file and still exits 0 (printing only a
+``Warning: ... timeout error(s) ...`` line).  That is a failure of the
+security gate, not a tool error, so both paths treat it as a non-zero
+result (see ``_semgrep_skipped_files``).  Genuine tool errors keep the
+fail-open behaviour above.
 """
 
 from __future__ import annotations
@@ -24,6 +31,12 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+
+#: Semgrep exits 0 when a per-rule match times out on a file — the offending
+#: file is silently skipped. That is an incomplete scan and a FAILURE of the
+#: gate, not a tool error, so it must block rather than warn-and-pass.
+#: These are the two signatures semgrep prints in that case.
+_SEMGREP_TIMEOUT_MARKERS = ("timeout error", "stopped running rules")
 
 # Git-state env vars inherited from a running `git commit` (e.g. the relative
 # `GIT_INDEX_FILE=.git/index`) break semgrep's `--baseline-commit` scan, which
@@ -55,6 +68,18 @@ run_semgrep.py WARNING: semgrep did NOT complete on Windows.
 
   Reason: {reason}
 ========================================================================"""
+
+
+def _semgrep_skipped_files(output: str) -> bool:
+    """Return True when semgrep skipped a file after a per-rule timeout.
+
+    Semgrep reports this as a warning and still exits 0, so a caller that only
+    reads the exit code treats an incomplete scan as clean. Matching the
+    signature lets both scan paths fail closed instead. The check is on the
+    combined stdout+stderr of the semgrep invocation.
+    """
+    lowered = output.lower()
+    return any(marker in lowered for marker in _SEMGREP_TIMEOUT_MARKERS)
 
 
 def _get_changed_py_files() -> tuple[list[str], str | None]:
@@ -162,6 +187,16 @@ def _run_windows() -> int:
             print(result.stdout, end="")
         if result.stderr:
             print(result.stderr, end="", file=sys.stderr)
+        # A per-rule timeout silently skips a file but exits 0. Treat that as a
+        # FAILURE (incomplete scan), never a pass.
+        if _semgrep_skipped_files((result.stdout or "") + (result.stderr or "")):
+            print(
+                "run_semgrep.py: semgrep reported a per-rule timeout and "
+                "skipped one or more files — the scan is INCOMPLETE and is "
+                "reported as a failure (FAR-1859). Re-run the scan.",
+                file=sys.stderr,
+            )
+            return 1
         return result.returncode
     except subprocess.TimeoutExpired:
         print(
@@ -221,7 +256,22 @@ def main() -> int:
         "--baseline-commit=HEAD",
         _BACKEND_SRC,
     ]
-    result = subprocess.run(cmd, env=env, check=False)
+    result = subprocess.run(cmd, env=env, check=False, capture_output=True, text=True)
+    if result.stdout:
+        print(result.stdout, end="")
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
+    # A per-rule timeout silently skips a file but exits 0. Treat that as a
+    # FAILURE (incomplete scan), never a pass. This is not a tool error, so it
+    # is deliberately not covered by the fail-open branches above.
+    if _semgrep_skipped_files((result.stdout or "") + (result.stderr or "")):
+        print(
+            "run_semgrep.py: semgrep reported a per-rule timeout and skipped "
+            "one or more files — the scan is INCOMPLETE and is reported as a "
+            "failure (FAR-1859). Re-run the scan.",
+            file=sys.stderr,
+        )
+        return 1
     return result.returncode
 
 

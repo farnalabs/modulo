@@ -10,9 +10,14 @@ rules:
       # present, which is a De Morgan rewrite (NOT A AND NOT B == NOT (A OR B))
       # of the previous two independent `pattern-not` entries. Collapsing them
       # into one `pattern-not` halves the number of deep `...` matching passes
-      # over the ~13k-line files this rule protects, keeping it well inside
-      # semgrep's default 5s per-rule-per-file budget so the file holding the
-      # MCP call site is never skipped as a timeout.
+      # over the ~13k-line files this rule protects. This is an
+      # equivalence-preserving simplification with NO measured timing
+      # difference (per-file scan time is ~2.9s before and after) — it is not a
+      # timeout fix. The rule can still time out under heavy CPU contention on
+      # a large file, and semgrep exits 0 while silently skipping that file;
+      # that timeout/skip class is now caught by the fail-closed timeout guard
+      # in CI and scripts/run_semgrep.py, with the remaining parse skip
+      # tracked in FAR-1933.
       - pattern-not:
           pattern-either:
             - pattern: replace_pipeline_graph(..., actor=GraphWriteActor(..., is_privileged=$P, ..., caller_type=$CT, ...), ...)

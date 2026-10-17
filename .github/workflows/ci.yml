@@ -167,6 +167,19 @@ jobs:
         working-directory: .
         run: uv run --no-build --project backend --no-sync python scripts/run_vulture.py
       - name: Semgrep (block new findings)
+        # --timeout 120 matches the budget scripts/run_semgrep.py already uses
+        # locally; semgrep's default is 5s, which the ~13k-line graph-write
+        # files can exceed under CI CPU contention. When a rule times out on a
+        # file, semgrep SKIPS that file and still exits 0, printing only
+        # "Warning: N timeout error(s) ...". So this step captures the scan
+        # output and fails CLOSED when a skipped-file timeout is reported —
+        # otherwise the gate can report green while having silently not run a
+        # rule against the very file it protects (mcp_server.py holds the only
+        # MCP replace_pipeline_graph call site). We deliberately do NOT fail on
+        # "Partially analyzed": mcp_server.py reports that on every run because
+        # of a pre-existing PEP 695 parse skip (FAR-1933 section 3), so matching
+        # it would make CI permanently red. `--error` semantics are unchanged:
+        # the step still propagates semgrep's own exit code for real findings.
         working-directory: .
         shell: bash
         run: |
@@ -177,28 +190,63 @@ jobs:
           else
             baseline=""
           fi
+          set +e
           if [ -n "$baseline" ]; then
-            uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit "$baseline" --error .
+            uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit "$baseline" --error --timeout 120 . 2>&1 | tee /tmp/semgrep-scan.log
           else
-            uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --error .
+            uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --error --timeout 120 . 2>&1 | tee /tmp/semgrep-scan.log
           fi
+          rc=${PIPESTATUS[0]}
+          set -e
+          if grep -Eiq "timeout error|stopped running rules" /tmp/semgrep-scan.log; then
+            echo "::error::semgrep skipped one or more files after a per-rule timeout; the scan is incomplete and must not be treated as passing (FAR-1859)."
+            exit 1
+          fi
+          exit "$rc"
       - name: Semgrep rule tests (--test)
         # Exercise the rule fixture tree so a rule's `# ruleid` / `# ok` guards
         # actually enforce the intended match. The directory form (`--test
         # .semgrep/`) is dead on this semgrep version for a dot-prefixed config
         # dir (get_config_filenames drops configs whose parent starts with `.`),
-        # so pair each rule with its matching-stem fixture explicitly. `set -e`
-        # aborts this step (red CI) if any fixture fails to match.
+        # so pair each rule with its fixture EXPLICITLY. The fixture filename
+        # cannot be derived from the rule-file stem in general: two rules here
+        # are named after the rule id (`graph-write-missing-is-privileged.py`)
+        # or the rule-file stem plus a suffix
+        # (`hitl-review-mcp-caller-type-literal.py`, whose rule id is
+        # `hitl-gate-mcp-caller-type-literal`) — a stem-derived loop silently
+        # skipped them. A listed rule with no fixture is a HARD failure: a
+        # missing fixture must fail the gate, never skip silently. `set -e`
+        # aborts the step (red CI) if any fixture fails to match.
         working-directory: .
         shell: bash
         run: |
           set -euo pipefail
-          for rule in .semgrep/no-raw-httpx-client.yml .semgrep/connector-egress-verify-required.yml .semgrep/callable-dunder-name.yml; do
-            base="$(basename "$rule" .yml)"
-            if [ -f ".semgrep/tests/${base}.py" ]; then
-              uv run --no-build --project backend --no-sync semgrep --config="$rule" --test ".semgrep/tests/${base}.py"
+          pairs="
+          .semgrep/no-raw-httpx-client.yml:.semgrep/tests/no-raw-httpx-client.py
+          .semgrep/connector-egress-verify-required.yml:.semgrep/tests/connector-egress-verify-required.py
+          .semgrep/callable-dunder-name.yml:.semgrep/tests/callable-dunder-name.py
+          .semgrep/missing-is-privileged.yml:.semgrep/tests/graph-write-missing-is-privileged.py
+          .semgrep/hitl-review-mcp-caller-type.yml:.semgrep/tests/hitl-review-mcp-caller-type-literal.py
+          "
+          for pair in $pairs; do
+            rule="${pair%%:*}"
+            fixture="${pair#*:}"
+            if [ ! -f "$rule" ]; then
+              echo "::error::semgrep rule test: rule file not found: $rule"
+              exit 1
             fi
+            if [ ! -f "$fixture" ]; then
+              echo "::error::semgrep rule test: missing fixture for $rule (expected $fixture) — a rule with no fixture is a failure, not a skip"
+              exit 1
+            fi
+            uv run --no-build --project backend --no-sync semgrep --config="$rule" --test "$fixture"
           done
+          # NOT wired in (pre-existing failure — do NOT add it here; tracked in
+          # FAR-1933):
+          #   .semgrep/hitl-review-edge-mutation-outside-guard.yml ->
+          #     .semgrep/tests/hitl-review-edge-mutation-outside-guard.py
+          # currently fails 0/1 (missed lines [23], incorrect lines [25]).
+          # Repairing that fixture/rule is out of scope for FAR-1859.
       - name: pip-audit (bounded retry on transient PyPI service errors)
         # pip-audit's PyPI vulnerability service raises ServiceError on any
         # non-404 HTTP error (pip_audit/_service/pypi.py: `raise ServiceError

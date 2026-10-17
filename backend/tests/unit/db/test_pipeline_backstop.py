@@ -54,6 +54,29 @@ def test_graph_write_actor_requires_caller_type() -> None:
     assert field.default is MISSING
 
 
+def test_graph_write_actor_fields_are_keyword_only() -> None:
+    """``GraphWriteActor`` is keyword-only and its required fields stay required.
+
+    ``@dataclass(frozen=True, kw_only=True)`` is load-bearing (FAR-1859): the
+    adjacent ``bool`` and ``str`` fields would otherwise be constructible
+    positionally, so a swapped call would silently build a privileged actor
+    from unprivileged input — ``GraphWriteActor(True, "rest")`` binding
+    ``True`` to ``is_privileged`` only by luck of field order. Removing
+    ``kw_only=True`` must fail this test. The required-field assertions pin
+    that keyword-only does not quietly make the fields optional.
+    """
+    with pytest.raises(TypeError):
+        GraphWriteActor(True, "rest")  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        GraphWriteActor(False, "mcp")  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        GraphWriteActor()  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        GraphWriteActor(is_privileged=True)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        GraphWriteActor(caller_type="rest")  # type: ignore[call-arg]
+
+
 def test_rollback_to_snapshot_is_privileged_keyword_only_no_default() -> None:
     sig = inspect.signature(rollback_to_snapshot)
     param = sig.parameters["is_privileged"]
@@ -214,33 +237,42 @@ def test_all_call_sites_pass_is_privileged() -> None:
     """Every guarded write declares its privilege context.
 
     ``replace_pipeline_graph`` carries it on the required ``actor`` object
-    (FAR-1859); ``rollback_to_snapshot`` still takes ``is_privileged`` directly.
+    (FAR-1859), so this asserts the nested ``GraphWriteActor(...)`` actually
+    passes ``is_privileged`` — not merely that an ``actor=`` keyword exists;
+    ``rollback_to_snapshot`` still takes ``is_privileged`` directly.
     """
     missing: list[str] = []
     for rel in _CALL_SITE_FILES:
         path = _SRC_ROOT / rel
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in _guarded_calls(tree):
-            keywords = {kw.arg for kw in node.keywords}
             if node.func.id == "replace_pipeline_graph":
-                if "actor" not in keywords:
+                actor = _actor_kwarg(node)
+                if actor is None or not any(kw.arg == "is_privileged" for kw in actor.keywords):
                     missing.append(f"{rel}:{node.lineno}: {node.func.id}()")
-            elif "is_privileged" not in keywords:
+            elif not any(kw.arg == "is_privileged" for kw in node.keywords):
                 missing.append(f"{rel}:{node.lineno}: {node.func.id}()")
     assert not missing, f"Call sites missing privilege context: {missing}"
 
 
 def test_all_call_sites_pass_caller_type() -> None:
+    """Every guarded write declares its caller type.
+
+    As above, this asserts the nested ``GraphWriteActor(...)`` actually passes
+    ``caller_type`` for ``replace_pipeline_graph`` — not just the presence of
+    the ``actor=`` keyword — and the direct ``caller_type`` argument for
+    ``rollback_to_snapshot``.
+    """
     missing: list[str] = []
     for rel in _CALL_SITE_FILES:
         path = _SRC_ROOT / rel
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in _guarded_calls(tree):
-            keywords = {kw.arg for kw in node.keywords}
             if node.func.id == "replace_pipeline_graph":
-                if "actor" not in keywords:
+                actor = _actor_kwarg(node)
+                if actor is None or not any(kw.arg == "caller_type" for kw in actor.keywords):
                     missing.append(f"{rel}:{node.lineno}: {node.func.id}()")
-            elif "caller_type" not in keywords:
+            elif not any(kw.arg == "caller_type" for kw in node.keywords):
                 missing.append(f"{rel}:{node.lineno}: {node.func.id}()")
     assert not missing, f"Call sites missing caller_type context: {missing}"
 
