@@ -13,7 +13,7 @@ import uuid
 from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
@@ -353,7 +353,7 @@ def _build_unhandled(session: AsyncMock, principal: TenantPrincipal) -> TestClie
     return TestClient(app, raise_server_exceptions=False)
 
 
-def _issue(client: TestClient, method: str, url: str, body: dict[str, object] | None) -> httpx.Response:
+def _issue(client: TestClient, method: str, url: str, body: dict[str, object] | None) -> httpx2.Response:
     """Issue one request for a parametrised route (keeps ``**kwargs`` out of mypy)."""
     if method == "get":
         return client.get(url)

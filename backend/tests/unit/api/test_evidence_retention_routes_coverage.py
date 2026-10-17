@@ -20,12 +20,13 @@ import uuid
 from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 
 import modulo.api.routes.admin_evidence_retention as retention_routes
+from modulo.api.db_error_handling import raise_lock_timeout_conflict_if
 from modulo.api.dependencies import get_db_session
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user
@@ -319,7 +320,7 @@ def test_update_policy_lock_timeout_arm_pre_empts_backstop(
     two paths apart. The discriminator is the emitted log key — the arm calls the
     classifier with its own route key (``admin_evidence_retention.…``), whereas
     the backstop would log the dotted prefix it was constructed with
-    (``admin.evidence.retention.…``). This test asserts the arm's key fired AND
+    (``admin.evidence_retention.…``). This test asserts the arm's key fired AND
     the backstop's did NOT, plus a wraps-spy proving the arm's classifier ran.
 
     Fails if (a) the arm's ``raise_lock_timeout_conflict_if`` call is removed —
@@ -329,7 +330,7 @@ def test_update_policy_lock_timeout_arm_pre_empts_backstop(
     instead of re-raising it — the arm's detail would no longer survive.
     """
     http, _ = client
-    real_classifier = retention_routes.raise_lock_timeout_conflict_if
+    real_classifier = raise_lock_timeout_conflict_if
     arm_calls: list[str] = []
 
     def _spy(exc: SQLAlchemyError, log_key: str) -> None:
@@ -352,7 +353,7 @@ def test_update_policy_lock_timeout_arm_pre_empts_backstop(
 
     messages = [record.getMessage() for record in caplog.records]
     assert "admin_evidence_retention.update_evidence_retention.lock_timeout" in messages
-    assert "admin.evidence.retention.update_evidence_retention.lock_timeout" not in messages
+    assert "admin.evidence_retention.update_evidence_retention.lock_timeout" not in messages
 
 
 # ---------------------------------------------------------------------------
@@ -468,7 +469,7 @@ def test_purge_success_passes_org_id_to_the_sweep(client: tuple[TestClient, Asyn
 # handler's own ``try``, which is why the hand-written arms cannot cover it).
 
 
-def _issue(client: TestClient, method: str, url: str, body: dict[str, int] | None) -> httpx.Response:
+def _issue(client: TestClient, method: str, url: str, body: dict[str, int] | None) -> httpx2.Response:
     """Issue one request for a parametrised route (keeps ``**kwargs`` out of mypy)."""
     if method == "get":
         return client.get(url)
