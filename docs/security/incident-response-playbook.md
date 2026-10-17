@@ -326,7 +326,7 @@ See §6 for the full process. Minimum steps:
 | Detection | Manual image scan (`trivy image ghcr.io/farnalabs/modulo:<version>`) — no automated image scan runs in CI yet; GitHub Advisory alert, security scanner notification |
 | Containment | Block network to affected Pod, deploy patched image |
 | Eradication | Verify no IOCs, rebuild image from pinned base |
-| Prevention | Weekly dependency scans, pinned base image digests |
+| Prevention | Per-push/PR dependency scans in CI (`pip-audit`) — no scheduled weekly scan (see `docs/security/dependency-policy.md`); pinned base image digests |
 
 ### 4.6 Data Exfiltration
 
