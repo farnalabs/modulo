@@ -531,7 +531,7 @@ class TestAdminGetCostControls:
         assert resp.status_code == 200
         data = resp.json()
         assert data["budget"] == 1000.0
-        assert data["max_run_cost"] == 12.34
+        assert data["max_run_cost"] == pytest.approx(12.34)
         assert data["spend_ceiling"] == 100.0
         assert data["org_cumulative_spend_usd"] == 40.0
         assert len(data["teams"]) == 2
