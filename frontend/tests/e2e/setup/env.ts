@@ -136,13 +136,15 @@ const LOCAL_E2E_PORT_MIN = 4000
 const LOCAL_E2E_PORT_MAX = 9999
 
 // Ports the derivation must never yield. Every entry is a FIXED host listener
-// this repo itself publishes on a developer machine — verified against the
-// compose files, source noted per port below (FAR-1922). A derived port
-// colliding with one of these guarantees a real listener conflict: the Vite
-// dev server would either fail to bind it (`--strictPort` turns that into a
-// loud startup error) or an `E2E_NO_WEBSERVER=true` run would poll the foreign
-// service instead of a server. The derivation steps past them.
+// this repo itself publishes or documents on a developer machine — verified
+// against the compose files and CONTRIBUTING.md, source noted per port below
+// (FAR-1922). A derived port colliding with one of these guarantees a real
+// listener conflict: the Vite dev server would either fail to bind it
+// (`--strictPort` turns that into a loud startup error) or an
+// `E2E_NO_WEBSERVER=true` run would poll the foreign service instead of a
+// server. The derivation steps past them.
 //
+//   4173  Vite `preview` (documented local BDD/e2e listener)   CONTRIBUTING.md + .github/workflows/bdd.yml
 //   4317  otel-collector            docker-compose.local.yml
 //   5173  frontend (root compose) + `vite` dev-server default   docker-compose.yml
 //   5432  Postgres (`db` / `db-local`)   docker-compose.yml + docker-compose.local.yml
@@ -164,7 +166,7 @@ const LOCAL_E2E_PORT_MAX = 9999
 // if the range is ever exhausted. Exported so the unit spec pins the REAL set
 // instead of a hand-copied mirror that can silently drift.
 export const RESERVED_LOCAL_E2E_PORTS: readonly number[] = [
-  4317, 5173, 5432, 5433, 5434, 6379, 6380, 8000, 8081, 8082, 8083, 9090,
+  4173, 4317, 5173, 5432, 5433, 5434, 6379, 6380, 8000, 8081, 8082, 8083, 9090,
 ]
 
 export function isCI(): boolean {

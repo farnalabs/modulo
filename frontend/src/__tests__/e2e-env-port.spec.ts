@@ -143,9 +143,10 @@ describe('local e2e port selection (FAR-1900)', () => {
   })
 
   it('reserves every fixed host listener the repo publishes inside the range', () => {
-    // Each entry is a fixed host port published by a compose file in this repo
+    // Each entry is a fixed host port this repo publishes or documents
     // (FAR-1922). A derived e2e port landing on one guarantees a listener
     // conflict. Pinned individually so dropping one fails loudly. Sources:
+    //   4173 Vite `preview` (CONTRIBUTING.md + .github/workflows/bdd.yml)
     //   4317 otel-collector (docker-compose.local.yml)
     //   5173 frontend (docker-compose.yml)
     //   5432 Postgres (docker-compose.yml + docker-compose.local.yml)
@@ -158,8 +159,8 @@ describe('local e2e port selection (FAR-1900)', () => {
     //   8082 watchdog (docker-compose.yml)
     //   8083 watchdog (deploy/compose/docker-compose.prod.yml)
     //   9090 Prometheus (docker-compose.local.yml)
-    const composeBackedListeners = [4317, 5173, 5432, 5433, 5434, 6379, 6380, 8000, 8081, 8082, 8083, 9090]
-    for (const port of composeBackedListeners) {
+    const fixedHostListeners = [4173, 4317, 5173, 5432, 5433, 5434, 6379, 6380, 8000, 8081, 8082, 8083, 9090]
+    for (const port of fixedHostListeners) {
       expect(RESERVED_LOCAL_E2E_PORTS).toContain(port)
     }
   })
