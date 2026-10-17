@@ -11,13 +11,15 @@ Against REAL Postgres (testcontainers, private database per test — the
   one ``organisation_cost_state`` row per organisation, and the seeded values
   are copied EXACTLY (this is what makes the test non-vacuous — a backfill of
   zeros would fail it);
-* the cutover DROPS the three ``organisations`` columns and the
-  ``ck_organisations_cum_spend`` CHECK;
+* the migration is purely ADDITIVE (expand half of an expand/contract cutover):
+  the three ``organisations`` columns and the ``ck_organisations_cum_spend``
+  CHECK are deliberately LEFT IN PLACE and still hold their original values —
+  dropping them in the same release that stops reading them would break
+  old-code instances during the rolling-deploy window;
 * the ``ck_organisation_cost_state_cum_spend`` CHECK refuses a negative
   cumulative total;
-* a downgrade restores the three ``organisations`` columns (backfilled from the
-  cost-state row) and re-adds the CHECK, then drops the table — a genuine
-  inverse that does not lose data.
+* a downgrade drops the new table and its RLS policy, and leaves the three
+  ``organisations`` columns untouched.
 """
 
 from __future__ import annotations
@@ -182,8 +184,8 @@ class TestBackfill:
         finally:
             await engine.dispose()
 
-    async def test_organisations_columns_are_dropped(self, upgraded_db_url: str) -> None:
-        """The cutover — the three source columns are gone after the upgrade."""
+    async def test_organisations_columns_are_left_in_place(self, upgraded_db_url: str) -> None:
+        """The expand half: the three source columns survive, values intact."""
         engine = create_async_engine(upgraded_db_url, poolclass=NullPool)
         try:
             async with engine.connect() as conn:
@@ -193,11 +195,36 @@ class TestBackfill:
                             "SELECT column_name FROM information_schema.columns "
                             "WHERE table_name = 'organisations' "
                             "AND column_name IN ('max_run_cost_cents', 'spend_ceiling_cents', "
-                            "'org_cumulative_spend_cents')"
+                            "'org_cumulative_spend_cents') "
+                            "ORDER BY column_name"
                         )
                     )
-                ).all()
-            assert present == []
+                ).scalars()
+                assert sorted(present) == [
+                    "max_run_cost_cents",
+                    "org_cumulative_spend_cents",
+                    "spend_ceiling_cents",
+                ]
+                # Additive means the ORIGINAL values are still there — the
+                # upgrade must not rewrite or null them out.
+                row = (
+                    await conn.execute(
+                        text(
+                            "SELECT max_run_cost_cents, spend_ceiling_cents, "
+                            "org_cumulative_spend_cents FROM organisations WHERE slug = :slug"
+                        ),
+                        {"slug": _SEEDED_SLUG},
+                    )
+                ).one()
+            assert tuple(row) == (_SEEDED_MAX_RUN, _SEEDED_CEILING, _SEEDED_CUMULATIVE)
+            # The CHECK that references the cumulative column was not dropped.
+            async with engine.connect() as conn:
+                constraint = (
+                    await conn.execute(
+                        text("SELECT conname FROM pg_constraint WHERE conname = 'ck_organisations_cum_spend'")
+                    )
+                ).scalar_one()
+            assert constraint == "ck_organisations_cum_spend"
         finally:
             await engine.dispose()
 
@@ -228,7 +255,7 @@ class TestCheckConstraint:
 
 
 class TestDowngrade:
-    async def test_downgrade_restores_columns_and_drops_the_table(self, upgraded_db_url: str) -> None:
+    async def test_downgrade_drops_the_table_and_leaves_org_columns_untouched(self, upgraded_db_url: str) -> None:
         _downgrade(upgraded_db_url, PREV_REV)
         engine = create_async_engine(upgraded_db_url, poolclass=NullPool)
         try:
@@ -237,8 +264,35 @@ class TestDowngrade:
                     await conn.execute(text("SELECT to_regclass('public.organisation_cost_state')"))
                 ).scalar_one()
                 assert present is None
-                # The genuine inverse: the three columns are back and BACKFILLED
-                # from the cost-state row (no data lost on a rollback).
+                # The RLS policy is gone with the table (never left dangling).
+                policy_count = (
+                    await conn.execute(
+                        text(
+                            "SELECT count(*) FROM pg_policies "
+                            "WHERE tablename = 'organisation_cost_state' "
+                            "AND policyname = 'rls_org_isolation'"
+                        )
+                    )
+                ).scalar_one()
+                assert policy_count == 0
+                # Additive means DOWNGRADE never touched the org columns either:
+                # they still exist and still hold the ORIGINAL seeded values.
+                columns = (
+                    await conn.execute(
+                        text(
+                            "SELECT column_name FROM information_schema.columns "
+                            "WHERE table_name = 'organisations' "
+                            "AND column_name IN ('max_run_cost_cents', 'spend_ceiling_cents', "
+                            "'org_cumulative_spend_cents') "
+                            "ORDER BY column_name"
+                        )
+                    )
+                ).scalars()
+                assert sorted(columns) == [
+                    "max_run_cost_cents",
+                    "org_cumulative_spend_cents",
+                    "spend_ceiling_cents",
+                ]
                 row = (
                     await conn.execute(
                         text(
