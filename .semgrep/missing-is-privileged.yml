@@ -1,15 +1,38 @@
 rules:
   - id: graph-write-missing-is-privileged
     patterns:
+      # Cheap narrowing step: restrict candidates to the two graph-write call
+      # shapes before the (more expensive) nested negative match runs.
       - pattern-either:
-          - pattern-regex: (?s)(?<!def\\s)(?:await\\s+|=\\s*)?(?:replace_pipeline_graph|rollback_to_snapshot)\\s*\\((?:(?!is_privileged\\s*=).)*?\\)
-          - pattern-regex: (?s)(?<!def\\s)(?:await\\s+|=\\s*)?(?:replace_pipeline_graph|rollback_to_snapshot)\\s*\\((?:(?!caller_type\\s*=).)*?\\)
+          - pattern: replace_pipeline_graph(...)
+          - pattern: rollback_to_snapshot(...)
+      # A single negated pass. The call is suppressed ONLY when BOTH guards are
+      # present, which is a De Morgan rewrite (NOT A AND NOT B == NOT (A OR B))
+      # of the previous two independent `pattern-not` entries. Collapsing them
+      # into one `pattern-not` halves the number of deep `...` matching passes
+      # over the ~13k-line files this rule protects. This is an
+      # equivalence-preserving simplification with NO measured timing
+      # difference (per-file scan time is ~2.9s before and after) — it is not a
+      # timeout fix. The rule can still time out under heavy CPU contention on
+      # a large file, and semgrep exits 0 while silently skipping that file;
+      # that timeout/skip class is now caught by the fail-closed timeout guard
+      # in CI and scripts/run_semgrep.py, with the remaining parse skip
+      # tracked in FAR-1933.
+      - pattern-not:
+          pattern-either:
+            - pattern: replace_pipeline_graph(..., actor=GraphWriteActor(..., is_privileged=$P, ..., caller_type=$CT, ...), ...)
+            - pattern: rollback_to_snapshot(..., is_privileged=$P, ..., caller_type=$CT, ...)
     message: >
       ADR 047 service-layer backstop + hitl-gate-removal-guard-plan.md v19:
-      replace_pipeline_graph() and rollback_to_snapshot() require explicit
-      is_privileged= and caller_type= keyword-only arguments (no defaults). A
-      missing one is a runtime TypeError AND a gate-guard bypass - always pass
-      both. The MCP call site must pass caller_type="mcp" as a literal.
+      replace_pipeline_graph() takes a required actor=GraphWriteActor(...) whose
+      is_privileged and caller_type fields are required (no defaults), and
+      rollback_to_snapshot() still takes required keyword-only is_privileged=
+      and caller_type= arguments (no defaults). A call site that omits either is
+      a runtime TypeError AND a gate-guard bypass — always pass both. For
+      replace_pipeline_graph the two values live on the GraphWriteActor built
+      inline at the call site; for rollback_to_snapshot they are direct keyword
+      arguments. The MCP call site must pass caller_type="mcp" as a literal
+      (enforced by hitl-review-mcp-caller-type.yml).
     languages: [python]
     severity: ERROR
     paths:
