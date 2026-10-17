@@ -12078,11 +12078,8 @@ export interface components {
             total: number;
             /** Oldest Pending Age Seconds */
             oldest_pending_age_seconds?: number | null;
-            /**
-             * By Cause
-             * @default {}
-             */
-            by_cause: {
+            /** By Cause */
+            by_cause?: {
                 [key: string]: number;
             };
             /** By Pipeline */
