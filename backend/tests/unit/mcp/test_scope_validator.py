@@ -109,6 +109,10 @@ class TestCheckToolScope:
             ("viewer", "list_housekeeping"),
             ("runner", "review_hitl"),
             ("runner", "perform_housekeeping"),
+            # FAR-1879: the MCP housekeeping tool now requires the admin
+            # org-role floor (housekeeping.manage), matching the REST cleanup
+            # route — an operator must be rejected.
+            ("operator", "perform_housekeeping"),
             ("viewer", "create_connector"),
             ("runner", "create_connector"),
             ("viewer", "create_trigger"),
@@ -129,6 +133,7 @@ class TestCheckToolScope:
             "viewer-list_housekeeping",
             "runner-review_hitl",
             "runner-perform_housekeeping",
+            "operator-perform_housekeeping",
             "viewer-create_connector",
             "runner-create_connector",
             "viewer-create_trigger",

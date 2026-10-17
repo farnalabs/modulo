@@ -179,7 +179,12 @@ PERMISSIONS: dict[str, str] = {
     "eval.definition.delete": "operator",
     # housekeeping
     "housekeeping.list": "runner",
-    "housekeeping.perform": "operator",
+    # FAR-1879: the operator-scoped ``housekeeping.perform`` key was retired.
+    # Its only consumer was the MCP ``perform_housekeeping`` scope mapping,
+    # which now maps to ``housekeeping.manage`` (admin) plus the strict
+    # is_system_admin in-body gate — matching the REST cleanup route. A
+    # leftover grant referencing the removed key fails closed (``is_delegable``
+    # returns False for an unknown key).
     # determination — SDLC scan + pipeline draft generation read all of the
     # org's connected tool data (repos, PRs, issues), so it is operator-scoped
     # like schema.infer rather than viewer/runner.

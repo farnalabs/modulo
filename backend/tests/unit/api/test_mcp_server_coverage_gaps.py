@@ -1380,6 +1380,9 @@ class TestSimpleToolErrorHandlers(_AuthContext):
         ]
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            # FAR-1879: the tool's in-body system-admin gate is separate from
+            # the (stubbed-here) scope chokepoint; bypass it to reach the body.
+            patch.object(ms, "_ctx_is_system_admin_val", return_value=True),
             patch("modulo.core.housekeeping.ENTITY_MODEL_MAP", {"secret": Secret}),
             patch("modulo.core.housekeeping.NON_DELETABLE_ENTITY_TYPES", set()),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
@@ -1396,6 +1399,8 @@ class TestSimpleToolErrorHandlers(_AuthContext):
     async def test_perform_housekeeping_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            # FAR-1879: pass the in-body system-admin gate to reach the body.
+            patch.object(ms, "_ctx_is_system_admin_val", return_value=True),
             patch.object(ms, "_session", side_effect=RuntimeError("boom")),
         ):
             result = await perform_housekeeping(items=[{"entity_type": "secret", "id": "a"}])

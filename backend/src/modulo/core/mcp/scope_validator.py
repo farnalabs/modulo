@@ -127,7 +127,15 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "delete_trigger": "trigger.delete",
     "set_org_triggers_paused": "org.triggers.pause.manage",
     "list_housekeeping": "housekeeping.list",
-    "perform_housekeeping": "housekeeping.perform",
+    # FAR-1879: the REST cleanup route (POST /api/v1/admin/housekeeping/cleanup)
+    # is gated by ``require_permission("housekeeping.manage")`` AND
+    # ``require_system_permission(...)`` — an admin org-role floor plus a strict
+    # is_system_admin gate. This scope-map entry pins the org-role floor; the
+    # tool enforces the load-bearing system-admin gate in-body (same treatment
+    # as ``list_feature_flags`` below). Previously this mapped to the operator-
+    # scoped ``housekeeping.perform``, letting an operator irreversibly delete
+    # org secrets/connectors/model backends over MCP.
+    "perform_housekeeping": "housekeeping.manage",
     "create_connector": "connector.create",
     "delete_connector": "connector.delete",
     "create_trigger": "trigger.create",

@@ -11906,7 +11906,8 @@ async def _delete_housekeeping_groups(
     "Valid entity types: secret, connector, model_backend, pipeline, "
     "pipeline_snapshot, trigger, webhook_dedup, environment_profile, "
     "org_api_key, sso_provider, team, parameter_schema, schema, lifecycle_map. "
-    "Deletions are grouped by entity type with per-group savepoints.",
+    "Deletions are grouped by entity type with per-group savepoints. "
+    "(mirrors POST /api/v1/admin/housekeeping/cleanup — SYSTEM-ADMIN only).",
 )
 @mcp_audited("housekeeping_performed", "housekeeping", fail_closed=True)
 async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
@@ -11914,6 +11915,16 @@ async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("perform_housekeeping")
+        # FAR-1879: the REST cleanup route is ``require_permission`` (admin
+        # org-role floor, pinned in the scope map) AND ``require_system_permission``
+        # — a STRICT is_system_admin gate with no org-role fall-through. This
+        # check is that load-bearing system-admin gate (API keys and OAuth
+        # tokens always fail it), so the destructive MCP path matches REST.
+        if not _ctx_is_system_admin_val():
+            return {
+                "error": "insufficient_scope",
+                "detail": "perform_housekeeping requires system admin role",
+            }
         from modulo.core.housekeeping import ENTITY_MODEL_MAP as HK_ENTITY_MAP
 
         org_id = _ctx_org_id_val()

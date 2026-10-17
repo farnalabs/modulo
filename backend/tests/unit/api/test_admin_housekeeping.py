@@ -110,6 +110,37 @@ def viewer_client() -> Generator[TestClient, None, None]:
 
 
 @pytest.fixture
+def operator_client() -> Generator[TestClient, None, None]:
+    """Operator role (below the admin floor) — rejected by ``require_permission``.
+
+    ``is_system_admin=True`` is set deliberately, so the test proves the org-role
+    floor denies an operator even when the system-admin flag is present.
+    """
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_url="postgresql+asyncpg://localhost/test",
+            secret_key="a" * 32,
+            fernet_key="a" * 32,
+            modulo_admin_password="testpass",
+        )
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_current_tenant_user] = lambda: _make_principal("operator", is_system_admin=True)
+    app.dependency_overrides[get_current_user] = lambda: _make_principal("operator", is_system_admin=True)
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = lambda: Settings(
         database_url="postgresql+asyncpg://localhost/test",
@@ -499,3 +530,24 @@ class TestSystemAdminRequired:
     def test_checkpoints_purge_403_for_org_admin(self, non_sys_admin_client: TestClient) -> None:
         resp = non_sys_admin_client.post("/api/v1/admin/housekeeping/checkpoints/purge", json={"confirm": True})
         assert resp.status_code == 403
+
+
+class TestCleanupAuthzParity:
+    """FAR-1879: REST cleanup authz, paired with the MCP tool's authz suite.
+
+    The REST cleanup surface requires an admin org role (``require_permission``)
+    AND ``is_system_admin`` (``require_system_permission``). These two
+    assertions mirror the MCP ``TestPerformHousekeepingAuthz`` tests so the two
+    surfaces cannot drift again.
+    """
+
+    URL = "/api/v1/admin/housekeeping/cleanup"
+
+    def test_operator_rejected(self, operator_client: TestClient) -> None:
+        resp = operator_client.post(self.URL, json={"items": []})
+        assert resp.status_code == 403
+
+    def test_system_admin_accepted(self, client: TestClient) -> None:
+        resp = client.post(self.URL, json={"items": []})
+        assert resp.status_code == 200
+        assert resp.json() == {"deleted_count": 0, "errors": []}
