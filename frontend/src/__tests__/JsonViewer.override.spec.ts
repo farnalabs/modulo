@@ -97,9 +97,11 @@ function classPresentInTree(wrapper: ReturnType<typeof mountSimple>, cls: string
 }
 
 /**
- * Every style rule reachable from `rules`, descending into grouping rules
- * (`CSSMediaRule`, `CSSSupportsRule`, nested rules). A top-level-only walk
- * cannot see the FAR-1901 declarations, which live inside
+ * Every style rule reachable from `rules` by descending through grouping rules
+ * (`CSSMediaRule`, `CSSSupportsRule`): a grouping rule's children are walked
+ * recursively. Style rules nested inside another style rule (CSS nesting) are
+ * not traversed — this stylesheet uses none. A top-level-only walk cannot see
+ * the FAR-1901 declarations, which live inside
  * `@media (min-width: 641px)` — so this recursion is what makes media-wrapped
  * rules tripwire-able by the same selector/declaration assertions as the
  * top-level ones.
