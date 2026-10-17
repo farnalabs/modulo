@@ -14,7 +14,7 @@ import logging
 import uuid
 
 from sqlalchemy import event, text
-from sqlalchemy.exc import InvalidRequestError, UnboundExecutionError
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.orm import ORMExecuteState
 from sqlalchemy.orm import Session as SASession
@@ -122,8 +122,9 @@ async def _resolve_session_dialect(session: AsyncSession) -> str | None:
     * a dialect name (e.g. ``"postgresql"``) when the bind's dialect is readable;
     * ``""`` when there is NO bind at all — no ``get_bind`` attribute (a session
       double exposing only ``execute``/``info``) or ``get_bind()`` raised
-      :class:`~sqlalchemy.exc.UnboundExecutionError` (an unbound session). ``""``
-      keeps the pre-FAR-1884 generic (``session.info``-first) read order;
+      ``sqlalchemy.exc.UnboundExecutionError`` (an unbound session; it is a
+      subclass of ``InvalidRequestError``, which is the class caught below).
+      ``""`` keeps the pre-FAR-1884 generic (``session.info``-first) read order;
     * ``None`` when a bind EXISTED but its dialect could not be read. This must
       NOT silently degrade to the generic order — that is exactly the ordering
       FAR-1884 removes on the authoritative backend — so the caller fails closed
@@ -136,9 +137,12 @@ async def _resolve_session_dialect(session: AsyncSession) -> str | None:
         bind = get_bind()
         if asyncio.iscoroutine(bind):
             bind = await bind
-    except (UnboundExecutionError, InvalidRequestError):
-        # No bind at all (unbound session / lightweight session double): the
-        # pre-FAR-1884 generic path is correct and must be preserved.
+    except InvalidRequestError:
+        # No bind at all: either ``get_bind()`` raised because nothing is bound
+        # (``sqlalchemy.exc.UnboundExecutionError`` — a subclass of
+        # ``InvalidRequestError``, so the base catch covers it), or the session
+        # is a lightweight double whose bind lookup is unavailable. Either way
+        # the pre-FAR-1884 generic path is correct and must be preserved.
         return ""
     try:
         return str(bind.dialect.name)
