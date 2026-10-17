@@ -43,11 +43,16 @@ Deliberate deviations from the ``RunEvidence`` precedent:
 * ``raw_output_markers`` is typed loosely (``Any``): marker payloads are
   JSON-serialisable values (dicts today, strings historically).
 
-The model keeps generic ``JSON`` columns (the repo parity rule: JSONB lives
-only in migrations — migration 0192 promotes the three blob columns to JSONB
-on Postgres and adds the STRICT sentinel-shape CHECKs there; the model carries
-the portable subset). Sentinel constants live here (the DB layer) because
-core imports db freely and the reverse is forbidden by importlinter.
+The four JSON blob columns stay declared as generic ``JSON`` even though
+migration 0192 promotes them to ``jsonb`` on Postgres; that migration also adds
+the STRICT sentinel-shape CHECKs, and the model carries only the portable
+subset. These four are the tracked residual (FAR-1941): a column whose ORM
+declaration matches its physical ``jsonb`` type instead uses the shared
+``JSON().with_variant(JSONB(), "postgresql")`` alias
+(``modulo.db.models.base.JSONB_COL``) — the alias lives in ``db/models``, so
+JSONB is NOT migration-only in this repo. Sentinel constants live here (the DB
+layer) because core imports db freely and the reverse is forbidden by
+importlinter.
 """
 
 from __future__ import annotations
@@ -149,15 +154,18 @@ class RunNodeOutput(Base, TimestampMixin):
     node_telemetry_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     raw_output_markers: Mapped[Any] = mapped_column(JSON, nullable=True)
     # FAR-582: per-node attempt artifact pointer list.
-    # JSON on the ORM (repo parity convention: JSONB only in migrations).
+    # Generic JSON on the ORM — one of the four FAR-1941 residual columns
+    # (physical jsonb after 0192, deliberately still bare JSON for
+    # SQLite/MariaDB parity; an aligned column would use JSONB_COL).
     # Stores ``list[pointer]`` — zero or more artifact pointer dicts
     # (stdout/stderr side-car files) for the node attempt.
     artifacts_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     # FAR-902: per-attempt schema enforcement telemetry.  Stores the
     # SchemaEnforcementRecord payload (outcome, profile, native flag, repair/
     # wasted-attempt counts, validation errors) — bound to 64 KB at write time.
-    # Written BEFORE update_run_status (D3 ordering guarantee).  On the ORM
-    # it is JSON (repo parity); the migration promotes to JSONB on Postgres.
+    # Written BEFORE update_run_status (D3 ordering guarantee).  On the ORM it
+    # is generic JSON; migration 0251 adds the column with the same generic-JSON
+    # type (NOT JSONB — its own prose says otherwise and is wrong).
     # NEVER written into outputs_json / node_telemetry_json (Agent Return
     # Contract columns).
     schema_enforcement_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
