@@ -175,7 +175,8 @@ class TestFiltersForwarded:
         # The envelope echoes the requested page, not a hard-coded first page.
         assert resp.json()["page"] == 3
         assert resp.json()["page_size"] == 25
-        # 25 rows consumed before page 3 already exceed the 1-row total.
+        # Page 3 skips 50 rows and returns 1, so 51 are consumed against a 1-row
+        # total: (3 - 1) * 25 + 1 = 51, which is not < 1.
         assert resp.json()["has_more"] is False
 
     def test_invalid_org_id_is_422(self) -> None:
@@ -223,7 +224,8 @@ class TestHasMore:
         session = _make_session()
         client = _build(session, _principal(system_admin=True))
         events, _ = _page_return_value()
-        # Page 1 of 50 against a 100-row result: 50 consumed, 50 still to come.
+        # The fixture returns a single event, so page 1 consumes 1 row against a
+        # 100-row total: (1 - 1) * 50 + 1 = 1, which is < 100.
         with _patch_read((events, 100)):
             resp = client.get(_URL, params={"page": 1, "page_size": 50})
 

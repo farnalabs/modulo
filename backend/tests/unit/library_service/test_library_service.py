@@ -606,7 +606,12 @@ async def test_list_primitives_has_more_reflects_the_narrowed_page():
 
 async def test_list_primitives_has_more_true_when_the_org_page_has_a_next_page():
     """With ``excluded_tiers=[]`` the org total is preserved, so a full org page whose
-    total exceeds what it returned genuinely has more rows to fetch."""
+    total exceeds what it returned genuinely has more rows to fetch.
+
+    This exercises the NON-DEFAULT ``excluded_tiers=[]`` path only; the route's default
+    path (``excluded_tiers`` omitted → ``["in_dev"]``) is pinned separately by
+    ``test_list_primitives_default_path_has_more_tracks_the_org_total`` below.
+    """
     session = _mock_session()
     org_id = uuid.uuid4()
     org_items = [_fake_primitive() for _ in range(20)]
@@ -620,6 +625,41 @@ async def test_list_primitives_has_more_true_when_the_org_page_has_a_next_page()
 
     assert result.has_more is True
     assert len(result.items) >= 20
+
+
+async def test_list_primitives_default_path_has_more_tracks_the_org_total():
+    """The route's DEFAULT path (``excluded_tiers`` omitted → ``["in_dev"]``) must still paginate.
+
+    Regression guard: collapsing ``org_total`` to the page-slice length inside
+    ``_exclude_tiers`` made ``total == len(all_items)`` on this path, so ``has_more``
+    was ``False`` on every page even when the org total spanned many pages.
+    """
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    page_size = 20
+    org_rows = [_fake_primitive() for _ in range(100)]
+
+    first_page: PageResult = PageResult(
+        items=org_rows[:page_size], total=len(org_rows), page=1, page_size=page_size, has_more=True
+    )
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=first_page),
+    ):
+        first = await list_primitives(session, org_id, page=1, page_size=page_size)
+
+    last_page: PageResult = PageResult(
+        items=org_rows[-page_size:], total=len(org_rows), page=5, page_size=page_size, has_more=False
+    )
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=last_page),
+    ):
+        last = await list_primitives(session, org_id, page=5, page_size=page_size)
+
+    assert first.has_more is True
+    assert first.total >= len(org_rows)
+    assert last.has_more is False
 
 
 # ---------------------------------------------------------------------------

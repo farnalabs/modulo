@@ -1091,9 +1091,20 @@ def _exclude_tiers(
     community: list[LibraryPrimitive],
     excluded_tiers: list[str] | None,
 ) -> tuple[list[LibraryPrimitive], int, list[LibraryPrimitive], list[LibraryPrimitive]]:
+    """Drop excluded tiers from the merged items without collapsing ``org_total``.
+
+    ``db.crud.library_primitive`` pushes ``~tier.in_(excluded_tiers)`` into the
+    same ``conditions`` its COUNT and item queries share, so ``org_page.total``
+    is already the tier-filtered universe count and must be passed through
+    unchanged. Collapsing it to ``len(org_items)`` — the page slice — would make
+    ``total == len(all_items)`` and force ``has_more`` to ``False`` on every page
+    of the default path, where ``excluded_tiers`` defaults to ``["in_dev"]``.
+
+    The in-memory ``modulo``/``community`` items never went through that query,
+    so they still need this Python-side filter.
+    """
     if excluded_tiers:
         org_items = [p for p in org_items if p.tier not in excluded_tiers]
-        org_total = len(org_items)
         modulo = [p for p in modulo if p.tier not in excluded_tiers]
         community = [p for p in community if p.tier not in excluded_tiers]
     return org_items, org_total, modulo, community
@@ -1155,11 +1166,15 @@ async def list_primitives(
 
     all_items: list[LibraryPrimitive] = org_items + modulo + community
     total = org_total + len(modulo) + len(community)
-    # ``total`` and ``has_more`` describe the RETURNED page, not the org query's
-    # pre-narrowing universe: the ``source`` and ``excluded_tiers`` filters drop
-    # rows after the offset query ran, so forwarding the org page's own
-    # ``has_more`` can contradict the items and total below it. Deriving it from
-    # the narrowed counts keeps the envelope self-consistent.
+    # ``has_more`` is derived here rather than forwarded from ``org_page.has_more``
+    # so the envelope can never contradict its own items.
+    #
+    # The two narrowing steps differ in whether ``total`` stays exact:
+    # * ``excluded_tiers`` does NOT narrow the total — the org COUNT query applies
+    #   the same tier filter as the items query (see ``_exclude_tiers``).
+    # * ``source`` DOES collapse it (see ``_filter_org_by_source``): that filter
+    #   runs only in Python after the offset query, with no count query behind it,
+    #   so on the ``?source=`` path ``total`` describes the returned page.
     has_more = (page - 1) * page_size + len(all_items) < total
     return PageResult(
         items=all_items,
