@@ -37,12 +37,63 @@ matrix.
 
 Controls a 98% hard-stop that refuses new runs when database capacity is nearly full.
 
+Capacity is **auto-detected by default**; there is normally nothing to configure. The
+monitor resolves a capacity figure from the first available source and compares it with
+the current database size (`pg_database_size`), refusing to create new runs once usage
+reaches `DB_CAPACITY_HARD_STOP_PCT`.
+
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `DB_CAPACITY_MODE` | No | `fixed` | Capacity mode: `fixed` (enforced), `elastic` (advisory only), or `disabled` |
-| `DB_CAPACITY_BYTES` | No | `None` | Total capacity bytes for computing usage percentage (required when mode=fixed) |
+| `DB_CAPACITY_SOURCE` | No | `auto` | Where capacity comes from: `auto`, `env`, `filesystem`, or `disabled` |
+| `DB_CAPACITY_PATH` | No | `/var/lib/modulo/db-volume` | Mount point of the Postgres data volume, for the `filesystem` source |
+| `DB_CAPACITY_BYTES` | No | `None` | Explicit capacity in bytes. An **override**, not a requirement - see below |
 | `DB_CAPACITY_BYPASS` | No | `false` | Operator bypass for the 98% hard-stop (e.g. deliberate migrations) |
 | `DB_CAPACITY_HARD_STOP_PCT` | No | `98.0` | Percent of capacity at/above which new runs are refused (mode=fixed only) |
+
+#### How capacity is detected
+
+`DB_CAPACITY_SOURCE` selects the detection strategy:
+
+| Value | Behaviour |
+|-------|-----------|
+| `auto` (default) | Tries `env`, then `filesystem`; uses the first source that resolves |
+| `env` | Uses `DB_CAPACITY_BYTES` only. The pre-auto-detection behaviour, kept as an escape hatch |
+| `filesystem` | Measures the filesystem at `DB_CAPACITY_PATH` only |
+| `disabled` | Resolves nothing at all, even when `DB_CAPACITY_BYTES` is set |
+
+An unrecognised value falls back to `auto`.
+
+- **`env`** uses `DB_CAPACITY_BYTES` as the capacity and the measured database size as
+  the numerator.
+- **`filesystem`** uses the total size of the mounted filesystem at `DB_CAPACITY_PATH`
+  and its free space (`total - free`) as the numerator. The Docker Compose files mount
+  the Postgres data volume read-only at this path, for the API/MCP process and for the
+  workers that create runs (cron and polling triggers). If the path is missing or
+  unreadable the source resolves nothing - the monitor never judges capacity from a
+  filesystem it cannot actually see.
+
+**An auto-detected candidate is rejected when it is physically impossible.** A volume
+whose total is *smaller than the database it holds* cannot exist, so the `filesystem`
+reading is the wrong volume: the monitor discards it, logs a warning, and falls through
+to the next source. This is an impossibility test, not a margin, so a small-but-valid
+volume whose total is genuinely just above the database size still resolves and still
+arms the hard-stop. The check is scoped to **auto-detected** sources only - an explicit
+`DB_CAPACITY_BYTES` (`env`) is the operator asserting the capacity and is never
+second-guessed, so a deliberately-small override still enforces.
+
+#### Failure behaviour
+
+Detection failure never blocks a run. With no source resolved, or when a probe or query
+fails, the status reports `capacity_percent: null` and `source: "none"`, the alert level
+stays `ok`, and the hard-stop remains inert - a capacity measurement is a safety
+advisory, not a reason to stop working. The resolved source is reported by
+`GET /api/v1/admin/db-capacity` so an operator can see which mechanism is active
+(`env`, `filesystem`, or `none`).
+
+`DB_CAPACITY_BYTES` is therefore optional everywhere: set it to pin capacity explicitly
+(pair it with `DB_CAPACITY_SOURCE=env` to pin it exclusively), or leave it unset and let
+detection work.
 
 ---
 

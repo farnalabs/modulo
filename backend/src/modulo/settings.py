@@ -329,16 +329,36 @@ class Settings(BaseSettings):
     modulo_max_local_concurrency: int = Field(2)
 
     # ------------------------------------------------------------------
-    # DB capacity monitor + 98% hard-stop (FAR-425/426)
+    # DB capacity monitor + 98% hard-stop (FAR-425/426, auto-detect FAR-1882)
     # ------------------------------------------------------------------
     # "fixed" (self-hosted, ENFORCED), "elastic" (Aurora / horizontally-scaled,
     # advisory only — no hard-stop), or "disabled". Env var: DB_CAPACITY_MODE.
     db_capacity_mode: str = Field("fixed")
-    # Total capacity bytes used to compute capacity_percent for mode="fixed".
-    # If left None, no percent is reported (capacity_percent=None, alert "ok"),
-    # the monitor is disabled and the 98% hard-stop never fires — an operator
-    # MUST set DB_CAPACITY_BYTES to enable it. Env var: DB_CAPACITY_BYTES.
+    # Which source resolves the TOTAL capacity used to compute capacity_percent
+    # for mode="fixed" (FAR-1882). One of:
+    #   "auto"       — try, in order: DB_CAPACITY_BYTES, then the filesystem probe
+    #                  of DB_CAPACITY_PATH; the first source that resolves wins.
+    #   "env"        — only DB_CAPACITY_BYTES (the pre-FAR-1882 behaviour).
+    #   "filesystem" — only the DB_CAPACITY_PATH probe.
+    #   "disabled"   — resolve nothing (capacity_percent=None, gate inert).
+    # An unrecognised value falls back to "auto". Env var: DB_CAPACITY_SOURCE.
+    db_capacity_source: str = Field("auto")
+    # OPTIONAL override — total capacity bytes for mode="fixed". Setting it
+    # takes precedence over auto-detection (source="env") and is never
+    # second-guessed (the operator is asserting the capacity), which is what an
+    # operator uses when the Postgres volume cannot be mounted into the app
+    # container (e.g. a split app/DB deployment). If unset, capacity is
+    # auto-detected by default; if NO source resolves, no percent is reported
+    # (capacity_percent=None, alert "ok") and the 98% hard-stop stays INERT.
+    # Env var: DB_CAPACITY_BYTES.
     db_capacity_bytes: int | None = Field(default=None)
+    # Path to the Postgres data volume, mounted READ-ONLY into the app
+    # container. The filesystem probe statvfses it to derive the volume's TRUE
+    # capacity (total) and usage (total - free) — so WAL, temp files and any
+    # other database sharing the volume are counted, which ``pg_database_size``
+    # alone misses. Only consulted when the app and the database share a
+    # filesystem. Env var: DB_CAPACITY_PATH.
+    db_capacity_path: str = Field("/var/lib/modulo/db-volume")
     # Operator bypass for the 98% hard-stop (e.g. a deliberate migration that
     # must write at/over the limit). Does NOT disable the monitor. Env var:
     # DB_CAPACITY_BYPASS=1.

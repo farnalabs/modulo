@@ -160,11 +160,30 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       EMAIL_FROM: ${EMAIL_FROM:-}
       ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
+      # Settings.db_capacity_path (FAR-1882) - the mount point of the
+      # postgres_data volume below. The capacity monitor auto-detects the
+      # database's capacity from this filesystem by default, which is what arms
+      # the 98% hard-stop on a plain compose deployment with no
+      # DB_CAPACITY_BYTES set (the Fly path auto-detects from the platform
+      # instead). Set DB_CAPACITY_SOURCE=env with DB_CAPACITY_BYTES to override
+      # with an explicit size, or =disabled to turn detection off entirely.
+      DB_CAPACITY_PATH: ${DB_CAPACITY_PATH:-/var/lib/modulo/db-volume}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    volumes:
+      # READ-ONLY, and read-only on purpose: the monitor only statvfs()es the
+      # mount to learn total/free bytes - it never reads a database file. The
+      # all-in-one container runs the API *and* both SAQ workers (see above), so
+      # this single mount covers every run-creation path (the API/MCP, webhook
+      # triggers, and the system worker's cron/polling triggers), which is where
+      # crud.run.create_run enforces the gate.
+      # If the container user cannot traverse the mount the probe fails open
+      # (capacity "none", stop inert) rather than erroring - detection never
+      # blocks a run by accident.
+      - postgres_data:/var/lib/modulo/db-volume:ro
     restart: unless-stopped
 
   # Health watchdog (Gatus) - same image and config as the root
