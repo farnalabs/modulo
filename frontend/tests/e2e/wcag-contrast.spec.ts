@@ -1,4 +1,4 @@
-import { test, expect } from './setup/fixtures'
+import { test, expect, systemAdminJwt } from './setup/fixtures'
 import AxeBuilder from '@axe-core/playwright'
 
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
@@ -166,27 +166,6 @@ test.describe('WCAG AA audit (CI — Vite dev server)', { tag: "@regression" }, 
 // shell with a real `sub`, which is the state every real session is in.
 const AUTHENTICATED_ROUTES = ['/runs', '/', '/pipelines', '/admin/my-profile', '/settings/triggers', '/admin/users'] as const
 
-// Mirrors the local-JWT helper in assistant-only.spec.ts: a structurally valid
-// token whose payload the client decodes (the signature is not verified
-// client-side). `sub` is what populates the sidebar's visible identity text.
-function b64url(input: unknown): string {
-  return Buffer.from(JSON.stringify(input)).toString('base64url')
-}
-
-function jwtWithSub(sub: string): string {
-  const header = b64url({ alg: 'HS256', typ: 'JWT' })
-  const now = Math.floor(Date.now() / 1000)
-  const payload = b64url({
-    sub,
-    email: 'admin@example.com',
-    org_role: 'admin',
-    is_system_admin: true,
-    iat: now,
-    exp: now + 3600,
-  })
-  return `${header}.${payload}.mocked-signature`
-}
-
 // Tagged @local-mock rather than @regression: these tests drive the
 // setupLocalMockApi target, so they run in the `Frontend and WCAG` CI job
 // (which selects this file by name, with the default local target) but must
@@ -206,12 +185,15 @@ test.describe('authenticated shell — sidebar profile links (FAR-1907)', { tag:
     // visible text is the UUID and an avatar whose initial is a digit — the
     // exact state in which label-content-name-mismatch fires.
     await page.goto('/runs')
-    await page.evaluate((token) => localStorage.setItem('modulo_access_token', token), jwtWithSub('3f9a1b2c-4d5e-6f70-8192-a3b4c5d6e7f8'))
+    await page.evaluate((token) => localStorage.setItem('modulo_access_token', token), systemAdminJwt('3f9a1b2c-4d5e-6f70-8192-a3b4c5d6e7f8'))
     await page.reload()
     await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
 
     const links = page.locator('a[href$="/admin/my-profile"]')
-    await expect(links).toHaveCount(2)
+    // Layout-agnostic: the number of profile links rendered on /runs depends on
+    // which sidebar breakpoints are active, so assert at least one renders and
+    // that EVERY rendered link satisfies the rule — do not pin the exact count.
+    await expect(links.first()).toBeVisible()
 
     // WCAG 2.5.3: the accessible name must contain the visible label text. The
     // pre-fix markup rendered aria-label="User profile" over "3f9a…" and "3".
@@ -219,6 +201,7 @@ test.describe('authenticated shell — sidebar profile links (FAR-1907)', { tag:
       label: el.getAttribute('aria-label') ?? '',
       visible: (el.textContent ?? '').trim(),
     })))
+    expect(pairs.length, 'at least one sidebar profile link must render').toBeGreaterThan(0)
     for (const { label, visible } of pairs) {
       expect(visible.length, 'each sidebar profile link must render visible text').toBeGreaterThan(0)
       expect(label, `aria-label ${JSON.stringify(label)} must contain the visible text ${JSON.stringify(visible)}`).toContain(visible)
