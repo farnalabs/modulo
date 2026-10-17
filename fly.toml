@@ -33,18 +33,31 @@ app = 'app-modulo'
 # [[vm]]-declared size), not a config change.
 # Whole-org standing (verified 2026-09-02): 11 machines across 7 apps in org
 # `personal`, ~8 started 24/7: app-modulo 3 + staging-modulo 2 + modulo-telemetry 2
-# (fra, 1 running) + library-modulo 1 (ams, autostop, mostly stopped) + 3 Fly MPG
-# Postgres machines (modulo-app-db 2CPU/4gb, modulo-staging-db, library-modulo-db).
-# MPG machines bill as separate "MPG Cluster" lines, NOT in the "Machines" usage
-# lines (verified against the Aug 2026 invoice). The invoice-line math "the 2x CPU
+# (fra, 1 running) + library-modulo 1 (ams, autostop, mostly stopped) + 3 Fly
+# Postgres APPS, each on its own volume (modulo-app-db 2CPU/4gb,
+# modulo-staging-db, library-modulo-db).
+# [FAR-1882 2026-10-17] Corrected: those three are NOT "Fly MPG Postgres machines"
+# (Managed Postgres clusters). Observed 2026-10-17: all three appear in
+# `flyctl apps list`; modulo-app-db runs one flyio/postgres-flex:17.7 machine with
+# volume vol_v8epz7le8wlll75v attached; `flyctl mpg status modulo-app-db` reports no
+# such managed cluster; and `flyctl mpg list` returns exactly one MPG cluster
+# (modulo-telemetry-db, below), which does NOT appear in `flyctl apps list`. The
+# former sentence "MPG machines bill as separate 'MPG Cluster' lines, NOT in the
+# 'Machines' usage lines (verified against the Aug 2026 invoice)" rested on that
+# wrong premise and has NOT been re-checked against an invoice since - treat it as
+# UNVERIFIED, not settled. The invoice-line math "the 2x CPU
 # line fits app+staging app machines exactly, with zero headroom for modulo-app-db"
 # no longer holds after the live resize: the prod app machine adds ~2 shared CPU to
 # that line going forward, so treat post-resize figures on that line as APPROXIMATE
 # until verified against the next invoice. The demo Fly instance (demo-modulo) is
 # retired - not provisioned, no app, no machines, no cost.
-# Org `modulo-admin` (separate org/bill) additionally holds 2 MPG clusters named
-# modulo-telemetry-db (fra, basic); one is ORPHANED (no attached apps) - cleanup
-# candidate via `fly mpg destroy`, needs-human.
+# Org `modulo-admin` (separate org/bill) holds the only MPG cluster this token can
+# see: `flyctl mpg list` -> modulo-telemetry-db (org modulo-admin, fra, basic,
+# status ready, attached apps: modulo-telemetry). [FAR-1882 2026-10-17] The wording
+# that stood here claimed TWO clusters with one ORPHANED and flagged a
+# `fly mpg destroy` cleanup (needs-human) - corrected: no orphaned cluster was
+# observed, this one is ATTACHED and serving telemetry, so destroying it would take
+# telemetry down. Do not destroy it.
 # Rolling deploys peak at N+1 per process group; each deploy also launches one-off
 # pre-migrate machines (shared-cpu-1x / 1gb, deploy.yml) on staging AND prod,
 # destroyed after the deploy - they bill only while running. There is no automated
@@ -203,6 +216,27 @@ primary_region = 'lhr'
   # Enable auto-upgrade on the add-on as a safety net:
   # `flyctl redis update <name>` -> select plan, then enable auto-upgrade.
   CORS_ORIGINS = "https://modulo.run,https://app.modulo.run,http://localhost:5173"
+  # --- DB capacity hard stop (FAR-1882) ---
+  # On Fly the app and the DB are SEPARATE machines with no mountable volume, so
+  # auto-detection resolves no source ("none"), capacity_percent stays null and the
+  # 98% hard stop never fires. Pin the capacity explicitly instead.
+  # Value = the pg_data volume's filesystem capacity, read on modulo-app-db
+  # (2026-10-17): `df -B1 /data` -> /dev/vdc total 84409147392 bytes, cross-checked
+  # by `stat -f -c '%b %S' /data` -> 20607702 blocks x 4096 = 84409147392. The raw
+  # device is 85882568704 bytes (80 GiB) and the volume reports "Size GB: 80"; the
+  # filesystem figure is the one that matters.
+  # HONEST LIMITATION - do not overclaim: on this "env" source the percentage is the
+  # modulo DATABASE's size (pg_database_size) over this capacity, NOT true volume
+  # consumption. True consumption is what the "filesystem" source reports, available
+  # on self-hosted compose because the DB volume is mounted read-only there
+  # (deploy/compose/docker-compose.prod.yml). So on Fly this is a LATE signal: it
+  # fires only as that one database approaches the volume total - WAL, temp files and
+  # other databases on the volume are not counted. Leave DB_CAPACITY_MODE at its
+  # default "fixed": only "fixed" enforces the hard stop.
+  DB_CAPACITY_BYTES = "84409147392"
+  # Explicit rather than the "auto" default: on Fly auto resolves no source and the
+  # gate would stay inert; "env" is the only source satisfiable here.
+  DB_CAPACITY_SOURCE = "env"
 
 # 2026-09-02 wedge: the 2-shared-CPU web machine stopped answering HTTP under
 # concurrent pipeline orchestration load (service check critical for 2+ hours).
