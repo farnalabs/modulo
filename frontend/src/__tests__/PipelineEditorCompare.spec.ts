@@ -159,6 +159,17 @@ describe('PipelineEditorView — version compare mode (FAR-1818)', () => {
     wrapper.unmount()
   })
 
+  it('hides the one-click compare entry point while the latest version is viewed', async () => {
+    // snap-9 is the latest; comparing it against itself has no meaning, so the
+    // banner must not offer the dead-end "Compare with latest" action.
+    const wrapper = await mountEditor({ snapshot: 'snap-9' })
+    const vm = wrapper.vm as any
+
+    expect(vm.isViewing).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-historic-compare"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('treats an empty compare id as "compare against latest"', async () => {
     const wrapper = await mountEditor({ snapshot: 'snap-4', compare: '' })
     const vm = wrapper.vm as any

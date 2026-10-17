@@ -582,8 +582,10 @@
               {{ $t('views.PipelineEditorView.historic_view_latest') }}
             </button>
             <!-- FAR-1818: one-click entry into semantic-led compare mode
-                 (viewed version vs the latest). -->
+                 (viewed version vs the latest). Hidden while the viewed
+                 version IS the latest — that would be a self-compare. -->
             <button
+              v-if="resolvedSnapshotId !== latestSnapshotId"
               type="button"
               :class="btnToolbarSecondary"
               data-testid="pipeline-editor-historic-compare"
@@ -1801,6 +1803,7 @@ import ProgressiveAutonomyPanel from '../components/pipeline/ProgressiveAutonomy
 import AgentRunnerBindings from '../components/agent/AgentRunnerBindings.vue'
 import { shortId } from '../utils/format'
 import { formatDateShort } from '../lib/formatDate'
+import { withTimeout } from '../lib/requestTimeout'
 import { CANVAS_EDGE_STROKE } from '../constants/canvas'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/schema'
@@ -1814,12 +1817,6 @@ import { runnerTierLabelKeyForProvider } from '../lib/runnerTiers'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 import { Pencil as PencilIcon, LoaderCircle as LoaderCircleIcon, Download as DownloadIcon, Play as PlayIcon, Plus as PlusIcon, Maximize2 as Maximize2Icon, X as XIcon, ExternalLink as ExternalLinkIcon } from '@lucide/vue'
-
-function withTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, ms = 15000): Promise<T> {
-  const ctrl = new AbortController()
-  const timeout = setTimeout(() => ctrl.abort(), ms)
-  return factory(ctrl.signal).finally(() => clearTimeout(timeout))
-}
 
 // The legacy useApi `post` helper aborted every request after 30s; the typed
 // client has no deadline of its own, so the archive/pause toggles keep the
