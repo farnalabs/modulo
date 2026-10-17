@@ -6402,6 +6402,25 @@ async def _terminalize_claim_cap_exhausted(
     (``UPDATE ... RETURNING id``) to drive the post-commit compensating
     analytics fact (P6', FAR-162).
 
+    FAR-1903 — the predicate covers ``pending`` as well as ``running``. The
+    claim UPDATE (``pipeline_execution._CLAIM_UPDATE_SQL``) is gated
+    ``AND claim_count < :claim_cap``, so a ``pending`` row at the cap can never
+    be claimed again: every enqueue is a silent no-op that leaves it
+    ``pending`` forever. A ``running``-only predicate left exactly that shape
+    unterminalisable (observed on prod: two eval runs wedged ``pending`` at
+    ``claim_count = cap``, outside every sibling leg). At the cap the row is
+    provably unrecoverable, so terminalising it is safe by the same argument as
+    the ``running`` leg.
+
+    The recoverability boundary for a ``pending`` row is ``claim_count >=
+    :claim_cap`` — NOT the heartbeat arm. A ``pending`` row's ``heartbeat_at``
+    is normally NULL and the arm matches NULL (``heartbeat_at IS NULL OR
+    heartbeat_at < now() - ...``), so the heartbeat gate is effectively a
+    no-op for ``pending``; what leaves a still-claimable ``pending`` row at
+    ``cap - 1`` alone is the ``claim_count >= :claim_cap`` predicate on its
+    own. The heartbeat arm remains meaningful for ``running``, where a fresh
+    heartbeat evidences a live executor.
+
     FAR-746 batch cap: *max_rows* bounds the UPDATE per tick (see
     :func:`_terminalize_mid_graph_wedges`); overflow drains next tick.
     """
@@ -6411,7 +6430,7 @@ async def _terminalize_claim_cap_exhausted(
             "error_detail=:detail, completed_at=now() "
             "WHERE ctid IN ("
             "  SELECT ctid FROM runs "
-            "  WHERE organisation_id=:oid AND status='running' AND claim_count >= :cap "
+            "  WHERE organisation_id=:oid AND status IN ('running','pending') AND claim_count >= :cap "
             "  AND (heartbeat_at IS NULL OR heartbeat_at < now() - (:stale * interval '1 second')) "
             "  LIMIT :max_rows) "
             "RETURNING id"
@@ -6892,9 +6911,10 @@ _BATCH_TERMINALIZER_SPECS: tuple[ReconcileTerminalizer, ...] = (
     _TERMINALIZERS_BY_KEY["nodeless"],
     _TERMINALIZERS_BY_KEY["mid_graph"],
     _TERMINALIZERS_BY_KEY["claim_cap"],
-    # FAR-1862: after the running-row gates (their predicates are disjoint from
-    # ``pending``) so a stranded pending row is terminalised before the row
-    # select would offer it to the reclaim legs one final time.
+    # FAR-1862: after the running-row gates, and after the FAR-1903 claim-cap
+    # gate now also collects ``pending`` at the cap, so this backstop sees only
+    # the foreign-dispatcher remainder before the row select would offer it to
+    # the reclaim legs one final time.
     _TERMINALIZERS_BY_KEY["stranded_pending"],
     _TERMINALIZERS_BY_KEY["hitl_review"],
     _TERMINALIZERS_BY_KEY["hitl_review_missing"],
@@ -7197,11 +7217,21 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         heartbeat proves the executor owning it is gone — without the
         liveness leg such a row survived to the 25h marker sweep holding a
         slot, invisible to every counter.
-      * B5 claim-cap: any ``running`` row at ``claim_count >= cap`` whose
-        heartbeat is STALE is terminal-failed ``claim_cap_exhausted`` —
-        selected INDEPENDENTLY of the reconcile predicates so a capped
-        fresh-heartbeat run with checkpoints is still caught once its heartbeat
-        goes stale, while a LIVE run on its final claim is never killed.
+      * B5 claim-cap: any ``running`` OR ``pending`` row at
+        ``claim_count >= cap`` whose heartbeat is STALE is terminal-failed
+        ``claim_cap_exhausted`` — selected INDEPENDENTLY of the reconcile
+        predicates so a capped fresh-heartbeat run with checkpoints is still
+        caught once its heartbeat goes stale, while a LIVE run on its final
+        claim is never killed. The ``pending`` arm (FAR-1903) is safe because
+        the claim UPDATE is gated ``AND claim_count < :claim_cap``: at the cap
+        no claim can ever succeed, so the row is unrecoverable and would
+        otherwise wedge forever. The recoverability boundary for a ``pending``
+        row is therefore ``claim_count >= cap`` — NOT the heartbeat arm, which
+        a ``pending`` row (``heartbeat_at`` NULL) satisfies by definition and
+        which no longer discriminates for ``pending``. A still-claimable
+        ``pending`` row at ``cap - 1`` is left alone by the ``claim_count >=
+        cap`` predicate, not the heartbeat arm; the arm still guards
+        ``running`` rows.
       * FAR-648 gate-expiry: any ``awaiting_human`` row whose every undecided
         gate is UNCLAIMED and past its review deadline (FAR-1257: the stamped
         ``hitl_claims.terminalize_at``, or for legacy unstamped rows

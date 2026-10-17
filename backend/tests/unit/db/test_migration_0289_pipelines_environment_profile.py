@@ -35,8 +35,10 @@ Lenses:
   ``0315_service_accounts_lifecycle``, and
   ``0317_drop_retired_pipeline_diff_rollback_flag`` chains onto
   ``0316_policy_gate_evaluation_mode``, and
-  ``0318_evidence_redaction_rules`` chains onto
-  ``0317_drop_retired_pipeline_diff_rollback_flag`` as the single
+  ``0318_trigger_event_required_refs_missing`` chains onto
+  ``0317_drop_retired_pipeline_diff_rollback_flag``, and
+  ``0319_evidence_redaction_rules`` chains onto
+  ``0318_trigger_event_required_refs_missing`` as the single
   linear head; the revision id matches the filename, and neither
   branch_labels nor depends_on is set (the pre-commit check-migration-heads
   hook and every ``test_single_head_*`` pin depend on that shape).
@@ -69,7 +71,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0289_pipelines_environment_profile"
 _MIGRATION_DOWN_REVISION = "0288_runs_execution_origin"
-_HEAD_MIGRATION = "0318_evidence_redaction_rules"
+_HEAD_MIGRATION = "0319_evidence_redaction_rules"
 _TABLE = "pipelines"
 _COLUMN = "environment_profile_id"
 _FK_NAME = "fk_pipelines_environment_profile_id"

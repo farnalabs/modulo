@@ -207,7 +207,7 @@
         <router-link
           to="/admin/my-profile"
           class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors flex-1 min-w-0"
-          :aria-label="$t('components.AppLayout.user_profile')"
+          :aria-label="$t('components.AppLayout.user_profile_link', { label: userEmail })"
         >
           {{ userEmail }}
         </router-link>

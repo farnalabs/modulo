@@ -62,8 +62,10 @@ Lenses:
     0315_service_accounts_lifecycle, and
     0317_drop_retired_pipeline_diff_rollback_flag chains onto
     0316_policy_gate_evaluation_mode, and
-    0318_evidence_redaction_rules chains onto
-    0317_drop_retired_pipeline_diff_rollback_flag as the
+    0318_trigger_event_required_refs_missing chains onto
+    0317_drop_retired_pipeline_diff_rollback_flag, and
+    0319_evidence_redaction_rules chains onto
+    0318_trigger_event_required_refs_missing as the
     single linear head (0259's test documents the run-up through 0288).
 * **Structure (mocked ``op``)** - upgrade emits THREE statements IN ORDER: the
   existence-gated ``ADD ... NOT VALID`` FIRST (so its ACCESS EXCLUSIVE is taken
@@ -99,7 +101,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0264_pipelines_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0263_evidence_layer"
-_HEAD_MIGRATION = "0318_evidence_redaction_rules"
+_HEAD_MIGRATION = "0319_evidence_redaction_rules"
 _CONSTRAINT = "ck_pipelines_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - a

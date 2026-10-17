@@ -65,8 +65,10 @@ Lenses:
     0315_service_accounts_lifecycle, and
     0317_drop_retired_pipeline_diff_rollback_flag chains onto
     0316_policy_gate_evaluation_mode, and
-    0318_evidence_redaction_rules chains onto
-    0317_drop_retired_pipeline_diff_rollback_flag as the
+    0318_trigger_event_required_refs_missing chains onto
+    0317_drop_retired_pipeline_diff_rollback_flag, and
+    0319_evidence_redaction_rules chains onto
+    0318_trigger_event_required_refs_missing as the
     single linear head.
 * **Structure (mocked ``op``)** - upgrade emits FOUR existence-gated DO blocks
   (add NOT VALID, then VALIDATE, for each of the two columns) carrying the full
@@ -92,7 +94,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0259_pipeline_snapshot_max_autonomy_check"
 _MIGRATION_DOWN_REVISION = "0258_pipeline_accountability_owners"
-_HEAD_MIGRATION = "0318_evidence_redaction_rules"
+_HEAD_MIGRATION = "0319_evidence_redaction_rules"
 _MAX_CEILING_CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_level"
 _DEFAULT_LEVEL_CONSTRAINT = "ck_pipeline_snapshots_default_autonomy_level"
 _CONSTRAINTS = (_MAX_CEILING_CONSTRAINT, _DEFAULT_LEVEL_CONSTRAINT)
