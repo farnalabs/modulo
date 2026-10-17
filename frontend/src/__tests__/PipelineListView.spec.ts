@@ -1269,6 +1269,11 @@ describe('PipelineListView', () => {
       expect(alert.exists()).toBe(true)
       expect(alert.text()).toContain('Failed to load folders:')
       expect(alert.text()).toContain('The server returned an invalid folder list.')
+      // The mobile folder-error surface: a live region that is hidden at >=md
+      // (the sidebar's FolderTree alert owns desktop) and is NOT dismissible.
+      expect(alert.attributes('role')).toBe('alert')
+      expect(alert.classes()).toContain('md:hidden')
+      expect(alert.find('[data-testid="error-alert-dismiss"]').exists()).toBe(false)
       wrapper.unmount()
     } finally {
       delete mockResponses['/api/v1/pipeline-folders']
@@ -1305,6 +1310,44 @@ describe('PipelineListView', () => {
 
       expect(folderCalls()).toBe(before + 1)
       expect(wrapper.find('[data-testid="pipeline-list-folder-error"]').exists()).toBe(false)
+      wrapper.unmount()
+    } finally {
+      delete mockResponses['/api/v1/pipeline-folders']
+      consoleError.mockRestore()
+    }
+  })
+
+  it('splits the folder-error live region by breakpoint: main-panel alert is md:hidden, the sidebar alert is not', async () => {
+    // jsdom applies no CSS, so class presence is the testable proxy for the
+    // breakpoint contract. The main-panel alert is the complement of
+    // FolderTree's `hidden md:flex`: below md the sidebar is out of the a11y
+    // tree and this is the only folder-error surface; at >=md the sidebar owns
+    // it. Exactly one is ever visible/announced — never both, never neither.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      mockResponses['/api/v1/pipeline-folders'] = undefined
+      await router.push('/pipelines')
+      await router.isReady()
+      const wrapper = mount(PipelineListView, {
+        global: { plugins: [router] },
+      })
+      await flushPromises()
+      await nextTick()
+
+      const mainAlert = wrapper.find('[data-testid="pipeline-list-folder-error"]')
+      expect(mainAlert.exists()).toBe(true)
+      expect(mainAlert.attributes('role')).toBe('alert')
+      expect(mainAlert.classes()).toContain('md:hidden')
+      // Not dismissible — dismissing the first load failure would strand the
+      // folder list with no retry until reload.
+      expect(mainAlert.find('[data-testid="error-alert-dismiss"]').exists()).toBe(false)
+
+      const sidebarAlert = wrapper.find('[data-testid="folder-tree-error"]')
+      expect(sidebarAlert.exists()).toBe(true)
+      expect(sidebarAlert.attributes('role')).toBe('alert')
+      // The complement: the sidebar owns >=md, so it must NOT be md:hidden.
+      // If both gained md:hidden the pair would collapse to "both hidden".
+      expect(sidebarAlert.classes()).not.toContain('md:hidden')
       wrapper.unmount()
     } finally {
       delete mockResponses['/api/v1/pipeline-folders']

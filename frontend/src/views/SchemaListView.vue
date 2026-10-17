@@ -22,12 +22,18 @@
       />
 
       <div class="flex-1 min-w-0">
+        <!-- Folder-list load failure. md:hidden is the complement of
+             FolderTree's `hidden md:flex`, so exactly one folder-error live
+             region is visible/announced per breakpoint (sidebar owns >=md,
+             this one owns <md) — the same contract as PipelineListView. It is
+             not dismissible: dismissing would strand the list empty with no
+             retry until reload. -->
         <ErrorAlert
           v-if="folderError"
           :message="`${$t('views.SchemaListView.failed_to_load_folders')} ${folderError}`"
           :on-retry="loadFolders"
-          :dismiss-label="$t('common.close')"
-          :on-dismiss="() => { folderError = null }"
+          class="md:hidden"
+          role="alert"
         />
 
         <!-- Retry is deliberately omitted (retryable=false): a failed move can only

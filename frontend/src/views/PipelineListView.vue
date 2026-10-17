@@ -45,14 +45,17 @@
              (never as a flex sibling of the sidebar, which would squeeze it into
              a vertical column between the tree and the table) and as a live
              region so a screen reader announces it. The failure is recoverable:
-             retry re-fetches; the table keeps rendering underneath. -->
+             retry re-fetches; the table keeps rendering underneath.
+             This surface is md:hidden — the complement of FolderTree's
+             `hidden md:flex` — so exactly one folder-error live region is ever
+             visible/announced: the sidebar owns >=md, this one owns <md. It is
+             deliberately NOT dismissible: dismissing the first load failure
+             would strand the folder list empty with no retry until reload. -->
         <ErrorAlert
           v-if="folderError"
           :message="$t('views.PipelineListView.failed_to_load_folders', { error: folderError })"
           :on-retry="loadFolders"
-          :dismiss-label="$t('common.close')"
-          :on-dismiss="() => { folderError = null }"
-          class="mb-4"
+          class="mb-4 md:hidden"
           role="alert"
           data-testid="pipeline-list-folder-error"
         />
