@@ -22,6 +22,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
+import modulo.api.routes._org_settings as _org_settings
 import modulo.api.routes.admin as admin
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -1453,11 +1454,17 @@ def test_update_retention_patches_only_retention_days(
     client, _ = api
     patches: list[dict[str, Any]] = []
 
-    async def _patch_settings(session: Any, org_id: Any, patch: Any = None, delete_keys: Any = None) -> dict[str, Any]:
+    async def _patch_settings(
+        session: Any,
+        org_id: Any,
+        patch: Any = None,
+        delete_keys: Any = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         patches.append(dict(patch or {}))
         return patch or {}
 
-    monkeypatch.setattr(admin, "update_org_settings_patch", _patch_settings)
+    monkeypatch.setattr(_org_settings, "update_org_settings_patch", _patch_settings)
     resp = client.put("/api/v1/admin/runs/retention", json={"retention_days": 180})
     assert resp.status_code == 200
     assert patches == [{"retention_days": 180}]

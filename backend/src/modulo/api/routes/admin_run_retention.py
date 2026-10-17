@@ -29,7 +29,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_UNEXPECTED_ERROR
-from modulo.api.db_error_handling import raise_session_contract_error
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import (
     get_db_session,
     require_feature,
@@ -152,6 +152,7 @@ def _delete_run_artifacts(runs: list[Run], org_id: uuid.UUID | None) -> None:
 
 
 @router.get("/candidates", dependencies=[require_feature("admin_run_retention")])
+@handle_db_errors("admin.run_retention.candidates")
 async def candidates(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     date_from: Annotated[datetime | None, Query()] = None,
@@ -234,6 +235,12 @@ async def candidates(
     return CandidatesResponse(**result)
 
 
+# NOTE (FAR-1905): deliberately NOT wrapped in @handle_db_errors, unlike its
+# /candidates and /purge siblings. This route's only DB work runs inside the
+# ``_stream()`` async generator, which is consumed by the StreamingResponse
+# AFTER this handler has already returned — a route-level decorator wraps the
+# handler call and cannot catch an error raised while the body is being
+# streamed. Do not "fix" this by adding the decorator: it would be inert.
 @router.post("/export", dependencies=[require_feature("admin_run_retention")])
 async def export(
     req: ExportRequest,
@@ -284,6 +291,7 @@ async def export(
         require_feature("admin_run_retention"),
     ],
 )
+@handle_db_errors("admin.run_retention.purge")
 async def purge(
     req: PurgeRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],

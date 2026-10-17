@@ -18,7 +18,6 @@ from modulo.core.product_analytics.consent import (
     is_partner_carve_out_active,
     is_prompt_eligible,
     kill_switch_disables_enforcement,
-    merge_product_analytics_block,
     partner_license_requires_analytics,
     set_level,
 )
@@ -77,32 +76,6 @@ class TestDefaultConsentState:
         assert block["level"] == LEVEL_ALL
         assert block["prompted"] is None  # default
         assert block["prompted_at"] is None  # default
-
-
-# ---------------------------------------------------------------------------
-# Merge
-# ---------------------------------------------------------------------------
-
-
-class TestMergeProductAnalyticsBlock:
-    def test_merge_creates_block_if_absent(self) -> None:
-        result = merge_product_analytics_block(None, {"level": LEVEL_ALL})
-        assert result[PRODUCT_ANALYTICS_KEY]["level"] == LEVEL_ALL
-
-    def test_merge_preserves_existing_keys(self) -> None:
-        settings = {
-            PRODUCT_ANALYTICS_KEY: {"level": LEVEL_OFF, "prompted": PROMPTED_NO},
-        }
-        result = merge_product_analytics_block(settings, {"level": LEVEL_ALL})
-        block = result[PRODUCT_ANALYTICS_KEY]
-        assert block["level"] == LEVEL_ALL
-        assert block["prompted"] == PROMPTED_NO  # preserved
-
-    def test_merge_does_not_clobber_other_settings(self) -> None:
-        settings = {"email": {"smtp_host": "smtp.example.com"}}
-        result = merge_product_analytics_block(settings, {"level": LEVEL_ALL})
-        assert result["email"]["smtp_host"] == "smtp.example.com"
-        assert result[PRODUCT_ANALYTICS_KEY]["level"] == LEVEL_ALL
 
 
 # ---------------------------------------------------------------------------

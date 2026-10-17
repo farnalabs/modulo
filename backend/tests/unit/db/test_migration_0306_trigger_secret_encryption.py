@@ -40,7 +40,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0306_trigger_secret_encryption"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0305_guardrail_escalate_action"
-_CHAIN_HEAD_MIGRATION = "0317_drop_retired_pipeline_diff_rollback_flag"
+_CHAIN_HEAD_MIGRATION = "0318_trigger_event_required_refs_missing"
 
 _KEY = "c3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3M="  # url-safe base64 of 32 b's — a valid deterministic Fernet key
 _FERNET = Fernet(_KEY.encode())

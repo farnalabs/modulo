@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -37,6 +37,15 @@ _VALID_32 = "a" * 32
 _FERNET_KEY = "KuV0vzf5ha7CJ3n4Dg_aqO6S4wBNJ31Q1fahdEYHHCo="
 _ORG_UUID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_UUID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+
+
+def _lock_timeout_operational() -> OperationalError:
+    """An ``OperationalError`` whose driver error carries SQLSTATE 55P03."""
+
+    class _PgError(Exception):
+        sqlstate = "55P03"
+
+    return OperationalError("UPDATE organisations ...", {}, _PgError("canceling statement due to lock timeout"))
 
 
 def _make_settings() -> Settings:
@@ -368,6 +377,19 @@ class TestObservabilityPutEndpoint:
         assert resp.status_code == 501
         body = resp.json()
         assert "migration" in body["detail"].lower()
+
+    def test_put_returns_409_on_lock_timeout(self, free_client: TestClient) -> None:
+        """FAR-1832 QA F10: 55P03 from the bounded settings-patch lock is a 409,
+        not the generic 503 the ``except SQLAlchemyError`` arm still answers."""
+        with (
+            patch(
+                "modulo.api.routes.observability.update_otel_config",
+                side_effect=_lock_timeout_operational(),
+            ),
+        ):
+            resp = free_client.put("/api/v1/settings/observability", json={"otlp_endpoint": "http://e:4318"})
+        assert resp.status_code == 409, resp.text
+        assert "another change is in progress" in resp.json()["detail"]
 
     def test_put_returns_503_on_sqlalchemy_error(self, free_client: TestClient) -> None:
         with (

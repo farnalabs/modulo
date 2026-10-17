@@ -262,7 +262,18 @@ async def _rotate_triggers(
 
 
 async def _rotate_otel_config(session: AsyncSession, new_fernet: Fernet, old_fernet: Fernet | None) -> int:
-    """Re-encrypt langsmith_api_key_ciphertext inside otel_config_json on organisations."""
+    """Re-encrypt langsmith_api_key_ciphertext inside otel_config_json on organisations.
+
+    FAR-1832 QA F5: the write is NARROWED to the one rotated key via
+    ``jsonb_set`` (the same pattern ``_rotate_triggers`` uses above) instead of
+    rewriting the whole ``otel_config_json`` document from the SELECT's
+    snapshot — an operator saving observability settings between this
+    function's SELECT and its UPDATE can no longer have their other keys
+    silently dropped by the rotation (the previous whole-column write made the
+    docstring's "no interleaving writer's keys can be lost" claim false for
+    this column). The SELECT still reads the whole document (it only needs the
+    stored ciphertext to re-encrypt); only the WRITE is narrow.
+    """
     rows = (
         await session.execute(
             text(
@@ -278,10 +289,16 @@ async def _rotate_otel_config(session: AsyncSession, new_fernet: Fernet, old_fer
         if not stored:
             continue
         new_ct = re_encrypt_str(stored, new_fernet, old_fernet)
-        config["langsmith_api_key_ciphertext"] = new_ct
+        # CAST(:ct AS text), NOT :ct::text — SQLAlchemy's bind-param regex
+        # skips a ":name" immediately followed by "::" (see _rotate_triggers).
         await session.execute(
-            text("UPDATE organisations SET otel_config_json = :config WHERE id = :id"),
-            {"config": json.dumps(config), "id": row.id},
+            text(
+                "UPDATE organisations SET otel_config_json = "
+                "jsonb_set(COALESCE(otel_config_json, '{}'::jsonb), "
+                "ARRAY['langsmith_api_key_ciphertext'], to_jsonb(CAST(:ct AS text))) "
+                "WHERE id = :id"
+            ),
+            {"ct": new_ct, "id": row.id},
         )
         count += 1
     return count

@@ -406,9 +406,13 @@ export async function loginAsAdmin(page: Page, env: TestEnv) {
  * (is_system_admin + org_role admin). The local mock login token is a plain org
  * admin, so the router's SYSTEM-group gate (`requiresSystemAdmin`) redirects
  * until this is swapped in.
+ *
+ * `sub` defaults to the mock admin id; pass a specific value when a test needs
+ * a particular principal (e.g. a UUID `sub`, which is what the backend mints
+ * and what populates the sidebar's visible identity text).
  */
-export function systemAdminJwt(): string {
-  return mintMockAccessToken({ is_system_admin: true })
+export function systemAdminJwt(sub = '1'): string {
+  return mintMockAccessToken({ sub, is_system_admin: true })
 }
 
 /**
