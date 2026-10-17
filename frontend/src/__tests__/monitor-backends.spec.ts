@@ -593,6 +593,28 @@ describe('monitor/index', () => {
     }))
     expect(backends.map((b) => b.key)).toEqual(['grafana-faro'])
   })
+
+  it('loadBackends drops a backend whose init never settles', { timeout: 2000 }, async () => {
+    // A dynamic import whose module factory never resolves models a stalled
+    // SDK chunk fetch: init() awaits forever. The loop is sequential, so
+    // without a per-backend bound this hangs the whole list (FAR-1892).
+    vi.doMock('@grafana/faro-web-sdk', () => new Promise(() => {}))
+
+    const backends = await loadBackends(
+      baseConfig({
+        monitorBackends: ['builtin', 'grafana-faro'],
+        grafanaFaro: { url: 'https://collector.example' },
+      }),
+      { initTimeoutMs: 50 },
+    )
+
+    // The stuck backend is dropped; the healthy one still loads.
+    expect(backends.map((b) => b.key)).toEqual(['builtin'])
+    expect(console.warn).toHaveBeenCalledWith(
+      '[monitor] Backend grafana-faro init failed; continuing without it',
+      expect.any(Error),
+    )
+  })
 })
 
 describe('isModuleNotFound', () => {
