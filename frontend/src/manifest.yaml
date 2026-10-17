@@ -3639,6 +3639,9 @@ elements:
       - testid: pipeline-editor-save-as-template
         type: button
         dynamic_testid: false
+      - testid: pipeline-editor-save-as-dropdown
+        type: element
+        dynamic_testid: false
       - testid: pipeline-editor-toolbar-group-run
         type: element
         dynamic_testid: false
