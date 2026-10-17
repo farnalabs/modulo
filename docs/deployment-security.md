@@ -380,10 +380,16 @@ using the configured secrets backend (Fernet, Vault, or AWS Secrets Manager).
 
 ### 5.1 Image Vulnerability Scanning
 
-Trivy runs as a required CI check (`ci.yml`), scanning the repository filesystem for
-dependency CVEs and misconfigurations - it does not scan the built images. The built
-container images are not image-scanned in CI, and `publish-images.yml` has no
-critical-vulnerability gate on its GHCR push. Scan the published image tag you deployed:
+Modulo's CI does **not** currently scan the built container images. Trivy runs as a
+required CI check (`ci.yml`), scanning the repository filesystem for dependency CVEs
+and misconfigurations - it does not scan the built images. The `publish-images.yml`
+workflow builds each backend/frontend image once and gates the GHCR push on image
+smoke checks (`import modulo`, `nginx -t`) only, with no critical-vulnerability gate
+on the push. The automated trivy/grype image gates, digest-drift guard and
+cosign/SBOM attestation are the D4 GA/CI follow-up item (see `docs/architecture.md`
+§CI/CD Pipeline).
+
+Until that lands, scan a deployed image tag manually:
 
 ```bash
 # Manual scan (pin the version you deployed; :latest tracks the newest release)
@@ -537,7 +543,7 @@ Configure alerts for these events in your monitoring system:
 | Failed login rate spike | Auth 401s > 10/min per IP | High | Security on-call |
 | Migration failure | Backend crash loop on startup | Critical | Ops channel |
 | CSRF token mismatch | 403 on state-changing endpoint | Medium | Ops channel |
-| Container image with Critical CVE | Trivy scan output | High | Security channel |
+| Container image with Critical CVE | Manual image scan (`trivy image ghcr.io/farnalabs/modulo:<version>`) — not automated in CI | High | Security channel |
 | Unexpected outbound connection | Network policy violation | Critical | Security on-call |
 
 ---
@@ -667,7 +673,7 @@ before marking a production deployment as complete.
 
 ### Containers
 
-- [ ] Trivy scan shows zero critical/high CVEs on deployed image tags
+- [ ] Deployed image tag scanned manually (`trivy image ghcr.io/farnalabs/modulo:<version>`) with zero critical/high CVEs — image scanning is not automated in CI (see §5.1)
 - [ ] Container runs as non-root user (`whoami` != `root`)
 - [ ] Read-only root filesystem enabled for backend containers
 - [ ] Image pinned by digest, not tag (production)
