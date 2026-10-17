@@ -39,6 +39,7 @@ const SelectStub = {
 }
 
 import PipelineSnapshotCompare from '../../components/pipeline/PipelineSnapshotCompare.vue'
+import ErrorAlert from '../../components/shared/ErrorAlert.vue'
 
 const SNAPSHOTS = [
   { id: 'snap-9', snapshot_version: 9, tag: null, created_at: '2026-08-02T12:00:00Z' },
@@ -264,10 +265,14 @@ describe('PipelineSnapshotCompare', () => {
     expect(error.exists()).toBe(true)
     expect(error.attributes('role')).toBe('alert')
     expect(error.text()).toContain('node is missing an id')
+    // VIS-3: the region is the shared ErrorAlert (compact), not a bespoke box.
+    const alert = wrapper.findComponent(ErrorAlert)
+    expect(alert.exists()).toBe(true)
+    expect(alert.props('compact')).toBe(true)
     expect(wrapper.find('[data-testid="pipeline-compare-summary"]').exists()).toBe(false)
 
     apiPost.mockResolvedValueOnce({ data: DIFF, error: undefined })
-    await wrapper.find('[data-testid="pipeline-compare-retry"]').trigger('click')
+    await wrapper.find('[data-testid="error-alert-retry"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('[data-testid="pipeline-compare-error"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="pipeline-compare-summary"]').exists()).toBe(true)
@@ -338,7 +343,7 @@ describe('PipelineSnapshotCompare', () => {
       const error = wrapper.find('[data-testid="pipeline-compare-error"]')
       expect(error.exists()).toBe(true)
       expect(error.text()).toContain('too long')
-      expect(wrapper.find('[data-testid="pipeline-compare-retry"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
     } finally {
       vi.useRealTimers()
     }
@@ -455,7 +460,7 @@ describe('PipelineSnapshotCompare', () => {
     // Retry: the unmarked id is looked up again and now resolves to the real
     // version label instead of staying stranded on the fallback.
     apiPost.mockResolvedValueOnce({ data: DIFF, error: undefined })
-    await wrapper.find('[data-testid="pipeline-compare-retry"]').trigger('click')
+    await wrapper.find('[data-testid="error-alert-retry"]').trigger('click')
     await flushPromises()
 
     expect(snapshotLookupAttempts).toBe(2)

@@ -4735,7 +4735,6 @@ function historicShareLink(): string {
   // FAR-1818: while comparing, the canonical share link carries the compare id
   // too (an empty compare id means "against latest", which the link preserves).
   if (compareMode.value) {
-    // An empty compare id means "against latest", which the link preserves.
     let compareId = compareParam.value
     if (compareId === null) compareId = latestSnapshotId.value
     if (compareId === null) compareId = ''

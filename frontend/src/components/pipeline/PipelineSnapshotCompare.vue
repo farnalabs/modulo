@@ -79,22 +79,19 @@
       {{ $t('components.PipelineSnapshotCompare.self_compare') }}
     </p>
 
+    <!-- VIS-3: the shared ErrorAlert owns this region's box, message and
+         retry affordance; the wrapper keeps the assertive role and the BDD
+         testid the compare contract pins. -->
     <div
       v-else-if="status === 'error'"
-      class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
       role="alert"
       data-testid="pipeline-compare-error"
     >
-      <p class="font-medium">{{ $t('components.PipelineSnapshotCompare.error_title') }}</p>
-      <p class="mt-0.5">{{ errorMessage }}</p>
-      <button
-        type="button"
-        class="mt-2 underline"
-        data-testid="pipeline-compare-retry"
-        @click="retryCompare"
-      >
-        {{ $t('components.PipelineSnapshotCompare.retry') }}
-      </button>
+      <ErrorAlert
+        compact
+        :message="errorDetail"
+        :on-retry="retryCompare"
+      />
     </div>
 
     <template v-else>
@@ -271,6 +268,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Select from '../shared/AppSelect.vue'
+import ErrorAlert from '../shared/ErrorAlert.vue'
 import { api } from '../../lib/api/client'
 import { formatApiError } from '../../lib/api/formatError'
 import { withTimeout, RequestTimeoutError } from '../../lib/requestTimeout'
@@ -380,6 +378,12 @@ const status = ref<CompareStatus>('idle')
 const diff = ref<DiffResponse | null>(null)
 const errorMessage = ref<string | null>(null)
 const showRaw = ref(false)
+
+// ErrorAlert renders a single message line, so carry the region's headline into
+// that message — the same `title: detail` shape it uses for a ProblemDetail.
+const errorDetail = computed(
+  () => `${t('components.PipelineSnapshotCompare.error_title')}: ${errorMessage.value ?? ''}`,
+)
 
 const rawRegionId = 'pipeline-compare-raw-region'
 const rawJson = computed(() => JSON.stringify(diff.value, null, 2))
