@@ -90,7 +90,7 @@ const ENVS: Record<string, TestEnv> = {
     credentials: {
       // Staging uses the real admin account, provided via E2E_ADMIN_EMAIL /
       // E2E_ADMIN_PASSWORD (must match the deployment's MODULO_USERS).
-      admin: { email: process.env.E2E_ADMIN_EMAIL, password: process.env.E2E_ADMIN_PASSWORD },
+      admin: { email: process.env.E2E_ADMIN_EMAIL || '', password: process.env.E2E_ADMIN_PASSWORD || '' },
       ...SHARED_CREDENTIALS,
     },
   },
@@ -98,7 +98,7 @@ const ENVS: Record<string, TestEnv> = {
     name: 'app',
     orgSlug: getOrgSlug(),
     credentials: {
-      admin: { email: process.env.E2E_ADMIN_EMAIL, password: process.env.E2E_ADMIN_PASSWORD || 'admin123' },
+      admin: { email: process.env.E2E_ADMIN_EMAIL || '', password: process.env.E2E_ADMIN_PASSWORD || 'admin123' },
       ...SHARED_CREDENTIALS,
     },
   },
@@ -123,16 +123,49 @@ export const BASE_URLS: Record<string, string> = {
 // a local run either binds ITS OWN server or fails loudly at startup — it can
 // never silently reuse a foreign server.
 //
-// CI keeps the historical 5173: it runs a single checkout on a single runner,
-// so the collision this guards against cannot occur there, and its behaviour
-// must not change. An explicit `E2E_PORT` always wins; `E2E_BASE_URL` and
-// `E2E_NO_WEBSERVER` continue to work exactly as before.
+// Port precedence, highest first:
+//   1. CI — always 5173, IGNORING `E2E_PORT`. CI runs a single checkout on a
+//      single runner, so the cross-worktree collision this guards against
+//      cannot occur there, and CI's behaviour must not change. An `E2E_PORT`
+//      set in CI is deliberately discarded rather than honoured.
+//   2. `E2E_PORT` (non-CI only) — an explicit valid port (1024-65535) wins.
+//   3. The worktree-derived port.
+// `E2E_BASE_URL` and `E2E_NO_WEBSERVER` continue to work exactly as before.
 // ---------------------------------------------------------------------------
 const LOCAL_E2E_PORT_MIN = 4000
-const LOCAL_E2E_PORT_SPAN = 6000
+const LOCAL_E2E_PORT_MAX = 9999
+
+// Ports the derivation must never yield. 5173 is the historical local
+// dev-server port (what a hand-started `pnpm dev` uses, and the URL a
+// `E2E_NO_WEBSERVER=true` run still targets); 8000 is the backend dev API the
+// Vite dev server proxies `/api` to. A derived port colliding with either
+// would guarantee a real listener conflict, so the derivation steps past them.
+const RESERVED_LOCAL_E2E_PORTS: readonly number[] = [5173, 8000]
 
 export function isCI(): boolean {
   return Boolean(process.env.CI)
+}
+
+function isReservedLocalE2ePort(port: number): boolean {
+  return RESERVED_LOCAL_E2E_PORTS.includes(port)
+}
+
+// Deterministically maps a worktree root to a port in
+// [LOCAL_E2E_PORT_MIN, LOCAL_E2E_PORT_MAX], skipping reserved ports. Pure and
+// stable: the same root always yields the same port, so the dev server a run
+// starts and the URL it polls cannot drift apart. Exported so the contract can
+// be pinned by a unit spec (frontend/src/__tests__/e2e-env-port.spec.ts).
+export function deriveLocalE2ePort(worktreeRoot: string): number {
+  const span = LOCAL_E2E_PORT_MAX - LOCAL_E2E_PORT_MIN + 1
+  const digest = createHash('sha1').update(worktreeRoot).digest()
+  let port = LOCAL_E2E_PORT_MIN + (digest.readUInt32BE(0) % span)
+  for (let i = 0; i < span; i++) {
+    if (!isReservedLocalE2ePort(port)) return port
+    port = port === LOCAL_E2E_PORT_MAX ? LOCAL_E2E_PORT_MIN : port + 1
+  }
+  // Unreachable while the reserved set is smaller than the range; fail loud
+  // rather than return a reserved port if that ever stops being true.
+  throw new Error('[env] local e2e port derivation exhausted the range')
 }
 
 export function getLocalE2ePort(): number {
@@ -147,8 +180,7 @@ export function getLocalE2ePort(): number {
   // ever do, `strictPort` turns the collision into a loud startup error rather
   // than a silent cross-worktree reuse.
   const worktreeRoot = resolve(__dirname, '..', '..', '..', '..')
-  const digest = createHash('sha1').update(worktreeRoot).digest()
-  return LOCAL_E2E_PORT_MIN + (digest.readUInt32BE(0) % LOCAL_E2E_PORT_SPAN)
+  return deriveLocalE2ePort(worktreeRoot)
 }
 
 export function getLocalE2eBaseUrl(): string {
