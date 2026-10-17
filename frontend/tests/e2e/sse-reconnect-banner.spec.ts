@@ -9,10 +9,15 @@ import type { Page } from '@playwright/test'
  * browser-observable lifecycle the ticket's acceptance criteria ask for:
  *
  *  1. a terminal 401 (token refresh rejected) raises the banner;
- *  2. Reconnect acknowledges the click with in-flight feedback, shows the
- *     failure copy when the restart lands back on a terminal stop, and
- *     CLEARS when the next /api/v1/events response is a healthy 200 stream;
- *  3. a 429 never raises the terminal banner — the stream retries with backoff.
+ *  2. Reconnect acknowledges the click with in-flight feedback and shows the
+ *     failure copy when the restart lands back on a terminal stop. Once the
+ *     failed copy is shown the button is DISABLED (FAR-1861: the copy tells
+ *     the user to sign in again, and without a fresh token a click would only
+ *     re-run the refresh+retry that just failed);
+ *  3. the banner CLEARS when the session is restored — a fresh sign-in fires
+ *     the app's auth-change re-arm, which restarts the stream and a healthy
+ *     200 removes the banner (FAR-1842);
+ *  4. a 429 never raises the terminal banner — the stream retries with backoff.
  *
  * Each stream outcome is forced with page.route so the terminal states are
  * reached deterministically on every target, without touching the real
@@ -115,8 +120,24 @@ async function installEventStreamRoutes(page: Page, initialMode: EventsMode): Pr
   }
 }
 
+/**
+ * Land a fresh session the way a re-login (or a sibling tab's token refresh)
+ * does: post on the app's cross-tab auth channel ('modulo-auth', FAR-1852),
+ * which re-fires every registered auth listener. The SSE stream's auth-change
+ * re-arm then restarts a stream that stopped on a terminal 401/403 (FAR-1842)
+ * — the recovery path FAR-1861 leaves as the only way off the failed banner
+ * once the manual Reconnect button is disabled.
+ */
+async function signalFreshSignIn(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const channel = new BroadcastChannel('modulo-auth')
+    channel.postMessage({ type: 'refresh', tabId: 'e2e', ts: Date.now() })
+    channel.close()
+  })
+}
+
 test.describe('SSE reconnect banner lifecycle', { tag: '@regression' }, () => {
-  test('terminal 401 raises the banner; a manual reconnect clears it on a healthy stream', { tag: '@regression' }, async ({ page, env }) => {
+  test('terminal 401 raises the banner; a failed manual reconnect is cleared by a fresh sign-in', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     const events = await installEventStreamRoutes(page, 'auth-fail')
 
@@ -138,18 +159,20 @@ test.describe('SSE reconnect banner lifecycle', { tag: '@regression' }, () => {
     await expect(button).toBeDisabled()
 
     // 3 — ...and when it lands back on a terminal stop, it says so instead of
-    //     silently swallowing the failure.
+    //     silently swallowing the failure. The failed copy instructs a fresh
+    //     sign-in, so the button is disabled alongside it (FAR-1861): without
+    //     a new token a click would only repeat the refresh+retry that just
+    //     failed.
     events.release()
     await expect(banner).toContainText('Reconnect failed')
-    await expect(button).toBeEnabled()
+    await expect(button).toBeDisabled()
 
-    // 4 — Clears: a restart that reaches a healthy 200 stream removes the
-    //     banner entirely (state derived, not dismissed).
+    // 4 — Clears: a fresh sign-in re-arms the stream and a healthy 200 removes
+    //     the banner entirely (state derived, not dismissed — FAR-1842/1861).
+    const beforeRecovery = events.requestCount()
     events.setMode('stream')
-    events.hold()
-    await button.click()
-    await expect(banner).toContainText('Reconnecting')
-    events.release()
+    await signalFreshSignIn(page)
+    await expect.poll(() => events.requestCount()).toBeGreaterThan(beforeRecovery)
     await expect(banner).toHaveCount(0)
   })
 
