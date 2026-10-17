@@ -3146,9 +3146,15 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     // Array.isArray([null]) is true, so the old `Array.isArray(response) ? response : ...`
     // stored [null]; the folderPath computed then did folders.find(f => f.id ...)
     // and threw "Cannot read properties of null (reading 'id')" on every render.
+    // Seed a NON-EMPTY valid list first: an empty list is the view's initial
+    // value, so asserting [] after a bad shape proves nothing about "leaves the
+    // list intact" — those assertions would pass even if loadFolders blanked
+    // `folders` on a bad response.
+    const seededFolders = [{ id: 'f1', name: 'Root', parent_id: null }]
+    let foldersResponse: unknown = seededFolders
     useApiFns.get.mockImplementation((url: string) => {
       if (url.includes('/lifecycle-maps')) return Promise.resolve([])
-      if (url.includes('/pipeline-folders')) return Promise.resolve([null])
+      if (url.includes('/pipeline-folders')) return Promise.resolve(foldersResponse)
       return Promise.resolve({ items: [] })
     })
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -3157,9 +3163,18 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
       await router.isReady()
       const wrapper = await mountEditorLoaded()
       const vm = wrapper.vm as any
+      // A successful load of the non-empty list, so "intact" has something to
+      // preserve.
       await vm.loadFolders()
       await flushPromises()
-      expect(vm.folders).toEqual([])
+      expect(vm.folders).toEqual(seededFolders)
+      // The NEXT fetch resolves a bad shape ([null]).
+      foldersResponse = [null]
+      await vm.loadFolders()
+      await flushPromises()
+      // The previously-loaded list SURVIVES a bad response (the literal claim
+      // in this test's name).
+      expect(vm.folders).toEqual(seededFolders)
       expect(consoleError).toHaveBeenCalled()
       // Re-render the toolbar (where folderPath is read) to prove no crash.
       await nextTick()

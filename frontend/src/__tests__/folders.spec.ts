@@ -68,11 +68,17 @@ describe('isFolderList', () => {
   })
 
   it('rejects an element with a non-string id', () => {
-    expect(isFolderList([{ id: 1, name: 'a' }])).toBe(false)
+    // `parent_id` is supplied as a valid `null` so the id type check is the ONLY
+    // failing field. Omitting it made the element fail the parent_id check
+    // first, masking this case: the id check could be deleted and this test
+    // would still pass.
+    expect(isFolderList([{ id: 1, name: 'a', parent_id: null }])).toBe(false)
   })
 
   it('rejects an element with a non-string name', () => {
-    expect(isFolderList([{ id: 'f1', name: 1 }])).toBe(false)
+    // `parent_id` is supplied as a valid `null` so the name type check is the
+    // ONLY failing field (see the non-string-id case above).
+    expect(isFolderList([{ id: 'f1', name: 1, parent_id: null }])).toBe(false)
   })
 
   it('rejects an element with a non-string, non-null parent_id', () => {
