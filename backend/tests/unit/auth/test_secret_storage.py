@@ -271,3 +271,45 @@ class TestIsCompleteFernetToken:
         assert _is_complete_fernet_token(b"bytes-not-str") is False
         assert _is_complete_fernet_token(123) is False
         assert _is_complete_fernet_token("") is False
+
+
+async def test_read_rls_org_id_postgres_ignores_populated_info() -> None:
+    """FAR-1884: on Postgres the GUC is authoritative, not ``session.info``.
+
+    ``set_rls_org`` never writes ``session.info`` on Postgres, so a populated
+    (stale/foreign) value must not resolve the decrypt against the wrong tenant.
+    """
+    from modulo.auth.secret_storage import _read_rls_org_id
+
+    foreign = uuid.uuid4()
+    session = _make_session(dialect="postgresql", info={"org_id": str(foreign)}, current_setting=str(_ORG_ID))
+
+    assert await _read_rls_org_id(session) == _ORG_ID
+
+
+async def test_read_rls_org_id_no_readable_dialect_keeps_info_path() -> None:
+    """FAR-1884 finding 4(a): a session double exposing only ``execute``/``info``
+    (no readable dialect) still resolves via ``session.info`` — the pre-existing
+    generic behaviour, preserved through the delegate.
+
+    Non-vacuous: the info org and the GUC probe value are DIFFERENT UUIDs, so a
+    regression that treated this shape as Postgres (GUC-first) or dropped the
+    generic path would resolve the GUC value instead and fail here.
+    """
+    from modulo.auth.secret_storage import _read_rls_org_id
+
+    guc_org = uuid.uuid4()
+    session = AsyncMock(spec=["execute", "info"])
+    session.info = {"org_id": str(_ORG_ID)}
+
+    async def _exec(_stmt: object, _params: object = None) -> MagicMock:
+        result = MagicMock()
+        result.scalar.return_value = str(guc_org)
+        return result
+
+    session.execute = _exec
+
+    result = await _read_rls_org_id(session)
+
+    assert result == _ORG_ID
+    assert result != guc_org

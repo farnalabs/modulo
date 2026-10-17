@@ -206,24 +206,20 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     expect(doc.scrollHeight).toBeLessThanOrEqual(doc.clientHeight)
   })
 
-  test('a short viewport yields the editor to the space left instead of a fixed floor', { tag: '@regression' }, async ({ page, env }) => {
-    // 640x480 (short landscape) is where the chrome stack above the editor
-    // exceeds the 240px usability floor the original mobile fix introduced:
-    // with a hard floor the editor was forced to 240px and spilled ~80px below
-    // the fold, re-introducing the trapped page scroll FAR-1841 removed. The
-    // floor must yield to the viewport (FAR-1861) — the editor shrinks to the
-    // space left instead of overflowing.
+  test('a short viewport shrinks the editor to the space left instead of scrolling the page', { tag: '@regression' }, async ({ page, env }) => {
+    // The original mobile fix pinned the editor to a hard 240px minimum, so on
+    // any viewport where the chrome stack above the editor left less than 240px
+    // the editor was forced to 240px and spilled below the fold, re-introducing
+    // the trapped page scroll FAR-1841 removed. FAR-1861 made the floor yield to
+    // the viewport — the editor shrinks to the space left instead of overflowing.
     //
     // The chrome height (fixed mobile header + breadcrumb + any ambient banners
-    // such as the DB-capacity or onboarding banner) differs by environment, so
-    // 640x480 does NOT guarantee a sub-240px leftover — on staging the chrome is
-    // only ~110px, leaving ~370px, and a fixed 640x480 assertion failed. Measure
-    // the chrome and shrink the height so ~180px remains below it: that
-    // deterministically exercises the floor-yields case with or without a
-    // banner. The invariant is CHROME-RELATIVE (the pinned height equals the
-    // room left below the chrome), never a fixed pixel count: the mocked e2e
-    // chrome is shorter than production's, so an absolute `< 240` here would be
-    // asserting the mock's chrome height, not the floor yielding.
+    // such as the DB-capacity or onboarding banner) varies by environment, so a
+    // fixed 640x480 does NOT guarantee a sub-240px leftover — on staging the
+    // chrome is ~110px, leaving ~370px, and the old absolute assertion failed.
+    // Measure the chrome, then shrink the height so ~180px remains below it:
+    // that deterministically exercises the floor-yields case with or without a
+    // banner (the fit maths itself stays pinned by PipelineEditorViewMobileFit).
     await loginAsAdmin(page, env)
     await mockEditorWithNode(page)
     await page.setViewportSize({ width: 640, height: 480 })
@@ -233,39 +229,28 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     const flow = page.locator('.vue-flow').first()
     await expect(flow).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
 
+    // Measure the chrome above the editor, then size the viewport so only ~180px
+    // is left for the editor — below the 240px floor, independent of environment.
+    const chromeTop = await page
+      .getByTestId('pipeline-editor-root')
+      .evaluate((el) => Math.round(el.getBoundingClientRect().top + window.scrollY))
+    expect(chromeTop).toBeGreaterThan(0)
+    await page.setViewportSize({ width: 640, height: chromeTop + 180 })
+
     // The fit resolves async (chrome above the editor mounts/measures on its
     // own schedule) — poll until the document settles with no vertical scroll.
-    const settle = () =>
-      expect
-        .poll(
-          async () => page.evaluate(() => document.documentElement.scrollHeight - document.documentElement.clientHeight),
-          { timeout: 15_000, message: 'short viewport must not scroll the page' },
-        )
-        .toBeLessThanOrEqual(0)
-    await settle()
-
-    const root = page.getByTestId('pipeline-editor-root')
-    let rootBox = await root.boundingBox()
-    expect(rootBox).not.toBeNull()
-
-    // Put the editor squarely in the "available < floor" band regardless of the
-    // mocked-vs-production chrome height: shrink the viewport to the measured
-    // chrome height plus a sub-240 slice. The resize handler re-fits the pin.
-    const chromeHeight = Math.ceil(rootBox!.y)
-    await page.setViewportSize({ width: 640, height: chromeHeight + 180 })
-    await settle()
+    await expect
+      .poll(
+        async () => page.evaluate(() => document.documentElement.scrollHeight - document.documentElement.clientHeight),
+        { timeout: 15_000, message: 'short viewport must not scroll the page' },
+      )
+      .toBeLessThanOrEqual(0)
 
     const viewportHeight = await page.evaluate(() => document.documentElement.clientHeight)
-    rootBox = await root.boundingBox()
+    const rootBox = await page.getByTestId('pipeline-editor-root').boundingBox()
     expect(rootBox).not.toBeNull()
-
-    const available = viewportHeight - rootBox!.y
-    // Precondition: genuinely below the old floor, so this only passes if the
-    // floor yielded (a hard 240px floor would leave this at 240, not available).
-    expect(available).toBeLessThan(240)
-    expect(rootBox!.height).toBeGreaterThan(0)
-    // The editor is the space actually left below the chrome — not a fixed pin.
-    expect(Math.abs(rootBox!.height - available)).toBeLessThanOrEqual(1)
+    // The 240px floor yielded: the editor is shorter than 240px here.
+    expect(rootBox!.height).toBeLessThan(240)
     // …and ends at or above the fold, so nothing is trapped below it.
     expect(rootBox!.y + rootBox!.height).toBeLessThanOrEqual(viewportHeight + 1)
   })

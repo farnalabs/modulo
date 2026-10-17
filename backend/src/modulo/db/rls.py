@@ -14,6 +14,7 @@ import logging
 import uuid
 
 from sqlalchemy import event, text
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.orm import ORMExecuteState
 from sqlalchemy.orm import Session as SASession
@@ -64,14 +65,38 @@ class OutputsRlsMismatch(RuntimeError):  # noqa: N818  # name mandated by the re
 async def read_rls_org(session: AsyncSession) -> uuid.UUID | None:
     """Read the RLS org id currently bound to *session*, or ``None``.
 
-    Ported from ``auth/secret_storage._read_rls_org_id`` (kept separate so the
-    auth module keeps its private helper untouched): generic backends store
-    the org in ``session.info['org_id']``; Postgres reads
-    ``current_setting('app.organisation_id', true)`` — the empty string (GUC
-    unset) normalises to ``None``. A value that cannot be coerced to a UUID is
-    treated as absent. Any failure executing the GUC read (non-Postgres
-    backend without the function, closed session) degrades to ``None``.
+    The authoritative source is selected by the session's DIALECT FIRST, so the
+    mechanism the dialect actually enforces is the one that is read:
+
+    * Postgres — the ``current_setting('app.organisation_id', true)`` GUC is the
+      only authoritative source. ``set_rls_org`` writes the GUC (never
+      ``session.info``) on Postgres, so a populated ``session.info['org_id']`` is
+      unrelated to the transaction's real RLS context and must not shadow it — a
+      stale or foreign info value would otherwise report a different org than RLS
+      actually enforces.
+    * Generic backends (MariaDB, SQLite) — store the org in
+      ``session.info['org_id']`` and have no GUC, so the info lookup is
+      authoritative there.
+
+    ``auth/secret_storage._read_rls_org_id`` delegates here, so this module is
+    the ONE implementation of the ordering: the two paths cannot drift into
+    divergent precedence (a drifted ordering on Postgres would resolve a decrypt
+    against a stale or foreign org). The empty string (GUC unset) normalises to
+    ``None``; a value that cannot be coerced to a UUID is treated as absent. Any
+    failure executing the GUC read (non-Postgres backend without the function,
+    closed session) degrades to ``None``.
     """
+    dialect = await _resolve_session_dialect(session)
+    if dialect == "postgresql" or dialect is None:
+        # Postgres reads the GUC. An UNREADABLE dialect (``None`` — a bind
+        # existed but its name could not be read) fails CLOSED to this same
+        # probe rather than re-entering the info-first ordering FAR-1884
+        # removes: a bind that cannot be identified might be Postgres, and
+        # consulting ``session.info`` first there is the defect this change
+        # exists to eliminate. A session with NO bind at all returns ``""`` and
+        # keeps the generic path below.
+        return await _read_guc_org(session)
+
     info = getattr(session, "info", None)
     if isinstance(info, dict):
         value = info.get(_TENANT_KEY)
@@ -80,11 +105,73 @@ async def read_rls_org(session: AsyncSession) -> uuid.UUID | None:
             if parsed is not None:
                 return parsed
 
+    # Generic backends have no ``app.organisation_id`` GUC, so this probe
+    # degrades to ``None`` there (the function is absent). It is retained so a
+    # session double that exposes only ``execute`` — and no resolvable dialect —
+    # behaves exactly as it did before the dialect split.
+    return await _read_guc_org(session)
+
+
+async def _resolve_session_dialect(session: AsyncSession) -> str | None:
+    """Resolve the session bind's dialect name, distinguishing the failure modes.
+
+    Mirrors the bind dance the other dialect guards use
+    (``db.crud.run.get_dialect_name``, ``db.crud.row_lock._dialect_name``) but
+    classifies a failure instead of collapsing every one to ``""``:
+
+    * a dialect name (e.g. ``"postgresql"``) when the bind's dialect is readable;
+    * ``""`` when there is NO bind at all — no ``get_bind`` attribute (a session
+      double exposing only ``execute``/``info``) or ``get_bind()`` raised
+      ``sqlalchemy.exc.UnboundExecutionError`` (an unbound session; it is a
+      subclass of ``InvalidRequestError``, which is the class caught below).
+      ``""`` keeps the pre-FAR-1884 generic (``session.info``-first) read order;
+    * ``None`` when a bind EXISTED but its dialect could not be read. This must
+      NOT silently degrade to the generic order — that is exactly the ordering
+      FAR-1884 removes on the authoritative backend — so the caller fails closed
+      to the GUC probe instead, and the condition is logged loudly here.
+    """
+    get_bind = getattr(session, "get_bind", None)
+    if get_bind is None:
+        return ""
+    try:
+        bind = get_bind()
+        if asyncio.iscoroutine(bind):
+            bind = await bind
+    except InvalidRequestError:
+        # No bind at all: either ``get_bind()`` raised because nothing is bound
+        # (``sqlalchemy.exc.UnboundExecutionError`` — a subclass of
+        # ``InvalidRequestError``, so the base catch covers it), or the session
+        # is a lightweight double whose bind lookup is unavailable. Either way
+        # the pre-FAR-1884 generic path is correct and must be preserved.
+        return ""
+    try:
+        return str(bind.dialect.name)
+    except AttributeError:
+        # A bind existed but carried no readable dialect. Never swallow this:
+        # the caller falls closed to the GUC probe rather than re-entering the
+        # info-first ordering FAR-1884 exists to eliminate.
+        _log.warning(
+            "read_rls_org: session bind %r exposes no readable dialect; failing closed to the Postgres GUC probe",
+            bind,
+            exc_info=True,
+        )
+        return None
+
+
+async def _read_guc_org(session: AsyncSession) -> uuid.UUID | None:
+    """Read ``current_setting('app.organisation_id', true)``, degrading to ``None``.
+
+    Non-Postgres backends have no such function; a closed session or a driver
+    error degrades to ``None`` rather than raising — the public contract of
+    :func:`read_rls_org`. The WHOLE read (``execute`` AND the ``scalar()`` fetch)
+    is inside the guard: a fetch-time failure (server-side cursor, connection
+    closed mid-fetch) must honour this contract too, not escape.
+    """
     try:
         result = await session.execute(text("SELECT current_setting('app.organisation_id', true)"))
+        raw: object = result.scalar()
     except Exception:
         return None
-    raw: object = result.scalar()
     if raw is None:
         return None
     if isinstance(raw, str) and raw.strip() == "":
