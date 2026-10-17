@@ -97,18 +97,21 @@
             </button>
             <div v-if="!isViewing" class="relative" @click.stop @keydown.enter.stop @keydown.space.prevent.stop>
               <button
+                ref="saveAsDropdownTriggerRef"
                 type="button"
                 :class="btnToolbarSecondary"
                 :aria-expanded="showSaveAsDropdown"
                 aria-haspopup="menu"
                 data-testid="pipeline-editor-save-as-template"
-                @click="showSaveAsDropdown = !showSaveAsDropdown"
+                @click="toggleSaveAsDropdown()"
               >
                 {{ $t('views.PipelineEditorView.save_as_template') }}
               </button>
               <div
                 v-if="showSaveAsDropdown"
-                class="absolute left-0 top-full z-30 mt-1 w-48 rounded-lg border bg-card py-1 shadow-lg"
+                class="fixed z-30 max-h-[calc(100vh-1rem)] w-48 overflow-y-auto overscroll-contain rounded-lg border bg-card py-1 shadow-lg"
+                :style="saveAsDropdownStyle"
+                data-testid="pipeline-editor-save-as-dropdown"
               >
                 <button
                   type="button"
@@ -1993,6 +1996,8 @@ const singlePrPerRun = computed<boolean>({
 })
 const selectedEdgeData = ref<any | null>(null)
 const showSaveAsDropdown = ref(false)
+const saveAsDropdownTriggerRef = ref<HTMLButtonElement | null>(null)
+const saveAsDropdownStyle = ref<Record<string, string>>({})
 const nodeTypes = { agent: 'agent', manual: 'manual', router: 'router', hitl: 'hitl', dispatch: 'dispatch' }
 const { fitView, onPaneReady } = useVueFlow()
 
@@ -2188,15 +2193,22 @@ const ownerlessGateAdvisory = computed(() => {
  * Returns {} when the trigger ref is not bound yet (jsdom mounts), leaving the
  * CSS class fallback in charge.
  *
- * `preferredWidth` is the panel's CSS width in px (w-80 = 320, w-72 = 288),
- * clamped here by the same `max-w-[calc(100vw-1rem)]` the class applies. The
- * panel is RIGHT-aligned to the trigger's right edge; when that would push its
- * LEFT edge off-screen (a trigger near the left edge — the w-80/w-72 panels are
- * wider than the room left of a left-edge trigger), it falls back to
- * LEFT-anchoring with the left edge clamped inside the margin, so both edges
- * stay on screen.
+ * `preferredWidth` is the panel's CSS width in px (w-80 = 320, w-72 = 288,
+ * w-48 = 192), clamped here by the same `max-w-[calc(100vw-1rem)]` the class
+ * applies. With the default `align: 'right'` the panel is RIGHT-aligned to the
+ * trigger's right edge; when that would push its LEFT edge off-screen (a
+ * trigger near the left edge — the w-80/w-72 panels are wider than the room
+ * left of a left-edge trigger), it falls back to LEFT-anchoring with the left
+ * edge clamped inside the margin, so both edges stay on screen. `align: 'left'`
+ * (the save-as-template menu, which hangs off the left edge of its trigger)
+ * always left-anchors, clamping the left edge inside the margin so a trigger
+ * near the right edge does not push the panel off-screen.
  */
-function anchoredPopoverStyle(trigger: HTMLElement | null, preferredWidth: number): Record<string, string> {
+function anchoredPopoverStyle(
+  trigger: HTMLElement | null,
+  preferredWidth: number,
+  align: 'left' | 'right' = 'right',
+): Record<string, string> {
   if (!trigger) return {}
   const rect = trigger.getBoundingClientRect()
   const margin = 8
@@ -2211,13 +2223,21 @@ function anchoredPopoverStyle(trigger: HTMLElement | null, preferredWidth: numbe
   const maxHeight = Math.max(120, Math.min(available, window.innerHeight - margin * 2))
   // Effective panel width: the class width, capped by the viewport cap.
   const width = Math.min(preferredWidth, window.innerWidth - margin * 2)
-  // Right-aligned by default; left-anchor when the panel would overflow the
-  // left edge (a trigger within one panel-width of the viewport's left edge).
-  const overflowsLeft = rect.right - width < margin
-  const left = overflowsLeft
-    ? `${Math.max(margin, Math.min(rect.left, window.innerWidth - margin - width))}px`
-    : 'auto'
-  const right = overflowsLeft ? 'auto' : `${Math.max(margin, window.innerWidth - rect.right)}px`
+  let left: string
+  let right: string
+  if (align === 'left') {
+    // Left-anchored to the trigger's left edge, clamped inside the margin.
+    left = `${Math.max(margin, Math.min(rect.left, window.innerWidth - margin - width))}px`
+    right = 'auto'
+  } else {
+    // Right-aligned by default; left-anchor when the panel would overflow the
+    // left edge (a trigger within one panel-width of the viewport's left edge).
+    const overflowsLeft = rect.right - width < margin
+    left = overflowsLeft
+      ? `${Math.max(margin, Math.min(rect.left, window.innerWidth - margin - width))}px`
+      : 'auto'
+    right = overflowsLeft ? 'auto' : `${Math.max(margin, window.innerWidth - rect.right)}px`
+  }
   return {
     left,
     right,
@@ -2511,6 +2531,52 @@ watch(autonomyPanelOpen, (open) => {
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onAutonomyPanelKeydown)
   unbindAutonomyPanelPositioning()
+})
+
+// FAR-1899 follow-up: the save-as-template menu is a plain in-tree popover in
+// the SAME clipped content column as the retry-policy and autonomy panels, so
+// it carries the same sub-fit clipping (FAR-1861). It gets the same
+// `position: fixed` viewport anchoring, but LEFT-anchored (the menu hangs off
+// the left edge of its trigger) rather than right-aligned like the panels —
+// hence the explicit `align`. `w-48` = 12rem = 192px (16px root); keep in sync
+// with the class on the menu.
+const SAVE_AS_DROPDOWN_WIDTH = 192
+
+function positionSaveAsDropdown() {
+  saveAsDropdownStyle.value = anchoredPopoverStyle(saveAsDropdownTriggerRef.value, SAVE_AS_DROPDOWN_WIDTH, 'left')
+}
+
+function bindSaveAsDropdownPositioning() {
+  document.addEventListener('scroll', positionSaveAsDropdown, true)
+  window.addEventListener('resize', positionSaveAsDropdown)
+}
+
+function unbindSaveAsDropdownPositioning() {
+  document.removeEventListener('scroll', positionSaveAsDropdown, true)
+  window.removeEventListener('resize', positionSaveAsDropdown)
+}
+
+function toggleSaveAsDropdown() {
+  if (showSaveAsDropdown.value) {
+    showSaveAsDropdown.value = false
+    return
+  }
+  // Anchor before paint so the menu never flashes at its static in-column
+  // position for a frame (same FAR-1899 anchor-before-paint as the panels).
+  positionSaveAsDropdown()
+  showSaveAsDropdown.value = true
+}
+
+watch(showSaveAsDropdown, (open) => {
+  if (open) {
+    bindSaveAsDropdownPositioning()
+  } else {
+    unbindSaveAsDropdownPositioning()
+  }
+})
+
+onBeforeUnmount(() => {
+  unbindSaveAsDropdownPositioning()
 })
 
 // A manual demote/promote writes earned_autonomy_level server-side; refetch

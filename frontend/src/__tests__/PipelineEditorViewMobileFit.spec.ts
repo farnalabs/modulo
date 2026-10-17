@@ -808,4 +808,67 @@ describe('PipelineEditorView — toolbar popover anchoring (FAR-1899 changed-lin
 
     wrapper.unmount()
   })
+
+  it('left-anchors the save-as-template menu inside the margin (FAR-1899 review note)', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+    setViewport(800)
+    // A toolbar trigger near the LEFT edge: the left-anchored w-48 menu hangs
+    // off its left edge, clamped inside the margin.
+    stubToggleRect(wrapper, 'pipeline-editor-save-as-template', { top: 60, right: 140, bottom: 100, left: 40 })
+    await wrapper.get('[data-testid="pipeline-editor-save-as-template"]').trigger('click')
+    await nextTick()
+
+    const style = wrapper.get('[data-testid="pipeline-editor-save-as-dropdown"]').attributes('style') ?? ''
+    expect(style).toContain('left: 40px')
+    expect(style).toContain('right: auto')
+    expect(style).toContain('top: 104px')
+    expect(style).toContain('bottom: auto')
+    wrapper.unmount()
+  })
+
+  it('clamps the save-as-template menu left edge when the trigger sits near the right edge', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+    setViewport(800)
+    // Trigger near the right edge: left = min(rect.left, innerWidth - margin -
+    // width) clamps to the viewport's right margin, so the menu stays on screen.
+    stubToggleRect(wrapper, 'pipeline-editor-save-as-template', { top: 60, right: 1060, bottom: 100, left: 1000 })
+    await wrapper.get('[data-testid="pipeline-editor-save-as-template"]').trigger('click')
+    await nextTick()
+
+    const style = wrapper.get('[data-testid="pipeline-editor-save-as-dropdown"]').attributes('style') ?? ''
+    expect(style).toContain(`left: ${window.innerWidth - 8 - 192}px`)
+    expect(style).toContain('right: auto')
+    wrapper.unmount()
+  })
+
+  it('drives the left-align branch of anchoredPopoverStyle directly', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    setViewport(800)
+    const el = document.createElement('button')
+    el.getBoundingClientRect = () => fakeRect({ top: 60, right: 140, bottom: 100, left: 40 })
+    expect(vm.anchoredPopoverStyle(el, 192, 'left')).toMatchObject({ left: '40px', right: 'auto' })
+    wrapper.unmount()
+  })
+
+  it('opens and closes the save-as-template menu through its toggle', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+    setViewport(800)
+    stubToggleRect(wrapper, 'pipeline-editor-save-as-template', { top: 60, right: 140, bottom: 100, left: 40 })
+
+    const trigger = wrapper.get('[data-testid="pipeline-editor-save-as-template"]')
+    await trigger.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-save-as-dropdown"]').exists()).toBe(true)
+
+    await trigger.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-save-as-dropdown"]').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
 })
