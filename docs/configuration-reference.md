@@ -39,8 +39,10 @@ Controls a 98% hard-stop that refuses new runs when database capacity is nearly 
 
 Capacity is **auto-detected by default**; there is normally nothing to configure. The
 monitor resolves a capacity figure from the first available source and compares it with
-the current database size (`pg_database_size`), refusing to create new runs once usage
-reaches `DB_CAPACITY_HARD_STOP_PCT`.
+that source's usage numerator: the measured database size (`pg_database_size`) for
+`env`, or the mounted volume's used space (`total - free`) for `filesystem`. The
+hard-stop applies in `DB_CAPACITY_MODE=fixed` only (the default), refusing to create
+new runs once usage reaches `DB_CAPACITY_HARD_STOP_PCT`.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -67,7 +69,7 @@ An unrecognised value falls back to `auto`.
 - **`env`** uses `DB_CAPACITY_BYTES` as the capacity and the measured database size as
   the numerator.
 - **`filesystem`** uses the total size of the mounted filesystem at `DB_CAPACITY_PATH`
-  and its free space (`total - free`) as the numerator. The Docker Compose files mount
+  and its **used** space (`total - free`) as the numerator. The Docker Compose files mount
   the Postgres data volume read-only at this path, for the API/MCP process and for the
   workers that create runs (cron and polling triggers). If the path is missing or
   unreadable the source resolves nothing - the monitor never judges capacity from a
@@ -75,8 +77,11 @@ An unrecognised value falls back to `auto`.
 
 **An auto-detected candidate is rejected when it is physically impossible.** A volume
 whose total is *smaller than the database it holds* cannot exist, so the `filesystem`
-reading is the wrong volume: the monitor discards it, logs a warning, and falls through
-to the next source. This is an impossibility test, not a margin, so a small-but-valid
+reading is the wrong volume: the monitor discards it and logs a warning. `filesystem`
+is last in the `auto` order (`env`, then `filesystem`) and is the sole candidate when
+selected explicitly, so a discarded reading has no next source to fall through to - it
+resolves nothing (`source: "none"`) and the hard-stop goes inert. This is an
+impossibility test, not a margin, so a small-but-valid
 volume whose total is genuinely just above the database size still resolves and still
 arms the hard-stop. The check is scoped to **auto-detected** sources only - an explicit
 `DB_CAPACITY_BYTES` (`env`) is the operator asserting the capacity and is never
