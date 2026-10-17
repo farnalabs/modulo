@@ -304,9 +304,10 @@ async def _record_rejected_delivery(
     kind: Literal["backpressure", "busy", "concurrency"],
     trigger_id: uuid.UUID,
     org_id: uuid.UUID | None,
-    raw_body: bytes,
-    raw_payload: dict[str, Any],
+    raw_body: bytes | None = None,
+    raw_payload: dict[str, Any] | None = None,
     reason: str = "",
+    source_event_id: uuid.UUID | None = None,
 ) -> bool:
     """FAR-604: re-record a refused delivery in a FRESH transaction.
 
@@ -324,17 +325,28 @@ async def _record_rejected_delivery(
     underlying recorders open their own session from the shared engine and
     never raise; this helper is the same shape.
 
+    Two caller shapes share this helper. The RECEIVE path holds the refused
+    delivery's raw body, so it passes ``raw_body``/``raw_payload`` and the
+    recorder stores a fresh payload row (replayable from the event log). The
+    REPLAY path (FAR-1904) holds no raw body — the original event's payload
+    already exists — so it passes ``source_event_id`` instead: the recorder
+    carries the ORIGINAL event's payload hash onto the refusal row and stores
+    no duplicate payload row (the ``_replay_busy_path`` busy-replay shape).
+
     Returns ``True`` when a re-record was attempted (the org was resolved),
     ``False`` when there is nothing to record against. Never raises.
     """
     if org_id is None:
         return False
+    # The receive path holds the raw body and hashes it; the replay path omits
+    # it and lets the recorder inherit the original event's hash instead.
+    payload_hash = sha256_hex(raw_body) if raw_body is not None else None
     if kind == "busy":
         await record_busy_delivery(
             trigger_id=trigger_id,
             org_id=org_id,
             trigger_type="webhook",
-            payload_hash=sha256_hex(raw_body),
+            payload_hash=payload_hash,
             raw_body=raw_body,
             raw_payload=raw_payload,
         )
@@ -349,7 +361,8 @@ async def _record_rejected_delivery(
             trigger_type="webhook",
             validation_result=_CONCURRENCY_REFUSAL_VALIDATION_RESULT,
             error_detail=_CONCURRENCY_REFUSAL_ERROR_DETAIL,
-            payload_hash=sha256_hex(raw_body),
+            payload_hash=payload_hash,
+            source_event_id=source_event_id,
             raw_body=raw_body,
             raw_payload=raw_payload,
         )
@@ -358,7 +371,7 @@ async def _record_rejected_delivery(
             trigger_id=trigger_id,
             org_id=org_id,
             trigger_type="webhook",
-            payload_hash=sha256_hex(raw_body),
+            payload_hash=payload_hash,
             reason=reason,
             raw_body=raw_body,
             raw_payload=raw_payload,
@@ -1245,9 +1258,31 @@ async def replay_webhook(
             detail="Duplicate webhook payload",
         ) from exc
     except ConcurrentRunLimitError as exc:
+        # FAR-1904: the replay mirror of receive_webhook's FAR-1863 post-unwind
+        # re-record. The engine's in-transaction ``concurrency_limit_reached``
+        # write rolls back with the unwound main transaction, so re-record the
+        # refusal in a FRESH transaction AFTER the unwind — the refused replay
+        # stays auditable, never silent (a bare 429 left no trace at all). The
+        # original event's payload already exists, so the re-record carries its
+        # hash via ``source_event_id`` (the _replay_busy_path busy-replay shape)
+        # and stores no duplicate payload row. The 429 is reject-and-retry, so
+        # it carries a Retry-After (the receive path's shape) and the caller
+        # re-fires once a slot frees.
+        _log.info(
+            "webhooks.replay_webhook.concurrent_limit_refused trigger=%s limit=%s",
+            trigger_id,
+            exc.limit,
+        )
+        await _record_rejected_delivery(
+            kind="concurrency",
+            trigger_id=trigger_id,
+            org_id=org_id,
+            source_event_id=event_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Concurrent run limit of {exc.limit} reached",
+            headers={"Retry-After": "5"},
         ) from exc
     except SnapshotLockNotAvailableError as exc:
         from modulo.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS
