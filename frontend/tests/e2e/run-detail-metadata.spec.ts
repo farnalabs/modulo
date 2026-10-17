@@ -19,6 +19,31 @@ import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 const RUN_ID = 'run-meta-terminal'
 
+/** The kept heartbeat on the terminal-run fixture (FAR-1839). */
+const HEARTBEAT_AT = '2026-08-01T10:04:55Z'
+
+/**
+ * The value the component renders for `HEARTBEAT_AT`, derived INSIDE the page
+ * with the same `toLocaleString` call the view makes (formatTimestamp →
+ * heartbeatDisplayText). Deriving it in the browser keeps the assertion
+ * independent of the runner's timezone: the fixture instant is
+ * 10:04:55 UTC on Aug 1, which renders "Jul 31" anywhere west of UTC-11 —
+ * a hardcoded /Aug 1/ regex was timezone-dependent (FAR-1839 follow-up).
+ * Mirrors the unit test's derivation in RunDetailView.spec.ts.
+ */
+async function expectedHeartbeatText(page: Page): Promise<string> {
+  return page.evaluate(
+    (iso) =>
+      new Date(iso).toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+    HEARTBEAT_AT,
+  )
+}
+
 function terminalRun(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     run_id: RUN_ID,
@@ -83,13 +108,13 @@ test.describe('Run detail metadata + heartbeat (FAR-1839)', { tag: '@regression'
 
   test('a terminal run shows its kept absolute last heartbeat, not a dash', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
-    await openRunDetail(page, terminalRun({ heartbeat_at: '2026-08-01T10:04:55Z' }))
+    await openRunDetail(page, terminalRun({ heartbeat_at: HEARTBEAT_AT }))
 
     const heartbeat = page.getByTestId('run-detail-heartbeat')
     await expect(heartbeat).toContainText('Last heartbeat')
     // The value is a formatted local timestamp, not the "—" placeholder.
     await expect(heartbeat).not.toContainText('—')
-    await expect(heartbeat).toContainText(/Aug\s+1/)
+    await expect(heartbeat).toContainText(await expectedHeartbeatText(page))
     // Staleness is a live-run signal only — a finished run never wears it.
     await expect(heartbeat).not.toContainText('(stale)')
     await expect(page.getByTestId('run-detail-warnings-strip-stale-heartbeat')).toHaveCount(0)
@@ -105,7 +130,7 @@ test.describe('Run detail metadata + heartbeat (FAR-1839)', { tag: '@regression'
 
   test('renders all five metadata fields with their labels', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
-    await openRunDetail(page, terminalRun({ heartbeat_at: '2026-08-01T10:04:55Z' }))
+    await openRunDetail(page, terminalRun({ heartbeat_at: HEARTBEAT_AT }))
 
     const list = metadataList(page)
     await expect(list).toBeVisible()
@@ -122,7 +147,7 @@ test.describe('Run detail metadata + heartbeat (FAR-1839)', { tag: '@regression'
 
   test('metadata labels and values align in two columns on desktop', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
-    await openRunDetail(page, terminalRun({ heartbeat_at: '2026-08-01T10:04:55Z' }))
+    await openRunDetail(page, terminalRun({ heartbeat_at: HEARTBEAT_AT }))
 
     const list = metadataList(page)
     // One shared left edge for every label, one for every value — this is the
@@ -141,7 +166,7 @@ test.describe('Run detail metadata + heartbeat (FAR-1839)', { tag: '@regression'
   test('the metadata block stays inside a phone viewport', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.setViewportSize({ width: 375, height: 812 })
-    await openRunDetail(page, terminalRun({ heartbeat_at: '2026-08-01T10:04:55Z' }))
+    await openRunDetail(page, terminalRun({ heartbeat_at: HEARTBEAT_AT }))
 
     const list = metadataList(page)
     // All five rows still readable (no collapsed/hidden labels)...
