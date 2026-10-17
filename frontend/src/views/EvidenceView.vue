@@ -54,7 +54,6 @@
 
     <div
       v-if="loading"
-      role="status"
       aria-live="polite"
       data-testid="evidence-loading"
       class="flex items-center gap-3 text-sm text-muted-foreground"
@@ -78,7 +77,7 @@
     />
 
     <div v-else class="space-y-3">
-      <p role="status" aria-live="polite" data-testid="evidence-count" class="text-sm text-muted-foreground">
+      <p aria-live="polite" data-testid="evidence-count" class="text-sm text-muted-foreground">
         {{ $t('views.EvidenceView.row_count', { count: rows.length }) }}
       </p>
       <p class="text-xs text-muted-foreground">{{ $t('views.EvidenceView.redaction_note') }}</p>

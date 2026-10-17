@@ -141,7 +141,7 @@ describe('EvidenceView', () => {
     await nextTick()
 
     expect(wrapper.find('[data-testid="evidence-loading"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="evidence-loading"]').attributes('role')).toBe('status')
+    expect(wrapper.find('[data-testid="evidence-loading"]').attributes('aria-live')).toBe('polite')
 
     resolveFetch(response([row()]))
     await flushPromises()
