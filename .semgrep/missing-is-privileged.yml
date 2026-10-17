@@ -2,14 +2,23 @@ rules:
   - id: graph-write-missing-is-privileged
     patterns:
       - pattern-either:
-          - pattern-regex: (?s)(?<!def\\s)(?:await\\s+|=\\s*)?(?:replace_pipeline_graph|rollback_to_snapshot)\\s*\\((?:(?!is_privileged\\s*=).)*?\\)
-          - pattern-regex: (?s)(?<!def\\s)(?:await\\s+|=\\s*)?(?:replace_pipeline_graph|rollback_to_snapshot)\\s*\\((?:(?!caller_type\\s*=).)*?\\)
+          - pattern: replace_pipeline_graph(...)
+          - pattern: rollback_to_snapshot(...)
+      - pattern-not: |
+          replace_pipeline_graph(..., actor=GraphWriteActor(..., is_privileged=$P, ..., caller_type=$CT, ...), ...)
+      - pattern-not: |
+          rollback_to_snapshot(..., is_privileged=$P, ..., caller_type=$CT, ...)
     message: >
       ADR 047 service-layer backstop + hitl-gate-removal-guard-plan.md v19:
-      replace_pipeline_graph() and rollback_to_snapshot() require explicit
-      is_privileged= and caller_type= keyword-only arguments (no defaults). A
-      missing one is a runtime TypeError AND a gate-guard bypass - always pass
-      both. The MCP call site must pass caller_type="mcp" as a literal.
+      replace_pipeline_graph() takes a required actor=GraphWriteActor(...) whose
+      is_privileged and caller_type fields are required (no defaults), and
+      rollback_to_snapshot() still takes required keyword-only is_privileged=
+      and caller_type= arguments (no defaults). A call site that omits either is
+      a runtime TypeError AND a gate-guard bypass — always pass both. For
+      replace_pipeline_graph the two values live on the GraphWriteActor built
+      inline at the call site; for rollback_to_snapshot they are direct keyword
+      arguments. The MCP call site must pass caller_type="mcp" as a literal
+      (enforced by hitl-review-mcp-caller-type.yml).
     languages: [python]
     severity: ERROR
     paths:
