@@ -88,7 +88,6 @@ test.describe('WCAG AA audit (CI — Vite dev server)', { tag: "@regression" }, 
   for (const { path, name } of pages) {
     test(`${name} — light mode has no unexpected WCAG AA violations`, { tag: "@regression" }, async ({ page }) => {
       await page.goto(path)
-      await page.waitForURL('**/*', { timeout: 5000 }).catch(() => {})
 
       // Guard: storageState may redirect /login to / (dashboard)
       if (path === '/login' && !page.url().includes('/login')) {
@@ -123,7 +122,6 @@ test.describe('WCAG AA audit (CI — Vite dev server)', { tag: "@regression" }, 
 
     test(`${name} — dark mode has no unexpected WCAG AA violations`, { tag: "@regression" }, async ({ page }) => {
       await page.goto(path)
-      await page.waitForURL('**/*', { timeout: 5000 }).catch(() => {})
 
       // Guard: storageState may redirect /login to / (dashboard)
       if (path === '/login' && !page.url().includes('/login')) {

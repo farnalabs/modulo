@@ -90,6 +90,10 @@ class _MockSession:
         self.executed.append((stmt, params))
         if "set_config" in str(stmt):
             return MagicMock()
+        if "stranded_age_minutes" in str(stmt):
+            # FAR-1862 stranded-pending backstop: empty by default, and it must
+            # not consume this double's fixed result sequence.
+            return MagicMock()
         if not self._results:
             return MagicMock()
         return self._results.pop(0)
@@ -1829,6 +1833,7 @@ async def test_reconcile_org_read_failure_returns(caplog):
         "nodeless_failed": 0,
         "mid_graph_wedge_terminalized": 0,
         "claim_cap_terminalized": 0,
+        "stranded_pending_terminalized": 0,
         "hitl_review_expired_terminalized": 0,
         "hitl_review_missing_terminalized": 0,
         "scanned": 0,
@@ -1873,6 +1878,7 @@ async def test_reconcile_org_processes_rows():
         "nodeless_failed": 0,
         "mid_graph_wedge_terminalized": 0,
         "claim_cap_terminalized": 0,
+        "stranded_pending_terminalized": 0,
         "hitl_review_expired_terminalized": 0,
         "hitl_review_missing_terminalized": 0,
         "scanned": 0,
@@ -1988,6 +1994,7 @@ async def test_update_reconcile_telemetry_records_stall_reasons():
         "nodeless_failed": 1,
         "claim_cap_terminalized": 2,
         "mid_graph_wedge_terminalized": 3,
+        "stranded_pending_terminalized": 0,
         "dispatch_failed_terminalized": 4,
         "hitl_review_expired_terminalized": 5,
         "hitl_review_missing_terminalized": 6,
@@ -2024,6 +2031,7 @@ async def test_update_reconcile_telemetry_skips_zero_hitl_keys():
         "nodeless_failed": 0,
         "claim_cap_terminalized": 0,
         "mid_graph_wedge_terminalized": 0,
+        "stranded_pending_terminalized": 0,
         "dispatch_failed_terminalized": 0,
         "hitl_review_expired_terminalized": 0,
         "hitl_review_missing_terminalized": 0,
@@ -2408,6 +2416,7 @@ async def test_reconcile_org_reraises_cancellation():
         "nodeless_failed": 0,
         "mid_graph_wedge_terminalized": 0,
         "claim_cap_terminalized": 0,
+        "stranded_pending_terminalized": 0,
         "hitl_review_expired_terminalized": 0,
         "hitl_review_missing_terminalized": 0,
         "scanned": 0,

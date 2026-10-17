@@ -190,28 +190,27 @@ def _make_run(**overrides: object) -> MagicMock:
     return run
 
 
-class TestDispatchPhaseNotApiProjected:
-    def test_columns_absent_from_run_response_schema(self) -> None:
-        """``dispatch_phase`` / ``dispatch_phase_entered_at`` are internal
-        instrumentation: neither may appear in the run detail response model
-        (fields or generated JSON schema)."""
-        assert "dispatch_phase" not in RunResponse.model_fields
+class TestDispatchPhaseProjection:
+    """FAR-1862: ``dispatch_phase`` IS now API-projected on the run read surfaces
+    (the reconciler's recovery decisions are computed from it, so a stranded run
+    must be diagnosable from the product). ``dispatch_phase_entered_at`` remains
+    internal instrumentation and stays off every surface."""
+
+    def test_phase_present_and_entry_time_absent_from_run_response_schema(self) -> None:
+        assert "dispatch_phase" in RunResponse.model_fields
         assert "dispatch_phase_entered_at" not in RunResponse.model_fields
 
         properties = RunResponse.model_json_schema()["properties"]
-        assert "dispatch_phase" not in properties
+        assert "dispatch_phase" in properties
         assert "dispatch_phase_entered_at" not in properties
 
-    def test_columns_absent_from_detail_payload(self) -> None:
-        """The payload ``_build_run_response`` actually serialises carries
-        neither column."""
+    def test_phase_present_and_entry_time_absent_from_detail_payload(self) -> None:
         dumped = _build_run_response(_make_run()).model_dump()
 
-        assert "dispatch_phase" not in dumped
+        assert "dispatch_phase" in dumped
         assert "dispatch_phase_entered_at" not in dumped
 
-    def test_columns_absent_from_list_item_payload(self) -> None:
-        """The list endpoint's per-row builder emits neither column."""
+    def test_phase_present_and_entry_time_absent_from_list_item_payload(self) -> None:
         ctx = _ListPageContext(
             child_rollup={},
             account_labels={},
@@ -222,7 +221,7 @@ class TestDispatchPhaseNotApiProjected:
 
         item = _build_list_item(_make_run(), ctx)
 
-        assert "dispatch_phase" not in item
+        assert "dispatch_phase" in item
         assert "dispatch_phase_entered_at" not in item
 
 
