@@ -21,7 +21,45 @@ export function isDevModeTarget(env: TestEnv): boolean {
   return env.name === 'local'
 }
 
-const MOCK_ACCESS_TOKEN = 'mock-access-token-for-e2e-tests'
+function b64url(input: unknown): string {
+  return Buffer.from(JSON.stringify(input)).toString('base64url')
+}
+
+/**
+ * The local target's mock login must issue a token with the SAME claim
+ * contract as the real backend login (`POST /api/v1/auth/login` →
+ * `create_access_token`): a JWT whose payload carries `sub` (account email),
+ * `org_id`, `account_id`, `org_role` and `is_system_admin`.
+ *
+ * The SPA reads those claims straight off the token — `lib/jwt.ts` decodes it
+ * for the router's role gate (`enforceRoleTierVisibility`), `useCurrentUser`
+ * and `planStore.currentOrgId()` — and a non-JWT opaque string decodes to
+ * `null`. With no readable `org_role`, EVERY route declaring
+ * `required_roles: [admin]` (the ADMIN / CONFIGURE groups and the whole
+ * `x-team` surface) was silently redirected to the dashboard, so its specs
+ * failed asserting the wrong `<h1>`. The SPA never verifies the signature, so a
+ * fixed placeholder third segment is sufficient — only the payload shape
+ * matters.
+ */
+export function mintMockAccessToken(overrides: Record<string, unknown> = {}): string {
+  const header = b64url({ alg: 'HS256', typ: 'JWT' })
+  const now = Math.floor(Date.now() / 1000)
+  const payload = b64url({
+    sub: 'admin@example.com',
+    org_id: '1',
+    account_id: '1',
+    org_role: 'admin',
+    is_system_admin: false,
+    ...overrides,
+    iat: now,
+    exp: now + 3600,
+  })
+  return `${header}.${payload}.mocked-signature`
+}
+
+// A regular org-admin session — the local analogue of the staging
+// E2E_ADMIN_* identity, which is also a non-system org admin.
+const MOCK_ACCESS_TOKEN = mintMockAccessToken()
 const MOCK_REFRESH_TOKEN = 'mock-refresh-token-for-e2e-tests'
 
 // Shared date spine for the dashboard summary/trends fixtures. Kept as data
@@ -179,6 +217,48 @@ export async function setupLocalMockApi(page: Page) {
       // GET catch-all below so it is actually reachable.
       return route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
     }
+    if (url.includes('/api/v1/runners/status') && method === 'GET') {
+      // `RunnersStatusResponse` is a STRUCTURED contract, not the generic
+      // {items,total} envelope: `RunnersConcurrencyTab` reads
+      // `status.concurrency.preflight` (FAR-591 D5), so the envelope makes
+      // `.preflight` throw `TypeError: Cannot read properties of undefined` and
+      // blanks the whole Concurrency tab. Mirrors
+      // `components["schemas"]["RunnersStatusResponse"]` in the generated
+      // OpenAPI types (frontend/src/lib/runnersStatus.ts derives from it).
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          aggregate_state: 'healthy',
+          probe_interval_seconds: 60,
+          staleness_threshold_seconds: 300,
+          machines: [],
+          profiles: [],
+          concurrency: {
+            sandbox_concurrency_limit: 4,
+            is_default: true,
+            preflight: {
+              state: 'ok',
+              detail: 'Within engine capacity',
+              engine_cpu_count: 8,
+              engine_mem_total_mb: 16384,
+              needed_cpu: 4,
+              needed_mem_mb: 4096,
+            },
+          },
+        }),
+      })
+    }
+    if (url.includes('/api/v1/admin/org/sandbox-concurrency') && method === 'GET') {
+      // `SandboxConcurrencyResponse` (FAR-589 D3b) — the Concurrency tab's
+      // limit read. `is_default` marks the ABSENT-key case so the UI can
+      // render "4 (default)" rather than "no gate".
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ sandbox_concurrency_limit: 4, is_default: true }),
+      })
+    }
     if (method === 'GET') {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], total: 0 }) })
     }
@@ -321,28 +401,18 @@ export async function loginAsAdmin(page: Page, env: TestEnv) {
   }, [MOCK_ACCESS_TOKEN, MOCK_REFRESH_TOKEN])
 }
 
-function b64url(input: unknown): string {
-  return Buffer.from(JSON.stringify(input)).toString('base64url')
-}
-
 /**
  * Mint a real JWT whose payload marks the principal as a system admin
- * (is_system_admin + org_role admin). The local mock login token is not a JWT,
- * so the router guard cannot read the claim off it.
+ * (is_system_admin + org_role admin). The local mock login token is a plain org
+ * admin, so the router's SYSTEM-group gate (`requiresSystemAdmin`) redirects
+ * until this is swapped in.
+ *
+ * `sub` defaults to the mock admin id; pass a specific value when a test needs
+ * a particular principal (e.g. a UUID `sub`, which is what the backend mints
+ * and what populates the sidebar's visible identity text).
  */
-export function systemAdminJwt(): string {
-  const header = b64url({ alg: 'HS256', typ: 'JWT' })
-  const now = Math.floor(Date.now() / 1000)
-  const payload = b64url({
-    sub: '1',
-    email: 'admin@example.com',
-    name: 'Admin',
-    org_role: 'admin',
-    is_system_admin: true,
-    iat: now,
-    exp: now + 3600,
-  })
-  return `${header}.${payload}.mocked-signature`
+export function systemAdminJwt(sub = '1'): string {
+  return mintMockAccessToken({ sub, is_system_admin: true })
 }
 
 /**

@@ -47,9 +47,9 @@
       </template>
     </FilterBar>
     <ErrorAlert v-if="pipelinesError" :message="pipelinesError" :on-retry="loadPipelines" />
-    <div
+    <output
       v-if="loading"
-      class="space-y-2"
+      class="block space-y-2"
       aria-busy="true"
       :aria-label="$t('views.FeedbackInboxView.loading_feedback')"
       data-testid="feedback-inbox-loading"
@@ -65,7 +65,7 @@
           <SkeletonBlock height-class="h-3 w-40" />
         </div>
       </div>
-    </div>
+    </output>
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadFeedback" />
     <template v-else>
       <EmptyState

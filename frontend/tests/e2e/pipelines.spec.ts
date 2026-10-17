@@ -8,7 +8,7 @@ test.describe('Pipelines Page', { tag: "@regression" }, () => {
     await page.goto('/pipelines')
 
     await expect(page.locator('h1')).toContainText('Pipelines')
-    await expect(page.getByTestId('pipeline-list-search')).toBeVisible()
+    await expect(page.getByTestId('filter-bar-search')).toBeVisible()
   })
 
   test('shows New Pipeline CTA button', { tag: "@regression" }, async ({ page, env }) => {
@@ -39,7 +39,7 @@ test.describe('Pipelines Page', { tag: "@regression" }, () => {
     await loginAsAdmin(page, getTestEnv())
     await page.goto('/pipelines')
 
-    const searchInput = page.getByTestId('pipeline-list-search')
+    const searchInput = page.getByTestId('filter-bar-search')
     await expect(searchInput).toBeVisible()
 
     await searchInput.fill('test pipeline')

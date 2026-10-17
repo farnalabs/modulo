@@ -149,10 +149,11 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0313_collection_install_drop_installed_entities chains off 0312_memberships_active_lookups, and
 # 0314_external_agents_mcp_servers chains off 0313_collection_install_drop_installed_entities, and
 # 0315_service_accounts_lifecycle chains off 0314_external_agents_mcp_servers, and
-# 0316_policy_gate_evaluation_mode chains off 0315_service_accounts_lifecycle, and
 # 0317_drop_retired_pipeline_diff_rollback_flag chains off 0316_policy_gate_evaluation_mode, and
-# 0318_organisation_cost_state chains off 0317_drop_retired_pipeline_diff_rollback_flag as the chain head.
-_CHAIN_HEAD_MIGRATION = "0318_organisation_cost_state"
+# 0318_trigger_event_required_refs_missing chains off 0317, and
+# 0319_trigger_event_parse_failed chains off 0318, and
+# 0320_organisation_cost_state chains off 0319 as the chain head.
+_CHAIN_HEAD_MIGRATION = "0320_organisation_cost_state"
 
 
 def _source(name: str) -> str:

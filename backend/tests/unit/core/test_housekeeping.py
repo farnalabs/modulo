@@ -1,5 +1,6 @@
 """Unit tests for the housekeeping scan service (modulo.core.housekeeping)."""
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -155,6 +156,74 @@ class TestScanAll:
         assert len(results) == 1
         assert results[0].category == "empty_teams"
         assert not results[0].candidates
+
+    @pytest.mark.asyncio
+    async def test_scan_all_logs_scanner_failure_with_category(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A failing scanner stays best-effort but its empty category is OBSERVABLE (FAR-1906).
+
+        The category is still returned empty (the scan must not crash the
+        endpoint), but the failure is logged at ERROR with the scanner name and
+        exception class so it is distinguishable from a clean empty scan.
+        """
+
+        async def refusing_scanner(_s, _o):  # type: ignore[no-untyped-def]
+            raise NotImplementedError("_lifecycle_map_has_no_stages is not implemented for the 'mysql' backend")
+
+        with (
+            patch(
+                "modulo.core.housekeeping._SCANNERS",
+                [
+                    Scanner(
+                        category="empty_lifecycle_maps",
+                        scan_func=refusing_scanner,
+                        label="Empty Lifecycle Maps",
+                        description="d",
+                        entity_type="lifecycle_map",
+                    )
+                ],
+            ),
+            caplog.at_level(logging.ERROR, logger="modulo.core.housekeeping"),
+        ):
+            results = await scan_all(await self._fake_session(), uuid.uuid4())
+
+        # Best-effort is preserved: the category is present and empty.
+        assert len(results) == 1
+        assert results[0].category == "empty_lifecycle_maps"
+        assert not results[0].candidates
+
+        # ... but it does NOT present as a clean scan: the failure is logged.
+        records = [record for record in caplog.records if record.name == "modulo.core.housekeeping"]
+        assert len(records) == 1
+        message = records[0].getMessage()
+        assert "empty_lifecycle_maps" in message
+        assert "NotImplementedError" in message
+        assert "scanner FAILURE" in message
+        assert records[0].exc_info is not None
+
+    @pytest.mark.asyncio
+    async def test_scan_all_does_not_log_failure_for_clean_empty_scan(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The failure signal distinguishes a failed scanner from a genuinely empty one (FAR-1906)."""
+        with (
+            patch(
+                "modulo.core.housekeeping._SCANNERS",
+                [
+                    Scanner(
+                        category="empty_teams",
+                        scan_func=AsyncMock(return_value=[]),
+                        label="Empty Teams",
+                        description="d",
+                        entity_type="team",
+                    )
+                ],
+            ),
+            caplog.at_level(logging.ERROR, logger="modulo.core.housekeeping"),
+        ):
+            results = await scan_all(await self._fake_session(), uuid.uuid4())
+
+        assert len(results) == 1
+        assert not results[0].candidates
+        records = [record for record in caplog.records if record.name == "modulo.core.housekeeping"]
+        assert not records
 
 
 class TestScanInvalidOrgFk:

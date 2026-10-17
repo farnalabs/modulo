@@ -4,7 +4,7 @@ Structural contract (no Postgres needed):
 
 * **Revision chain** — 0307 revises ``0306_trigger_secret_encryption``;
   the migrations directory has exactly one head
-  (``0318_organisation_cost_state``, pinned by all sibling chain
+  (``0320_organisation_cost_state``, pinned by all sibling chain
   tests), the revision id matches the filename, and neither ``branch_labels``
   nor ``depends_on`` is set (the pre-commit check-migration-heads hook and
   every ``test_single_head_*`` pin depend on that shape).
@@ -40,7 +40,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0307_runs_guardrail_override_resume_pending"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0306_trigger_secret_encryption"
-_CHAIN_HEAD_MIGRATION = "0318_organisation_cost_state"
+_CHAIN_HEAD_MIGRATION = "0320_organisation_cost_state"
 _COLUMN_NAME = "guardrail_override_resume_pending"
 
 
@@ -76,7 +76,7 @@ def _migration_calls(entry_point: str) -> list[tuple[str, tuple[Any, ...], dict[
 
 
 class TestChain:
-    def test_single_head_is_0318_organisation_cost_state(self) -> None:
+    def test_single_head_is_0320_organisation_cost_state(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
 

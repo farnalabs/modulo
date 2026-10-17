@@ -42,7 +42,9 @@ lookup indexes:
   ``0314_external_agents_mcp_servers`` then
   ``0315_service_accounts_lifecycle`` then
   ``0317_drop_retired_pipeline_diff_rollback_flag`` then
-  ``0318_organisation_cost_state`` now the single linear head)
+  ``0318_trigger_event_required_refs_missing`` then
+  ``0319_trigger_event_parse_failed`` then
+  ``0320_organisation_cost_state`` now the single linear head)
   so the pre-commit check-migration-heads hook and every ``test_single_head_*``
   pin cannot be ambushed by a renumber;
 * the upgrade emits exactly the two ``CREATE INDEX IF NOT EXISTS`` statements
@@ -76,7 +78,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0271_org_api_keys_revocation_sweep_indexes"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0270_pipeline_snapshots_max_autonomy_ge_default"
-_HEAD_MIGRATION = "0318_organisation_cost_state"
+_HEAD_MIGRATION = "0320_organisation_cost_state"
 _TABLE = 'public."org_api_keys"'
 
 #: Index name -> (ordered key columns, partial WHERE predicate). This is the

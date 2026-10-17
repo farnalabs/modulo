@@ -77,7 +77,13 @@ test.describe('Admin Plugins', { tag: "@regression" }, () => {
     test.skip(!isDevModeTarget(env), 'Route is dev-mode-gated (private_preview); only runs on a dev-mode target')
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/plan*', (route) => {
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ license: { tier: 'v2' }, flags: [{ name: 'plugin_management', currently_active: true }, { name: 'model_backend_management', currently_active: true }, { name: 'team_rbac', currently_active: true }] }) })
+      // `tier` must use the live vocabulary (community/team/enterprise): the
+      // retired 'v2' bucket is unknown to the plan store, whose tier-derived
+      // computeds then throw during router startup
+      // (`VUE_ROUTER_R0011 Unexpected error when starting the router`) and the
+      // app never mounts. `dev_mode: true` is also required: /admin/plugins is
+      // private_preview, so without it the guard redirects to the dashboard.
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ license: { tier: 'team' }, dev_mode: true, flags: [{ name: 'plugin_management', currently_active: true }, { name: 'model_backend_management', currently_active: true }, { name: 'team_rbac', currently_active: true }] }) })
     })
     await page.route('**/api/v1/plugins*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([{ PLUGIN_ID: 'p1', display_name: 'Test Plugin', description: 'A test plugin', version: '1.0.0', capabilities: ['connector_type'], health_ok: true, health_detail: 'OK', health_checked_at: '2025-06-01T12:00:00Z' }]) })

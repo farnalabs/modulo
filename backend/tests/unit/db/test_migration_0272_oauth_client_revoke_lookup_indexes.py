@@ -139,10 +139,12 @@ class TestChain:
         # then 0307_runs_guardrail_override_resume_pending, then
         # 0313_collection_install_drop_installed_entities, 0314_external_agents_mcp_servers and
         # 0315_service_accounts_lifecycle, 0316_policy_gate_evaluation_mode,
-        # 0317_drop_retired_pipeline_diff_rollback_flag and
-        # 0318_organisation_cost_state now chain onto this migration,
+        # 0317_drop_retired_pipeline_diff_rollback_flag,
+        # 0318_trigger_event_required_refs_missing,
+        # 0319_trigger_event_parse_failed and
+        # 0320_organisation_cost_state now chain onto this migration,
         # so the single head moved up another revision.
-        assert heads == ["0318_organisation_cost_state"], f"expected a single head, got {heads}"
+        assert heads == ["0320_organisation_cost_state"], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0271_org_api_keys_revocation_sweep_indexes(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION

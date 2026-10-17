@@ -1,13 +1,13 @@
-"""Integration test for migration 0318_organisation_cost_state (FAR-1833).
+"""Integration test for migration 0320_organisation_cost_state (FAR-1833).
 
 Against REAL Postgres (testcontainers, private database per test — the
 ``test_migration_0315`` harness):
 
-* seed TWO organisations at ``0316_policy_gate_evaluation_mode`` (the deployed
+* seed TWO organisations at ``0319_trigger_event_parse_failed`` (the deployed
   shape, before this table exists): one carrying a NON-ZERO
   ``org_cumulative_spend_cents`` and non-NULL ``max_run_cost_cents`` /
   ``spend_ceiling_cents``, and one on the column defaults;
-* the REAL alembic ``upgrade`` of ``0318_organisation_cost_state`` backfills
+* the REAL alembic ``upgrade`` of ``0320_organisation_cost_state`` backfills
   one ``organisation_cost_state`` row per organisation, and the seeded values
   are copied EXACTLY (this is what makes the test non-vacuous — a backfill of
   zeros would fail it);
@@ -42,8 +42,8 @@ pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = str(Path(__file__).resolve().parents[3])
 
-MIGRATION_REV = "0318_organisation_cost_state"
-PREV_REV = "0317_drop_retired_pipeline_diff_rollback_flag"
+MIGRATION_REV = "0320_organisation_cost_state"
+PREV_REV = "0319_trigger_event_parse_failed"
 
 _SEEDED_SLUG = "m0317-seeded"
 _PLAIN_SLUG = "m0317-plain"
@@ -103,7 +103,7 @@ def _downgrade(iso_url: str, target: str) -> None:
 
 @pytest_asyncio.fixture
 async def upgraded_db_url(db_url: str) -> AsyncGenerator[str, None]:
-    """Private Postgres migrated to 0318 with two organisations seeded at 0317."""
+    """Private Postgres migrated to 0320 with two organisations seeded at 0319."""
     db_name, iso_url = await _fresh_db(db_url, "m0317")
     try:
         _migrate(iso_url, PREV_REV)

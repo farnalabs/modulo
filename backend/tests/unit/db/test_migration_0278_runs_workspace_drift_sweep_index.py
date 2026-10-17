@@ -48,7 +48,9 @@ index and dropping the sweep back to a full-table scan of ``runs`` every
 ``0315_service_accounts_lifecycle`` then
 ``0316_policy_gate_evaluation_mode`` then
 ``0317_drop_retired_pipeline_diff_rollback_flag`` then
-``0318_organisation_cost_state`` as the
+``0318_trigger_event_required_refs_missing`` then
+``0319_trigger_event_parse_failed`` then
+``0320_organisation_cost_state`` as the
 single linear head) and the
 ``ORDER BY id`` / ``LIMIT 200`` access shape
 the ``(id)`` key is chosen to serve.
@@ -76,7 +78,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0278_runs_workspace_drift_sweep_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0277_run_daily_facts_trigger_dispatch_phase"
-_CHAIN_HEAD_MIGRATION = "0318_organisation_cost_state"
+_CHAIN_HEAD_MIGRATION = "0320_organisation_cost_state"
 _INDEX_NAME = "ix_runs_workspace_drift_sweep"
 _KEY_COLUMNS = ("id",)
 
