@@ -146,7 +146,7 @@ Medium / Low incident detected
 | Failed login rate spike (>10/min per IP) | Backend logs / OTel | Credential stuffing, SSO probe |
 | 429 rate limit threshold crossed | Reverse proxy logs | DoS, brute force |
 | Unexpected outbound connection | Network policy logs | Data exfiltration, C2 beacon |
-| Container with Critical CVE deployed | Trivy scan CI | Known-exploit path |
+| Container with Critical CVE deployed | Manual image scan (`trivy image ghcr.io/farnalabs/modulo:<version>`) — no automated image scan runs in CI yet | Known-exploit path |
 | CSRF token mismatch spike | Backend error logs | CSRF probing, automated scanning |
 | Unexplained 403/401 without auth header | Backend access logs | API key leak, token reuse |
 | RLS policy violation logged | Postgres logs | Multi-tenant cross-read |
@@ -323,7 +323,7 @@ See §6 for the full process. Minimum steps:
 | Attribute | Details |
 |-----------|---------|
 | Severity | **High** (with known PoC), **Medium** (theoretical) |
-| Detection | Trivy scan in CI/CD, GitHub Advisory alert, security scanner notification |
+| Detection | Manual image scan (`trivy image ghcr.io/farnalabs/modulo:<version>`) — no automated image scan runs in CI yet; GitHub Advisory alert, security scanner notification |
 | Containment | Block network to affected Pod, deploy patched image |
 | Eradication | Verify no IOCs, rebuild image from pinned base |
 | Prevention | Weekly dependency scans, pinned base image digests |
