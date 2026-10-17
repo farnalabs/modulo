@@ -21,14 +21,19 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import (
+    handle_db_errors,
+    raise_lock_timeout_conflict_if,
+    raise_session_contract_error,
+)
 from modulo.api.dependencies import get_db_session, require_system_permission, resolve_audit_principal
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event_isolated
-from modulo.core.feature_flags import FeatureFlagRegistry, resolve_plan_context
+from modulo.core.feature_flags import FeatureFlagRegistry, feature_overrides_from_settings, resolve_plan_context
 from modulo.core.license import get_license, verify_license_key
-from modulo.db.crud.organisation import get_organisation
+from modulo.db.crud.organisation import get_organisation, update_org_settings_patch
+from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
 _AUDIT_EVENT_FLAG_OVERRIDE_SET = "feature_flag_override_set"
@@ -146,19 +151,19 @@ async def _invalidate_cache(settings: Settings, org_id: str | uuid.UUID) -> None
 async def _read_org_overrides(session: AsyncSession, org_id: uuid.UUID) -> dict[str, bool]:
     """Read the org's ``feature_overrides`` map (bool entries only).
 
-    Returns ``{}`` when the org or its settings are missing. Callers own the
-    error policy: both GET endpoints treat a failed read as best-effort and
-    fall back to the registry defaults.
+    Returns ``{}`` when the org or its settings are missing. The bool-only /
+    malformed-settings rule is the shared
+    ``core.feature_flags.feature_overrides_from_settings`` reader (the same
+    one the member-facing plan bootstrap uses), so the admin list and
+    ``GET /api/v1/plan`` cannot drift. Callers own the error policy: both GET
+    endpoints treat a failed read as best-effort and fall back to the registry
+    defaults.
     """
     async with session.begin():
         org = await get_organisation(session, org_id)
-    if org is None or not isinstance(getattr(org, "settings_json", None), dict):
+    if org is None:
         return {}
-    return {
-        key: bool(value)
-        for key, value in org.settings_json.get("feature_overrides", {}).items()
-        if isinstance(value, bool)
-    }
+    return feature_overrides_from_settings(getattr(org, "settings_json", None))
 
 
 async def _write_org_override(session: AsyncSession, org_id: uuid.UUID, flag_name: str, enabled: bool) -> None:
@@ -167,17 +172,19 @@ async def _write_org_override(session: AsyncSession, org_id: uuid.UUID, flag_nam
     The single durable write path shared by the toggle (``PUT /{flag_name}``)
     and org-override (``PUT /{flag_name}/org-override``) endpoints, so both
     endpoints write the same truth. Raises 404 when the org does not exist.
+
+    FAR-1830: emits ONLY the ``feature_overrides`` top-level key via the atomic
+    patch — a whole-column write from the read below would drop every OTHER
+    concern's keys written in the window.
     """
     async with session.begin():
+        await set_rls_org(session, org_id)
         org = await get_organisation(session, org_id)
         if not org:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Org not found")
-        settings_dict = dict(org.settings_json or {})
-        overrides = dict(settings_dict.get("feature_overrides", {}))
+        overrides = dict((org.settings_json or {}).get("feature_overrides", {}))
         overrides[flag_name] = enabled
-        settings_dict["feature_overrides"] = overrides
-        org.settings_json = settings_dict
-        session.add(org)
+        await update_org_settings_patch(session, org_id, {"feature_overrides": overrides})
 
 
 def _enforce_team_tier_gate(
@@ -541,7 +548,14 @@ async def toggle_feature_flag(
             },
         )
     except SQLAlchemyError as exc:
+        # FAR-1832 QA F16: this arm fronts ``_apply_org_flag_override`` →
+        # ``_write_org_override`` → the bounded-lock org-settings patch, so a
+        # 55P03 is reachable here — the F10 sweep converted the org-override
+        # sibling writers but missed this toggle arm. FAR-1464: the
+        # session-contract guard leads (it returns for other errors); the F2
+        # lock-timeout 409 classification below runs before the generic 503.
         raise_session_contract_error(exc, "admin_feature_flags.toggle_feature_flag")
+        raise_lock_timeout_conflict_if(exc, "admin_feature_flags.toggle_feature_flag")
         logger.exception(_CODE_FEATURE_FLAGS_TOGGLE_FAILED, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -659,6 +673,7 @@ async def set_org_flag_override(
         )
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "admin_feature_flags.set_org_flag_override")
+        raise_lock_timeout_conflict_if(exc, "admin_feature_flags.set_org_flag_override")
         logger.exception(_CODE_FEATURE_FLAGS_SET_ORG, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -710,15 +725,15 @@ async def clear_org_flag_override(
         )
     try:
         async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
             org = await get_organisation(session, current_user.organisation_id)
             if not org or not org.settings_json:
                 return {"override": None}
-            settings_dict = dict(org.settings_json)
-            overrides = dict(settings_dict.get("feature_overrides", {}))
+            overrides = dict(org.settings_json.get("feature_overrides", {}))
             overrides.pop(flag_name, None)
-            settings_dict["feature_overrides"] = overrides
-            org.settings_json = settings_dict
-            session.add(org)
+            # FAR-1830: emit ONLY the ``feature_overrides`` key via the atomic
+            # patch — never write the whole settings_json column back.
+            await update_org_settings_patch(session, current_user.organisation_id, {"feature_overrides": overrides})
         await _invalidate_cache(settings, current_user.organisation_id)
         await _emit_org_flag_override_audit(
             session,
@@ -742,6 +757,7 @@ async def clear_org_flag_override(
         )
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "admin_feature_flags.clear_org_flag_override")
+        raise_lock_timeout_conflict_if(exc, "admin_feature_flags.clear_org_flag_override")
         logger.exception(_CODE_FEATURE_FLAGS_CLEAR_ORG, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

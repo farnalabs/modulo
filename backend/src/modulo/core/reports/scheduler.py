@@ -5,6 +5,22 @@ fire job (``fire_report_trigger`` in :mod:`modulo.core.cron_helpers`, enqueued
 by ``fire_due_triggers``) generates, formats, and delivers each due report as a
 bounded SAQ job. The Celery beat scheduler (``DatabaseReportScheduler`` /
 ``ReportFireTask``) was removed in PR C of the Celery->SAQ migration.
+
+The admin/search fire logic itself lives here, in ``_fire_scheduled_report`` —
+the SINGLE implementation shared by the SAQ fire job
+(``cron_helpers.fire_report_trigger``) and every other caller. The
+``ScheduledReport`` row lock is held only for the two short critical sections
+(the read/snapshot before generation, then the terminal stamp after it); report
+generation/delivery runs outside it and is fenced by a Redis lease so two fires
+of the same report can never run concurrently (FAR-1822).
+
+Idempotency (FAR-1822 fix): the fire is keyed by an ``epoch`` (the enqueue
+tick), stamped onto the row's ``last_sent_at`` on success. Phase 1 SKIPS an
+epoch whose delivery was already recorded, so a SAQ retry (or a re-queued dead
+job) can never deliver the same epoch twice. A *terminal-stamp* failure after a
+successful send is caught and reported as success — the send already happened,
+so SAQ must not retry the whole fire. A fire that never reaches phase 3 leaves
+``next_send_at`` untouched (NEVER nulled), so the due-scan can re-select it.
 """
 
 from __future__ import annotations
@@ -23,6 +39,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from croniter import croniter
+from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
@@ -161,53 +178,300 @@ async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fire logic — shared async core (called by the SAQ fire_report_trigger job)
+# Fire logic — the SINGLE shared async core
 # ---------------------------------------------------------------------------
+
+#: Redis key prefix for the per-report fire lease (FAR-1822). The lease makes
+#: "one firing in flight per report" explicit now that generation no longer
+#: runs under the ``ScheduledReport`` row lock.
+_REPORT_FIRE_LEASE_PREFIX = "saq:report:firing:"
+
+#: Lease lifetime in seconds, a pure backstop. A lease cannot legitimately
+#: outlive the SAQ fire job (``FIRE_JOB_TIMEOUT`` is 300s), and CRASH RECOVERY
+#: does NOT wait for this TTL: a re-queued attempt carries the same ``epoch``
+#: as its dead predecessor and STEALS the lease, then releases it on completion
+#: or on the next acquisition. The TTL only cleans up a lease whose holder died
+#: without ever being retried.
+_REPORT_FIRE_LEASE_TTL_SECONDS = 900
+
+#: Release the lease only when we still own it (compare-and-delete on the whole
+#: stored value), so a fire whose lease was stolen/expired cannot delete a newer
+#: fire's lease.
+_RELEASE_REPORT_FIRE_LEASE_LUA = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
+)
+
+#: Steal a lease left by a dead SAME-epoch predecessor (compare-and-set on the
+#: whole observed value). The compare-and-set — not a plain ``SET`` after a
+#: check-then-read — is what makes the steal atomic: two concurrent re-queues of
+#: the same epoch both observe the dead holder's value, but only the first SET
+#: wins; the loser's CAS misses and it treats the lease as a genuine live fire.
+_STEAL_REPORT_FIRE_LEASE_LUA = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then "
+    "redis.call('set', KEYS[1], ARGV[2], 'EX', ARGV[3]) return 1 "
+    "else return 0 end"
+)
+
+
+class ReportFireLeaseUnavailableError(RuntimeError):
+    """The per-report fire lease could NOT be established (no Redis client, or a
+    Redis error).
+
+    Deliberately distinct from a genuine held lease: an unavailable lease is an
+    INFRASTRUCTURE failure and must be recorded as such (backoff + consecutive-
+    failure counter + alerting), never as the benign ``already_firing`` skip —
+    otherwise the epoch's delivery is silently dropped (FAR-1822 fix, finding 3).
+    """
+
+
+def _lease_value(token: str, epoch: str | None) -> str:
+    """Serialize a lease as ``{"token", "epoch"}`` — the epoch lets a re-queued
+    attempt recognise (and steal) a lease its own dead predecessor left."""
+    return json.dumps({"token": token, "epoch": epoch}, separators=(",", ":"))
+
+
+def _lease_epoch(raw: object) -> str | None:
+    """Extract the epoch carried by a stored lease value, or ``None``."""
+    if isinstance(raw, bytes):
+        try:
+            raw = raw.decode()
+        except UnicodeDecodeError:
+            return None
+    if not isinstance(raw, str):
+        return None
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    epoch = data.get("epoch")
+    return epoch if isinstance(epoch, str) else None
+
+
+async def _acquire_report_fire_lease(
+    redis_client: AsyncRedis | None,
+    report_id: uuid.UUID,
+    epoch: str | None = None,
+) -> str | None:
+    """Claim the exclusive per-report fire lease for *epoch*.
+
+    Returns the lease value when acquired, or ``None`` when a genuine, LIVE fire
+    already holds it. Raises :class:`ReportFireLeaseUnavailableError` when the lease
+    could not be established at all (no Redis client, or a Redis error) — the
+    caller records a FAILURE rather than a benign skip so an infrastructure
+    outage never looks like a successful no-op (finding 3).
+
+    A re-queued attempt (SAQ re-runs a dead job with the SAME ``epoch``) may
+    STEAL a lease its own predecessor left behind: the stored epoch identifies
+    the dead attempt, so a same-epoch claim is safe and recovery is immediate
+    rather than waiting out ``_REPORT_FIRE_LEASE_TTL_SECONDS`` (finding 4). A
+    DIFFERENT epoch never steals — that is a genuine concurrent fire.
+
+    The steal is a Lua compare-and-set on the exact value the ``GET`` observed,
+    never a bare ``SET`` after a check: two concurrent re-queues of the same
+    epoch both see the dead holder's value, but only the first ``SET`` wins —
+    the loser's CAS misses and it reports a genuine live fire. Without the CAS
+    both would steal and both would generate (the concurrency invariant would
+    have a hole exactly on the steal path).
+    """
+    if redis_client is None:
+        raise ReportFireLeaseUnavailableError(f"no redis client for report {report_id}")
+    key = f"{_REPORT_FIRE_LEASE_PREFIX}{report_id}"
+    value = _lease_value(uuid.uuid4().hex, epoch)
+    try:
+        # SET NX stores *value* only when the key is absent — the atomic claim.
+        if await redis_client.set(key, value, nx=True, ex=_REPORT_FIRE_LEASE_TTL_SECONDS):
+            return value
+        if epoch is None:
+            return None
+        current = await redis_client.get(key)
+        if current is not None and _lease_epoch(current) == epoch:
+            # Same epoch, held by the dead predecessor SAQ re-queued -> steal it.
+            # Compare-and-set on the EXACT value we just read (not merely the
+            # epoch): a concurrent same-epoch re-queue reads the same dead
+            # holder's value, so only the first SET wins and the loser falls
+            # through to ``None`` (a genuine live fire).
+            stolen = await redis_client.eval(
+                _STEAL_REPORT_FIRE_LEASE_LUA,
+                1,
+                key,
+                current,
+                value,
+                _REPORT_FIRE_LEASE_TTL_SECONDS,
+            )
+            return value if stolen else None
+        return None
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.exception("report fire lease acquire failed for %s", report_id)
+        raise ReportFireLeaseUnavailableError(str(exc)) from exc
+
+
+async def _release_report_fire_lease(
+    redis_client: AsyncRedis | None,
+    report_id: uuid.UUID,
+    lease_value: str | None,
+) -> None:
+    """Best-effort release of the fire lease (compare-and-delete on the value)."""
+    if redis_client is None or lease_value is None:
+        return
+    key = f"{_REPORT_FIRE_LEASE_PREFIX}{report_id}"
+    try:
+        await redis_client.eval(_RELEASE_REPORT_FIRE_LEASE_LUA, 1, key, lease_value)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # pragma: no cover - a stuck lease self-heals via its TTL
+        _log.warning("report fire lease release failed for %s", report_id, exc_info=True)
+
+
+def _parse_epoch(epoch: str | None) -> datetime.datetime | None:
+    """Parse the enqueue-epoch ISO timestamp, or ``None`` when absent/unusable."""
+    if epoch is None:
+        return None
+    try:
+        parsed = datetime.datetime.fromisoformat(epoch)
+    except (TypeError, ValueError):
+        _log.warning("report fire: unparseable epoch %r; proceeding without the epoch guard", epoch)
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.UTC)
+    return parsed
 
 
 async def _fire_scheduled_report(
     *,
     report_id: uuid.UUID,
     org_id: uuid.UUID,
+    epoch: str | None = None,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+    redis_client: AsyncRedis | None = None,
+    rls_setter: Callable[[AsyncSession, uuid.UUID], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
-    """Core fire logic — runs inside asyncio.run() (the Celery task was removed in PR C)."""
-    engine = _get_engine()
-    factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+    """Generate, format and deliver ONE scheduled report — the single fire path.
 
-    async with factory() as session, session.begin():
-        await _set_rls_org(session, org_id)
+    FAR-1822: the ``ScheduledReport`` row lock (``SELECT … FOR UPDATE``) is held
+    ONLY for two short critical sections — the read/snapshot before generation
+    and the terminal stamp after it — and is RELEASED before the (potentially
+    heavy) generator/formatter/deliverer run. Concurrency is fenced by a Redis
+    lease so two fires of the same report can never run at once.
 
-        now = datetime.datetime.now(datetime.UTC)
-        result = await session.execute(
-            select(ScheduledReport)
-            .where(
-                ScheduledReport.id == report_id,
-                ScheduledReport.organisation_id == org_id,
-                ScheduledReport.next_send_at <= now,
-            )
-            .with_for_update()
-        )
-        report = result.scalar_one_or_none()
-        if report is None or not report.active:
-            return {"status": "skipped", "reason": "report_inactive_or_missing"}
+    Phase 1 (short lock): read the active report, snapshot the fire inputs, and
+    SKIP the epoch if its delivery was already recorded (idempotency guard).
+    Phase 2 (no lock): generate/format/deliver. Phase 3 (guarded write): stamp
+    ``last_sent_at`` and, for a one-time report, the terminal ``active=False`` /
+    ``next_send_at=None`` — never restating state the phase did not observe.
 
-        generator = get_generator(report.report_type)
+    ``epoch`` is the enqueue tick (the SAQ job passes it through); SAQ re-runs a
+    dead job with the SAME epoch, so a retry of an already-delivered epoch is a
+    skip, while a genuinely new enqueue (a later epoch) proceeds.
+
+    A failure of the terminal stamp AFTER a successful send is caught and the
+    fire reports success — the send happened, so SAQ must not retry the whole
+    fire and deliver AGAIN. This send-then-stamp ordering is at-least-once: if
+    the stamp is lost, ``last_sent_at`` is never recorded, so the *next*
+    due-scan (``next_send_at IS NOT NULL``) re-selects the report — a one-time
+    report keeps ``active=True`` and its due ``next_send_at`` — and re-delivers
+    it under a NEW epoch the idempotency guard cannot see. A pre-send durable
+    record would be the only exact fix; the catch-as-success protects against
+    SAQ retrying the SAME epoch, not against the due-scan's next one.
+
+    Callers own the failure policy: on a ``failed`` result the SAQ fire job backs
+    ``next_send_at`` off so ``fire_due_triggers`` cannot re-enqueue every 30s.
+    """
+    rls = rls_setter or _set_rls_org
+    factory = session_factory or async_sessionmaker(_get_engine(), expire_on_commit=False, autobegin=False)
+    epoch_dt = _parse_epoch(epoch)
+
+    try:
+        lease_value = await _acquire_report_fire_lease(redis_client, report_id, epoch)
+    except ReportFireLeaseUnavailableError:
+        # Infrastructure failure — surfaced as `failed` so the SAQ wrapper backs
+        # off and counts it, NEVER swallowed as a benign `already_firing` skip.
+        _log.error("Report %s fire lease unavailable; recording a fire failure", report_id)
+        return {"status": "failed", "reason": "lease_unavailable"}
+    if lease_value is None:
+        return {"status": "skipped", "reason": "already_firing"}
+    try:
+        # ---- Phase 1: SHORT row lock — read + snapshot the fire state ----
+        async with factory() as session, session.begin():
+            await rls(session, org_id)
+
+            now = datetime.datetime.now(datetime.UTC)
+            report = (
+                await session.execute(
+                    select(ScheduledReport)
+                    .where(
+                        ScheduledReport.id == report_id,
+                        ScheduledReport.organisation_id == org_id,
+                        ScheduledReport.active.is_(True),
+                    )
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if report is None or not report.active:
+                return {"status": "skipped", "reason": "report_inactive_or_missing"}
+
+            # Idempotency guard (finding 1): ``last_sent_at`` carries the epoch
+            # of the last DELIVERED fire, so a retry/re-queue of an already-
+            # delivered epoch is a skip. A cancelled/failed attempt never
+            # reaches phase 3, so its epoch is NOT recorded as delivered and the
+            # retry still makes progress (at-least-once for an unconfirmed send).
+            if epoch_dt is not None:
+                last_sent_at = getattr(report, "last_sent_at", None)
+                if last_sent_at is not None and last_sent_at >= epoch_dt:
+                    _log.info("Report %s already delivered for epoch %s; skipping", report_id, epoch)
+                    return {"status": "skipped", "reason": "already_delivered"}
+
+            # Snapshot the plain values generation needs BEFORE the transaction
+            # commits (the ORM instance is detached afterwards).
+            report_type = report.report_type
+            config = report.config_json or {}
+            recipient_config = report.recipient_config or {}
+            schedule_type = config.get("schedule_type")
+
+            if schedule_type == "one_time":
+                next_send: datetime.datetime | None = None
+            else:
+                try:
+                    next_send = compute_next_send(report.cron_expression, after=now)
+                except (ValueError, TypeError, KeyError) as exc:
+                    _log.exception(
+                        "Invalid cron expression '%s' for report %s: %s",
+                        report.cron_expression,
+                        report_id,
+                        exc,
+                        exc_info=True,
+                    )
+                    await session.execute(
+                        update(ScheduledReport).where(ScheduledReport.id == report_id).values(active=False)
+                    )
+                    return {"status": "failed", "reason": f"invalid_cron: {exc}"}
+
+            # FAR-1822 (finding 2): do NOT stamp ``next_send_at`` here. The
+            # enqueue already advanced it atomically, and a never-completed
+            # one-time fire MUST keep its non-NULL value so the due-scan
+            # (``next_send_at IS NOT NULL``) can re-select it — nulling it here
+            # strands the report forever if the process dies before phase 3.
+        # ---- Phase 2: generate + deliver OUTSIDE the row lock ----
+        generator = get_generator(report_type)
         if generator is None:
-            _log.warning("No generator registered for report type %s", report.report_type)
-            return {"status": "failed", "reason": f"no_generator_for_{report.report_type}"}
+            _log.warning("No generator registered for report type %s", report_type)
+            return {"status": "failed", "reason": f"no_generator_for_{report_type}"}
 
         try:
-            config = report.config_json or {}
-            report_data = await generator(session, org_id, config)
+            async with factory() as gen_session, gen_session.begin():
+                # The generator runs in its OWN transaction (the row lock is
+                # gone) — re-apply the org RLS context so it can read the
+                # team-scoped tables org-wide exactly as before.
+                await rls(gen_session, org_id)
+                report_data = await generator(gen_session, org_id, config)
 
-            formatter = get_formatter(report.report_type)
-            payload: Any = report_data
-            if formatter is not None:
-                payload = formatter(report_data)
+            formatter = get_formatter(report_type)
+            payload: Any = formatter(report_data) if formatter is not None else report_data
 
-            deliverer = get_deliverer(report.report_type)
-            recipient_config = report.recipient_config or {}
-            delivery_results: list[dict[str, Any]] = []
+            deliverer = get_deliverer(report_type)
             if deliverer is not None:
                 delivery_results = await deliverer(payload, recipient_config)
             else:
@@ -215,52 +479,57 @@ async def _fire_scheduled_report(
         except asyncio.CancelledError:
             raise
         except Exception:
-            _log.exception("Report %s (%s) generation or delivery failed", report_id, report.report_type)
+            _log.exception("Report %s (%s) generation or delivery failed", report_id, report_type)
             return {"status": "failed", "reason": "generation_or_delivery_failed"}
 
-        schedule_type = config.get("schedule_type")
+        # ---- Phase 3: guarded terminal stamp ----
+        # FAR-1822 (finding 5): write ONLY what this phase observed. A recurring
+        # report's next_send_at was advanced by the enqueue and a concurrent
+        # advance/deactivation must not be rewound, so we never restate
+        # next_send_at/active for it. A one-time report is terminally retired
+        # here, on SUCCESS only, guarded on active so we never resurrect a row a
+        # concurrent operator deactivated.
+        delivered_at = epoch_dt if epoch_dt is not None else now
+        terminal = update(ScheduledReport).where(ScheduledReport.id == report_id)
         if schedule_type == "one_time":
-            next_send = None
-        else:
-            try:
-                next_send = compute_next_send(report.cron_expression, after=now)
-            except (ValueError, TypeError, KeyError) as exc:
-                _log.exception(
-                    "Invalid cron expression '%s' for report %s: %s",
-                    report.cron_expression,
-                    report_id,
-                    exc,
-                    exc_info=True,
-                )
-                await session.execute(
-                    update(ScheduledReport).where(ScheduledReport.id == report_id).values(active=False)
-                )
-                return {"status": "failed", "reason": f"invalid_cron: {exc}"}
-
-        await session.execute(
-            update(ScheduledReport)
-            .where(ScheduledReport.id == report_id)
-            .values(
-                last_sent_at=now,
-                next_send_at=next_send,
-                active=schedule_type != "one_time",
+            terminal = terminal.where(ScheduledReport.active.is_(True)).values(
+                last_sent_at=delivered_at,
+                next_send_at=None,
+                active=False,
             )
-        )
+        else:
+            terminal = terminal.values(last_sent_at=delivered_at)
+        try:
+            async with factory() as session, session.begin():
+                await rls(session, org_id)
+                await session.execute(terminal)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # The send already happened. Retrying the whole fire would deliver
+            # AGAIN — so log the terminal-stamp failure and report success.
+            _log.exception(
+                "Report %s (%s) sent but its terminal stamp failed; not retrying the fire",
+                report_id,
+                report_type,
+            )
 
         _log.info(
             "Report %s (%s) sent. Next send: %s",
             report_id,
-            report.report_type,
+            report_type,
             next_send.isoformat() if next_send is not None else "none (one-time report completed)",
         )
 
         return {
             "status": "sent",
             "report_id": str(report_id),
-            "report_type": report.report_type,
+            "report_type": report_type,
             "next_send_at": next_send.isoformat() if next_send is not None else None,
             "delivery_results": delivery_results,
         }
+    finally:
+        await _release_report_fire_lease(redis_client, report_id, lease_value)
 
 
 # ---------------------------------------------------------------------------

@@ -113,7 +113,10 @@ class _MockSession:
             return r
         if "UPDATE runs SET" in s:
             ids = self.terminalizer_rows.get("dispatch_failed", [])
-            if "node_attempt_count" in s:
+            if "stranded_age_minutes" in s:
+                # FAR-1862 stranded-pending backstop: empty by default.
+                ids = self.terminalizer_rows.get("stranded_pending", [])
+            elif "node_attempt_count" in s:
                 ids = self.terminalizer_rows.get("no_progress", [])
             elif "claim_cap_exhausted" in s:
                 ids = self.terminalizer_rows.get("claim_cap_exhausted", [])
@@ -257,9 +260,12 @@ class TestNodeStartedRowIsNeverRedispatched:
     async def test_node_started_stale_row_is_not_redispatched(self, monkeypatch: Any) -> None:
         """A running + stale-heartbeat + no-SAQ-job row whose phase proves a
         node STARTED is never re-dispatched (execute_run would re-execute the
-        started node). It is counted ``node_started_deferred`` and left for
-        the watchdogs / age gate — no enqueue, no terminal-fail, no zero-node
-        mislabel."""
+        started node). Since FAR-1803 it is counted
+        ``node_started_executor_lost`` (the observed dead-executor class —
+        stale heartbeat IS the executor-lost evidence) and left for the age
+        gate — no enqueue, no terminal-fail, no zero-node mislabel. Before
+        FAR-1803 it landed on the belt's ``node_started_deferred`` (a counter
+        documented as "production should see 0")."""
         run_id = uuid.uuid4()
         row = _run_row(run_id, dispatch_phase=PHASE_FIRST_NODE_DISPATCHED)
         summary, reenqueue, _session = await _run_reconcile(monkeypatch, [row])
@@ -269,7 +275,8 @@ class TestNodeStartedRowIsNeverRedispatched:
         assert summary["nodeless_redispatched"] == 0
         assert summary["nodeless_failed"] == 0
         assert summary["claimed_but_never_dispatched"] == 0
-        assert summary["node_started_deferred"] == 1
+        assert summary["node_started_executor_lost"] == 1
+        assert summary["node_started_deferred"] == 0
 
     async def test_control_null_phase_stale_row_is_redispatched(self, monkeypatch: Any) -> None:
         """The control: the SAME row with no durable phase (no node-start
@@ -290,20 +297,26 @@ class TestNodeStartedRowIsNeverRedispatched:
         awaiting_human/claimed/hitl_parked, never ``running``), so the burst
         enqueues ZERO jobs — the flood bound the old nodeless cap (50/tick)
         provided holds a fortiori (0 <= 50), and every held-back row is
-        counted."""
+        counted ``node_started_executor_lost`` (FAR-1803; pre-fix it was the
+        belt's ``node_started_deferred``)."""
         burst = 60  # above the former NODELESS_REDISPATCH_MAX_PER_TICK=50
         rows = [_run_row(uuid.uuid4(), dispatch_phase=PHASE_FIRST_NODE_DISPATCHED) for _ in range(burst)]
         summary, reenqueue, _session = await _run_reconcile(monkeypatch, rows)
 
         reenqueue.assert_not_awaited()
         assert summary["repaired"] == 0
-        assert summary["node_started_deferred"] == burst
+        assert summary["node_started_executor_lost"] == burst
+        assert summary["node_started_deferred"] == 0
 
     def test_stale_heartbeat_predicate_excludes_node_started_phase(self) -> None:
         """The SQL leg itself (the selection half of finding 1): the generic
         stale-heartbeat branch binds the shared phase constant, so a
-        node-STARTED row is never even selected (and the D8 marker sweep, which
-        composes this same predicate, judges it unrecoverable in lockstep)."""
+        node-STARTED row is never re-dispatched through THAT leg. FAR-1803
+        added a separate leg that admits the same shape for COUNTING only
+        (``node_started_executor_lost`` — held back, never re-dispatched), so
+        the D8 marker sweep now judges such rows recoverable — their marker is
+        kept until the age gate terminalises them at the bound, which is
+        strictly earlier than D8's 25h staleness sweep anyway."""
         import sqlalchemy as sa
 
         from modulo.db.models.run import Run
@@ -403,15 +416,17 @@ class TestPendingLegRedispatchesTheFencedResetRow:
         sql = str(compiled)
         assert sql.count("dispatch_phase IS NULL") == 1
         phase_params = [v for v in dict(compiled.params).values() if v == PHASE_FIRST_NODE_DISPATCHED]
-        # FAR-1728: the phase constant is now bound TWICE — once by the single
+        # FAR-1728 bound the phase constant TWICE — once by the single
         # EXCLUSION leg above (the running stale-heartbeat leg, pinned at
         # exactly one "IS NULL") and once by the guardrail-override resume
         # leg's POSITIVE match (``dispatch_phase = ...`` + the flip's
         # dedicated ``guardrail_override_resume_pending`` marker column —
         # NOT ``is_replay``, which webhook/manual replay also set).
-        # A third binding would mean another leg started binding the phase —
-        # inspect before relaxing this.
-        assert len(phase_params) == 2
+        # FAR-1803 adds the THIRD binding: its own POSITIVE match (the
+        # node-started / executor-lost leg — counted, never re-dispatched).
+        # A fourth binding would mean yet another leg started binding the
+        # phase — inspect before relaxing this.
+        assert len(phase_params) == 3
 
     async def test_pending_node_started_reset_row_is_redispatched(self, monkeypatch: Any) -> None:
         """The REGRESSION test: a pending + dispatcher='saq' + old-
@@ -461,14 +476,19 @@ class TestPendingLegRedispatchesTheFencedResetRow:
 
     async def test_belt_holds_back_running_node_started_row(self, monkeypatch: Any) -> None:
         """The belt's surviving scope (RUNNING only): a running node-started
-        row that reaches the re-dispatch path (race window / future-leg
-        regression) is still held back — the storm does not come back."""
-        row = _run_row(uuid.uuid4(), status="running", dispatch_phase=PHASE_FIRST_NODE_DISPATCHED)
+        row that reaches the re-dispatch path is still held back — the storm
+        does not come back. Since FAR-1803 a STALE-heartbeat row of this shape
+        is classified earlier (``node_started_executor_lost``), so the belt's
+        own scope is the FRESH-heartbeat row: a live attempt that reached the
+        loop by a selection race (never re-dispatched, never counted as
+        executor-lost)."""
+        row = _run_row(uuid.uuid4(), status="running", stale=False, dispatch_phase=PHASE_FIRST_NODE_DISPATCHED)
         summary, reenqueue, _session = await _run_reconcile(monkeypatch, [row])
 
         reenqueue.assert_not_awaited()
         assert summary["repaired"] == 0
         assert summary["node_started_deferred"] == 1
+        assert summary["node_started_executor_lost"] == 0
 
 
 class TestFencedResetIsIdempotencyGated:

@@ -647,6 +647,8 @@ class TestListDeletePipelineTeamScope(_OperatorAuthContext):
         assert result["total"] == 0
         mock_list.assert_awaited_once()
         assert mock_list.await_args.kwargs["team_id"] == _TEAM_A
+        # FAR-328: the org predicate is the BYPASSRLS defence-in-depth barrier.
+        assert mock_list.await_args.kwargs["organisation_id"] == _PLACEHOLDER_ORG_ID
 
 
 class TestListPendingHitlTeamScope(_AuthContext):

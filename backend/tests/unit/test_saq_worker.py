@@ -186,6 +186,7 @@ class TestFunctionsWiring:
             "health_readiness_alert",
             "memory_monitor_cron",
             "run_kill_switch_drill",
+            "legacy_agent_return_sweep",
         }
         # fire_due_triggers: every 60s (croniter parses 5-field cron), timeout=300, retries=3 (F1).
         fdt = jobs["fire_due_triggers"]
@@ -331,6 +332,18 @@ class TestFunctionsWiring:
         assert hra.heartbeat == 30
         assert hra.ttl == 300
         assert hra.unique is True
+
+        # legacy_agent_return_sweep: daily at 02:30 (FAR-132) — read-only
+        # legacy-shape straggler scan; unique so two machines cannot
+        # double-scan, one retry for a transient DB error (a scan that cannot
+        # run re-raises rather than reporting a false clean zero).
+        lars = jobs["legacy_agent_return_sweep"]
+        assert lars.cron == "30 2 * * *"
+        assert lars.timeout == 300
+        assert lars.retries == 1
+        assert lars.heartbeat == 30
+        assert lars.ttl == 900
+        assert lars.unique is True
 
     def test_sync_interval_to_cron_maps_seconds_to_5_field_cron(self) -> None:
         assert sw._sync_interval_to_cron(300) == "*/5 * * * *"
@@ -676,6 +689,52 @@ class TestExecuteResumeWrappers:
         assert job.update.await_args.kwargs["kwargs"]["claim_token"] == "tok-claim"
 
     @pytest.mark.asyncio
+    async def test_execute_run_skips_phase_flush_without_durable_writer(self) -> None:
+        """FAR-1088 (W2): the post-run phase drain is skipped when no durable
+        writer is attached to the tracker (the ``durable_writer is None`` arm),
+        while the run still completes and ``mark_complete`` still fires.
+
+        ``DispatchPhaseWriter`` is imported inside ``execute_run`` from
+        ``pipeline_execution``, so patching it there makes the attachment a
+        no-op and drives the guard's false arm — the same defensive path the
+        writer being absent in production would take.
+        """
+        job = MagicMock()
+        job.update = AsyncMock()
+        ctx: dict = {"job": job}
+
+        async def _pass_through(aeng: Any, **kwargs: Any) -> dict[str, str]:
+            await kwargs["execute_fn"]()
+            return {"status": "complete"}
+
+        with (
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch(
+                "modulo.core.pipeline_execution.claim_run_async",
+                new_callable=AsyncMock,
+                return_value="tok-claim",
+            ),
+            patch("modulo.core.pipeline_execution.load_and_setup", new_callable=AsyncMock) as load,
+            patch("modulo.core.pipeline_execution.mark_complete", new_callable=AsyncMock) as complete,
+            patch(
+                "modulo.core.pipeline_execution.run_executor_with_watchdog",
+                side_effect=_pass_through,
+            ),
+            patch("modulo.core.pipeline_execution.DispatchPhaseWriter", return_value=None),
+        ):
+            run = MagicMock()
+            run.input_payload = {}
+            executor = MagicMock()
+            executor.execute = AsyncMock()
+            load.return_value = (run, executor)
+            result = await sw.execute_run(
+                ctx, run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f", org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70"
+            )
+
+        assert result == {"status": "complete"}
+        complete.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_execute_run_failed_outcome_skips_mark_complete(self) -> None:
         """An honest ``failed`` outcome must NOT run mark_complete (A2) — a
         silent wrong-success write is never attempted after a failure."""
@@ -721,6 +780,30 @@ class TestExecuteResumeWrappers:
             )
         assert result == {"status": "not_claimed"}
         complete.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_execute_run_job_kwargs_stamp_cancelled_error_propagates(self) -> None:
+        """A shutdown cancellation during the claim-token stamp re-raises (FAR-1627).
+
+        SAQ cancels the job task mid-run; when ``job.update`` is what observes
+        the ``CancelledError`` it must propagate (never be downgraded by the
+        broad ``except Exception``) so ``track_inflight_run`` keeps the entry
+        for the shutdown handback.
+        """
+        job = MagicMock()
+        job.update = AsyncMock(side_effect=asyncio.CancelledError)
+        with (
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch("modulo.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value="tok-claim"),
+            patch("modulo.core.pipeline_execution.load_and_setup", new_callable=AsyncMock) as load,
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await sw.execute_run(
+                {"job": job},
+                run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f",
+                org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70",
+            )
+        load.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_execute_run_setup_failure_fails_run_terminal(self) -> None:
@@ -1479,6 +1562,21 @@ class TestFireWrappersExtended:
         ch.assert_awaited_once()
         assert ch.await_args.kwargs["report_id"] == UUID(_UUID_1)
         assert ch.await_args.kwargs["org_id"] == UUID(_UUID_ORG)
+
+    @pytest.mark.asyncio
+    async def test_fire_report_trigger_forwards_epoch(self) -> None:
+        """FAR-1822: the SAQ job passes the enqueue epoch through so a retry of
+        an already-delivered epoch is idempotent."""
+        with (
+            patch(
+                "modulo.core.cron_helpers.fire_report_trigger",
+                new_callable=AsyncMock,
+                return_value={"status": "sent"},
+            ) as ch,
+        ):
+            await sw.fire_report_trigger({}, report_id=_UUID_1, org_id=_UUID_ORG, epoch="epoch-E")
+
+        assert ch.await_args.kwargs["epoch"] == "epoch-E"
 
 
 class TestSystemJobDelegates:

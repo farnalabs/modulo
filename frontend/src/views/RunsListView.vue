@@ -68,13 +68,25 @@
           :row-clickable="false"
         >
           <template #cell-pipeline_name="{ row }">
-            <router-link
-              :to="`/runs/${row.run_id}`"
-              class="font-medium hover:underline"
-              :data-testid="`runs-list-view-${row.run_id}`"
-            >
-              {{ row.pipeline_name || $t('views.RunsListView.deleted_pipeline') }}
-            </router-link>
+            <div class="flex flex-wrap items-center gap-1">
+              <!-- FAR-1813: the pipeline name opens the VERSION this run
+                   executed (?snapshot= from the run's own snapshot_id). The
+                   run itself stays reachable through the adjacent link — the
+                   name cell no longer carries run-detail navigation. -->
+              <RunPipelineVersionLink
+                :pipeline-id="(row as RunListItem).pipeline_id"
+                :pipeline-name="(row as RunListItem).pipeline_name"
+                :snapshot-id="snapshotIdOf(row)"
+                :snapshot-version="snapshotVersionOf(row)"
+                class="font-medium"
+                :data-testid="`runs-list-view-${row.run_id}`"
+              >{{ row.pipeline_name || $t('views.RunsListView.deleted_pipeline') }}</RunPipelineVersionLink>
+              <router-link
+                :to="`/runs/${row.run_id}`"
+                class="text-xs text-muted-foreground hover:text-foreground hover:underline"
+                :data-testid="`runs-list-open-${row.run_id}`"
+              >{{ $t('views.RunsListView.view_run') }}</router-link>
+            </div>
           </template>
           <template #cell-status="{ value, row }">
             <div class="flex flex-wrap items-center gap-1">
@@ -125,7 +137,7 @@
               :data-testid="`runs-list-heartbeat-${row.run_id}`"
               :class="isListHeartbeatStale(row as RunListItem) ? 'text-warning-text font-medium' : 'text-muted-foreground'"
               class="text-xs whitespace-nowrap"
-            >{{ formatHeartbeat(heartbeatAgeFor(row as RunListItem, now)) }}</span>
+            >{{ heartbeatTextFor(row as RunListItem, now) }}</span>
           </template>
           <template #cell-run_number="{ value }">
             <span class="tabular-nums">{{ value ?? '—' }}</span>
@@ -261,7 +273,8 @@ import { formatApiError } from '../lib/api/formatError'
 import { DataTable, type Column } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 import TableSkeleton from '../components/shared/TableSkeleton.vue'
-import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, triggerTypeLabel, runStatusDescription, isDispatchedRun, isSupersededRun, queuedCapacityReason } from '../utils/runUtils'
+import RunPipelineVersionLink from '../components/runs/RunPipelineVersionLink.vue'
+import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, heartbeatDisplayText, isHeartbeatStale, triggerTypeLabel, runStatusDescription, isDispatchedRun, isSupersededRun, queuedCapacityReason } from '../utils/runUtils'
 import { RUN_STATUS, TRIGGER_TYPE } from '../constants/filters'
 import { isNonTerminalStatus, isTerminalStatus } from '../constants/runStatuses'
 import { formatMoney } from '../lib/money'
@@ -289,6 +302,31 @@ const runColumns = computed<Column[]>(() => [
   { key: 'warnings', label: t('views.RunsListView.warnings'), sortable: false },
   { key: 'actions', label: '', sortable: false },
 ])
+
+/**
+ * FAR-1813: the run's OWN snapshot id, narrowed from the list item's
+ * `Record<string, unknown>` shape (the field rides the payload but is not
+ * declared on `RunListItem`). Returns null — never a placeholder — for a
+ * missing/legacy snapshot so the pipeline link falls back to the live editor
+ * instead of building a dead `?snapshot=null` target.
+ */
+function snapshotIdOf(row: unknown): string | null {
+  const snap = (row as { snapshot_id?: unknown }).snapshot_id
+  return typeof snap === 'string' && snap.length > 0 ? snap : null
+}
+
+/**
+ * FAR-1813: the run's OWN snapshot version, narrowed from the list item's
+ * `Record<string, unknown>` shape (the field rides the payload but is not
+ * declared on `RunListItem`). Only a numeric payload value is forwarded; a
+ * missing/legacy version is null — the component then renders NO chip rather
+ * than a placeholder like `v0`. The chip's accept/reject rule (integer >= 1)
+ * lives in the component so every run surface applies exactly one rule.
+ */
+function snapshotVersionOf(row: unknown): number | null {
+  const ver = (row as { snapshot_version?: unknown }).snapshot_version
+  return typeof ver === 'number' ? ver : null
+}
 
 const confirmingIds = ref(new Set<string>())
 const cancellingIds = ref(new Set<string>())
@@ -582,8 +620,12 @@ function isListHeartbeatStale(run: RunListItem): boolean {
   return isHeartbeatStale(heartbeatAgeFor(run, now.value))
 }
 
-function formatHeartbeat(age: number | null): string {
-  return formatHeartbeatAge(age, t)
+// FAR-1839: the heartbeat cell renders the absolute last-heartbeat time for a
+// terminal run (the backend keeps heartbeat_at; only a re-dispatch clears it)
+// and the humanized age for a live one, via the same shared formatter the run
+// detail uses — a terminal run must not read as "—".
+function heartbeatTextFor(run: RunListItem, nowMs: number): string {
+  return heartbeatDisplayText(run.heartbeat_at, run.status, nowMs, t, formatRunDate)
 }
 
 </script>

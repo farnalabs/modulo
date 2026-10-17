@@ -3,7 +3,7 @@
 Wires ``features/pipelines/validation.feature`` into the executing BDD
 suite by driving the REAL
 ``modulo.core.graph_validator.GraphValidator.validate_definition`` against a
-mocked sqlalchemy session — the save-time surface the pipelines graph PATCH
+mocked sqlalchemy session — the save-time surface the pipelines graph PUT
 route calls via ``_validate_graph_save``. Mirrors the DB-free pattern of
 ``backend/tests/unit/graph_validator/`` so the executing BDD coverage locks the
 same contract: a graph with no nodes, a cycle, or a dangling edge is rejected

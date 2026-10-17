@@ -488,6 +488,8 @@ export default {
       "run_b": "Run B",
       "paste_run_id": "Paste a run ID (or select from dropdown)",
       "select_recent_run": "Select recent run...",
+      "select_run_a": "Select run A",
+      "select_run_b": "Select run B",
       "loading": "Loading...",
       "compare": "Compare",
       "outputs_identical": "Outputs are identical",
@@ -646,6 +648,7 @@ export default {
       "clear_filters": "Clear filters",
       "apply_filters": "Apply Filters",
       "failed_to_dismiss_notification": "Failed to dismiss notification",
+      "loading_notifications": "Loading notifications",
       "request_timed_out": "Notifications request timed out after 30s"
     },
     "EnvironmentProfileForm": {
@@ -1039,6 +1042,9 @@ export default {
       "dismiss_failed": "Dismiss failed:",
       "dismissed": "Dismissed.",
       "dismissing": "Dismissing...",
+      "dismissed_label": "Dismissed",
+      "loading_feedback": "Loading feedback records...",
+      "loading_detail": "Loading feedback detail...",
       "failed_to_load_pipelines": "Failed to load pipelines",
       "handler_human": "Human",
       "handler_ai_correction": "AI Correction",
@@ -1408,7 +1414,55 @@ export default {
       "snapshot_lock_released_pids": "Terminated PIDs: {pids}",
       "snapshot_lock_load_failed": "Failed to load the snapshot lock status: {error}",
       "snapshot_lock_release_failed": "Failed to release the snapshot lock: {error}",
-      "snapshot_lock_release_forbidden": "Release refused: {error}"
+      "snapshot_lock_release_forbidden": "Release refused: {error}",
+      "historic_banner_title": "Viewing v{version} — a historical version",
+      "historic_banner_meta": "(saved {date} by {author})",
+      "historic_unknown_author": "unknown author",
+      "historic_banner_body": "This version is read-only. New runs always use the latest saved version, and edits here are not possible.",
+      "historic_restore": "Restore this version",
+      "historic_view_latest": "View latest",
+      "historic_copy_link": "Copy link",
+      "historic_copy_link_copied": "Link copied",
+      "historic_copy_link_failed": "Could not copy the link to this version",
+      "historic_restore_dialog_title": "Restore this version?",
+      "historic_restore_dialog_intro": "Restoring replaces the pipeline's current configuration with version {version}.",
+      "historic_restore_diff_title": "What will change",
+      "historic_restore_diff_loading": "Comparing with the current version…",
+      "historic_restore_diff_failed": "Could not load the change summary.",
+      "historic_restore_diff_retry": "Retry",
+      "historic_restore_diff_unavailable": "The change summary is not available.",
+      "historic_restore_diff_is_current": "This is already the pipeline's current version — restoring it changes nothing.",
+      "historic_restore_diff_no_baseline": "Could not compare against the current version, so the changes this restore makes can't be shown.",
+      "historic_restore_diff_no_changes": "No configuration differences from the current version.",
+      "historic_restore_diff_nodes_restored": "{count} node will be restored from this version | {count} nodes will be restored from this version",
+      "historic_restore_diff_nodes_removed": "{count} node will stop being used | {count} nodes will stop being used",
+      "historic_restore_diff_nodes_modified": "{count} node will be updated to this version's settings | {count} nodes will be updated to this version's settings",
+      "historic_restore_diff_edges_restored": "{count} connection will be restored | {count} connections will be restored",
+      "historic_restore_diff_edges_removed": "{count} connection will be removed | {count} connections will be removed",
+      "historic_restore_diff_edges_modified": "{count} connection will change | {count} connections will change",
+      "historic_restore_diff_impacted": "{count} downstream node affected | {count} downstream nodes affected",
+      "historic_restore_diff_breaking": "{severity} — {reason}",
+      "historic_restore_effect_runs": "New runs will use this version.",
+      "historic_restore_effect_edits": "Everything edited since this version will stop being used.",
+      "historic_restore_effect_history": "Nothing is deleted: restoring creates a new version, so you can always restore again.",
+      "historic_restore_effect_in_progress": "Runs already in progress are unaffected — they keep the version they started on.",
+      "historic_restore_blocked_note": "This is blocked if it would remove a human-review gate, strip a guardrail bound to a node, or use another team's connector.",
+      "historic_restore_confirm": "Restore",
+      "historic_restore_success": "Restored v{restored}. Created v{created}.",
+      "historic_restore_success_no_created": "Restored v{restored}.",
+      "historic_restore_success_no_restored": "Restored. Created v{created}.",
+      "historic_restore_success_generic": "This version was restored.",
+      "historic_restore_failed_generic": "This version can't be restored right now. Try again, or ask an administrator if it keeps happening.",
+      "historic_restore_blocked_hitl": "This version can't be restored: it would remove a human-review gate. Ask an admin, or restore a version that keeps the gate.",
+      "historic_restore_blocked_guardrail": "This version can't be restored: it would strip a guardrail bound to a node. Ask an admin, or restore a version that keeps it.",
+      "historic_restore_blocked_connector": "This version can't be restored: it uses a connector owned by another team. Reassign the connector, or restore a version that uses a connector your team owns.",
+      "version_missing_title": "This version is no longer available",
+      "version_missing_body": "It may have been deleted, or this link may be out of date.",
+      "version_missing_open_latest": "Open the latest version",
+      "version_load_failed": "Failed to load this version: {error}",
+      "unsaved_changes_title": "Unsaved changes",
+      "unsaved_changes_body": "You have unsaved changes to this pipeline's graph. Open the historical version anyway? Your unsaved changes stay in the latest editor.",
+      "unsaved_changes_continue": "Open version"
     },
     "AdminPluginsView": {
       "manage_installed_modulo_plugins_and_extensions": "Manage installed Modulo plugins and extensions",
@@ -1464,6 +1518,7 @@ export default {
       "queued": "queued",
       "empty_state_description": "Try adjusting your filters or trigger a pipeline run.",
       "deleted_pipeline": "(deleted pipeline)",
+      "view_run": "View run",
       "run_count": "1 run | {count} runs",
       "previous": "Previous",
       "next": "Next",
@@ -3828,6 +3883,7 @@ export default {
       "mcp_detail": "OAuth clients: {clients} - API keys: {keys}",
       "commands_detail": "Composite templates: {composites} - Library primitives: {primitives}",
       "autonomy_detail": "Manual approval: {manual} - Notify on complete: {notify} - Fully autonomous: {autonomous}",
+      "autonomy_detail_partial": "Manual approval: {manual} - Notify on complete: {notify} - Fully autonomous: {autonomous} (first {sampled} of {total} pipelines)",
       "telemetry_detail": "OpenTelemetry export: {otel} - Error groups: {errors} - Notification endpoints: {endpoints}",
       "telemetry_otel_configured": "configured",
       "telemetry_otel_not_configured": "not configured",
@@ -3890,6 +3946,11 @@ export default {
       "seed_error_detail": "Error detail:\n{detail}",
       "seed_failing_node": "Failing node: {node}",
       "seed_request": "Work out the most likely root cause of this failure, cite the evidence in the run, and suggest concrete fixes."
+    },
+    "RunPipelineVersionLink": {
+      "version_title": "Open the pipeline version this run executed",
+      "current_title": "Open the pipeline (this run has no recorded version)",
+      "version_chip": "v{version}"
     },
     "ViewToggle": {
       "saved_views": "Saved Views",
@@ -4382,8 +4443,11 @@ export default {
     },
     "NotificationBell": {
       "notifications": "Notifications",
+      "notifications_with_unread": "Notifications, {count} unread",
       "reconnect_banner": "Live updates stopped. Reconnect with a fresh sign-in to resume them.",
       "reconnect_action": "Reconnect",
+      "reconnect_attempting": "Reconnecting…",
+      "reconnect_failed": "Reconnect failed. Sign in again to restore live updates.",
       "unread_count_status": "{count} unread notifications"
     },
     "NotificationDropdown": {
@@ -4398,7 +4462,9 @@ export default {
       "view_all": "View all notifications"
     },
     "PageTabs": {
-      "section_navigation": "Section navigation"
+      "section_navigation": "Section navigation",
+      "available_on_plan": "Available on the {plan} plan",
+      "locked_aria": "{label} (Available on the {plan} plan)"
     },
     "FeatureGate": {
       "team_feature": "Team Feature",
@@ -4419,17 +4485,40 @@ export default {
     "PipelineSnapshotTimeline": {
       "version_timeline": "Version timeline",
       "no_snapshots_yet": "No snapshots yet.",
+      "load_failed": "Could not load this pipeline's version history.",
+      "retry": "Retry",
       "compare_to": "Compare to:",
       "impacted_nodes": "Impacted nodes:",
       "breaking_changes": "Breaking changes",
       "no_breaking_port_changes": "No breaking port changes.",
       "close": "Close version timeline",
       "select_base_snapshot": "Select base snapshot",
+      "select_base_snapshot_aria": "Base snapshot to compare",
       "diff": "Diff",
-      "rollback_to_selected": "Rollback to selected",
-      "edit": "edit",
-      "run": "run",
+      "restore_version": "Restore this version",
+      "open_version_aria": "Open v{version} as a historical version",
+      "select_version_aria": "Select v{version} for compare or restore",
+      "ran_times": "ran {count}x",
+      "ran_earlier": "ran {count}x on earlier versions",
+      "truncated_notice": "Showing the most recent {loaded} of {total} versions.",
+      "load_more": "Load more",
+      "load_more_failed": "Could not load more history.",
       "none": "none"
+    },
+    "PipelineVersionChip": {
+      "chip_aria": "Version {version} — show version details",
+      "popover_aria": "Details for version {version}",
+      "created_label": "Created",
+      "kind_label": "Type",
+      "author_label": "Saved by",
+      "tag_label": "Tag",
+      "notes_label": "Notes",
+      "no_value": "—",
+      "open_timeline": "Open in timeline",
+      "kind_initial": "initial",
+      "kind_edit": "edit",
+      "kind_rollback": "rollback",
+      "kind_run": "run"
     },
     "SidebarLink": {
       "preview": "Preview",
@@ -4559,6 +4648,13 @@ export default {
     "dismiss": "Dismiss",
     "seed_examples": "Seed example primitives",
     "dismiss_hint": "Click anywhere to dismiss this guide"
+  },
+  "auth": {
+    "ssoError": {
+      "not_invited": "You're signed in, but you haven't been invited to this organisation yet. Ask an organisation admin to send you an invite, then try again.",
+      "auth_failed": "We couldn't complete the sign-in. Please try again.",
+      "provider_unavailable": "Sign-in is temporarily unavailable. Please try again in a moment."
+    }
   },
   "errorCodes": {
     "_unknown": "Unknown error",

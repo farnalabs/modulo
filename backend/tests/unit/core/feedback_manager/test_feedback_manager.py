@@ -282,6 +282,61 @@ class TestPaginateUnscopedWarning:
         assert any("empty conditions" in r.message for r in caplog.records)
 
 
+class TestPaginatedResponseHasMore:
+    """``paginated_response`` derives ``has_more`` so the envelope cannot lie (FAR-1881).
+
+    With a real ``total`` the answer is exact; without one the count is unknown
+    and a full page is the only available signal, so the two modes need pinning
+    separately - a single mode's tests would not catch the other being wrong.
+    """
+
+    def _rows(self, n: int) -> list[FeedbackRecord]:
+        return [MagicMock(spec=FeedbackRecord) for _ in range(n)]
+
+    def test_eagerly_true_when_a_later_row_exists(self) -> None:
+        from modulo.core.feedback_manager.queries import paginated_response
+
+        resp = paginated_response(self._rows(2), total=5, page=1, page_size=2)
+
+        assert resp["has_more"] is True
+        # The pre-existing envelope keys are preserved.
+        assert resp["total"] == 5
+        assert resp["page"] == 1
+        assert resp["page_size"] == 2
+        assert len(resp["items"]) == 2
+
+    def test_false_when_the_last_row_lands_on_this_page(self) -> None:
+        from modulo.core.feedback_manager.queries import paginated_response
+
+        resp = paginated_response(self._rows(2), total=4, page=2, page_size=2)
+
+        assert resp["has_more"] is False
+
+    def test_extra_keys_are_still_merged(self) -> None:
+        from modulo.core.feedback_manager.queries import paginated_response
+
+        pipeline_map = {"11111111-1111-1111-1111-111111111111": "Onboarding"}
+        resp = paginated_response(self._rows(1), total=1, page=1, page_size=20, extra={"pipeline_map": pipeline_map})
+
+        assert resp["has_more"] is False
+        # ``extra`` is merged through without disturbing the envelope.
+        assert resp["pipeline_map"] == pipeline_map
+
+    def test_heuristic_true_on_a_full_page_without_a_total(self) -> None:
+        from modulo.core.feedback_manager.queries import paginated_response
+
+        resp = paginated_response(self._rows(20), total=0, page=1, page_size=20, include_total=False)
+
+        assert resp["has_more"] is True
+
+    def test_heuristic_false_on_a_partial_page_without_a_total(self) -> None:
+        from modulo.core.feedback_manager.queries import paginated_response
+
+        resp = paginated_response(self._rows(3), total=0, page=1, page_size=20, include_total=False)
+
+        assert resp["has_more"] is False
+
+
 class TestGetFeedbackRecords:
     async def _setup_mock(self, mock_session: AsyncMock, items: list, total: int) -> MagicMock:
         mock_result = MagicMock()
@@ -301,6 +356,8 @@ class TestGetFeedbackRecords:
         assert len(result["items"]) == 1
         assert result["page"] == 1
         assert result["page_size"] == 20
+        # A single row against a total of one: nothing follows.
+        assert result["has_more"] is False
 
     async def test_filters_by_status(
         self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord

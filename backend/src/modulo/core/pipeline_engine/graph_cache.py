@@ -52,6 +52,7 @@ from modulo.core.pipeline_engine.scatter_join import (
     run_scatter_node,
     validate_scatter_join_node,
 )
+from modulo.db.crud.hitl_review_config import human_only_effective
 
 # Cache key: (pipeline_id, snapshot_id, pipeline_node_timeout_seconds). The
 # third element matters because the compiled graph bakes the effective per-node
@@ -1166,6 +1167,79 @@ def _assemble_nodes(
         graph.add_node(node_id, wrapped)
 
 
+@dataclasses.dataclass(frozen=True)
+class SourceDispatch:
+    """Which compile branch a source takes, and the edges of that branch.
+
+    Single source of truth (M7) shared by :func:`_link_sources` (which
+    COMPILES the branch) and :func:`_effective_gate_edges_for_source` (which
+    the chunk-12 fail-closed human-mode validation reads) — the validator
+    previously re-stated the dispatch precedence, so a change to
+    ``_link_sources`` would silently desync it and reopen the silent
+    no-pause hole §3.3 exists to close.
+
+    ``gate_edges`` are the forwarding edges of the selected branch that
+    actually compile an HITL review gate node:
+
+    * ``router`` / ``loop`` / ``llm`` / ``conditional`` — none (those
+      branches never reach :func:`_add_normal_edges` →
+      :func:`_add_hitl_review_edge`).
+    * ``hitl`` — every normal edge: :func:`_inject_node_hitl_configs`
+      stamps the node-level ``hitl_config`` onto each one, so each compiles
+      a gate (an absent/empty node-level config still stamps
+      ``{"review_id": ...}``).
+    * ``normal`` — the normal edges carrying an edge-level
+      ``hitl_review_config``.
+    """
+
+    branch: str  # "router" | "hitl" | "loop" | "llm" | "conditional" | "normal"
+    conditional: list[dict[str, Any]]
+    loop_edges: list[dict[str, Any]]
+    normal: list[dict[str, Any]]
+    gate_edges: list[dict[str, Any]]
+
+
+def classify_source_dispatch(
+    src_edges: list[dict[str, Any]],
+    source_node_def: dict[str, Any],
+) -> SourceDispatch:
+    """Classify *source*'s outgoing edges under the dispatch precedence.
+
+    Precedence (unchanged from the original builder): Router node config >
+    HITL node config > loop edges > LLM routing mode > conditional edges >
+    normal edges. This is THE precedence — ``_link_sources`` dispatches on
+    ``.branch`` and the chunk-12 validation reads ``.gate_edges``.
+    """
+    conditional, loop_edges, normal = _classify_outgoing_edges(src_edges)
+    node_type = source_node_def.get("node_type", "agent")
+    if node_type == "router":
+        branch = "router"
+    elif node_type == "hitl":
+        branch = "hitl"
+    elif loop_edges:
+        branch = "loop"
+    elif source_node_def.get("routing_mode") == "llm":
+        branch = "llm"
+    elif conditional:
+        branch = "conditional"
+    else:
+        branch = "normal"
+
+    if branch == "hitl":
+        gate_edges = list(normal)
+    elif branch == "normal":
+        gate_edges = [e for e in normal if e.get("hitl_review_config")]
+    else:
+        gate_edges = []
+    return SourceDispatch(
+        branch=branch,
+        conditional=conditional,
+        loop_edges=loop_edges,
+        normal=normal,
+        gate_edges=gate_edges,
+    )
+
+
 def _link_sources(
     graph: StateGraph[Any],
     source: str,
@@ -1182,24 +1256,24 @@ def _link_sources(
 ) -> None:
     """Compile one source node's outgoing edges onto *graph*.
 
-    Dispatch precedence (unchanged from the original builder): Router node
-    config > HITL node config > loop edges > LLM routing mode > conditional
-    edges > normal edges.
+    Dispatch precedence comes from :func:`classify_source_dispatch` — the
+    SAME classifier the chunk-12 human-mode validation reads (M7), so the
+    compiled branch and the validated branch can never desync:
+    Router node config > HITL node config > loop edges > LLM routing mode >
+    conditional edges > normal edges.
     """
     source_node_def = nodes_by_id.get(source, {})
-    routing_mode: str | None = source_node_def.get("routing_mode")
-    source_node_type: str = source_node_def.get("node_type", "agent")
+    dispatch = classify_source_dispatch(src_edges, source_node_def)
+    conditional, loop_edges, normal = dispatch.conditional, dispatch.loop_edges, dispatch.normal
 
-    conditional, loop_edges, normal = _classify_outgoing_edges(src_edges)
-
-    if source_node_type == "router":
+    if dispatch.branch == "router":
         # Router node (FAR-402 P1 / F2-A): lowers to the existing
         # conditional-edge compile path via the shared JMESPath evaluator.
         # Compile-time default-rule enforcement guards mis-configured graphs.
         router_config = dict(source_node_def.get("router_config") or {})
         _validate_router_config(router_config, source)
         graph.add_conditional_edges(source, make_router_node_fn(router_config, node_id=source))
-    elif source_node_type == "hitl":
+    elif dispatch.branch == "hitl":
         # HITL node (FAR-402 P1 / F2-D): stamp the node-level hitl_config onto
         # every outgoing normal edge, then compile them via the legacy
         # synthetic-gate path unchanged.
@@ -1216,11 +1290,11 @@ def _link_sources(
             org_id=org_id,
             node_type_map=node_type_map,
         )
-    elif loop_edges:
+    elif dispatch.branch == "loop":
         _add_loop_edges(graph, source, loop_edges, normal, target_ids)
-    elif routing_mode == "llm":
+    elif dispatch.branch == "llm":
         _add_llm_routing(graph, source, source_node_def, conditional, normal, target_ids)
-    elif conditional:
+    elif dispatch.branch == "conditional":
         _add_conditional_routing(graph, source, conditional, normal, target_ids)
     else:
         _add_normal_edges(
@@ -1280,6 +1354,84 @@ def _assemble_edges(
             node_type_map=node_type_map,
         )
     return target_ids
+
+
+def _effective_gate_edges_for_source(
+    src_edges: list[dict[str, Any]],
+    source_node_def: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """The forwarding edges of a source node that will actually compile an HITL gate.
+
+    M7: this no longer re-states :func:`_link_sources`' dispatch precedence —
+    it delegates to the SHARED :func:`classify_source_dispatch`, the same
+    classifier ``_link_sources`` dispatches on, so the two can never desync
+    (a desync would silently reopen the no-pause hole §3.3 exists to close).
+    Only the paths that reach :func:`_add_normal_edges` →
+    :func:`_add_hitl_review_edge` insert a gate node, and an HITL-typed node
+    stamps its own ``hitl_config`` onto EVERY normal edge so each one
+    compiles a gate. Used by the chunk-12 fail-closed human-mode validation.
+    """
+    return list(classify_source_dispatch(src_edges, source_node_def).gate_edges)
+
+
+def _validate_human_mode_pause_edges(
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    eval_definitions_by_node: dict[str, list[EvalDefDTO]] | None,
+) -> None:
+    """FAR-939 chunk 12 §3.3 — fail-closed graph-build validation.
+
+    A node whose eval list contains a HUMAN-mode-governed DTO must be the
+    source of EXACTLY ONE edge that compiles an HITL review gate, and that
+    gate's config must not carry a FALSY ``human_only`` (``false``, ``0``,
+    ``""`` — any value the runtime's ``human_only_effective`` resolves to
+    False; a node-level ``hitl_config`` bypasses the Pydantic model, so
+    the identity check against ``False`` alone was bypassable). Without
+    a pause edge the human-governed eval would be skipped with nothing to
+    decide it (a silent no-decision hole); with two, one gate would raise
+    two interrupts for a single evaluation; and a human-decided gate is
+    definitionally human-only (FAR-609), so an explicit opt-out is
+    rejected. Violations raise ``ValueError`` — run start fails loudly, the
+    run never begins.
+    """
+    if not eval_definitions_by_node:
+        return
+    human_nodes = {
+        str(node_id)
+        for node_id, dtos in eval_definitions_by_node.items()
+        if any(getattr(dto, "policy_gate_evaluation_mode", None) == "human" for dto in dtos)
+    }
+    if not human_nodes:
+        return
+
+    nodes_by_id: dict[str, dict[str, Any]] = {str(n["id"]): n for n in nodes if n.get("id")}
+    source_edges = _group_forwarding_edges(edges)
+
+    for node_id in sorted(human_nodes):
+        source_node_def = nodes_by_id.get(node_id, {})
+        gate_edges = _effective_gate_edges_for_source(source_edges.get(node_id, []), source_node_def)
+        if len(gate_edges) != 1:
+            raise ValueError(
+                f"human-mode policy-gate eval on node {node_id} requires EXACTLY ONE outgoing edge "
+                f"that compiles an HITL review gate; found {len(gate_edges)}. A human-governed eval "
+                "with no pause edge would never be decided (chunk 12 §3.3)."
+            )
+        hitl_config = gate_edges[0].get("hitl_review_config")
+        if hitl_config is None and source_node_def.get("node_type") == "hitl":
+            # The edge-level config is stamped at compile time from the
+            # node-level hitl_config; validate the source of the stamp.
+            hitl_config = source_node_def.get("hitl_config")
+        # M5: the SAME semantics the runtime enforces — a falsy opt-out
+        # (``false``, ``0``, ``""`` — a node-level hitl_config bypasses the
+        # Pydantic model, so any of these can persist) is rejected, not just
+        # the literal ``False``. ``human_only_effective`` is the FAR-609
+        # single source the runtime resolution reads through.
+        if isinstance(hitl_config, dict) and human_only_effective(hitl_config) is False:
+            raise ValueError(
+                f"human-mode policy-gate eval on node {node_id}: the HITL review config sets "
+                f"human_only={hitl_config.get('human_only')!r} (falsy) — a human-decided gate is "
+                "definitionally human-only (chunk 12 §3.3 / FAR-609)."
+            )
 
 
 def build_graph_from_json(
@@ -1348,6 +1500,12 @@ def build_graph_from_json(
     # source node's type to split the envelope. Derived from the immutable
     # graph_json, so it is identical for every compiled snapshot.
     node_type_map = {str(n["id"]): (n.get("node_type") or DEFAULT_NODE_TYPE) for n in nodes if n.get("id")}
+
+    # FAR-939 chunk 12 §3.3 — fail closed BEFORE compiling: a human-mode
+    # governed eval without exactly one HITL pause edge (or with an explicit
+    # human_only=false opt-out) must refuse to start rather than silently
+    # decide nothing at runtime.
+    _validate_human_mode_pause_edges(nodes, edges, eval_definitions_by_node)
 
     _assemble_nodes(
         graph,

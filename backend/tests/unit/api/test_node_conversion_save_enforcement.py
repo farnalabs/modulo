@@ -14,7 +14,7 @@ graph-write endpoints run (``replace_pipeline_graph_endpoint`` and
    inside the same transaction so a blocking code rolls the write back (422).
 
 So a convert-to-agent request could persist a cross-team connector binding that
-``PATCH /graph`` rejects with ``409 connector_team_mismatch``.
+``PUT /graph`` rejects with ``409 connector_team_mismatch``.
 
 These tests drive ``_save_locked_graph`` directly with a session double that
 dispatches on SQL text (so a statement-order change cannot silently swap
@@ -202,7 +202,7 @@ async def _save(
 async def test_cross_team_connector_binding_is_rejected_409() -> None:
     """A team-private connector owned by ANOTHER team must not be persisted.
 
-    This is the exact request ``PATCH /graph`` rejects with
+    This is the exact request ``PUT /graph`` rejects with
     ``409 connector_team_mismatch``; the node-conversion save path must apply
     the same gate. The named error in ``detail`` is what lets a client branch
     on it, so assert on it rather than only the status.
@@ -450,7 +450,7 @@ async def test_validate_graph_save_failure_propagates_out_of_the_save() -> None:
 async def test_advisory_issues_are_returned_by_the_save() -> None:
     """A non-blocking issue must be RETURNED, not only logged.
 
-    ``PATCH /graph`` and ``PATCH /{id}`` answer with ``validation_issues``; the
+    ``PUT /graph`` and ``PATCH /{id}`` answer with ``validation_issues``; the
     conversion endpoints must be able to do the same, so the shared chokepoint
     widens its return to ``(nodes, edges, issues)``. Anything that only logged
     the advisory half would leave the two surfaces inconsistent.

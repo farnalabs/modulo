@@ -37,12 +37,79 @@ matrix.
 
 Controls a 98% hard-stop that refuses new runs when database capacity is nearly full.
 
+Capacity is **auto-detected by default**; there is normally nothing to configure. The
+monitor resolves a capacity figure from the first available source and compares it with
+that source's usage numerator: the measured database size (`pg_database_size`) for
+`env`, or the mounted volume's used space (`total - free`) for `filesystem`. The
+hard-stop applies in `DB_CAPACITY_MODE=fixed` only (the default), refusing to create
+new runs once usage reaches `DB_CAPACITY_HARD_STOP_PCT`.
+
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `DB_CAPACITY_MODE` | No | `fixed` | Capacity mode: `fixed` (enforced), `elastic` (advisory only), or `disabled` |
-| `DB_CAPACITY_BYTES` | No | `None` | Total capacity bytes for computing usage percentage (required when mode=fixed) |
+| `DB_CAPACITY_SOURCE` | No | `auto` | Where capacity comes from: `auto`, `env`, `filesystem`, or `disabled` |
+| `DB_CAPACITY_PATH` | No | `/var/lib/modulo/db-volume` | Mount point of the Postgres data volume, for the `filesystem` source |
+| `DB_CAPACITY_BYTES` | No | `None` | Explicit capacity in bytes. An **override**, not a requirement - see below |
 | `DB_CAPACITY_BYPASS` | No | `false` | Operator bypass for the 98% hard-stop (e.g. deliberate migrations) |
 | `DB_CAPACITY_HARD_STOP_PCT` | No | `98.0` | Percent of capacity at/above which new runs are refused (mode=fixed only) |
+
+#### How capacity is detected
+
+`DB_CAPACITY_SOURCE` selects the detection strategy:
+
+| Value | Behaviour |
+|-------|-----------|
+| `auto` (default) | Tries `env`, then `filesystem`; uses the first source that resolves |
+| `env` | Uses `DB_CAPACITY_BYTES` only. The pre-auto-detection behaviour, kept as an escape hatch |
+| `filesystem` | Measures the filesystem at `DB_CAPACITY_PATH` only |
+| `disabled` | Resolves nothing at all, even when `DB_CAPACITY_BYTES` is set |
+
+An unrecognised value falls back to `auto`.
+
+- **`env`** uses `DB_CAPACITY_BYTES` as the capacity and the measured database size as
+  the numerator.
+- **`filesystem`** uses the total size of the mounted filesystem at `DB_CAPACITY_PATH`
+  and its **used** space (`total - free`) as the numerator. The Docker Compose files mount
+  the Postgres data volume read-only at this path, for the API/MCP process and for the
+  workers that create runs (cron and polling triggers). If the path is missing or
+  unreadable the source resolves nothing - the monitor never judges capacity from a
+  filesystem it cannot actually see.
+
+**An auto-detected candidate is rejected when it is physically impossible.** A volume
+whose total is *smaller than the database it holds* cannot exist, so the `filesystem`
+reading is the wrong volume: the monitor discards it and logs a warning. `filesystem`
+is last in the `auto` order (`env`, then `filesystem`) and is the sole candidate when
+selected explicitly, so a discarded reading has no next source to fall through to - it
+resolves nothing (`source: "none"`) and the hard-stop goes inert. This is an
+impossibility test, not a margin, so a small-but-valid
+volume whose total is genuinely just above the database size still resolves and still
+arms the hard-stop. The check is scoped to **auto-detected** sources only - an explicit
+`DB_CAPACITY_BYTES` (`env`) is the operator asserting the capacity and is never
+second-guessed, so a deliberately-small override still enforces.
+
+#### Failure behaviour
+
+Detection failure never **raises** - every failure fails open - but it does not always
+leave the monitor inert, because the two failure kinds differ:
+
+- **No source resolved, or the filesystem probe itself fails** - `capacity_percent:
+  null`, `source: "none"`, alert level `ok`, hard-stop inert.
+- **A `pg_database_size` query failure** - the resolved source still resolves. For `env`
+  the capacity comes from `DB_CAPACITY_BYTES` with the numerator unknown, so the status
+  reads `source: "env"` and `capacity_percent: null`, and the hard-stop is inert. For
+  `filesystem` the numerator is the mount's own `total - free`, which does not depend on
+  the database, so the percent and alert level stay real and the hard-stop **stays
+  armed**.
+
+On the default self-hosted Compose deployment `filesystem` is the source that resolves,
+so a database blip on a near-full volume does not disarm the gate - new runs can still
+be refused. Detection is a safety advisory, and it fails open. The resolved source is
+reported by `GET /api/v1/admin/db-capacity` so an operator can see which mechanism is
+active (`env`, `filesystem`, or `none`).
+
+`DB_CAPACITY_BYTES` is therefore optional everywhere: set it to pin capacity explicitly
+(pair it with `DB_CAPACITY_SOURCE=env` to pin it exclusively), or leave it unset and let
+detection work.
 
 ---
 
@@ -58,6 +125,7 @@ Controls a 98% hard-stop that refuses new runs when database capacity is nearly 
 | `MODULO_ADMIN_SECRET` | No | – | **CLI-only**. Shared secret for `modulo-migrate` CLI auth bypass (not part of the Settings class; read directly by the CLI tool) |
 | `MODULO_ADMIN_TOKEN` | No | – | **CLI-only**. Admin JWT for `modulo-migrate` CLI (alternative to env; not part of the Settings class) |
 | `MODULO_SECRETS_BACKEND` | No | `fernet` | Secrets backend: `fernet`, `vault`, or `aws` |
+| `GUARDRAIL_DESTROY_PEPPER` | For destroy-mode redaction | `""` | HMAC pepper used by guardrails in `destroy` redaction mode to key replacement tokens. Empty (the default) leaves it unset, and a guardrail that declares a destroy-mode redaction rule then fails closed - the rule is rejected at save time and the block is terminal at the edge. Never logged. Rotating it breaks cross-run linkage of already-destroyed tokens by design. |
 | `INVITATION_EXPIRY_HOURS` | No | `72` | How long an in-app invitation token stays consumable |
 
 See [`docs/deployment-security.md`](./deployment-security.md) for key rotation procedures and [`docs/security/secret-management.md`](./security/secret-management.md) for backend-specific configuration.
@@ -94,7 +162,7 @@ configured a signing key cannot emit signed evidence.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `MODULO_EVIDENCE_SIGNING_KEY` | For signed evidence | – | PEM-encoded Ed25519 private key that signs the evidence manifest. Set it to enable signing; the matching public key is derived and published automatically via the admin verification-key endpoint. Empty disables signed evidence. |
-| `MODULO_EVIDENCE_EXPORTER_IDENTITY` | No | `modulo` | Human-readable identity stamped into the signed manifest as the exporter. Never a credential. |
+| `MODULO_EVIDENCE_EXPORTER_IDENTITY` | No | `""` (falls back to `modulo` at stamp time) | Human-readable identity stamped into the signed manifest as the exporter. Never a credential. |
 
 ---
 
@@ -154,6 +222,7 @@ Team-tier feature (requires valid `MODULO_LICENSE_KEY`). Configurable via env va
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `MODULO_PUBLIC_URL` | For SSO | `http://localhost:8000` | Public-facing URL for OAuth redirects, webhook callbacks, email links |
+| `MODULO_FRONTEND_URL` | No | `""` | Browser-facing SPA base URL for SSO post-login redirects and MCP OAuth authorize links. Set only for a split-origin deployment (SPA and API on different origins); empty falls back to `MODULO_PUBLIC_URL`, then `http://localhost:5173`. CORS origins are not used for post-login routing. |
 | `CORS_ORIGINS` | No | `http://localhost:5173` | Comma-separated allowed CORS origins |
 | `CORS_MAX_AGE` | No | `600` | Preflight cache max-age in seconds |
 | `MODULO_LOG_LEVEL` | No | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
@@ -276,6 +345,7 @@ mutation transaction, including the clone's separate-connection step-(a)
 | `MODULO_TELEMETRY_ENABLED` | No | `false` | Enable OpenTelemetry instrumentation |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | – | OTel gRPC exporter endpoint (e.g. `http://otel-collector:4317`) |
 | `MODULO_OTEL_SERVICE_NAME` | No | `modulo` | OTel service name attribute |
+| `MODULO_SLOW_CALLBACK_WARN_MS` | No | `0` | When greater than `0` (milliseconds), process startup arms asyncio's slow-callback warning at this threshold and starts a low-frequency sampler that records the loop thread's stack, so the readiness stall log can name the blocking callback (`file:line`) - the FAR-1439 class where a synchronous call freezes the event loop and starves every async DB op at once. `0` (the default) is a zero-cost no-op. |
 
 Telemetry is opt-in. With default settings, Modulo makes **zero** external network calls. See [`docs/operations/network-egress.md`](./operations/network-egress.md).
 
@@ -347,6 +417,14 @@ LOAD.
 
 ---
 
+## Work-Item Refs
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_WORK_ITEM_REFS_CAP` | No | `100` | Unified cap (clamped to `[1, 100000]`) on work-item references carried through the refs pipeline: self-report normalisation, the finalise merge, and node-input injection all read this one value. When more refs are supplied, drops drain lowest-provenance first (agent → derived → caller, then array position) and are counted. A pipeline declaring `work_item_refs_required: true` in its `run_context_defaults` refuses a delivery that supplied no refs: HTTP 422 with a `work_item_refs_required` error on the MCP and webhook paths, and a 422 with a prose detail (`This pipeline requires work_item_refs but none were supplied`) on the REST path. |
+
+---
+
 ## Feature Flags
 
 | Variable | Required | Default | Description |
@@ -373,7 +451,7 @@ via the admin API. Unknown/absent keys default to safe values.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `sandbox_concurrency_limit` | `int` (1–100) or `null` | `null` (unlimited) | Max concurrently `running` sandbox-agent runs for the org across all pipelines. Runs beyond the cap stay `pending` with `error_code='org_capacity_limited'` and are retried by the background accelerator. Managed via `GET`/`PUT /api/v1/admin/org/sandbox-concurrency`. |
+| `sandbox_concurrency_limit` | `int` (0–100) or `null` | `4` when the key is absent | Max concurrently `running` sandbox-agent runs for the org across all pipelines. An absent key resolves to the Docker-tier default of `4`, not unlimited; only an explicit `null` means unlimited. `0` is meaningful (deny-all), so the clamp range is `[0, 100]`. Runs beyond the cap stay `pending` with `error_code='org_capacity_limited'` and are retried by the background accelerator. Managed via `GET`/`PUT /api/v1/admin/org/sandbox-concurrency`. |
 | `run_concurrency_limit` | `int` (1–100) or `null` | `null` (unlimited) | Max concurrently executing/claimed runs for the org across ALL pipelines (sandbox-agent and otherwise). Runs dispatched while the org is at this cap are deferred back to `pending` with `error_code='org_capacity_limited'` and retried by the background accelerator. Independent of `sandbox_concurrency_limit` – both are org-wide caps, and both produce the same `org_capacity_limited` marker on deferred runs. Managed via `GET`/`PUT /api/v1/admin/org/run-concurrency`. |
 | `hitl_review_window_seconds` | `int` (60–604800) or `null` | `null` (instance default) | Org default HITL review window: how long a fired review may sit unclaimed/undecided before the run is terminalised `cancelled` / `hitl_review_expired`. A pipeline-level `hitl_review_window_seconds` wins over this; `null` clears the key and inherits the instance default. The terminaliser itself has no per-org opt-out and no "0 = disabled". Managed via `GET`/`PUT /api/v1/admin/org/hitl-review-window`, where an omitted field is a 422 and only an explicit `null` clears the org default |
 
@@ -426,7 +504,7 @@ The same SMTP configuration also drives the system worker's in-app readiness ale
 
 Notifications are edge-triggered and deduplicated: a new state must hold for 2 consecutive ticks (a ~10-minute worst-case notification latency, a single-probe blip never emails), and the dedup state is persisted in Redis so there is **one email per incident, never one per tick**. With no SMTP configuration (the compose deployment default), the cron still runs and evaluates health, never errors, and logs at most once per hour that alerting is disabled – quiet, not silent.
 
-The alerting also covers the **advisory** sweeps whose failure is real breakage (FAR-1571). The readiness aggregate deliberately excludes the advisory checks, so `REAL_FAILURE_ADVISORY_CHECKS` names the ones that *are* alert-worthy: a sustained non-`ok` on `stale_run_recovery`, `slot_reconciliation`, `hitl_park_sweep`, `runner_workspace_reconcile`, `runner_marker_sweep`, `runner_health_probe` or `dispatcher_reconcile` at its `degraded` tier emails the same incident/recovery pair even while the aggregate still reads `ok` (the email reports `degraded`, never the misleading `ok`). Benign or other-channel advisories: `break_glass` and a not-measured `db_hygiene` probe - stay quiet, and the 2-tick hysteresis is unchanged, so a single transient advisory blip still never emails. `event_loop_lag` is the exception, gated by magnitude rather than silenced outright (FAR-1771): under 250 ms (`_LOOP_LAG_DEGRADED_MS`, `api/routes/health.py`) it reads `ok` and stays quiet; from 250 ms to 1 s it reads `degraded` - visible in the readiness payload, but it never pages; at 1 s or above (`SEVERE_EVENT_LOOP_STALL_MS`, `core/health_alerts.py`) it reads `degraded`, flips `HealthObservation.observed_state` and is listed as a failing check, so it emails like a real failure (same 2-tick hysteresis). All three bands stay out of the readiness aggregate, so `event_loop_lag` never gates bluegreen.
+The alerting also covers the **advisory** sweeps whose failure is real breakage (FAR-1571). The readiness aggregate deliberately excludes the advisory checks, so `REAL_FAILURE_ADVISORY_CHECKS` names the nine ones that *are* alert-worthy: a sustained non-`ok` on `stale_run_recovery`, `slot_reconciliation`, `hitl_park_sweep`, `runner_workspace_reconcile`, `runner_marker_sweep`, `runner_health_probe`, `dispatcher_reconcile`, `decision_record_reconcile` or `legacy_agent_return_sweep` at its `degraded` tier emails the same incident/recovery pair even while the aggregate still reads `ok` (the email reports `degraded`, never the misleading `ok`). Benign or other-channel advisories: `break_glass` and a not-measured `db_hygiene` probe - stay quiet, and the 2-tick hysteresis is unchanged, so a single transient advisory blip still never emails. `event_loop_lag` is the exception, gated by magnitude rather than silenced outright (FAR-1771): under 250 ms (`_LOOP_LAG_DEGRADED_MS`, `api/routes/health.py`) it reads `ok` and stays quiet; from 250 ms to 1 s it reads `degraded` - visible in the readiness payload, but it never pages; at 1 s or above (`SEVERE_EVENT_LOOP_STALL_MS`, `core/health_alerts.py`) it reads `degraded`, flips `HealthObservation.observed_state` and is listed as a failing check, so it emails like a real failure (same 2-tick hysteresis). All three bands stay out of the readiness aggregate, so `event_loop_lag` never gates bluegreen.
 
 This covers degradation *while the app is up*. A **full outage** is covered separately by the compose deployment's external [Gatus health watchdog](./deployment.md#health-watchdog-docker-compose), which does not depend on Modulo itself running.
 

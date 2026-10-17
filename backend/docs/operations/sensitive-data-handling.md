@@ -79,7 +79,7 @@ Masking is applied at these points:
 | MCP `modulo://library/{type}/{slug}` resource — FAR-1380 | `mask_pipeline_graph_node()` on the composite primitive's `content_json` nodes before rendering the Content Summary | Same node masking as the pipeline graph read |
 
 Graph READ masking must not corrupt data on WRITE: the graph endpoints are
-full-replace, so a PATCH round-tripping a masked GET would otherwise persist
+full-replace, so a PUT round-tripping a masked GET would otherwise persist
 the mask literals over the stored secrets. `merge_masked_graph_nodes()`
 resolves mask echoes against the stored graph before a graph write commits —
 an echoed value is restored from storage, an echo with no stored counterpart
@@ -242,7 +242,7 @@ Every serialization path for the three graph entities, one cell per path:
 | Path | pipelines.graph_nodes_json | pipeline_snapshots.graph_json | composite_templates.sub_pipeline_graph_json |
 |---|---|---|---|
 | REST graph GET `GET /pipelines/{id}/graph` | **Masked** — `_graph_response` calls `mask_pipeline_graph_node` per node (`api/routes/pipelines.py:1790`); test `test_pipeline_graph_masking.py:283` | N/A (not this entity) | N/A |
-| REST graph PATCH (full replace) | **Write + echo-merge** — `merge_masked_graph_nodes` resolves masked echoes against storage before persisting (`pipelines.py` PATCH graph route); test `test_pipeline_graph_masking.py:300` | N/A | N/A |
+| REST graph PUT (full replace) | **Write + echo-merge** — `merge_masked_graph_nodes` resolves masked echoes against storage before persisting (`pipelines.py` PUT graph route); test `test_pipeline_graph_masking.py:300` | N/A | N/A |
 | REST pipeline list / detail / patch / archive / clone / folder-move | **Stripped** — `PipelineResponse` has no graph field; `node_count` only via `_pipeline_response` (`pipelines.py:2213-2228`); clone copies the column server-side (`db/crud/pipeline.py:1141`, in `_read_clone_source_snapshot` at `:1057`) | N/A (not on this entity) | N/A |
 | REST save-as-composite `POST /pipelines/{id}/save-as-composite` | **Write (store) + sentinel 422 (FAR-1374)** — copied nodes persist as-is (no write-side masking; parity with the pipeline graph write), and `resolve_and_reject_mask_sentinels` refuses a submitted mask sentinel with 422 before the template is created (`pipelines.py` save-as-composite route); test `routes/test_composite_authoring.py` `TestSaveAsCompositeCredentialStorage` | N/A | write side of the same flow |
 | REST snapshot list `GET /pipelines/{id}/snapshots` | N/A | **Stripped** — list response omits `graph_json` (`_snapshot_to_response`, `pipelines.py:3523`) | N/A |

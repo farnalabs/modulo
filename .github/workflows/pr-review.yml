@@ -1,5 +1,17 @@
 name: "Review: Modulo Agent"
 
+# FAR-1843: the PR-reviewer dispatch lives HERE — in its own workflow, driven
+# by product-CI completion (workflow_run) or manual dispatch — never as a job
+# inside ci.yml. When the dispatch lived inside "CI: Fast Validation"
+# (job notify-pr-review), a dispatch outage (e.g. an app HTTP 429 backpressure)
+# concluded the whole CI run as failure. merge-queue.yml gates every merge on
+# the latest "CI: Fast Validation" conclusion, so a review-dispatch outage was
+# indistinguishable from product-CI failure and blocked every merge; the red
+# CI then fanned Branch Fixer runs for every PR into the org sandbox cap,
+# demoting reviewer runs to pending and starving the reviewer itself —
+# a self-amplifying outage that could not self-heal (2026-10-15, 5 h, 28+ PRs).
+# A dispatch failure now fails only THIS workflow's own run.
+
 on:
   workflow_dispatch:
     inputs:
@@ -17,6 +29,14 @@ on:
         required: false
         default: ''
         type: string
+  # Drive the review from product-CI COMPLETION, decoupled from the CI run
+  # itself (FAR-1843 D1). Only a successful product-CI conclusion dispatches a
+  # review — a failed CI is the Branch Fixer's job, not the reviewer's.
+  # workflow_run events fire from the default branch's copy of this file and
+  # carry the triggering run's conclusion / head_sha / head_branch.
+  workflow_run:
+    workflows: ["CI: Fast Validation"]
+    types: [completed]
 
 permissions:
   contents: read
@@ -25,6 +45,12 @@ permissions:
 jobs:
   trigger-modulo-review:
     name: Trigger Modulo PR Review
+    # A workflow_run for a FAILED / CANCELLED product-CI run must not dispatch
+    # a review at all (the Branch Fixer owns red CI). This gate is safe to
+    # express at job level: workflow_run-triggered runs attach their check
+    # runs to the default-branch SHA, not to the PR head, so skipping this job
+    # never changes the PR's own check status.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubicloud-standard-2
     steps:
       - name: Set PR details
@@ -45,12 +71,62 @@ jobs:
           PR_NUMBER_INPUT: ${{ inputs.pr_number }}
           HEAD_SHA_INPUT: ${{ inputs.head_sha }}
           HEAD_BRANCH_INPUT: ${{ inputs.head_branch }}
+          WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           if [ "$EVENT_NAME" = "pull_request" ]; then
-            echo "pr_number=${PR_NUMBER_EVENT}" >> $GITHUB_OUTPUT
-            echo "repo=${REPO}" >> $GITHUB_OUTPUT
-            echo "head_sha=${HEAD_SHA_EVENT}" >> $GITHUB_OUTPUT
-            echo "head_branch=${HEAD_BRANCH_EVENT}" >> $GITHUB_OUTPUT
+            {
+              echo "pr_number=${PR_NUMBER_EVENT}"
+              echo "repo=${REPO}"
+              echo "head_sha=${HEAD_SHA_EVENT}"
+              echo "head_branch=${HEAD_BRANCH_EVENT}"
+              echo "ready=true"
+            } >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT_NAME" = "workflow_run" ]; then
+            # Product-CI completed for WORKFLOW_RUN_HEAD_SHA. Resolve the PR
+            # it validated, then apply the skip conditions the old ci.yml
+            # notify-pr-review job carried: superseded-run and
+            # manual-delivery (dedup runs as its own step after checkout).
+            HEAD_SHA="${WORKFLOW_RUN_HEAD_SHA}"
+            PR_NUM=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/pulls" \
+              --jq '[.[] | select(.state == "open")][0].number // empty' 2>/dev/null || true)
+            if [ -z "$PR_NUM" ]; then
+              # Not a PR CI run (push to main, workflow_dispatch of ci.yml, or
+              # the PR was merged in the meantime) — nothing to review.
+              echo "ready=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::CI completion for ${HEAD_SHA} (${WORKFLOW_RUN_HEAD_BRANCH}) maps to no open PR — no review dispatch."
+              exit 0
+            fi
+            # Superseded guard (FAR-1427 semantics, applied to CI-completion
+            # dispatch): a newer push to the PR has its own CI run and owns
+            # the review outcome; this completion is stale. Fail OPEN on an
+            # API error (empty CURRENT_SHA) — a genuine review must not be
+            # dropped on a blip; the dedup step and the engine's byte-level
+            # webhook idempotency coalesce any double dispatch.
+            CURRENT_SHA=$(gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '.head.sha' 2>/dev/null || echo "")
+            if [ -n "$CURRENT_SHA" ] && [ "$CURRENT_SHA" != "$HEAD_SHA" ]; then
+              echo "ready=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::CI completed for ${HEAD_SHA} but PR #${PR_NUM} head is now ${CURRENT_SHA} — superseded run, no review dispatch."
+              exit 0
+            fi
+            HEAD_BRANCH=$(gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '.head.ref' 2>/dev/null || echo "${WORKFLOW_RUN_HEAD_BRANCH}")
+            # manual-delivery label: do not auto-dispatch the reviewer (same
+            # documented meaning as on the Branch Fixer dispatch in ci.yml).
+            LABELS=$(gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+            case ",${LABELS}," in
+              *,manual-delivery,*)
+                echo "ready=false" >> "$GITHUB_OUTPUT"
+                echo "::notice::PR #${PR_NUM} carries the manual-delivery label — no automatic review dispatch."
+                exit 0
+                ;;
+            esac
+            {
+              echo "pr_number=${PR_NUM}"
+              echo "repo=${REPO}"
+              echo "head_sha=${HEAD_SHA}"
+              echo "head_branch=${HEAD_BRANCH}"
+              echo "ready=true"
+            } >> "$GITHUB_OUTPUT"
           else
             PR_NUM="${PR_NUMBER_INPUT}"
             HEAD_SHA="${HEAD_SHA_INPUT}"
@@ -60,10 +136,13 @@ jobs:
               HEAD_SHA=$(printf '%s' "$PR_JSON" | jq -r '.head_sha')
               HEAD_BRANCH=$(printf '%s' "$PR_JSON" | jq -r '.head_branch')
             fi
-            echo "pr_number=${PR_NUM}" >> $GITHUB_OUTPUT
-            echo "repo=${REPO}" >> $GITHUB_OUTPUT
-            echo "head_sha=${HEAD_SHA}" >> $GITHUB_OUTPUT
-            echo "head_branch=${HEAD_BRANCH}" >> $GITHUB_OUTPUT
+            {
+              echo "pr_number=${PR_NUM}"
+              echo "repo=${REPO}"
+              echo "head_sha=${HEAD_SHA}"
+              echo "head_branch=${HEAD_BRANCH}"
+              echo "ready=true"
+            } >> "$GITHUB_OUTPUT"
           fi
 
       # FAR-264: the same-repo author gate, shared with merge-queue.yml via the
@@ -72,11 +151,47 @@ jobs:
       # PR is NOT auto-reviewed - it needs a human review path. Unverifiable
       # state (API error, missing script output) fails CLOSED: the webhook is
       # NOT sent and the job fails loudly, never a silent green without review.
-      - name: Checkout repository (for the author gate script)
+      - name: Checkout repository (for the gate scripts)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.pr-details.outputs.ready == 'true'
+
+      # Dedup: do not re-review a head SHA the reviewer already reviewed
+      # (workflow_run path only — a manual workflow_dispatch is an explicit
+      # operator re-trigger and bypasses this, as it always has). Ported from
+      # the old ci.yml notify-pr-review job (FAR-1843 D1: same semantics).
+      # The script fails OPEN (dispatch) on any load error or ambiguous state.
+      - name: Skip when head already reviewed (dedup)
+        id: dedup
+        if: github.event_name == 'workflow_run' && steps.pr-details.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr-details.outputs.pr_number }}
+          REPO: ${{ steps.pr-details.outputs.repo }}
+          HEAD_SHA: ${{ steps.pr-details.outputs.head_sha }}
+        shell: bash
+        run: |
+          # Guard the wiring: the dedup script is a no-op if the repo was not
+          # checked out (GitHub Actions runners start with an empty workspace),
+          # so this workflow checks out the repo first. The deterministic path
+          # must fail LOUDLY, not fall through to the fail-open
+          # `|| echo "skip=false"` below, or a wiring bug silently dispatches
+          # every webhook and defeats the dedup feature.
+          test -f .github/scripts/pr-review-dedup.py || { echo "::error::pr-review-dedup.py not found - dedup disabled"; exit 1; }
+          # Fetch the PR's reviews and commits JSON, then run the versioned
+          # dedup decision script (.github/scripts/pr-review-dedup.py).
+          # The script handles multi-line bodies and pipe chars correctly
+          # (naive cut -d'|' is line-oriented and corrupts the SHA), and
+          # fails open (dispatch) on any load error or ambiguous state.
+          gh api "/repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" --paginate > /tmp/pr-reviews.json 2>/dev/null || echo "[]" > /tmp/pr-reviews.json
+          gh api "/repos/${REPO}/pulls/${PR_NUMBER}/commits?per_page=100" --paginate > /tmp/pr-commits.json 2>/dev/null || echo "[]" > /tmp/pr-commits.json
+          SKIP_OUTPUT=$(python3 .github/scripts/pr-review-dedup.py /tmp/pr-reviews.json /tmp/pr-commits.json "${HEAD_SHA}" 2>/tmp/pr-dedup-err || echo "skip=false")
+          echo "${SKIP_OUTPUT}" >> "$GITHUB_OUTPUT"
+          echo "PR Reviewer dedup: ${SKIP_OUTPUT}"
+          cat /tmp/pr-dedup-err
 
       - name: Same-repo author gate (FAR-264)
         id: author-gate
+        if: steps.pr-details.outputs.ready == 'true' && steps.dedup.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.pr-details.outputs.pr_number }}
@@ -106,7 +221,7 @@ jobs:
 
       - name: Send webhook to Modulo PR Review Agent
         id: webhook
-        if: steps.author-gate.outputs.skipped != 'true'
+        if: steps.pr-details.outputs.ready == 'true' && steps.dedup.outputs.skip != 'true' && steps.author-gate.outputs.skipped != 'true'
         env:
           MODULO_WEBHOOK_URL: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_URL }}
           MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_SECRET }}
@@ -131,8 +246,9 @@ jobs:
           # The Modulo app answers 503 "Pipeline snapshot lock unavailable
           # after 5 attempts - retry the webhook delivery" while a snapshot
           # lock is contended, so a single-shot POST loses the review for
-          # that PR outright: no run is created and nothing else re-drives
-          # it. Mirrors the Branch Fixer webhook step's retry policy.
+          # that PR outright: no run is created and only the app-side
+          # lifecycle watchdog's slow re-drive (~90 min) would recover it.
+          # Mirrors the Branch Fixer webhook step's retry policy.
           for i in 1 2 3 4 5; do
             # Timestamp and HMAC are recomputed per attempt so a signature
             # is never replayed outside the app's timestamp freshness window
@@ -193,8 +309,24 @@ jobs:
             esac
           done
           # Still fail the job when every attempt was refused: the missing
-          # review is a real blockage and the Lifecycle Watchdog keys off
-          # this workflow's conclusion to detect and re-drive it.
+          # review is a real blockage, and now that this dispatch is decoupled
+          # from product CI (FAR-1843) a failure here fails ONLY this
+          # workflow's run — it can never mark the PR's CI red or block the
+          # merge queue. The app-side lifecycle watchdog (PR Housekeeper) DOES
+          # re-drive genuinely missed reviews — it re-dispatches pr-review.yml
+          # for PRs open >90 min with no review, and for CHANGES_REQUESTED
+          # PRs whose fix commit is >2 h old — so the earlier "nothing else
+          # re-drives it" claim was wrong; but that watchdog is a slow outer
+          # loop, so a failed dispatch here must still fail loudly for the
+          # gap to be visible in minutes rather than at the next watchdog
+          # cadence.
+          #
+          # Intended behaviour change vs the removed ci.yml job (on the
+          # record, deliberately — not an accident): that job ran under
+          # always() with needs: covering every fallible job and therefore
+          # reviewed even a red-CI PR, whereas this gate reviews ONLY a green
+          # CI run. A failed CI is the Branch Fixer's job; the lifecycle
+          # watchdog re-drives anything genuinely missed.
           if [ "${ACCEPTED}" != "true" ]; then
             echo "::error::Modulo PR Review webhook POST failed with HTTP ${HTTP_CODE} after 5 attempts - no pipeline run was created."
             exit 1

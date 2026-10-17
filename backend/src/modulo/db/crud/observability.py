@@ -27,22 +27,45 @@ async def update_otel_config(
     org_id: uuid.UUID,
     config: dict[str, Any],
 ) -> dict[str, Any]:
-    """Merge ``config`` into the stored OTel config and return the result."""
-    # FAR-1025: opt out of the global soft-delete filter — a pending-deletion
-    # org is still operationally live; its OTel config must remain writable.
-    from modulo.db.soft_delete import include_soft_deleted
+    """Atomically merge ``config`` into the stored OTel config and return it.
 
-    # FAR-1624 org-lock audit: intentionally `FOR UPDATE`, NOT `FOR NO KEY
-    # UPDATE` — this read-modify-write acquires the org lock FIRST (no pre-held
-    # FK `KEY SHARE` on the org), so it cannot hit the KEY-SHARE->FOR-UPDATE
-    # upgrade cycle.
-    result = await session.execute(
-        include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
-    )
-    org = result.scalar_one_or_none()
-    if org is None:
-        raise ValueError("Organisation not found")
-    merged = {**org.otel_config_json, **config}
-    org.otel_config_json = merged
-    await session.flush()
-    return merged
+    FAR-1832 (QA F3): routes through the SHARED atomic JSON-column patch
+    machinery (:func:`modulo.db.crud.organisation.update_org_json_column_patch`)
+    — one implementation of the bounded lock wait, the fail-closed tenant
+    guard, the dialect split, the ``LookupError`` for a missing org and the
+    identity-map refresh, exactly as the settings writer uses. The two
+    legitimate OTel differences are ARGUMENTS, not a fork:
+
+    - ``column="otel_config_json"`` — a different column;
+    - ``require_live_row=False`` — FAR-1025 keeps a pending-deletion org's
+      OTel config **writable** during the confirmation window, so this path
+      deliberately carries no ``deleted_at IS NULL`` predicate on either
+      dialect (the settings helper refuses soft-deleted orgs; inheriting that
+      refusal here would silently regress FAR-1025);
+    - it never uses ``delete_keys`` (an empty clear list is passed).
+
+    The tenant guard APPLIES here (FAR-1832 QA F3): the caller must have bound
+    the org RLS context (``set_rls_org``) for this org — the same contract as
+    every settings writer. ``organisations`` is NOT RLS-scoped, so this guard
+    is the only tenant control on the raw ``UPDATE organisations … WHERE id =
+    :org_id``; before F3 this function trusted the ``org_id`` argument
+    verbatim. A session bound to a different org is refused with
+    ``OrgSettingsPatchOrgMismatch``; an unbound/unreadable context is refused
+    with the ``OrgSettingsPatchContext*`` errors.
+
+    Missing org raises ``ValueError("Organisation not found")`` (unchanged
+    contract — the CRUD's ``LookupError`` is translated at this boundary).
+    """
+    from modulo.db.crud.organisation import update_org_json_column_patch
+
+    try:
+        return await update_org_json_column_patch(
+            session,
+            org_id,
+            patch=config,
+            delete_keys=[],
+            column="otel_config_json",
+            require_live_row=False,
+        )
+    except LookupError:
+        raise ValueError("Organisation not found") from None

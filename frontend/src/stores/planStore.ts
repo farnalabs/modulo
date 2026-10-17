@@ -13,37 +13,47 @@ interface ApiResult<T> {
   error?: unknown;
 }
 
-interface FeatureFlagsPayload {
-  license: { tier: string };
+/**
+ * The single `GET /api/v1/plan` bootstrap payload (FAR-1806). Caller-scoped:
+ * readable by ANY authenticated org member, carrying the effective tier,
+ * the licence view, dev mode and the FULL known flag set (org
+ * `feature_overrides` applied; inactive flags present with
+ * `currently_active: false`). The vocabulary mirrors what the admin
+ * `/admin/feature-flags` + `/admin/license` pair used to serve, so no field
+ * renames — FAR-1809 just collapses those two reads into this one.
+ */
+interface PlanPayload {
+  license: {
+    tier: string;
+    expires_at?: string | null;
+    org_id?: string | null;
+  };
   dev_mode?: boolean;
   flags: Array<{ name: string; currently_active: boolean }>;
-}
-
-interface LicensePayload {
-  expires_at?: string | null;
-  org_id?: string | null;
-  tier?: string;
 }
 
 interface TiersPayload {
   tiers: Array<{ tier_id: string; label: string; rank: number }>;
 }
 
-function pushSettledError(apiErrors: string[], label: string, reason: unknown): void {
-  const message = (reason as { message?: unknown } | null | undefined)?.message;
-  apiErrors.push(`${label}: ${message ?? String(reason)}`);
-}
-
-function runPlanSource<T>(
+/**
+ * Run one plan request to settlement: apply on success, record on failure.
+ * Never rejects — the request is built INSIDE a thunk so even a synchronous
+ * throw from `api.GET` lands in this function's catch rather than escaping
+ * before the chain exists. (Replaces the old allSettled-then-apply pair:
+ * applying per source lets a fast plan response settle the nav without
+ * waiting on the tier catalogue — FAR-1805.)
+ */
+async function settlePlanSource<T>(
   label: string,
-  settled: PromiseSettledResult<unknown>,
+  makeRequest: () => Promise<unknown>,
   apply: (res: ApiResult<T>, apiErrors: string[]) => void,
   apiErrors: string[],
-): void {
-  if (settled.status === "fulfilled") {
-    apply(settled.value as unknown as ApiResult<T>, apiErrors);
-  } else {
-    pushSettledError(apiErrors, label, settled.reason);
+): Promise<void> {
+  try {
+    apply((await makeRequest()) as ApiResult<T>, apiErrors);
+  } catch (e: unknown) {
+    apiErrors.push(`${label}: ${formatApiError(e)}`);
   }
 }
 
@@ -104,8 +114,19 @@ export const usePlanStore = defineStore("plan", () => {
   // server payload ever returns it to 'none', so a resolved layout can never
   // fall back to the unresolved state mid-session (FAR-1237 guard). Note
   // `loaded` stays false on a cache hit — it means "fetched from the server",
-  // which the router's tier guard relies on.
-  const flagsSource = ref<"none" | "cache" | "server">(
+  // which the router's tier guard relies on as the signal that the TIER is
+  // known: it is set together with `currentTier`, so a payload that resolved
+  // to an EMPTY flag map is still 'loaded' and tier-checked (FAR-1809).
+  //
+  // 'unavailable' (FAR-1805) = the flags request SETTLED without a payload
+  // (5xx, rejection, the 15s timeout, the all-undefined no-payload branch, or
+  // a 4xx such as an expired token). It is terminal "cannot be read", not
+  // "has not been read yet": layout consumers treat it as known-and-default
+  // (drawer) instead of 'pending', because a permanent placeholder is a
+  // silent failure path. Unlike 'none' it IS recoverable — a later successful
+  // fetch overwrites it with 'server' (applyPlanPayload), while a
+  // cache hit or payload still never returns to 'none'.
+  const flagsSource = ref<"none" | "cache" | "server" | "unavailable">(
     cachedFlags ? "cache" : "none",
   );
   const devMode = ref(false);
@@ -164,12 +185,23 @@ export const usePlanStore = defineStore("plan", () => {
 
   let fetchPlanPromise: Promise<void> | null = null;
 
-  function applyFeatureFlagsPayload(res: ApiResult<FeatureFlagsPayload>, apiErrors: string[]): void {
+  /**
+   * Apply the single caller-scoped `GET /api/v1/plan` payload (FAR-1806,
+   * repointed in FAR-1809): tier, dev mode, licence view and the effective
+   * flag map arrive together for ANY authenticated member, so this one apply
+   * replaces the old instance-admin `/admin/feature-flags` +
+   * `/admin/license` pair. `loaded` and `currentTier` are written together
+   * here — that pairing is what lets the router's tier guard tell a known
+   * tier (payload landed, even with zero flags) from an unknown one.
+   */
+  function applyPlanPayload(res: ApiResult<PlanPayload>, apiErrors: string[]): void {
     if (res.error) {
       apiErrors.push(`Feature flags: ${formatApiError(res.error)}`);
     } else if (res.data) {
       currentTier.value = res.data.license.tier;
       devMode.value = res.data.dev_mode === true;
+      expiresAt.value = res.data.license.expires_at ?? null;
+      orgId.value = res.data.license.org_id ?? null;
       const map: Record<string, boolean> = {};
       for (const flag of res.data.flags) {
         map[flag.name] = flag.currently_active;
@@ -178,16 +210,6 @@ export const usePlanStore = defineStore("plan", () => {
       flagsSource.value = "server";
       loaded.value = true;
       writeFlagCache(map);
-    }
-  }
-
-  function applyLicensePayload(res: ApiResult<LicensePayload>, apiErrors: string[]): void {
-    if (res.error) {
-      apiErrors.push(`License: ${formatApiError(res.error)}`);
-    } else if (res.data) {
-      expiresAt.value = res.data.expires_at ?? null;
-      orgId.value = res.data.org_id ?? null;
-      if (res.data.tier) currentTier.value = res.data.tier;
     }
   }
 
@@ -222,30 +244,60 @@ export const usePlanStore = defineStore("plan", () => {
     error.value = null;
     const apiErrors: string[] = [];
     try {
-      const results = await Promise.allSettled([
-        withTimeout(
-          api.GET("/api/v1/admin/feature-flags"),
-          15000,
-          "Feature flags request",
-        ),
-        withTimeout(
-          api.GET("/api/v1/admin/license"),
-          15000,
-          "License request",
-        ),
-        withTimeout(
-          api.GET("/api/v1/admin/tiers"),
-          15000,
-          "Tiers request",
-        ),
-      ]);
+      // Two sources, each applying AS IT SETTLES (FAR-1805): the plan
+      // bootstrap — ONE caller-scoped `GET /api/v1/plan` (FAR-1806) that
+      // carries tier + dev mode + licence view + the effective flag map for
+      // ANY authenticated member, replacing the instance-admin
+      // `/admin/feature-flags` + `/admin/license` reads (FAR-1809) — and the
+      // tier catalogue (`/admin/tiers`, 200 for viewers, unchanged). A slow
+      // tiers response must not hold the plan answer the nav is waiting on;
+      // vice versa a hung plan request must not delay the tier catalogue.
+      // The plan source keeps the label "Feature flags": labels name the
+      // SOURCE ROLE (what `flagsSource` and the fallback log below refer to,
+      // and the prefix the error filter matches on), not an endpoint path —
+      // the path is right here in the thunk.
+      const flagsChain = settlePlanSource(
+        "Feature flags",
+        () => withTimeout(api.GET("/api/v1/plan"), 15000, "Feature flags request"),
+        applyPlanPayload,
+        apiErrors,
+      ).finally(() => {
+        // FAR-1805: the FLAGS source settled without producing a payload —
+        // terminal, never 'pending' forever (fail open, with a log). The
+        // guard is "still 'none' after the flags source settled", deliberately
+        // NOT "an error was recorded": the all-undefined no-payload branch
+        // ({data: undefined, error: undefined}) records no apiError at all, so
+        // an error-only check would miss it. Covers 4xx/5xx, rejection, and the
+        // 15s withTimeout alike (settlePlanSource never throws past here) —
+        // the 403-for-non-admin case FAR-1805 was born for largely disappears
+        // with the caller-scoped endpoint (FAR-1809), but timeout / 5xx must
+        // still settle here.
+        // 'cache'/'server'/'unavailable' are left untouched (a resolved layout
+        // never falls back); a later successful fetch still overwrites with
+        // 'server'. The log carries ONLY this source's own errors — flags can
+        // settle LAST (the 15s-timeout case), by which time tiers may
+        // have recorded theirs, so filter by the label rather than joining
+        // whatever has accumulated.
+        if (flagsSource.value === "none") {
+          flagsSource.value = "unavailable";
+          const flagsErrors = apiErrors.filter((entry) =>
+            entry.startsWith("Feature flags: "),
+          );
+          console.warn(
+            "[plan] Feature flags request settled without a payload — " +
+              "mobile nav falls back to the drawer",
+            flagsErrors.length > 0 ? flagsErrors.join("; ") : null,
+          );
+        }
+      });
+      const tiersChain = settlePlanSource(
+        "Tiers",
+        () => withTimeout(api.GET("/api/v1/admin/tiers"), 15000, "Tiers request"),
+        applyTiersPayload,
+        apiErrors,
+      );
 
-      const [flagsSettled, licenseSettled, tiersSettled] = results;
-
-      runPlanSource("Feature flags", flagsSettled, applyFeatureFlagsPayload, apiErrors);
-      runPlanSource("License", licenseSettled, applyLicensePayload, apiErrors);
-      runPlanSource("Tiers", tiersSettled, applyTiersPayload, apiErrors);
-
+      await Promise.all([flagsChain, tiersChain]);
       error.value = apiErrors.length > 0 ? apiErrors.join("; ") : null;
     } catch (e: unknown) {
       error.value = formatApiError(e);

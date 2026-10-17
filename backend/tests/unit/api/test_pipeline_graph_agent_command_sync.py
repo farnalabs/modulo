@@ -1,12 +1,12 @@
 """FAR-488a: node-level agent_commands PATCHes must reach the bound Agent row.
 
 At snapshot time ``_apply_agent_fields`` overwrites a bound node's
-``agent_commands`` with the Agent row's non-NULL value. The graph PATCH used to
+``agent_commands`` with the Agent row's non-NULL value. The graph write used to
 persist node-level commands to ``graph_nodes_json`` only, so an operator's
 PATCH read back correctly but every run silently executed the stale Agent-row
 command. These tests pin the sync ("what you PATCH is what runs") at three
 levels: the pure extractor, the DB sync helper against a mocked session, and
-the PATCH /graph endpoint wiring.
+the PUT /graph endpoint wiring.
 """
 
 import uuid
@@ -28,6 +28,7 @@ from modulo.api.routes.pipelines import (
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.pipeline_engine.git_content import GitContentRefError
+from modulo.db.crud.pipeline import GraphWriteRecording
 from modulo.db.crud.pipeline_snapshot import _apply_agent_fields
 from modulo.db.models.agent import Agent
 from modulo.settings import Settings
@@ -236,7 +237,7 @@ def test_snapshot_materializes_synced_agent_commands() -> None:
 def test_snapshot_shadow_overrides_node_command_with_agent_row() -> None:
     """The shadow itself: an out-of-step Agent row would override the node
     value at snapshot time — the exact mechanism behind the FAR-488 incident,
-    and the reason the row must be synced on every graph PATCH."""
+    and the reason the row must be synced on every graph write."""
     agent = Agent(name="reviewer", prompt_template="p")
     agent.agent_commands = ["stale-agent-row-command"]
     node = _node(uuid.uuid4(), agent_id=uuid.uuid4(), agent_commands=["fresh-node-command"])
@@ -282,8 +283,8 @@ def client() -> TestClient:
     app.dependency_overrides.clear()
 
 
-def test_patch_graph_endpoint_invokes_agent_commands_sync(client: TestClient) -> None:
-    """Wiring: the PATCH /graph endpoint calls the sync inside its transaction
+def test_put_graph_endpoint_invokes_agent_commands_sync(client: TestClient) -> None:
+    """Wiring: the PUT /graph endpoint calls the sync inside its transaction
     with the incoming node data."""
     node_id = uuid.uuid4()
     agent_id = uuid.uuid4()
@@ -302,7 +303,7 @@ def test_patch_graph_endpoint_invokes_agent_commands_sync(client: TestClient) ->
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": nodes, "edges": []},
         )
@@ -312,6 +313,80 @@ def test_patch_graph_endpoint_invokes_agent_commands_sync(client: TestClient) ->
     assert sync_mock.await_args.kwargs["org_id"] == _ORG_ID
     synced_nodes = sync_mock.await_args.kwargs["nodes"]
     assert any(node.get("agent_commands") == ["opencode run -- patched"] for node in synced_nodes)
+
+
+def test_put_graph_endpoint_syncs_agent_rows_before_the_graph_write(client: TestClient) -> None:
+    """Ordering (FAR-1810 review): the Agent-row sync must run BEFORE the
+    ``replace_pipeline_graph`` call that mints the FAR-1810 edit snapshot. The
+    snapshot copy's ``_materialize_agent_fields`` overwrites bound nodes from
+    the Agent row, so a sync that ran AFTER the write (the pre-fix order)
+    recorded a snapshot pinned to the stale command — the very defect that
+    FAR-488a exists to prevent. Fails on the pre-fix ordering."""
+    node_id = uuid.uuid4()
+    agent_id = uuid.uuid4()
+    nodes = [_node(node_id, agent_id=agent_id, agent_commands=["opencode run -- patched"])]
+    validation = MagicMock()
+    validation.issues = []
+    order: list[str] = []
+
+    async def _record_sync(*_args: Any, **_kwargs: Any) -> int:
+        order.append("sync")
+        return 1
+
+    async def _record_replace(*_args: Any, **_kwargs: Any) -> tuple[list[dict[str, Any]], list[Any]]:
+        order.append("replace")
+        return (nodes, [])
+
+    with (
+        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=_record_sync),
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph", new=_record_replace),
+        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
+        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=MagicMock(owner_team_id=None)),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.put(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": nodes, "edges": []},
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert order == ["sync", "replace"]
+
+
+async def test_save_graph_syncs_agent_rows_before_the_graph_write() -> None:
+    """Ordering (FAR-1810 review) for the node-conversion save path: the shared
+    ``_save_graph`` helper must sync the bound Agent rows BEFORE the write that
+    mints the edit snapshot. Same defect class as the PUT /graph endpoint."""
+    from modulo.api.routes.pipelines import _save_graph
+
+    order: list[str] = []
+
+    async def _record_sync(*_args: Any, **_kwargs: Any) -> int:
+        order.append("sync")
+        return 0
+
+    async def _record_replace(*_args: Any, **_kwargs: Any) -> tuple[list[dict[str, Any]], list[Any]]:
+        order.append("replace")
+        return ([], [])
+
+    with (
+        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=_record_sync),
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph", new=_record_replace),
+    ):
+        await _save_graph(
+            AsyncMock(),
+            _PIPELINE_ID,
+            _ORG_ID,
+            [],
+            [],
+            is_privileged=True,
+            caller_type="rest",
+            recording=GraphWriteRecording(record_snapshot=True),
+        )
+
+    assert order == ["sync", "replace"]
 
 
 # ---------------------------------------------------------------------------
@@ -367,9 +442,9 @@ async def test_sync_allows_pinned_git_ref_from_agent_type_node() -> None:
     assert agent.agent_commands == [_PINNED_REF]
 
 
-def test_patch_graph_endpoint_maps_unpinned_ref_sync_to_422(client: TestClient) -> None:
+def test_put_graph_endpoint_maps_unpinned_ref_sync_to_422(client: TestClient) -> None:
     """Wiring: when the Agent-row sync fails closed on an unpinned git content
-    ref, the PATCH /graph endpoint surfaces HTTP 422 (not the decorator's 500)
+    ref, the PUT /graph endpoint surfaces HTTP 422 (not the decorator's 500)
     and the enclosing transaction rolls back the graph write."""
     node_id = uuid.uuid4()
     agent_id = uuid.uuid4()
@@ -389,7 +464,7 @@ def test_patch_graph_endpoint_maps_unpinned_ref_sync_to_422(client: TestClient) 
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": nodes, "edges": []},
         )

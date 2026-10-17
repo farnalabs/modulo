@@ -263,4 +263,48 @@ describe('SidebarNav', () => {
       '/settings/license',
     )
   })
+
+  describe('touch sizing (collapsed rail)', () => {
+    it('keeps the default 40x26 toggle box and 40x40 link boxes in default mode', async () => {
+      const { wrapper } = mountSidebar({ collapsed: true })
+      await flushPromises()
+      const toggle = wrapper.find('.sidebar-group-rail-toggle')
+      expect(toggle.exists()).toBe(true)
+      expect(toggle.classes()).toContain('sidebar-group-rail-toggle')
+      expect(toggle.classes()).not.toContain('sidebar-group-rail-toggle--touch')
+      const links = wrapper.findAll('.sidebar-link')
+      expect(links.length).toBeGreaterThan(0)
+      for (const link of links) {
+        expect(link.classes()).toContain('sidebar-link--collapsed')
+        expect(link.classes()).not.toContain('sidebar-link--collapsed--touch')
+      }
+    })
+
+    it('uses the 44x44 toggle box in touch mode', async () => {
+      const { wrapper } = mountSidebar({ collapsed: true, size: 'touch' })
+      await flushPromises()
+      const toggle = wrapper.find('.sidebar-group-rail-toggle')
+      expect(toggle.exists()).toBe(true)
+      expect(toggle.classes()).toContain('sidebar-group-rail-toggle--touch')
+    })
+
+    it('forwards touch sizing to every rail link in touch mode', async () => {
+      const { wrapper } = mountSidebar({ collapsed: true, size: 'touch' })
+      await flushPromises()
+      const links = wrapper.findAll('.sidebar-link')
+      expect(links.length).toBeGreaterThan(0)
+      for (const link of links) {
+        expect(link.classes()).toContain('sidebar-link--collapsed--touch')
+      }
+    })
+
+    it('drops touch sizing from the expanded sidebar even when size is touch', async () => {
+      const { wrapper } = mountSidebar({ size: 'touch' })
+      await flushPromises()
+      expect(wrapper.findAll('.sidebar-group-rail-toggle').length).toBe(0)
+      for (const link of wrapper.findAll('.sidebar-link')) {
+        expect(link.classes()).not.toContain('sidebar-link--collapsed--touch')
+      }
+    })
+  })
 })

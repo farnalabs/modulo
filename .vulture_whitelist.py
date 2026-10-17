@@ -72,16 +72,13 @@ __all__ = [
     "_GitLabCITestDouble",
     "_JenkinsTestDouble",
     "_TeamCityTestDouble",
+    "_WoodpeckerTestDouble",
     # --- Known dead in production, referenced only by tests (kept — see comments) ---
     "LicenseKeyTier",  # test-support PlanContext double — used by BDD steps to fake licensed plans
     "circuit_state",  # test-consumed circuit-breaker observability API (health_check deliberately bypasses the breaker)
     "get_api_key_role_cap_count",  # test-support diagnostic getter for API-key role-cap security counter
     # runs.py wrapper kept for test_prompt_reveal (reveal_node_prompt uses _build_messages)
     "_build_messages_from_template_and_state",
-    # GraphValidator._check_node_send_budget — flat node-key send-budget reconcile kept for
-    # tests/unit/graph_validator/test_edges_and_sandbox_validation.py (FAR-410); the validate
-    # path uses _check_node_send_budget_bindings, so vulture cannot see a prod call site.
-    "_check_node_send_budget",
     # FAR-900: RenderResult.skip_reason is read by callers/tests but vulture
     # cannot resolve dataclass attribute reads.
     "skip_reason",
@@ -431,6 +428,7 @@ __all__ = [
     "_terminalize_expired_hitl_reviews",
     "_terminalize_hitl_review_missing",
     "_terminalize_aged_nodeless_zombies",  # FAR-1329: first batch terminalizer; same string-keyed registry resolution
+    "_terminalize_stranded_pending_runs",  # FAR-1862: stranded-pending age backstop; same registry resolution
     # FAR-720 declarative registry dataclasses: referenced only in type
     # annotations (``tuple[ReconcileTerminalizer, ...]``, ``tuning:
     # ReconcileTuning``), which vulture does not credit as uses.

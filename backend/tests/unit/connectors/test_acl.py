@@ -1,10 +1,19 @@
 """Unit tests for ConnectorACL."""
 
 import inspect
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.connectors.base import ConnectorACL, ConnectorPermissionError, unrestricted_allowed_operations
+from modulo.connectors.base import (
+    ACL_OPERATION_BY_CONNECTOR_METHOD,
+    ConnectorACL,
+    ConnectorPayload,
+    ConnectorPermissionError,
+    ConnectorQuery,
+    unrestricted_allowed_operations,
+)
+from modulo.core.connector_hub import _TracedConnector
 
 
 def test_acl_org_visibility():
@@ -233,3 +242,53 @@ def test_acl_unrestricted_semantics_survive_the_type_check():
         acl = ConnectorACL(visibility="org", allowed_operations=ops, connector_type_id="filesystem")
         assert acl.check("write") is None
         assert acl.check("read") is None
+
+
+# ---------------------------------------------------------------------------
+# The connector-method → ACL-operation table mirrors _TracedConnector (FAR-1667)
+# ---------------------------------------------------------------------------
+
+#: One call per ``_TracedConnector`` method with the args it needs. Its keys are
+#: the same seven methods as ``ACL_OPERATION_BY_CONNECTOR_METHOD``; the
+#: parametrised test below drives each and asserts the ACL gate used exactly the
+#: table's operation.
+_TRACED_METHOD_CALLS: dict[str, tuple] = {
+    "health_check": (),
+    "query": (ConnectorQuery(resource="r"),),
+    "write": (ConnectorPayload(resource="r", data={}),),
+    "trigger_run": ("pipeline",),
+    "get_run_status": ("run",),
+    "get_run_logs": ("run",),
+    "list_runs": (),
+}
+
+
+def _traced_connector(*, acl):
+    inner = MagicMock()
+    for name in _TRACED_METHOD_CALLS:
+        setattr(inner, name, AsyncMock(return_value=MagicMock()))
+    tracer = MagicMock()
+    span = MagicMock()
+    span_cm = MagicMock()
+    span_cm.__enter__ = MagicMock(return_value=span)
+    span_cm.__exit__ = MagicMock(return_value=False)
+    tracer.start_as_current_span.return_value = span_cm
+    return _TracedConnector(inner, tracer, org_id="org", acl=acl)
+
+
+@pytest.mark.parametrize("method", sorted(ACL_OPERATION_BY_CONNECTOR_METHOD))
+async def test_traced_connector_gates_each_method_with_the_table_operation(method):
+    # The hub must gate each connector method with EXACTLY the operation the
+    # shared table declares — the same table the save-time validator derives
+    # requirements from, so the two surfaces cannot drift.
+    acl = MagicMock()
+    conn = _traced_connector(acl=acl)
+    await getattr(conn, method)(*_TRACED_METHOD_CALLS[method])
+    acl.check.assert_called_once_with(ACL_OPERATION_BY_CONNECTOR_METHOD[method])
+
+
+def test_acl_operation_table_unknown_method_raises_key_error():
+    # The table is CLOSED: an unknown method must fail LOUD, never silently
+    # resolve to ``acl_operation=None`` (which would skip the ACL gate).
+    with pytest.raises(KeyError):
+        ACL_OPERATION_BY_CONNECTOR_METHOD["does_not_exist"]

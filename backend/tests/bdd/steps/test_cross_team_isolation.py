@@ -1,7 +1,7 @@
 """BDD step definitions: Cross-team isolation."""
 
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
@@ -158,20 +158,27 @@ def user_requests_connector(username: str, connector_name: str, request, ctx) ->
 
 @when(parsers.parse('I bind connector "{connector_name}" to a node in pipeline "{pipeline_name}"'))
 def bind_cross_team_connector(connector_name: str, pipeline_name: str, request, ctx) -> None:
-    """PATCH the real graph-replace route; the REAL team-visibility predicate
+    """PUT the real graph-replace route; the REAL team-visibility predicate
     judges the binding.
 
     ``_prepare_graph_write`` and ``_enforce_connector_team_bindings`` (with its
     ``find_connector_team_mismatches`` predicate) run unpatched; the candidate
     read seam is stubbed to the ctx connector row so the real mismatch check
     fires and the route raises its own named 409.
+
+    FAR-1810: a passing binding reaches the real ``replace_pipeline_graph``,
+    which now records an edit snapshot - and that snapshot's advisory lock
+    requires a session bound to a real ``AsyncEngine``. This harness runs a
+    mocked session, so the snapshot-write seam is stubbed (the snapshot's own
+    lock/versioning behaviour is covered by the unit tests against a real
+    SQLite session); the graph write and the team-binding predicate this
+    scenario exists to assert stay real.
     """
     cpdata = ctx.get("connectors", {}).get(connector_name)
     ppdata = ctx.get("pipelines", {}).get(pipeline_name)
     if cpdata is None or ppdata is None:
         raise AssertionError(
-            "binding step requires the connector and pipeline to be declared; "
-            "the real graph PATCH route cannot be driven"
+            "binding step requires the connector and pipeline to be declared; the real graph PUT route cannot be driven"
         )
     connector_id = uuid.UUID(cpdata["id"])
     with (
@@ -187,8 +194,13 @@ def bind_cross_team_connector(connector_name: str, pipeline_name: str, request, 
             new_callable=AsyncMock,
             return_value=[make_connector_row(cpdata, connector_name)],
         ),
+        patch(
+            "modulo.db.crud.pipeline.create_snapshot_edit",
+            new_callable=AsyncMock,
+            return_value=MagicMock(snapshot_version=1),
+        ),
     ):
-        resp = client.patch(
+        resp = client.put(
             f"/api/v1/pipelines/{uuid.UUID(ppdata['id'])}/graph",
             json={
                 "nodes": [

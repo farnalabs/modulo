@@ -73,6 +73,22 @@ describe('NotificationsPage', () => {
     mockFetchNotifications.mockResolvedValue(pageResponse([], 0, 1))
   })
 
+  it('shows a skeleton placeholder while loading, not an indeterminate spinner', async () => {
+    mockFetchNotifications.mockReturnValue(new Promise(() => {}))
+    const wrapper = mount(NotificationsPage)
+    await nextTick()
+
+    const skeleton = wrapper.find('[data-testid="notifications-loading"]')
+    expect(skeleton.exists()).toBe(true)
+    // A native <output> carries the implicit ARIA status role, so its
+    // aria-label is permitted (axe aria-prohibited-attr) without an explicit
+    // role attribute (SonarCloud Web:S6819) — assert the native element rather
+    // than a redundant role, matching ParameterSchemasView / NotificationBell.
+    expect(skeleton.element.tagName).toBe('OUTPUT')
+    expect(skeleton.attributes('aria-busy')).toBe('true')
+    expect(wrapper.find('.animate-spin').exists()).toBe(false)
+  })
+
   it('fetches with status=active by default and auto-applies on filter change', async () => {
     const wrapper = mount(NotificationsPage)
     await flushPromises()

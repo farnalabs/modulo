@@ -35,7 +35,10 @@ import uuid
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.eval_engine.eval_definition_write import create_or_update_eval
+from modulo.core.eval_engine.eval_definition_write import (
+    EvalWriteOptions,
+    create_or_update_eval,
+)
 from modulo.core.guardrails.config import (
     GuardrailConfigError,
     GuardrailConfigItem,
@@ -112,7 +115,7 @@ async def upsert_org_guardrail_rows(
                 failure_behaviour="warn",
                 pass_threshold=None,
                 suite_id=None,
-                existing_eval_id=row.id,
+                write_options=EvalWriteOptions(existing_eval_id=row.id),
             )
     return created
 

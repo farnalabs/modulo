@@ -750,6 +750,10 @@ routes:
         system_admin_only: true
         type: page
         <<: *team
+        # A system_admin_only route is an INSTANCE-level gate; the org-ROLE
+        # requirement *team carries does not apply (FAR-1795), so it is
+        # overridden to none. The Team TIER gate is deliberate.
+        required_roles:
         deprecated: false
 
     /admin/system/config:
@@ -2906,6 +2910,12 @@ elements:
       - testid: feedback-inbox-empty
         type: element
         dynamic_testid: false
+      - testid: feedback-inbox-loading
+        type: element
+        dynamic_testid: false
+      - testid: feedback-inbox-detail-loading
+        type: element
+        dynamic_testid: false
       - testid: feedback-inbox-toggle-expand
         type: button
         dynamic_testid: false
@@ -3170,6 +3180,9 @@ elements:
         type: element
         dynamic_testid: false
     /notifications:
+      - testid: notifications-loading
+        type: element
+        dynamic_testid: false
       - testid: notifications-reset-filters
         type: button
         dynamic_testid: false
@@ -3263,6 +3276,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: onboarding-wizard-run-empty-warning
+        type: element
+        dynamic_testid: false
+      - testid: onboarding-wizard-view-runs
         type: element
         dynamic_testid: false
       - testid: onboarding-wizard-next
@@ -3410,9 +3426,6 @@ elements:
         type: button
         dynamic_testid: false
       - testid: pipeline-editor-run-dialog-cancel
-        type: button
-        dynamic_testid: false
-      - testid: pipeline-editor-edge-panel-close
         type: button
         dynamic_testid: false
       - testid: pipeline-editor-hitl-review-window
@@ -3673,6 +3686,21 @@ elements:
       - testid: pipeline-editor-fit-view
         type: button
         dynamic_testid: false
+      - testid: pipeline-editor-root
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-content
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-canvas
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-node-props-close
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-edge-props-close
+        type: button
+        dynamic_testid: false
       - testid: pipeline-node-scope-badge
         type: element
         dynamic_testid: false
@@ -3760,6 +3788,30 @@ elements:
       - testid: snapshot-timeline-rollback
         type: button
         dynamic_testid: false
+      - testid: snapshot-timeline-load-error
+        type: element
+        dynamic_testid: false
+      - testid: snapshot-timeline-load-retry
+        type: button
+        dynamic_testid: false
+      - testid: snapshot-timeline-earlier
+        type: element
+        dynamic_testid: false
+      - testid: snapshot-timeline-earlier-toggle
+        type: button
+        dynamic_testid: false
+      - testid: snapshot-timeline-earlier-list
+        type: element
+        dynamic_testid: false
+      - testid: snapshot-timeline-truncated
+        type: element
+        dynamic_testid: false
+      - testid: snapshot-timeline-load-more
+        type: button
+        dynamic_testid: false
+      - testid: snapshot-timeline-load-more-error
+        type: element
+        dynamic_testid: false
       - testid: pipeline-editor-snapshot-lock
         type: element
         dynamic_testid: false
@@ -3776,6 +3828,64 @@ elements:
         type: button
         dynamic_testid: false
       - testid: pipeline-editor-snapshot-lock-release
+        type: button
+        dynamic_testid: false
+      # FAR-1812: version indicator chip + read-only historic version view
+      - testid: pipeline-editor-version-chip
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-version-chip-popover
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-version-chip-kind
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-version-chip-author
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-version-chip-open-timeline
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-historic-banner
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-historic-restore
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-historic-view-latest
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-historic-copy-link
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-historic-copy-link-error
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-restore-diff
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-restore-diff-error
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-restore-diff-retry
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-restore-diff-current
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-restore-diff-no-baseline
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-restore-diff-reload
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-restore-notice
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-version-missing
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-version-missing-open-latest
         type: button
         dynamic_testid: false
     /pipelines/copy:
@@ -3906,6 +4016,9 @@ elements:
         dynamic_testid: false
     /runs/:id:
       - testid: run-detail-breadcrumb-runs
+        type: link
+        dynamic_testid: false
+      - testid: run-detail-pipeline-version-link
         type: link
         dynamic_testid: false
       - testid: run-detail-dispatched
@@ -4240,6 +4353,9 @@ elements:
         type: button
         dynamic_testid: false
       - testid: diff-identical-banner
+        type: element
+        dynamic_testid: false
+      - testid: diff-raw-outputs-toggle
         type: element
         dynamic_testid: false
       - testid: json-viewer
@@ -5838,7 +5954,7 @@ features:
             - "[x] GET /api/v1/evidence lists a run's evidence rows (required run_id UUID; optional node_id and key filters) scoped to the caller's organisation through RLS, with the field-level redaction boundary applied SERVER-SIDE before the response is serialised; the caller's role resolves a rule from evidence_redaction_rules (most-specific-wins by key_pattern, else the '*' catch-all for that role, else the built-in viewer default) and the covered evidence-value keys are replaced with the \"[REDACTED]\" sentinel while permitted fields (key, subject_type/subject_id, observed_at, timestamps, pass/fail outcomes) survive unredacted (backend/src/modulo/api/routes/evidence.py, backend/src/modulo/core/evidence_redaction.py)"
             - "[x] GET /api/v1/evidence/{evidence_id} returns a single org-scoped evidence row with the same server-side redaction applied and 404s an id absent for the org"
             - "[x] Redaction rules are readable and editable by org admins only: GET /api/v1/evidence/redaction-rules lists the org's rules and PUT /api/v1/evidence/redaction-rules upserts one by (key_pattern, role, redacted_fields) — gated by evidence.redaction.manage (admin) via require_system_or_org_admin, with unknown redaction classes rejected 422 so a rule can never be a silent no-op; writes are audited (evidence_redaction_rule_upserted) (modulo.auth.permissions evidence.read=viewer / evidence.redaction.manage=admin)"
-            - "[x] Migration 0313_evidence_redaction_rules creates evidence_redaction_rules (OrgScoped + soft-delete, UNIQUE (organisation_id, key_pattern, role), role CHECK in admin/operator/viewer), applies the four-step RLS pattern, and seeds the mandatory catch-all row key_pattern='*' / role='viewer' / redacted_fields='{sensitive_output, internal_metadata}' for every existing organisation"
+            - "[x] Migration 0318_evidence_redaction_rules creates evidence_redaction_rules (OrgScoped + soft-delete, UNIQUE (organisation_id, key_pattern, role), role CHECK in admin/operator/viewer), applies the four-step RLS pattern, and seeds the mandatory catch-all row key_pattern='*' / role='viewer' / redacted_fields='{sensitive_output, internal_metadata}' for every existing organisation"
             - "[x] The /evidence route renders under the MONITOR sidebar group; EvidenceView.vue fetches the already-redacted payload and renders it as-is with NO client-side redaction or conditional field hiding, with i18n-backed strings and role=status/aria-live status regions (frontend/src/views/EvidenceView.vue, frontend/src/manifest.yaml)"
             - "[ ] An in-product admin rule-editor UI is not shipped (chunk 9b §2.5): the redaction-rules GET/PUT surface is an admin API only, so the /evidence view is a read-only dashboard and the catch-all seed plus the service's built-in viewer default keep viewers redacted without any rule authored"
         deferrals:
@@ -5851,12 +5967,13 @@ features:
             - "[x] The /governance route renders Modulo's seven-level governance hierarchy (Models, Tools, MCP, Agents, Commands, Autonomy, Telemetry) as a single read-only inventory, each level composing an existing list API client-side (no new backend endpoint, no migration, no schema change)"
             - "[x] Each level loads independently and shows a live count plus a configured/empty state, or its own restricted (402 feature-gated / 403 permission) state, or a retry-able per-level error state; one level's failure or restriction never blanks another level or the page"
             - "[x] Levels deep-link to their existing management surfaces: /admin/model-backends, /admin/connectors, /settings/mcp, /library, /pipelines, /settings/observability, /admin/errors, /admin/notification-delivery"
-            - "[x] Level 6 (Autonomy) summarises the pipeline list as total pipelines plus the distribution across the three rungs from earned_autonomy_level, falling back to default_autonomy_level when earned is null"
+            - "[x] Level 6 (Autonomy) summarises the pipeline list as total pipelines plus the distribution across the three rungs from earned_autonomy_level, falling back to default_autonomy_level when earned is null; the distribution is read across every cursor page of GET /api/v1/pipelines (page_size 100, bounded at 20 pages) so the three rungs sum to the count shown, a failure on any page fails the level, and a truncated walk is labelled 'first {sampled} of {total} pipelines' instead of presenting a prefix as the whole ladder"
             - "[x] Plan-gated levels reuse the same FeatureGate as their management page (model_backend_management, plugin_management, mcp_server, observability); every user-facing string is i18n-backed and per-level status regions use role=status/aria-live (assertive for errors); covered by the GovernanceStackView Vitest spec"
         deferrals:
             - "Upstream MCP-server inventory and a pinned tool-definition allowlist are not yet governed (Beta, G3); the MCP card states the boundary and draws no fabricated data"
             - "An org-wide inventory of agents Modulo did not dispatch is not yet governed (Beta, G3); the Agents card states the boundary"
             - "The interactive earned-autonomy panel and promote/demote controls are FAR-1696(b) / ADR-043-S5; this surface is a readout only"
+            - "The telemetry level's single count sums error groups and notification endpoints into one number, and GET /api/v1/errors is read unfiltered so resolved groups count toward it; the per-source breakdown in the detail line is the accurate reading until 'telemetry destination' is decided"
     feat-environments:
         description: Environment profiles
         status: covered
@@ -5983,6 +6100,7 @@ features:
         behaviours:
             - "[x] Stripe webhook handling verifies signatures and processes invoice.paid events"
             - "[x] Tier catalogue endpoints resolve plan tiers and feature entitlements"
+            - "[x] Caller-scoped plan bootstrap: GET /api/v1/plan returns 200 to ANY authenticated org member with license.tier / expires_at / org_id, dev_mode, and the FULL known flag set with the org feature_overrides overlay applied (inactive flags present as currently_active: false), so a non-admin reads their org's real tier, dev mode and effective flags instead of the bootstrap defaults left by the instance-admin-only /api/v1/admin/feature-flags + /api/v1/admin/license reads; the frontend planStore bootstraps from it alongside the viewer-readable /api/v1/admin/tiers catalogue, and the admin endpoints keep their system-admin gates for the inspection/toggle UI (backend/src/modulo/api/routes/viewmodel.py plan_bootstrap, backend/tests/unit/api/test_viewmodel_plan.py, frontend/src/stores/planStore.ts, docs/product-map/licensing/license.md; FAR-1806 + FAR-1809)"
             - "[x] Plan/license-based gating is wired at the composition root (require_feature / get_plan_context): the Team-tier licensed surfaces (SSO providers, /api/v1/teams, audit export, admin spend limits) return 402 naming the gated feature without a valid Team license and pass with one; the license resolves from the org settings with a system-license fallback (team_gates.feature, docs/product-map/licensing/license.md)"
             - "[ ] License-driven gating is not applied to EVERY registered feat-* surface — gating targets the licensed Team-tier surfaces, not the whole feature registry"
         deferrals:
@@ -6029,7 +6147,7 @@ features:
             - "[x] Provision-time resolution: a fresh short-lived ModelBackendHub per dispatch resolves ONLY referenced backends, decrypts via the secrets backend and is explicitly disposed; precedence is profile secrets < runner bindings < node env_vars_extra (the node wins); every injected var is audit-logged without values"
             - "[x] Tier applicability: bindings inject on container/workspace tiers; the Local (host-subprocess) provider refuses at provision time (typed sandbox.tier_refused error) unless the profile's config_json sets allow_runner_env_bindings; resolution failures map to the retryable sandbox.binding_resolution code (D6 rollback trigger)"
             - "[x] REST surface: GET/PUT/DELETE /api/v1/agents/{agent_id}/bindings bind create/update behind the model_backend.binding.manage permission with audit events (values never logged); library export carries name-based binding specs and import rebinds them by backend name"
-            - "[x] Editor UI: the pipeline editor's sandbox-agent inspector shows repeatable binding rows with inline help and a Local-tier warning; i18n keys under views.PipelineEditorView.runner_bindings_*"
+            - "[x] Editor UI: the pipeline editor's sandbox-agent inspector shows repeatable binding rows with inline help and a Local-tier warning; the whole panel is UNMOUNTED while viewing a read-only historic version (bindings write the LIVE agent and show live rows — state the frozen view must not present); i18n keys under views.PipelineEditorView.runner_bindings_*"
             # Cross-team model-backend pin enforcement at graph save (FAR-1515, PRD §9.3)
             - "[x] A pipeline graph save that pins a model backend with visibility=team from a pipeline owned by a DIFFERENT team is refused 409 model_backend_team_mismatch (FAR-1515): the model-backend mirror of the connector team-scope rule, enforced at the shared graph-reference resolver (_enforce_model_backend_team_bindings) so a team-private backend is only usable by its own team's pipeline. Since FAR-1618 it says exactly the same thing as the connector rule (an org-visibility row never mismatches; a team-private row mismatches every pipeline outside its owner team, including an org pipeline): ModelBackendHub has no invocation-time visibility gate — a run resolves a pin with hub.get(backend_id) and never consults visibility — and after FAR-1618 neither does the connector hub, so neither rule has an invocation-time counterpart to mirror (backend/src/modulo/core/team_visibility.py, backend/src/modulo/api/routes/pipelines.py _enforce_model_backend_team_bindings, backend/tests/unit/core/test_team_visibility.py, backend/tests/unit/api/test_pipeline_team_visibility.py)"
     feat-notifications:
@@ -6119,6 +6237,7 @@ features:
             - "[x] A pipeline carries a unified per-pipeline Paused execution state (FAR-1530) — PRESENT and VISIBLE but NON-EXECUTING, deliberately distinct from archived_at (hidden) and the ORG-level triggers_paused kill-switch. run_enabled (default true) is the unified state, and run_disabled_reason (closed vocabulary 'operator' | 'circuit_breaker', enforced by CHECK ck_pipelines_run_disabled_reason) plus run_disabled_at name the first cause (CHECK ck_pipelines_run_enabled requires both when disabled). Every PipelineResponse carries the three columns (defensively coerced so partial/legacy rows serialise as running). POST /api/v1/pipelines/{id}/pause sets run_enabled=false / reason='operator' (idempotent — first cause owns the reason, so a circuit-breaker pause is never overwritten) audited as pipeline_paused; POST /api/v1/pipelines/{id}/resume clears the state (idempotent when already running) audited as pipeline_resumed, and is REFUSED 409 while circuit_breaker_tripped holds (reset the breaker first — an operator resume must never revive a tripped pipeline). Both routes share the team-gated mutation transaction of archive/unarchive (in-txn team re-check, org-scoped existence read → 404, post-flush refresh) and the any-credential pipeline-update permission gate so a declarative-apply mk_ key can pause. Unarchiving lands a pipeline in Paused, NOT Active, so a dormant pipeline never surprise-fires. The state is enforced at create_run for EVERY origin (manual / trigger / REST / MCP / rerun / webhook / slack / variant / feedback correction) via PipelineNotRunnableError state='paused' mapped to 409. The frontend surfaces it: a Paused badge on the row, Pause/Resume in the row action menu and in the editor toolbar, the UI blocks Resume with a tooltip while the breaker is tripped, and the editor banner names the breaker and the org-admin reset (backend/src/modulo/api/routes/pipelines.py, backend/src/modulo/db/crud/pipeline.py pause_pipeline/resume_pipeline, backend/src/modulo/db/crud/run.py, backend/src/modulo/db/models/pipeline.py, backend/src/modulo/db/migrations/versions/0286_pipeline_run_state.py, backend/tests/unit/db/test_pipeline_pause_resume_crud.py, backend/tests/unit/api/test_pipelines_routes_coverage.py, backend/tests/unit/db/test_pipeline_state_gate.py, backend/tests/integration/test_migration_0286_pipeline_run_state.py; frontend/src/views/PipelineListView.vue, frontend/src/views/PipelineEditorView.vue, frontend/src/__tests__/PipelineEditorPaused.spec.ts, frontend/src/__tests__/PipelineListView.spec.ts)"
             # Governed CI-runner dispatch to pipeline nodes (FAR-1141 / ADR-042)
             - "[x] A pipeline graph can DISPATCH work to an external CI substrate and witness it (FAR-1141, ADR-042): the `dispatch` node type plus any node whose connector_binding routes the `dispatch` verb (the shared connector_binding_operation predicate reads the strict dispatch routing — an `agent` node carrying an agent_id or a sandbox_agent binding is inert and never dispatches, so a graph that fires nothing can never be stamped dispatched) fires a governed connector operation on a CI-runner-type connector — dispatch_action trigger_run (default) / get_run_status / get_run_logs / list_runs — with the run-id round-trip contract enforced per provider (trigger_run's CIRun.id is exactly what get_run_status/get_run_logs consume, else trigger_run raises); the CI-runner capability contract (Capability.TRIGGER_RUN/get_run_status/get_run_logs/list_runs) is enforced at graph save time by connector_type_supports_dispatch (fail-closed — an unknown or plugin type that cannot be proven to implement the four ops is rejected, never discovered as an AttributeError mid-run), AND at dispatch time the engine runs the ACL/guardrail/conformance checks on the write path with traced/ACL parity to the connector hub. A triggered external job is only OBSERVED, not driven: with await_completion=true the node node_runner.poll loop waits on a monotonic deadline (wait_timeout, default 300, hard-capped 3600) polling get_run_status until a terminal status, and the wait window expiring terminalizes the node with the typed never-retryable `dispatch.wait_timeout` code — dispatch terminal failures are NON-RETRYABLE structurally (a retry would fire a second external job); the node timeout budget folds in a poll-retry slack (the deadline reserves wait_timeout AND the poll budget) so a wait that times out is never misreported as an engine error. Dispatch connectors ship for the CI-runner type: github_actions_ci / gitlab_ci (hub-native), circleci, buildkite, jenkins, teamcity, azure_pipelines (ConnectorType-ci-runner capabilities), with per-provider id schemes (owner/repo/run_id, project_id/pipeline_id, job_name/build_number with the job_name/queue/queue_id terminalizing queue form, ...) and the PARITY hard rule that the produced id round-trips into the connector's own readers; Jenkins trigger_run POSTs build parameters in the request BODY (never the URL query string) so variable values cannot leak into access logs (backend/src/modulo/core/pipeline_engine/node_runner.py _run_connector_dispatch/_await_dispatch_terminal, backend/src/modulo/core/graph_validator/__init__.py _check_dispatch_binding_capabilities, backend/src/modulo/connectors/base.py connector_type_supports_dispatch/connector_binding_operation/node_fires_dispatch_job, backend/src/modulo/connectors/ci_runner/base.py, backend/src/modulo/connectors/{jenkins,circleci,buildkite,teamcity,azure_pipelines}/__init__.py, backend/src/modulo/connectors/{github,gitlab}/__init__.py (hub-native github_actions_ci / gitlab_ci arms), backend/src/modulo/api/mcp_server.py, backend/src/modulo/db/migrations/versions/0288_runs_execution_origin.py, backend/tests/unit/pipeline_engine/test_dispatch_guards.py + test_dispatch_composed_e2e.py, backend/tests/unit/connectors/{test_ci_runner,test_jenkins,test_buildkite}.py, backend/tests/unit/graph_validator/test_graph_validator.py)"
+            - "[x] The pipeline editor opens a saved version READ-ONLY via ?snapshot=<uuid> (canonical deep link) or ?version=<n> (alias resolved against the server's version-descending snapshot list by a bounded client-side search — one request at page_size=100, then a capped page search for deeper versions, so a deep link into a long-lived pipeline's history resolves correctly instead of falsely reporting the version missing; snapshot wins when both are present) — FAR-1812. While viewing, the FROZEN snapshot graph renders on the canvas and the editable editor state keeps holding the LIVE graph (rawNodes/flowNodes are never hydrated from the snapshot), so a stray Save could only rewrite live with live; the write affordances are UNMOUNTED rather than disabled (Save, Save as template, Run, the pipeline-settings group, the node palette/Add node, rename, archive/pause/delete, snapshot-lock card and the empty-state action row are absent; the inspector's inputs render read-only and its action buttons are hidden; the sandbox inspector's runner-binding panel is unmounted outright (it writes the LIVE agent via PUT and shows live rows — state the snapshot does not freeze, so it must be absent, not read-only); node drag, edge connect/update and keyboard delete are off at the canvas level) and every write function additionally early-returns while viewing. Still interactive: pan/zoom, node/edge inspection of the frozen config, the version timeline (FAR-1817: primary rows are SUBSTANTIVE versions only — created_kind initial/edit/rollback; run snapshots are NOT rows but annotate the version they executed as an expandable \"ran Nx\" grouping (aria-expanded/aria-controls) listing the individual run snapshots on demand, while runs older than EVERY substantive version render in an explicit \"ran Nx on earlier versions\" bucket instead of being falsely attributed to the oldest row; history is windowed at page_size=100 with a truthful truncation notice (\"showing the most recent N of M versions\") and a Load more action, and a failed history load is a retryable error state, never a false \"no snapshots\"; a row click, or a run-snapshot click once expanded, opens that version READ-ONLY via the editor deep link; a per-version radio selects the snapshot the diff/restore actions operate on, and a selection plus its Restore this version action opens the shared restore dialog; a pipeline whose history predates edit boundaries — no substantive version at all — renders its runs under a single initial anchor with no synthetic backfill), diff, Copy link, Restore this version and View latest. A persistent amber banner (role=status) carries Restore this version / View latest / Copy link. FAR-1816: Restore this version (banner AND timeline) opens ONE shared FormDialog that embeds the old-vs-latest change summary (POST /snapshots/diff — nodes restored, nodes or connections modified, nodes dropped, connections added/removed, downstream impact, breaking port changes; \"no differences\" is asserted only when every change class the endpoint reports is empty, so a config-only edit is never mislabelled as no change; a comparison that cannot be computed — the target IS the current version, or the current version is unavailable — is stated explicitly rather than left blank, with a retry) and names the real consequences of restoring: it replaces the pipeline's current configuration, new runs use the restored version, edits made since stop being used, history is NOT deleted (restoring creates a NEW version, so you can always restore again), and runs already in progress are unaffected (they keep the version they started on). It is blocked if it would remove a HITL gate, strip a node-bound guardrail, or use another team's connector. There is NO typed confirmation — restore is reversible because history is preserved; typed confirmation stays reserved for irreversible destructive actions such as pipeline delete. A server-side guard refusal is surfaced as plain-language copy, never the raw error string. On success the editor navigates back to the latest version (the historic banner is gone), the new version appears in the timeline as a rollback entry, and a role=status notice names the outcome (Restored v{n}. Created v{m}.). A `v{n}` version chip (no content hash) sits in the toolbar beside the pipeline name and labels the pipeline's current SUBSTANTIVE version (created_kind initial/edit/rollback — run snapshots are not versions), resolved through the same shared predicate the timeline uses so the two surfaces can never disagree; it opens a hover/focus popover with created date, created_kind, author, tag and notes plus Open in timeline. Entering a version while the live graph has unsaved changes prompts before navigating (never silently discards), and an unknown/deleted version — or a version alias that resolves to nothing — degrades to a 'This version is no longer available' state with a link back to the latest editor, never a raw error (an alias search that cannot COMPLETE — network/server failure — shows a retryable load error instead, never a false 'no longer available') (frontend/src/views/PipelineEditorView.vue, frontend/src/components/pipeline/PipelineVersionChip.vue, frontend/src/components/pipeline/PipelineSnapshotTimeline.vue view action; frontend/src/__tests__/PipelineEditorHistoricVersion.spec.ts, frontend/src/__tests__/components/PipelineSnapshotTimeline.spec.ts)"
         deferrals:
             - "There is no pipeline-level batch recovery endpoint — recovery/retry is per-run (rerun) and per-node (recover), tracked under feat-runs"
     feat-plugins:
@@ -6192,6 +6311,9 @@ features:
             - "[x] A run is refused for a pipeline that may not run (FAR-1528, extended by FAR-1530): create_run raises PipelineNotRunnableError when the pipeline is archived, soft-deleted OR paused (run_enabled=false — the FAR-1530 Paused execution state), and every REST entry point that can reach it (manual trigger, rerun, test trigger, webhook, replay, slack, variant runs, feedback correction) maps the refusal to 409 Conflict through the shared pipeline_not_runnable_http helper naming the pipeline id and state — never a generic 500 — while the cron/polling/ongoing fire jobs handle the same refusal without crashing; the archived / soft-deleted / paused precedence is resolved by the shared state classifier (deleted outranks archived outranks paused), the state gate reads org-scoped and is RLS-fenced, and a pipeline that does not exist is still refused upstream by the route's own 404 entry filter (backend/src/modulo/api/routes/runs.py, backend/src/modulo/db/crud/run.py classify state gate, backend/src/modulo/core/exceptions.py, test_runs_endpoint.py, test_runs_rerun_endpoint.py, test_pipeline_state_gate.py, test_pipeline_state_gate_rls.py)"
             # Run execution-origin provenance (FAR-1141 / ADR-042)
             - "[x] Every run carries WHERE its work was executed (FAR-1141, ADR-042): runs.execution_origin (migration 0288, closed vocabulary via EXECUTION_ORIGIN_DISPATCHED='dispatched', single-sourced in db/models/run.py) is stamped 'dispatched' by create_run when the run's FROZEN snapshot graph contains at least one `dispatch` node — part of the work executed OUTSIDE Modulo and only witnessed/triggered by it; NULL means executed by Modulo or the run predates the column (legacy rows are deliberately never backfilled). The provenance rides every run-rendering surface: RunResponse + the /api/v1/viewmodel runs, the dashboard and lifecycle-map run rows, the runs list detail, and the analytics execution_origin dimension (bucket + chart label via the utility executionOriginLabel so raw keys like 'dispatched' never surface), and the run-detail page renders a 'Dispatched' provenance badge for such runs (frontend/src/utils/runUtils.ts, frontend/src/lib/api/runs.ts, backend/src/modulo/db/crud/run.py, backend/src/modulo/api/routes/{runs,viewmodel,dashboard,lifecycle_maps,analytics}.py, frontend dispatchDisplay.spec.ts / executionOriginLabel.spec.ts)"
+            # Run -> pipeline-version link (FAR-1813)
+            - "[x] The runs list row and the run detail render the pipeline NAME as a real focusable link to the version that run executed (/pipelines/{pipeline_id}/editor?snapshot={snapshot_id}), built ONLY from that run's own snapshot_id so a rerun links to the source snapshot it re-executed and never to the pipeline head; a legacy run with snapshot_id NULL links to the live editor with a title stating the run has no recorded version, a deleted pipeline (pipeline_name NULL) renders plain text instead of a dead link, and the list row keeps a separate 'View run' link so run detail stays reachable now the name opens the version (frontend/src/components/runs/RunPipelineVersionLink.vue, RunsListView.vue, RunDetailView.vue, RunPipelineVersionLink.spec.ts)"
+            - "[x] The same run surfaces show WHICH pipeline version the run executed as a compact `v{n}` chip beside the pipeline name (RunResponse.snapshot_version, forwarded by RunsListView/RunDetailView): the chip renders only for a positive integer version (a bool, numeric string, non-integer, NaN/Infinity or 0 renders no chip; a legacy run with snapshot_version NULL renders NO chip at all — absence, never `v0`/`vnull`/placeholder), and it sits INSIDE the pipeline link when a link target exists so the pipeline-name control (name + chip, not the whole row) stays ONE tab stop with ONE accessible name ('my-pipeline v3'), while a deleted pipeline (no link target) still shows the chip as plain non-interactive content because the version describes the RUN — never a second focusable element and never a dead link; label/tooltip are locale keys under components.RunPipelineVersionLink (frontend/src/components/runs/RunPipelineVersionLink.vue, RunsListView.vue, RunDetailView.vue, locales/en-US.js, RunPipelineVersionLink.spec.ts, RunsListView.spec.ts, RunDetailView.spec.ts)"
     feat-runtime:
         description: Runtime configuration, rate limits, retention, sandbox concurrency, and the Runners page (D5)
         status: covered
@@ -6231,7 +6353,7 @@ features:
             - "[x] Rendering is cached in a bounded LRU keyed by (schema content SHA-256, profile, provider_id, renderer_version); mutation-safe via deep copies"
             - "[x] Design-time schema_translation_report in graph response (include_schema_warnings=true) lists per-node keyword-strip warnings before pipeline execution"
             - "[x] Agent schema_profile (String(30), nullable, CHECK constraint) defaults to verbatim; set via POST /api/v1/agents or PATCH /api/v1/agents/{id}"
-            - "[x] Node schema_profile is an optional field on PipelineGraphNode; set via PATCH /api/v1/pipelines/{id}/graph"
+            - "[x] Node schema_profile is an optional field on PipelineGraphNode; set via PUT /api/v1/pipelines/{id}/graph"
             - "[x] The schema_profile field is optional and defaults to verbatim; no graph migration is required for existing pipelines"
 
             # On-disk sandbox contract (FAR-901)
@@ -6278,10 +6400,10 @@ features:
         behaviours:
             # SAML per-org (multi-org) — regression coverage in
             # backend/tests/integration/auth/test_saml_per_org_regression.py
-            - "[x] SAML provider resolution is per-org under RLS: GET /saml/login/{provider_slug} and /saml/acs/{provider_slug} resolve the provider ONLY from the caller's org's enabled provider rows (system-session lookup scoped by the RLS org context) — org A's IdP configuration is invisible to org B and a slug owned by another org resolves 404"
+            - "[x] SAML provider resolution is per-org under RLS: GET /saml/login/{provider_slug} and /saml/acs/{provider_slug} resolve the provider ONLY from the caller's org's enabled provider rows (system-session lookup scoped by the RLS org context) — org A's IdP configuration is invisible to org B; on the non-ACS routes (GET /saml/{provider_slug}/login, /saml/{provider_slug}/metadata) a slug owned by another org — or an unknown, disabled or non-SAML one — answers the uniform 404, while the browser-facing ACS (POST /saml/acs/{provider_slug}) maps the same uniform failure to a 303 redirect to /login carrying sso_error=auth_failed (FAR-1791; the 303 is exactly as opaque as the 404 — ADR 036)"
             - "[x] Per-provider SP metadata (GET /saml/metadata/{provider_slug}) emits each org's own SP Entity ID (urn:modulo:sp:{org_short}) and a provider-specific ACS URL (/saml/acs/{provider_slug}); the instance-wide legacy route emits the first enabled provider's entity ID with the unsegmented legacy ACS"
-            - "[x] Cross-org assertion reuse fails closed: a response minted for org A's entity ID, replayed to org B's ACS, is rejected (401 SAML response validation failed) — python3-saml audience/destination/recipient checks plus the explicit audience-containment enforcement (FAR-1010)"
-            - "[x] The per-provider login redirect embeds an HMAC-signed RelayState token bound to the provider slug; a replay of the same signed response with a RelayState minted for another org is rejected (401, 'does not match')"
+            - "[x] Cross-org assertion reuse fails closed: a response minted for org A's entity ID, replayed to org B's ACS, is rejected (303 redirect to the login page with sso_error=auth_failed) — python3-saml audience/destination/recipient checks plus the explicit audience-containment enforcement (FAR-1010)"
+            - "[x] The per-provider login redirect embeds an HMAC-signed RelayState token bound to the provider slug; a replay of the same signed response with a RelayState minted for another org is rejected (303 to the login page with sso_error=auth_failed)"
             - "[x] IdP-initiated SSO (no RelayState) is accepted on the per-provider ACS — absence is tolerated, only a PRESENT-and-mismatched RelayState is fatal"
             - "[x] Legacy single-tenant parity: /saml/login and /saml/acs (unsegmented) keep working against the first enabled provider; the legacy RelayState is python3-saml's self-derived SP self URL rather than a signed per-provider token"
             # OIDC per-org (multi-org) — regression coverage in
@@ -6290,6 +6412,7 @@ features:
             - "[x] The OIDC app fallback runs inside a scoped transaction (FAR-1058 parity — set_rls_org requires an active transaction, autobegin=False session factories otherwise raised RuntimeError → 500): a provider read on a transaction-less app session resolves in its own begin() and leaves the caller's session transaction-less; the login/callback routes (always wrapped in session.begin()) read in place"
             - "[x] An unbound pre-auth app session sees ZERO OIDC providers; an unknown OIDC slug fails closed all-None at the resolver and 400 (not 500) on GET /oidc/{provider}/login; GET /oidc/{provider}/login for a cross-org provider 307-redirects to the IdP authorization endpoint with the resolved provider's client_id + callback redirect_uri"
             - "[x] The provider delete-confirmation dialog warns that users already signed in with the provider are NOT signed out automatically — their sessions remain valid until they expire and only new sign-ins through the provider are blocked (settings-sso-delete-session-warning, `SettingsSsoView.vue`)"
+            - "[x] A browser-facing SSO callback failure (OIDC callback / SAML ACS) redirects with HTTP 303 to the login page carrying a whitelisted error code (`not_invited` / `auth_failed` / `provider_unavailable`) instead of rendering a raw JSON error page (FAR-1791): a denied join carries its org so the user lands on `/login/{slug}`, any other handled callback failure — including an unknown, disabled or non-SAML provider slug on the ACS — falls back to `/login`; the ACS attempt is still audited with an honest `outcome=error` (the failure RAISES, so the `saml_acs_attempted` audit dependency sees it), the real error is still logged server-side, exception text never reaches the URL (the code is a fixed whitelist), and the success path keeps its 307. `LoginView.vue` / `OrgLoginView.vue` read `?sso_error` synchronously — via the shared `lib/ssoError.ts` normaliser — and render it in the shared ErrorAlert (unknown codes fall back to the `auth_failed` copy; the raw value is never rendered)"
         deferrals:
             - IdP-initiated SSO and ACS paths are exercised with the XML-signature step mocked (xmlsec cannot sign/verify round-trip on this Windows host); a Linux CI job with a real signed response would close the gap
             - SAML single logout (SLO) is not implemented yet (SCIM user/group provisioning and deprovisioning ship API-only and are tracked under feat-scim)
@@ -6372,7 +6495,7 @@ features:
             - "[x] The polling scheduler fires only when the condition matches (TriggerEvent condition_met) and records no_match otherwise; a poll respects max_concurrent_runs (concurrency_limit_reached) and the daily spend limit (spend_limit_reached); with no limit it always fires; invalid JMESPath or connector failure records poll_error; inactive triggers are skipped"
 
             # Agent signal
-            - "[x] An agent_signal trigger fires a child pipeline run when its watched node completes, passing node_output and source_run_id into the child input payload, and records a TriggerEvent for every attempt"
+            - "[x] An agent_signal trigger fires a child pipeline run when its watched node completes, passing node_output and source_run_id into the child input payload, and records a TriggerEvent for every attempt; the child's node_output is the watched node's PURE RETURN (never the legacy mixed envelope) for any splittable type — whatever the return's shape (dict, scalar, list, or absent) — resolved through the SAME split_node_output the write-side splitter uses, with the node-type map EXTENDED from the snapshot edges so an edge-synthesized HITL gate resolves as 'gate'; an unknown/unsplittable type (or a caller that supplies no type) keeps the value verbatim, and a splittable type with no contract output OMITS the key (FAR-131)"
             - "[x] agent_signal respects max_concurrent_runs (skip + concurrency_limit_reached event), ignores inactive triggers and invalid snapshot_id configs (skip), and is org-isolated (a watched node in one org never fires another org)"
 
             # Trigger event log

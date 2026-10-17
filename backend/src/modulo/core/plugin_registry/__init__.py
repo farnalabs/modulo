@@ -34,6 +34,7 @@ from typing import Any
 
 from modulo.connectors.base import ConnectorBase
 from modulo.model_backends.base import ModelBackendBase
+from modulo.util import callable_label
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ _HLTH_METADATA_FOUND = "Package metadata found"
 _HLTH_PACKAGE_NOT_FOUND = "Package not found in installed packages"
 _HLTH_MISSING_METADATA = "Entry point references a package with no installed metadata"
 _HLTH_UNKNOWN_PLUGIN = "Unknown plugin"
+_HLTH_UNREADABLE_METADATA = "Failed to read distribution metadata for plugin"
 
 _CAP_CONNECTOR = "connector_type"
 _CAP_MODEL_BACKEND = "model_backend"
@@ -173,25 +175,12 @@ class PluginRegistry:
         """
         dist = ep.dist
         if dist is None:
-            detail = _HLTH_MISSING_METADATA
-            plugin_id = ep.name
-            with self._lock:
-                self._entry_point_errors[plugin_id] = detail
-                existing = self._plugins.get(plugin_id)
-                if existing is None:
-                    existing = PluginManifest(
-                        PLUGIN_ID=plugin_id,
-                        display_name=plugin_id,
-                        description="",
-                        version="0.0.0",
-                    )
-                self._plugins[plugin_id] = existing
-                self._health[plugin_id] = PluginHealth(ok=False, detail=detail)
+            self._record_unhealthy(ep.name, ep.name, "", "0.0.0", _HLTH_MISSING_METADATA)
             return None
-        plugin_id = dist.name
-        display_name = dist.metadata.get("Name", plugin_id)
-        description = dist.metadata.get("Summary", "")
-        version = dist.metadata.get("Version", "0.0.0")
+        metadata_fields = self._read_distribution_metadata(dist, ep.name)
+        if metadata_fields is None:
+            return None
+        plugin_id, display_name, description, version = metadata_fields
 
         try:
             builder = ep.load()
@@ -208,18 +197,7 @@ class PluginRegistry:
             # "Failed to load entry point …" surface and keep scanning.
             logger.exception("Failed to load entry point %s from package %s", ep.name, plugin_id)
             detail = f"Failed to load entry point {ep.name}"
-            with self._lock:
-                self._entry_point_errors[plugin_id] = detail
-                existing = self._plugins.get(plugin_id)
-                if existing is None:
-                    existing = PluginManifest(
-                        PLUGIN_ID=plugin_id,
-                        display_name=display_name,
-                        description=description,
-                        version=version,
-                    )
-                self._plugins[plugin_id] = existing
-                self._health[plugin_id] = PluginHealth(ok=False, detail=detail)
+            self._record_unhealthy(plugin_id, display_name, description, version, detail)
             return None
 
         with self._lock:
@@ -256,6 +234,71 @@ class PluginRegistry:
             self._health[plugin_id] = PluginHealth(ok=True, detail=_HLTH_LOADED)
         return manifest
 
+    def _record_unhealthy(self, plugin_id: str, display_name: str, description: str, version: str, detail: str) -> None:
+        """Register ``plugin_id`` as an unhealthy plugin.
+
+        Keeps a broken plugin visible in the registry (so it shows up in
+        ``list_plugins`` / ``health_check`` with a reason) instead of dropping
+        it silently, and never raises.
+        """
+        with self._lock:
+            self._entry_point_errors[plugin_id] = detail
+            existing = self._plugins.get(plugin_id)
+            if existing is None:
+                existing = PluginManifest(
+                    PLUGIN_ID=plugin_id,
+                    display_name=display_name,
+                    description=description,
+                    version=version,
+                )
+            self._plugins[plugin_id] = existing
+            self._health[plugin_id] = PluginHealth(ok=False, detail=detail)
+
+    def _read_distribution_metadata(
+        self, dist: importlib.metadata.Distribution, entry_point_name: str
+    ) -> tuple[str, str, str, str] | None:
+        """Read a distribution's identity/display fields, failing soft.
+
+        ``dist.name`` / ``dist.metadata`` read and parse the distribution's
+        ``METADATA`` file from disk. That read is not guaranteed to succeed for
+        a third-party distribution: a half-written or corrupt ``.dist-info``
+        (an interrupted install, a stripped image layer, a vendored wheel) can
+        make it raise. Because ``discover_plugins`` runs on the startup critical
+        path (``api/main.py::_discover_plugins``), letting that escape would
+        make the whole instance unbootable because of one broken third-party
+        package — the exact failure mode the guarded ``ep.load()`` in
+        ``_load_entry_point`` exists to prevent. Surface the plugin unhealthy
+        and keep scanning instead.
+
+        Returns ``(plugin_id, display_name, description, version)``, or ``None``
+        when the metadata could not be read (the plugin has then already been
+        recorded as unhealthy).
+        """
+        try:
+            plugin_id = dist.name
+            metadata = dist.metadata
+            display_name = metadata.get("Name", plugin_id)
+            description = metadata.get("Summary", "")
+            version = metadata.get("Version", "0.0.0")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Failed to read distribution metadata for entry point %s", entry_point_name)
+            fallback_id = entry_point_name
+            try:
+                fallback_id = dist.name or entry_point_name
+            except Exception:
+                fallback_id = entry_point_name
+            self._record_unhealthy(
+                fallback_id,
+                fallback_id,
+                "",
+                "0.0.0",
+                f"{_HLTH_UNREADABLE_METADATA} {fallback_id}",
+            )
+            return None
+        return plugin_id, display_name, description, version
+
     # ------------------------------------------------------------------
     # Builders
     # ------------------------------------------------------------------
@@ -280,7 +323,7 @@ class PluginRegistry:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.exception("Connector builder %s for type %s raised an error", builder.__name__, type_id)
+            logger.exception("Connector builder %s for type %s raised an error", callable_label(builder), type_id)
             raise RuntimeError(f"Connector builder for type {type_id!r} failed") from exc
 
     def build_model_backend(
@@ -305,7 +348,9 @@ class PluginRegistry:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.exception("Model backend builder %s for provider %s raised an error", builder.__name__, provider)
+            logger.exception(
+                "Model backend builder %s for provider %s raised an error", callable_label(builder), provider
+            )
             raise RuntimeError(f"Model backend builder for provider {provider!r} failed") from exc
 
     def register_connector_type(

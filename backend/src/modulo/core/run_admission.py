@@ -31,11 +31,11 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
-from modulo.db.models.run import AWAITING_HUMAN_STATUS, HITL_PARKED_STATUS
+from modulo.db.models.run import AWAITING_HUMAN_STATUS, HITL_PARKED_STATUS, Run
 from modulo.db.sqlstates import is_row_lock_timeout
 from modulo.settings import get_settings
 
@@ -732,6 +732,55 @@ def coalesce_enabled(trigger_config: dict[str, Any] | None) -> bool:
 # ---------------------------------------------------------------------------
 
 
+async def _oldest_non_org_capacity_pending_created_at(
+    session: Any,
+    pipeline_id: uuid.UUID,
+) -> datetime | None:
+    """Oldest unstarted ``pending`` run NOT parked at the ORG capacity gate.
+
+    FAR-1826: ``_capacity_decline`` (``pipeline_engine.executor``) demotes a run
+    back to ``pending`` carrying a ``CAPACITY_MARKERS`` ``error_code`` when a
+    capacity gate is full. **Only ``org_capacity_limited`` is excluded here.**
+    That marker means the ORG is busy while THIS pipeline is healthy — the run
+    is re-admitted on ``CAPACITY_REDISPATCH_SECONDS`` — so it is NOT a wedged
+    admission gate and the age leg of :func:`evaluate_backpressure` must not
+    count it toward "aged pending" (a busy org otherwise 429s a healthy
+    pipeline; observed PR Reviewer 429s on 2026-10-15, FAR-1808).
+
+    ``pipeline_capacity`` is deliberately NOT excluded: it is written when the
+    pipeline's OWN active-run count reaches ``max_concurrent_runs``
+    (``count_active_runs_for_pipeline``), and that count includes leaked
+    ``running`` rows — so a crashed worker's leaked slot leaves the pipeline
+    pinned at its own cap and every new delivery is demoted ``pipeline_capacity``
+    indefinitely. By code alone that is indistinguishable from a healthy full
+    pipeline, so it MUST keep tripping the age guard — it is exactly the
+    FAR-604 wedge ("66 queued, zero starts for 13+h") this module exists to
+    break (see the module docstring). The queue-DEPTH leg is likewise
+    deliberately left unfiltered.
+
+    Rows with a NULL ``error_code`` (a genuinely un-started pending row) and
+    rows carrying any other code are still counted. ``None`` when every pending
+    row is ``org_capacity_limited``.
+    """
+    from modulo.db.crud.run import ERROR_CODE_ORG_CAPACITY_LIMITED
+
+    stmt = (
+        select(func.min(Run.created_at))
+        .select_from(Run)
+        .where(
+            Run.pipeline_id == pipeline_id,
+            Run.status == "pending",
+            Run.cancellation_requested.is_(False),
+            or_(
+                Run.error_code.is_(None),
+                Run.error_code.notin_([ERROR_CODE_ORG_CAPACITY_LIMITED]),
+            ),
+        )
+    )
+    oldest: datetime | None = (await session.execute(stmt)).scalar_one_or_none()
+    return oldest
+
+
 async def evaluate_backpressure(
     session: Any,
     *,
@@ -748,7 +797,15 @@ async def evaluate_backpressure(
     * the OLDEST pending run's age exceeds *oldest_age_seconds* (settings
       ``TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS``, default 60 min) — a wedged
       admission gate must stop accumulating deliveries even below the depth
-      cap.
+      cap. FAR-1826: the age signal excludes ONLY ``org_capacity_limited``
+      pending rows — a run demoted because the ORG is busy belongs to a healthy
+      pipeline queued at the gate, not a wedged admission gate. A
+      ``pipeline_capacity`` demotion is NOT excluded: the pipeline being pinned
+      at its OWN cap (possibly by a leaked ``running`` slot) is itself a wedge
+      and still trips the age leg (see
+      :func:`_oldest_non_org_capacity_pending_created_at`). The depth signal is
+      unchanged and still counts every pending row (a genuine 3x-over-cap
+      backlog is still refused).
 
     Returns ``(skip, reason)`` — ``reason`` is a short stable token
     (``queue_depth`` / ``oldest_age``) for logs + TriggerEvent error_detail.
@@ -782,13 +839,34 @@ async def evaluate_backpressure(
         if oldest_created_at is not None:
             age = (datetime.now(UTC) - oldest_created_at).total_seconds()
             if age > oldest_age_seconds:
+                # FAR-1826: the unfiltered oldest is aged, but a run demoted to
+                # ``pending`` because the ORG is at capacity is a healthy
+                # pipeline queued at the gate, not a wedge. Re-measure the age
+                # over only the genuinely-wedged pending rows (excluding
+                # ``org_capacity_limited``; ``pipeline_capacity`` still counts)
+                # and refuse on THAT. The filtered oldest can only be younger
+                # than the unfiltered one, so this second read is needed only
+                # when the unfiltered signal is already over the limit.
+                actionable_oldest = await _oldest_non_org_capacity_pending_created_at(session, pipeline_id)
+                actionable_age = (
+                    (datetime.now(UTC) - actionable_oldest).total_seconds() if actionable_oldest is not None else 0.0
+                )
+                if actionable_age > oldest_age_seconds:
+                    _log.info(
+                        "backpressure.oldest_age pipeline=%s oldest_age_s=%.0f limit=%d — refusing new runs",
+                        pipeline_id,
+                        actionable_age,
+                        oldest_age_seconds,
+                    )
+                    return True, f"oldest_age={int(actionable_age)}s limit={oldest_age_seconds}s"
                 _log.info(
-                    "backpressure.oldest_age pipeline=%s oldest_age_s=%.0f limit=%d — refusing new runs",
+                    "backpressure.oldest_age_capacity_excluded pipeline=%s "
+                    "unfiltered_age_s=%.0f actionable_age_s=%.0f limit=%d — admitting",
                     pipeline_id,
                     age,
+                    actionable_age,
                     oldest_age_seconds,
                 )
-                return True, f"oldest_age={int(age)}s limit={oldest_age_seconds}s"
     except Exception:
         _log.warning("backpressure.check_failed pipeline=%s (admitting)", pipeline_id, exc_info=True)
         return False, ""

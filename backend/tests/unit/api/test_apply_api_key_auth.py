@@ -667,7 +667,7 @@ class TestGraphSaveGateParity:
                     f"/api/v1/pipelines/{pipeline.id}",
                     json={"graph_json": {"nodes": nodes, "edges": edges}},
                 )
-                resp_graph_endpoint = client.patch(
+                resp_graph_endpoint = client.put(
                     f"/api/v1/pipelines/{pipeline.id}/graph",
                     json={"nodes": nodes, "edges": edges},
                 )

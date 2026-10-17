@@ -220,7 +220,7 @@ jobs:
               continue
             fi
             # Only cancel if at least one job is queued but never started
-            UNSTARTED=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/jobs --jq '[.jobs[] | select(.started_at == null)] | length' 2>/dev/null || echo "0")
+            UNSTARTED=$(gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}/jobs" --jq '[.jobs[] | select(.started_at == null)] | length' 2>/dev/null || echo "0")
             if [ "$UNSTARTED" -gt 0 ]; then
               echo "    Run #$RUN_ID has $UNSTARTED queued job(s) never started for >10 min - cancelling."
               gh run cancel "$RUN_ID" --repo ${{ github.repository }} 2>/dev/null && echo "    Cancelled run #$RUN_ID." || echo "    Cancel of #$RUN_ID failed (ignoring)."
@@ -261,7 +261,6 @@ jobs:
         shell: bash
         run: |
           echo "Checking main branch CI status..."
-          MAIN_SHA=$(git rev-parse main 2>/dev/null || echo "unknown")
           CI_RUN=$(gh run list --workflow ci.yml --branch main --limit 1 --json conclusion,databaseId 2>/dev/null || echo "[]")
           CI_CONCLUSION=$(echo "$CI_RUN" | jq -r '.[0].conclusion // "unknown"' 2>/dev/null || echo "unknown")
           echo "Latest main CI run conclusion: $CI_CONCLUSION"
@@ -371,6 +370,18 @@ jobs:
 
             if [ "$MERGEABLE" = "true" ]; then
               # Check CI status - only include PRs with passing CI
+              #
+              # INVARIANT (FAR-1843): this gate must reflect PRODUCT CI only.
+              # "CI: Fast Validation" may contain nothing but product-
+              # validation jobs whose failure genuinely invalidates the PR —
+              # never a webhook dispatch, notifier, or external-service ping.
+              # The PR-reviewer dispatch was moved OUT of ci.yml into
+              # pr-review.yml (workflow_run-triggered) precisely so a review-
+              # dispatch outage can never mark this run failed and block every
+              # merge (2026-10-15: five hours, 28+ PRs, self-amplifying
+              # sandbox-cap starvation). Do not re-couple any non-product job
+              # into ci.yml; give it its own workflow. Guarded by
+              # backend/tests/architecture/test_workflow_structure.py.
               CI_BRANCH=$(echo "$pr" | jq -r ".headRefName")
               CI_CONCLUSION=$(gh run list --branch "$CI_BRANCH" --workflow "CI: Fast Validation" --limit 1 --json conclusion --jq ".[0].conclusion" 2>/dev/null || echo "unknown")
               if [ "$CI_CONCLUSION" != "success" ]; then
@@ -421,9 +432,11 @@ jobs:
 
           PR_COUNT=$(jq 'length' /tmp/prs.json)
           echo "Approved PRs ready for queue: $PR_COUNT"
-          echo "pr_count=$PR_COUNT" >> "$GITHUB_OUTPUT"
-          echo "all_count=$ALL_COUNT" >> "$GITHUB_OUTPUT"
-          echo "ci_pending_count=$CI_PENDING" >> "$GITHUB_OUTPUT"
+          {
+            echo "pr_count=$PR_COUNT"
+            echo "all_count=$ALL_COUNT"
+            echo "ci_pending_count=$CI_PENDING"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Exit early if no approved PRs
         if: steps.collect.outputs.pr_count == '0'
@@ -464,7 +477,6 @@ jobs:
           while IFS= read -r pr; do
             NUM=$(echo "$pr" | jq -r '.number')
             TITLE=$(echo "$pr" | jq -r '.title')
-            REF=$(echo "$pr" | jq -r '.headRefName')
 
             # Skip already-closed
             PR_STATE=$(gh pr view "$NUM" --json state,closed 2>/dev/null) || true
@@ -518,12 +530,14 @@ jobs:
           echo "$conflict_prs" > /tmp/conflict_prs.txt
           echo "$noop_prs" > /tmp/noop_prs.txt
 
-          echo "merged_prs=$merged_prs" >> "$GITHUB_OUTPUT"
-          echo "conflict_prs=$conflict_prs" >> "$GITHUB_OUTPUT"
-          echo "noop_prs=$noop_prs" >> "$GITHUB_OUTPUT"
-          echo "merged_count=$(echo "$merged_prs" | wc -w)" >> "$GITHUB_OUTPUT"
-          echo "conflict_count=$(echo "$conflict_prs" | wc -w)" >> "$GITHUB_OUTPUT"
-          echo "noop_count=$(echo "$noop_prs" | wc -w)" >> "$GITHUB_OUTPUT"
+          {
+            echo "merged_prs=$merged_prs"
+            echo "conflict_prs=$conflict_prs"
+            echo "noop_prs=$noop_prs"
+            echo "merged_count=$(echo "$merged_prs" | wc -w)"
+            echo "conflict_count=$(echo "$conflict_prs" | wc -w)"
+            echo "noop_count=$(echo "$noop_prs" | wc -w)"
+          } >> "$GITHUB_OUTPUT"
 
           echo ""
           echo "=== Results ==="
@@ -543,6 +557,10 @@ jobs:
           # The close itself stays best-effort (duplicate PRs whose changes are
           # already on main genuinely should close), but a failed comment is an
           # ::error:: annotation so it is loudly visible, not a quiet warning.
+          # The list holds bare PR numbers (whitespace-separated integers), so
+          # iterating over words is intended; a line-oriented read would add a
+          # missing-file failure path for no benefit.
+          # shellcheck disable=SC2013
           for NUM in $(cat /tmp/noop_prs.txt 2>/dev/null); do
             echo "  Closing duplicate PR #$NUM (changes already on main)..."
             CLOSE_REASON="Auto-closed by the merge queue as a duplicate: this PR's changes are already on main (merged via another PR), so squash-merging it into the queue produced no commit. If this was a mistake, reopen the PR and re-request a review."
@@ -691,7 +709,7 @@ jobs:
                   fi
                   ;;
               esac
-            done < <(git diff --name-status main...pr-$NUM -- "$MIG_DIR" 2>/dev/null || true)
+            done < <(git diff --name-status "main...pr-${NUM}" -- "$MIG_DIR" 2>/dev/null || true)
           done
 
           collision_prs=$(echo "$collision_prs" | xargs)
@@ -789,7 +807,7 @@ jobs:
             git config --local --replace-all "http.https://github.com/.extraheader" \
               "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
           fi
-          if git push origin merge-queue:refs/heads/merge-queue/active-$TIMESTAMP 2>&1; then
+          if git push origin "merge-queue:refs/heads/merge-queue/active-${TIMESTAMP}" 2>&1; then
             echo "branch_ref=merge-queue/active-$TIMESTAMP" >> "$GITHUB_ENV"
           else
             echo "::warning::Reference push failed (workflow-scoped PAT rejected or network error - see git output above). Queue continues without a reference branch."
@@ -1526,8 +1544,12 @@ jobs:
           # branches. On any query failure the script protects EVERY slated
           # branch (it never exits non-zero for that, so the post-merge CI/deploy
           # dispatch below still runs).
-          ARGS=$(cat /tmp/branches_to_delete.txt | tr '\n' ' ')
-          python3 .github/scripts/retarget-stacked-prs.py $ARGS main
+          # Branches are passed one-per-line via a bash array: git refs cannot
+          # contain whitespace, so the old whitespace-split string was equivalent,
+          # but the array never word-splits and is what ci.yml already uses for
+          # file lists (mapfile idiom).
+          mapfile -t BRANCHES < /tmp/branches_to_delete.txt
+          python3 .github/scripts/retarget-stacked-prs.py "${BRANCHES[@]}" main
 
       - name: Delete branches whose PRs are already merged (defense-in-depth)
         if: success()
@@ -1764,7 +1786,7 @@ jobs:
             git config --local --replace-all "http.https://github.com/.extraheader" \
               "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
           fi
-          if git push origin merge-queue:refs/heads/merge-queue/failed-$TIMESTAMP 2>&1; then
+          if git push origin "merge-queue:refs/heads/merge-queue/failed-${TIMESTAMP}" 2>&1; then
             echo "branch_ref=merge-queue/failed-$TIMESTAMP" >> "$GITHUB_ENV"
             echo "Preserved merge-queue branch at merge-queue/failed-$TIMESTAMP"
           else

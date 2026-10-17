@@ -126,9 +126,11 @@ jobs:
           }
 
           if [ "$FORCE_DEPLOY" = "true" ]; then
-            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
-            echo "skip_reason=" >> "$GITHUB_OUTPUT"
-            echo "next_deploy=" >> "$GITHUB_OUTPUT"
+            {
+              echo "should_deploy=true"
+              echo "skip_reason="
+              echo "next_deploy="
+            } >> "$GITHUB_OUTPUT"
             echo "Force deploy requested — bypassing throttle."
             write_verdict "YES (forced - throttle bypassed)" "workflow_dispatch force_deploy=true" ""
             exit 0
@@ -153,8 +155,10 @@ jobs:
             exit 1
           fi
           if [ -n "$IN_PROGRESS" ]; then
-            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
-            echo "skip_reason=in_progress" >> "$GITHUB_OUTPUT"
+            {
+              echo "should_deploy=false"
+              echo "skip_reason=in_progress"
+            } >> "$GITHUB_OUTPUT"
             # Next deploy: as soon as the in-progress run concludes - an exact
             # time is unknowable from here, so say what it is instead of a
             # fabricated timestamp.
@@ -167,9 +171,11 @@ jobs:
           # Always deploy for deployment/CI-fix commits so the fix is validated end-to-end
           COMMIT_MSG="$(gh api repos/${{ github.repository }}/commits/${{ github.sha }} --jq '.commit.message' 2>/dev/null || echo '')"
           if [[ "$COMMIT_MSG" =~ ^(fix\(deploy(ment)?\)|fix\(ci\)|infra\(deploy\)|ci:) ]]; then
-            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
-            echo "skip_reason=" >> "$GITHUB_OUTPUT"
-            echo "next_deploy=" >> "$GITHUB_OUTPUT"
+            {
+              echo "should_deploy=true"
+              echo "skip_reason="
+              echo "next_deploy="
+            } >> "$GITHUB_OUTPUT"
             echo "Deploy/CI-fix commit — bypassing throttle."
             write_verdict "YES (deploy/CI-fix commit - throttle bypassed)" "commit message matches the fix(deploy)/fix(ci)/ci: bypass pattern" ""
             exit 0
@@ -198,9 +204,11 @@ jobs:
           done
           echo "last_deploy_attempt=${LAST:-none}"
           if [ -z "$LAST" ]; then
-            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
-            echo "skip_reason=" >> "$GITHUB_OUTPUT"
-            echo "next_deploy=" >> "$GITHUB_OUTPUT"
+            {
+              echo "should_deploy=true"
+              echo "skip_reason="
+              echo "next_deploy="
+            } >> "$GITHUB_OUTPUT"
             echo "No previous deploy attempt - deploying."
             write_verdict "YES" "no previous deploy attempt found to anchor the throttle on" ""
           else
@@ -220,9 +228,11 @@ jobs:
               echo "::notice::Last deploy attempt ${DIFF_H}h ago (< ${INTERVAL_HOURS}h) - skipping deploy. This run will NOT deploy; next deploy eligible at ${NEXT_AT} (UTC). Use workflow_dispatch force_deploy=true to bypass now."
               write_verdict "NO - this run deploys nothing (throttled)" "last production deploy was ${DIFF_H}h ago, under the ${INTERVAL_HOURS}h throttle interval" "${NEXT_AT} UTC (last deploy + ${INTERVAL_HOURS}h); sooner only via workflow_dispatch force_deploy=true"
             else
-              echo "should_deploy=true" >> "$GITHUB_OUTPUT"
-              echo "skip_reason=" >> "$GITHUB_OUTPUT"
-              echo "next_deploy=" >> "$GITHUB_OUTPUT"
+              {
+                echo "should_deploy=true"
+                echo "skip_reason="
+                echo "next_deploy="
+              } >> "$GITHUB_OUTPUT"
               echo "Deploying (${DIFF_H}h since last deploy attempt)."
               write_verdict "YES" "${DIFF_H}h since last deploy attempt (>= ${INTERVAL_HOURS}h interval)" ""
             fi
@@ -465,7 +475,7 @@ jobs:
             -e POSTGRES_DB=modulo_test \
             -p 5433:5432 \
             postgres:16-alpine
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             docker exec modulo-ci-pg pg_isready -U modulo_test 2>/dev/null && { echo "Postgres ready"; break; }
             sleep 2
           done
@@ -479,7 +489,7 @@ jobs:
         run: |
           docker rm -f modulo-ci-redis 2>/dev/null || true
           docker run -d --name modulo-ci-redis -p 6379:6379 redis:7-alpine
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             docker exec modulo-ci-redis redis-cli ping 2>/dev/null && { echo "Redis ready"; break; }
             sleep 2
           done
@@ -575,7 +585,15 @@ jobs:
               echo "::notice::pip-audit succeeded on attempt ${attempt}/3."
               break
             fi
-            if grep -qE "pip_audit\._service\.interface\.(ServiceError|ConnectionError)|[0-9]{3} Server Error|Backend is unhealthy|Could not connect to PyPI|PyPI is not redirecting properly" "$LOG"; then
+            # Retry ONLY on a transient PyPI signature, never when pip-audit
+            # reports actual vulnerabilities (a genuine finding never matches
+            # these network-error phrases, so it still fails the gate). The
+            # signature list must include socket read/connect timeouts — a plain
+            # `Read timed out` / `ReadTimeout` to pypi.org is the most common
+            # transient failure and, when absent from this list, was misread as
+            # "non-transient error" and failed pre-deploy-gate without retrying
+            # (observed on main at 71a55aab0).
+            if grep -qE "pip_audit\._service\.interface\.(ServiceError|ConnectionError)|[0-9]{3} Server Error|Backend is unhealthy|Could not connect to PyPI|PyPI is not redirecting properly|Read timed out|ReadTimeout|ConnectTimeout|Connection timed out|Max retries exceeded|HTTPSConnectionPool\(host='pypi\.org'" "$LOG"; then
               if [ "$attempt" -lt 3 ]; then
                 echo "::warning::pip-audit hit a transient PyPI service error (attempt ${attempt}/3); retrying."
                 sleep $((attempt * 10))
@@ -692,11 +710,11 @@ jobs:
           # Match both 'failure' and 'cancelled' (job-level timeout produces
           # 'cancelled', not 'failure' — GitHub Actions convention).
           FAILED_STAGES=""
-          [ "${PRE_DEPLOY_RESULT}" = "failure" -o "${PRE_DEPLOY_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} pre-deploy-gate"
-          [ "${STAGING_DEPLOY_RESULT}" = "failure" -o "${STAGING_DEPLOY_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} deploy-staging"
-          [ "${STAGING_E2E_RESULT}" = "failure" -o "${STAGING_E2E_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} staging-e2e"
-          [ "${PROD_DEPLOY_RESULT}" = "failure" -o "${PROD_DEPLOY_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} deploy-production"
-          [ "${PROD_SMOKE_RESULT}" = "failure" -o "${PROD_SMOKE_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} prod-smoke"
+          [ "${PRE_DEPLOY_RESULT}" = "failure" ] || [ "${PRE_DEPLOY_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} pre-deploy-gate"
+          [ "${STAGING_DEPLOY_RESULT}" = "failure" ] || [ "${STAGING_DEPLOY_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} deploy-staging"
+          [ "${STAGING_E2E_RESULT}" = "failure" ] || [ "${STAGING_E2E_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} staging-e2e"
+          [ "${PROD_DEPLOY_RESULT}" = "failure" ] || [ "${PROD_DEPLOY_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} deploy-production"
+          [ "${PROD_SMOKE_RESULT}" = "failure" ] || [ "${PROD_SMOKE_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} prod-smoke"
           FAILED_STAGES="${FAILED_STAGES# }"  # trim leading space
           # FIRST failed stage, in the same canonical order FAILED_STAGES
           # already uses (pre-deploy-gate, deploy-staging, staging-e2e,
@@ -725,7 +743,7 @@ jobs:
           TIMESTAMP=$(date +%s)
           BODY=$(jq -n \
             --arg branchName "${BRANCH}" \
-            --argjson prNumber ${PR_NUMBER} \
+            --argjson prNumber "${PR_NUMBER}" \
             --arg failureDescription "${FEEDBACK}" \
             --arg repo "${{ github.repository }}" \
             --arg headSha "${HEAD_SHA}" \
@@ -802,7 +820,7 @@ jobs:
           TIMESTAMP=$(date +%s)
           BODY=$(jq -n \
             --arg branchName "${BRANCH}" \
-            --argjson prNumber ${PR_NUMBER} \
+            --argjson prNumber "${PR_NUMBER}" \
             --arg failureDescription "${FEEDBACK}" \
             --arg repo "${{ github.repository }}" \
             --arg headSha "${HEAD_SHA}" \
@@ -866,7 +884,7 @@ jobs:
           TIMESTAMP=$(date +%s)
           BODY=$(jq -n \
             --arg branchName "${BRANCH}" \
-            --argjson prNumber ${PR_NUMBER} \
+            --argjson prNumber "${PR_NUMBER}" \
             --arg failureDescription "${FEEDBACK}" \
             --arg repo "${{ github.repository }}" \
             --arg headSha "${HEAD_SHA}" \
@@ -938,7 +956,7 @@ jobs:
           TIMESTAMP=$(date +%s)
           BODY=$(jq -n \
             --arg branchName "${BRANCH}" \
-            --argjson prNumber ${PR_NUMBER} \
+            --argjson prNumber "${PR_NUMBER}" \
             --arg failureDescription "${FEEDBACK}" \
             --arg repo "${{ github.repository }}" \
             --arg headSha "${HEAD_SHA}" \
@@ -1060,7 +1078,7 @@ jobs:
               exit 0
             else
               EXIT_CODE=$?
-              if [ $attempt -lt $MAX_RETRIES ]; then
+              if [ "$attempt" -lt "$MAX_RETRIES" ]; then
                 DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
                 echo "Build failed (exit $EXIT_CODE) -- retrying in ${DELAY}s..."
                 sleep $DELAY
@@ -1658,7 +1676,7 @@ jobs:
               exit 0
             else
               EXIT_CODE=$?
-              if [ $attempt -lt $MAX_RETRIES ]; then
+              if [ "$attempt" -lt "$MAX_RETRIES" ]; then
                 DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
                 echo "Deploy failed (exit $EXIT_CODE) -- retrying in ${DELAY}s..."
                 sleep $DELAY
@@ -2243,7 +2261,7 @@ jobs:
               exit 0
             else
               EXIT_CODE=$?
-              if [ $attempt -lt $MAX_RETRIES ]; then
+              if [ "$attempt" -lt "$MAX_RETRIES" ]; then
                 DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
                 echo "Build failed (exit $EXIT_CODE) -- retrying in ${DELAY}s..."
                 sleep $DELAY
@@ -2844,7 +2862,7 @@ jobs:
               exit 0
             else
               EXIT_CODE=$?
-              if [ $attempt -lt $MAX_RETRIES ]; then
+              if [ "$attempt" -lt "$MAX_RETRIES" ]; then
                 DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
                 echo "Deploy failed (exit $EXIT_CODE) -- retrying in ${DELAY}s..."
                 sleep $DELAY
@@ -3237,7 +3255,7 @@ jobs:
           TIMESTAMP=$(date +%s)
           BODY=$(jq -n \
             --arg branchName "${BRANCH}" \
-            --argjson prNumber ${PR_NUMBER} \
+            --argjson prNumber "${PR_NUMBER}" \
             --arg failureDescription "${FEEDBACK}" \
             --arg repo "${{ github.repository }}" \
             --arg headSha "${HEAD_SHA}" \

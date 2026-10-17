@@ -4,6 +4,28 @@ How to upgrade an existing Modulo deployment with minimal downtime. Covers versi
 
 ---
 
+## Project Version Convention
+
+The **single source of truth** for the product version is `backend/pyproject.toml` (`[project].version`). It is mirrored into:
+
+| File | Field |
+|------|-------|
+| `frontend/package.json` | `"version"` |
+| `deploy/helm/modulo/Chart.yaml` | `version` and `appVersion` |
+
+All of these files carry a plain numeric `X.Y.Z`. A pre-release suffix (`-rc1`) lives in the **git tag only** (e.g. `v0.4.0-rc1`) and is never written into the files.
+
+Bump with `scripts/bump-version.py` (reads the current version from `backend/pyproject.toml`, writes every mirror):
+
+```bash
+python scripts/bump-version.py patch        # or: minor | major
+python scripts/bump-version.py --set 1.2.3  # explicit version
+```
+
+The script fails loudly (non-zero exit, nothing written) if any mirror has drifted away from the source of truth or is already at the target version - it never reports a change it did not make. After a bump, run `uv lock` in `backend/`: `backend/uv.lock` also records the project version, and the `check-uv-lock` pre-commit hook fails the commit when it is stale.
+
+---
+
 ## Before You Start
 
 1. **Read the release notes** for the target version – check for breaking changes, new required env vars, and deprecated features.
@@ -12,7 +34,9 @@ How to upgrade an existing Modulo deployment with minimal downtime. Covers versi
    uv run alembic history
    uv run alembic upgrade heads --sql  # preview SQL without applying
    ```
-3. **Back up the database** – always take a backup before upgrading:
+3. **Back up the database** – always take a backup before upgrading
+   (from the repository root - `scripts/` lives at the repo root, not in
+   `backend/`):
    ```bash
    uv run scripts/backup.py --output /backups/pre-upgrade-$(date +%Y%m%d).tar.gz.enc
    ```
@@ -23,6 +47,11 @@ How to upgrade an existing Modulo deployment with minimal downtime. Covers versi
 ## Upgrade Paths
 
 ### Native single-install (Linux)
+
+The native single-install path is **Linux-only**, so this upgrade path is too.
+macOS and Windows are out of scope for v1: `scripts/install.sh` refuses a
+non-Linux host, and no macOS/Windows bundle exists to upgrade. See the platform
+support matrix in [`docs/system-requirements.md`](./system-requirements.md).
 
 The native upgrade swaps the `current` symlink after a verified data
 snapshot; migrations run through the new bundle's boot lifespan. Two entry
@@ -195,7 +224,8 @@ docker compose -f deploy/compose/docker-compose.prod.yml exec modulo uv run alem
 
 **Prefer a forward-fix over downgrading.** Write a new migration that reverts the schema change rather than using `alembic downgrade`. Not all migrations include a `downgrade()` function.
 
-If downgrade fails, restore from the pre-upgrade backup instead:
+If downgrade fails, restore from the pre-upgrade backup instead
+(from the repository root):
 
 ```bash
 uv run scripts/restore.py --input /backups/pre-upgrade-<date>.tar.gz.enc --full
@@ -234,6 +264,7 @@ When upgrading, check for changes to:
 
 | Topic | Document |
 |-------|----------|
+| System requirements (platform support matrix) | [`docs/system-requirements.md`](./system-requirements.md) |
 | Deployment guide | [`docs/deployment.md`](./deployment.md) |
 | Deployment security | [`docs/deployment-security.md`](./deployment-security.md) §7 |
 | Backup & restore | [`docs/operations/backup.md`](./operations/backup.md) |

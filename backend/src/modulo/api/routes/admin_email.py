@@ -10,7 +10,11 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR, MSG_ORGANISATION_NOT_FOUND
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import (
+    handle_db_errors,
+    raise_lock_timeout_conflict_if,
+    raise_session_contract_error,
+)
 from modulo.api.dependencies import (
     deny_break_glass_mint,
     get_db_session,
@@ -28,7 +32,8 @@ from modulo.core.email_service import (
     _is_valid_recipient,
     send_email,
 )
-from modulo.db.crud.organisation import get_organisation, update_organisation
+from modulo.db.crud.organisation import get_organisation, update_org_settings_patch
+from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
 _CODE_ADMIN_EMAIL_ADMIN_UPDATE = "admin_email.admin_update_email_settings"
@@ -141,6 +146,10 @@ async def admin_update_email_settings(
 ) -> EmailSettingsResponse:
     try:
         async with session.begin():
+            # FAR-1830: bind the target org's RLS context on the READ txn too —
+            # the target org comes from the path, so without this the settings
+            # patch's tenant guard would run against an unbound session.
+            await set_rls_org(session, org_id)
             org = await get_organisation(session, org_id)
     except ProgrammingError:
         logger.exception(_CODE_ADMIN_EMAIL_ADMIN_UPDATE)
@@ -182,11 +191,18 @@ async def admin_update_email_settings(
         merged["smtp_password"] = encrypt_stored_secret(req.smtp_password, settings.fernet_key).decode()
     merged["email_from"] = req.email_from
     merged["smtp_timeout"] = req.smtp_timeout
-    settings_json["email"] = merged
 
     try:
         async with session.begin():
-            await update_organisation(session, org_id, {"settings_json": settings_json})
+            # FAR-1830: bind the target org so the patch helper's tenant guard
+            # sees a matching (not unbound) context on this path-parameter route.
+            await set_rls_org(session, org_id)
+            # FAR-1830: emit ONLY this writer's top-level key. The read above is
+            # for readability/merge of the email sub-object; writing the whole
+            # ``settings_json`` column back from that stale read would drop every
+            # other concern's keys (and even a concurrent email write) between the
+            # two transactions. The atomic patch merges into the live column.
+            await update_org_settings_patch(session, org_id, {"email": merged})
     except ProgrammingError:
         logger.exception(_CODE_ADMIN_EMAIL_ADMIN_UPDATE)
         raise HTTPException(
@@ -195,6 +211,7 @@ async def admin_update_email_settings(
         ) from None
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, _CODE_ADMIN_EMAIL_ADMIN_UPDATE)
+        raise_lock_timeout_conflict_if(exc, _CODE_ADMIN_EMAIL_ADMIN_UPDATE)
         logger.exception(_CODE_ADMIN_EMAIL_ADMIN_UPDATE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

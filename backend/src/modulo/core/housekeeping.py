@@ -8,11 +8,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.graph_validator.mask_sentinel import find_mask_sentinel_values
 from modulo.db.bundled_runner_template import BUNDLED_RUNNER_PROVIDER_TYPE
+from modulo.db.crud.run_node_outputs import resolve_dialect
 from modulo.db.crud.run_retention import CHECKPOINT_RETENTION_DAYS, _checkpoint_detail
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
@@ -35,6 +36,7 @@ from modulo.db.models.sso_provider import SsoProvider
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
+from modulo.db.models.variant_group import VariantGroup
 from modulo.db.models.webhook import WebhookDedupHash
 
 _log = logging.getLogger(__name__)
@@ -93,6 +95,37 @@ ENTITY_MODEL_MAP: dict[str, type] = {
 # Submitting a candidate from one of these to the cleanup endpoint returns a
 # clear triage message instead of a misleading "Unknown entity type" error.
 NON_DELETABLE_ENTITY_TYPES: frozenset[str] = frozenset({"invalid_org_fk", "degraded_composite_template"})
+
+
+async def delete_one_in_savepoint(
+    session: AsyncSession,
+    model_cls: type[Any],
+    entity_id: str,
+    organisation_id: uuid.UUID,
+) -> bool:
+    """Delete one org-scoped row; True only if its savepoint committed.
+
+    The org-scoped ``select`` (matching ``id`` AND ``organisation_id``) lives
+    here, so both callers — the REST cleanup route and the MCP
+    ``perform_housekeeping`` tool — share one implementation and cannot drift.
+
+    The DELETE is flushed when the nested transaction releases, so an FK
+    RESTRICT refusal raises here and the row survives — callers must count
+    only a True return (FAR-1857). An absent / foreign-org row is a no-op
+    returning False; a genuine ``IntegrityError`` propagates to the caller so
+    each call site keeps its own existing error handling.
+    """
+    deleted = False
+    async with session.begin_nested():
+        stmt = select(model_cls).where(
+            model_cls.id == entity_id,
+            model_cls.organisation_id == organisation_id,
+        )
+        obj = (await session.execute(stmt)).scalar_one_or_none()
+        if obj is not None:
+            await session.delete(obj)
+            deleted = True
+    return deleted
 
 
 @dataclass(frozen=True)
@@ -376,6 +409,227 @@ async def _scan_orphan_snapshots(session: AsyncSession, org_id: uuid.UUID) -> li
             created_at=s.created_at.isoformat() if s.created_at else None,
         )
         for s in snapshots
+    ]
+
+
+# FAR-1815 snapshot retention: how many ``version_kind='edit'`` snapshots are
+# kept per pipeline (the newest N). Deliberately a module constant, not a
+# config surface — the ticket scopes no new configuration, and retention bounds
+# are policy, not deployment-specific settings.
+EDIT_SNAPSHOT_RETENTION_LIMIT = 200
+
+
+def _canonical_snapshot_id(raw: object) -> uuid.UUID | None:
+    """Return ``raw`` as a canonical snapshot id, or ``None`` if it is not one.
+
+    REST stores trigger/variant pins verbatim and unvalidated while the fire
+    paths accept anything ``uuid.UUID(str(...))`` accepts (uppercase, braced and
+    ``urn:`` forms), so pins are canonicalised in Python rather than compared as
+    raw SQL strings — a string comparison would miss non-canonical stored forms.
+    """
+    if raw is None:
+        return None
+    try:
+        return uuid.UUID(str(raw))
+    except (ValueError, TypeError):
+        return None
+
+
+async def _trigger_pinned_snapshot_ids(session: AsyncSession, org_id: uuid.UUID) -> set[uuid.UUID]:
+    """Canonical snapshot ids pinned by any of the org's triggers.
+
+    A trigger pins a specific snapshot via ``config_json.snapshot_id`` — a
+    non-FK reference; a missing pin yields an explicit ``no_pipeline`` skip
+    rather than a silent auto-create, so any pinned snapshot must be excluded
+    from the retention pool. Reads the Core ``triggers`` table rather than the
+    ORM entity so the global soft-delete filter cannot hide a
+    soft-deleted-but-restorable trigger's pin (``/triggers/{id}/restore``).
+    """
+    trigger_table = Trigger.__table__
+    configs = (
+        await session.execute(select(trigger_table.c.config_json).where(trigger_table.c.organisation_id == org_id))
+    ).scalars()
+    pinned: set[uuid.UUID] = set()
+    for config in configs:
+        snapshot_id = _canonical_snapshot_id((config or {}).get("snapshot_id"))
+        if snapshot_id is not None:
+            pinned.add(snapshot_id)
+    return pinned
+
+
+async def _variant_pinned_snapshot_ids(session: AsyncSession, org_id: uuid.UUID) -> set[uuid.UUID]:
+    """Canonical snapshot ids pinned by any variant group's ``variants`` array.
+
+    A group pins one snapshot per variant via a ``variants`` JSON entry carrying
+    ``snapshot_id`` — a non-FK reference; deleting the row breaks the group's
+    next fire. Reads the Core ``variant_groups`` table rather than the ORM entity
+    so the soft-delete filter cannot hide a soft-deleted group's pin (matching
+    the trigger leg), and walks the JSON in Python so the check is
+    dialect-portable across the JSON storage differences.
+    """
+    variant_table = VariantGroup.__table__
+    variant_lists = (
+        await session.execute(select(variant_table.c.variants).where(variant_table.c.organisation_id == org_id))
+    ).scalars()
+    pinned: set[uuid.UUID] = set()
+    for variants in variant_lists:
+        if not isinstance(variants, list):
+            continue
+        for entry in variants:
+            if not isinstance(entry, dict):
+                continue
+            snapshot_id = _canonical_snapshot_id(entry.get("snapshot_id"))
+            if snapshot_id is not None:
+                pinned.add(snapshot_id)
+    return pinned
+
+
+async def _scan_edit_snapshot_retention(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
+    """Surface edit snapshots beyond the newest ``EDIT_SNAPSHOT_RETENTION_LIMIT`` per pipeline.
+
+    FAR-1815: since FAR-1810 every explicit editor graph save records an
+    immutable ``version_kind='edit'`` snapshot in the save transaction, on top
+    of one row per run — unbounded growth per pipeline with no retention
+    anywhere. This scan ranks each pipeline's PROVENANCE-EDIT snapshots
+    (``version_kind='edit'`` AND ``created_kind='edit'``) newest-first and
+    surfaces only those past the newest 200 as cleanup candidates, so
+    retention keeps the newest 200 edit versions and everything older is
+    deletable through the standard housekeeping cleanup
+    (``entity_type='pipeline_snapshot'`` — same path as ``orphan_snapshots``).
+
+    The deletable pool — the set the rank and the newest-200 bound apply to —
+    is edit/edit snapshots that are (a) untagged by a release channel, (b) not
+    pinned by a trigger and (c) not referenced by any variant. Never surfaced:
+
+    * run / rollback / initial snapshots. The ``created_kind`` carve-out is
+      load-bearing: ``rollback_to_snapshot`` writes ``version_kind='edit'`` /
+      ``created_kind='rollback'``, so filtering on ``version_kind`` alone would
+      delete rollback history.
+    * release-channel snapshots (``channel='canary'`` / ``'stable'``). These
+      carry the same edit/edit kinds but are ROUTING STATE, not save history:
+      ``resolve_snapshot_for_channel`` resolves the latest snapshot for a
+      channel, and when that row is gone it returns ``None`` and the caller
+      silently falls back to pinning the live graph — a silent behaviour
+      change. Only ``channel='none'`` rows enter the pool.
+    * trigger-pinned snapshots. A trigger pins a specific snapshot via
+      ``config_json.snapshot_id``; a missing pin produces an explicit
+      ``no_pipeline`` event and a skip (never a silent auto-create), i.e. a
+      silently broken trigger — so any snapshot a trigger pins is excluded from
+      the pool. REST stores the pin verbatim and unvalidated (the fire path
+      accepts anything ``uuid.UUID(str(...))`` accepts — uppercase, braced and
+      ``urn:`` forms), so the exclusion canonicalises each stored pin in
+      Python with ``uuid.UUID`` (case- and format-insensitive) and matches on
+      canonical id equality; a raw SQL string comparison would miss
+      non-canonical stored forms. The exclusion reads the Core ``triggers``
+      table rather than the ORM entity so the global soft-delete filter cannot
+      hide a soft-deleted-but-restorable trigger's pin
+      (``/triggers/{id}/restore``).
+    * variant-referenced snapshots. A variant group pins one snapshot per
+      variant via the ``variant_groups.variants`` JSON array (an ``entry``
+      carrying ``snapshot_id``) — a non-FK reference; deleting the row breaks
+      the group's next fire. Any snapshot any variant pins is excluded from the
+      pool. The referenced-id set is computed in Python (``uuid.UUID`` parse of
+      each entry), which is dialect-portable across the JSON storage
+      differences; the exclusion reads the Core ``variant_groups`` table, not
+      the ORM entity, so the global soft-delete filter cannot hide a
+      soft-deleted group's pin — matching the trigger leg's reasoning.
+
+    A run-referenced edit snapshot is deliberately NOT excluded here:
+    ``runs.snapshot_id`` is ``ondelete=RESTRICT``, so cleanup of such a row
+    fails loudly (IntegrityError → per-item cleanup error) instead of being
+    deleted around the FK. Likewise the pipeline's latest snapshot: ranking's
+    ``retention_rank`` is ``row_number() ... ORDER BY snapshot_version DESC``
+    over the pool (unique per pipeline via ``uq_pipeline_snapshot_version``, so
+    no ties), which makes rank 1 the pool's maximum version — ``rank >
+    EDIT_SNAPSHOT_RETENTION_LIMIT`` can never select it. The outer
+    ``snapshot_version != latest_version`` predicate is redundant
+    defence-in-depth against a future rank-definition change, NOT the
+    structural guarantee; ordering matches the invariant's key
+    (``snapshot_version`` desc). Failures are not caught here: an exception
+    propagates to :func:`scan_all`, which logs it with the stack trace and
+    still returns the other categories.
+    """
+    trigger_pinned = await _trigger_pinned_snapshot_ids(session, org_id)
+    variant_pinned = await _variant_pinned_snapshot_ids(session, org_id)
+    # Pool predicates: the (a) channel + (b) trigger + (c) variant exclusions
+    # from the docstring, applied BEFORE ranking so the newest-200 bound counts
+    # only genuinely deletable rows. Each not-in predicate joins only when its
+    # set is non-empty (empty ``in_``/``not_in`` sets carry no useful SQL).
+    pool_predicates: list[ColumnElement[bool]] = [
+        PipelineSnapshot.organisation_id == org_id,
+        PipelineSnapshot.version_kind == "edit",
+        PipelineSnapshot.created_kind == "edit",
+        PipelineSnapshot.channel == "none",
+    ]
+    if trigger_pinned:
+        pool_predicates.append(PipelineSnapshot.id.not_in(trigger_pinned))
+    if variant_pinned:
+        pool_predicates.append(PipelineSnapshot.id.not_in(variant_pinned))
+    ranked = (
+        select(
+            PipelineSnapshot.id.label("id"),
+            PipelineSnapshot.pipeline_id.label("pipeline_id"),
+            PipelineSnapshot.snapshot_version.label("snapshot_version"),
+            PipelineSnapshot.created_at.label("created_at"),
+            func.row_number()
+            .over(
+                partition_by=PipelineSnapshot.pipeline_id,
+                order_by=PipelineSnapshot.snapshot_version.desc(),
+            )
+            .label("retention_rank"),
+        )
+        .where(*pool_predicates)
+        .subquery()
+    )
+    latest_version = (
+        select(
+            PipelineSnapshot.pipeline_id.label("pipeline_id"),
+            func.max(PipelineSnapshot.snapshot_version).label("latest_version"),
+        )
+        .where(PipelineSnapshot.organisation_id == org_id)
+        .group_by(PipelineSnapshot.pipeline_id)
+        .subquery()
+    )
+    rows = (
+        await session.execute(
+            select(ranked)
+            .join(latest_version, ranked.c.pipeline_id == latest_version.c.pipeline_id)
+            .where(
+                ranked.c.retention_rank > EDIT_SNAPSHOT_RETENTION_LIMIT,
+                ranked.c.snapshot_version != latest_version.c.latest_version,
+            )
+            .order_by(ranked.c.pipeline_id, ranked.c.snapshot_version)
+        )
+    ).all()
+    if not rows:
+        return []
+
+    per_pipeline: dict[uuid.UUID, int] = {}
+    for row in rows:
+        per_pipeline[row.pipeline_id] = per_pipeline.get(row.pipeline_id, 0) + 1
+    _log.warning(
+        "housekeeping.edit_snapshot_retention: org %s has %d edit snapshot(s) beyond the newest %d retained "
+        "per pipeline across %d pipeline(s): %s",
+        org_id,
+        len(rows),
+        EDIT_SNAPSHOT_RETENTION_LIMIT,
+        len(per_pipeline),
+        ", ".join(
+            f"{pid}:{count}"
+            for pid, count in sorted((str(pipeline_id), count) for pipeline_id, count in per_pipeline.items())
+        ),
+    )
+    return [
+        Candidate(
+            id=str(row.id),
+            name=f"Snapshot v{row.snapshot_version} for pipeline {row.pipeline_id}",
+            detail=(
+                f"Edit snapshot beyond retention — only the newest {EDIT_SNAPSHOT_RETENTION_LIMIT} "
+                "edit versions are kept per pipeline"
+            ),
+            created_at=row.created_at.isoformat() if row.created_at else None,
+        )
+        for row in rows
     ]
 
 
@@ -685,6 +939,61 @@ async def _scan_unused_schemas(session: AsyncSession, org_id: uuid.UUID) -> list
     ]
 
 
+def _lifecycle_map_has_no_stages(session: AsyncSession) -> ColumnElement[bool]:
+    """SQL predicate: the map has no stages configured.
+
+    Emptiness is derived structurally ("no stages"), never by dict equality
+    against ``{}`` (FAR-1856). Both real production shapes must count as empty:
+
+    * the three-key shape ``{"stages": [], "edges": [], "notes": ""}`` that the
+      editor's **save** path writes (``normalize_content`` in
+      ``core/lifecycle_map/validation.py``) once every stage is deleted; and
+    * a bare ``{}``, which the API persists for a map created with no content:
+      ``LifecycleMapCreate.content_json`` defaults to ``{}`` and
+      ``normalize_content`` leaves an empty payload ``{}`` (it validates only the
+      keys present and injects nothing).
+
+    Both are REQUIRED, not dead/legacy: a map created empty is empty just as
+    much as one the UI has emptied. A missing ``stages`` key, an empty array and
+    a malformed non-array value all count as "no stages" — matching the other
+    readers' ``content.get("stages") or []`` / ``isinstance(stages, list)``
+    guards (``api/routes/lifecycle_maps.py``, ``derive_lifecycle_map_stages``).
+
+    Dialect-branched because the array-length function and its type guard differ
+    between Postgres (``jsonb``; the product DB) and SQLite (the unit scanner
+    suite's dialect). ``jsonb_typeof`` returns NULL for a missing key, so the
+    CASE falls through to 0; the type guard stops ``jsonb_array_length`` raising
+    on a non-array value (Postgres refuses array length of a non-array).
+    """
+    stages = LifecycleMap.content_json["stages"]
+    dialect = resolve_dialect(session)
+    if dialect == "postgresql":
+        # ``jsonb_typeof`` is NULL for a missing key, so the CASE falls through
+        # to 0; the guard keeps ``jsonb_array_length`` from raising on a
+        # non-array value (Postgres refuses array length of a non-array).
+        length = case(
+            (func.jsonb_typeof(stages) == "array", func.jsonb_array_length(stages)),
+            else_=0,
+        )
+    elif dialect == "sqlite":
+        # SQLite: ``json_type`` is NULL for a missing path and
+        # ``json_array_length`` returns 0 for any non-array value.
+        length = case(
+            (func.json_type(LifecycleMap.content_json, "$.stages") == "array", func.json_array_length(stages)),
+            else_=0,
+        )
+    else:
+        # Fail loud on any other dialect rather than falling through to the
+        # SQLite branch: ``json_type``/``json_array_length`` are invalid on e.g.
+        # MySQL/MariaDB, where they would raise and ``scan_all`` would swallow
+        # the per-scanner exception into an empty category — the exact
+        # silent-failure class FAR-1856 fixed. Mirrors ``dialect_insert``.
+        raise NotImplementedError(
+            f"_lifecycle_map_has_no_stages is not implemented for the {dialect!r} backend (postgres/sqlite only)"
+        )
+    return func.coalesce(length, 0) == 0
+
+
 async def _scan_empty_lifecycle_maps(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
     """Lifecycle maps with empty content (no stages configured)."""
     maps = (
@@ -693,7 +1002,7 @@ async def _scan_empty_lifecycle_maps(session: AsyncSession, org_id: uuid.UUID) -
                 select(LifecycleMap).where(
                     LifecycleMap.organisation_id == org_id,
                     LifecycleMap.deleted_at.is_(None),
-                    LifecycleMap.content_json == {},  # empty dict = no content
+                    _lifecycle_map_has_no_stages(session),
                 )
             )
         )
@@ -924,6 +1233,18 @@ _SCANNERS: list[Scanner] = [
         scan_func=_scan_orphan_snapshots,
         label="Orphan Snapshots",
         description="Snapshots whose pipeline no longer exists",
+        entity_type="pipeline_snapshot",
+    ),
+    Scanner(
+        category="edit_snapshot_retention",
+        scan_func=_scan_edit_snapshot_retention,
+        label="Edit Snapshot Retention",
+        description=(
+            "Edit snapshots beyond the newest 200 kept per pipeline — deletable via the "
+            "standard housekeeping cleanup; run/rollback/initial snapshots, a pipeline's "
+            "latest snapshot, release-channel-tagged snapshots, trigger-pinned snapshots "
+            "and variant-referenced snapshots are never selected (FAR-1815)."
+        ),
         entity_type="pipeline_snapshot",
     ),
     Scanner(

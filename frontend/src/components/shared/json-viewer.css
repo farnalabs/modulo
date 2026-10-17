@@ -168,3 +168,82 @@
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* FAR-1840: narrow viewports (<= 640px). The shrink-proof expand toggle +
+   char count squeeze the preview to its min-content — with
+   `overflow-wrap: anywhere` that floor is ONE character, so at 375px the
+   long value rendered as a column of single characters (measured: preview
+   7px wide, 400 line boxes for a 500-char preview, controls vertically
+   centred ~4000px down the page, 8px row overflow). Two coordinated moves:
+
+   1. Lay the ROW out as a two-column grid: [indent | content]. The value
+      wrapper sits in the SAME column as the key (its own row), so the
+      content column is `minmax(0, 1fr)` — a long value fills the row
+      instead of being squeezed next to the controls, and every wrapped
+      line starts at the column's left edge. The first version of this fix
+      used flex-wrap on the row, which put the wrapped value's line at the
+      ROW's left edge (measured x58 vs the key at x73) and left the indent
+      guide spanning only the first flex line. The grid's indent column
+      spans both rows (`grid-row: 1 / -1`), so the guides keep spanning
+      the full node, and a wrapped value aligns to the key's left edge.
+      Short values move below their key as well — every value in a column
+      shares one left edge. The key itself is `white-space: nowrap` in the
+      column's remaining width, exactly as it was in the flex line.
+
+   2. Stack the truncation controls onto their own line ABOVE the preview
+      so they never consume the preview's width. The control cannot be
+      moved next to the key from inside vue-json-pretty's `renderNodeValue`
+      extension point — the dep always renders key + colon before the value
+      slot — so the controls sit at the head of the value block instead:
+      reachable immediately, then the value fills the column below.
+
+   Desktop rendering (>= 641px) is untouched: every override here is
+   scoped to the media query. Virtual trees keep their `white-space:
+   nowrap` horizontal-scroll contract and are excluded (mirrors the
+   FAR-626 wrap rule above). */
+@media (max-width: 640px) {
+  .json-viewer .vjs-tree:not(.is-virtual) .vjs-tree-node {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto;
+  }
+
+  /* Indent column spans both rows: the dashed guides run the full node
+     height even when the value wraps onto its own row. */
+  .json-viewer .vjs-tree:not(.is-virtual) .vjs-tree-node > .vjs-indent {
+    grid-column: 1;
+    grid-row: 1 / -1;
+  }
+
+  /* Key on row 1; the value wrapper takes column 2 with an auto row, so the
+     auto-placement cursor drops it on row 2 when a key occupies row 1, and
+     keeps it on row 1 for rows without a key (array items and brackets —
+     they carry no key to align to). Either way the value's left edge is the
+     column's left edge, i.e. the key's left edge. */
+  .json-viewer .vjs-tree:not(.is-virtual) .vjs-tree-node > .vjs-key {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .json-viewer .vjs-tree:not(.is-virtual) .vjs-tree-node > span:not([class]) {
+    grid-column: 2;
+  }
+
+  .json-viewer .json-viewer-string-truncated {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .json-viewer .json-viewer-string-truncated-text {
+    order: 3;
+    flex: 1 0 100%;
+  }
+
+  .json-viewer .json-viewer-string-toggle {
+    order: 1;
+  }
+
+  .json-viewer .json-viewer-string-count {
+    order: 2;
+  }
+}

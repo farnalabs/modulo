@@ -14,7 +14,7 @@
           <label for="agentoutputdiffview-field-run-a" class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_a') }}</label>
           <div class="flex gap-2">
             <Select
-  aria-label="Select run A"
+  :aria-label="$t('views.AgentOutputDiffView.select_run_a')"
   v-model="runIdA"
   :placeholder="loadingRuns ? $t('views.AgentOutputDiffView.loading') : $t('views.AgentOutputDiffView.select_recent_run')"
   data-testid="diff-recent-runs-a"
@@ -51,7 +51,7 @@
           <label for="agentoutputdiffview-field-run-b" class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_b') }}</label>
           <div class="flex gap-2">
             <Select
-  aria-label="Select run B"
+  :aria-label="$t('views.AgentOutputDiffView.select_run_b')"
   v-model="runIdB"
   :placeholder="loadingRuns ? $t('views.AgentOutputDiffView.loading') : $t('views.AgentOutputDiffView.select_recent_run')"
   data-testid="diff-recent-runs-b"
@@ -103,8 +103,8 @@
           </span>
         </div>
 
-        <details class="rounded-lg border bg-card">
-          <summary class="cursor-pointer px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">
+        <details class="rounded-lg border bg-card" data-testid="diff-raw-outputs-toggle">
+          <summary class="cursor-pointer rounded-lg px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
             {{ $t('views.AgentOutputDiffView.raw_outputs') }}
           </summary>
           <div class="grid grid-cols-1 gap-4 border-t p-4 md:grid-cols-2">
@@ -196,7 +196,7 @@ const { loading: loadingRuns, data: summaryResp } = useDataFetch(
   { immediate: true },
 )
 
-const recentRuns = computed(() => ((summaryResp.value as any)?.recent_runs ?? []) as RecentRun[])
+const recentRuns = computed<RecentRun[]>(() => summaryResp.value?.recent_runs ?? [])
 
 
 

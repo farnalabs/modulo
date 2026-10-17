@@ -1637,9 +1637,14 @@ export interface paths {
          *     Resolves the provider by its globally unique ``provider_id`` slug. The
          *     response is validated against THIS provider's SP entity ID and ACS URL.
          *
+         *     Because the IdP navigates the BROWSER here, a handled callback failure —
+         *     including an unknown, disabled or non-SAML ``provider_id`` — is rendered
+         *     as a 303 redirect to the login page carrying a whitelisted ``sso_error``
+         *     code (FAR-1791), never the uniform JSON 404 the non-ACS routes keep.
+         *
          *     RelayState verification (FAR-1003, defense-in-depth):
          *     - valid signed RelayState for THIS provider → proceed
-         *     - tampered / wrong provider / expired → reject (401)
+         *     - tampered / wrong provider / expired → reject (303 to the login page)
          *     - absent → do NOT fail; proceed on URL path (IdP-initiated SSO)
          *
          *     Security reasoning: with routing by URL path, a forged RelayState
@@ -2335,6 +2340,115 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/service-accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Service Accounts Endpoint
+         * @description List the org's service principals (admins only — same floor as /admin/users).
+         */
+        get: operations["list_service_accounts_endpoint_api_v1_service_accounts_get"];
+        put?: never;
+        /**
+         * Create Service Account Endpoint
+         * @description Create a service principal with its own name and an org role ≤ operator.
+         */
+        post: operations["create_service_account_endpoint_api_v1_service_accounts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/service-accounts/{service_account_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Service Account Endpoint
+         * @description Read one service principal.
+         */
+        get: operations["get_service_account_endpoint_api_v1_service_accounts__service_account_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Service Account Endpoint
+         * @description Rename a service principal and/or assign a new org role (≤ operator).
+         */
+        patch: operations["update_service_account_endpoint_api_v1_service_accounts__service_account_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/service-accounts/{service_account_id}/decommission": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Decommission Service Account Endpoint
+         * @description Explicitly retire a service principal: tombstone, revoke keys, drop teams.
+         *
+         *     One-way by design (ADR 058: decommissioned EXPLICITLY, never by owner
+         *     death): the timestamp is durable, the membership tombstone makes every
+         *     live-role read return None (so any surviving credential dies immediately),
+         *     and every live ``mk_`` key owned by the principal is bulk-revoked in the
+         *     same transaction. The human user surface refuses service targets, so the
+         *     membership tombstone can never be cleared behind this endpoint's back.
+         */
+        post: operations["decommission_service_account_endpoint_api_v1_service_accounts__service_account_id__decommission_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/service-accounts/{service_account_id}/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Service Account Key Endpoint
+         * @description Mint an ``mk_`` key OWNED by the service principal.
+         *
+         *     Two callers, one owner stamp:
+         *
+         *     * a human admin (JWT) bootstraps or rotates a key FOR the service account;
+         *     * the service principal itself (its own ``mk_`` credential — service rows
+         *       have no browser session, so this is the "mints its own keys" path),
+         *       which may mint only for ITSELF: a key never mints keys for someone
+         *       else's principal.
+         *
+         *     Either way ``org_api_keys.account_id`` is the service account, the role
+         *     never exceeds the target's LIVE org role (≤ operator by construction), a
+         *     grant-set (optional) flows through the live registry exclusion flag, and
+         *     the 365-day service TTL is enforced at the ``create_api_key`` choke point
+         *     for every surface.
+         */
+        post: operations["create_service_account_key_endpoint_api_v1_service_accounts__service_account_id__keys_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teams/my": {
         parameters: {
             query?: never;
@@ -2502,13 +2616,52 @@ export interface paths {
         };
         /** Get Pipeline Graph Endpoint */
         get: operations["get_pipeline_graph_endpoint_api_v1_pipelines__pipeline_id__graph_get"];
+        /** Replace Pipeline Graph Endpoint */
+        put: operations["replace_pipeline_graph_endpoint_api_v1_pipelines__pipeline_id__graph_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pipelines/{pipeline_id}/graph/nodes/{node_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        /** Replace Pipeline Graph Endpoint */
-        patch: operations["replace_pipeline_graph_endpoint_api_v1_pipelines__pipeline_id__graph_patch"];
+        /**
+         * Patch Pipeline Graph Node Endpoint
+         * @description FAR-1829: patch ONE node's allowlisted scalar fields, atomically.
+         *
+         *     Same permission (``pipeline.graph.update``) and team-scope gate as the
+         *     sibling graph writes, plus the same in-transaction team re-check. The
+         *     handler itself is deliberately tiny: the read/merge/validation adapter
+         *     (:func:`_build_node_patch_graph`) runs under the locked pipeline row, and
+         *     the write is delegated to :func:`_apply_graph_update` — the SAME function
+         *     the ``PATCH /{pipeline_id}`` payload's ``graph_json`` path uses — so every
+         *     guard, the row lock, the save-time graph validation and the
+         *     ``pipeline.graph_updated`` audit fire through one shared write path rather
+         *     than a second, parallel one. The Agent-row ``agent_commands`` sync runs in
+         *     that shared path too: ``_apply_graph_update`` calls it AFTER the
+         *     masked-echo merge and BEFORE ``replace_pipeline_graph`` writes, so the
+         *     FAR-1810 edit snapshot the write mints pins the command this patch just
+         *     saved rather than the stale pre-patch one.
+         *
+         *     Unknown ``node_id`` → 404 (a missing pipeline already 404s in the team
+         *     gate). A body key outside :class:`PipelineGraphNodePatch`'s allowlist → 422
+         *     with a typed ``body.<field>`` path. No precondition token, no 409: the
+         *     merge happens under the row lock, so there is nothing to race.
+         */
+        patch: operations["patch_pipeline_graph_node_endpoint_api_v1_pipelines__pipeline_id__graph_nodes__node_id__patch"];
         trace?: never;
     };
     "/api/v1/pipelines/{pipeline_id}/autonomy/demote": {
@@ -2522,7 +2675,7 @@ export interface paths {
         put?: never;
         /**
          * Demote Pipeline Autonomy
-         * @description Manually lower a pipeline's earned autonomy level (FAR-1175, ADR 043 §1).
+         * @description Manually lower a pipeline's earned autonomy level (FAR-1175, ADR 062 §1).
          *
          *     Demotion adds human review, so it is always safe: an admin or the pipeline's
          *     owner may lower the earned level at any time. Takes effect at the run's next
@@ -2547,7 +2700,7 @@ export interface paths {
         put?: never;
         /**
          * Promote Pipeline Autonomy
-         * @description Manually raise a pipeline's earned autonomy level (FAR-1175, ADR 043 §1).
+         * @description Manually raise a pipeline's earned autonomy level (FAR-1175, ADR 062 §1).
          *
          *     Promotion is never automatic: an admin or the pipeline's owner approves it,
          *     capped at the pipeline's ``max_autonomy_level`` ceiling. It applies only to
@@ -2737,6 +2890,31 @@ export interface paths {
          *     tags the edit's release channel.
          */
         post: operations["save_edit_snapshot_endpoint_api_v1_pipelines__pipeline_id__snapshots_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pipelines/{pipeline_id}/snapshots/by-version/{snapshot_version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Snapshot By Version Endpoint
+         * @description Read one snapshot by its per-pipeline version number (FAR-1811).
+         *
+         *     Backs the ``?version=<n>`` deep-link: same response model and the SAME
+         *     team/pipeline scoping as the by-UUID read below (FAR-1360), so a version
+         *     belonging to another pipeline resolves to ``None`` -> 404 and never leaks.
+         *     A non-integer version path segment is a 422; an absent version is a 404.
+         */
+        get: operations["get_snapshot_by_version_endpoint_api_v1_pipelines__pipeline_id__snapshots_by_version__snapshot_version__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5446,6 +5624,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Plan Bootstrap
+         * @description Caller-scoped effective plan bootstrap, readable by any authenticated member.
+         *
+         *     FAR-1806: the client's plan/tier/feature bootstrap previously read the
+         *     instance-admin-only ``/api/v1/admin/feature-flags`` (and
+         *     ``/api/v1/admin/license``), so every non-admin ran the app on permanently
+         *     wrong defaults (tier ``community``, ``dev_mode`` false, no flags). This
+         *     endpoint serves the same caller-scoped truth — effective tier, dev mode,
+         *     licence view, and the FULL effective flag set with the org
+         *     ``feature_overrides`` overlay — with no permission beyond authentication
+         *     against the caller's own org. The admin endpoints keep their
+         *     system-admin/permission gates for the inspection and toggle UI.
+         *
+         *     Failure ladder mirrors ``viewmodel_current``: ProgrammingError -> 501,
+         *     SQLAlchemyError -> 503, HTTPException re-raised, Exception -> 500.
+         */
+        get: operations["plan_bootstrap_api_v1_plan_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/viewmodel/views": {
         parameters: {
             query?: never;
@@ -7314,8 +7525,13 @@ export interface paths {
          *     check is performed (criterion 14).
          *
          *     Version increments on each edit (1→2→3).  ``pre_version_raw`` captures
-         *     ALL currently-mutable fields as ``{"action": <value>}`` — the snapshot
-         *     key set equals the set of mutable fields (criteria 17/18).
+         *     ALL currently-mutable fields as ``{"action": <value>,
+         *     "evaluation_mode": <value>}`` — the snapshot key set equals the set of
+         *     mutable fields (criteria 17/18). PUT is a full replace of the mutable
+         *     config: a caller that sends only ``action`` PRESERVES the live
+         *     gate's ``evaluation_mode`` (an omitted field never resets a
+         *     ``human`` gate), while an explicit ``evaluation_mode`` — including
+         *     ``'automatic'`` — writes it.
          *
          *     ``validate_binding`` is called to verify the gate-to-eval binding is
          *     still valid after the update.  Violations are logged at WARNING with
@@ -7746,6 +7962,120 @@ export interface paths {
          * @description Create an eval definition pre-populated from run output. Operator or admin (FAR-735).
          */
         post: operations["create_eval_from_run_api_v1_evals_from_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/external-agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List External Agents Endpoint */
+        get: operations["list_external_agents_endpoint_api_v1_external_agents_get"];
+        put?: never;
+        /** Create External Agent Endpoint */
+        post: operations["create_external_agent_endpoint_api_v1_external_agents_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/external-agents/{agent_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get External Agent Endpoint */
+        get: operations["get_external_agent_endpoint_api_v1_external_agents__agent_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete External Agent Endpoint */
+        delete: operations["delete_external_agent_endpoint_api_v1_external_agents__agent_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update External Agent Endpoint */
+        patch: operations["update_external_agent_endpoint_api_v1_external_agents__agent_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/mcp-servers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Mcp Servers Endpoint */
+        get: operations["list_mcp_servers_endpoint_api_v1_mcp_servers_get"];
+        put?: never;
+        /** Create Mcp Server Endpoint */
+        post: operations["create_mcp_server_endpoint_api_v1_mcp_servers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mcp-servers/{server_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Mcp Server Endpoint */
+        get: operations["get_mcp_server_endpoint_api_v1_mcp_servers__server_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Mcp Server Endpoint */
+        delete: operations["delete_mcp_server_endpoint_api_v1_mcp_servers__server_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Mcp Server Endpoint */
+        patch: operations["update_mcp_server_endpoint_api_v1_mcp_servers__server_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/mcp-servers/{server_id}/observe-tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Observe Tools Endpoint
+         * @description Record the server's observed tool definitions and apply the drift decision.
+         */
+        post: operations["observe_tools_endpoint_api_v1_mcp_servers__server_id__observe_tools_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mcp-servers/{server_id}/approve-tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve Tools Endpoint
+         * @description Approve the CURRENTLY observed tool set, pinning its canonical hash.
+         */
+        post: operations["approve_tools_endpoint_api_v1_mcp_servers__server_id__approve_tools_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -13018,6 +13348,8 @@ export interface components {
             used_bytes: number;
             /** Capacity Bytes */
             capacity_bytes: number | null;
+            /** Source */
+            source: string;
         };
         /** DeleteOAuthClientResponse */
         DeleteOAuthClientResponse: {
@@ -13768,6 +14100,106 @@ export interface components {
             status?: string | null;
             /** Organisation Id */
             organisation_id?: string | null;
+        };
+        /** ExternalAgentCreate */
+        ExternalAgentCreate: {
+            /**
+             * Visibility
+             * @default org
+             */
+            visibility: string;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Runtime Kind
+             * @default other
+             */
+            runtime_kind: string;
+            /** Host Descriptor */
+            host_descriptor?: string | null;
+            /**
+             * Status
+             * @default active
+             * @enum {string}
+             */
+            status: "active" | "inactive" | "unknown";
+            /**
+             * Discovery Provenance
+             * @default manual
+             * @enum {string}
+             */
+            discovery_provenance: "manual" | "mcp" | "webhook" | "forge";
+        };
+        /** ExternalAgentListResponse */
+        ExternalAgentListResponse: {
+            /** Items */
+            items: components["schemas"]["ExternalAgentResponse"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+        };
+        /** ExternalAgentResponse */
+        ExternalAgentResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organisation Id
+             * Format: uuid
+             */
+            organisation_id: string;
+            /** Name */
+            name: string;
+            /** Runtime Kind */
+            runtime_kind: string;
+            /** Host Descriptor */
+            host_descriptor?: string | null;
+            /** Status */
+            status: string;
+            /** Discovery Provenance */
+            discovery_provenance: string;
+            /** First Seen */
+            first_seen?: string | null;
+            /** Last Seen */
+            last_seen?: string | null;
+            /** Visibility */
+            visibility: string;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ExternalAgentUpdate */
+        ExternalAgentUpdate: {
+            /** Visibility */
+            visibility?: string | null;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Runtime Kind */
+            runtime_kind?: string | null;
+            /** Host Descriptor */
+            host_descriptor?: string | null;
+            /** Status */
+            status?: ("active" | "inactive" | "unknown") | null;
+            /** Discovery Provenance */
+            discovery_provenance?: ("manual" | "mcp" | "webhook" | "forge") | null;
         };
         /**
          * FanOutConfig
@@ -15461,6 +15893,146 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** McpServerCreate */
+        McpServerCreate: {
+            /**
+             * Visibility
+             * @default org
+             */
+            visibility: string;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Transport
+             * @enum {string}
+             */
+            transport: "stdio" | "sse" | "http" | "websocket";
+            /** Endpoint */
+            endpoint?: string | null;
+            /** Command */
+            command?: string | null;
+            /** Declared Scopes */
+            declared_scopes?: string[];
+            /** Credentials */
+            credentials?: string | null;
+        };
+        /** McpServerListResponse */
+        McpServerListResponse: {
+            /** Items */
+            items: components["schemas"]["McpServerResponse"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+        };
+        /** McpServerObservationResponse */
+        McpServerObservationResponse: {
+            /**
+             * Server Id
+             * Format: uuid
+             */
+            server_id: string;
+            /** Tools Hash */
+            tools_hash: string;
+            /** Approval Status */
+            approval_status: string;
+            /** Drift Detected */
+            drift_detected: boolean;
+            /** Newly Drifted */
+            newly_drifted: boolean;
+            /** Previous Tools Hash */
+            previous_tools_hash?: string | null;
+        };
+        /** McpServerResponse */
+        McpServerResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organisation Id
+             * Format: uuid
+             */
+            organisation_id: string;
+            /** Name */
+            name: string;
+            /** Transport */
+            transport: string;
+            /** Endpoint */
+            endpoint?: string | null;
+            /** Command */
+            command?: string | null;
+            /** Declared Scopes */
+            declared_scopes: string[];
+            /** Owner Account Id */
+            owner_account_id?: string | null;
+            /** Has Credentials */
+            has_credentials: boolean;
+            /** Tools Json */
+            tools_json: {
+                [key: string]: unknown;
+            }[];
+            /** Tools Hash */
+            tools_hash?: string | null;
+            /** Approval Status */
+            approval_status: string;
+            /** Approved By */
+            approved_by?: string | null;
+            /** Approved At */
+            approved_at?: string | null;
+            /** Approved Hash */
+            approved_hash?: string | null;
+            /** Last Observed At */
+            last_observed_at?: string | null;
+            /** Visibility */
+            visibility: string;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * McpServerToolsObservation
+         * @description A reported MCP tool-definition set (each entry a JSON object with a name).
+         */
+        McpServerToolsObservation: {
+            /** Tools */
+            tools?: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** McpServerUpdate */
+        McpServerUpdate: {
+            /** Visibility */
+            visibility?: string | null;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Transport */
+            transport?: ("stdio" | "sse" | "http" | "websocket") | null;
+            /** Endpoint */
+            endpoint?: string | null;
+            /** Command */
+            command?: string | null;
+            /** Declared Scopes */
+            declared_scopes?: string[] | null;
+            /** Credentials */
+            credentials?: string | null;
+        };
         /** MembershipListResponse */
         MembershipListResponse: {
             /** Items */
@@ -16814,6 +17386,137 @@ export interface components {
             wait_timeout?: number | null;
         };
         /**
+         * PipelineGraphNodePatch
+         * @description Partial node body for the node-targeted graph patch (FAR-1829).
+         *
+         *     A CLOSED allowlist — anything the model does not declare is rejected by
+         *     ``extra="forbid"`` with a typed 422 field path naming the offending key
+         *     (``body.env_vars: Extra inputs are not permitted``), so a partial body can
+         *     never be an arbitrary-key passthrough.
+         *
+         *     The INCLUSION rule is absolute-value assignment only — no per-item
+         *     operations: a declared field is wholly replaced by the supplied value,
+         *     never incremented, appended to or edited per entry. That is why the
+         *     list-typed ``agent_commands`` and ``egress_allowlist`` fields ARE declared
+         *     (the whole list replaces the stored one) while op-list verbs (``set`` /
+         *     ``patch`` / ``unset``) do not exist on this route at all.
+         *
+         *     Classes of field deliberately NOT declared (these are examples — the
+         *     exhaustive rule is simply "any key this model does not declare is a 422"):
+         *
+         *     * the credential-bearing dicts (``env_vars``, ``context_files``,
+         *       ``composite_parameter_values``, ``parameter_overrides``) — a partial body
+         *       must never be able to drop or half-write a secret, so those fields are
+         *       unpatchable rather than validated;
+         *     * the structural / topology fields (``id``, ``node_type``, ``agent_id``,
+         *       ``position``, and every edge) — the path's ``node_id`` addresses the node
+         *       and is never a body field, and a node patch changes no topology;
+         *     * ``agent_prompt`` — on an ``agent`` node the runtime reads the bound
+         *       Agent row's prompt instead, so a node-level patch would read back right
+         *       while the run used the old prompt, and unlike ``agent_commands`` there
+         *       is no Agent-row sync that could keep the two in step.
+         *
+         *     Field annotations and constraints MIRROR the same fields on
+         *     :class:`PipelineGraphNode` — the annotation plus every ``ge`` / ``le`` /
+         *     ``max_length`` / ``Literal`` member is pinned field-by-field by
+         *     ``tests/unit/api/test_pipeline_graph_node_patch.py`` — so a value the body
+         *     accepts within a declared bound is a value the merged node's own field
+         *     validator accepts. The single deliberate divergence is ``None``-widening:
+         *     the four non-nullable booleans below are widened here for a uniform body
+         *     shape — ``enable_heartbeat`` and ``idempotent`` to ``bool | None``, and the
+         *     strict ``single_pr_per_run`` and ``await_completion`` to
+         *     ``StrictBool | None`` — and an explicit ``null`` on them is rejected by the
+         *     MERGED node's ``bool`` field (422), never stored.
+         *
+         *     ``None`` semantics therefore depend on the field:
+         *
+         *     * NULLABLE on the node (``label``, ``description``,
+         *       ``stall_timeout_seconds``, ...): an explicitly supplied ``null`` (present
+         *       in ``model_fields_set``) CLEARS the stored value;
+         *     * the four non-nullable booleans (``enable_heartbeat``, ``idempotent``,
+         *       ``single_pr_per_run``, ``await_completion``): ``null`` is a 422 from the
+         *       merged node's own validation (see above);
+         *     * an ABSENT key always leaves the stored value untouched.
+         */
+        PipelineGraphNodePatch: {
+            /** Label */
+            label?: string | null;
+            /** Description */
+            description?: string | null;
+            /**
+             * Timeout Seconds
+             * @description Per-node timeout override (60-604800s). Overrides pipeline node_timeout_seconds.
+             */
+            timeout_seconds?: number | null;
+            /**
+             * Stall Timeout Seconds
+             * @description Stall window (seconds) before the idle watchdog treats the agent as stalled. Validated against the MERGED node's timeout_seconds at save time.
+             */
+            stall_timeout_seconds?: number | null;
+            /**
+             * Enable Heartbeat
+             * @description Enable the connection-liveness (heartbeat) stall channel.
+             */
+            enable_heartbeat?: boolean | null;
+            /**
+             * Idempotent
+             * @description Whether the node is logically safe to re-run.
+             */
+            idempotent?: boolean | null;
+            /**
+             * Single Pr Per Run
+             * @description Install the run-scoped one-PR-per-run gh shim in the node's sandbox (sandbox_agent only).
+             */
+            single_pr_per_run?: boolean | null;
+            /**
+             * Await Completion
+             * @description dispatch nodes only: poll get_run_status to a terminal status after firing once.
+             */
+            await_completion?: boolean | null;
+            /**
+             * Egress Policy
+             * @description Sandbox egress control (sandbox_agent only).
+             */
+            egress_policy?: ("default" | "deny_all" | "selected") | null;
+            /**
+             * Egress Allowlist
+             * @description Host:port egress allowlist (sandbox_agent, egress_policy='selected' only); the whole list replaces the stored one.
+             */
+            egress_allowlist?: {
+                [key: string]: unknown;
+            }[] | null;
+            /**
+             * Wallclock Budget Seconds
+             * @description Wall-clock spend budget in seconds for the node's sandbox.
+             */
+            wallclock_budget_seconds?: number | null;
+            /**
+             * Stdout Max Bytes
+             * @description Max retained stdout/stderr bytes when stdout_retention_mode=='full'.
+             */
+            stdout_max_bytes?: number | null;
+            /**
+             * Stdout Retention Mode
+             * @description Per-node stdout/stderr retention mode (sandbox_agent only).
+             */
+            stdout_retention_mode?: ("tail" | "full") | null;
+            /**
+             * Stdout Percentage Delta
+             * @description stdout-delta stall detector: fraction of new stdout that must differ to count as activity.
+             */
+            stdout_percentage_delta?: number | null;
+            /**
+             * Agent Commands
+             * @description sandbox_agent node command list; the whole list replaces the stored one and is synced to the bound Agent row in the same transaction.
+             */
+            agent_commands?: string[] | null;
+            /**
+             * Script Command
+             * @description sandbox_agent script-mode command, run verbatim (mutually exclusive with agent_commands).
+             */
+            script_command?: string | null;
+        };
+        /**
          * PipelineGraphPolicyGate
          * @description Node-attached policy-gate configuration (FAR-1109).
          *
@@ -17144,12 +17847,65 @@ export interface components {
              */
             environment_profile_id?: string | null;
         };
+        /**
+         * PlanBootstrapResponse
+         * @description Caller-scoped effective plan + feature bootstrap (FAR-1806).
+         *
+         *     Readable by ANY authenticated member of their own org (no instance-admin
+         *     permission), with the org ``feature_overrides`` overlay applied and the
+         *     FULL known flag set present — inactive flags carry
+         *     ``currently_active: false`` rather than being omitted.
+         */
+        PlanBootstrapResponse: {
+            license: components["schemas"]["PlanLicenseInfo"];
+            /** Dev Mode */
+            dev_mode: boolean;
+            /** Flags */
+            flags: components["schemas"]["PlanFlagInfo"][];
+        };
+        /**
+         * PlanFlagInfo
+         * @description One effective feature flag in the ``/api/v1/plan`` payload.
+         *
+         *     Mirrors the admin feature-flag list's ``flags[]`` vocabulary
+         *     (``currently_active`` / ``depends_on`` included) so a client reading
+         *     either endpoint maps the same field names.
+         */
+        PlanFlagInfo: {
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Tier */
+            tier: string;
+            /** Currently Active */
+            currently_active: boolean;
+            /** Depends On */
+            depends_on?: string[] | null;
+        };
         /** PlanInfo */
         PlanInfo: {
             /** Tier */
             tier: string;
             /** Daily Spend Limit */
             daily_spend_limit?: number | null;
+        };
+        /**
+         * PlanLicenseInfo
+         * @description Effective-licence view served by ``GET /api/v1/plan`` (FAR-1806).
+         *
+         *     ``tier`` is the plan context's resolved tier; ``expires_at`` / ``org_id``
+         *     come from the same licence-ladder rung the admin ``/api/v1/admin/license``
+         *     resolver walks, so a member reads the licence view without hitting an
+         *     admin-permission-gated endpoint.
+         */
+        PlanLicenseInfo: {
+            /** Tier */
+            tier: string;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Org Id */
+            org_id?: string | null;
         };
         /** PluginHealth */
         PluginHealth: {
@@ -17198,6 +17954,8 @@ export interface components {
         PolicyGateCreateRequest: {
             /** Action */
             action: string;
+            /** Evaluation Mode */
+            evaluation_mode?: string | null;
         };
         /**
          * PolicyGateResponse
@@ -17216,6 +17974,11 @@ export interface components {
             eval_id: string;
             /** Action */
             action: string;
+            /**
+             * Evaluation Mode
+             * @default automatic
+             */
+            evaluation_mode: string;
             /** Version */
             version: number;
             /** Pre Version Raw */
@@ -17252,6 +18015,8 @@ export interface components {
         PolicyGateUpdateRequest: {
             /** Action */
             action: string;
+            /** Evaluation Mode */
+            evaluation_mode?: string | null;
         };
         /**
          * PollingConfigUpdate
@@ -18435,6 +19200,8 @@ export interface components {
             langgraph_thread_id: string;
             /** Snapshot Id */
             snapshot_id?: string | null;
+            /** Snapshot Version */
+            snapshot_version?: number | null;
             /** Error Detail */
             error_detail?: string | null;
             /** Error Code */
@@ -18519,6 +19286,16 @@ export interface components {
             trigger_id?: string | null;
             /** Heartbeat At */
             heartbeat_at?: string | null;
+            /** Dispatcher */
+            dispatcher?: string | null;
+            /** Dispatched At */
+            dispatched_at?: string | null;
+            /** Dispatch Phase */
+            dispatch_phase?: string | null;
+            /** Claim Count */
+            claim_count?: number | null;
+            /** Enqueue Failed At */
+            enqueue_failed_at?: string | null;
             /** Work Item Refs */
             work_item_refs?: {
                 [key: string]: unknown;
@@ -19104,6 +19881,111 @@ export interface components {
             label: string;
             /** Value */
             value: string;
+        };
+        /** ServiceAccountCreate */
+        ServiceAccountCreate: {
+            /** Name */
+            name: string;
+            /**
+             * Role
+             * @default operator
+             */
+            role: string;
+        };
+        /** ServiceAccountDecommissionResponse */
+        ServiceAccountDecommissionResponse: {
+            /** Id */
+            id: string;
+            /** Decommissioned At */
+            decommissioned_at: string;
+            /** Revoked Keys */
+            revoked_keys: number;
+            /** Team Memberships Removed */
+            team_memberships_removed: number;
+        };
+        /** ServiceAccountKeyCreate */
+        ServiceAccountKeyCreate: {
+            /** Name */
+            name: string;
+            /**
+             * Role
+             * @default operator
+             */
+            role: string;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Grants */
+            grants?: string[] | null;
+            /** Scope */
+            scope?: string | null;
+        };
+        /** ServiceAccountKeyResponse */
+        ServiceAccountKeyResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Role */
+            role: string;
+            /** Key Value */
+            key_value: string;
+            /** Lookup Prefix */
+            lookup_prefix: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Owner Account Id
+             * Format: uuid
+             */
+            owner_account_id: string;
+            /**
+             * Scope
+             * @default org
+             */
+            scope: string;
+            /** Grants */
+            grants?: string[] | null;
+        };
+        /** ServiceAccountListResponse */
+        ServiceAccountListResponse: {
+            /** Items */
+            items: components["schemas"]["ServiceAccountResponse"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+        };
+        /** ServiceAccountResponse */
+        ServiceAccountResponse: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Kind */
+            kind: string;
+            /** Role */
+            role: string;
+            /** Active */
+            active: boolean;
+            /** Decommissioned At */
+            decommissioned_at?: string | null;
+            /** Created At */
+            created_at?: string | null;
+        };
+        /** ServiceAccountUpdate */
+        ServiceAccountUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Role */
+            role?: string | null;
         };
         /** SessionKeyResponse */
         SessionKeyResponse: {
@@ -19840,7 +20722,7 @@ export interface components {
         };
         /**
          * SystemAuditEventPage
-         * @description Repo-standard offset page envelope (items / total / page / page_size).
+         * @description Repo-standard offset page envelope (items / total / page / page_size / has_more).
          */
         SystemAuditEventPage: {
             /** Items */
@@ -19851,6 +20733,11 @@ export interface components {
             page: number;
             /** Page Size */
             page_size: number;
+            /**
+             * Has More
+             * @default false
+             */
+            has_more: boolean;
         };
         /** TargetInjection */
         TargetInjection: {
@@ -26057,6 +26944,215 @@ export interface operations {
             };
         };
     };
+    list_service_accounts_endpoint_api_v1_service_accounts_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+                search?: string | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccountListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    create_service_account_endpoint_api_v1_service_accounts_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceAccountCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccountResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_service_account_endpoint_api_v1_service_accounts__service_account_id__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                service_account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccountResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    update_service_account_endpoint_api_v1_service_accounts__service_account_id__patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                service_account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceAccountUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccountResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    decommission_service_account_endpoint_api_v1_service_accounts__service_account_id__decommission_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                service_account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccountDecommissionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    create_service_account_key_endpoint_api_v1_service_accounts__service_account_id__keys_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                service_account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceAccountKeyCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccountKeyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
     my_teams_endpoint_api_v1_teams_my_get: {
         parameters: {
             query?: {
@@ -26645,7 +27741,7 @@ export interface operations {
             };
         };
     };
-    replace_pipeline_graph_endpoint_api_v1_pipelines__pipeline_id__graph_patch: {
+    replace_pipeline_graph_endpoint_api_v1_pipelines__pipeline_id__graph_put: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -26659,6 +27755,44 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["PipelineGraphUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelineGraphResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    patch_pipeline_graph_node_endpoint_api_v1_pipelines__pipeline_id__graph_nodes__node_id__patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                pipeline_id: string;
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PipelineGraphNodePatch"];
             };
         };
         responses: {
@@ -27103,6 +28237,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SnapshotResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_snapshot_by_version_endpoint_api_v1_pipelines__pipeline_id__snapshots_by_version__snapshot_version__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                pipeline_id: string;
+                snapshot_version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SnapshotDetailResponse"];
                 };
             };
             /** @description Validation Error */
@@ -33159,6 +34327,37 @@ export interface operations {
             };
         };
     };
+    plan_bootstrap_api_v1_plan_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanBootstrapResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
     viewmodel_list_views_api_v1_viewmodel_views_get: {
         parameters: {
             query?: {
@@ -38164,6 +39363,414 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    list_external_agents_endpoint_api_v1_external_agents_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalAgentListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    create_external_agent_endpoint_api_v1_external_agents_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExternalAgentCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalAgentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_external_agent_endpoint_api_v1_external_agents__agent_id__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalAgentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    delete_external_agent_endpoint_api_v1_external_agents__agent_id__delete: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    update_external_agent_endpoint_api_v1_external_agents__agent_id__patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExternalAgentUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalAgentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    list_mcp_servers_endpoint_api_v1_mcp_servers_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    create_mcp_server_endpoint_api_v1_mcp_servers_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpServerCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_mcp_server_endpoint_api_v1_mcp_servers__server_id__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    delete_mcp_server_endpoint_api_v1_mcp_servers__server_id__delete: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    update_mcp_server_endpoint_api_v1_mcp_servers__server_id__patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpServerUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    observe_tools_endpoint_api_v1_mcp_servers__server_id__observe_tools_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpServerToolsObservation"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerObservationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    approve_tools_endpoint_api_v1_mcp_servers__server_id__approve_tools_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
             };
         };
     };

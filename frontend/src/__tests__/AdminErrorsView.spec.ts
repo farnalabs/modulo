@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
+import { setActivePinia, createPinia } from 'pinia'
 
 const getMock = vi.fn().mockResolvedValue({ items: [], total: 0 })
 
@@ -82,6 +83,8 @@ function mountView() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // PageTabs resolves tier-locked state via the plan store (FAR-47).
+  setActivePinia(createPinia())
   authState.isSystemAdmin = false
   if (routerMocks.query) delete routerMocks.query.scope
   getMock.mockResolvedValue({ items: [], total: 0 })

@@ -167,7 +167,7 @@ function mountEditor() {
   setActivePinia(pinia)
   const store = usePlanStore()
   store.currentTier = 'team'
-  store.features = { pipeline_delete: true, pipeline_diff_rollback: true }
+  store.features = { pipeline_delete: true }
   return mount(PipelineEditorView, {
     global: {
       plugins: [pinia, router],
@@ -651,7 +651,7 @@ describe('PipelineEditorView', () => {
 
     await vm.saveGraph()
 
-    const patchMock = vi.mocked(api.PATCH)
+    const patchMock = vi.mocked(api.PUT)
     expect(patchMock).toHaveBeenCalled()
     const savedNode = (patchMock.mock.calls[0][1] as any).body.nodes[0]
     // list + custom joiner survive the save payload (round-trip)
@@ -686,7 +686,7 @@ describe('PipelineEditorView', () => {
 
     await vm.saveGraph()
 
-    const savedNode = (vi.mocked(api.PATCH).mock.calls[0][1] as any).body.nodes[0]
+    const savedNode = (vi.mocked(api.PUT).mock.calls[0][1] as any).body.nodes[0]
     // FAR-820: only the agent_commands list is persisted; a commandless node
     // saves a null list + null joiner, and the dead scalar is never sent.
     expect(savedNode.agent_commands).toBeNull()
@@ -719,7 +719,7 @@ describe('PipelineEditorView', () => {
 
     await vm.saveGraph()
 
-    const savedNode = (vi.mocked(api.PATCH).mock.calls[0][1] as any).body.nodes[0]
+    const savedNode = (vi.mocked(api.PUT).mock.calls[0][1] as any).body.nodes[0]
     // unset joiner saves as the runtime default
     expect(savedNode.commands_concatenation_string).toBe(' && ')
     expect(savedNode.agent_commands).toEqual(['opencode run', '--model oxf'])
@@ -751,7 +751,7 @@ describe('PipelineEditorView', () => {
     await nextTick()
 
     await vm.saveGraph()
-    const savedNode = (vi.mocked(api.PATCH).mock.calls[0][1] as any).body.nodes[0]
+    const savedNode = (vi.mocked(api.PUT).mock.calls[0][1] as any).body.nodes[0]
     // empty/whitespace rows are dropped; the remaining list wins
     expect(savedNode.agent_commands).toEqual(['cmd-a'])
     expect(savedNode).not.toHaveProperty('agent_command')
@@ -795,7 +795,7 @@ describe('PipelineEditorView', () => {
 
     await vm.saveGraph()
 
-    const savedNode = (vi.mocked(api.PATCH).mock.calls[0][1] as any).body.nodes[0]
+    const savedNode = (vi.mocked(api.PUT).mock.calls[0][1] as any).body.nodes[0]
     // the critical regression: _validate_sandbox_agent_node 422s without a
     // template_id, so a save that drops it bricks every sandbox pipeline edit
     expect(savedNode.template_id).toBe('opencode')
@@ -848,7 +848,7 @@ describe('PipelineEditorView', () => {
 
     await vm.saveGraph()
 
-    const savedNode = (vi.mocked(api.PATCH).mock.calls[0][1] as any).body.nodes[0]
+    const savedNode = (vi.mocked(api.PUT).mock.calls[0][1] as any).body.nodes[0]
     // "Composite nodes require a composite_ref" — dropping it hard-422s the save
     expect(savedNode.composite_ref).toBe('composite-1')
     expect(savedNode.composite_parameter_values).toEqual({ region: 'eu' })
@@ -892,7 +892,7 @@ describe('PipelineEditorView', () => {
 
     await vm.saveGraph()
 
-    const savedNode = (vi.mocked(api.PATCH).mock.calls[0][1] as any).body.nodes[0]
+    const savedNode = (vi.mocked(api.PUT).mock.calls[0][1] as any).body.nodes[0]
     // the editor never fabricates or rewrites commands on a non-sandbox node
     // (FAR-488a syncs a bound Agent's row); the removed scalar is never sent
     expect(savedNode).not.toHaveProperty('agent_command')
@@ -1021,20 +1021,22 @@ describe('PipelineEditorView — toolbar rendering', () => {
     // archived pipeline shows Unarchive, not Archive
     expect(wrapper.find('[data-testid="pipeline-editor-unarchive"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="pipeline-editor-archive"]').exists()).toBe(false)
-    // plan features enable the Versions + Delete buttons
+    // The Versions button is always available (FAR-1819: tier gate retired);
+    // the Delete button still needs the pipeline_delete feature
     expect(wrapper.find('[data-testid="pipeline-editor-version-timeline"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="pipeline-editor-delete"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
-  it('hides feature-gated toolbar buttons when the plan lacks them', async () => {
+  it('keeps the ungated Versions button when the plan lacks features, still hides Delete', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
     const wrapper = await mountEditorLoaded()
     const store = usePlanStore()
     store.features = {}
     await nextTick()
-    expect(wrapper.find('[data-testid="pipeline-editor-version-timeline"]').exists()).toBe(false)
+    // FAR-1819: the version timeline is no longer plan-feature-gated
+    expect(wrapper.find('[data-testid="pipeline-editor-version-timeline"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="pipeline-editor-delete"]').exists()).toBe(false)
     wrapper.unmount()
   })
@@ -1099,7 +1101,7 @@ describe('PipelineEditorView — toolbar rendering', () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
     const wrapper = await mountEditorLoaded()
-    ;(api.PATCH as ReturnType<typeof vi.fn>).mockImplementationOnce(() => Promise.reject(new Error('422 validation')))
+    ;(api.PUT as ReturnType<typeof vi.fn>).mockImplementationOnce(() => Promise.reject(new Error('422 validation')))
     await (wrapper.vm as any).saveGraph()
     await flushPromises()
     const err = wrapper.find('[data-testid="pipeline-editor-save-error"]')
@@ -1292,6 +1294,29 @@ describe('PipelineEditorView — run dialog', () => {
     await button.trigger('keydown', { key: ' ', code: 'Space' })
     await nextTick()
     expect(wrapper.find('[data-testid="pipeline-editor-version-timeline"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('toggles the version timeline when the always-available Versions button is clicked (FAR-1819)', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.pipeline = { id: 'test-pipeline-id', name: 'Test Pipeline' }
+    await nextTick()
+
+    // FAR-1819: the Versions button lost its plan-feature gate, so it is always
+    // present and its click handler must actually open and close the timeline.
+    const button = wrapper.find('[data-testid="pipeline-editor-version-timeline"]')
+    expect(button.exists()).toBe(true)
+
+    await button.trigger('click')
+    await nextTick()
+    expect(vm.showVersionTimeline).toBe(true)
+
+    await button.trigger('click')
+    await nextTick()
+    expect(vm.showVersionTimeline).toBe(false)
     wrapper.unmount()
   })
 
@@ -1790,7 +1815,7 @@ describe('PipelineEditorView — edge properties panel', () => {
     await vm.saveEdgeConfig()
     await flushPromises()
     await nextTick()
-    const patch = vi.mocked(api.PATCH).mock.calls[0]
+    const patch = vi.mocked(api.PUT).mock.calls[0]
     expect(patch[0]).toBe('/api/v1/pipelines/{pipeline_id}/graph')
     expect((patch[1] as any).body.edges[0].edge_type).toBe('loop')
     expect((patch[1] as any).body.edges[0].max_iterations).toBe(4)
@@ -1807,7 +1832,7 @@ describe('PipelineEditorView — edge properties panel', () => {
     await flushPromises()
     await nextTick()
 
-    const patch = vi.mocked(api.PATCH).mock.calls[0]
+    const patch = vi.mocked(api.PUT).mock.calls[0]
     expect(patch[0]).toBe('/api/v1/pipelines/{pipeline_id}/graph')
     const savedEdge = (patch[1] as any).body.edges[0]
     expect(savedEdge.hitl_review_config.label).toBe('Review gate')
@@ -1817,14 +1842,14 @@ describe('PipelineEditorView — edge properties panel', () => {
 
   it('blocks the edge save when the HITL gate has no description (FAR-613)', async () => {
     const wrapper = await mountWithEdge(edgeFixture({ hitl_review_config: { label: 'Review gate' } }))
-    ;(api.PATCH as ReturnType<typeof vi.fn>).mockClear()
+    ;(api.PUT as ReturnType<typeof vi.fn>).mockClear()
 
     await wrapper.find('[data-testid="pipeline-editor-save-edge"]').trigger('click')
     await flushPromises()
     await nextTick()
 
     expect(wrapper.text()).toContain('HITL gate requires a description')
-    expect(vi.mocked(api.PATCH).mock.calls.length).toBe(0)
+    expect(vi.mocked(api.PUT).mock.calls.length).toBe(0)
     wrapper.unmount()
   })
 
@@ -1832,14 +1857,14 @@ describe('PipelineEditorView — edge properties panel', () => {
     const wrapper = await mountWithEdge(edgeFixture({
       hitl_review_config: { label: 'Review gate', description: 'too short' },
     }))
-    ;(api.PATCH as ReturnType<typeof vi.fn>).mockClear()
+    ;(api.PUT as ReturnType<typeof vi.fn>).mockClear()
 
     await wrapper.find('[data-testid="pipeline-editor-save-edge"]').trigger('click')
     await flushPromises()
     await nextTick()
 
     expect(wrapper.text()).toContain('HITL gate requires a description')
-    expect(vi.mocked(api.PATCH).mock.calls.length).toBe(0)
+    expect(vi.mocked(api.PUT).mock.calls.length).toBe(0)
     wrapper.unmount()
   })
 
@@ -1847,7 +1872,7 @@ describe('PipelineEditorView — edge properties panel', () => {
     const wrapper = await mountWithEdge(edgeFixture({
       hitl_review_config: { label: 'Review gate', description: 'Approve the deploy only after a human reviews the plan.' },
     }))
-    ;(api.PATCH as ReturnType<typeof vi.fn>).mockImplementationOnce(() => Promise.reject(new Error('edge_rejected')))
+    ;(api.PUT as ReturnType<typeof vi.fn>).mockImplementationOnce(() => Promise.reject(new Error('edge_rejected')))
     await wrapper.find('[data-testid="pipeline-editor-save-edge"]').trigger('click')
     await flushPromises()
     await nextTick()
@@ -1944,12 +1969,12 @@ describe('PipelineEditorView — edge properties panel', () => {
     const wrapper = await mountWithEdge(edgeFixture({
       hitl_review_config: { label: 'Review gate', description },
     }))
-    ;(api.PATCH as ReturnType<typeof vi.fn>).mockClear()
+    ;(api.PUT as ReturnType<typeof vi.fn>).mockClear()
     await wrapper.find('[data-testid="pipeline-editor-save-edge"]').trigger('click')
     await flushPromises()
     await nextTick()
     expect(wrapper.text()).not.toContain('HITL gate requires a description')
-    expect(vi.mocked(api.PATCH).mock.calls.length).toBe(1)
+    expect(vi.mocked(api.PUT).mock.calls.length).toBe(1)
     wrapper.unmount()
   })
 })
@@ -2276,7 +2301,7 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     await nextTick()
     await wrapper.find('[data-testid="pipeline-editor-run-prompt"]').setValue('go')
     // make saveGraph fail
-    ;(api.PATCH as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('save_broken'))
+    ;(api.PUT as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('save_broken'))
     await wrapper.find('[data-testid="pipeline-editor-run-submit"]').trigger('click')
     await flushPromises()
     await nextTick()
@@ -2475,7 +2500,7 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     await flushPromises()
     await nextTick()
 
-    const patch = vi.mocked(api.PATCH).mock.calls[0]
+    const patch = vi.mocked(api.PUT).mock.calls[0]
     const savedEdge = (patch[1] as any).body.edges[0]
     expect(savedEdge.hitl_review_config.condition).toBe('status == "approved"')
     expect(savedEdge.hitl_review_config.eval_condition).toBeUndefined()
@@ -2516,7 +2541,7 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     await flushPromises()
     await nextTick()
 
-    const patch = vi.mocked(api.PATCH).mock.calls[0]
+    const patch = vi.mocked(api.PUT).mock.calls[0]
     const savedEdge = (patch[1] as any).body.edges[0]
     expect(savedEdge.hitl_review_config.eval_condition).toEqual({
       eval_name: 'quality_check',
@@ -2558,7 +2583,7 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     await flushPromises()
     await nextTick()
 
-    const patch = vi.mocked(api.PATCH).mock.calls[0]
+    const patch = vi.mocked(api.PUT).mock.calls[0]
     const savedEdge = (patch[1] as any).body.edges[0]
     expect(savedEdge.hitl_review_config.condition).toBeUndefined()
     expect(savedEdge.hitl_review_config.eval_condition).toBeUndefined()
@@ -2640,7 +2665,7 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     await vm.saveGraph()
     await flushPromises()
 
-    const patch = vi.mocked(api.PATCH).mock.calls[0]
+    const patch = vi.mocked(api.PUT).mock.calls[0]
     const savedNode = (patch[1] as any).body.nodes[0]
     expect(savedNode.parameter_set_id).toBe('ps-1')
     expect(savedNode.parameter_overrides).toEqual({ temperature: 0.5 })
@@ -2666,7 +2691,7 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     await vm.saveGraph()
     await flushPromises()
 
-    const patch = vi.mocked(api.PATCH).mock.calls[0]
+    const patch = vi.mocked(api.PUT).mock.calls[0]
     const savedNode = (patch[1] as any).body.nodes[0]
     expect(savedNode.parameter_set_id).toBeNull()
     expect(savedNode.parameter_overrides).toBeNull()
@@ -2694,7 +2719,7 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     await vm.saveGraph()
     await flushPromises()
 
-    const patch = vi.mocked(api.PATCH).mock.calls[0]
+    const patch = vi.mocked(api.PUT).mock.calls[0]
     const savedEdges = (patch[1] as any).body.edges
     const loopEdge = savedEdges.find((e: any) => e.id === 'e1')
     expect(loopEdge.edge_type).toBe('loop')
@@ -2999,7 +3024,7 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     expect(vm.rawNodes[0].single_pr_per_run).toBe(true)
 
     await vm.saveGraph()
-    const savedNode = (vi.mocked(api.PATCH).mock.calls[0][1] as any).body.nodes[0]
+    const savedNode = (vi.mocked(api.PUT).mock.calls[0][1] as any).body.nodes[0]
     expect(savedNode.single_pr_per_run).toBe(true)
     wrapper.unmount()
   })

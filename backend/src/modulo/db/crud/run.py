@@ -2700,7 +2700,8 @@ async def list_runs(
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     items = list((await session.execute(q.order_by(Run.created_at.desc()).offset(offset).limit(page_size))).scalars())
-    return PageResult(items=items, total=total, page=page, page_size=page_size)
+    has_more = (offset + len(items)) < total
+    return PageResult(items=items, total=total, page=page, page_size=page_size, has_more=has_more)
 
 
 _COST_ROLLUP_QUANTUM = Decimal("0.000001")
@@ -2808,6 +2809,16 @@ class _RunStatusUpdate:
     claim_token: str | None = None
     from_status: str | None = None
     not_status: str | None = None
+    # FAR-1831: refund the ONE claim a capacity-denied resume consumed, in the
+    # same fenced write that resets the run. A capacity denial is not a real
+    # attempt (the executor never ran a node), so charging it against the
+    # ``claim_count`` budget would let repeated denials exhaust the claim cap and
+    # permanently strand a run whose HITL decision is already committed. The
+    # refund is a single decrement (never a reset), so a genuine poison run —
+    # whose claim is consumed on a NON-capacity failure and is never refunded —
+    # still reaches the cap and terminalises. Only valid on the fenced (claim
+    # token) path: the refund is fenced to the claim it is refunding.
+    refund_claim_count: bool = False
 
 
 #: Stall bound for the fail-closed marker write below. Deliberately a
@@ -3510,6 +3521,7 @@ async def update_run_status(
     claim_token: str | None = None,
     from_status: str | None = None,
     not_status: str | None = None,
+    refund_claim_count: bool = False,
 ) -> Run | None:
     """Write a run's status (optionally + blobs) — the FAR-583 store-write
     chokepoint.
@@ -3536,8 +3548,9 @@ async def update_run_status(
     * ``core.cost_controller.finalize._reduced_escape`` (the reduced escape —
       blobs arrive via ``**finalize_fields``).
 
-    Sites passing NO blobs (``core.dispatch._org_capacity_deferred``, the
-    ``executor`` claim/capacity/ceiling writes, ``api.routes.hitl.claim_gate``,
+    Sites passing NO blobs (``core.dispatch._org_capacity_deferred``,
+    ``core.pipeline_execution.defer_capacity_denied_run_to_awaiting_human``,
+    the ``executor`` claim/capacity/ceiling writes, ``api.routes.hitl.claim_gate``,
     ``finalize._write_empty_terminal``) cannot raise DualWriteError and need
     no guard. A new blobs-passing call site added without the guard aborts
     un-orchestrated (no terminalize, no event) — the
@@ -3553,13 +3566,20 @@ async def update_run_status(
     caller knows what a 55P03 means for its own recovery, so the caller
     issues ``db.crud.row_lock.set_mutation_row_lock_timeout(session)`` at the
     TOP of its transaction, before any lock (FAR-1584 / FAR-1592 pattern).
-    Verified as of FAR-1601: the dispatch admission transaction
-    (``core.dispatch``) does issue it before calling in; the remaining
-    callers are caller-side follow-up on FAR-1601, not a change to this
-    shared function.
+    FAR-1610 (commit ``310f9e48e``) issued the bound at the hot ``runs``
+    writers — the dispatch-admission transaction (``core.dispatch``) and the
+    executor's run-status / claim / capacity / ceiling paths — closing the
+    caller-side follow-up this note originally recorded under FAR-1601.
+    Bounding here remains deliberately out of scope for this shared function.
     """
     if status not in RUN_STATUS_WHITELIST:
         raise ValueError(f"invalid run status: {status!r}")
+    if refund_claim_count and claim_token is None:
+        # A refund decrements the claim the caller is refunding, so it is only
+        # meaningful fenced to that claim's token. Refusing here prevents a
+        # silent no-op (the ORM path has no token to fence against) — the same
+        # fail-loud contract as the fence helpers.
+        raise ValueError("refund_claim_count requires claim_token (refund is fenced to the claim it refunds)")
     update = _RunStatusUpdate(
         error_code=error_code,
         error_detail=error_detail,
@@ -3574,6 +3594,7 @@ async def update_run_status(
         claim_token=claim_token,
         from_status=from_status,
         not_status=not_status,
+        refund_claim_count=refund_claim_count,
     )
     if update.claim_token is not None:
         return await _update_run_status_fenced(session, run_id, status, update=update)
@@ -3669,7 +3690,9 @@ _UPDATE_STATUS_FENCED_SQL = text(
     "cost_breakdown = CASE WHEN :cost_breakdown_sentinel THEN CAST(cost_breakdown AS jsonb) "
     "  ELSE CAST(:cost_breakdown AS jsonb) END, "
     "node_token_usage = CASE WHEN CAST(:node_token_usage AS jsonb) IS NOT NULL "
-    "  THEN CAST(:node_token_usage AS jsonb) ELSE CAST(node_token_usage AS jsonb) END "
+    "  THEN CAST(:node_token_usage AS jsonb) ELSE CAST(node_token_usage AS jsonb) END, "
+    "claim_count = CASE WHEN :refund_claim_count "
+    "  THEN GREATEST(claim_count - 1, 0) ELSE claim_count END "
     "WHERE id=:rid "
     "AND (CAST(:tok AS text) IS NULL OR claim_token = CAST(:tok AS text)) "
     "AND (CAST(:from_status AS text) IS NULL OR status = CAST(:from_status AS text)) "
@@ -3730,6 +3753,7 @@ async def _update_run_status_fenced(
             "node_token_usage": _json_bind(update.node_token_usage),
             "claimed_by": update.claimed_by,
             "clear_error_code": update.clear_error_code,
+            "refund_claim_count": update.refund_claim_count,
         },
     )
     if result.fetchone() is None:
@@ -3793,10 +3817,10 @@ async def unpark_parked_run(session: AsyncSession, *, run_id: uuid.UUID, org_id:
     at the top, before any lock — FAR-1584 / FAR-1592): only a caller can
     decide what a 55P03 failure means for its own flow, and injecting one
     here would surface as a bare exception inside the HITL decide path.
-    Verified as of FAR-1601: neither caller issues the bound today
-    (``core.hitl_manager``'s decide path and
-    ``gate_coalescing.evaluate_gate_coalescing``) — caller-side follow-up on
-    FAR-1601.
+    FAR-1610 (commit ``310f9e48e``) issued the bound at BOTH callers — the
+    ``core.hitl_manager`` decide path and
+    ``gate_coalescing.evaluate_gate_coalescing`` — closing the caller-side
+    follow-up this note originally recorded under FAR-1601.
     """
     await session.execute(
         update(Run)
@@ -3876,8 +3900,11 @@ async def transition_run(
     the caller's transaction (``set_mutation_row_lock_timeout`` at the top,
     before any lock): bounding it here would make every caller's broad
     ``except Exception`` swallow a 55P03 into a SILENT missed transition —
-    worse than the unbounded wait it replaces. Whether each caller issues it
-    is caller-side work tracked on FAR-1601.
+    worse than the unbounded wait it replaces. FAR-1610 (commit ``310f9e48e``)
+    issued the bound at the caller's transaction before this write (the
+    ``HITLManager.claim`` path sets it ahead of the claim UPDATE and the
+    subsequent ``transition_run``; see ``api.routes.hitl.claim_review``),
+    closing the caller-side follow-up this note originally recorded.
     """
     if target_status not in RUN_STATUS_WHITELIST:
         raise ValueError(f"invalid run status: {target_status!r}")
@@ -3931,11 +3958,13 @@ async def request_cancellation(
     class). The bound still belongs in the caller's transaction
     (``set_mutation_row_lock_timeout(session)`` at the top, before the lock):
     this is SHARED CRUD, and only the caller can decide whether a 55P03 means
-    a visible 409/500 response or a retryable outcome. Verified as of
-    FAR-1601 neither caller issues it — ``api.routes.runs._cancel_run`` and
-    ``api.mcp_server._cancel_run_impl`` (the MCP server's bound at
-    ``mcp_server``'s graph-update path does NOT cover it) — caller-side
-    follow-up on FAR-1601.
+    a visible 409/500 response or a retryable outcome. FAR-1610 (commit
+    ``310f9e48e``) issued the bound at BOTH callers —
+    ``api.routes.runs._cancel_run`` maps the 55P03 to a visible 409 and
+    ``api.mcp_server._cancel_run_impl`` maps it to a branchable ``lock_timeout``
+    result — closing the caller-side follow-up this note originally recorded
+    under FAR-1601, so an unbounded wait is no longer reachable from these
+    paths.
     """
     if reason not in CANCEL_REASON_VALUES:
         raise ValueError(f"invalid cancel reason: {reason!r}")

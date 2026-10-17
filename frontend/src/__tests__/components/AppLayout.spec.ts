@@ -9,6 +9,8 @@ vi.mock('../../lib/api/client', () => ({
   getAccessToken: vi.fn().mockReturnValue('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbkBtb2R1bG8ucnVuIiwib3JnX3JvbGUiOiJhZG1pbiJ9.fakesignature'),
   clearAccessToken: vi.fn(),
   isDemoSession: vi.fn().mockReturnValue(false),
+  // useEventStream registers a module-scope re-arm listener on import (FAR-1842).
+  onAuthChange: vi.fn(() => vi.fn()),
 }))
 
 function mockMatchMedia(matches: boolean) {
@@ -98,9 +100,9 @@ describe('AppLayout', () => {
       // mode here — an unresolved store must render the pending placeholder
       // instead (asserted in the FAR-1237 block below).
       usePlanStore().features['mobile_sidebar_rail'] = false
-      // The mocked onboarding API resolves ready=true with isFirstRun defaulting
-      // to true, so the banner would otherwise be active. Dismiss it to isolate
-      // the header-only offset path this test exercises.
+      // The onboarding banner renders in normal flow and reserves its own
+      // height, so its active/dismissed state does not change <main>'s padding
+      // class at all. Dismiss it here purely for determinism.
       const onboarding = useOnboardingStore()
       onboarding.dismissed = true
       await nextTick()
@@ -110,7 +112,11 @@ describe('AppLayout', () => {
       expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(true)
     })
 
-    it('combines header + banner offsets into one additive padding class when both are active on mobile', async () => {
+    it('keeps header-only padding when the mobile header and the onboarding banner are both active', async () => {
+      // Regression pin: the onboarding banner is in normal flow, so it reserves
+      // its own height and <main> must NOT add a banner offset. The padding here
+      // is identical to the banner-inactive case ("pt-14" on mobile) — any
+      // banner term would double-count the gap.
       mockMatchMedia(false)
       const wrapper = mount(AppLayout, {
         global: {
@@ -124,13 +130,23 @@ describe('AppLayout', () => {
       store.dismissed = false
       await nextTick()
       await nextTick()
+      // Pin the premise: the banner must actually be RENDERED for the
+      // no-offset assertions below to mean anything. The trigger button lives
+      // inside OnboardingBanner's `v-if="store.isActive"` root, so it only
+      // exists when the banner is active (same locator the active-banner and
+      // inactive-banner tests in this file use).
+      expect(wrapper.find('[data-testid="onboarding-banner-trigger"]').exists()).toBe(true)
       const main = wrapper.find('main')
-      expect(main.classes()).toContain('pt-[calc(3.5rem+8.25rem)]')
-      expect(main.classes()).not.toContain('pt-14')
+      expect(main.classes()).toContain('pt-14')
+      expect(main.classes()).not.toContain('pt-[calc(3.5rem+8.25rem)]')
       expect(main.classes()).not.toContain('pt-[8.25rem]')
+      expect(main.classes()).not.toContain('md:pt-20')
     })
 
-    it('uses banner-only padding on mobile when the rail header (flag ON) replaces the fixed header', async () => {
+    it('adds no padding when the rail (flag ON) replaces the fixed header, even with the banner active', async () => {
+      // The rail is in-flow, so there is no fixed header to clear and the
+      // in-flow banner needs no offset — the padding matches the
+      // banner-inactive rail case (empty). Banner state does not vary padding.
       mockMatchMedia(false)
       const wrapper = mount(AppLayout, {
         global: {
@@ -147,8 +163,10 @@ describe('AppLayout', () => {
       await nextTick()
       await nextTick()
       const main = wrapper.find('main')
-      expect(main.classes()).toContain('pt-[8.25rem]')
       expect(main.classes()).not.toContain('pt-14')
+      expect(main.classes()).not.toContain('pt-[8.25rem]')
+      expect(main.classes()).not.toContain('pt-[calc(3.5rem+8.25rem)]')
+      expect(main.classes()).not.toContain('md:pt-20')
     })
   })
 
@@ -175,6 +193,24 @@ describe('AppLayout', () => {
   describe('mobile — nav flag unresolved (FAR-1237 pending placeholder)', () => {
     it('renders neither chrome on first paint — pending placeholder + header offset, no hamburger, no rail', async () => {
       mockMatchMedia(false)
+      // Hold the plan-bootstrap response so the store is genuinely IN FLIGHT
+      // ('none') at assertion time. The store currently reads the flags from
+      // `/api/v1/admin/feature-flags`; FAR-1809 (PR #1863) repoints that read
+      // to the caller-scoped `/api/v1/plan`, so BOTH paths are held — the
+      // test stays genuine on either side of that merge. Without the hold the
+      // no-payload mock would settle the store to terminal 'unavailable'
+      // (FAR-1805) — the settled case is pinned by the companion test next
+      // door. The flushPromises() below makes the discrimination real: it
+      // drains the settle chain, so a hold that misses the live path leaves
+      // flagsSource 'none' only by timing luck and the assertion fails once
+      // the chain settles (proven by mutation: a bogus hold path fails this
+      // test).
+      ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((path: string) => {
+        if (path === '/api/v1/admin/feature-flags' || path === '/api/v1/plan') {
+          return new Promise(() => {})
+        }
+        return Promise.resolve({ data: null, error: undefined })
+      })
       const wrapper = mount(AppLayout, {
         global: {
           plugins: [createPinia(), router],
@@ -183,8 +219,11 @@ describe('AppLayout', () => {
       })
       const onboarding = useOnboardingStore()
       onboarding.dismissed = true
-      await nextTick()
-      await nextTick()
+      // Drain the microtask chain fully: license/tiers settle (no-payload),
+      // and the held bootstrap request must STILL leave the store in 'none'.
+      // Without this the assertions below could pass on timing luck alone,
+      // before an unheld request had time to settle the store.
+      await flushPromises()
 
       expect(usePlanStore().flagsSource).toBe('none')
       const pending = wrapper.find(`[data-testid="${MOBILE_NAV_PENDING_TESTID}"]`)
@@ -198,6 +237,27 @@ describe('AppLayout', () => {
       expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false)
       // The placeholder occupies the fixed header slot, so the offset matches.
       expect(wrapper.find('main').classes()).toContain('pt-14')
+    })
+
+    it("unmounts the placeholder once the fetch settles unreadable — hamburger + drawer render (FAR-1805)", async () => {
+      mockMatchMedia(false)
+      const wrapper = mount(AppLayout, {
+        global: {
+          plugins: [createPinia(), router],
+          stubs: { LogoMark: true },
+        },
+      })
+      const onboarding = useOnboardingStore()
+      onboarding.dismissed = true
+      await flushPromises()
+
+      // The no-payload mock has settled the store: terminal 'unavailable',
+      // logged by the store (console.warn is spied in beforeEach).
+      expect(usePlanStore().flagsSource).toBe('unavailable')
+      expect(wrapper.find(`[data-testid="${MOBILE_NAV_PENDING_TESTID}"]`).exists()).toBe(false)
+      expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(true) // interactive
+      expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false) // drawer fallback, not rail
+      expect(wrapper.find('main').classes()).toContain('pt-14') // header slot still occupied
     })
   })
 

@@ -2,7 +2,7 @@
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
@@ -564,6 +564,34 @@ def test_update_api_key_with_expires_at(client: TestClient) -> None:
         )
     assert resp.status_code == 200
     assert resp.json()["name"] == "Expiring Key"
+
+
+def test_update_api_key_service_ttl_ceiling_maps_to_422(client: TestClient) -> None:
+    """QA M1: a >365d extension of a service-owned key is a 422, never applied.
+
+    ``update_api_key`` raises ``ApiKeyTtlError`` (the same choke-point error
+    the create path maps); the update handler must surface it as 422 with the
+    ceiling message, mirroring ``_mint_api_key``.
+    """
+    from modulo.auth.api_key import ApiKeyTtlError
+
+    too_long = (datetime.now(UTC) + timedelta(days=400)).isoformat()
+    with (
+        patch(
+            "modulo.api.routes.api_keys.update_api_key",
+            side_effect=ApiKeyTtlError("Keys owned by a service account expire within 365 days"),
+        ) as update,
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+    ):
+        resp = client.put(
+            f"/api/v1/api-keys/{_KEY_ID}",
+            json={"expires_at": too_long},
+        )
+    assert resp.status_code == 422
+    assert "365" in resp.json()["detail"]
+    # The choke point refused before mutating; nothing further was applied.
+    update.assert_awaited_once()
 
 
 def test_create_api_key_rejects_empty_name(client: TestClient) -> None:

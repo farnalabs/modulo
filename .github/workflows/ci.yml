@@ -193,7 +193,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for rule in .semgrep/no-raw-httpx-client.yml .semgrep/connector-egress-verify-required.yml; do
+          for rule in .semgrep/no-raw-httpx-client.yml .semgrep/connector-egress-verify-required.yml .semgrep/callable-dunder-name.yml; do
             base="$(basename "$rule" .yml)"
             if [ -f ".semgrep/tests/${base}.py" ]; then
               uv run --no-build --project backend --no-sync semgrep --config="$rule" --test ".semgrep/tests/${base}.py"
@@ -208,6 +208,11 @@ jobs:
         # signature (or a PyPI connection error), never when pip-audit reports
         # actual vulnerabilities, so a genuine finding is never masked. Mirrors
         # the signature-gated retry used for the SonarCloud scan below.
+        # The signature list must include socket read/connect timeouts — a plain
+        # `Read timed out` / `ReadTimeout` to pypi.org is the most common
+        # transient failure and, when absent, was misread as "non-transient
+        # error" and failed the check without retrying (observed on main at
+        # 71a55aab0 in deploy.yml's mirror of this gate).
         run: |
           set -uo pipefail
           LOG="$(mktemp)"
@@ -222,7 +227,7 @@ jobs:
               echo "::notice::pip-audit succeeded on attempt ${attempt}/3."
               exit 0
             fi
-            if grep -qE "pip_audit\._service\.interface\.(ServiceError|ConnectionError)|[0-9]{3} Server Error|Backend is unhealthy|Could not connect to PyPI|PyPI is not redirecting properly" "$LOG"; then
+            if grep -qE "pip_audit\._service\.interface\.(ServiceError|ConnectionError)|[0-9]{3} Server Error|Backend is unhealthy|Could not connect to PyPI|PyPI is not redirecting properly|Read timed out|ReadTimeout|ConnectTimeout|Connection timed out|Max retries exceeded|HTTPSConnectionPool\(host='pypi\.org'" "$LOG"; then
               if [ "$attempt" -lt 3 ]; then
                 echo "::warning::pip-audit hit a transient PyPI service error (attempt ${attempt}/3); retrying."
                 sleep $((attempt * 10))
@@ -241,6 +246,9 @@ jobs:
       - name: Validate sidebar nav translations
         working-directory: .
         run: uv run --no-build --project backend --no-sync python scripts/run_validate_translations.py
+      - name: Validate manifest nav structure
+        working-directory: .
+        run: uv run --no-build --project backend --no-sync python scripts/run_validate_nav_config.py
       - name: Trivy filesystem scan (dependency CVEs + misconfigs)
         uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297
         # Pin the vulnerability DB to the canonical GHCR repository instead of
@@ -460,7 +468,7 @@ jobs:
             -e POSTGRES_DB=modulo_test \
             -p 5433:5432 \
             postgres:16-alpine
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             if docker exec modulo-ci-pg pg_isready -U modulo_test 2>/dev/null; then
               echo "Postgres ready"
               exit 0
@@ -476,7 +484,7 @@ jobs:
         run: |
           docker rm -f modulo-ci-redis 2>/dev/null || true
           docker run -d --name modulo-ci-redis -p 6379:6379 redis:7-alpine
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if docker exec modulo-ci-redis redis-cli ping 2>/dev/null | grep -q PONG; then
               echo "Redis ready"
               exit 0
@@ -624,6 +632,13 @@ jobs:
       - name: Run WCAG contrast tests
         if: needs.changes.outputs.frontend == 'true'
         run: pnpm exec playwright test wcag-contrast
+      # FAR-1850: the mobile nav specs previously ran only inside the staging
+      # E2E job, so a regression that broke them surfaced (at best) days later.
+      # They run against the local mock target and do not need staging, so the
+      # per-PR frontend job is the earliest gate that can own them.
+      - name: Run mobile nav specs (flash + usable)
+        if: needs.changes.outputs.frontend == 'true'
+        run: pnpm exec playwright test mobile-nav-flash mobile-nav-usable
       - name: Run unit tests (vitest)
         if: needs.changes.outputs.frontend == 'true'
         # FAR-101: ubicloud-standard-2 is 2 vCPU. package.json's `test:unit`
@@ -1064,6 +1079,13 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref || 'main' }}
           FRONTEND_CHANGED: ${{ needs.changes.outputs.frontend }}
+          # FAR-1317 reviewer opt-in: a deletion-only production diff is a
+          # deliberate human decision (retiring / subtracting code) that leaves
+          # nothing new to cover. The gate stays fail-closed by default; this
+          # flag — set ONLY by the reviewer-applied
+          # `coverage: deletion-only-approved` label — authorises the
+          # deletion-only skip-as-pass.
+          DELETION_ONLY_APPROVED: "${{ contains(github.event.pull_request.labels.*.name, 'coverage: deletion-only-approved') }}"
         run: |
           # Provision an isolated venv with ONLY the gate's dependency
           # (diff-cover) using `--no-build`, so no third-party setup scripts
@@ -1086,6 +1108,12 @@ jobs:
           EXTRA_ARGS=()
           if [ "$FRONTEND_CHANGED" != "true" ]; then
             EXTRA_ARGS+=(--allow-missing-js-report)
+          fi
+          # FAR-1317: authorise a reviewer-approved deletion-only diff only when
+          # the PR carries the label. The flag is opt-in; absent the label the
+          # gate still fails closed on a deletion-only production change.
+          if [ "$DELETION_ONLY_APPROVED" = "true" ]; then
+            EXTRA_ARGS+=(--allow-deletion-only-approved)
           fi
           .venv/bin/python ../scripts/run_coverage_gate.py \
             --compare-branch "origin/$BASE_REF" \
@@ -1455,6 +1483,29 @@ jobs:
             echo "queue_in_flight=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # FAR-1843 D3 was a Branch Fixer in-flight cap in this job (counting
+      # actions/workflows/branch-fixer.yml/runs against BRANCH_FIXER_CAP=5);
+      # removed after pre-PR review (F1). It could not bound what it claimed:
+      # notify-pr-failure dispatches the Branch Fixer by DIRECT WEBHOOK POST
+      # to MODULO_BRANCH_FIXER_WEBHOOK_URL, which creates ZERO
+      # branch-fixer.yml runs (branch-fixer.yml is a workflow_dispatch-only
+      # wrapper that POSTs the same webhook; its runs are produced only by
+      # app-side / devtools dispatches). The counter therefore read ~0 during
+      # the very storm it was meant to bound, and its read-then-dispatch
+      # TOCTOU across ~28 concurrent ci jobs could not bound anything anyway.
+      # A GitHub-side counter cannot reliably bound an app-side resource — a
+      # cap that does not bound the thing it claims to is worse than no cap:
+      # it looks like protection while providing none. Do not re-add one here.
+      #
+      # The real bound lives APP-SIDE, enforced atomically at run-creation
+      # time: the Branch Fixer pipeline's own concurrency on app.modulo.run —
+      # pipeline id 6bdf5fca-1b29-4ad2-a273-2b3684e97348 — via its
+      # max_concurrent_runs and its webhook trigger's max_concurrent_runs
+      # (follow-up tracked separately; FAR-1843). The dispatch guards that
+      # remain below — superseded-run, exhausted, queue-check,
+      # manual-delivery — are unaffected and still suppress stale, duplicate
+      # and hand-managed dispatches.
+
       - name: Trigger Modulo Branch Fixer
         if: (failure() || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted == 'false' && steps.queue-check.outputs.queue_in_flight != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
         env:
@@ -1524,14 +1575,14 @@ jobs:
             BODY_RESP=$(echo "$RESPONSE" | sed '$d')
             LAST_HTTP="$HTTP_CODE"
             if [ "$HTTP_CODE" = "202" ]; then
-              RESP_STATUS=$(echo $BODY_RESP | jq -r '.status // "accepted"')
+              RESP_STATUS=$(echo "$BODY_RESP" | jq -r '.status // "accepted"')
               if [ "$RESP_STATUS" = "coalesced" ]; then
                 # FAR-1034 handled no-op: duplicate CI-failure for the same
                 # PR + head SHA within the coalesce window — intentionally no
                 # new run. Not an error, not retried.
                 echo "::notice::Modulo Branch Fixer coalesced (duplicate CI-failure for same PR + head SHA — suppressed)"
               else
-                echo "Modulo Branch Fixer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+                echo "Modulo Branch Fixer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
               fi
               DISPATCHED="true"
               break
@@ -1550,7 +1601,7 @@ jobs:
               echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
               sleep "$DELAY"
             else
-              echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
+              echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
               break
             fi
           done
@@ -1644,11 +1695,11 @@ jobs:
             BODY_RESP=$(echo "$RESPONSE" | sed '$d')
             LAST_HTTP="$HTTP_CODE"
             if [ "$HTTP_CODE" = "202" ]; then
-              RESP_STATUS=$(echo $BODY_RESP | jq -r '.status // "accepted"')
+              RESP_STATUS=$(echo "$BODY_RESP" | jq -r '.status // "accepted"')
               if [ "$RESP_STATUS" = "coalesced" ]; then
                 echo "::notice::Branch Fixer coalesced (duplicate CI-failure for same sha — suppressed)"
               else
-                echo "Branch Fixer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+                echo "Branch Fixer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
               fi
               DISPATCHED="true"
               break
@@ -1666,7 +1717,7 @@ jobs:
               echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
               sleep "$DELAY"
             else
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
+              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
               break
             fi
           done
@@ -1676,139 +1727,16 @@ jobs:
             exit 1
           fi
 
-  notify-pr-review:
-    name: Trigger PR Reviewer
-    # Mirror the notify-pr-failure pattern above: a job-level `success()`
-    # surfaces this check as "skipped" in the check-runs API whenever any
-    # needed job fails or is cancelled (e.g. a runner outage), and the PR
-    # Reviewer flags that as a non-green signal. The check itself always
-    # reports success on pull_request events; the "only dispatch when all
-    # needed checks are green" logic lives on the webhook step below.
-    if: github.event_name == 'pull_request' && always()
-    # FAR-1429: `needs` must list EVERY job that can fail on a PR. failure() and
-    # success() in the steps below consider all ancestor jobs, so a failing job
-    # missing from this list (tier1b-light, sonarcloud-scan,
-    # migration-heads-check were) never reached the Branch Fixer / reviewer
-    # gate. A job that is merely SKIPPED is neither failure() nor cancelled();
-    # every job here either always runs (path gates are step-level) or is only
-    # skipped because an ancestor already failed, which is itself a failure.
-    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
-    runs-on: ubicloud-standard-2
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Skip PR Reviewer when head already reviewed or only merged since last review
-        id: review-check
-        if: success() && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
-        env:
-          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          # Guard the wiring: the dedup script is a no-op if the repo was not
-          # checked out (GitHub Actions runners start with an empty workspace),
-          # so the notify-pr-review job checks out the repo first. The
-          # deterministic path must fail LOUDLY, not fall through to the
-          # fail-open `|| echo "skip=false"` below, or a wiring bug silently
-          # dispatches every webhook and defeats the dedup feature.
-          test -f .github/scripts/pr-review-dedup.py || { echo "::error::pr-review-dedup.py not found - dedup disabled"; exit 1; }
-          # Fetch the PR's reviews and commits JSON, then run the versioned
-          # dedup decision script (.github/scripts/pr-review-dedup.py).
-          # The script handles multi-line bodies and pipe chars correctly
-          # (naive cut -d'|' is line-oriented and corrupts the SHA), and
-          # fails open (dispatch) on any load error or ambiguous state.
-          gh api "/repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" --paginate > /tmp/pr-reviews.json 2>/dev/null || echo "[]" > /tmp/pr-reviews.json
-          gh api "/repos/${REPO}/pulls/${PR_NUMBER}/commits?per_page=100" --paginate > /tmp/pr-commits.json 2>/dev/null || echo "[]" > /tmp/pr-commits.json
-          SKIP_OUTPUT=$(python3 .github/scripts/pr-review-dedup.py /tmp/pr-reviews.json /tmp/pr-commits.json "${HEAD_SHA}" 2>/tmp/pr-dedup-err || echo "skip=false")
-          echo "${SKIP_OUTPUT}" >> "$GITHUB_OUTPUT"
-          echo "PR Reviewer dedup: ${SKIP_OUTPUT}"
-          cat /tmp/pr-dedup-err
-      - name: Send webhook to Modulo PR Review Agent
-        if: success() && steps.review-check.outputs.skip != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
-        env:
-          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_URL }}
-          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_SECRET }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ github.event.pull_request.head.sha }}
-          BRANCH: ${{ github.event.pull_request.head.ref }}
-        run: |
-          # jq -n --arg/--argjson JSON-escapes every value, so a crafted branch
-          # name (legal in git refnames, e.g. containing '"') cannot inject
-          # keys or break the payload. See FAR-568.
-          BODY=$(jq -n \
-            --arg repo "${REPO}" \
-            --argjson prNumber "${PR_NUMBER}" \
-            --arg sha "${SHA}" \
-            --arg ref "${BRANCH}" \
-            '{action: "check_run", repository: {full_name: $repo}, pull_request: {number: $prNumber, head: {sha: $sha, ref: $ref}}}')
-
-          # Retry with exponential backoff on network failures (curl HTTP 000) and 429/5xx (max 5 attempts, ~5 min total)
-          # TIMESTAMP and HMAC are recomputed PER ATTEMPT: the server enforces a
-          # +/-300s replay window on X-Modulo-Timestamp, so a signature computed
-          # once (before a slow attempt) would fall outside the window after a
-          # 429/5xx retry and be rejected as a replay — silently losing the
-          # review. Recomputing each iteration keeps every signature fresh.
-          DISPATCHED="false"
-          LAST_HTTP=""
-          for i in 1 2 3 4 5; do
-            TIMESTAMP=$(date +%s)
-            HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
-            # `|| RESPONSE=""` stops the default `bash -e` (GitHub Actions adds
-            # it to `run:` steps) from aborting this retry loop on the FIRST
-            # curl failure. Without it a curl timeout (exit 28) killed the step
-            # immediately, so the HTTP 000 retry branch below (the whole point
-            # of the loop) never ran and a transient webhook blip permanently
-            # lost the review trigger.
-            RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST "${MODULO_WEBHOOK_URL}" \
-              -H "Content-Type: application/json" \
-              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-              -d "${BODY}") || RESPONSE=""
-            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-            # A failed curl writes no body, so tail -1 is empty; normalise it to
-            # the HTTP 000 sentinel the retry/no-op branches key off.
-            [ -n "$HTTP_CODE" ] || HTTP_CODE="000"
-            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
-            LAST_HTTP="$HTTP_CODE"
-            if [ "$HTTP_CODE" = "202" ]; then
-              echo "PR Reviewer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
-              DISPATCHED="true"
-              break
-            elif [ "$HTTP_CODE" = "400" ] && echo "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
-              # FAR-1097 follow-up: HTTP 400 "Duplicate webhook payload" is the
-              # engine's byte-level idempotency guard (DuplicateWebhookError) —
-              # the identical delivery was already ACCEPTED within the ~5-min
-              # dedup window (e.g. two concurrent CI runs both dispatching the
-              # same PR+SHA check_run). It is a handled no-op, NOT a dispatch
-              # failure; retrying would only re-hit the same window.
-              echo "::notice::PR Reviewer duplicate delivery suppressed (identical payload already accepted within the dedup window)"
-              DISPATCHED="true"
-              break
-            elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
-              DELAY=$((2 ** (i - 1) * 5))
-              echo "::warning::PR Reviewer returned HTTP $HTTP_CODE (attempt $i/5) retrying in ${DELAY}s"
-              sleep "$DELAY"
-            else
-              echo "::warning::PR Reviewer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
-              break
-            fi
-          done
-          if [ "$DISPATCHED" != "true" ]; then
-            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
-            echo "::error::PR Reviewer webhook dispatch failed (HTTP ${LAST_HTTP}: ${DETAIL}) — PR review was not triggered."
-            exit 1
-          fi
-          echo "PR Reviewer notified"
-
-      - name: Report PR Reviewer check status
-        if: success()
-        run: echo "PR Reviewer trigger check passed (all required checks green, webhook sent or suppressed by manual-delivery label)."
+  # FAR-1843: the PR-reviewer dispatch (former job `notify-pr-review`, name
+  # "Trigger PR Reviewer") has MOVED to .github/workflows/pr-review.yml,
+  # driven by a workflow_run completion trigger on this workflow. When the
+  # dispatch lived here with `always()` + `needs:` every failing-capable job,
+  # a dispatch outage (e.g. an app HTTP 429) concluded this whole run as
+  # failure — indistinguishable from product-CI failure to merge-queue.yml's
+  # merge gate — and blocked every merge while red CI fanned Branch Fixer runs
+  # into the org sandbox cap, starving the reviewer itself. A dispatch failure
+  # must never mark product CI red again. Guarded by
+  # backend/tests/architecture/test_workflow_structure.py.
 
   self-report-ci:
     name: Self-report CI stage to Modulo

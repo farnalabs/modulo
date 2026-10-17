@@ -26,7 +26,14 @@
             >{{ $t('common.execution_origin.dispatched') }}</span>
           </div>
           <p class="mt-1 text-sm text-muted-foreground">
-            {{ $t('views.RunDetailView.pipeline_label') }} <span class="font-medium text-foreground">{{ formatRun(run) }}</span>
+            {{ $t('views.RunDetailView.pipeline_label') }} <RunPipelineVersionLink
+              :pipeline-id="run.pipeline_id"
+              :pipeline-name="run.pipeline_name"
+              :snapshot-id="run.snapshot_id ?? null"
+              :snapshot-version="run.snapshot_version ?? null"
+              class="font-medium text-foreground"
+              data-testid="run-detail-pipeline-version-link"
+            >{{ formatRun(run) }}</RunPipelineVersionLink>
           </p>
           <p class="text-xs text-muted-foreground">
             {{ $t('views.RunDetailView.run_id_label') }} <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{{ shortId(run.run_id) }}</code>
@@ -140,16 +147,31 @@
         {{ hitlMessage.text }}
       </div>
 
-      <!-- Timestamps -->
-      <div v-if="runTimestamps" class="flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground">
-        <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.created') }}</span> {{ runTimestamps.created }}</div>
-        <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.started') }}</span> {{ runTimestamps.started }}</div>
-        <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.completed') }}</span> {{ runTimestamps.completed }}</div>
-        <div data-testid="run-detail-trigger-actor"><span class="font-medium text-foreground">{{ $t('views.RunDetailView.triggered_by') }}</span> {{ run.trigger_actor || triggerTypeLabel(run.trigger_type, t) }}</div>
-        <div data-testid="run-detail-heartbeat" id="run-detail-heartbeat-anchor">
-          <span class="font-medium text-foreground">{{ $t('views.RunDetailView.last_heartbeat') }}</span>{{ ' ' }}<span :class="isHeartbeatStale(heartbeatAge) ? 'font-medium text-warning-text' : ''">{{ formatHeartbeatAge(heartbeatAge, t) }}<span v-if="isHeartbeatStale(heartbeatAge)"> ({{ $t('views.RunDetailView.stale') }})</span></span>
+      <!-- Timestamps (FAR-1839). Aligned label column instead of a wrapping
+           inline list: every label starts at the same x and every value
+           starts at the same x, on desktop and on narrow viewports alike.
+           Each row is a real layout box (never display:contents) so the
+           warnings strip's #run-detail-heartbeat-anchor target still has a
+           box to scrollIntoView(). The explicit {{ ' ' }} between label and
+           value keeps the two readable as "Label value" in copied/screen-read
+           text (FAR-624: Vue condenses newline-only separation away). -->
+      <dl v-if="runTimestamps" class="space-y-1 text-xs text-muted-foreground">
+        <div class="flex gap-3 sm:gap-4">
+          <dt class="w-28 shrink-0 font-medium text-foreground">{{ $t('views.RunDetailView.created') }}</dt>{{ ' ' }}<dd class="min-w-0 break-words">{{ runTimestamps.created }}</dd>
         </div>
-      </div>
+        <div class="flex gap-3 sm:gap-4">
+          <dt class="w-28 shrink-0 font-medium text-foreground">{{ $t('views.RunDetailView.started') }}</dt>{{ ' ' }}<dd class="min-w-0 break-words">{{ runTimestamps.started }}</dd>
+        </div>
+        <div class="flex gap-3 sm:gap-4">
+          <dt class="w-28 shrink-0 font-medium text-foreground">{{ $t('views.RunDetailView.completed') }}</dt>{{ ' ' }}<dd class="min-w-0 break-words">{{ runTimestamps.completed }}</dd>
+        </div>
+        <div data-testid="run-detail-trigger-actor" class="flex gap-3 sm:gap-4">
+          <dt class="w-28 shrink-0 font-medium text-foreground">{{ $t('views.RunDetailView.triggered_by') }}</dt>{{ ' ' }}<dd class="min-w-0 break-words">{{ run.trigger_actor || triggerTypeLabel(run.trigger_type, t) }}</dd>
+        </div>
+        <div data-testid="run-detail-heartbeat" id="run-detail-heartbeat-anchor" class="flex gap-3 sm:gap-4">
+          <dt class="w-28 shrink-0 font-medium text-foreground">{{ $t('views.RunDetailView.last_heartbeat') }}</dt>{{ ' ' }}<dd class="min-w-0 break-words" :class="isHeartbeatStale(heartbeatAge) ? 'font-medium text-warning-text' : ''">{{ heartbeatText }}<span v-if="isHeartbeatStale(heartbeatAge)"> ({{ $t('views.RunDetailView.stale') }})</span></dd>
+        </div>
+      </dl>
 
       <!-- Live cost + tokens so far (non-terminal runs only) -->
       <div v-if="liveCostPresent" data-testid="run-detail-live-cost" class="mt-2 mb-4 text-xs text-muted-foreground">
@@ -916,13 +938,14 @@ import JsonViewer from '../components/shared/JsonViewer.vue'
 import HitlReviewCard from '../components/hitl/HitlReviewCard.vue'
 import KnownFixesPanel from '../components/shared/KnownFixesPanel.vue'
 import AnalyzeRunButton from '../components/runs/AnalyzeRunButton.vue'
+import RunPipelineVersionLink from '../components/runs/RunPipelineVersionLink.vue'
 import { isAnalyzableFailure, type AnalyzeRunInfo } from '../components/runs/analyzeRun'
 import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
 import { formatApiError } from '../lib/api/formatError'
 import { requestRunCancellation, requestRunRerun } from '../lib/api/runs'
 import { isHitlActionableStatus, isTerminalStatus } from '../constants/runStatuses'
-import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, runStatusLabel, runStatusDescription, cancelReasonLabel, queuedCapacityReason, isDispatchedRun, isSupersededRun, type RunCapacity } from '../utils/runUtils'
+import { triggerTypeLabel, heartbeatAgeSeconds, heartbeatDisplayText, isHeartbeatStale, runStatusLabel, runStatusDescription, cancelReasonLabel, queuedCapacityReason, isDispatchedRun, isSupersededRun, type RunCapacity } from '../utils/runUtils'
 import { shortId, formatRun } from '../utils/format'
 import { prettyPrintLog, stripAnsi, hasAnsiSequences } from '../utils/logTransforms'
 import { formatMoney } from '../lib/money'
@@ -2136,6 +2159,23 @@ const heartbeatAge = computed<number | null>(() => {
   const r = run.value
   if (!r) return null
   return heartbeatAgeSeconds(r.heartbeat_at, r.status, heartbeatNow.value)
+})
+
+// FAR-1839: what the metadata row actually RENDERS for "Last heartbeat".
+// `heartbeatAge` above stays null on a terminal run (it drives staleness, and
+// staleness is meaningless once the run has ended), so the value is resolved
+// separately: terminal runs show the absolute local time of the kept
+// `heartbeat_at`, live runs show the humanized age, and only a genuinely
+// absent heartbeat renders "—".
+//
+// The non-null assertion cannot fail: this computed's only consumer is the
+// metadata <dl> under `v-if="runTimestamps"`, and `runTimestamps` is already
+// null whenever `run` is null — so an absent run never reaches this
+// expression. A defensive `if (!r)` guard here would be dead code, and its
+// never-taken true arm would fail the changed-lines branch-coverage gate.
+const heartbeatText = computed<string>(() => {
+  const r = run.value!
+  return heartbeatDisplayText(r.heartbeat_at, r.status, heartbeatNow.value, t, formatTimestamp)
 })
 
 // Run-level warnings summary (strip at the top of the page). Aggregates the

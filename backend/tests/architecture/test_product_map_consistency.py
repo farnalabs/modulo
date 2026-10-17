@@ -33,6 +33,8 @@ from __future__ import annotations
 
 import functools
 import re
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 
 import yaml
@@ -51,6 +53,15 @@ ROUTER_PATH = REPO_ROOT / "frontend" / "src" / "router" / "index.ts"
 NAVIGATION_PATH = REPO_ROOT / "frontend" / "src" / "config" / "navigation.ts"
 LOCALE_PATH = REPO_ROOT / "frontend" / "src" / "locales" / "en-US.js"
 SVG_ICON_PATH = REPO_ROOT / "frontend" / "src" / "components" / "SvgIcon.vue"
+
+#: Shared nav parsing + invariant helpers — the SAME module the pre-commit / CI
+#: gate ``scripts/run_validate_nav_config.py`` imports, so the gate and this
+#: suite can never drift into enforcing different rules against navigation.ts
+#: (the silent half of a two-parser drift is the looser reader returning an
+#: empty problem set).
+_nav_shared_loader = SourceFileLoader("nav_config_shared", str(REPO_ROOT / "scripts" / "nav_config_shared.py"))
+_nav_shared = module_from_spec(spec_from_loader("nav_config_shared", _nav_shared_loader))
+_nav_shared_loader.exec_module(_nav_shared)
 
 # Auth / public / dev / error plumbing that is intentionally not part of the
 # product map (no breadcrumb or sidebar surface a user navigates to).
@@ -150,35 +161,16 @@ def test_manifest_route_entries_have_core_fields():
 def test_sidebar_group_references_resolve():
     data = _load_manifest()
     groups = set(data.get("sidebar_groups", {}))
-    routes = data["routes"]
-    dangling = {
-        path: entry["sidebar_group"]
-        for path, entry in routes.items()
-        if isinstance(entry, dict) and entry.get("sidebar_group") and entry["sidebar_group"] not in groups
-    }
+    dangling = _nav_shared.sidebar_group_references(data["routes"], groups)
     assert not dangling, "manifest routes reference undeclared sidebar_groups:\n" + "\n".join(
-        f"  {path} -> {group}" for path, group in sorted(dangling.items())
+        f"  {path} -> {group}" for path, group in sorted(dangling)
     )
 
 
 def test_sidebar_order_unique_within_group():
-    routes = _load_manifest()["routes"]
-    seen: dict[str, dict[int, str]] = {}
-    conflicts: list[str] = []
-    for path, entry in routes.items():
-        if not isinstance(entry, dict):
-            continue
-        group = entry.get("sidebar_group")
-        order = entry.get("sidebar_order")
-        if not group or order is None or entry.get("type") == "detail_page":
-            continue
-        group_orders = seen.setdefault(group, {})
-        if order in group_orders:
-            conflicts.append(f"{group} order {order}: {group_orders[order]} and {path}")
-        else:
-            group_orders[order] = path
+    conflicts = _nav_shared.sidebar_order_conflicts(_load_manifest()["routes"])
     assert not conflicts, "duplicate sidebar_order within a group leaves the sort order ambiguous:\n" + "\n".join(
-        conflicts
+        f"  {group} order {order}: {first} and {second}" for group, order, first, second in conflicts
     )
 
 
@@ -582,6 +574,7 @@ OWNED_PAGES = {
     "/composites/:id/editor": "frontend/src/views/pipeline/CompositeEditorView.vue",
     "/pipelines/:id/editor": (
         "frontend/src/views/PipelineEditorView.vue",
+        "frontend/src/components/pipeline/PipelineSnapshotTimeline.vue",
         "frontend/src/components/pipeline/SandboxCommandsEditor.vue",
         "frontend/src/components/pipeline/SnapshotLockCard.vue",
     ),
@@ -863,16 +856,7 @@ def test_every_non_auth_router_route_is_mapped():
 
 def _route_config_entries() -> dict[str, tuple[str, str]]:
     """Map sidebar route name -> (icon, labelKey) from ``navigation.ts``."""
-    text = NAVIGATION_PATH.read_text(encoding="utf-8")
-    block = text.split("const routeConfigMap", 1)[1].split("const groupLabelKeyMap", 1)[0]
-    entries: dict[str, tuple[str, str]] = {}
-    for key, icon, label_key in re.findall(
-        r"^\s{2}['\"]?([A-Za-z][\w-]*)['\"]?:\s*\{[^}]*icon: '([^']+)'[^}]*labelKey: '([^']+)'",
-        block,
-        re.MULTILINE,
-    ):
-        entries[key] = (icon, label_key)
-    return entries
+    return _nav_shared.route_config_entries(NAVIGATION_PATH.read_text(encoding="utf-8"))
 
 
 def _svg_icon_map_keys() -> frozenset[str]:
@@ -952,27 +936,16 @@ def _load_locale_object() -> dict:
 
 def test_sidebar_routes_have_navigation_icon_and_label():
     routes = _load_manifest()["routes"]
-    config = _route_config_entries()
-    uncovered = {
-        path: entry["name"]
-        for path, entry in routes.items()
-        if isinstance(entry, dict)
-        and entry.get("sidebar_group")
-        and entry.get("type") != "detail_page"
-        and entry.get("name") not in config
-    }
+    uncovered = _nav_shared.nav_routes_missing_config(routes, set(_route_config_entries()))
     assert not uncovered, (
         "sidebar-linked manifest routes missing a routeConfigMap icon/labelKey "
         "(nav falls back to a generic icon and an unresolved 'nav.<name>' label):\n"
-        + "\n".join(f"  {path} -> {name}" for path, name in sorted(uncovered.items()))
+        + "\n".join(f"  {path} -> {name}" for path, name in sorted(uncovered))
     )
 
 
 def test_navigation_config_keys_resolve_to_manifest_routes():
-    manifest_names = {
-        entry["name"] for entry in _load_manifest()["routes"].values() if isinstance(entry, dict) and entry.get("name")
-    }
-    stale = sorted(set(_route_config_entries()) - manifest_names)
+    stale = _nav_shared.dead_config_keys(_load_manifest()["routes"], set(_route_config_entries()))
     assert not stale, (
         "routeConfigMap entries with no corresponding manifest route (dead sidebar config):\n"
         + "\n".join(f"  {name}" for name in stale)

@@ -45,9 +45,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_PIPELINE_NOT_FOUND, MSG_THIS_FEATURE_NOT_AVAILABLE
 from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import (
     get_db_session,
-    require_feature,
     require_permission,
     require_permission_any_credential,
     require_team_membership_or_admin,
@@ -89,6 +89,7 @@ from modulo.core.capability_scope import (
     validate_allowed_connectors_subset,
     validate_no_self_tools,
 )
+from modulo.core.exceptions import SnapshotLockNotAvailableError
 from modulo.core.graph_validator import HITL_DESCRIPTION_MIN_LENGTH, GraphValidator
 from modulo.core.pipeline_engine.git_content import GitContentRefError, validate_agent_git_content_values
 from modulo.core.pipeline_engine.scatter_join import (
@@ -130,6 +131,7 @@ from modulo.db.crud.pipeline import (
     CIRCUIT_BREAKER_THRESHOLD_CHANGE_DENIED_EVENT,
     CIRCUIT_BREAKER_THRESHOLD_MAX,
     CircuitBreakerThresholdChangeDenied,
+    GraphWriteRecording,
     PipelineHasActiveRunsError,
     archive_pipeline,
     check_pipeline_name_available,
@@ -151,10 +153,11 @@ from modulo.db.crud.pipeline import (
 )
 from modulo.db.crud.pipeline_folder import move_pipeline_to_folder
 from modulo.db.crud.pipeline_owner import is_account_in_team
-from modulo.db.crud.pipeline_snapshot import create_snapshot_edit
+from modulo.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS, create_snapshot_edit
 from modulo.db.crud.pipeline_snapshot_versioning import (
     delete_snapshot,
     diff_snapshots,
+    get_snapshot_by_version,
     get_snapshot_detail,
     list_snapshots,
     rollback_to_snapshot,
@@ -180,6 +183,7 @@ _CODE_PIPELINE_GRAPH_UPDATE = "pipeline.graph.update"
 _CODE_PIPELINE_UPDATE = "pipeline.update"
 
 _MSG_NOT_TEAM_MEMBER = "Not a member of the team that owns this resource"
+_MSG_NODE_NOT_FOUND = "Node not found"
 
 # FAR-1184: raising or clearing a pipeline's spend circuit-breaker threshold
 # requires the same org-admin permission as the circuit-breaker reset.
@@ -294,6 +298,38 @@ def _raise_db_migration_error(exc: ProgrammingError) -> None:
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+    ) from None
+
+
+def _raise_snapshot_lock_busy(exc: SnapshotLockNotAvailableError, *, log_prefix: str, action: str) -> NoReturn:
+    """Translate a contended edit-snapshot lock into the retryable 503 contract.
+
+    FAR-1810: every explicit graph save now creates an edit snapshot, and that
+    snapshot's bounded graph-copy lock is shared with concurrent RUN starts — so
+    a save can legitimately lose the race. ``_acquire_snapshot_lock`` /
+    ``_acquire_snapshot_allocation_lock`` raise the typed
+    ``SnapshotLockNotAvailableError``, a plain ``Exception`` carrying no
+    SQLSTATE, so neither this module's route-local ``except SQLAlchemyError``
+    arms nor ``handle_db_errors``'s 55P03 -> 409 map can see it: it fell
+    through to the generic ``Exception -> 500 "Internal server error"`` arm and
+    reported a transient busy lock as a server bug.
+
+    This is CONTENTION, not a fault: answer the same retryable 503 every
+    run-start surface already answers (``routes.runs``, ``webhooks``, ``slack``,
+    ``triggers``), preceded by the same structured ``snapshot_lock_unavailable``
+    record so the event stays observable. The action word names the operation
+    the caller should retry.
+    """
+    logger.warning("%s.snapshot_lock_busy: %s", log_prefix, exc)
+    log_service_unavailable(
+        "snapshot_lock_unavailable",
+        exc,
+        route=log_prefix,
+        detail=f"snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts",
+    )
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=(f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — retry the {action}"),
     ) from None
 
 
@@ -1036,7 +1072,7 @@ class PipelineResponse(BaseModel):
     default_autonomy_level: str | None = None
     # FAR-1163: nullable ceiling (NULL = effective ceiling is the default).
     max_autonomy_level: str | None = None
-    # FAR-1175 (ADR 043 S1): the runtime earned autonomy level (NULL until a
+    # FAR-1175 (ADR 062 S1): the runtime earned autonomy level (NULL until a
     # manual promote/demote sets it) and when it last moved. Read LIVE at every
     # HITL gate when the ``autonomy_gating`` flag is on.
     earned_autonomy_level: str | None = None
@@ -3212,7 +3248,305 @@ async def _sync_agent_row_commands(
     return changed
 
 
-@router.patch(
+# ---------------------------------------------------------------------------
+# FAR-1829: node-targeted patch — ``PATCH /{pipeline_id}/graph/nodes/{node_id}``
+# ---------------------------------------------------------------------------
+#
+# Editing ONE field of ONE node used to require a whole-graph rewrite: the
+# caller re-read the graph and faithfully re-emitted every node, including
+# multi-KB ``agent_commands`` and masked credentials, so a one-integer change
+# risked silently dropping a field. This route is a THIN ADAPTER over the
+# EXISTING full-graph write transaction, not a second writer: it loads the
+# stored node, shallow-merges the allowlisted fields the caller supplied, and
+# hands the resulting MERGED full graph to ``_apply_graph_update`` — so the row
+# lock, the gate-weakening diff, the guardrail-strip guard, the
+# ``agent_commands``→Agent-row sync, the save-time graph validation and the
+# ``pipeline.graph_updated`` audit all fire exactly as they do for a full
+# replace. The merge-then-hand-off order is load-bearing: a body-only
+# validation could never check ``stall_timeout_seconds`` against the STORED
+# ``timeout_seconds`` it was not given.
+#
+# There is deliberately NO precondition / ``predicted_updated_at`` token and no
+# 409: the patch is atomic under the existing row lock and needs no read before
+# the write — that read-free property is the point of the feature. There is no
+# op-list either (no ``set``/``patch``/``unset`` verbs); the collection-level
+# ``PATCH /graph`` is left vacant on purpose so a multi-node op-list could land
+# there later if a real need appears.
+
+
+class PipelineGraphNodePatch(BaseModel):
+    """Partial node body for the node-targeted graph patch (FAR-1829).
+
+    A CLOSED allowlist — anything the model does not declare is rejected by
+    ``extra="forbid"`` with a typed 422 field path naming the offending key
+    (``body.env_vars: Extra inputs are not permitted``), so a partial body can
+    never be an arbitrary-key passthrough.
+
+    The INCLUSION rule is absolute-value assignment only — no per-item
+    operations: a declared field is wholly replaced by the supplied value,
+    never incremented, appended to or edited per entry. That is why the
+    list-typed ``agent_commands`` and ``egress_allowlist`` fields ARE declared
+    (the whole list replaces the stored one) while op-list verbs (``set`` /
+    ``patch`` / ``unset``) do not exist on this route at all.
+
+    Classes of field deliberately NOT declared (these are examples — the
+    exhaustive rule is simply "any key this model does not declare is a 422"):
+
+    * the credential-bearing dicts (``env_vars``, ``context_files``,
+      ``composite_parameter_values``, ``parameter_overrides``) — a partial body
+      must never be able to drop or half-write a secret, so those fields are
+      unpatchable rather than validated;
+    * the structural / topology fields (``id``, ``node_type``, ``agent_id``,
+      ``position``, and every edge) — the path's ``node_id`` addresses the node
+      and is never a body field, and a node patch changes no topology;
+    * ``agent_prompt`` — on an ``agent`` node the runtime reads the bound
+      Agent row's prompt instead, so a node-level patch would read back right
+      while the run used the old prompt, and unlike ``agent_commands`` there
+      is no Agent-row sync that could keep the two in step.
+
+    Field annotations and constraints MIRROR the same fields on
+    :class:`PipelineGraphNode` — the annotation plus every ``ge`` / ``le`` /
+    ``max_length`` / ``Literal`` member is pinned field-by-field by
+    ``tests/unit/api/test_pipeline_graph_node_patch.py`` — so a value the body
+    accepts within a declared bound is a value the merged node's own field
+    validator accepts. The single deliberate divergence is ``None``-widening:
+    the four non-nullable booleans below are widened here for a uniform body
+    shape — ``enable_heartbeat`` and ``idempotent`` to ``bool | None``, and the
+    strict ``single_pr_per_run`` and ``await_completion`` to
+    ``StrictBool | None`` — and an explicit ``null`` on them is rejected by the
+    MERGED node's ``bool`` field (422), never stored.
+
+    ``None`` semantics therefore depend on the field:
+
+    * NULLABLE on the node (``label``, ``description``,
+      ``stall_timeout_seconds``, ...): an explicitly supplied ``null`` (present
+      in ``model_fields_set``) CLEARS the stored value;
+    * the four non-nullable booleans (``enable_heartbeat``, ``idempotent``,
+      ``single_pr_per_run``, ``await_completion``): ``null`` is a 422 from the
+      merged node's own validation (see above);
+    * an ABSENT key always leaves the stored value untouched.
+    """
+
+    # Rejected fields are reported by the standard request-validation path, so
+    # extra keys carry no default handler of their own — forbid, do not ignore.
+    model_config = {"extra": "forbid"}
+
+    label: str | None = Field(default=None, max_length=255)
+    description: str | None = Field(default=None, max_length=2000)
+    timeout_seconds: int | None = Field(
+        default=None,
+        ge=60,
+        le=604800,
+        description="Per-node timeout override (60-604800s). Overrides pipeline node_timeout_seconds.",
+    )
+    stall_timeout_seconds: int | None = Field(
+        default=None,
+        ge=60,
+        le=604800,
+        description="Stall window (seconds) before the idle watchdog treats the agent as stalled. "
+        "Validated against the MERGED node's timeout_seconds at save time.",
+    )
+    enable_heartbeat: bool | None = Field(
+        default=None,
+        description="Enable the connection-liveness (heartbeat) stall channel.",
+    )
+    idempotent: bool | None = Field(
+        default=None,
+        description="Whether the node is logically safe to re-run.",
+    )
+    single_pr_per_run: StrictBool | None = Field(
+        default=None,
+        description="Install the run-scoped one-PR-per-run gh shim in the node's sandbox (sandbox_agent only).",
+    )
+    await_completion: StrictBool | None = Field(
+        default=None,
+        description="dispatch nodes only: poll get_run_status to a terminal status after firing once.",
+    )
+    egress_policy: Literal["default", "deny_all", "selected"] | None = Field(
+        default=None,
+        description="Sandbox egress control (sandbox_agent only).",
+    )
+    # Absolute assignment (the whole list replaces the stored one) — the
+    # required companion of ``egress_policy`` above: the node's own
+    # ``_validate_sandbox_egress_allowlist_config`` fail-closes the pair
+    # ("selected" REQUIRES a non-empty allowlist, any other policy must NOT
+    # carry one), so patching either half alone could only ever 422 — the
+    # coupled pair must be patchable together.
+    egress_allowlist: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="Host:port egress allowlist (sandbox_agent, egress_policy='selected' only); "
+        "the whole list replaces the stored one.",
+    )
+    wallclock_budget_seconds: int | None = Field(
+        default=None,
+        description="Wall-clock spend budget in seconds for the node's sandbox.",
+    )
+    stdout_max_bytes: int | None = Field(
+        default=None,
+        description="Max retained stdout/stderr bytes when stdout_retention_mode=='full'.",
+    )
+    stdout_retention_mode: Literal["tail", "full"] | None = Field(
+        default=None,
+        description="Per-node stdout/stderr retention mode (sandbox_agent only).",
+    )
+    stdout_percentage_delta: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="stdout-delta stall detector: fraction of new stdout that must differ to count as activity.",
+    )
+    # Absolute assignment (the whole list replaces the stored one) — not a
+    # per-item op. Included because the adapter reuses ``_apply_graph_update``,
+    # which runs the SAME ``_sync_agent_row_commands`` Agent-row sync inside the
+    # same transaction as a full replace, so "what you PATCH is what runs"
+    # (FAR-488) holds for this route too.
+    agent_commands: list[str] | None = Field(
+        default=None,
+        description="sandbox_agent node command list; the whole list replaces the stored one and is "
+        "synced to the bound Agent row in the same transaction.",
+    )
+    # script mode runs ``script_command`` VERBATIM straight off the node at run
+    # time (``sandbox_mode``); no Agent row holds a copy of it, so there is
+    # nothing to sync and the node value is authoritative by construction.
+    script_command: str | None = Field(
+        default=None,
+        description="sandbox_agent script-mode command, run verbatim (mutually exclusive with agent_commands).",
+    )
+
+
+def _joined_validation_detail(exc: ValidationError) -> str:
+    """Render a Pydantic ``ValidationError`` as ``<dotted.path>: <message>`` lines.
+
+    A MODEL-level error (a ``model_validator`` rejecting a cross-field
+    combination, e.g. ``await_completion`` on a non-dispatch node) carries an
+    EMPTY ``loc`` — it is not attributable to one field, so it renders as the
+    bare message (whose Pydantic text already names the offending field)
+    rather than a ``": "`` prefix pointing at nothing.
+
+    Uses :func:`_safe_validation_errors` so no ``input`` value (which for a
+    model-level error is the ENTIRE node dict, credentials included) can reach
+    the response — the same redaction every other write path applies.
+    """
+    parts: list[str] = []
+    for err in _safe_validation_errors(exc):
+        loc = ".".join(str(part) for part in err.get("loc", ()))
+        msg = str(err.get("msg", ""))
+        parts.append(f"{loc}: {msg}" if loc else msg)
+    return "; ".join(parts)
+
+
+def _patched_node_models(
+    stored_nodes: list[dict[str, Any]],
+    *,
+    target_id: uuid.UUID,
+    patch: PipelineGraphNodePatch,
+) -> list[PipelineGraphNode]:
+    """Merge ``patch`` into its target node and (re)validate every node.
+
+    The MERGED target node is held to the STRICT write bar (the same bar a
+    request-payload node must clear on a full replace) with no legacy
+    fallback: it is being written, and its type-specific rules are exactly the
+    cross-field invariants a partial-body validation could never check (e.g.
+    ``single_pr_per_run`` is sandbox_agent-only, ``agent_commands`` and
+    ``script_command`` are mutually exclusive). Tolerating a violation there
+    would persist a declared-but-unread field — a silent no-op at run time.
+
+    The UNCHANGED nodes keep the stored-data tolerance
+    (:func:`_stored_node_model`, the ONE strict-then-``legacy_read``
+    implementation, shared with :func:`_graph_nodes_as_models`): they were
+    valid at their own save time and a rule tightened since must not block an
+    unrelated one-field edit any more than it blocks a node conversion.
+    """
+    key = str(target_id)
+    target_raw: dict[str, Any] | None = None
+    for raw in stored_nodes:
+        if isinstance(raw, dict) and str(raw.get("id")) == key:
+            target_raw = raw
+            break
+    if target_raw is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_NODE_NOT_FOUND)
+
+    merged = dict(target_raw)
+    for field_name in patch.model_fields_set:
+        merged[field_name] = getattr(patch, field_name)
+
+    try:
+        target_model = PipelineGraphNode.model_validate(merged)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Node {key} is not a valid graph node after merging the patch: {_joined_validation_detail(exc)}",
+        ) from None
+
+    # Preserve the stored node ORDER — only the target's model changes.
+    models: list[PipelineGraphNode] = []
+    for raw in stored_nodes:
+        if not isinstance(raw, dict):
+            continue
+        models.append(target_model if str(raw.get("id")) == key else _stored_node_model(raw))
+    return models
+
+
+def _stored_node_model(raw: dict[str, Any]) -> PipelineGraphNode:
+    """Stored node dict → model, using the stored-data tolerance (strict, then legacy)."""
+    try:
+        return PipelineGraphNode.model_validate(raw)
+    except ValidationError:
+        try:
+            return PipelineGraphNode.model_validate(raw, context=LEGACY_READ_CONTEXT)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Stored graph node {raw.get('id', 'unknown')} no longer validates "
+                f"against the current node schema: {_joined_validation_detail(exc)}",
+            ) from exc
+
+
+def _stored_edge_model(row: Any) -> PipelineGraphEdge:
+    """Persisted ``PipelineEdge`` row → model, unchanged by the node patch.
+
+    Same strict-then-``legacy_read`` tolerance as the stored nodes: a node
+    patch never touches an edge, so an edge rule tightened since its own save
+    time must not block the patch.
+    """
+    raw = _edge_to_dict(row)
+    try:
+        return PipelineGraphEdge.model_validate(raw)
+    except ValidationError:
+        try:
+            return PipelineGraphEdge.model_validate(raw, context=LEGACY_READ_CONTEXT)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Stored pipeline edge {raw.get('id', 'unknown')} no longer validates "
+                f"against the current edge schema: {_joined_validation_detail(exc)}",
+            ) from exc
+
+
+def _build_node_patch_graph(
+    stored_nodes: list[dict[str, Any]],
+    edge_rows: list[Any],
+    *,
+    node_id: uuid.UUID,
+    patch: PipelineGraphNodePatch,
+) -> PipelineGraphUpdate:
+    """Load + merge + revalidate the FULL graph for the node-targeted patch.
+
+    Returns the whole graph as the ``PipelineGraphUpdate`` payload the
+    full-graph write consumes, so the caller can hand it straight to
+    ``_apply_graph_update``. Read + merge only — nothing here writes.
+    """
+    nodes = _patched_node_models(stored_nodes, target_id=node_id, patch=patch)
+    try:
+        return PipelineGraphUpdate(nodes=nodes, edges=[_stored_edge_model(row) for row in edge_rows])
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Merged graph rejected: {_joined_validation_detail(exc)}",
+        ) from None
+
+
+@router.put(
     "/{pipeline_id}/graph",
     dependencies=[Depends(audited("pipeline_graph_replaced", "pipeline", principal_dep=get_current_tenant_user))],
 )
@@ -3268,6 +3602,15 @@ async def replace_pipeline_graph_endpoint(
                 principal.organisation_id,
                 pipeline_owner_team_id=pipeline.owner_team_id,
             )
+            # FAR-488a + FAR-1810: keep the bound Agent rows in step with
+            # node-level agent_commands PATCHes BEFORE the write, because the
+            # write mints the FAR-1810 edit snapshot — and the snapshot copy's
+            # ``_materialize_agent_fields`` OVERWRITES each bound node's
+            # ``agent_commands`` with the Agent-row value. Syncing first makes
+            # the snapshot (and any rollback replaying it) pin the command the
+            # operator just saved; pre-change the sync ran AFTER the write, so
+            # the snapshot carried the stale command.
+            await _sync_agent_row_commands(session, org_id=principal.organisation_id, nodes=node_data)
             graph = await replace_pipeline_graph(
                 session,
                 pipeline_id=pipeline_id,
@@ -3280,12 +3623,9 @@ async def replace_pipeline_graph_endpoint(
                 is_guardrail_admin=_is_guardrail_admin(principal),
                 grants_deny_privilege=_grants_deny_privilege(principal),
                 grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
+                recording=GraphWriteRecording(record_snapshot=True),
             )
             if graph is not None:
-                # FAR-488a: keep the bound Agent rows in step with node-level
-                # agent_commands PATCHes INSIDE the same transaction, so the
-                # next snapshot materializes the command the operator saved.
-                await _sync_agent_row_commands(session, org_id=principal.organisation_id, nodes=node_data)
                 issues = await _validate_graph_save(
                     session,
                     org_id=principal.organisation_id,
@@ -3307,6 +3647,11 @@ async def replace_pipeline_graph_endpoint(
         # write is rolled back with it. Surface 422 instead of the decorator's
         # 500.
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1810: the edit snapshot's bounded lock lost its race against a
+        # concurrent run start — retryable contention, never the decorator's
+        # generic 500.
+        _raise_snapshot_lock_busy(exc, log_prefix="pipelines.replace_graph", action="save")
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
@@ -3314,6 +3659,100 @@ async def replace_pipeline_graph_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     nodes, edges = graph
     return _graph_response(nodes, edges, validation_issues=issues)
+
+
+@router.patch(
+    "/{pipeline_id}/graph/nodes/{node_id}",
+    dependencies=[Depends(audited("pipeline_graph_node_patched", "pipeline", principal_dep=get_current_tenant_user))],
+)
+@handle_db_errors("pipelines.patch_graph_node")
+async def patch_pipeline_graph_node_endpoint(
+    pipeline_id: uuid.UUID,
+    node_id: uuid.UUID,
+    req: PipelineGraphNodePatch,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_GRAPH_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> PipelineGraphResponse:
+    """FAR-1829: patch ONE node's allowlisted scalar fields, atomically.
+
+    Same permission (``pipeline.graph.update``) and team-scope gate as the
+    sibling graph writes, plus the same in-transaction team re-check. The
+    handler itself is deliberately tiny: the read/merge/validation adapter
+    (:func:`_build_node_patch_graph`) runs under the locked pipeline row, and
+    the write is delegated to :func:`_apply_graph_update` — the SAME function
+    the ``PATCH /{pipeline_id}`` payload's ``graph_json`` path uses — so every
+    guard, the row lock, the save-time graph validation and the
+    ``pipeline.graph_updated`` audit fire through one shared write path rather
+    than a second, parallel one. The Agent-row ``agent_commands`` sync runs in
+    that shared path too: ``_apply_graph_update`` calls it AFTER the
+    masked-echo merge and BEFORE ``replace_pipeline_graph`` writes, so the
+    FAR-1810 edit snapshot the write mints pins the command this patch just
+    saved rather than the stale pre-patch one.
+
+    Unknown ``node_id`` → 404 (a missing pipeline already 404s in the team
+    gate). A body key outside :class:`PipelineGraphNodePatch`'s allowlist → 422
+    with a typed ``body.<field>`` path. No precondition token, no 409: the
+    merge happens under the row lock, so there is nothing to race.
+    """
+    issues: list[GraphValidationIssue] = []
+
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            # Locks the pipeline row FOR UPDATE and re-verifies the team gate
+            # inside THIS transaction — the lock the merge and the delegated
+            # write both run under, so a concurrent graph write cannot slip
+            # between the read of the stored node and the write of the merge.
+            locked = await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+            stored_nodes, edge_rows = await _load_locked_pipeline_graph(
+                session,
+                pipeline_id,
+                pipeline_row=locked,
+            )
+            graph_json = _build_node_patch_graph(
+                stored_nodes,
+                edge_rows,
+                node_id=node_id,
+                patch=req,
+            )
+            # ``updates={}``: a node patch never changes pipeline-level fields,
+            # so the effective owner team is the row's current one (which is
+            # what ``_apply_graph_update`` falls back to).
+            # FAR-1829: the node-targeted patch DECLARES the field names it
+            # supplied; it is also an explicit save, so it requests the
+            # FAR-1810 edit snapshot like every other graph-write surface.
+            saved_nodes, saved_edges, issues = await _apply_graph_update(
+                session,
+                pipeline_id=pipeline_id,
+                org_id=principal.organisation_id,
+                principal=principal,
+                graph_json=graph_json,
+                updates={},
+                recording=GraphWriteRecording(
+                    record_snapshot=True,
+                    patched_fields=sorted(req.model_fields_set),
+                ),
+            )
+    except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied) as exc:
+        await _handle_graph_write_denials(
+            session,
+            principal=principal,
+            pipeline_id=pipeline_id,
+            exc=exc,
+        )
+    except GitContentRefError as exc:
+        # Parity with the full-replace route: the Agent-row command sync
+        # failed closed INSIDE the transaction, so the graph write rolled back
+        # with it. Surface 422 instead of the decorator's 500.
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    # No ``saved_* is None`` arm: a vanished pipeline 404s inside
+    # ``_apply_graph_update`` (and earlier still, in the team gate), so the
+    # only way to reach here is a committed write.
+    return _graph_response(saved_nodes, saved_edges, validation_issues=issues)
 
 
 def _is_admin(principal: TenantPrincipal) -> bool:
@@ -3601,15 +4040,33 @@ async def _apply_graph_update(
     principal: TenantPrincipal,
     graph_json: PipelineGraphUpdate,
     updates: dict[str, Any],
-) -> None:
-    """Apply a graph replacement shipped inside a PATCH update payload."""
+    recording: GraphWriteRecording | None = None,
+) -> tuple[list[dict[str, Any]], list[PipelineEdge], list[GraphValidationIssue]]:
+    """Apply a graph replacement shipped inside a PATCH update payload.
+
+    ``recording`` (FAR-1810 + FAR-1829) is the caller's declaration of how the
+    write is recorded. It is forwarded VERBATIM to the shared
+    :func:`replace_pipeline_graph` write, so the caller owns both halves: the
+    node-targeted patch route passes
+    ``GraphWriteRecording(record_snapshot=True, patched_fields=<declared
+    field names>)`` and the ``graph_json``-inside-``PATCH`` caller passes
+    ``GraphWriteRecording(record_snapshot=True)`` — this path is an explicit
+    save, so BOTH callers request the FAR-1810 edit snapshot exactly as the
+    hard-coded flag did before the two recording knobs were folded into one
+    value object. ``patched_fields`` reaches the ``pipeline.graph_updated``
+    audit payload only when the caller declared some, so every non-patch
+    caller's payload shape is unchanged. The three-value return (saved nodes,
+    saved edges, advisory validation issues) is consumed by the node-targeted
+    patch route; the pre-existing ``graph_json``-inside-``PATCH`` caller
+    ignores it, so its behaviour is unchanged.
+    """
     node_data, edge_data, validator_graph, graph_bindings = _prepare_graph_write(graph_json)
     existing = await get_pipeline(session, pipeline_id, organisation_id=org_id)
     if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     effective_owner_team_id = updates.get("owner_team_id", existing.owner_team_id)
     # FAR-1181: resolve mask echoes against the stored graph (parity with the
-    # PATCH /graph endpoint) — a full-replace write round-tripping the masked
+    # PUT /graph endpoint) — a full-replace write round-tripping the masked
     # read must not persist the mask literals over the stored secrets.
     node_data = merge_masked_graph_nodes(node_data, list(existing.graph_nodes_json or []))
     validator_graph = {
@@ -3629,6 +4086,11 @@ async def _apply_graph_update(
         org_id,
         pipeline_owner_team_id=effective_owner_team_id,
     )
+    # FAR-488a + FAR-1810: same Agent-row sync as the PUT /graph endpoint,
+    # and it must run BEFORE the write mints the edit snapshot — the snapshot
+    # materializes bound nodes from the Agent row, so syncing first pins the
+    # command the operator just saved.
+    await _sync_agent_row_commands(session, org_id=org_id, nodes=node_data)
     graph = await replace_pipeline_graph(
         session,
         pipeline_id=pipeline_id,
@@ -3641,19 +4103,17 @@ async def _apply_graph_update(
         is_guardrail_admin=_is_guardrail_admin(principal),
         grants_deny_privilege=_grants_deny_privilege(principal),
         grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
+        recording=recording,
     )
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
-    # FAR-488a: same Agent-row sync as the PATCH /graph endpoint — a graph
-    # replacement shipped inside a PATCH update payload must also run.
-    await _sync_agent_row_commands(session, org_id=org_id, nodes=node_data)
     # FAR-681 QA gate parity: the dedicated graph endpoint runs
     # _validate_graph_save after the write, rejecting GUARDRAIL_CAP_EXCEEDED,
     # REDACT_CORRECT_BLOCKED and HITL_REVIEW_DESCRIPTION_REQUIRED with 422 (the
     # rejection rolls the write back). The apply path (graph_json inside a
     # PATCH update payload) must enforce the IDENTICAL gates — without this
     # call a declarative apply could save a graph the authoring UI rejects.
-    await _validate_graph_save(
+    issues = await _validate_graph_save(
         session,
         org_id=org_id,
         pipeline_id=pipeline_id,
@@ -3661,6 +4121,8 @@ async def _apply_graph_update(
         connector_bindings=graph_bindings,
         model_backend_pins=model_backend_pins,
     )
+    saved_nodes, saved_edges = graph
+    return saved_nodes, saved_edges, issues
 
 
 def _raise_active_runs_conflict(exc: PipelineHasActiveRunsError) -> None:
@@ -3861,6 +4323,10 @@ async def _apply_pipeline_update_payload(
             updates=updates,
         )
         if has_graph and req.graph_json is not None:
+            # A ``graph_json``-inside-``PATCH`` save is an explicit save: it
+            # records the FAR-1810 edit snapshot (it always has — the flag used
+            # to be hard-coded inside ``_apply_graph_update``). It declares no
+            # node fields, so the audit payload carries no ``patched_fields``.
             await _apply_graph_update(
                 session,
                 pipeline_id=pipeline_id,
@@ -3868,6 +4334,7 @@ async def _apply_pipeline_update_payload(
                 principal=principal,
                 graph_json=req.graph_json,
                 updates=updates,
+                recording=GraphWriteRecording(record_snapshot=True),
             )
         pipeline = await update_pipeline(
             session,
@@ -3944,6 +4411,10 @@ async def update_pipeline_endpoint(
         # the write rolls back with it. Surface 422 instead of the decorator's
         # 500.
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1810: a graph_json PATCH's edit snapshot lost its bounded lock
+        # race — retryable contention, never the decorator's generic 500.
+        _raise_snapshot_lock_busy(exc, log_prefix="pipelines.update", action="save")
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
@@ -3954,7 +4425,7 @@ async def update_pipeline_endpoint(
     return response
 
 
-# ── FAR-1175 (ADR 043 S1): manual autonomy demote / promote ──────────────────
+# ── FAR-1175 (ADR 062 S1): manual autonomy demote / promote ──────────────────
 AUTONOMY_DEMOTED_EVENT = "pipeline.autonomy_demoted"
 AUTONOMY_PROMOTION_DECIDED_EVENT = "pipeline.autonomy_promotion_decided"
 
@@ -4007,7 +4478,7 @@ def _current_effective_level(pipeline: Pipeline) -> AutonomyLevel:
 async def _assert_autonomy_admin_or_owner(
     session: AsyncSession, principal: TenantPrincipal, pipeline: Pipeline
 ) -> None:
-    """Admin/owner gate for a manual autonomy change (ADR 043 §1).
+    """Admin/owner gate for a manual autonomy change (ADR 062 §1).
 
     Promotion/demotion is a governance decision: org admins, and members of the
     pipeline's owner team (the owner), may make it. Everyone else is refused
@@ -4136,7 +4607,7 @@ async def demote_pipeline_autonomy(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
 ) -> AutonomyChangeResponse:
-    """Manually lower a pipeline's earned autonomy level (FAR-1175, ADR 043 §1).
+    """Manually lower a pipeline's earned autonomy level (FAR-1175, ADR 062 §1).
 
     Demotion adds human review, so it is always safe: an admin or the pipeline's
     owner may lower the earned level at any time. Takes effect at the run's next
@@ -4163,7 +4634,7 @@ async def promote_pipeline_autonomy(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
 ) -> AutonomyChangeResponse:
-    """Manually raise a pipeline's earned autonomy level (FAR-1175, ADR 043 §1).
+    """Manually raise a pipeline's earned autonomy level (FAR-1175, ADR 062 §1).
 
     Promotion is never automatic: an admin or the pipeline's owner approves it,
     capped at the pipeline's ``max_autonomy_level`` ceiling. It applies only to
@@ -5127,7 +5598,6 @@ async def list_snapshot_endpoint(
 @router.post(
     "/{pipeline_id}/snapshots",
     dependencies=[
-        require_feature("pipeline_diff_rollback"),
         Depends(audited("pipeline_snapshot_saved", "pipeline_snapshot", principal_dep=get_current_tenant_user)),
     ],
 )
@@ -5175,12 +5645,50 @@ async def save_edit_snapshot_endpoint(
                 draft=req.draft,
                 channel=channel,
             )
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1810 sweep: this endpoint creates the same edit snapshot the
+        # graph-save paths do, so it carries the same contended-lock failure —
+        # translated here too rather than left as the decorator's generic 500.
+        _raise_snapshot_lock_busy(exc, log_prefix="pipelines.save_edit_snapshot", action="save")
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
     if snapshot is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save edit snapshot")
     return _snapshot_to_response(snapshot)
+
+
+@router.get("/{pipeline_id}/snapshots/by-version/{snapshot_version}")
+@handle_db_errors("pipelines.get_snapshot_by_version")
+async def get_snapshot_by_version_endpoint(
+    pipeline_id: uuid.UUID,
+    snapshot_version: int,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_LIST),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> SnapshotDetailResponse:
+    """Read one snapshot by its per-pipeline version number (FAR-1811).
+
+    Backs the ``?version=<n>`` deep-link: same response model and the SAME
+    team/pipeline scoping as the by-UUID read below (FAR-1360), so a version
+    belonging to another pipeline resolves to ``None`` -> 404 and never leaks.
+    A non-integer version path segment is a 422; an absent version is a 404.
+    """
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            snapshot = await get_snapshot_by_version(
+                session,
+                pipeline_id,
+                snapshot_version,
+                organisation_id=principal.organisation_id,
+            )
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    if snapshot is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SNAPSHOT_NOT_FOUND)
+    return _snapshot_to_detail_response(snapshot)
 
 
 @router.get("/{pipeline_id}/snapshots/{snapshot_id}")
@@ -5261,7 +5769,6 @@ async def tag_snapshot_endpoint(
 @router.post(
     "/{pipeline_id}/snapshots/{snapshot_id}/rollback",
     dependencies=[
-        require_feature("pipeline_diff_rollback"),
         Depends(audited("pipeline_snapshot_rolled_back", "pipeline_snapshot", principal_dep=get_current_tenant_user)),
     ],
 )
@@ -5296,7 +5803,7 @@ async def rollback_snapshot_endpoint(
             # lock is already held there), against the pipeline's CURRENT owner
             # team — the team boundary may have moved since the snapshot was
             # taken — and raises the same named 409 ``connector_team_mismatch``
-            # as ``PATCH /graph``. The model-backend gate is deliberately NOT
+            # as ``PUT /graph``. The model-backend gate is deliberately NOT
             # mirrored here: it remains a save-time-only rule (ModelBackendHub
             # has no invocation-time visibility gate), so rollbacks are judged
             # on connector bindings only.
@@ -5395,7 +5902,6 @@ async def delete_snapshot_endpoint(
 
 @router.post(
     "/{pipeline_id}/snapshots/diff",
-    dependencies=[require_feature("pipeline_diff_rollback")],
 )
 @handle_db_errors("pipelines.diff_snapshots")
 async def diff_snapshot_endpoint(
@@ -5538,27 +6044,16 @@ def _graph_nodes_as_models(nodes: list[dict[str, Any]]) -> list[PipelineGraphNod
     TYPE-SPECIFIC rules have tightened since it was written does not fail a
     conversion that ``replace_pipeline_graph`` would happily persist anyway.
 
-    A node that clears neither tier is a 422 naming that node (via
-    ``_safe_validation_errors``, so no ``env_vars``/credential value can leak
-    into the detail) rather than an opaque generic one - the graph cannot be
-    reference-checked, and this is a write path, so it fails closed.
+    The tolerance policy itself has ONE implementation —
+    :func:`_stored_node_model` (which this delegates to per stored dict), the
+    same helper the node-patch read path uses — so the two can never drift
+    apart in which stored nodes are tolerated or in how a node that clears
+    neither tier is reported: a 422 naming that node, rendered by
+    :func:`_joined_validation_detail` (so no ``env_vars``/credential value can
+    leak into the detail) rather than an opaque generic one. The graph cannot
+    be reference-checked, and this is a write path, so it fails closed.
     """
-    models: list[PipelineGraphNode] = []
-    for raw in nodes:
-        if not isinstance(raw, dict):
-            continue
-        try:
-            models.append(PipelineGraphNode.model_validate(raw))
-        except ValidationError:
-            try:
-                models.append(PipelineGraphNode.model_validate(raw, context=LEGACY_READ_CONTEXT))
-            except ValidationError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail=f"Stored graph node {raw.get('id', 'unknown')} no longer validates "
-                    f"against the current node schema: {_safe_validation_errors(exc)}",
-                ) from exc
-    return models
+    return [_stored_node_model(raw) for raw in nodes if isinstance(raw, dict)]
 
 
 def _edge_row_to_validator(edge: Any) -> dict[str, Any]:
@@ -5623,12 +6118,12 @@ async def _save_locked_graph(
 
     Steps 1-2 run BEFORE the write and 4 after it, exactly as the siblings
     order them. Without them a convert-to-agent request could persist a
-    cross-team connector binding or a scope-widening node that PATCH /graph
+    cross-team connector binding or a scope-widening node that PUT /graph
     rejects.
 
     Advisory issues are both LOGGED and RETURNED: the log keeps the existing
     server-side trace, and the return lets the conversion endpoints surface
-    them exactly like ``PATCH /graph`` / ``PATCH /{id}`` do. The blocking codes
+    them exactly like ``PUT /graph`` / ``PATCH /{id}`` do. The blocking codes
     are the enforcement and still raise identically, so widening the return
     changes no rejection path.
     """
@@ -5652,6 +6147,7 @@ async def _save_locked_graph(
         is_guardrail_admin=_is_guardrail_admin(principal),
         grants_deny_privilege=_grants_deny_privilege(principal),
         grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
+        recording=GraphWriteRecording(record_snapshot=True),
     )
     if graph is None:
         return None
@@ -5775,7 +6271,7 @@ async def convert_node_to_agent_endpoint(
 
             target = _find_node_in_list(nodes, node_id)
             if target is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_NODE_NOT_FOUND)
             if target.get("node_type") != "manual":
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -5850,6 +6346,10 @@ async def convert_node_to_agent_endpoint(
                 nodes=nodes,
                 edges=edges,
             )
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1810: the conversion's edit snapshot lost its bounded lock race —
+        # retryable contention, never the decorator's generic 500.
+        _raise_snapshot_lock_busy(exc, log_prefix="pipelines.convert_node_to_agent", action="save")
     except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied, GitContentRefError, ProgrammingError) as exc:
         await _finalize_locked_graph_save(exc, session, principal=principal, pipeline_id=pipeline_id)
 
@@ -5885,7 +6385,7 @@ async def revert_node_to_manual_endpoint(
 
             target = _find_node_in_list(nodes, node_id)
             if target is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_NODE_NOT_FOUND)
             if target.get("node_type") != "agent":
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -5951,6 +6451,10 @@ async def revert_node_to_manual_endpoint(
                 nodes=nodes,
                 edges=edges,
             )
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1810: the revert's edit snapshot lost its bounded lock race —
+        # retryable contention, never the decorator's generic 500.
+        _raise_snapshot_lock_busy(exc, log_prefix="pipelines.revert_node_to_manual", action="save")
     except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied, GitContentRefError, ProgrammingError) as exc:
         await _finalize_locked_graph_save(exc, session, principal=principal, pipeline_id=pipeline_id)
 
@@ -6000,16 +6504,25 @@ async def _save_graph(
     is_guardrail_admin: bool = False,
     grants_deny_privilege: bool = False,
     grants_deny_guardrail_admin: bool = False,
+    recording: GraphWriteRecording | None = None,
 ) -> tuple[list[dict[str, Any]], list[Any]] | None:
     """Persist updated nodes + edges via replace_pipeline_graph.
 
     Accepts edges as either ORM model instances (PipelineEdge) or plain dicts.
     Forwards is_privileged + caller_type + account_id + is_guardrail_admin to
     the underlying graph write (ADR 047 backstop /
-    hitl-gate-removal-guard-plan.md v19 / FAR-309 PR A review).
+    hitl-gate-removal-guard-plan.md v19 / FAR-309 PR A review). Node-conversion
+    saves pass ``recording=GraphWriteRecording(record_snapshot=True)``
+    (FAR-1810) so a conversion — a deliberate graph edit — records an edit
+    snapshot like the sibling graph-write endpoints.
     """
     edge_dicts = [_edge_to_dict(e) if hasattr(e, "source_node_id") else dict(e) for e in edges]
-    graph = await replace_pipeline_graph(
+    # FAR-488a + FAR-1810: node-conversion saves go through here too — sync the
+    # bound Agent rows BEFORE the write mints the edit snapshot, so the snapshot
+    # materializes the command the operator just saved rather than the pre-sync
+    # Agent-row value (a no-op when the node commands already mirror the row).
+    await _sync_agent_row_commands(session, org_id=org_id, nodes=nodes)
+    return await replace_pipeline_graph(
         session,
         pipeline_id=pipeline_id,
         org_id=org_id,
@@ -6021,10 +6534,5 @@ async def _save_graph(
         is_guardrail_admin=is_guardrail_admin,
         grants_deny_privilege=grants_deny_privilege,
         grants_deny_guardrail_admin=grants_deny_guardrail_admin,
+        recording=recording,
     )
-    if graph is not None:
-        # FAR-488a: node-conversion saves go through here too — keep the same
-        # "what you save is what runs" Agent-row sync (a no-op when the node
-        # commands already mirror the bound Agent rows).
-        await _sync_agent_row_commands(session, org_id=org_id, nodes=nodes)
-    return graph

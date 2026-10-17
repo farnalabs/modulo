@@ -24,6 +24,14 @@ export function isDevModeTarget(env: TestEnv): boolean {
 const MOCK_ACCESS_TOKEN = 'mock-access-token-for-e2e-tests'
 const MOCK_REFRESH_TOKEN = 'mock-refresh-token-for-e2e-tests'
 
+// Shared date spine for the dashboard summary/trends fixtures. Kept as data
+// (rather than inlined per series) so the seven trends arrays stay the same
+// length and every series lines up on the same dates for the charts.
+const DASHBOARD_TREND_DATES = [
+  '2026-07-01', '2026-07-02', '2026-07-03', '2026-07-04',
+  '2026-07-05', '2026-07-06', '2026-07-07',
+]
+
 export async function setupLocalMockApi(page: Page) {
   await page.route('**/api/v1/**', async (route) => {
     const url = route.request().url()
@@ -44,13 +52,26 @@ export async function setupLocalMockApi(page: Page) {
     if (url.includes('/api/v1/pipelines') && method === 'GET') {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: '1', name: 'Test Pipeline', organisation_id: '1', description: 'A test pipeline', visibility: 'org', status: 'idle', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), archived_at: null }], total: 1 }) })
     }
-    if (url.includes('/api/v1/admin/feature-flags')) {
+    if (url.includes('/api/v1/plan') || url.includes('/api/v1/admin/feature-flags')) {
+      // planStore bootstraps from the caller-scoped GET /api/v1/plan (FAR-1809
+      // collapsed the old instance-admin /api/v1/admin/feature-flags reads into
+      // it); the instance-admin endpoint still backs the admin feature-flags
+      // page, so answer both with the plan payload shape.
       // dev_mode: true so private_preview routes (evals, runs-diff, feedback
       // inbox, saved views, node categories, feature flags, monitoring,
       // error forwarders, runtime config, rate limits, ...) resolve on the
       // local mock-API target instead of redirecting to the dashboard. Local
       // e2e mirrors staging, which also runs with dev mode on.
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ flags: [], license: { tier: 'enterprise' }, dev_mode: true }) })
+    }
+    if (url.includes('/api/v1/plan')) {
+      // FAR-1809: the caller-scoped plan bootstrap (`GET /api/v1/plan`) that
+      // replaced the instance-admin `/admin/feature-flags` + `/admin/license`
+      // pair the app's planStore used to read. Same vocabulary (tier, licence
+      // view, dev_mode, effective flag map) — dev_mode: true so private_preview
+      // routes resolve on the local mock-API target instead of redirecting to
+      // the dashboard (local e2e mirrors staging, which also runs dev mode on).
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ flags: [], license: { tier: 'enterprise', org_id: '1', expires_at: null }, dev_mode: true }) })
     }
     if (url.includes('/api/v1/admin/license')) {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ expires_at: null, org_id: '1', tier: 'enterprise' }) })
@@ -69,6 +90,94 @@ export async function setupLocalMockApi(page: Page) {
           total: 2,
         }),
       })
+    }
+    if (url.includes('/api/v1/dashboard/summary') && method === 'GET') {
+      // DashboardView calls this on mount (with `days=<n>` for a rolling
+      // window). serve the same populated body for both shapes — the summary
+      // validators require total_runs/active_pipelines/run_counts_by_status/
+      // teams/recent_runs, and the arrays must not be empty or the view falls
+      // through to its error/empty branches. Registered BEFORE the generic GET
+      // catch-all below so it is actually reachable.
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          total_runs: 128,
+          active_pipelines: 4,
+          run_counts_by_status: { running: 1, awaiting_human: 0, failed: 3, idle: 124 },
+          eval_pass_rate: {
+            overall_pass_rate: 92,
+            total_evals: 50,
+            passed_evals: 46,
+            per_pipeline: {},
+            per_team_pipeline: {},
+          },
+          trend: DASHBOARD_TREND_DATES.map((date, i) => ({
+            date,
+            run_count: 12 + i * 3,
+            eval_pass_rate: 88 + i,
+            token_spend_usd: 3.5 + i * 0.75,
+            avg_time_to_approve_ms: 120000 + i * 5000,
+            rejection_rate: 5 + i,
+          })),
+          teams: [
+            {
+              id: '1',
+              name: 'Platform',
+              total_runs: 128,
+              active_pipelines: 4,
+              run_counts_by_status: { running: 1, awaiting_human: 0, failed: 3, idle: 124 },
+              eval_pass_rate: { total_evals: 50, passed_evals: 46, pass_rate: 92 },
+            },
+          ],
+          recent_runs: [
+            { id: '101', pipeline_name: 'Release Pipeline', status: 'success', created_at: '2026-07-07T09:15:00Z', trigger_type: 'webhook', execution_origin: null },
+            { id: '102', pipeline_name: 'Nightly Regression', status: 'failed', created_at: '2026-07-07T06:00:00Z', trigger_type: 'cron', execution_origin: 'dispatched' },
+            { id: '103', pipeline_name: 'Docs Build', status: 'running', created_at: '2026-07-07T11:30:00Z', trigger_type: 'manual', execution_origin: null },
+          ],
+          config_warnings: [],
+        }),
+      })
+    }
+    if (url.includes('/api/v1/dashboard/trends') && method === 'GET') {
+      // Seven required series, each an ARRAY (validateTrendsResponse rejects
+      // any missing/non-array key). Populated wherever the chart reads a value;
+      // every series shares DASHBOARD_TREND_DATES so the combined trend in
+      // DashboardView renders a full curve. Registered BEFORE the generic GET
+      // catch-all so it is actually reachable.
+      // Every rejection-rate field is a PERCENTAGE (0-100), matching the
+      // backend's `round(rejected / total * 100, 1)` — never a 0-1 fraction.
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          days: DASHBOARD_TREND_DATES.length,
+          run_counts: DASHBOARD_TREND_DATES.map((date, i) => ({ date, run_count: 12 + i * 3 })),
+          eval_pass_rates: DASHBOARD_TREND_DATES.map((date, i) => ({ date, total_evals: 8, passed_evals: 7, pass_rate: 88 + i })),
+          token_spend: DASHBOARD_TREND_DATES.map((date, i) => ({ date, total_spend_usd: 3.5 + i * 0.75 })),
+          hitl_volume: DASHBOARD_TREND_DATES.map((date, i) => ({ date, total_decisions: 4, approved_count: 3, rejected_count: 1, rejection_rate: 25, avg_time_to_approve_ms: 120000 + i * 5000 })),
+          rejection_trend: DASHBOARD_TREND_DATES.map((date, i) => ({ date, rolling_rejection_rate: 5 + i, raw_rejection_rate: 6 + i })),
+          correlation: DASHBOARD_TREND_DATES.map((date, i) => ({ date, rejection_rate: 5 + i, eval_pass_rate: 88 + i })),
+          feedback_volume: DASHBOARD_TREND_DATES.map((date) => ({ date, feedback_count: 2, resolved_count: 1, correcting_count: 1 })),
+        }),
+      })
+    }
+    if (
+      (url.includes('/api/v1/pipeline-folders') || url.includes('/api/v1/schema-folders')) &&
+      method === 'GET'
+    ) {
+      // Folder-list endpoints return a BARE ARRAY, not the generic
+      // {items,total} envelope. The consumers type the response as
+      // FolderItem[] and iterate it in a computed — FolderTree.vue
+      // (`allFolders.value.filter`) and PipelineListView.vue /
+      // SchemaListView.vue (`for (const f of foldersList.value)`) — so the
+      // envelope makes the computed throw `TypeError: ... is not a function`
+      // / `... is not iterable` and silently blanks the folder sidebar
+      // (FAR-1876). Mirrors `list_folders` in
+      // backend/src/modulo/api/routes/{pipeline_folders,schema_folders}.py,
+      // which returns `list[FolderResponse]`. Registered BEFORE the generic
+      // GET catch-all below so it is actually reachable.
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
     }
     if (method === 'GET') {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], total: 0 }) })

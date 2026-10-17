@@ -5,6 +5,7 @@ All functions enforce org scoping via organisation_id filter.
 
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from collections.abc import Sequence
@@ -13,12 +14,14 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import ColumnElement, Select, delete, func, or_, select
-from sqlalchemy.exc import IntegrityError, ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.notification import Dismissal, Notification, NotificationPreference
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.run import TERMINAL_STATUSES, Run
+
+_log = logging.getLogger(__name__)
 
 LEVEL_RANK: dict[str, int] = {
     "debug": 0,
@@ -237,6 +240,64 @@ def apply_prefs_filter(query: Select[Any], account_id: uuid.UUID) -> Select[Any]
     return query.where(Notification.category.notin_(opted_out_categories))
 
 
+async def _rows_with_prefs_fail_open(
+    session: AsyncSession,
+    query: Select[Any],
+    account_id: uuid.UUID,
+    *,
+    log_key: str,
+) -> list[Any]:
+    """Materialise ``query`` rows with the opt-out filter applied, failing OPEN (FAR-247).
+
+    The filtered statement runs inside a SAVEPOINT so a failure reading
+    ``notification_preferences`` (missing table, lost privilege, driver error)
+    rolls back only the savepoint — it can never abort (poison) the enclosing
+    transaction. On failure the filter is DROPPED (every category reads as
+    enabled), the error is logged, and the unfiltered statement runs in a
+    fresh savepoint; a notification read must never abort because preferences
+    could not be read. If the unfiltered statement fails too, its exception
+    propagates to the caller's own ``ProgrammingError`` degradation — also
+    inside a savepoint, so that fallback path leaves the transaction usable.
+
+    Each attempt gets its OWN savepoint: a statement that failed inside a
+    Postgres savepoint aborts that savepoint until it is rolled back, so the
+    retry must run after the first savepoint has been unwound.
+    """
+    try:
+        async with session.begin_nested():
+            result = await session.execute(apply_prefs_filter(query, account_id=account_id))
+            return list(result.scalars().all())
+    except SQLAlchemyError:
+        _log.warning(log_key, extra={"account_id": str(account_id)}, exc_info=True)
+    async with session.begin_nested():
+        result = await session.execute(query)
+        return list(result.scalars().all())
+
+
+async def _count_with_prefs_fail_open(
+    session: AsyncSession,
+    query: Select[Any],
+    account_id: uuid.UUID,
+    *,
+    log_key: str,
+) -> int:
+    """Count variant of :func:`_rows_with_prefs_fail_open` — same contract.
+
+    Keeps badge/list/count in agreement even when the preferences read is
+    broken: the count degrades to "nothing opted out" exactly when the row
+    reads do (FAR-247 fail-open).
+    """
+    try:
+        async with session.begin_nested():
+            result = await session.execute(apply_prefs_filter(query, account_id=account_id))
+            return int(result.scalar_one())
+    except SQLAlchemyError:
+        _log.warning(log_key, extra={"account_id": str(account_id)}, exc_info=True)
+    async with session.begin_nested():
+        result = await session.execute(query)
+        return int(result.scalar_one())
+
+
 async def create_notification(
     session: AsyncSession,
     *,
@@ -325,11 +386,11 @@ async def get_dashboard_notifications(
         _not_expired_clause(),
         _visible_to_user_clause(user_id),
     )
-    q = apply_prefs_filter(q, account_id=user_id)
     q = q.order_by(Notification.created_at.desc()).limit(limit)
     try:
-        result = await session.execute(q)
-        return list(result.scalars().all())
+        return await _rows_with_prefs_fail_open(
+            session, q, user_id, log_key="notifications.dashboard.prefs_filter_fail_open"
+        )
     except ProgrammingError:
         return []
 
@@ -350,7 +411,6 @@ async def get_notifications_for_user(
         Notification.organisation_id == org_id,
         _visible_to_user_clause(user_id),
     )
-    q = apply_prefs_filter(q, account_id=user_id)
 
     if level is not None:
         q = q.where(Notification.level == level)
@@ -363,8 +423,9 @@ async def get_notifications_for_user(
 
     q = q.order_by(Notification.created_at.desc()).offset(offset).limit(limit)
     try:
-        result = await session.execute(q)
-        return list(result.scalars().all())
+        return await _rows_with_prefs_fail_open(
+            session, q, user_id, log_key="notifications.list.prefs_filter_fail_open"
+        )
     except ProgrammingError:
         return []
 
@@ -435,7 +496,6 @@ async def count_notifications_for_user(
         Notification.organisation_id == org_id,
         _visible_to_user_clause(user_id),
     )
-    q = apply_prefs_filter(q, account_id=user_id)
 
     if level is not None:
         q = q.where(Notification.level == level)
@@ -447,8 +507,9 @@ async def count_notifications_for_user(
     q = _apply_status_filter(q, user_id=user_id, status_filter=status_filter)
 
     try:
-        result = await session.execute(q)
-        return int(result.scalar_one())
+        return await _count_with_prefs_fail_open(
+            session, q, user_id, log_key="notifications.count.prefs_filter_fail_open"
+        )
     except ProgrammingError:
         return 0
 
@@ -618,10 +679,10 @@ async def get_unread_count(
         _not_expired_clause(),
         _visible_to_user_clause(user_id),
     )
-    q = apply_prefs_filter(q, account_id=user_id)
     try:
-        result = await session.execute(q)
-        return int(result.scalar_one())
+        return await _count_with_prefs_fail_open(
+            session, q, user_id, log_key="notifications.unread.prefs_filter_fail_open"
+        )
     except ProgrammingError:
         return 0
 
@@ -632,14 +693,23 @@ async def get_opted_out_categories(
     org_id: uuid.UUID,
     account_id: uuid.UUID,
 ) -> set[str]:
-    """Return the categories the user has opted out of in this org."""
-    result = await session.execute(
-        select(NotificationPreference.category).where(
-            NotificationPreference.organisation_id == org_id,
-            NotificationPreference.account_id == account_id,
+    """Return the categories the user has opted out of in this org.
+
+    The read runs inside a SAVEPOINT (FAR-247): callers include WRITE
+    transactions (the PUT-merge read in ``set_notification_preferences``), and
+    a failed statement would otherwise abort the whole transaction — poisoning
+    the caller's writes for a preferences read that failed. The savepoint
+    un-poisons; the error still PROPAGATES so the caller decides (the merge
+    read must fail loud — merging without current state would corrupt it).
+    """
+    async with session.begin_nested():
+        result = await session.execute(
+            select(NotificationPreference.category).where(
+                NotificationPreference.organisation_id == org_id,
+                NotificationPreference.account_id == account_id,
+            )
         )
-    )
-    return set(result.scalars().all())
+        return set(result.scalars().all())
 
 
 async def set_notification_preferences(

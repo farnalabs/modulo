@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -30,6 +31,34 @@ def _make_settings() -> Settings:
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
     )
+
+
+def _in_memory_settings_patch(org: MagicMock):
+    """Replace the atomic org-settings patch with an in-memory merge.
+
+    Unit tier has no real DB, so the helper's JSONB statement cannot run; this
+    applies the same top-level merge semantics onto the mocked org so the
+    route's response/round-trip behaviour is exercised faithfully.
+    """
+
+    async def _apply(session, organisation_id, patch=None, delete_keys=None):
+        settings = dict(org.settings_json) if isinstance(org.settings_json, dict) else {}
+        settings.update(patch or {})
+        for key in delete_keys or []:
+            settings.pop(key, None)
+        org.settings_json = settings
+        return settings
+
+    return _apply
+
+
+def _lock_timeout_operational() -> OperationalError:
+    """An ``OperationalError`` whose driver error carries SQLSTATE 55P03."""
+
+    class _PgError(Exception):
+        sqlstate = "55P03"
+
+    return OperationalError("UPDATE organisations ...", {}, _PgError("canceling statement due to lock timeout"))
 
 
 def _make_mock_session() -> AsyncMock:
@@ -734,6 +763,7 @@ class TestCostControlsCurrency:
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
             patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.update_org_settings_patch", new=_in_memory_settings_patch(org)),
             patch("modulo.api.routes.costs.list_teams", return_value=page_result),
             patch("modulo.api.routes.costs.set_rls_org"),
         ):
@@ -751,11 +781,49 @@ class TestCostControlsCurrency:
             }
         }
 
+    def test_update_patches_only_cost_controls_key(self, client: TestClient) -> None:
+        """FAR-1830: the cost-controls writer emits ONLY ``cost_controls``.
+
+        A revert to a whole-column ``settings_json`` write would not call the
+        patch helper, so ``assert_awaited_once`` fails.
+        """
+        org = self._org()
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        patch_mock = AsyncMock(return_value={})
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.update_org_settings_patch", new=patch_mock),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.put(self.ENDPOINT, json={"currency": "EUR"})
+        assert resp.status_code == 200
+        patch_mock.assert_awaited_once()
+        call_patch = patch_mock.await_args.args[2]
+        assert set(call_patch) == {"cost_controls"}
+
+    def test_update_cost_controls_lock_timeout_returns_409(self, client: TestClient) -> None:
+        """FAR-1832 QA F10: 55P03 from the bounded settings-patch lock is a 409,
+        not the generic 503 the ``except SQLAlchemyError`` arm still answers."""
+        org = self._org()
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch(
+                "modulo.api.routes.costs.update_org_settings_patch",
+                side_effect=_lock_timeout_operational(),
+            ),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.put(self.ENDPOINT, json={"currency": "EUR"})
+        assert resp.status_code == 409, resp.text
+        assert "another change is in progress" in resp.json()["detail"]
+
     def test_update_persists_alert_thresholds(self, client: TestClient) -> None:
         org = self._org()
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
             patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.update_org_settings_patch", new=_in_memory_settings_patch(org)),
             patch("modulo.api.routes.costs.list_teams", return_value=page_result),
             patch("modulo.api.routes.costs.set_rls_org"),
         ):
@@ -807,6 +875,7 @@ class TestCostControlsCurrency:
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
             patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.update_org_settings_patch", new=_in_memory_settings_patch(org)),
             patch("modulo.api.routes.costs.list_teams", return_value=page_result),
             patch("modulo.api.routes.costs.set_rls_org"),
         ):
@@ -825,6 +894,7 @@ class TestCostControlsCurrency:
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
             patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.update_org_settings_patch", new=_in_memory_settings_patch(org)),
             patch("modulo.api.routes.costs.list_teams", return_value=page_result),
             patch("modulo.api.routes.costs.set_rls_org"),
         ):
@@ -944,6 +1014,7 @@ class TestCostControlsAlertThresholds:
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
             patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.update_org_settings_patch", new=_in_memory_settings_patch(org)),
             patch("modulo.api.routes.costs.list_teams", return_value=page_result),
             patch("modulo.api.routes.costs.set_rls_org"),
         ):
@@ -957,6 +1028,7 @@ class TestCostControlsAlertThresholds:
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
             patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.update_org_settings_patch", new=_in_memory_settings_patch(org)),
             patch("modulo.api.routes.costs.list_teams", return_value=page_result),
             patch("modulo.api.routes.costs.set_rls_org"),
         ):
@@ -972,6 +1044,7 @@ class TestCostControlsAlertThresholds:
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
             patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.update_org_settings_patch", new=_in_memory_settings_patch(org)),
             patch("modulo.api.routes.costs.list_teams", return_value=page_result),
             patch("modulo.api.routes.costs.set_rls_org"),
         ):

@@ -94,6 +94,10 @@ def _make_mock_plan_context() -> MagicMock:
     flag2.tier = "community"
     flag2.currently_active = True
     ctx.list_enabled_features = MagicMock(return_value=[flag1, flag2])
+    # FAR-1806: the viewmodel serves the full set via
+    # ``effective_feature_flags(plan_ctx, ...)``, which reads
+    # ``list_all_features`` (not the active-only ``list_enabled_features``).
+    ctx.list_all_features = MagicMock(return_value=[flag1, flag2])
     return ctx
 
 
@@ -109,6 +113,11 @@ def _make_mock_session() -> AsyncMock:
     scalars_mock.all = MagicMock(return_value=[])
     execute_result.scalars.return_value = scalars_mock
     execute_result.scalar_one_or_none = MagicMock(return_value=None)
+    # The offset-pagination count reads (e.g. list_views) go through
+    # scalar_one()/scalar(); a bare MagicMock there makes the new has_more
+    # comparison raise TypeError, so serve a real 0 (empty page) total.
+    execute_result.scalar_one = MagicMock(return_value=0)
+    execute_result.scalar = MagicMock(return_value=0)
     session.execute = AsyncMock(return_value=execute_result)
     return session
 
@@ -368,6 +377,53 @@ def test_viewmodel_current_includes_feature_flags(client: TestClient) -> None:
     for flag in body["feature_flags"]:
         assert flag["active"] is True
         assert flag["tier"] == "community"
+
+
+def test_viewmodel_current_feature_flags_full_set_with_org_overlay(client: TestClient) -> None:
+    """FAR-1806: ``feature_flags`` is the full known set WITH the org overlay.
+
+    The pre-fix payload was built from ``list_enabled_features()`` (inactive
+    flags dropped entirely) and no org ``feature_overrides`` overlay — the two
+    gaps that made this endpoint unusable as a plan bootstrap replacement.
+    """
+    from modulo.core.feature_flags import FeatureFlag
+
+    pipeline = _make_pipeline()
+    run = _make_run()
+    pipelines_page = MagicMock(items=[pipeline], total=1, page=1, page_size=20)
+    runs_page = MagicMock(items=[run], total=1, page=1, page_size=10)
+    org = _make_org(settings_json={"feature_overrides": {"analytics_page": False}})
+    user = _make_user()
+    plan_ctx = MagicMock()
+    plan_ctx.list_all_features = MagicMock(
+        return_value=[
+            FeatureFlag(name="eval_system", description="d", tier="community", currently_active=True),
+            FeatureFlag(name="mobile_sidebar_rail", description="d", tier="community", currently_active=False),
+            FeatureFlag(name="analytics_page", description="d", tier="community", currently_active=True),
+        ]
+    )
+
+    with (
+        patch("modulo.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
+        patch("modulo.api.routes.viewmodel.list_runs", return_value=runs_page),
+        patch("modulo.api.routes.viewmodel.set_rls_org"),
+        patch("modulo.api.routes.viewmodel.set_rls_user_context"),
+        patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
+        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
+        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+        patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
+    ):
+        resp = client.get("/api/v1/viewmodel/current")
+
+    assert resp.status_code == 200
+    by_name = {f["name"]: f for f in resp.json()["feature_flags"]}
+    assert len(by_name) == 3
+    # Inactive flag PRESENT with active=false (was dropped entirely before).
+    assert by_name["mobile_sidebar_rail"]["active"] is False
+    # Org override applied on top of the registry state (was ignored before).
+    assert by_name["analytics_page"]["active"] is False
+    # Untouched default stays as the registry computed it.
+    assert by_name["eval_system"]["active"] is True
 
 
 def test_viewmodel_current_includes_org_info(client: TestClient) -> None:

@@ -155,13 +155,26 @@ def paginated_response(
     page: int,
     page_size: int,
     extra: dict[str, Any] | None = None,
+    include_total: bool = True,
 ) -> dict[str, Any]:
-    """Build the standard paginated response dict, optionally with extra keys."""
+    """Build the standard paginated response dict, optionally with extra keys.
+
+    ``has_more`` is derived so the envelope never contradicts itself:
+
+    * with a real ``total`` (``include_total=True``) it is exact —
+      ``(page - 1) * page_size + len(rows) < total``;
+    * without one (``include_total=False``) the count is unknown, so a full
+      page is the only signal that more rows may exist. That is a heuristic,
+      never an exact answer.
+    """
+    consumed = (page - 1) * page_size + len(rows)
+    has_more = consumed < total if include_total else len(rows) == page_size
     response: dict[str, Any] = {
         "items": rows,
         "total": total,
         "page": page,
         "page_size": page_size,
+        "has_more": has_more,
     }
     if extra:
         response.update(extra)

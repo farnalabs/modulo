@@ -84,6 +84,35 @@ async def get_snapshot_detail(
     return result.scalar_one_or_none()
 
 
+async def get_snapshot_by_version(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+    snapshot_version: int,
+    *,
+    organisation_id: uuid.UUID | None = None,
+) -> PipelineSnapshot | None:
+    """Get the snapshot a pipeline holds at a given version number (FAR-1811).
+
+    Versions are unique PER pipeline (``uq_pipeline_snapshot_version``), so the
+    ``{pipeline_id}`` scope is REQUIRED and never optional here: a version
+    number only identifies a snapshot within one pipeline, and a read against a
+    foreign pipeline's path must answer ``None`` (-> 404) rather than resolve
+    the same-numbered snapshot of another pipeline — the FAR-1360 contract the
+    sibling snapshot routes carry. ``organisation_id`` is the same
+    defence-in-depth org scope :func:`get_snapshot_detail` takes. The route maps
+    ``None`` to 404 (miss) and relies on FastAPI for the 422 on a non-integer
+    version path segment.
+    """
+    stmt = select(PipelineSnapshot).where(
+        PipelineSnapshot.pipeline_id == pipeline_id,
+        PipelineSnapshot.snapshot_version == snapshot_version,
+    )
+    if organisation_id is not None:
+        stmt = stmt.where(PipelineSnapshot.organisation_id == organisation_id)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 async def list_snapshots(
     session: AsyncSession,
     pipeline_id: uuid.UUID,

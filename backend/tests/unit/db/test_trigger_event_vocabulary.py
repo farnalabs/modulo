@@ -177,10 +177,15 @@ _MIGRATION_PATH = (
 # 0309_hitl_claims_decision_sweep chained onto 0308_runs_dispatch_phase_history, and
 # 0310_library_cluster_db_hardening chained onto 0309_hitl_claims_decision_sweep, and
 # 0311_library_cluster_schema_hygiene chained onto 0310_library_cluster_db_hardening, and
-# 0313_evidence_redaction_rules chained onto 0311_library_cluster_schema_hygiene as the chain head.
+# 0312_memberships_active_lookups chained onto 0311_library_cluster_schema_hygiene, and
+# 0313_collection_install_drop_installed_entities chained onto 0312_memberships_active_lookups, and
+# 0314_external_agents_mcp_servers chained onto 0313_collection_install_drop_installed_entities, and
+# 0315_service_accounts_lifecycle chained onto 0314_external_agents_mcp_servers, and
+# 0317_drop_retired_pipeline_diff_rollback_flag chained onto 0316_policy_gate_evaluation_mode, and
+# 0318_evidence_redaction_rules chained onto 0317_drop_retired_pipeline_diff_rollback_flag as the chain head.
 # (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
 # migration under test, not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0313_evidence_redaction_rules"
+_CHAIN_HEAD_MIGRATION_NAME = "0318_evidence_redaction_rules"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

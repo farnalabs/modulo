@@ -96,6 +96,10 @@ _CRON_HOURLY = "0 * * * *"
 #: (FAR-1707). Distinct from analytics_facts_maintenance's 01:00 slot so the
 #: two daily crons never contend.
 _CRON_DAILY = "0 3 * * *"
+#: Once-daily cadence (02:30) — the FAR-132 legacy-shape straggler sweep. A
+#: distinct off-peak slot from the other daily crons (facts maintenance 01:00,
+#: kill-switch drill 03:00) so the three never contend.
+_CRON_DAILY_0230 = "30 2 * * *"
 
 # Scheduled run-retention window (FAR-1549). Pinned explicitly so the purge
 # and its audit record read the SAME cutoff: ``batch_delete_old_terminal_runs``
@@ -450,126 +454,134 @@ async def execute_run(
         _log.warning("SAQ execute_run: run %s not claimed (already handled or wrong state)", rid)
         return {"status": "not_claimed"}
 
-    tracker.enter_phase(PHASE_CLAIMED)
-    _log.info(
-        "execute_run.claimed run=%s org=%s claim_token=%s",
-        run_id,
-        org_id,
-        str(claim_token)[:8] if claim_token else None,
-    )
+    # FAR-1627: scope this claim's ownership for the shutdown handoff. The
+    # entry is dropped on EVERY normal/failed exit; on cancellation (SAQ
+    # shutdown) it is KEPT and marked cancellation-observed, so
+    # _shutdown_handoff_hook releases exactly the runs this process abandoned
+    # AND whose task provably unwound (never a run whose task is stuck).
+    from modulo.core.worker_handoff import track_inflight_run
 
-    # FAR-1088 (W2): durable best-effort writer for post-claim phase entries,
-    # bound to (engine, run_id, org_id, claim_token). Attaching it to the
-    # tracker wires PHASE_LOADING_SETUP / PHASE_SETUP_COMPLETE below and the
-    # executor's ``streaming`` transition (via DISPATCH_TRACKER_ATTR) through
-    # enter_phase(). Single-flight, bounded, fail-soft — see DispatchPhaseWriter.
-    tracker.durable_writer = DispatchPhaseWriter(
-        aeng,
-        run_id=run_id,
-        org_id=org_id,
-        claim_token=claim_token,
-    )
+    async with track_inflight_run(run_id=rid, org_id=oid, claim_token=str(claim_token)):
+        tracker.enter_phase(PHASE_CLAIMED)
+        _log.info(
+            "execute_run.claimed run=%s org=%s claim_token=%s",
+            run_id,
+            org_id,
+            str(claim_token)[:8] if claim_token else None,
+        )
 
-    # Stamp the claim token into the job hash so the after_process task_failure
-    # hook can fence its terminal write: a failed job must not mark the run
-    # failed when a successor already re-claimed it (dist/runtime-core A1).
-    if job is not None:
+        # FAR-1088 (W2): durable best-effort writer for post-claim phase entries,
+        # bound to (engine, run_id, org_id, claim_token). Attaching it to the
+        # tracker wires PHASE_LOADING_SETUP / PHASE_SETUP_COMPLETE below and the
+        # executor's ``streaming`` transition (via DISPATCH_TRACKER_ATTR) through
+        # enter_phase(). Single-flight, bounded, fail-soft — see DispatchPhaseWriter.
+        tracker.durable_writer = DispatchPhaseWriter(
+            aeng,
+            run_id=run_id,
+            org_id=org_id,
+            claim_token=claim_token,
+        )
+
+        # Stamp the claim token into the job hash so the after_process task_failure
+        # hook can fence its terminal write: a failed job must not mark the run
+        # failed when a successor already re-claimed it (dist/runtime-core A1).
+        if job is not None:
+            try:
+                job_kwargs = getattr(job, "kwargs", None)
+                merged_kwargs = {**(job_kwargs if isinstance(job_kwargs, dict) else {}), "claim_token": claim_token}
+                await job.update(kwargs=merged_kwargs)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.warning("SAQ execute_run: job kwargs stamp failed for run %s", rid, exc_info=True)
+
+        settings = get_settings()
+        tracker.enter_phase(PHASE_LOADING_SETUP)
         try:
-            job_kwargs = getattr(job, "kwargs", None)
-            merged_kwargs = {**(job_kwargs if isinstance(job_kwargs, dict) else {}), "claim_token": claim_token}
-            await job.update(kwargs=merged_kwargs)
+            run, executor = await asyncio.wait_for(
+                load_and_setup(aeng, rid, oid),
+                timeout=settings.saq_setup_grace_seconds,
+            )
+        except TimeoutError:
+            _log.exception("SAQ execute_run: load_and_setup timed out for run %s", rid)
+            await fail_run_terminal(
+                aeng,
+                run_id,
+                org_id,
+                error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
+                error_detail=(
+                    f"load_and_setup (pre-node setup) exceeded setup grace "
+                    f"({settings.saq_setup_grace_seconds}s) — likely DB connection "
+                    "exhaustion or a wedged worker; was riding to the 35-min "
+                    "agent.stall backstop"
+                ),
+            )
+            return {"status": "setup_failed"}
         except asyncio.CancelledError:
             raise
         except Exception:
-            _log.warning("SAQ execute_run: job kwargs stamp failed for run %s", rid, exc_info=True)
+            _log.exception("SAQ execute_run: load_and_setup failed for run %s", rid)
+            await fail_run_terminal(
+                aeng,
+                run_id,
+                org_id,
+                error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
+                error_detail="load_and_setup failed before any node could run",
+            )
+            return {"status": "setup_failed"}
+        if run is None:
+            # The claim succeeded (status=running + heartbeat), but the row is now
+            # invisible to load_and_setup — terminalize so the claimed row is not
+            # left running with a frozen heartbeat until dispatcher_reconcile
+            # collects it (~35-min zombie backstop).
+            _log.warning("SAQ execute_run: run %s not found after claim — terminalizing", rid)
+            await fail_run_terminal(
+                aeng,
+                run_id,
+                org_id,
+                error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
+                error_detail="run row not found during load_and_setup after a successful claim",
+            )
+            return {"status": "missing"}
 
-    settings = get_settings()
-    tracker.enter_phase(PHASE_LOADING_SETUP)
-    try:
-        run, executor = await asyncio.wait_for(
-            load_and_setup(aeng, rid, oid),
-            timeout=settings.saq_setup_grace_seconds,
-        )
-    except TimeoutError:
-        _log.exception("SAQ execute_run: load_and_setup timed out for run %s", rid)
-        await fail_run_terminal(
-            aeng,
+        tracker.enter_phase(PHASE_SETUP_COMPLETE)
+        _log.info(
+            "execute_run.setup_complete run=%s elapsed=%.1fs",
             run_id,
-            org_id,
-            error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
-            error_detail=(
-                f"load_and_setup (pre-node setup) exceeded setup grace "
-                f"({settings.saq_setup_grace_seconds}s) — likely DB connection "
-                "exhaustion or a wedged worker; was riding to the 35-min "
-                "agent.stall backstop"
+            tracker.elapsed_in_phase(),
+        )
+
+        # Wire the tracker onto the executor so it can report phases during execute().
+        setattr(executor, DISPATCH_TRACKER_ATTR, tracker)
+
+        outcome = await run_executor_with_watchdog(
+            aeng,
+            run_id=run_id,
+            org_id=org_id,
+            executor=executor,
+            job=job,
+            claim_token=claim_token,
+            dispatch_tracker=tracker,
+            execute_fn=lambda: executor.execute(
+                run_id=rid,
+                org_id=oid,
+                input_payload=run.input_payload or {},
+                claim_token=claim_token,
             ),
         )
-        return {"status": "setup_failed"}
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.exception("SAQ execute_run: load_and_setup failed for run %s", rid)
-        await fail_run_terminal(
-            aeng,
-            run_id,
-            org_id,
-            error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
-            error_detail="load_and_setup failed before any node could run",
-        )
-        return {"status": "setup_failed"}
-    if run is None:
-        # The claim succeeded (status=running + heartbeat), but the row is now
-        # invisible to load_and_setup — terminalize so the claimed row is not
-        # left running with a frozen heartbeat until dispatcher_reconcile
-        # collects it (~35-min zombie backstop).
-        _log.warning("SAQ execute_run: run %s not found after claim — terminalizing", rid)
-        await fail_run_terminal(
-            aeng,
-            run_id,
-            org_id,
-            error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
-            error_detail="run row not found during load_and_setup after a successful claim",
-        )
-        return {"status": "missing"}
 
-    tracker.enter_phase(PHASE_SETUP_COMPLETE)
-    _log.info(
-        "execute_run.setup_complete run=%s elapsed=%.1fs",
-        run_id,
-        tracker.elapsed_in_phase(),
-    )
+        # FAR-1088 (W2): drain any still-in-flight phase write (bounded + fail-soft)
+        # so the final phase lands before the job finishes.
+        if tracker.durable_writer is not None:
+            await tracker.durable_writer.flush()
 
-    # Wire the tracker onto the executor so it can report phases during execute().
-    setattr(executor, DISPATCH_TRACKER_ATTR, tracker)
-
-    outcome = await run_executor_with_watchdog(
-        aeng,
-        run_id=run_id,
-        org_id=org_id,
-        executor=executor,
-        job=job,
-        claim_token=claim_token,
-        dispatch_tracker=tracker,
-        execute_fn=lambda: executor.execute(
-            run_id=rid,
-            org_id=oid,
-            input_payload=run.input_payload or {},
-            claim_token=claim_token,
-        ),
-    )
-
-    # FAR-1088 (W2): drain any still-in-flight phase write (bounded + fail-soft)
-    # so the final phase lands before the job finishes.
-    if tracker.durable_writer is not None:
-        await tracker.durable_writer.flush()
-
-    # Honest outcomes (A2): ``mark_complete`` runs ONLY on a genuine
-    # completion. After a failure/awaiting_human/supersession it is a no-op
-    # (the run is already terminal), so this is purely a guard against a
-    # silent wrong-success write.
-    if outcome.get("status") == "complete":
-        await mark_complete(aeng, run_id, org_id, claim_token=claim_token)
-    return outcome
+        # Honest outcomes (A2): ``mark_complete`` runs ONLY on a genuine
+        # completion. After a failure/awaiting_human/supersession it is a no-op
+        # (the run is already terminal), so this is purely a guard against a
+        # silent wrong-success write.
+        if outcome.get("status") == "complete":
+            await mark_complete(aeng, run_id, org_id, claim_token=claim_token)
+        return outcome
 
 
 async def resume_run(
@@ -674,11 +686,17 @@ async def fire_polling_trigger(
     return await _dispatch_created_run(result, org_id=org_id, log_context="fire_polling_trigger")
 
 
-async def fire_report_trigger(_ctx: dict[str, Any], *, report_id: str, org_id: str) -> dict[str, Any]:
-    """Per-item report fire job — generate + deliver (SAQ bounded job)."""
+async def fire_report_trigger(
+    _ctx: dict[str, Any], *, report_id: str, org_id: str, epoch: str | None = None
+) -> dict[str, Any]:
+    """Per-item report fire job — generate + deliver (SAQ bounded job).
+
+    ``epoch`` is the enqueue tick replayed verbatim by SAQ on a retry, keeping
+    an already-delivered epoch from being delivered twice (FAR-1822).
+    """
     from modulo.core import cron_helpers as _ch
 
-    return await _ch.fire_report_trigger(report_id=uuid.UUID(report_id), org_id=uuid.UUID(org_id))
+    return await _ch.fire_report_trigger(report_id=uuid.UUID(report_id), org_id=uuid.UUID(org_id), epoch=epoch)
 
 
 async def fire_ongoing_trigger(
@@ -1158,6 +1176,47 @@ async def dispatcher_reconcile(_ctx: dict[str, Any]) -> dict[str, Any]:
     return await _ch.dispatcher_reconcile()
 
 
+async def legacy_agent_return_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — detect run_node_outputs rows still carrying the legacy shape (FAR-132).
+
+    The periodic invariant gating the FAR-132 Agent-Return-split strip. The scan
+    + LOUD detection log live in
+    :func:`modulo.core.cron_helpers.legacy_agent_return_sweep`; this wrapper owns
+    the durable liveness record (mirroring ``decision_record_reconcile``): the
+    outcome (``last_run_at`` + ``legacy_count``) is persisted to the shared Redis
+    key every tick so /healthz/ready can warn when the sweep is stale or
+    missing. A sweep failure is persisted (with the error) and then RE-RAISED so
+    SAQ's ``retries`` engage — a silently dead invariant must not be invisible.
+    """
+    from modulo.core import cron_helpers as _ch
+
+    try:
+        result = await _ch.legacy_agent_return_sweep()
+    except Exception as exc:
+        await _persist_sweep_stats(
+            LEGACY_AGENT_RETURN_SWEEP_STATS_KEY,
+            {
+                "last_run_at": datetime.now(UTC).isoformat(),
+                "legacy_count": 0,
+                "error": f"sweep_failed ({type(exc).__name__}: {exc})"[:200],
+            },
+            LEGACY_AGENT_RETURN_SWEEP_STATS_TTL_SECONDS,
+        )
+        raise
+
+    stats: dict[str, Any] = {
+        "last_run_at": datetime.now(UTC).isoformat(),
+        "legacy_count": result.get("legacy_count", 0),
+        "sample_truncated": result.get("sample_truncated", False),
+    }
+    await _persist_sweep_stats(
+        LEGACY_AGENT_RETURN_SWEEP_STATS_KEY,
+        stats,
+        LEGACY_AGENT_RETURN_SWEEP_STATS_TTL_SECONDS,
+    )
+    return stats
+
+
 async def claim_expiry(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — expire stale HITL claims (SAQ SOLE writer/notifier, F1)."""
     from modulo.core.hitl_manager.expiry_job import expire_stale_claims
@@ -1603,6 +1662,20 @@ DECISION_RECORD_RECONCILE_STATS_KEY = "saq:cron:stats:decision_record_reconcile"
 DECISION_RECORD_RECONCILE_STALE_SECONDS = 3 * 60 * 60
 # TTL: one sweep past the stale window (same arithmetic as the sibling keys).
 DECISION_RECORD_RECONCILE_STATS_TTL_SECONDS = DECISION_RECORD_RECONCILE_STALE_SECONDS + 60
+
+# Cross-process stats key for the FAR-132 legacy-shape straggler sweep (same
+# contract as the sibling detection crons: the daily cron persists its outcome
+# — ``legacy_count`` + ``last_run_at`` — and /healthz/ready reads it to detect a
+# silently dead sweep or a never-run sweep). The sweep is read-only (it never
+# mutates a row), so its liveness is the only signal that the strip-gating
+# invariant is still being evaluated.
+LEGACY_AGENT_RETURN_SWEEP_STATS_KEY = "saq:cron:stats:legacy_agent_return_sweep"
+# The sweep runs daily at 02:30; a last_run_at older than 72h means at least two
+# ticks were missed -> report "stale" (advisory). Mirrors the sibling 3x-cadence
+# arithmetic (decision_record_reconcile: hourly -> 3h).
+LEGACY_AGENT_RETURN_SWEEP_STALE_SECONDS = 3 * 24 * 60 * 60
+# TTL: one sweep past the stale window.
+LEGACY_AGENT_RETURN_SWEEP_STATS_TTL_SECONDS = LEGACY_AGENT_RETURN_SWEEP_STALE_SECONDS + 60
 
 
 async def _persist_sweep_stats(key: str, stats: dict[str, Any], ttl_seconds: int) -> None:
@@ -2179,6 +2252,15 @@ def _base_worker_settings(queue_name: str, functions: list[Any]) -> dict[str, An
         # through both `Worker(**settings())` (run_system_web) and the plain
         # `python -m saq ...runs_settings` CLI — saq awaits async callables.
         "startup": _startup_event_bus_hook,
+        # FAR-1627: on worker shutdown (SIGTERM drain -> cancel -> stop), hand
+        # every still-in-flight run back for re-dispatch instead of letting it
+        # wait out the 30-minute heartbeat TTL. Runs AFTER job cancellation by
+        # SAQ design (Worker.stop calls shutdown callbacks post-drain) — but
+        # NOT unconditionally after the tasks are DEAD: SAQ invokes the
+        # callbacks even when cancellation timed out. The hook therefore only
+        # releases runs whose task actually observed the cancellation (see
+        # worker_handoff's cancellation-observation gate).
+        "shutdown": _shutdown_handoff_hook,
         # Instance identity for worker metadata shared with the health gate —
         # platform-neutral resolver at call time (ADR 043 / FAR-1194).
         "metadata": {"hostname": resolve_instance_identity()},
@@ -2285,6 +2367,50 @@ async def _startup_event_bus_hook(_ctx: dict[str, Any]) -> None:
         raise
     except Exception:
         _log.exception("saq_worker.event_subscription_spawn_failed")
+
+
+async def _shutdown_handoff_hook(_ctx: dict[str, Any]) -> None:
+    """SAQ ``shutdown`` hook — hand every abandoned run back for re-dispatch (FAR-1627).
+
+    SAQ's ``Worker.stop()`` runs this AFTER the shutdown grace period and the
+    cancellation hard deadline — but that does NOT mean every job task is
+    dead: ``cancel_tasks`` only returns ``all(task.done())``, and on timeout
+    ``stop()`` logs "Some tasks did not finish cancellation in time, they may
+    be stuck or blocked" and runs the shutdown callbacks anyway. The hook
+    therefore does not assume a dead predecessor. It hands back only the runs
+    whose task actually OBSERVED the cancellation (the executor body has
+    unwound — ``worker_handoff``'s cancellation-observation gate), releasing
+    the claim (reset to ``pending`` with the truthful ``harness.worker_lost``
+    code) so ``dispatcher_reconcile`` re-dispatches them on its next 60s tick;
+    a run whose re-run is not safe (non-idempotent node-started graph, or a
+    never-retry decision) is terminal-failed in place with the same code
+    instead of being put on the un-gated re-dispatch leg. A run whose task is
+    stuck and never observed the cancellation is left untouched and falls back
+    to the 30-minute heartbeat TTL, instead of being re-dispatched against a
+    still-live executor.
+
+    Fail-open with a LOUD log: a failed handback must never fail the worker's
+    shutdown (the heartbeat-TTL sweeps remain the backstop, and an exception
+    here would surface as a worker crash). ``CancelledError`` is re-raised —
+    a second signal cancelling the shutdown sequence must not be swallowed.
+    """
+    from modulo.core.worker_handoff import handback_inflight_runs
+
+    try:
+        result = await handback_inflight_runs(_get_async_engine())
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("saq_worker.shutdown_handoff_failed (runs fall back to the heartbeat-TTL sweeps)")
+        return
+    if result.get("handed_back") or result.get("terminalised"):
+        _log.warning(
+            "saq_worker.shutdown_handoff handed_back=%d terminalised=%d skipped=%d "
+            "(in-flight runs released for re-dispatch — or truthfully failed in place — on worker shutdown)",
+            result["handed_back"],
+            result.get("terminalised", 0),
+            result.get("skipped", 0),
+        )
 
 
 def _make_session_factory() -> Any:
@@ -2458,6 +2584,7 @@ def _system_functions() -> list[Any]:
         health_readiness_alert,
         memory_monitor_cron,
         run_kill_switch_drill,
+        legacy_agent_return_sweep,
     ]
 
 
@@ -2825,6 +2952,25 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
             heartbeat=30,
             retries=1,
             ttl=300,
+        ),
+        # legacy_agent_return_sweep: daily at 02:30 (FAR-132) — the periodic
+        # invariant that gates stripping the Agent-Return-split's legacy
+        # tolerance. It counts run_node_outputs rows still reaching the legacy
+        # fallback, logs a LOUD ERROR when any remain (zero is healthy), and
+        # persists ``last_run_at`` + ``legacy_count`` to
+        # ``saq:cron:stats:legacy_agent_return_sweep`` for the /healthz/ready
+        # advisory. READ-ONLY: it mutates no row, so unique=True simply prevents
+        # two machines double-scanning one slot, and retries=1 is enough for a
+        # transient DB error (a scan that cannot run re-raises and must never be
+        # mistaken for a clean zero).
+        CronJob(
+            legacy_agent_return_sweep,
+            cron=_CRON_DAILY_0230,
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=1,
+            ttl=900,
         ),
     ]
 

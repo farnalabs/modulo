@@ -42,6 +42,7 @@ from typing import Any
 
 from modulo.core.run_context.autonomy import PIPELINE_EARNED_AT_START_KEY, PIPELINE_MAX_AUTONOMY_KEY
 from modulo.db.lifecycle_refs import notify_refs_shadow_strip_hit
+from modulo.util import callable_label
 
 _log = logging.getLogger(__name__)
 
@@ -337,20 +338,26 @@ def cancellable_node(
     """
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+        # ``fn`` is only known to be callable, so it may be a callable object or
+        # a partial with no ``__name__``. Resolve the label once, defensively —
+        # reading ``fn.__name__`` per call would raise AttributeError on the first
+        # node invocation, from inside the pipeline execution path.
+        fn_name = callable_label(fn)
+
         @functools.wraps(fn)
         async def wrapper(state: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
             run_ctx: dict[str, Any] = state.get("run_context") or {}
-            _raise_if_state_cancelled(fn.__name__, run_ctx)
-            await _raise_if_db_cancelled(fn.__name__)
+            _raise_if_state_cancelled(fn_name, run_ctx)
+            await _raise_if_db_cancelled(fn_name)
 
-            result = await _execute_node(fn, state, kwargs, timeout, fn.__name__)
+            result = await _execute_node(fn, state, kwargs, timeout, fn_name)
 
             # 3. Context-setter guard and write log
             if result and "run_context" in result and result["run_context"] is not None:
                 if role == "context_setter":
-                    _handle_context_setter(result, state, fn.__name__, role)
+                    _handle_context_setter(result, state, fn_name, role)
                 else:
-                    await _raise_context_violation(result, fn.__name__, role)
+                    await _raise_context_violation(result, fn_name, role)
 
             return result
 

@@ -250,6 +250,153 @@ async def test_resume_routes_completed_outputs_to_finalize_cost():
 
 
 # ---------------------------------------------------------------------------
+# FAR-131 (MAJOR 2) — the executor → fire_agent_signal wiring threads the
+# node-type map, so a splittable node's child run receives its PURE RETURN.
+# ---------------------------------------------------------------------------
+
+
+def _make_signal_session(*, trigger: MagicMock, active_count: int = 0) -> MagicMock:
+    """A session whose ``execute`` dispatches the agent_signal fire queries.
+
+    Dispatches on SQL text (org pause / active-run count / the trigger select)
+    so the real ``fire_agent_signal`` can run against it without a database.
+    """
+    session = MagicMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+
+    trigger_result = MagicMock()
+    trigger_result.scalars.return_value.all.return_value = [trigger]
+    count_result = MagicMock()
+    count_result.scalar_one.return_value = active_count
+    org_result = MagicMock()
+    org_result.one_or_none.return_value = (False, "active")
+
+    async def _execute(*args: Any, **_kwargs: Any) -> Any:
+        sql = str(args[0]) if args else ""
+        if "organisations" in sql:
+            return org_result
+        if "count(" in sql:
+            return count_result
+        return trigger_result
+
+    session.execute = _execute
+    return session
+
+
+def _make_signal_trigger(*, pipeline_id: uuid.UUID, source_node_id: str) -> MagicMock:
+    """A minimal agent_signal Trigger watching *source_node_id*."""
+    trigger = MagicMock()
+    trigger.id = uuid.uuid4()
+    trigger.pipeline_id = pipeline_id
+    trigger.active = True
+    trigger.max_concurrent_runs = 5
+    trigger.config_json = {
+        "source_pipeline_id": str(pipeline_id),
+        "source_node_id": source_node_id,
+        "snapshot_id": str(uuid.uuid4()),
+    }
+    return trigger
+
+
+_SANDBOX_SIGNAL_ENVELOPE: dict[str, Any] = {
+    "output": {"status": "complete", "summary": "done", "cost_estimate_usd": 0.5},
+    "artifacts": [
+        {
+            "status": "complete",
+            "output": {
+                "output_json": {"pr_url": "https://example/1", "changed_files": ["a.py"]},
+                "cost_estimate_usd": 0.5,
+            },
+        }
+    ],
+}
+
+
+async def test_fire_agent_signals_embeds_pure_return_for_sandbox_agent():
+    """The executor path threads ``node_type_map`` into ``fire_agent_signal``, so
+    the CHILD run's ``input_payload["node_output"]`` is the sandbox_agent's PURE
+    RETURN — never the legacy mixed envelope.
+
+    Removing the ``node_type=(node_type_map or {}).get(node_id)`` threading in
+    ``_fire_agent_signals`` leaves the child with the envelope and this fails.
+    """
+    pipeline_id = uuid.uuid4()
+    org_id = uuid.uuid4()
+    trigger = _make_signal_trigger(pipeline_id=pipeline_id, source_node_id="node-x")
+    session = _make_signal_session(trigger=trigger)
+    executor = PipelineExecutor(MagicMock())
+
+    with patch("modulo.core.trigger_engine.agent_signal.create_run", new_callable=AsyncMock) as mock_create_run:
+        mock_create_run.return_value = MagicMock(id=uuid.uuid4())
+        await executor._fire_agent_signals(
+            session=session,
+            org_id=org_id,
+            run_id=uuid.uuid4(),
+            pipeline_id=pipeline_id,
+            completed_node_outputs={"node-x": _SANDBOX_SIGNAL_ENVELOPE},
+            node_type_map={"node-x": "sandbox_agent"},
+        )
+
+    assert mock_create_run.await_count == 1
+    payload = mock_create_run.call_args[1]["input_payload"]
+    assert payload["node_output"] == {"pr_url": "https://example/1", "changed_files": ["a.py"]}
+
+
+async def test_execute_threads_extended_node_type_map_into_agent_signal_fire():
+    """A full ``execute()`` run threads the node-type map — EXTENDED with the
+    edge-synthesized HITL gate — into ``_fire_agent_signals``.
+
+    Deleting the ``node_type_map`` argument at any hop (execute → post-stream
+    tail → ``_fire_agent_signals``) leaves this map absent/partial; dropping the
+    ``extend_node_type_map_from_edges`` call drops the gate entry.
+    """
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="complete")
+    snapshot = _make_snapshot(
+        {
+            "nodes": [
+                {"id": "node-x", "node_type": "manual"},
+                {"id": "node-y", "node_type": "agent"},
+            ],
+            "edges": [
+                {
+                    "id": "e1",
+                    "source": "node-x",
+                    "target": "node-y",
+                    "hitl_review_config": {"label": "review"},
+                }
+            ],
+        }
+    )
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    compiled = _mock_compiled()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch.object(PipelineExecutor, "_fire_agent_signals", new_callable=AsyncMock) as mock_fire,
+    ):
+        executor = PipelineExecutor(MagicMock())
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    assert mock_fire.await_count == 1
+    passed_map = mock_fire.await_args.kwargs["node_type_map"]
+    assert passed_map["node-x"] == "manual"
+    assert passed_map["node-y"] == "agent"
+    assert passed_map["hitl_review_node-x_node-y"] == "gate"
+
+
+# ---------------------------------------------------------------------------
 # FAR-189 — executor terminalization wires the work_intact reclassify
 # ---------------------------------------------------------------------------
 
@@ -852,10 +999,18 @@ def _make_resume_session(snapshot: MagicMock, retry_policy: dict[str, Any] | Non
     # retry_policy) regardless of which iterator slot resume() consumes it from.
     eval_result.scalar_one_or_none.return_value = pipeline
 
+    # FAR-939 M4: the fire-time evaluation-mode stamp read (one
+    # gate_config_json select per fired claim) sits between the eval load and
+    # the second session block.
+    claim_stamp_result = MagicMock()
+    claim_stamp_result.scalars.return_value = []
+
     count_result = MagicMock()
     count_result.scalar.return_value = 0
 
-    execute_results = iter([graph_json_result, snapshot_result, pipeline_result, eval_result, count_result])
+    execute_results = iter(
+        [graph_json_result, snapshot_result, pipeline_result, claim_stamp_result, eval_result, count_result]
+    )
 
     async def _execute(*_args: Any, **_kwargs: Any) -> Any:
         try:
@@ -1985,6 +2140,67 @@ async def test_interrupt_window_resolution_cancellation_propagates():
             )
 
     hitl_manager.create_gate.assert_not_awaited()
+
+
+async def test_interrupt_gate_stamps_frozen_eval_modes_onto_the_resolved_config():
+    """FAR-939 chunk 12 (M4): the fire-time evaluation-mode snapshot is
+    merged onto the RESOLVED review config on the claim row, so a resume can
+    re-freeze the DTO universe (``gate_config_json`` is the stamp's home —
+    see ``executor._overlay_frozen_gated_eval_modes`` on resume)."""
+    from modulo.core.pipeline_engine.executor import _GATED_EVAL_MODES_KEY
+
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    hitl_manager = MagicMock()
+    hitl_manager.create_gate = AsyncMock()
+    pipeline = MagicMock()
+    pipeline.name = "Human Gate Pipeline"
+    frozen = [
+        {
+            "eval_id": str(uuid.uuid4()),
+            "policy_gate_id": str(uuid.uuid4()),
+            "evaluation_mode": "human",
+        }
+    ]
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch(
+            "modulo.core.pipeline_engine.executor.evaluate_gate_coalescing",
+            new=AsyncMock(return_value="fresh"),
+        ),
+        patch("modulo.core.pipeline_engine.executor.get_pipeline", new=AsyncMock(return_value=pipeline)),
+        patch(
+            "modulo.core.pipeline_engine.executor.build_hitl_review_context",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "modulo.core.pipeline_engine.executor.resolve_hitl_review_config",
+            new=AsyncMock(return_value={"human_only": True}),
+        ),
+        patch(
+            "modulo.core.pipeline_engine.executor.resolve_review_window_for_gate",
+            new=AsyncMock(return_value=3600),
+        ),
+        patch("modulo.core.pipeline_engine.executor.HITLManager", return_value=hitl_manager),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        executor._session_factory = factory
+        pipeline_name, coalesce_reused = await executor._create_interrupt_gate(
+            org_id=uuid.uuid4(),
+            run_id=uuid.uuid4(),
+            review_id="native-gate",
+            pipeline_id=uuid.uuid4(),
+            required_team_id=None,
+            frozen_gated_eval_modes=frozen,
+        )
+
+    assert pipeline_name == "Human Gate Pipeline"
+    assert coalesce_reused is False
+    gate_config = hitl_manager.create_gate.await_args.kwargs["gate_config_json"]
+    assert gate_config == {"human_only": True, _GATED_EVAL_MODES_KEY: frozen}
 
 
 async def test_interrupt_threads_matched_condition_result_into_the_context():

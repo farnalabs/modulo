@@ -14,6 +14,10 @@ gate:
 | `query()` – read | `read` | `GET` (default), `HEAD` |
 | `write()` – write | `write` | `POST` (default), `PUT`, `PATCH`, `DELETE` |
 
+`OPTIONS` is also accepted when explicitly declared on either surface; the
+surface (not the verb) still fixes the ACL gate, and the per-surface
+default (`GET` / `POST`) applies when no method is declared.
+
 A `PUT` / `PATCH` / `DELETE` mutates the remote system, so it belongs on the
 **write** surface even though it is not a "create". The capability set is
 `{read, write}`.
@@ -90,18 +94,25 @@ than silently passing through.
 
 Idempotent verbs (`GET`/`HEAD`) are retried up to 2 times (3 total attempts)
 with exponential backoff + jitter, honouring `Retry-After` and the retryable
-status set
-(`429`/`5xx`). Mutating verbs are retried only when the operation declares an
-`idempotency_header`. Transport failures are retried for idempotent verbs and
-surface as a typed `RESTConnectError`. The retry sleep uses the injected clock
-seam, so timing is deterministic under test.
+status set (`429`, `500`, `502`, `503`, `504` — a narrow set, not every `5xx`;
+other server errors fail immediately). Mutating verbs are retried only when the
+operation declares an `idempotency_header`. Transport failures are retried for
+idempotent verbs and surface as a typed `RESTConnectError`. The retry sleep
+uses the injected `sleep` seam (defaulting to `asyncio.sleep`), so timing is
+deterministic under test; jitter comes from a separate injected `random_uniform`
+seam, and the injected `clock` seam is used only for latency instrumentation.
 
 ### Security guards
 
-- **SSRF**: every target URL passes a guard (bound at the composition root)
-  that blocks private/loopback/link-local/cloud-metadata/CGNAT ranges via DNS
-  resolution, and enforces the `allowed_hosts` allowlist. Disabling `verify_tls`
-  never re-enables loopback/metadata targets.
+- **SSRF**: the target URL is validated twice, in two distinct places. The
+  connector itself checks the `allowed_hosts` allowlist first
+  (`connectors/rest/__init__.py`, `_validate_target_url`), then delegates to
+  the injected SSRF guard, which is bound at the composition root and resolves
+  DNS before blocking private/loopback/link-local/cloud-metadata/CGNAT ranges.
+  Private and loopback ranges can be re-enabled for a self-hosted deployment
+  via the `SSRF_ALLOW_PRIVATE_RANGES` CIDR allowlist, but the link-local,
+  metadata, benchmarking and CGNAT blocks are a non-negotiable floor. Disabling
+  `verify_tls` never re-enables those blocked targets.
 - **Header injection**: rendered header names/values may not contain CR/LF or
   control characters, and may not override auth/transport headers.
 - **Redaction**: credential values are stripped from error detail so a secret

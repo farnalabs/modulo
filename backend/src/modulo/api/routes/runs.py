@@ -16,10 +16,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Select, select, text
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.exc import TimeoutError as SA_TimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import InstanceState, selectinload
+from sqlalchemy.orm.base import LoaderCallableStatus
 from tenacity import before_sleep_log, retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from modulo.api.constants import (
@@ -241,7 +243,20 @@ async def _do_get_run_with_gate(
     async with factory() as session, session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.account_id, principal.org_role)
-        run = (await session.execute(_run_detail_statement(principal, run_id))).scalar_one_or_none()
+        # FAR-1838: eager-load ONLY the referenced snapshot's version column
+        # alongside the run (one extra narrow SELECT — never the snapshot's
+        # graph_json, which can be megabytes), so `_build_run_response` can
+        # surface `snapshot_version` from the loaded relationship without a
+        # lazy load (the factory runs autobegin=False). Applied HERE rather
+        # than on the shared `_run_detail_statement` so the events /
+        # schema-enforcement readers of `_do_get_run` do not pay for it.
+        run = (
+            await session.execute(
+                _run_detail_statement(principal, run_id).options(
+                    selectinload(Run.snapshot).load_only(PipelineSnapshot.snapshot_version)
+                )
+            )
+        ).scalar_one_or_none()
         if run is None:
             raise RunNotFoundError(run_id)
         return run, await _run_gate_fired(session, run)
@@ -543,6 +558,12 @@ class _ListPageContext:
     # ``get_run_cost_breakdowns`` query (cost_breakdown is deferred) so the
     # badge renders without N+1 and without reading the ORM attribute.
     warnings_count: dict[uuid.UUID, int] = field(default_factory=dict)
+    # FAR-1838: per-snapshot version numbers for the page's snapshot ids,
+    # loaded via ONE ``WHERE id IN (...)`` query over the page's DISTINCT
+    # snapshot ids (``_load_snapshot_versions``). Keyed by the same
+    # ``str(snapshot_id)`` spelling the list item serialises, so the builder
+    # never touches the run→snapshot relationship (no per-row query, no N+1).
+    snapshot_versions: dict[str, int] = field(default_factory=dict)
 
 
 async def _load_account_labels(session: AsyncSession, runs: list[Run]) -> dict[uuid.UUID, str]:
@@ -569,6 +590,86 @@ async def _load_trigger_labels(session: AsyncSession, runs: list[Run]) -> dict[u
     return labels
 
 
+def _coerce_snapshot_version(raw: Any) -> int | None:
+    """FAR-490-style coercion for a snapshot version number.
+
+    A real ``int`` passes through; anything else — a ``bool`` (which would
+    serialise as the fabricated ``0``/``1``), a MagicMock stand-in, a string —
+    degrades to ``None``. Mirrors the defensive coercion the same routes apply
+    to ``snapshot_id``: a test double must never leak into the payload and a
+    500 must never be raised for a display field.
+    """
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return None
+    return raw
+
+
+async def _load_snapshot_versions(session: AsyncSession, runs: list[Run]) -> dict[str, int]:
+    """Bulk-load snapshot version numbers for a page of runs — ONE query (FAR-1838).
+
+    Returns a map keyed by ``str(snapshot_id)`` (the same spelling the list
+    item serialises) so ``_build_list_item`` can surface ``snapshot_version``
+    without touching the run→snapshot relationship — a per-row relationship
+    read would be an N+1 on the list endpoint. The single
+    ``WHERE id IN (...)`` covers the page's DISTINCT snapshot ids only; runs
+    without a snapshot (legacy / test doubles) contribute nothing and later
+    resolve to ``None``.
+    """
+    snapshot_ids: set[uuid.UUID] = set()
+    for run in runs:
+        raw_id = getattr(run, "snapshot_id", None)
+        if isinstance(raw_id, uuid.UUID):
+            snapshot_ids.add(raw_id)
+        elif isinstance(raw_id, str):
+            try:
+                snapshot_ids.add(uuid.UUID(raw_id))
+            except ValueError:
+                # A non-UUID string id (test double / corrupt row) can never
+                # resolve a version — skip it rather than 500 the list page.
+                continue
+    if not snapshot_ids:
+        return {}
+    result = await session.execute(
+        select(PipelineSnapshot.id, PipelineSnapshot.snapshot_version).where(PipelineSnapshot.id.in_(snapshot_ids))
+    )
+    versions: dict[str, int] = {}
+    for snapshot_id, version in result.all():
+        coerced = _coerce_snapshot_version(version)
+        if coerced is not None:
+            versions[str(snapshot_id)] = coerced
+    return versions
+
+
+def _str_or_none(value: Any) -> str | None:
+    """The value when it is a ``str``, else ``None`` (FAR-1862 coercion)."""
+    return value if isinstance(value, str) else None
+
+
+def _int_or_none(value: Any) -> int | None:
+    """The value when it is an ``int``, else ``None`` (FAR-1862 coercion).
+
+    Guards the dispatch-state read against a test double (MagicMock /
+    SimpleNamespace) carrying a non-int where a count belongs — a raw value
+    would fail ``RunResponse``'s ``int | None`` validation.
+    """
+    return value if isinstance(value, int) else None
+
+
+def _dt_or_none(value: Any) -> datetime | None:
+    """The value when it is a ``datetime``, else ``None`` (FAR-1862 coercion)."""
+    return value if isinstance(value, datetime) else None
+
+
+def _iso_or_none(value: Any) -> str | None:
+    """ISO-8601 string for a datetime column value, else ``None``.
+
+    A real ``datetime`` serialises; any other value (a test double standing in
+    for the column) degrades to ``None`` rather than raising or leaking.
+    """
+    dt = _dt_or_none(value)
+    return dt.isoformat() if dt is not None else None
+
+
 def _build_list_item(run: Run, ctx: _ListPageContext) -> dict[str, Any]:
     """Build one runs-list item dict from a Run row + the shared page context."""
     pipeline_name = run.pipeline.name if run.pipeline else None
@@ -588,6 +689,13 @@ def _build_list_item(run: Run, ctx: _ListPageContext) -> dict[str, Any]:
     # Mirror the FAR-228/FAR-213 defensive coercion above.
     _raw_list_snapshot_id = getattr(run, "snapshot_id", None)
     _list_snapshot_id = str(_raw_list_snapshot_id) if isinstance(_raw_list_snapshot_id, (uuid.UUID, str)) else None
+    # FAR-1838: the version of the snapshot this run executed (``v{n}``),
+    # pre-fetched for the whole page in ONE query (see
+    # ``_load_snapshot_versions``) so the chip never costs a per-row read.
+    # NULL exactly when ``snapshot_id`` is NULL — never a fabricated 0.
+    _snapshot_version: int | None = None
+    if _list_snapshot_id is not None:
+        _snapshot_version = _coerce_snapshot_version(ctx.snapshot_versions.get(_list_snapshot_id))
     return {
         "run_id": str(run.id),
         "pipeline_id": str(run.pipeline_id),
@@ -603,6 +711,7 @@ def _build_list_item(run: Run, ctx: _ListPageContext) -> dict[str, Any]:
         # FAR-490: snapshot the run executes (None only for legacy/pre-FK rows)
         # so run→snapshot verification is one GET, not pagination archaeology.
         "snapshot_id": _list_snapshot_id,
+        "snapshot_version": _snapshot_version,
         "created_at": run.created_at.isoformat() if run.created_at else None,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
@@ -616,6 +725,18 @@ def _build_list_item(run: Run, ctx: _ListPageContext) -> dict[str, Any]:
         "input_payload": _mask_output_value(run.input_payload) if run.input_payload else None,
         "trigger_actor": trigger_actor,
         "heartbeat_at": run.heartbeat_at.isoformat() if run.heartbeat_at else None,
+        # FAR-1862: the dispatch-state columns the reconciler's recovery
+        # decisions are computed from. Exposed additively (they are operational
+        # state, not credentials) so a stranded run is diagnosable from the
+        # product instead of requiring DB access — the 2026-10-16 incident had
+        # two runs sitting ``pending`` for 22h with no read surface exposing
+        # WHY. Read defensively (a test double may omit them); a non-datetime
+        # timestamp value degrades to None rather than leaking a MagicMock.
+        "dispatcher": _str_or_none(getattr(run, "dispatcher", None)),
+        "dispatched_at": _iso_or_none(getattr(run, "dispatched_at", None)),
+        "dispatch_phase": _str_or_none(getattr(run, "dispatch_phase", None)),
+        "claim_count": _int_or_none(getattr(run, "claim_count", None)),
+        "enqueue_failed_at": _iso_or_none(getattr(run, "enqueue_failed_at", None)),
         "capacity": capacity,
         "warnings_count": warnings_count,
     }
@@ -631,6 +752,7 @@ async def _do_list_runs(
         await set_rls_user_context(session, user.account_id, user.org_role)
         result = await db_list_runs(
             session,
+            organisation_id=user.organisation_id,
             pipeline_id=query.pipeline_id,
             status=query.run_status,
             trigger_type=query.trigger_type,
@@ -661,6 +783,11 @@ async def _do_list_runs(
                 for run_id, breakdown in breakdowns.items()
             }
 
+        # FAR-1838: snapshot version numbers for the whole page, loaded via ONE
+        # ``WHERE id IN (...)`` over the page's DISTINCT snapshot ids — never a
+        # per-row snapshot read (avoids N+1 on the list endpoint).
+        snapshot_versions = await _load_snapshot_versions(session, result.items)
+
         # Active-run observability (FAR-307). Capacity is computed ONCE per
         # request (one active-count query + one limit read) and reused for
         # every item; `waiting` is derived per item from its own status. The
@@ -678,6 +805,7 @@ async def _do_list_runs(
             active_count=active_count,
             concurrency_limit=concurrency_limit,
             warnings_count=warnings_count,
+            snapshot_versions=snapshot_versions,
         )
         items = [_build_list_item(run, ctx) for run in result.items]
     return {
@@ -843,6 +971,12 @@ class RunResponse(BaseModel):
     # authoritative record of what the run ACTUALLY executed — expose the link
     # so staleness investigations never have to diff the live graph instead.
     snapshot_id: uuid.UUID | None = None
+    # FAR-1838: the version number of the snapshot this run executes (the
+    # ``v{n}`` a run surface renders next to the snapshot id). NULL exactly
+    # when ``snapshot_id`` is NULL (legacy/pre-FK runs) — never fabricated as
+    # ``0``, never the run number. Additive/nullable: existing consumers are
+    # unaffected.
+    snapshot_version: int | None = None
     error_detail: str | None = None
     error_code: str | None = None
     # FAR-1233 cancellation transparency: WHY this run was cancelled (one of
@@ -923,6 +1057,19 @@ class RunResponse(BaseModel):
     trigger_actor: str | None = None
     trigger_id: uuid.UUID | None = None
     heartbeat_at: datetime | None = None
+    # FAR-1862: the dispatch-state columns dispatcher_reconcile's recovery
+    # decisions are computed from — ``dispatcher`` (where the job went),
+    # ``dispatched_at`` (the per-attempt clock), ``dispatch_phase`` (how far the
+    # claim got), ``claim_count`` (attempts so far), and ``enqueue_failed_at``
+    # (the durable enqueue-failure marker). Additive/nullable; operational
+    # state, never a credential. These make a stranded run diagnosable from the
+    # product (the 2026-10-16 incident: two runs sat ``pending`` for 22h with
+    # ``error_code=None`` and no read surface exposing the reconciler's inputs).
+    dispatcher: str | None = None
+    dispatched_at: datetime | None = None
+    dispatch_phase: str | None = None
+    claim_count: int | None = None
+    enqueue_failed_at: datetime | None = None
     work_item_refs: list[dict[str, Any]] | None = None
     child_runs: list[dict[str, Any]] | None = None
     capacity: dict[str, Any] | None = None
@@ -1030,6 +1177,29 @@ def _resolve_trace_display(run: Any, otlp_endpoint: str | None) -> tuple[str | N
     return trace_id, None
 
 
+def _attached_snapshot_version(run: Any) -> Any:
+    """The snapshot version of the snapshot object ALREADY loaded on *run* (FAR-1838).
+
+    Reads the ``snapshot`` relationship's loaded value ONLY — it never issues
+    SQL. The session factories run ``autobegin=False``, so a lazy load outside
+    a transaction raises instead of loading; the callers therefore attach the
+    snapshot they just loaded (manual trigger, rerun) or eager-load it in the
+    same transaction (run detail via ``selectinload``), and this reader
+    degrades to ``None`` for a run whose snapshot was never loaded, a
+    non-ORM test double, or a missing snapshot row. The caller coerces the
+    result through :func:`_coerce_snapshot_version`.
+    """
+    state = sa_inspect(run, raiseerr=False)
+    if not isinstance(state, InstanceState):
+        return None
+    if "snapshot" not in state.attrs:
+        return None
+    loaded = state.attrs["snapshot"].loaded_value
+    if loaded is None or loaded is LoaderCallableStatus.NO_VALUE:
+        return None
+    return getattr(loaded, "snapshot_version", None)
+
+
 def _build_run_response(
     run: Any,
     ctx: _RunDisplayContext | None = None,
@@ -1082,6 +1252,13 @@ def _build_run_response(
     _raw_snapshot_id = getattr(run, "snapshot_id", None)
     snapshot_id = _raw_snapshot_id if isinstance(_raw_snapshot_id, (uuid.UUID, str)) else None
 
+    # FAR-1838: the version of the snapshot this run executed, read from the
+    # snapshot object ALREADY loaded on the run (the rerun/manual-trigger paths
+    # attach the snapshot they just loaded; the detail path eager-loads it in
+    # the run-load transaction) — never a second fetch, never a lazy load. NULL
+    # exactly when snapshot_id is NULL; a non-int/MagicMock never leaks.
+    snapshot_version = _coerce_snapshot_version(_attached_snapshot_version(run)) if snapshot_id is not None else None
+
     # Masked input payload, mirroring the list shape (_build_list_item). Same
     # defensive coercion as run_classification/snapshot_id above: a non-dict
     # column value (or a MagicMock in test fakes) degrades to None, never a 500.
@@ -1098,6 +1275,7 @@ def _build_run_response(
         pipeline_name=pipeline_name,
         langgraph_thread_id=run.langgraph_thread_id,
         snapshot_id=snapshot_id,
+        snapshot_version=snapshot_version,
         error_detail=error_detail,
         error_code=error_code,
         # FAR-1233: both columns are genuinely ``str | None`` on the row, so the
@@ -1130,6 +1308,13 @@ def _build_run_response(
         **run_provenance_fields(run),
         trigger_id=ctx.trigger_id if ctx.trigger_id is not None else getattr(run, "trigger_id", None),
         heartbeat_at=ctx.heartbeat_at if ctx.heartbeat_at is not None else getattr(run, "heartbeat_at", None),
+        # FAR-1862: the reconciler's dispatch-state inputs, additive/nullable.
+        # Coerced defensively so a test double cannot fail response validation.
+        dispatcher=_str_or_none(getattr(run, "dispatcher", None)),
+        dispatched_at=_dt_or_none(getattr(run, "dispatched_at", None)),
+        dispatch_phase=_str_or_none(getattr(run, "dispatch_phase", None)),
+        claim_count=_int_or_none(getattr(run, "claim_count", None)),
+        enqueue_failed_at=_dt_or_none(getattr(run, "enqueue_failed_at", None)),
         work_item_refs=ctx.work_item_refs,
         child_runs=ctx.child_runs,
         capacity=ctx.capacity,
@@ -1299,6 +1484,9 @@ async def _create_manual_run(
     # (e.g. the integration-test session) and turns POST /api/v1/runs into a
     # 500 even though the run was created successfully.
     run.pipeline = pipeline
+    # FAR-1838: same attach pattern for the snapshot just created, so
+    # _build_run_response can surface snapshot_version without a second fetch.
+    run.snapshot = snapshot
     return run
 
 
@@ -1519,6 +1707,11 @@ async def _create_rerun_run(session: AsyncSession, principal: TenantPrincipal, s
     # run.pipeline.name without a lazy load (same autobegin rationale as the
     # manual trigger path).
     run.pipeline = pipeline
+    # FAR-1838: the source snapshot is already in hand from the validation
+    # read above — attach it so the response carries snapshot_version without
+    # re-querying the same row (a run whose snapshot is loaded must never be
+    # fetched twice).
+    run.snapshot = snapshot
     return run
 
 

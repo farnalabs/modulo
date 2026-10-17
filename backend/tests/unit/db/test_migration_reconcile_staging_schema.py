@@ -145,8 +145,13 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0309_hitl_claims_decision_sweep chains off 0308_runs_dispatch_phase_history, and
 # 0310_library_cluster_db_hardening chains off 0309_hitl_claims_decision_sweep, and
 # 0311_library_cluster_schema_hygiene chains off 0310_library_cluster_db_hardening, and
-# 0313_evidence_redaction_rules chains off 0311_library_cluster_schema_hygiene as the chain head.
-_CHAIN_HEAD_MIGRATION = "0313_evidence_redaction_rules"
+# 0312_memberships_active_lookups chains off 0311_library_cluster_schema_hygiene, and
+# 0313_collection_install_drop_installed_entities chains off 0312_memberships_active_lookups, and
+# 0314_external_agents_mcp_servers chains off 0313_collection_install_drop_installed_entities, and
+# 0315_service_accounts_lifecycle chains off 0314_external_agents_mcp_servers, and
+# 0317_drop_retired_pipeline_diff_rollback_flag chains off 0316_policy_gate_evaluation_mode, and
+# 0318_evidence_redaction_rules chains off 0317_drop_retired_pipeline_diff_rollback_flag as the chain head.
+_CHAIN_HEAD_MIGRATION = "0318_evidence_redaction_rules"
 
 
 def _source(name: str) -> str:

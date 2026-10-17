@@ -18,6 +18,7 @@ parameter was retired from the public surface in FAR-1103 chunk 5a.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import uuid
 from typing import Any
@@ -193,6 +194,31 @@ def _reject_unbound_output_point_guardrail(
         )
 
 
+@dataclasses.dataclass(frozen=True)
+class EvalWriteOptions:
+    """Optional write-path modifiers for :func:`create_or_update_eval`.
+
+    Groups the three trailing optional arguments (S107 — the helper had 14
+    parameters, above the 13 authorized). Semantics are unchanged from the
+    former keyword parameters:
+
+      * ``eval_suite_id`` — optional FK onto the owning eval suite; ``None``
+        leaves the row's ``eval_suite_id`` untouched on update / unset on
+        create.
+      * ``existing_eval_id`` — when set, the helper takes the UPDATE path
+        (load, snapshot ``pre_version_raw``, bump ``version``) instead of
+        CREATE; a missing row falls back to a first-time create with that id.
+      * ``evaluation_mode`` — FAR-939 chunk 12 §3.1 preserve-or-default:
+        ``None`` means *preserve the live gate's mode on update* /
+        *default to ``automatic`` on create*; a non-``None`` value is the
+        explicit write.
+    """
+
+    eval_suite_id: uuid.UUID | None = None
+    existing_eval_id: uuid.UUID | None = None
+    evaluation_mode: str | None = None
+
+
 async def create_or_update_eval(
     session: AsyncSession,
     *,
@@ -206,8 +232,7 @@ async def create_or_update_eval(
     failure_behaviour: str,
     pass_threshold: float | None,
     suite_id: str | None,
-    eval_suite_id: uuid.UUID | None = None,
-    existing_eval_id: uuid.UUID | None = None,
+    write_options: EvalWriteOptions | None = None,
 ) -> Any:
     """Persist an ``Eval`` row and optionally a ``PolicyGate`` row.
 
@@ -219,22 +244,49 @@ async def create_or_update_eval(
        a row is enforced by no seam and would fire silently never);
        persist ``Eval`` row only (no ``PolicyGate``, never call ``validate_binding``).
     2. Else ``node_id is not None`` → call ``validate_binding``;
-       on ``PolicyGateBindingViolationError`` re-raise for the caller.
-       Persist ``Eval`` + ``PolicyGate(action=failure_behaviour)``.
+       on        ``PolicyGateBindingViolationError`` re-raise for the caller.
+       Persist ``Eval`` + ``PolicyGate(action=failure_behaviour,
+       evaluation_mode=<see the preserve-or-default rule below>)``.
     3. Else (suite-scoped non-guardrail) → persist ``Eval`` row only
        (no ``PolicyGate``).
 
     ``failure_behaviour`` is internal — callers always pass ``"warn"``
     since FAR-1103 chunk 5a retired the public surface.
 
+    ``write_options.evaluation_mode`` (FAR-939 chunk 12) is persisted on
+    BOTH gate upsert paths, with preserve-or-default semantics (§3.1 —
+    every update surface must carry OR preserve the field):
+
+      - **CREATE** (no live gate): ``evaluation_mode or "automatic"`` — a
+        fresh gate is automatic (current behaviour) unless the caller
+        passes a mode explicitly.
+      - **UPDATE** (live gate): assigned ONLY when the caller passes a
+        non-``None`` value; ``None`` means *preserve the live gate's
+        mode*. This is what makes an MCP (or any partial) eval edit
+        unable to silently reset a ``human`` gate to ``automatic`` —
+        mirroring ``failure_behaviour`` preservation.
+
+    REST callers forward the live value; callers that do not carry the
+    field pass ``None`` and preserve on update / default on create.
+
     Version stamping lives inside the helper:
       - create → ``version=1``
-      - update (``existing_eval_id`` given) → bump ``version``, snapshot ``pre_version_raw``.
+      - update (``write_options.existing_eval_id`` given) → bump ``version``,
+        snapshot ``pre_version_raw``.
+
+    The three optional modifiers ride on ``write_options`` (an
+    :class:`EvalWriteOptions`) rather than as bare keyword parameters —
+    same semantics, one fewer parameter (S107).
 
     Returns the persisted ``Eval`` row instance.
     """
     from modulo.db.models.eval import Eval
     from modulo.db.models.policy_gate import PolicyGate
+
+    opts = write_options if write_options is not None else EvalWriteOptions()
+    eval_suite_id = opts.eval_suite_id
+    existing_eval_id = opts.existing_eval_id
+    evaluation_mode = opts.evaluation_mode
 
     # --- Branch on eval type BEFORE calling validate_binding ---
 
@@ -346,16 +398,25 @@ async def create_or_update_eval(
         ).scalar_one_or_none()
 
         if existing_gate is not None:
-            # Update existing gate
+            # Update existing gate.
             existing_gate.action = pg_action
             existing_gate.node_id = node_id
+            # FAR-939 chunk 12 §3.1: ``None`` means *preserve the live
+            # mode* — an update surface that does not carry the field
+            # (the MCP write seam) must never reset a human-approval gate
+            # to automatic. Callers that carry it (the REST update route)
+            # pass the resolved live value, so an explicit write lands.
+            if evaluation_mode is not None:
+                existing_gate.evaluation_mode = evaluation_mode
         else:
-            # Create new gate
+            # Create new gate — fresh gates are automatic unless the
+            # caller passes a mode explicitly.
             gate = PolicyGate(
                 organisation_id=org_id,
                 eval_id=eval_row.id,
                 node_id=node_id,
                 action=pg_action,
+                evaluation_mode=evaluation_mode or "automatic",
                 version=1,
             )
             session.add(gate)

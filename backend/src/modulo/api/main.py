@@ -12,7 +12,7 @@ import anyio
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import PlainTextResponse
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -28,6 +28,7 @@ from modulo.api.dependencies import (
 )
 from modulo.api.exception_handlers import (
     http_exception_handler,
+    sso_callback_error_handler,
     storage_exhausted_exception_handler,
     unhandled_exception_handler,
     validation_exception_handler,
@@ -86,6 +87,7 @@ from modulo.api.routes.errors import router as errors_router
 from modulo.api.routes.evals import router as evals_router
 from modulo.api.routes.events import router as events_router
 from modulo.api.routes.evidence import router as evidence_router
+from modulo.api.routes.external_agents import router as external_agents_router
 from modulo.api.routes.feedback import router as feedback_router
 from modulo.api.routes.guardrail_config import router as guardrail_config_router
 from modulo.api.routes.health import router as health_router
@@ -95,6 +97,7 @@ from modulo.api.routes.library import router as library_router
 from modulo.api.routes.lifecycle_maps import router as lifecycle_maps_router
 from modulo.api.routes.manifest import router as manifest_router
 from modulo.api.routes.mcp_oauth import router as mcp_oauth_router
+from modulo.api.routes.mcp_servers import router as mcp_servers_router
 from modulo.api.routes.mcp_setup import router as mcp_setup_router
 from modulo.api.routes.me import router as me_router
 from modulo.api.routes.metrics import router as metrics_router
@@ -121,6 +124,7 @@ from modulo.api.routes.runs import router as runs_router
 from modulo.api.routes.schema_folders import router as schema_folders_router
 from modulo.api.routes.schemas import router as schemas_router
 from modulo.api.routes.scim import router as scim_router
+from modulo.api.routes.service_accounts import router as service_accounts_router
 from modulo.api.routes.slack import router as slack_router
 from modulo.api.routes.sso import router as sso_router
 from modulo.api.routes.stripe_webhook import router as stripe_webhook_router
@@ -133,6 +137,7 @@ from modulo.api.routes.variants import router as variants_router
 from modulo.api.routes.viewmodel import router as viewmodel_router
 from modulo.api.routes.views import router as views_router
 from modulo.api.routes.webhooks import router as webhooks_router
+from modulo.auth.sso import SsoCallbackError
 from modulo.core.events.event_bus import configure_event_bus
 from modulo.core.events.listeners import register_listeners
 from modulo.core.graceful_shutdown import ShutdownManager, ShutdownMiddleware
@@ -1166,6 +1171,31 @@ async def _seed_tier_catalog() -> None:
                 params,
             )
 
+        # Reconcile: prune every catalog row whose name is not in the current
+        # code registry. Retiring a flag is a code-only change and the INSERT
+        # above is upsert-only (``ON CONFLICT DO NOTHING``), so without this a
+        # retired flag's row lingers and stays user-visible in the DB-backed
+        # admin Feature Flags listing (the FAR-1875 defect). No table holds a
+        # foreign key to ``feature_flag_catalog`` (verified against the fully
+        # migrated schema: its only constraints are its own PK on ``name`` and
+        # its FK to ``tier_catalog``), so this DELETE cannot raise an FK
+        # violation and crash application boot. Idempotent: the predicate is a
+        # pure function of the code registry.
+        prune = await session.execute(
+            text("DELETE FROM feature_flag_catalog WHERE name NOT IN :names").bindparams(
+                bindparam("names", expanding=True)
+            ),
+            {"names": [flag["name"] for flag in FLAGS]},
+        )
+        # Observability: report the swept count so a 0-row prune is
+        # distinguishable in the boot log from a wrong database. ``rowcount``
+        # is present on the DML cursor result but not on the ``Result`` typing.
+        pruned_rows = prune.rowcount if hasattr(prune, "rowcount") else 0
+        logger.info(
+            "startup.tier_catalog_pruned_stale_flags",
+            extra={"pruned_rows": pruned_rows},
+        )
+
 
 app = FastAPI(
     title="Modulo",
@@ -1246,6 +1276,7 @@ app.include_router(dashboard_router)
 app.include_router(deployment_router)
 app.include_router(costs_router)
 app.include_router(cost_components_router)
+app.include_router(service_accounts_router)
 app.include_router(teams_router)
 app.include_router(pipelines_router)
 app.include_router(pipeline_folders_router)
@@ -1291,6 +1322,8 @@ app.include_router(product_analytics_router)
 app.include_router(registry_router)
 app.include_router(determination_router)
 app.include_router(evals_router)
+app.include_router(external_agents_router)
+app.include_router(mcp_servers_router)
 app.include_router(admin_notifications_router)
 app.include_router(admin_orgs_router)
 app.include_router(admin_assistant_router)
@@ -1336,6 +1369,10 @@ app.mount("/mcp", build_mcp_asgi_app())
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(StorageExhaustedError, storage_exhausted_exception_handler)  # type: ignore[arg-type]
+# FAR-1791: a raised SsoCallbackError renders the 303 login redirect (the
+# callback routes raise instead of returning it, so the saml_acs_attempted
+# audit dependency records an honest outcome="error" for a failed sign-in).
+app.add_exception_handler(SsoCallbackError, sso_callback_error_handler)  # type: ignore[arg-type]
 app.add_exception_handler(Exception, unhandled_exception_handler)
 
 

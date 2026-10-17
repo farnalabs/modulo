@@ -143,7 +143,8 @@ async def list_environment_profiles(
     if include_deleted:
         q = include_soft_deleted(q)
     rows = (await session.execute(q)).scalars().all()
-    return PageResult(items=list(rows), total=total, page=page, page_size=page_size)
+    has_more = (offset + len(rows)) < total
+    return PageResult(items=list(rows), total=total, page=page, page_size=page_size, has_more=has_more)
 
 
 async def update_environment_profile(

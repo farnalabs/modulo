@@ -1037,7 +1037,10 @@ async def install_collection(
         "entity_fingerprints": fingerprints,
     }
     install.connector_checklist = connector_checklist
-    install.installed_entities = entities
+    # FAR-1754: the entity list is NOT duplicated onto the parent row. The
+    # ``collection_install_entity`` child rows written by ``_record_entities``
+    # (step 7) are the single source of truth for what this install wrote;
+    # the API response derives its ``installed_entities`` list from them.
 
     await session.flush()
 

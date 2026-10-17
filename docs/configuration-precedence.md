@@ -35,9 +35,9 @@ the SAQ children, and the CLI sees the bundled endpoints.
 3. **Field defaults** in `modulo.settings` sit below the pinned file.
 
 Practical consequence: exporting `DATABASE_URL` in your shell says
-"ignore the bundled Postgres and use mine" (launcher-hostile ambient
-values like `PG*` and company URLs are scrubbed at boot per ADR 031
-Decision 2, so only intentional exports survive).
+"ignore the bundled Postgres and use mine" (`PG*` client vars are scrubbed
+at boot and ambient `DATABASE_URL`/`REDIS_URL` are refused before first
+boot per ADR 031 Decisions 2/8, so only intentional exports survive).
 
 ## Compose / container deployments: env > secret-manager > defaults
 
@@ -59,8 +59,14 @@ Do not conflate these; they do NOT share a code path:
   ENTIRELY: it resolves ORG-LEVEL runtime state (for example the
   org-wide trigger pause, `org_row_is_paused`) from the database rows -
   a per-request decision layered above Settings, read fresh from Postgres
-  on every fire path. It does not read env vars and does not participate
-  in the precedence order above.
+  on every fire path. It is not part of the precedence order above, but it
+  is not env-free either: its `resolve_schema_validator_mode` resolver runs a
+  four-level chain (FAR-899) of
+  `organisations.settings_json["schema_validator_mode"]` (per-org) →
+  `system_config` row (instance-wide) → `MODULO_SCHEMA_VALIDATOR_MODE`
+  env var (first-boot seed only) → `lenient`. Note the direction: the
+  database wins over the env var once a runtime value exists, which is
+  the opposite of the Settings order above.
 
 ---
 

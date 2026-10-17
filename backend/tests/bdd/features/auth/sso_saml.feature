@@ -28,13 +28,13 @@ Feature: SSO SAML 2.0 Integration
 
   Scenario: Invalid SAML response is rejected
     When the SAML ACS endpoint receives a malformed SAMLResponse
-    Then the response status is 401
-    And the error detail mentions "malformed or invalid"
+    Then the response status is 303
+    And the login redirect reports SSO error "auth_failed"
 
   Scenario: Missing SAMLResponse in form data is rejected
     When the SAML ACS endpoint receives a request without SAMLResponse
-    Then the response status is 400
-    And the error detail mentions "SAMLResponse"
+    Then the response status is 303
+    And the login redirect reports SSO error "auth_failed"
 
   Scenario: IdP group claim maps to team membership
     Given SAML group mapping is configured for "admins" to team "team-1" with role "admin"

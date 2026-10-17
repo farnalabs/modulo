@@ -85,6 +85,20 @@ PERMISSIONS: dict[str, str] = {
     "connector.update": "operator",
     "connector.delete": "operator",
     "connector.list": "viewer",
+    # external-agent / MCP-server registries (FAR-1692). These are INVENTORY
+    # records and policy substrate, not enforcement (ADR 055). Reads are
+    # viewer-level; writes take the ordinary resource-management operator floor,
+    # and approving an MCP server's pinned tool set (the re-approval after a
+    # tools_hash drift) is operator-level too.
+    "external_agent.list": "viewer",
+    "external_agent.create": "operator",
+    "external_agent.update": "operator",
+    "external_agent.delete": "operator",
+    "mcp_server.list": "viewer",
+    "mcp_server.create": "operator",
+    "mcp_server.update": "operator",
+    "mcp_server.delete": "operator",
+    "mcp_server.approve": "operator",
     # In-Dev (pre-release) disclosure controls (ADR 010): the list endpoints
     # accept ?include_in_dev=true, but revealing In-Dev items is operator-only —
     # the base "list" permission stays viewer so normal listing is unchanged.

@@ -6,14 +6,14 @@ import { getHandlers, clearAllRegistrations } from '../stores/syncRegistry'
 import { getAccessToken } from '../lib/api/client'
 import type { EventBusEvent } from '../types/events'
 
-const mockFlagsResponse = {
-  license: { tier: 'team', has_license_key: true, is_valid: true },
+const mockPlanResponse = {
+  license: { tier: 'team', expires_at: '2026-12-31T23:59:59Z', org_id: 'Acme Corp' },
+  dev_mode: false,
   flags: [
     { name: 'parallel_branches', description: 'Parallel branches', tier: 'team', currently_active: true, depends_on: null },
     { name: 'eval_system', description: 'Eval system', tier: 'team', currently_active: false, depends_on: null },
     { name: 'hitl_reviews', description: 'HITL gates', tier: 'community', currently_active: true, depends_on: null },
   ],
-  would_activate: [],
 }
 
 const mockTiersResponse = {
@@ -23,14 +23,6 @@ const mockTiersResponse = {
     { tier_id: 'v1', label: 'V1', rank: 2 },
     { tier_id: 'v2', label: 'V2', rank: 3 },
   ],
-}
-
-const mockLicenseResponse = {
-  has_license: true,
-  tier: 'team',
-  features: [],
-  expires_at: '2026-12-31T23:59:59Z',
-  org_id: 'Acme Corp',
 }
 
 vi.mock('../lib/api/client', () => ({
@@ -58,11 +50,8 @@ const FLAG_CACHE_KEY = flagCacheKey(null)
 async function mockApiSuccess() {
   const { api } = await import('../lib/api/client')
   ;(api.GET as any).mockImplementation((path: string) => {
-    if (path === '/api/v1/admin/feature-flags') {
-      return Promise.resolve({ data: mockFlagsResponse, error: null })
-    }
-    if (path === '/api/v1/admin/license') {
-      return Promise.resolve({ data: mockLicenseResponse, error: null })
+    if (path === '/api/v1/plan') {
+      return Promise.resolve({ data: mockPlanResponse, error: null })
     }
     if (path === '/api/v1/admin/tiers') {
       return Promise.resolve({ data: mockTiersResponse, error: null })
@@ -127,14 +116,11 @@ describe('usePlanStore', () => {
     expect(store.isLoading).toBe(false)
   })
 
-  it('sets devMode and loaded from the feature-flags payload', async () => {
+  it('sets devMode and loaded from the plan payload', async () => {
     const { api } = await import('../lib/api/client')
     ;(api.GET as any).mockImplementation((path: string) => {
-      if (path === '/api/v1/admin/feature-flags') {
-        return Promise.resolve({ data: { ...mockFlagsResponse, dev_mode: true }, error: null })
-      }
-      if (path === '/api/v1/admin/license') {
-        return Promise.resolve({ data: mockLicenseResponse, error: null })
+      if (path === '/api/v1/plan') {
+        return Promise.resolve({ data: { ...mockPlanResponse, dev_mode: true }, error: null })
       }
       return Promise.resolve({ data: mockTiersResponse, error: null })
     })
@@ -157,13 +143,28 @@ describe('usePlanStore', () => {
     expect(store.isAtMinimumTier('v2')).toBe(false)
   })
 
-  it('fetchPlan populates license info from license endpoint', async () => {
+  it('populates tier, licence view and flag map from the single plan payload', async () => {
     const store = usePlanStore()
     await store.fetchPlan()
 
     expect(store.expiresAt).toBe('2026-12-31T23:59:59Z')
     expect(store.orgId).toBe('Acme Corp')
     expect(store.currentTier).toBe('team')
+    expect(store.loaded).toBe(true)
+  })
+
+  it('reads no instance-admin endpoint — one plan call plus the viewer-readable tier catalogue', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockClear()
+
+    const store = usePlanStore()
+    await store.fetchPlan()
+
+    const paths = (api.GET as any).mock.calls.map((call: unknown[]) => call[0])
+    expect(paths).toContain('/api/v1/plan')
+    expect(paths).toContain('/api/v1/admin/tiers')
+    expect(paths).not.toContain('/api/v1/admin/feature-flags')
+    expect(paths).not.toContain('/api/v1/admin/license')
   })
 
   it('featureEnabled returns correct boolean', async () => {
@@ -215,7 +216,7 @@ describe('usePlanStore', () => {
   it('fetchPlan sets error on failure', async () => {
     const { api } = await import('../lib/api/client')
     ;(api.GET as any).mockImplementation((path: string) => {
-      if (path === '/api/v1/admin/feature-flags') {
+      if (path === '/api/v1/plan') {
         return Promise.resolve({ data: null, error: 'Network error' })
       }
       return Promise.resolve({ data: null, error: null })
@@ -239,39 +240,17 @@ describe('usePlanStore', () => {
     expect(store.isLoading).toBe(false)
   })
 
-  it('reports a license endpoint error while keeping flags and tiers state', async () => {
+  it('reports a plan bootstrap error while keeping the tier catalogue applied', async () => {
+    // Since FAR-1809 the tier + licence view + flags arrive in ONE plan
+    // payload, so their state sinks or rises together; the independent
+    // second source is the tier catalogue, which must still apply.
     const { api } = await import('../lib/api/client')
     ;(api.GET as any).mockImplementation((path: string) => {
-      if (path === '/api/v1/admin/license') {
-        return Promise.resolve({ data: null, error: 'License endpoint down' })
+      if (path === '/api/v1/plan') {
+        return Promise.resolve({ data: null, error: 'Plan endpoint down' })
       }
       if (path === '/api/v1/admin/tiers') {
         return Promise.resolve({ data: mockTiersResponse, error: null })
-      }
-      return Promise.resolve({ data: mockFlagsResponse, error: null })
-    })
-
-    const store = usePlanStore()
-    await store.fetchPlan()
-
-    expect(store.error).toContain('License endpoint down')
-    expect(store.currentTier).toBe('team')
-    expect(store.expiresAt).toBeNull()
-    expect(store.orgId).toBeNull()
-    expect(store.loaded).toBe(true)
-  })
-
-  it('aggregates partial failures while keeping successful endpoint state', async () => {
-    const { api } = await import('../lib/api/client')
-    ;(api.GET as any).mockImplementation((path: string) => {
-      if (path === '/api/v1/admin/feature-flags') {
-        return Promise.resolve({ data: null, error: 'Flags endpoint down' })
-      }
-      if (path === '/api/v1/admin/tiers') {
-        return Promise.resolve({ data: null, error: 'Tiers endpoint down' })
-      }
-      if (path === '/api/v1/admin/license') {
-        return Promise.resolve({ data: mockLicenseResponse, error: null })
       }
       return Promise.resolve({ data: null, error: null })
     })
@@ -279,12 +258,36 @@ describe('usePlanStore', () => {
     const store = usePlanStore()
     await store.fetchPlan()
 
-    expect(store.error).toContain('Flags endpoint down')
+    expect(store.error).toContain('Plan endpoint down')
+    expect(store.flagsSource).toBe('unavailable')
+    expect(store.loaded).toBe(false)
+    expect(store.currentTier).toBe('community') // bootstrap default, not observed truth
+    expect(store.expiresAt).toBeNull()
+    expect(store.orgId).toBeNull()
+    expect(store.tierLabels).toEqual({ community: 'Community', team: 'Team', v1: 'V1', v2: 'V2' })
+  })
+
+  it('aggregates partial failures while keeping successful endpoint state', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/tiers') {
+        return Promise.resolve({ data: null, error: 'Tiers endpoint down' })
+      }
+      if (path === '/api/v1/plan') {
+        return Promise.resolve({ data: mockPlanResponse, error: null })
+      }
+      return Promise.resolve({ data: null, error: null })
+    })
+
+    const store = usePlanStore()
+    await store.fetchPlan()
+
     expect(store.error).toContain('Tiers endpoint down')
     expect(store.currentTier).toBe('team')
     expect(store.expiresAt).toBe('2026-12-31T23:59:59Z')
     expect(store.orgId).toBe('Acme Corp')
-    expect(store.loaded).toBe(false)
+    expect(store.loaded).toBe(true)
+    expect(store.flagsSource).toBe('server')
     expect(store.isLoading).toBe(false)
   })
 
@@ -294,10 +297,10 @@ describe('usePlanStore', () => {
       if (path === '/api/v1/admin/tiers') {
         return Promise.reject(new Error('tiers timeout'))
       }
-      if (path === '/api/v1/admin/license') {
-        return Promise.resolve({ data: mockLicenseResponse, error: null })
+      if (path === '/api/v1/plan') {
+        return Promise.resolve({ data: mockPlanResponse, error: null })
       }
-      return Promise.resolve({ data: mockFlagsResponse, error: null })
+      return Promise.resolve({ data: null, error: null })
     })
 
     const store = usePlanStore()
@@ -326,15 +329,12 @@ describe('usePlanStore', () => {
 
   it('toggles isLoading while the plan fetch is in flight', async () => {
     const { api } = await import('../lib/api/client')
-    let releaseFlags!: (value: { data: unknown; error: null }) => void
-    const flagsPromise = new Promise<{ data: unknown; error: null }>(resolve => {
-      releaseFlags = resolve
+    let releasePlan!: (value: { data: unknown; error: null }) => void
+    const planPromise = new Promise<{ data: unknown; error: null }>(resolve => {
+      releasePlan = resolve
     })
     ;(api.GET as any).mockImplementation((path: string) => {
-      if (path === '/api/v1/admin/feature-flags') return flagsPromise
-      if (path === '/api/v1/admin/license') {
-        return Promise.resolve({ data: mockLicenseResponse, error: null })
-      }
+      if (path === '/api/v1/plan') return planPromise
       return Promise.resolve({ data: mockTiersResponse, error: null })
     })
 
@@ -342,7 +342,7 @@ describe('usePlanStore', () => {
     const pending = store.fetchPlan()
     expect(store.isLoading).toBe(true)
 
-    releaseFlags({ data: mockFlagsResponse, error: null })
+    releasePlan({ data: mockPlanResponse, error: null })
     await pending
 
     expect(store.isLoading).toBe(false)
@@ -356,7 +356,7 @@ describe('usePlanStore', () => {
 
     await Promise.all([store.fetchPlan(), store.fetchPlan(), store.fetchPlan()])
 
-    expect(api.GET).toHaveBeenCalledTimes(3)
+    expect(api.GET).toHaveBeenCalledTimes(2)
     expect(store.currentTier).toBe('team')
   })
 
@@ -368,7 +368,7 @@ describe('usePlanStore', () => {
       if (path.includes('/org-override')) {
         return Promise.resolve({ data: { override: true }, error: null })
       }
-      return Promise.resolve({ data: mockFlagsResponse, error: null })
+      return Promise.resolve({ data: mockPlanResponse, error: null })
     })
     expect(await store.fetchOrgFlagOverride('parallel_branches')).toBe(true)
 
@@ -376,7 +376,7 @@ describe('usePlanStore', () => {
       if (path.includes('/org-override')) {
         return Promise.resolve({ data: { override: false }, error: null })
       }
-      return Promise.resolve({ data: mockFlagsResponse, error: null })
+      return Promise.resolve({ data: mockPlanResponse, error: null })
     })
     expect(await store.fetchOrgFlagOverride('parallel_branches')).toBe(false)
   })
@@ -392,7 +392,7 @@ describe('usePlanStore', () => {
       if (path.includes('/org-override')) {
         return Promise.resolve({ data: null, error: 'Forbidden' })
       }
-      return Promise.resolve({ data: mockFlagsResponse, error: null })
+      return Promise.resolve({ data: mockPlanResponse, error: null })
     })
 
     const store = usePlanStore()
@@ -496,7 +496,7 @@ describe('usePlanStore', () => {
     }
 
     await vi.waitFor(() => {
-      expect((api.GET as any).mock.calls).toHaveLength(callsBefore + 3)
+      expect((api.GET as any).mock.calls).toHaveLength(callsBefore + 2)
     })
   })
 
@@ -512,7 +512,7 @@ describe('usePlanStore', () => {
         handler(syncEvent({ type: resource, id: `evt-${resource}` }))
       }
       expect(store.isLoading).toBe(true)
-      await vi.waitFor(() => expect(count()).toBe(before + 3))
+      await vi.waitFor(() => expect(count()).toBe(before + 2))
       await vi.waitFor(() => expect(store.isLoading).toBe(false))
     }
   })
@@ -528,7 +528,7 @@ describe('usePlanStore', () => {
     for (const handler of getHandlers('team')) handler(event)
 
     await vi.waitFor(() => {
-      expect((api.GET as any).mock.calls).toHaveLength(callsBefore + 3)
+      expect((api.GET as any).mock.calls).toHaveLength(callsBefore + 2)
     })
   })
 
@@ -772,6 +772,209 @@ describe('usePlanStore', () => {
       expect(() =>
         serializeFlagCache({ a: true, b: 1 } as unknown as Record<string, boolean>),
       ).toThrow(TypeError)
+    })
+  })
+
+  describe("terminal 'unavailable' state (FAR-1805 — never pending forever)", () => {
+    const FALLBACK_WARN = '[plan] Feature flags request settled without a payload'
+
+    it('an error settle (no payload) is terminal: unavailable + a log, not pending', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const { api } = await import('../lib/api/client')
+        ;(api.GET as any).mockImplementation((path: string) => {
+          if (path === '/api/v1/plan') {
+            return Promise.resolve({ data: null, error: 'Forbidden' })
+          }
+          return Promise.resolve({ data: null, error: null })
+        })
+        const store = usePlanStore()
+        await store.fetchPlan()
+
+        expect(store.flagsSource).toBe('unavailable')
+        expect(store.error).toContain('Forbidden')
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining(FALLBACK_WARN),
+          expect.any(String),
+        )
+      } finally {
+        warn.mockRestore()
+      }
+    })
+
+    it('the all-undefined no-payload branch is terminal too — it records no error at all', async () => {
+      // {data: undefined, error: undefined} pushes nothing into error.value, so
+      // an error-only guard would leave this path silently pending forever.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const { api } = await import('../lib/api/client')
+        ;(api.GET as any).mockResolvedValue({ data: undefined, error: undefined })
+        const store = usePlanStore()
+        await store.fetchPlan()
+
+        expect(store.flagsSource).toBe('unavailable')
+        expect(store.error).toBeNull()
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(FALLBACK_WARN), null)
+      } finally {
+        warn.mockRestore()
+      }
+    })
+
+    it('a rejection settle is terminal: unavailable + a log', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const { api } = await import('../lib/api/client')
+        ;(api.GET as any).mockRejectedValue(new Error('network down'))
+        const store = usePlanStore()
+        await store.fetchPlan()
+
+        expect(store.flagsSource).toBe('unavailable')
+        expect(store.error).toContain('network down')
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining(FALLBACK_WARN),
+          expect.any(String),
+        )
+      } finally {
+        warn.mockRestore()
+      }
+    })
+
+    it('the 15s timeout settle is terminal: unavailable + a log', async () => {
+      vi.useFakeTimers()
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const { api } = await import('../lib/api/client')
+        ;(api.GET as any).mockImplementation(() => new Promise(() => {})) // never settles
+        const store = usePlanStore()
+        const fetchPromise = store.fetchPlan()
+
+        await vi.advanceTimersByTimeAsync(15_001)
+        await fetchPromise
+
+        expect(store.flagsSource).toBe('unavailable')
+        expect(store.error).toContain('timed out')
+        // The fallback log attributes ONLY the flags source: both requests
+        // timed out here, so a naive join would carry the tiers noise into a
+        // flags-fallback warning.
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining(FALLBACK_WARN),
+          expect.stringContaining('Feature flags request timed out'),
+        )
+        const warnArgs = warn.mock.calls.find(call => String(call[0]).includes(FALLBACK_WARN))
+        expect(String(warnArgs?.[1])).not.toContain('Tiers:')
+      } finally {
+        warn.mockRestore()
+        vi.useRealTimers()
+      }
+    })
+
+    it("stays 'none' (in flight) until the request settles, then flips once", async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const { api } = await import('../lib/api/client')
+        let releaseFlags!: (value: { data: unknown; error: null }) => void
+        const flagsPromise = new Promise<{ data: unknown; error: null }>(resolve => {
+          releaseFlags = resolve
+        })
+        ;(api.GET as any).mockImplementation((path: string) => {
+          if (path === '/api/v1/plan') return flagsPromise
+          return Promise.resolve({ data: null, error: null })
+        })
+
+        const store = usePlanStore()
+        const pending = store.fetchPlan()
+        // Still in flight: the pending state must survive until settle.
+        expect(store.flagsSource).toBe('none')
+        expect(warn).not.toHaveBeenCalled()
+
+        releaseFlags({ data: null, error: null }) // settles without a payload
+        await pending
+
+        expect(store.flagsSource).toBe('unavailable')
+        expect(warn).toHaveBeenCalledTimes(1)
+      } finally {
+        warn.mockRestore()
+      }
+    })
+
+    it('a fast plan settle is not held hostage by a slow tier-catalogue response', async () => {
+      // Before the per-source application, doFetchPlan awaited ALL requests
+      // before applying any of them, so a hung sibling request kept the nav in
+      // "pending" for up to 15s even though the plan answer had already
+      // arrived. The nav state must key off the FLAGS (plan) settle alone.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const { api } = await import('../lib/api/client')
+        let releaseTiers!: (value: { data: null; error: null }) => void
+        const tiersPromise = new Promise<{ data: null; error: null }>(resolve => {
+          releaseTiers = resolve
+        })
+        ;(api.GET as any).mockImplementation((path: string) => {
+          if (path === '/api/v1/plan') {
+            return Promise.resolve({ data: null, error: 'Forbidden' })
+          }
+          if (path === '/api/v1/admin/tiers') return tiersPromise
+          return Promise.resolve({ data: null, error: null })
+        })
+
+        const store = usePlanStore()
+        const fetchPromise = store.fetchPlan()
+
+        // The plan source has settled (error, no payload) while tiers hangs.
+        await vi.waitFor(() => expect(store.flagsSource).toBe('unavailable'))
+        expect(store.isLoading).toBe(true) // the overall fetch is still in flight
+        expect(store.error).toBeNull() // aggregation still waits for all sources
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining('[plan] Feature flags request settled without a payload'),
+          expect.any(String),
+        )
+
+        releaseTiers({ data: null, error: null })
+        await fetchPromise
+
+        expect(store.isLoading).toBe(false)
+        expect(store.error).toContain('Forbidden')
+      } finally {
+        warn.mockRestore()
+      }
+    })
+
+    it("recovers 'unavailable' -> 'server' when a later fetch succeeds", async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const { api } = await import('../lib/api/client')
+        ;(api.GET as any).mockRejectedValue(new Error('flaky network'))
+        const store = usePlanStore()
+        await store.fetchPlan()
+        expect(store.flagsSource).toBe('unavailable')
+
+        await mockApiSuccess()
+        await store.fetchPlan()
+
+        expect(store.flagsSource).toBe('server')
+        expect(store.loaded).toBe(true)
+        expect(store.featureEnabled('parallel_branches')).toBe(true)
+      } finally {
+        warn.mockRestore()
+      }
+    })
+
+    it('a failed refresh after a successful fetch keeps the resolved source (write-once)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const store = usePlanStore()
+        await store.fetchPlan()
+        expect(store.flagsSource).toBe('server')
+
+        const { api } = await import('../lib/api/client')
+        ;(api.GET as any).mockRejectedValue(new Error('flaky network'))
+        await store.fetchPlan()
+
+        expect(store.flagsSource).toBe('server')
+        expect(warn).not.toHaveBeenCalled()
+      } finally {
+        warn.mockRestore()
+      }
     })
   })
 })

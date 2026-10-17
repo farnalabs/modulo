@@ -12,6 +12,17 @@ import { usePlanStore } from '../stores/planStore'
  *   NEITHER chrome — a neutral placeholder — so the first paint can never be
  *   the wrong layout, whatever mode the user's org actually resolves to.
  *
+ * `pending` is bounded, not permanent (FAR-1805): it exists only while the
+ * FLAGS request is genuinely in flight — it is applied independently of the
+ * license/tiers requests, so a slow sibling cannot hold the nav either way.
+ * When it settles the plan store leaves 'none': 'server' if a payload arrived,
+ * or the terminal 'unavailable' if it did not — the realistic failure is a
+ * timeout or 5xx from the caller-scoped `/api/v1/plan` bootstrap (a 4xx, e.g.
+ * an expired token, lands here too) — and 'unavailable' resolves to `drawer`
+ * below (the flag's default; the store logs the fallback). A cache hit starts
+ * at 'cache' synchronously, never through a settle. Only an in-flight flags
+ * request can still be 'pending'.
+ *
  * Scope of the guarantee (FAR-1237 review findings): it covers the first paint
  * of the LAYOUT chrome, i.e. once AppLayout mounts. Before auth settles App.vue
  * renders LoginView (no nav chrome at all), and the bare routes that render
@@ -32,11 +43,14 @@ export function useSidebarMode() {
   const planStore = usePlanStore()
 
   // A flag value is knowable only once something real has populated it: the
-  // persisted cache (synchronous, read when the plan store is created) or a
-  // server payload. An unfetched, empty map means UNKNOWN — defaulting it to
-  // either layout is exactly the first-paint flash this composable exists to
-  // prevent. The `features`-non-empty fallback covers state populated directly
-  // without going through either source.
+  // persisted cache (synchronous, read when the plan store is created), a
+  // server payload, or — FAR-1805 — the terminal 'unavailable' settle (the
+  // request finished and produced nothing; "known unreadable" is as knowable
+  // as "known off" for layout purposes, and resolves to drawer below). An
+  // unfetched, empty map still means UNKNOWN — defaulting it to either layout
+  // is exactly the first-paint flash this composable exists to prevent. The
+  // `features`-non-empty fallback covers state populated directly without
+  // going through any of those sources.
   const flagsKnown = computed(
     () => planStore.flagsSource !== 'none' || Object.keys(planStore.features).length > 0,
   )

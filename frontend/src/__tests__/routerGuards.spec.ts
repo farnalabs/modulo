@@ -123,6 +123,40 @@ describe('enforceRoleTierVisibility', () => {
     expect(result).toBe(true)
   })
 
+  it('applies the tier check to a KNOWN-EMPTY flag map — empty ≠ unknown (FAR-1809)', async () => {
+    // A payload applied with zero flags still means the TIER is known
+    // (`loaded` is written together with `currentTier`). The old guard read
+    // `Object.keys(features).length > 0`, so a resolved community org sailed
+    // through a team route whenever the flag map came back empty.
+    decodeJwtPayload.mockReturnValue({})
+    planStore.loaded = true
+    planStore.features = {} // known-empty, not unknown
+    planStore.isAtMinimumTier.mockReturnValue(false)
+    const result = await enforceRoleTierVisibility(
+      makeRoute('some-tier-route', { requiredTier: 'team' }),
+      'tok',
+    )
+    expect(result).toEqual({ name: 'dashboard' })
+  })
+
+  it('skips the tier check while the tier is unknown — no payload ever applied (FAR-1809)', async () => {
+    // `loaded` false after the guard's own fetch = the plan bootstrap settled
+    // unreadable ('unavailable') or produced nothing, so `currentTier` is the
+    // 'community' bootstrap DEFAULT, not observed truth. Tier-checking that
+    // default would bounce a licensed user to the dashboard on a transient
+    // plan failure; the backend 402 still enforces the real licence.
+    decodeJwtPayload.mockReturnValue({})
+    planStore.loaded = false
+    planStore.features = {}
+    planStore.isAtMinimumTier.mockReturnValue(false) // would redirect if consulted
+    const result = await enforceRoleTierVisibility(
+      makeRoute('some-tier-route', { requiredTier: 'team' }),
+      'tok',
+    )
+    expect(planStore.fetchPlan).toHaveBeenCalled()
+    expect(result).toBe(true)
+  })
+
   it('redirects a private_preview route when devMode is off', async () => {
     decodeJwtPayload.mockReturnValue({})
     planStore.devMode = false
@@ -156,9 +190,9 @@ describe('enforceRoleTierVisibility', () => {
   it('lets a community-tier admin through /admin/org with the REAL manifest entry (FAR-1269)', async () => {
     // Drive the guard with /admin/org's actual required_tier/required_roles
     // from frontend/src/manifest.yaml, in the exact plan state that used to
-    // redirect community admins to the dashboard (a RESOLVED, non-empty
-    // feature map — the guard's fail-open on an empty map is not the path a
-    // real community session takes). The org HITL review window endpoint is
+    // redirect community admins to the dashboard (a RESOLVED plan — the
+    // guard's fail-open applies only while the tier is UNKNOWN, `loaded`
+    // false, which is not the path a real community session takes). The org HITL review window endpoint is
     // not plan-gated, so this route must admit the community admin.
     const manifest = yaml.load(
       readFileSync(resolve(__dirname, '../manifest.yaml'), 'utf-8'),

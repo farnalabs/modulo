@@ -76,7 +76,7 @@ function mountEditor() {
   setActivePinia(pinia)
   const store = usePlanStore()
   store.currentTier = 'team'
-  store.features = { pipeline_delete: true, pipeline_diff_rollback: true }
+  store.features = { pipeline_delete: true }
   return mount(PipelineEditorView, {
     global: {
       plugins: [pinia, router],
@@ -168,7 +168,7 @@ describe('PipelineEditorView dispatch canvas template (FAR-1141)', () => {
     setActivePinia(pinia)
     const store = usePlanStore()
     store.currentTier = 'team'
-    store.features = { pipeline_delete: true, pipeline_diff_rollback: true }
+    store.features = { pipeline_delete: true }
     const wrapper = mount(PipelineEditorView, {
       global: {
         plugins: [pinia, router],

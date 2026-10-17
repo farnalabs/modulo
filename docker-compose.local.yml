@@ -39,8 +39,19 @@ services:
       REDIS_URL: redis://redis-local:6379/0
       MODULO_PUBLIC_URL: http://localhost:8000
       MODULO_USERS: admin:admin
+      # DB capacity monitor (FAR-1882). This worker EXECUTES runs, and two
+      # run-creation paths run inside that execution: agent-signal child runs
+      # (executor._fire_agent_signals -> trigger_engine.agent_signal) and
+      # feedback reject-correction runs (node_runner._dispatch_reject_correction
+      # -> feedback_manager) - both reaching crud.run.create_run. Without the
+      # volume visible here those runs resolve capacity "none" and the 98%
+      # hard-stop is inert for them.
+      DB_CAPACITY_PATH: /var/lib/modulo/db-volume
     volumes:
       - ./backend/src:/app/src
+      # Read-only: the monitor only statvfs()es it (fails open, stop inert, if
+      # it cannot - see DB_CAPACITY_BYTES to override with an explicit size).
+      - pgdata_local:/var/lib/modulo/db-volume:ro
 
   # SAQ system worker — owns the scheduler (fire_due_triggers) + reconcile +
   # system crons (plan F8). REQUIRED for local cron/triggers (see Local
@@ -62,10 +73,18 @@ services:
       MODULO_USERS: admin:admin
       SAQ_AUTH_USERNAME: admin
       SAQ_AUTH_PASSWORD: admin
+      # DB capacity monitor (FAR-1882): cron/polling triggers create their runs
+      # here (cron_helpers.fire_cron_trigger / _run_poll_fire), so the volume
+      # must be visible in this process for the 98% hard-stop to arm with no
+      # DB_CAPACITY_BYTES set.
+      DB_CAPACITY_PATH: /var/lib/modulo/db-volume
     ports:
       - "127.0.0.1:8081:8081"
     volumes:
       - ./backend/src:/app/src
+      # Read-only: the monitor only statvfs()es it (fails open, stop inert, if
+      # it cannot - see DB_CAPACITY_BYTES to override with an explicit size).
+      - pgdata_local:/var/lib/modulo/db-volume:ro
 
   otel-collector:
     profiles:

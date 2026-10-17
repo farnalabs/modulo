@@ -318,6 +318,35 @@ class TestCheckDispatcherReconcile:
         assert "node_started_deferred=0" in result.detail
 
     @pytest.mark.asyncio
+    async def test_fresh_run_detail_surfaces_node_started_executor_lost_counter(self) -> None:
+        """FAR-1803: the readiness detail must surface
+        ``node_started_executor_lost`` (the node-started / dead-executor
+        gauge). The observed defect was a readiness line whose reconcile
+        counters were ALL 0 while such runs sat ``running`` for hours — the
+        counter has to be ON the line, and default to 0 (never raise) for a
+        pre-FAR-1803 payload."""
+        fake = _FakeStatsRedis(blob=_fresh_payload(node_started_executor_lost=4).encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "node_started_executor_lost=4" in result.detail
+
+        # Absent key (pre-FAR-1803 worker payload) renders 0, never raises.
+        fake_absent = _FakeStatsRedis(blob=_fresh_payload().encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake_absent),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "node_started_executor_lost=0" in result.detail
+
+    @pytest.mark.asyncio
     async def test_fresh_run_detail_surfaces_per_org_bounded_failure_counters(self) -> None:
         """FAR-1621: the readiness detail must surface ALL the per-org
         bounded-failure counters (plus ``orgs_deferred``) so an alert email can

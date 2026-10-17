@@ -4,6 +4,14 @@
 primitive into an organisation. ``CollectionInstallEntity`` is the per-entity
 child recording exactly which schemas/agents/pipelines an install wrote.
 
+FAR-1754: ``CollectionInstallEntity`` is the SINGLE source of truth for
+"what this install wrote" — uninstall (``core/library_service/uninstall.py``)
+acts on it and the install API response derives its ``installed_entities``
+list from it. The parent's duplicate ``installed_entities`` JSON column was
+dropped (migration ``0313_collection_install_drop_installed_entities``): the
+same fact was persisted twice with nothing keeping the copies in sync, so any
+divergence silently misreported what uninstall would act on.
+
 The ORM metadata here was originally kept byte-for-byte consistent with
 migration ``0207_collection_install_tracking`` — the primary key is
 ``install_id`` (NOT ``id``), the table carries ``created_at`` only (no
@@ -61,8 +69,10 @@ class CollectionInstall(SoftDeleteMixin, Base):
     """One row per install attempt of a library primitive into an organisation.
 
     ``status`` is ``'installed'`` or ``'failed'``; ``resolved_manifest`` /
-    ``connector_checklist`` / ``installed_entities`` capture the resolved
-    manifest and the per-connector checklist outcome for debugging.
+    ``connector_checklist`` capture the resolved manifest and the
+    per-connector checklist outcome for debugging. The entity list is NOT
+    stored here — ``CollectionInstallEntity`` child rows are the single
+    source of truth (FAR-1754).
 
     The primary key is ``install_id`` (the migration does NOT use the
     ``OrgScoped``-inherited ``id`` column, and the table has no ``updated_at``
@@ -95,7 +105,6 @@ class CollectionInstall(SoftDeleteMixin, Base):
     )
     resolved_manifest: Mapped[dict[str, Any] | None] = mapped_column(_JSONB_COL, nullable=True)
     connector_checklist: Mapped[list[dict[str, Any]] | None] = mapped_column(_JSONB_COL, nullable=True)
-    installed_entities: Mapped[list[dict[str, Any]] | None] = mapped_column(_JSONB_COL, nullable=True)
     created_by: Mapped[UUID | None] = mapped_column(
         Uuid(),
         # Named to match migration 0309's explicit DDL so create_all and the

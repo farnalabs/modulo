@@ -31,7 +31,25 @@
     </FilterBar>
 
     <!-- States -->
-    <LoadingSpinner v-if="loading" />
+    <output
+      v-if="loading"
+      class="block space-y-2"
+      aria-busy="true"
+      :aria-label="$t('views.NotificationsPage.loading_notifications')"
+      data-testid="notifications-loading"
+    >
+      <div
+        v-for="n in 3"
+        :key="`notifications-skeleton-${n}`"
+        class="rounded-lg border bg-card p-4"
+      >
+        <div class="space-y-2">
+          <SkeletonBlock height-class="h-4 w-48" />
+          <SkeletonBlock height-class="h-3 w-72" />
+          <SkeletonBlock height-class="h-3 w-40" />
+        </div>
+      </div>
+    </output>
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadNotifications" />
     <EmptyState v-else-if="notifications.length === 0" :title="$t('views.NotificationsPage.no_notifications')" :description="$t('views.NotificationsPage.no_notifications_matching_filters')">
       <button type="button" data-testid="notifications-clear-filters" class="text-sm text-primary hover:underline" @click="resetFilters">{{ $t('views.NotificationsPage.clear_filters') }}</button>
@@ -86,7 +104,7 @@ import { fetchNotifications, reviewLater } from "../lib/api/notifications";
 import NotificationCard from "../components/NotificationCard.vue";
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
-import LoadingSpinner from "../components/shared/LoadingSpinner.vue";
+import SkeletonBlock from "../components/shared/SkeletonBlock.vue";
 import ErrorAlert from "../components/shared/ErrorAlert.vue";
 import EmptyState from "../components/shared/EmptyState.vue";
 

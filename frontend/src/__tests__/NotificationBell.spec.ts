@@ -26,19 +26,33 @@ vi.mock('../lib/api/formatError', () => ({
     if (result.error) throw new Error('prefs failed')
     return result.data
   },
+  // The unmocked notifications store imports formatApiError from this module
+  // and calls it in the fetchRecent/markAllRead error paths. The mock must
+  // provide it or those paths crash with "formatApiError is not a function".
+  formatApiError: (err: unknown): string => {
+    if (err instanceof Error) return err.message
+    if (typeof err === 'string') return err
+    return 'Unknown error'
+  },
 }))
 
 // Reactive banner flag: a plain { value } object would NOT trigger a re-render
 // (Vue only tracks refs/computed), so the mock owns a real ref and the test
-// flips it through the exported __banner handle.
+// flips it through the exported __banner / __feedback handles (FAR-1842 adds
+// the reconnect feedback tri-state on top of the banner flag).
 vi.mock('../composables/useEventStream', async () => {
   const { ref } = await import('vue')
   const banner = ref(false)
+  const feedback = ref<'idle' | 'attempting' | 'failed'>('idle')
   return {
     __banner: banner,
+    __feedback: feedback,
     eventBus: {
       get reconnectRequired() {
         return banner.value
+      },
+      get reconnectFeedback() {
+        return feedback.value
       },
       get connected() {
         return false
@@ -58,6 +72,9 @@ import NotificationBell from '../components/NotificationBell.vue'
 import * as eventStreamModule from '../composables/useEventStream'
 
 const bannerFlag = (eventStreamModule as unknown as { __banner: { value: boolean } }).__banner
+const feedbackFlag = (
+  eventStreamModule as unknown as { __feedback: { value: 'idle' | 'attempting' | 'failed' } }
+).__feedback
 
 function notificationEvent(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -73,8 +90,8 @@ function notificationEvent(overrides: Record<string, unknown> = {}): Record<stri
   }
 }
 
-async function mountBell() {
-  const wrapper = mount(NotificationBell, { global: { plugins: [createPinia()] } })
+async function mountBell(props: Record<string, unknown> = {}) {
+  const wrapper = mount(NotificationBell, { props, global: { plugins: [createPinia()] } })
   await flushPromises()
   await nextTick()
   return wrapper
@@ -85,6 +102,7 @@ describe('NotificationBell (FAR-250)', () => {
     vi.clearAllMocks()
     setActivePinia(createPinia())
     bannerFlag.value = false
+    feedbackFlag.value = 'idle'
     h.mockFetchUnreadCount.mockResolvedValue(3)
     h.mockApiGet.mockResolvedValue({
       data: {
@@ -113,6 +131,23 @@ describe('NotificationBell (FAR-250)', () => {
     expect(h.mockSubscribe.mock.calls[0][1]).toBeTypeOf('function')
   })
 
+  it('keeps the desktop hit-box by default and enlarges it to 44px for the touch size', async () => {
+    const desktop = await mountBell()
+    const desktopButton = desktop.find('[data-testid="notification-bell-button"]')
+    expect(desktopButton.classes()).toContain('p-2')
+    expect(desktopButton.classes()).not.toContain('h-11')
+
+    const touch = await mountBell({ size: 'touch' })
+    const touchButton = touch.find('[data-testid="notification-bell-button"]')
+    expect(touchButton.classes()).toContain('h-11')
+    expect(touchButton.classes()).toContain('w-11')
+    // The visible glyph is unchanged — only the hit box is enlarged.
+    expect(touchButton.classes()).not.toContain('p-2')
+    // The size variant must not regress the WCAG 2.5.3 accessible name: the
+    // touch control still uses bellAriaLabel (count 3 from the default fetch).
+    expect(touchButton.attributes('aria-label')).toBe('Notifications, 3 unread')
+  })
+
   it('renders the unread badge from the initial fetch', async () => {
     h.mockFetchUnreadCount.mockResolvedValue(7)
     const wrapper = await mountBell()
@@ -125,6 +160,40 @@ describe('NotificationBell (FAR-250)', () => {
     h.mockFetchUnreadCount.mockResolvedValue(150)
     const wrapper = await mountBell()
     expect(wrapper.find('[data-testid="notification-unread-badge"]').text()).toBe('99+')
+  })
+
+  // -------------------------------------------------------------------------
+  // WCAG 2.5.3 — the visible badge text must be part of the accessible name.
+  // The badge is aria-hidden (kept out of the a11y tree) but still VISIBLE, so
+  // axe's label-content-name-mismatch rule requires the button's accessible
+  // name to contain the visible count.
+  // -------------------------------------------------------------------------
+
+  it('includes the visible unread count in the bell button accessible name', async () => {
+    h.mockFetchUnreadCount.mockResolvedValue(7)
+    const wrapper = await mountBell()
+    expect(wrapper.find('[data-testid="notification-bell-button"]').attributes('aria-label')).toBe(
+      'Notifications, 7 unread',
+    )
+  })
+
+  it('keeps the plain accessible name when there is no unread badge', async () => {
+    h.mockFetchUnreadCount.mockResolvedValue(0)
+    const wrapper = await mountBell()
+    expect(wrapper.find('[data-testid="notification-bell-button"]').attributes('aria-label')).toBe(
+      'Notifications',
+    )
+  })
+
+  it('keeps the accessible-name count in step with the capped "99+" badge', async () => {
+    h.mockFetchUnreadCount.mockResolvedValue(150)
+    const wrapper = await mountBell()
+    // The badge and the accessible name must carry the SAME visible text, or
+    // label-content-name-mismatch still fails for counts above the cap.
+    expect(wrapper.find('[data-testid="notification-unread-badge"]').text()).toBe('99+')
+    expect(wrapper.find('[data-testid="notification-bell-button"]').attributes('aria-label')).toBe(
+      'Notifications, 99+ unread',
+    )
   })
 
   it('refetches the unread count when a non-opted-out notification event arrives', async () => {
@@ -236,6 +305,65 @@ describe('NotificationBell (FAR-250)', () => {
     expect(h.mockReconnect).toHaveBeenCalledTimes(1)
 
     bannerFlag.value = false
+    await nextTick()
+    expect(wrapper.find('[data-testid="sse-reconnect-banner"]').exists()).toBe(false)
+  })
+
+  it('keeps the banner visible with attempting feedback and a disabled button while a manual restart is in flight (FAR-1842)', async () => {
+    const wrapper = await mountBell()
+    // No terminal stop, but a manual restart is in flight: the banner stays
+    // so the click is visibly acknowledged (it used to vanish silently).
+    feedbackFlag.value = 'attempting'
+    await nextTick()
+
+    const banner = wrapper.find('[data-testid="sse-reconnect-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('Reconnecting')
+    expect(wrapper.find('[data-testid="sse-reconnect-button"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('shows explicit failure feedback when a manual restart cannot recover (FAR-1842)', async () => {
+    const wrapper = await mountBell()
+    bannerFlag.value = true
+    feedbackFlag.value = 'failed'
+    await nextTick()
+
+    const banner = wrapper.find('[data-testid="sse-reconnect-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('Reconnect failed. Sign in again')
+    // The copy instructs a fresh sign-in, so the button must not contradict
+    // it by inviting an immediate retry: without a fresh token a click would
+    // only re-run the refresh+retry that just failed. The auth-change
+    // re-arm restarts the stream when the fresh sign-in lands (FAR-1861).
+    expect(wrapper.find('[data-testid="sse-reconnect-button"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('keeps the reconnect button enabled on the plain auth-stop banner (FAR-1861)', async () => {
+    // The base banner (no manual attempt yet, feedback idle) still offers the
+    // manual restart — only the terminal 'failed' feedback disables it.
+    const wrapper = await mountBell()
+    bannerFlag.value = true
+    feedbackFlag.value = 'idle'
+    await nextTick()
+
+    const banner = wrapper.find('[data-testid="sse-reconnect-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('Live updates stopped')
+    expect(wrapper.find('[data-testid="sse-reconnect-button"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('clears the banner when the stream state leaves auth_failed (FAR-1842)', async () => {
+    // State-transition coverage: banner shown while failed, then cleared —
+    // driven by the reactive flags, matching eventBus leaving auth_failed
+    // (manual recovery or the auth-change re-arm).
+    const wrapper = await mountBell()
+    bannerFlag.value = true
+    feedbackFlag.value = 'failed'
+    await nextTick()
+    expect(wrapper.find('[data-testid="sse-reconnect-banner"]').exists()).toBe(true)
+
+    bannerFlag.value = false
+    feedbackFlag.value = 'idle'
     await nextTick()
     expect(wrapper.find('[data-testid="sse-reconnect-banner"]').exists()).toBe(false)
   })

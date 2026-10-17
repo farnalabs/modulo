@@ -3,7 +3,8 @@
 Checks:
 1. Topology: no cycles, valid edge references, reachability, max nesting depth 3
 2. Schema compatibility: output schema of each edge source matches input schema of target
-3. Connector capability: bound connector instances are active and have required operations
+3. Connector capability: bound connector instances are active and allow the
+   ACL operations their node's routed verb requires
 4. Model backend health: pinned model backends exist and are active
 5. Environment capability: bound EnvironmentProfile declares all agent required capabilities
 6. Pre-run input payload compatibility with entry node schema
@@ -26,12 +27,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo import settings
 from modulo.connectors.base import (
-    canonical_capability,
-    canonical_capability_set,
+    ConnectorACL,
+    ConnectorPermissionError,
     connector_binding_operation,
+    connector_binding_required_acl_operations,
     connector_type_supports_dispatch,
-    unrestricted_allowed_operations,
+    node_routes_binding_to_connector,
 )
+from modulo.connectors.rest import _DEFAULT_MAX_FANOUT_CARDINALITY, _DEFAULT_TIMEOUT
 from modulo.core.graph_validator._types import (
     ValidationIssue,
     ValidationResult,
@@ -92,8 +95,10 @@ _JSON_TYPE_MAP: MappingProxyType[str, type | tuple[type, ...]] = MappingProxyTyp
     }
 )
 
-# Phase 1 cutover: pipelines with snapshots created before this date
-# use degraded-mode validation (warnings instead of hard errors).
+# Phase 1 cutover: snapshots created before this date are "pre-existing".
+# Schema incompatibilities BLOCK runs on those snapshots too (FAR-1760);
+# the pre-existing carve-out only changes the MESSAGE (a distinct blocked
+# log + error), never the outcome — there is no degraded-mode proceed.
 _PHASE_1_CUTOVER = datetime(2026, 7, 22, tzinfo=UTC)
 
 _DEFERRED_SCHEMA_KEYWORDS = frozenset({"$ref", "oneOf", "anyOf", "allOf", "not", "if", "then", "else"})
@@ -127,7 +132,7 @@ _RETRY_POLICY_MAX_RETRIES = 5
 # key — the timeout is a constructor parameter defaulted to ``_DEFAULT_TIMEOUT``
 # that the production composition root never overrides, so the connector ALWAYS
 # executes 30.0s per item in production. The send-budget reconcile applies the
-# SAME defaults, imported in _check_node_send_budget directly from the connector
+# SAME defaults, imported in _resolve_fanout_budget directly from the connector
 # module as the single source of truth, so it cannot diverge from what the
 # connector actually executes.
 
@@ -1587,14 +1592,17 @@ class GraphValidator:
     ) -> ValidationResult:
         """Pre-run validation — all save-time checks plus input schema checking.
 
-        Returns errors only (no warnings). Any error blocks run start,
-        unless the snapshot pre-dates the Phase 1 cutover (grace period).
+        Returns errors only (no warnings). Any error blocks run start —
+        including on snapshots that pre-date the Phase 1 cutover, which get
+        a distinct "run is blocked" log and error for schema incompatibility
+        (FAR-1760). A pre-existing snapshot is never a reason to proceed.
         """
         result = ValidationResult()
 
         pre_existing = _is_pre_existing(snapshot)
 
-        # Topology: hard errors block immediately.
+        # Topology: hard errors block immediately (no grace period — the cutover
+        # covers schema enforcement only).
         self._check_topology(snapshot.graph_json, result)
         if not result.is_valid:
             return self._strip_warnings(result)
@@ -1605,17 +1613,17 @@ class GraphValidator:
             session,
             result,
         )
-        if not result.is_valid and pre_existing:
-            _log.warning(
-                "Schema incompatibility in pipeline %s (snapshot %s). Run proceeds in degraded mode.",
-                snapshot.pipeline_id,
-                snapshot.id,
-            )
-            result.warning(
-                "SCHEMA_DEGRADED",
-                "Schema incompatibility found. Run proceeds in degraded mode.",
-            )
-        elif not result.is_valid:
+        if not result.is_valid:
+            if pre_existing:
+                _log.warning(
+                    "Schema incompatibility in pipeline %s (snapshot %s). Run is blocked.",
+                    snapshot.pipeline_id,
+                    snapshot.id,
+                )
+                result.error(
+                    "SCHEMA_PRE_EXISTING_BLOCKED",
+                    "Schema incompatibility found on a pre-Phase-1 snapshot. Run is blocked.",
+                )
             return self._strip_warnings(result)
 
         # Input payload compatibility with entry node schema.
@@ -1628,17 +1636,17 @@ class GraphValidator:
             session,
             result,
         )
-        if not result.is_valid and pre_existing:
-            _log.warning(
-                "Input schema incompatibility in pipeline %s (snapshot %s). Run proceeds in degraded mode.",
-                snapshot.pipeline_id,
-                snapshot.id,
-            )
-            result.warning(
-                "SCHEMA_DEGRADED",
-                "Input schema incompatibility found. Run proceeds in degraded mode.",
-            )
-        elif not result.is_valid:
+        if not result.is_valid:
+            if pre_existing:
+                _log.warning(
+                    "Input schema incompatibility in pipeline %s (snapshot %s). Run is blocked.",
+                    snapshot.pipeline_id,
+                    snapshot.id,
+                )
+                result.error(
+                    "SCHEMA_PRE_EXISTING_BLOCKED",
+                    "Input schema incompatibility found on a pre-Phase-1 snapshot. Run is blocked.",
+                )
             return self._strip_warnings(result)
 
         # Sandbox agent config check. Run-time surface for the `{{ model }}`
@@ -2645,6 +2653,19 @@ class GraphValidator:
         )
         found: dict[uuid.UUID, ConnectorInstance] = {r.id: r for r in rows}
 
+        # FAR-1667: map graph nodes by id ONCE so each binding can read the
+        # node's ROUTED verb (the extracted binding rows carry the instance id
+        # alone). Guarded: a graph we cannot read yields an empty map, and every
+        # binding then skips its capability check (fail-open-with-log below).
+        nodes_by_id: dict[str, dict[str, Any]] = {}
+        if isinstance(graph_json, dict):
+            raw_nodes = graph_json.get("nodes")
+            if isinstance(raw_nodes, list):
+                # Reuse the module's node indexer (it already drops id-less
+                # nodes); filter to mapping nodes first so a malformed entry is
+                # dropped rather than raising on ``.get``.
+                nodes_by_id = _index_nodes_by_id([n for n in raw_nodes if isinstance(n, dict)])
+
         # FAR-1141 (MAJOR 8): a dispatch binding must target a connector whose
         # TYPE implements the CI-runner contract. Runs off the GRAPH (the
         # binding's ``operation`` / ``dispatch_action`` only live on the node —
@@ -2673,62 +2694,47 @@ class GraphValidator:
                     node_id,
                 )
 
-            required_ops: list[str] = binding.get("required_operations", [])
-            # FAR-1564: None/[] means the connector is UNRESTRICTED, so only a
-            # NON-EMPTY allowlist restricts. An unset allowlist must never be
-            # read as "missing every required operation". A MALFORMED non-list
-            # value is RESTRICTED (fail closed: every required op reads as
-            # missing) and is logged — the shared predicate keeps this decision
-            # identical to ConnectorACL's and the guardrail conformance reader's.
-            # FAR-1594/FAR-1616: a NON-EMPTY list is not tested raw — its
-            # entries are reduced to the canonical bare-capability vocabulary
-            # by the SHARED helper with the instance's own connector type
-            # threaded through, and the REQUESTED op is canonicalised too, so
-            # graph-save time grants exactly what a ConnectorACL built with
-            # the same connector type grants at runtime (same-type legacy
-            # entries grant; mis-typed ones fail closed).
-            raw_allowed: object = instance.allowed_operations
-            if not unrestricted_allowed_operations(raw_allowed):
-                if isinstance(raw_allowed, list):
-                    # FAR-1594/FAR-1616: reduce the stored allowlist to the
-                    # canonical bare-capability vocabulary with the SHARED
-                    # helper, threading the instance's OWN connector type — a
-                    # stored same-type legacy entry (``github.read``) grants
-                    # ``read`` here exactly as the hub's ConnectorACL and the
-                    # guardrail conformance reader grant it; a mis-typed entry
-                    # (``github.read`` on a filesystem connector) grants
-                    # nothing (fail closed).
-                    allowed_ops: set[str] = canonical_capability_set(
-                        raw_allowed,
-                        connector_type_id=instance.connector_type_id,
-                    )
-                else:
-                    _log.warning(
-                        "graph_validator.connector_allowed_operations_malformed",
-                        extra={
-                            "connector_instance_id": str(cid),
-                            "allowed_operations_type": type(raw_allowed).__name__,
-                        },
-                    )
-                    allowed_ops = set()
-                # Mirror ConnectorACL.check: canonicalise the REQUESTED
-                # operation too, so a stored legacy spelling grants the required
-                # op on exactly the terms the runtime ACL grants it. A
-                # non-string required op is not a capability in any spelling —
-                # report it MISSING (fail closed) rather than raising, and
-                # short-circuit before the set-membership test so an unhashable
-                # value cannot raise either.
-                missing = [
-                    op
-                    for op in required_ops
-                    if not (
-                        isinstance(op, str) and (op in allowed_ops or (canonical_capability(op) or op) in allowed_ops)
-                    )
-                ]
-                if missing:
+            # FAR-1667: derive the required ACL operations from the node's
+            # ROUTED verb — never from a declared ``required_operations`` key
+            # (no producer ever populated one, so the old check was unreachable).
+            node = nodes_by_id.get(node_id) if node_id is not None else None
+            if node is None:
+                # A binding row whose node is absent from the graph is a harness
+                # bug, not customer input: fail open with a log, never reject.
+                _log.warning(
+                    "graph_validator.connector_binding_node_missing",
+                    extra={"connector_instance_id": str(cid), "node_id": node_id},
+                )
+                continue
+            if not node_routes_binding_to_connector(node):
+                # Dead configuration (an ``agent`` node with an ``agent_id``, a
+                # ``sandbox_agent``): the engine never routes this binding, so
+                # there is no verb to gate.
+                continue
+            required_ops = connector_binding_required_acl_operations(node)
+            if not required_ops:
+                continue
+            # Ask the REAL runtime ACL so save-time validation and the hub can
+            # never disagree about what an ``allowed_operations`` value means
+            # (None/[] unrestricted, a non-empty allowlist restricts, a
+            # malformed value fails closed — the ACL owns all of it). The
+            # instance's own ``visibility`` is threaded through exactly as the
+            # hub does (``ci.visibility``); ``check`` does not enforce it today,
+            # but keeping the two construction sites identical avoids drift.
+            acl = ConnectorACL(
+                visibility=instance.visibility,
+                allowed_operations=instance.allowed_operations,
+                connector_type_id=instance.connector_type_id,
+            )
+            operation = connector_binding_operation(node)
+            for op in required_ops:
+                try:
+                    acl.check(op)
+                except ConnectorPermissionError:
                     result.error(
                         "CONNECTOR_MISSING_OPERATIONS",
-                        f"Connector {cid} missing operations: {missing}",
+                        f"Connector {cid} ({instance.name!r}) does not allow {op!r} "
+                        f"required by node's {operation!r} operation",
                         node_id,
                     )
 
@@ -3355,80 +3361,16 @@ class GraphValidator:
 
     # ------------------------------------------------------------------
 
-    # Node send budget reconcile — FAR-410 flat node-key path.
-    # Kept so the branch's direct unit tests (GraphValidator._check_node_send_budget)
-    # still exercise the flat-key reconcile; the validate path uses the
-    # connector-config reconcile in :meth:`_check_node_send_budget_bindings`.
-    @staticmethod
-    def _node_send_budget_values(node: dict[str, Any]) -> tuple[float, float] | None:
-        """Resolve a fan-out node's (fanout_cardinality, per_item_budget) pair; None to skip.
-
-        A node without both keys — or with keys that do not parse as positive
-        numbers — contributes no send-budget warning.
-        """
-        fanout = node.get("fanout_cardinality")
-        per_item = node.get("per_item_budget")
-        if fanout is None and per_item is None:
-            return None
-        fanout_val = _as_positive_number(fanout)
-        per_item_val = _as_positive_number(per_item)
-        if fanout_val is None or per_item_val is None:
-            return None
-        return fanout_val, per_item_val
-
-    @staticmethod
-    def _resolve_node_wait_for(node: dict[str, Any]) -> float | None:
-        """The node's total budget: explicit ``node_wait_for`` else ``timeout_seconds``."""
-        wait_for = _as_positive_number(node.get("node_wait_for"))
-        if wait_for is None:
-            return _as_positive_number(node.get("timeout_seconds"))
-        return wait_for
-
-    @staticmethod
-    def _node_send_budget_inputs(node: dict[str, Any]) -> tuple[str, float, float, float] | None:
-        """Resolve (nid, fanout, per_item, wait_for) for a fan-out node; None to skip."""
-        resolved = GraphValidator._node_send_budget_values(node)
-        if resolved is None:
-            return None
-        wait_for = GraphValidator._resolve_node_wait_for(node)
-        if wait_for is None:
-            return None
-        return _string_or_default(node.get("id")), resolved[0], resolved[1], wait_for
-
-    @staticmethod
-    def _check_node_send_budget(graph_json: dict[str, Any], result: ValidationResult) -> None:
-        """Warn when a fan-out node's send budget exceeds its wait_for budget (FAR-410).
-
-        A connector node may fan out over ``fanout_cardinality`` items and run
-        each with a ``per_item_budget`` — but all of that must fit inside the
-        node's total ``wait_for`` budget (``node_wait_for`` or ``timeout_seconds``
-        when no explicit wait_for is set). When the per-item sends cannot
-        sequentially fit in the budget, retries collide with the node deadline
-        and every attempt gets cancelled mid-send (UNKNOWN outcomes). This is a
-        save-time warning, not a hard error: nodes without these config keys
-        (every existing graph) are unaffected, and it is advisory rather than
-        a blocker so an operator can still save while they reconcile.
-        """
-        for node in graph_json.get("nodes", []) or []:
-            if not isinstance(node, dict):
-                continue
-            resolved = GraphValidator._node_send_budget_inputs(node)
-            if resolved is None:
-                continue
-            nid, fanout_val, per_item_val, wait_for = resolved
-            total = fanout_val * per_item_val
-            if total > wait_for:
-                result.warning(
-                    "NODE_SEND_BUDGET_OVERSUBSCRIBED",
-                    f"Node '{nid}': fanout_cardinality={fanout_val} x per_item_budget={per_item_val} "
-                    f"({total:.1f}s) exceeds node wait_for budget {wait_for:.1f}s — retries will be "
-                    "cancelled mid-send, producing UNKNOWN outcomes. Raise node_wait_for or lower "
-                    "per_item_budget.",
-                    node_id=nid,
-                )
-
-    # Node send budget reconcile (FAR-410 / FAR-411)
+    # Node send budget reconcile (FAR-411)
     # ------------------------------------------------------------------
+    #
+    # The original FAR-410 flat-node-key path (``_check_node_send_budget`` and
+    # its ``_node_send_budget_values`` / ``_resolve_node_wait_for`` /
+    # ``_node_send_budget_inputs`` helpers) read ``fanout_cardinality`` /
+    # ``per_item_budget`` / ``node_wait_for`` off the node — a namespace no
+    # production writer populates — and had no production caller, only its own
+    # direct unit tests. It was removed rather than kept as test-only
+    # production code. The live reconcile is the connector-config path below.
 
     async def _check_node_send_budget_bindings(
         self,
@@ -3491,9 +3433,9 @@ class GraphValidator:
     ) -> None:
         """Emit NODE_SEND_BUDGET_OVERSUBSCRIBED for a single fan-out binding.
 
-        Mirrors :meth:`_check_node_send_budget`: a binding only counts when its
-        node resolves, its connector instance is found, and the instance's
-        ``fan_out`` config is genuinely fan-out-active (``items_path`` truthy).
+        A binding only counts when its node resolves, its connector instance is
+        found, and the instance's ``fan_out`` config is genuinely fan-out-active
+        (``items_path`` truthy).
         """
         node_id = str(binding.get("node_id")) if binding.get("node_id") else None
         if node_id is None:
@@ -3550,16 +3492,12 @@ class GraphValidator:
             if max_cardinality is None:
                 return None
         else:
-            from modulo.connectors.rest import _DEFAULT_MAX_FANOUT_CARDINALITY
-
             max_cardinality = float(_DEFAULT_MAX_FANOUT_CARDINALITY)
         if "per_item_timeout" in fanout:
             per_item_timeout = _as_positive_number(fanout.get("per_item_timeout"))
             if per_item_timeout is None:
                 return None
         else:
-            from modulo.connectors.rest import _DEFAULT_TIMEOUT
-
             per_item_timeout = _DEFAULT_TIMEOUT
         max_retries_raw = fanout.get("max_retries")
         if isinstance(max_retries_raw, int) and not isinstance(max_retries_raw, bool) and max_retries_raw >= 0:

@@ -36,7 +36,7 @@ A `NULL` value (or omitting the field) defaults to `verbatim`.
 Set `schema_profile` on an individual node in the pipeline graph:
 
 ```json
-PATCH /api/v1/pipelines/{pipeline_id}/graph
+PUT /api/v1/pipelines/{pipeline_id}/graph
 {
   "nodes": [
     {
@@ -69,10 +69,12 @@ that need a different profile.
 
 ### Design-time preview
 
-When a graph is saved with `include_schema_warnings=true`, the graph response
-includes a `schema_translation_report` listing which keywords would be stripped
-for each node's target provider, so operators can preview the impact before
-running a pipeline.
+Requesting `GET /api/v1/pipelines/{pipeline_id}/graph?include_schema_warnings=true`
+returns a graph response whose `schema_translation_report` lists which keywords
+would be stripped for each node's target provider, so operators can preview the
+impact before running a pipeline. The flag is read-only: it is a query
+parameter on the graph GET only, and the save (`PATCH .../graph`) response
+never populates a report - re-GET the graph with the flag after saving.
 
 ### Migration safety
 
@@ -92,7 +94,7 @@ Caught at HTTP request deserialisation – blocks the API call with a 422 respon
 | Code | Severity | Rule |
 |---|---|---|
 | `node_type` validation | Error | `node_type` must be one of: `agent`, `manual`, `composite`, `sandbox_agent`, `router`, `hitl`, `join`, `dispatch` |
-| `agent_command` | Error | Sandbox agent nodes require a non-empty `agent_command` |
+| `agent_commands` / `agent_prompt` / `script_command` | Error | Sandbox agent nodes are `mode`-driven (`mode` is `"llm"` or `"script"`). In `script` mode a non-empty `script_command` is required; in the default `llm` mode both a non-empty `agent_commands` list and a non-empty `agent_prompt` are required. Setting `agent_commands` and `script_command` together is rejected as mutually exclusive. Note the graph node field is `agent_commands` (a list, joined at run time); `agent_command` is not a node field |
 | `template_id` | Error | Sandbox agent nodes require a `template_id` (e.g. `"opencode"`) |
 | `timeout_seconds` | Error | Per-node timeout must be between 60 and 604800 seconds if set |
 | `env_vars` reserved keys | Error | Sandbox agent `env_vars` keys must not start with `MODULO_` or `OPENCODE_API_KEY` |
@@ -109,12 +111,12 @@ Caught before the graph is persisted via the MCP interface. Returns structured e
 |---|---|---|
 | Duplicate node IDs | Error | Node IDs must be unique across the graph |
 | Duplicate edge IDs | Error | Edge IDs must be unique across the graph |
-| `agent_command` (MCP) | Error | Sandbox agent nodes require a non-empty `agent_command` |
+| `agent_commands` (MCP) | Error | Sandbox agent nodes require a non-empty `agent_commands` list (and a non-empty `agent_prompt`) in the default `llm` mode, or a non-empty `script_command` in `script` mode |
 | `template_id` (MCP) | Error | Sandbox agent nodes require a `template_id` |
 
 ### Layer 3: GraphValidator (`core/graph_validator/`)
 
-Runs on-save (via the REST API's `PATCH /{pipeline_id}/graph` endpoint) and pre-run (when a pipeline is triggered). Errors block execution; warnings are advisory. Codes below reflect the current validator. Several are fail-closed: an invalid or unknown value is a hard error so a declared control can never silently no-op.
+Runs on-save (via the REST API's `PUT /{pipeline_id}/graph` endpoint) and pre-run (when a pipeline is triggered). Errors block execution; warnings are advisory. Codes below reflect the current validator. Several are fail-closed: an invalid or unknown value is a hard error so a declared control can never silently no-op.
 
 **Topology**
 
@@ -140,10 +142,10 @@ Runs on-save (via the REST API's `PATCH /{pipeline_id}/graph` endpoint) and pre-
 
 | Code | Severity | Rule |
 |---|---|---|
-| `SANDBOX_MISSING_COMMAND` | Error | Sandbox agent node has empty `agent_command` |
+| `SANDBOX_MISSING_COMMAND` | Error | Sandbox agent node is missing a required command or prompt (`agent_commands` and `agent_prompt` in `llm` mode, `script_command` in `script` mode) |
 | `SANDBOX_MISSING_TEMPLATE` | Warning | Sandbox agent node has no `template_id` |
 | `SANDBOX_UNKNOWN_TEMPLATE` | Warning | `template_id` is not a known-good template (expected `opencode` or `modulo-opencode`) |
-| `SANDBOX_BAD_JINJA_TEMPLATE` | Error | `agent_command` is not Jinja-renderable (llm mode only) |
+| `SANDBOX_BAD_JINJA_TEMPLATE` | Error | the joined command (built from `agent_commands`) is not Jinja-renderable (llm mode only) |
 | `SANDBOX_TIMEOUT_BOUNDS` | Warning | `timeout_seconds` outside recommended 60-604800s range |
 | `SANDBOX_TIMEOUT_INVALID` | Warning | `timeout_seconds` is not a valid integer |
 | `SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP` | Error | `timeout_seconds` exceeds the E2B 1-hour sandbox cap; use `<= 3300` for provisioning headroom (FAR-511) |

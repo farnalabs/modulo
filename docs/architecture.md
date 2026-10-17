@@ -287,7 +287,7 @@ git+<repo-url>[@<ref>]#<path>
 
 Lifecycle (the shared parse/resolve/pin helpers live in `modulo/core/pipeline_engine/git_content.py`; the save-time gate is part of the graph validator):
 
-1. **Graph-save validation** (`GraphValidator`, codes `GIT_CONTENT_REF_INVALID` / `GIT_CONTENT_REF_UNPINNED`): a `git+` value must parse, and stored graphs must carry a **pinned** `@<40-hex>` ref, so every run snapshot (which deep-copies the live graph at snapshot creation) surfaces the resolved commit SHA for audit. Movable refs are rejected at save with a hint to pin them or use `modulo apply`. Composite-template sandbox sub-nodes obey the same gate. Agent rows are gated at every write path too: the REST/MCP Agent saves run `validate_agent_git_content_values` directly, the graph-PATCH Agent-command sync validates each incoming list before writing the row (the graph validator only checks `sandbox_agent` nodes, so an `agent`-type node could otherwise carry an unpinned ref into the row ungated), and prompt rollback re-validates the restored template (a legacy history entry must not re-poison a clean row). A `GitContentRefError` from any of these surfaces is mapped to HTTP 422 and rolls back the enclosing write.
+1. **Graph-save validation** (`GraphValidator`, codes `GIT_CONTENT_REF_INVALID` / `GIT_CONTENT_REF_UNPINNED`): a `git+` value must parse, and stored graphs must carry a **pinned** `@<40-hex>` ref, so every run snapshot (which deep-copies the live graph at snapshot creation) surfaces the resolved commit SHA for audit. Movable refs are rejected at save with a hint to pin them or use `modulo apply`. Composite-template sandbox sub-nodes obey the same gate. Agent rows are gated at every write path too: the REST/MCP Agent saves run `validate_agent_git_content_values` directly, the `PUT /graph` Agent-command sync validates each incoming list before writing the row (the graph validator only checks `sandbox_agent` nodes, so an `agent`-type node could otherwise carry an unpinned ref into the row ungated), and prompt rollback re-validates the restored template (a legacy history entry must not re-poison a clean row). A `GitContentRefError` from any of these surfaces is mapped to HTTP 422 and rolls back the enclosing write.
 2. **Pin-on-apply**: `modulo apply` resolves a movable spec ref to its current commit SHA at plan time (`git ls-remote`, bounded, fail-closed; an unresolvable ref BLOCKS the entity) and rewrites the field to the canonical pinned form. The desired managed view, the write payload, the stored graph, and every subsequent run snapshot therefore hold the same pinned SHA.
 3. **Run-time rendering**: at the agent-command rendering point (`node_runner`), a whole-field pinned ref is fetched at exactly that commit (host-side `git clone --no-checkout` + `git show <sha>:<path>`) and the file content replaces the ref before dispatch (fetched content then flows through the normal Jinja render for llm mode / verbatim for script mode). Unpinned refs and fetch failures raise typed errors, so the node fails closed rather than dispatching the raw ref string. Host-side fetch is public-repository-only in this increment (no credential material is ever embedded in the ref or the process environment); private-repo credential support is a later increment.
 4. **Drift (`--diff`)**: because the desired side is the resolved pin and the deployed side is the stored pin, the managed-field hash reports `updated` when the tracked ref moved (branch/tag advanced, spec changed, or the deployed graph was saved unpinned). `drift_detail` additionally names the move per content field as a `git_content` list (`{node, field, desired, current}` with the full old/new refs), rendered as `drift detail git-content ...` lines, so a CI gate on `--diff` fails on content drift and the report shows the actual commit transition. Re-running `modulo apply` converges the deployed pin.
@@ -358,6 +358,31 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   (default 30 min) with the `worker_lost` error code, force-releasing the
   pipeline slots a crashed worker leaked. Journeys and daily facts advance for
   each released run.
+- **Worker-shutdown handoff (FAR-1627):** a deploy SIGTERMs the SAQ runs
+  worker while agent runs are mid-execution. Instead of leaving those runs
+  `running` until the 30-minute heartbeat TTL above detects the loss (and
+  misattributes it to the dispatch path), the worker's SAQ `shutdown` hook
+  processes every run it still owns the moment shutdown begins, and each run
+  takes one of two paths. If a re-run is safe — a pre-node run (zero nodes
+  executed, so nothing can double-execute) within its retry budget, or a
+  node-started run whose graph is idempotent and whose `retry_policy` permits
+  the re-run — the claim is freed (row reset to `pending`,
+  `dispatched_at`/`dispatcher`/`heartbeat_at` cleared) and stamped with the
+  truthful `harness.worker_lost` code plus a detail naming the shutdown;
+  `dispatcher_reconcile` re-dispatches it on its next 60s tick, so an
+  in-flight run at a release is handed back within ~1 minute of the new worker
+  becoming ready — never 30-35 minutes. If a re-run is NOT safe — a
+  non-idempotent node-started graph, or a `retry_policy` that forbids it — the
+  run is failed in place with the same `harness.worker_lost` code and a detail
+  naming why, rather than being put on the un-gated re-dispatch leg (which
+  would re-EXECUTE a side-effecting node). Both writes are claim-token-fenced
+  (a successor's re-claim is never clobbered) and cancellation-requested runs
+  belong to the cancel path. The hook only hands back runs whose task actually
+  observed SAQ's cancellation: SAQ runs the shutdown callbacks even when
+  cancellation timed out, so a stuck, still-live predecessor's run is left
+  untouched rather than re-dispatched against it. The heartbeat TTL remains
+  the backstop for a hard crash (SIGKILL / OOM), where no shutdown hook runs,
+  and for any run the observation gate skips.
 - **HITL review-window terminaliser (FAR-648, FAR-1257):** a sweep wired into
   `dispatcher_reconcile` (every 60s) cancels an `awaiting_human` run whose open
   gate is still UNCLAIMED and UNDECIDED past the resolved review window:
@@ -516,7 +541,7 @@ Provenance is ENGINE-ASSIGNED per supply channel; the wire `source` value is nev
 
 Minting is owned by provenance: `caller`/`derived` refs mint journey rows at run creation and again at terminal finalise via a rank-guarded upsert (`agent(0) < derived(1) < caller(2)`: provenance only ever upgrades, never downgrades; `first_seen_source` is immutable after mint; `latest_*`/`run_count` stay owned by the finalise evidence CAS). `agent`-sourced refs are collected and stored on the run and confirmed against EXISTING journey rows (advisory, match-only), but never mint: agent minting is deferred pending its safety substrate (FAR-795). Coalesced deliveries merge refs into the surviving run with the same rank-guarded union and re-mint newly-seen entries.
 
-Completeness over precision: the unified cap (`modulo_work_item_refs_cap`, env `MODULO_WORK_ITEM_REFS_CAP`, default 100, clamped to [1, 100000]) bounds self-report normalisation, the finalise merge, and node-input injection with one value; cap drops drain lowest-provenance first (agent → derived → caller, then array position) and are counted. Pipelines declaring `work_item_refs_required: true` in `run_context_defaults` refuse a delivery that supplied no refs: HTTP 422 `work_item_refs_required` on the REST, MCP, and webhook paths (reject-and-retry for webhooks, not acked-as-accepted).
+Completeness over precision: the unified cap (`modulo_work_item_refs_cap`, env `MODULO_WORK_ITEM_REFS_CAP`, default 100, clamped to [1, 100000]) bounds self-report normalisation, the finalise merge, and node-input injection with one value; cap drops drain lowest-provenance first (agent → derived → caller, then array position) and are counted. Pipelines declaring `work_item_refs_required: true` in `run_context_defaults` refuse a delivery that supplied no refs: HTTP 422 with a `work_item_refs_required` error on the MCP and webhook paths, and a 422 whose detail is prose on the REST path (reject-and-retry for webhooks, not acked-as-accepted).
 
 Nodes opt in to reading the run's refs by declaring a `work_item_refs` input property in the node's `input_schema_json`: the create-time refs are injected read-only as a `{{ work_item_refs }}` template variable at node start (a read failure degrades to fewer refs, never a failed node). Journeys carry `provenance` + `first_seen_source` columns (migration 0220; `runs.work_item_refs` containment is served by the existing partial GIN index) and the refs pipeline emits OTel counters (`modulo_work_item_refs_by_source_total`, `..._unknown_source_total`, `..._shadow_strip_hits_total`, `..._malformed_total`, `..._cap_dropped_total`).
 
@@ -619,6 +644,36 @@ minting is REST-JWT-only, gated by the org `user_scoped_mcp_keys` flag
 account and are denied under org-wide/run-scoped keys. Key lifecycle events
 are audited (`api_key_created` / `api_key_revoked`) on both the REST and MCP
 surfaces with `auth_type` / `key_scope` / masked-prefix payload stamps.
+
+**Service accounts (FAR-1478, ADR 056 / 058).** A service principal is a
+first-class `accounts` row (`kind='service'`, carrying no email, password or
+SSO identity — structurally unreachable by every login/invite/SSO/SCIM path,
+FAR-1385 slice 1; `accounts.kind` itself is immutable after insert, enforced
+by the `trg_accounts_kind_immutable` DB trigger, so a human row can never be
+flipped into a service row — or vice versa — by any writer). Org admins
+provision, read, list, rename and decommission them at
+`/api/v1/service-accounts`; an `admin` org-role grant on a service
+principal is rejected with 422 at the surface and structurally refused by a
+DB trigger (`trg_org_memberships_service_role_ceiling`, migration 0315) — the
+role ceiling is `operator`, never admin. Service accounts hold team
+memberships through the normal team surface (team roles never include admin).
+Keys minted for a service principal are OWNED by it (`org_api_keys.account_id`
+is the service account, never the minting human): a human admin bootstraps one
+via `POST /api/v1/service-accounts/{id}/keys`, and the service principal
+mints its own with its own `mk_` credential (MCP `create_api_key`, or the same
+endpoint acting as the principal itself — a key may only mint keys for its own
+principal). Service-owned keys are capped at **365 days** (ADR 058's tiered
+TTL — the service half of the 365d-service / 90d-user-scoped resolution),
+enforced at the `create_api_key` AND `update_api_key` choke points so every
+surface — mint and extension alike — refuses the same way (a mint-only cap
+would let any runner/operator extend a service-owned key arbitrarily via
+`PUT /api/v1/api-keys/{id}`). Decommission is explicit and one-way: it stamps
+`accounts.decommissioned_at` (CHECK-restricted to service rows), tombstones
+the org membership, flips `active` off and bulk-revokes every live key — a
+service account survives human offboarding and is retired only by that
+deliberate act; the human user-admin surface refuses service targets that are
+members of the caller's org (non-members surface as 404 first, so the
+rejection never discloses a cross-org service account).
 
 **Grant-sets on API keys (FAR-1477, ADR 058; flag `api_key_grants`, default OFF).**
 `org_api_keys.grants` is a nullable, space-joined list of `PERMISSIONS` keys,
@@ -865,10 +920,19 @@ Note: duplicate ADR numbers were resolved by FAR-1157 (devtools commit `b65b5de`
 
 ## Import Contracts (enforced by import-linter)
 
-- `modulo.api` must not import `langgraph` directly
-- `modulo.connectors` must not import `modulo.api` or `modulo.auth`
-- `modulo.core`, `.api`, `.connectors` must not import `modulo_cloud` (removed; this contract is retained as a forward-compatibility guard)
-- `modulo.otel_bridge` must not import `core.pipeline_engine`, `hitl_manager`, `eval_engine`
+The eight contracts in `backend/.importlinter`, all `forbidden` type. Each has explicit
+`ignore_imports` seams where a deliberate exception exists.
+
+| Contract name | Source | Forbidden |
+|---|---|---|
+| API layer uses pipeline_engine, not LangGraph directly | `modulo.api` | `langgraph` |
+| Connectors layer is independent of API | `modulo.connectors` | `modulo.api`, `modulo.auth` |
+| Core is zero-coupled to modulo-cloud | `modulo.core`, `modulo.api`, `modulo.connectors` | `modulo_cloud` |
+| OTel bridge does not import core business logic | `modulo.otel_bridge` | `modulo.core.pipeline_engine`, `modulo.core.hitl_manager`, `modulo.core.eval_engine` |
+| Core layer never sees FastAPI | `modulo.core` | `modulo.api` |
+| DB layer has no business logic imports | `modulo.db` | `modulo.core`, `modulo.api` |
+| Connectors don't reach into core | `modulo.connectors` | `modulo.core` |
+| Concrete runtime providers are only imported inside `core/runtime_provider` (FAR-587) | `modulo` | `modulo.core.runtime_provider.{docker,e2b,k8s,local,local_docker}` |
 
 ## Testing Strategy
 
@@ -879,7 +943,12 @@ Note: duplicate ADR numbers were resolved by FAR-1157 (devtools commit `b65b5de`
 | BDD | pytest-bdd | <5m | Real Postgres |
 | E2E | Playwright | <10m | Real Postgres + Frontend |
 
-Coverage targets: `modulo.auth` 90%, `pipeline_engine` 85%, `db.rls` 95%, overall 80%.
+Coverage: `[tool.coverage.run]` in `backend/pyproject.toml` measures **branch** coverage
+(not just line coverage) over `src/modulo`, and `[tool.coverage.report]` sets
+`fail_under = 89`. There is no per-module threshold in that config; the modules named as
+targets in earlier drafts (`modulo.auth`, `pipeline_engine`, `db.rls`) are instead the
+mutation-testing (`mutmut`) `source_paths` alongside `core/license.py` and
+`core/eval_engine/`.
 
 ### Frontend API-path guard
 

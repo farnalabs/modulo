@@ -19,7 +19,10 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
 
 import modulo.api.routes.connectors as connectors_module
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
@@ -30,6 +33,11 @@ from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.connectors.base import ConnectorACL, HealthResult
 from modulo.connectors.ci_runner import GitHubActionsCIRunner
 from modulo.connectors.github import GitHubNetworkError
+from modulo.db.crud.connector_instance import get_connector_instance as _real_get_connector_instance
+from modulo.db.models.account import Account
+from modulo.db.models.base import Base
+from modulo.db.models.connector_instance import ConnectorInstance
+from modulo.db.models.organisation import Organisation
 from modulo.settings import Settings, get_settings
 
 _FERNET_KEY = Fernet.generate_key().decode()
@@ -1710,13 +1718,13 @@ def test_list_connector_types_offers_only_hub_buildable_ids(client: TestClient) 
     """
     from modulo.core.connector_hub import _build_connector
     from modulo.core.plugin_registry import get_plugin_registry
-    from tests.unit.connector_hub.test_build_connector import _BUILD_CASES
+    from tests.unit.connector_hub._fixtures import BUILD_CASES
 
     resp = client.get("/api/v1/connectors/types")
     assert resp.status_code == 200
     ids = [item["id"] for item in resp.json()["items"]]
     assert ids
-    fixtures = {row[0]: (row[1], row[2]) for row in _BUILD_CASES}
+    fixtures = {row[0]: (row[1], row[2]) for row in BUILD_CASES}
     fixtures["rest"] = ({"base_url": "https://api.example.com"}, {"auth_mode": "bearer", "token": "rest_token"})
     fixtures["ticket-tracker"] = ({"provider": "github"}, {"token": "tt_token"})
     fixtures["linear"] = ({}, {"token": "linear_token"})
@@ -1728,6 +1736,46 @@ def test_list_connector_types_offers_only_hub_buildable_ids(client: TestClient) 
         assert fixture is not None, f"/types offered {type_id!r} with no buildable fixture"
         config, creds = fixture
         assert _build_connector(type_id, config, creds) is not None
+
+
+# ── FAR-1772: MCP list_connector_types agrees with GET /types ─────────────
+
+
+async def test_mcp_list_connector_types_matches_rest_surface() -> None:
+    """The MCP tool and ``GET /api/v1/connectors/types`` advertise the SAME
+    buildable id set — a drift on either surface fails here.
+
+    Both surfaces must reuse ``buildable_connector_type_ids()`` (FAR-1764's
+    helper). Before FAR-1772 the MCP tool iterated the raw ``ConnectorType``
+    enum: it advertised the unbuildable abstract labels ``ci-runner`` /
+    ``custom`` and omitted the hub-native CI ids ``github_actions_ci`` /
+    ``gitlab_ci``, disagreeing with the REST surface.
+    """
+    from modulo.api.mcp_server import _ctx_role
+    from modulo.api.mcp_server import list_connector_types as mcp_list_connector_types
+    from modulo.api.routes.connectors import list_connector_types as rest_list_connector_types
+
+    rest = await rest_list_connector_types()
+    rest_ids = [item.id for item in rest.items]
+
+    # Real scope gate runs (connector.list resolves to viewer); only the
+    # per-event credential re-validation is stubbed — no live credential exists
+    # in a unit test, and authz denial is covered by the MCP tool's own tests.
+    role_token = _ctx_role.set("operator")
+    try:
+        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+            mcp_result = await mcp_list_connector_types()
+    finally:
+        _ctx_role.reset(role_token)
+
+    assert "error" not in mcp_result, mcp_result
+    mcp_ids = [item["id"] for item in mcp_result["data"]]
+    assert mcp_ids == rest_ids, f"MCP/REST connector-type surfaces drifted: {mcp_ids!r} vs {rest_ids!r}"
+    # The FAR-1772 defect class, pinned explicitly on the MCP side too.
+    assert "ci-runner" not in mcp_ids
+    assert "custom" not in mcp_ids
+    assert "github_actions_ci" in mcp_ids
+    assert "gitlab_ci" in mcp_ids
 
 
 def test_create_and_health_check_github_actions_ci_connector(client: TestClient) -> None:
@@ -2463,3 +2511,104 @@ def test_update_connector_missing_vault_key_fails_closed(client: TestClient) -> 
     assert "credential_reference_error" in detail
     assert "vault/missing" in detail
     update_mock.assert_not_awaited()
+
+
+async def test_patch_connector_returns_2xx_persists_row_and_get_reflects_change(client: TestClient) -> None:
+    """FAR-1792 regression: a successful PATCH must answer 2xx, not 500.
+
+    The CRUD ``update_connector_instance`` flush expires the server-populated
+    ``updated_at`` column (``onupdate=func.current_timestamp()``). Building
+    the response AFTER the ``session.begin()`` block has committed — on the
+    ``expire_on_commit=False, autobegin=False`` DI session — reloaded that
+    expired attribute outside any transaction and raised
+    ``InvalidRequestError: Autobegin is disabled on this Session``, which
+    ``handle_db_errors`` maps to a 500 even though the write had already
+    committed: the caller saw "update failed" for a change that took effect.
+
+    Asserts the full contract the bug violated, not just the write: the 2xx
+    status, the persisted row read back in a fresh session, and a subsequent
+    GET reflecting the change. A write-only assertion would have passed both
+    before and after the fix.
+    """
+    engine = create_async_engine(
+        "sqlite+aiosqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+    connector_id = uuid.uuid4()
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda sync_conn: Base.metadata.create_all(
+                    sync_conn,
+                    tables=[Organisation.__table__, Account.__table__, ConnectorInstance.__table__],
+                )
+            )
+        async with factory() as session, session.begin():
+            session.add(Organisation(id=_ORG_ID, name="FAR-1792 Test Org", slug="far1792-test-org"))
+            session.add(
+                ConnectorInstance(
+                    id=connector_id,
+                    organisation_id=_ORG_ID,
+                    name="Original Name",
+                    connector_type_id="filesystem",
+                    account_id=_USER_ID,
+                    credentials_ciphertext=b"encrypted",
+                    config_json={},
+                    allowed_operations=[],
+                )
+            )
+
+        async def override_session() -> AsyncGenerator[AsyncSession, None]:
+            async with factory() as session:
+                yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+
+        # The module-level autouse fixture stubs this CRUD read with a
+        # MagicMock; the real-DB route under test needs the real function.
+        with patch("modulo.api.routes.connectors.get_connector_instance", _real_get_connector_instance):
+            resp = client.patch(f"/api/v1/connectors/{connector_id}", json={"name": "Renamed"})
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["name"] == "Renamed"
+
+        async with factory() as verify_session, verify_session.begin():
+            stored = (
+                await verify_session.execute(select(ConnectorInstance).where(ConnectorInstance.id == connector_id))
+            ).scalar_one()
+        assert stored.name == "Renamed"
+
+        with patch("modulo.api.routes.connectors.get_connector_instance", _real_get_connector_instance):
+            got = client.get(f"/api/v1/connectors/{connector_id}")
+        assert got.status_code == 200, got.text
+        assert got.json()["name"] == "Renamed"
+    finally:
+        await engine.dispose()
+
+
+def test_patch_connector_row_gone_at_write_time_returns_404(client: TestClient) -> None:
+    """FAR-1792: the row vanishing between the ownership read and the write is a 404.
+
+    ``_apply_connector_update`` reads the connector once for the IDOR/ownership
+    check and again (inside the transaction) through
+    ``update_connector_instance``; a concurrent DELETE between the two reads
+    makes that write return ``None``. The helper must surface this as
+    ``(None, warning)`` so ``update_connector_endpoint`` maps it to 404 — a
+    test that only makes the ownership read return ``None`` (the existing
+    ``update_not_found`` CRUD case) raises inside the helper and never reaches
+    this arm, leaving the ``updated is None`` branch and the route's
+    ``payload is None`` arm uncovered.
+    """
+    connector = _make_connector()
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=connector),
+        patch("modulo.api.routes.connectors.update_connector_instance", return_value=None),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"name": "Renamed"})
+
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"] == "Connector not found"

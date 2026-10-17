@@ -714,9 +714,8 @@ export function hydrateManifestMeta(to: Parameters<Parameters<typeof router.befo
   // can never drift from it. A route is gated when EITHER its own route entry
   // carries `system_admin_only: true` OR its sidebar group has
   // `system_admin_only: true` — the two signals OR together.
-  // NOTE: the SIDEBAR filter (config/navigation.ts) reads only the group-level
-  // flag today, so a route with route-entry gating inside a VISIBLE sidebar
-  // group would be router-gated yet still listed in the sidebar.
+  // NOTE: the SIDEBAR filter (config/navigation.ts) honours BOTH signals too
+  // (FAR-1796), so the router gate and the sidebar cannot disagree.
   const routePath = (entry as unknown as { path?: string }).path
     ?? manifestByName.get(routeName)?.path
   if (routePath) {
@@ -767,7 +766,26 @@ export async function enforceRoleTierVisibility(
     }
     if (
       to.meta?.requiredTier &&
-      Object.keys(planStore.features).length > 0 &&
+      // Tier check keyed on TIER KNOWLEDGE, not flag-map emptiness (FAR-1809).
+      // The old `Object.keys(features).length > 0` used "the flag map is
+      // non-empty" as a proxy for "the plan is known", conflating two distinct
+      // states:
+      //   - KNOWN-EMPTY: a payload applied with zero flags. `loaded` is set
+      //     together with `currentTier`, so a resolved tier MUST still be
+      //     tier-checked — emptiness of the flag map says nothing about the
+      //     tier, and skipping here let a resolved community org through a
+      //     team route.
+      //   - UNKNOWN: no server payload has ever applied (fetch failed ->
+      //     flagsSource 'unavailable', `loaded` stays false; the tier is the
+      //     'community' bootstrap default, not observed truth). Tier-checking
+      //     that default would bounce licensed users to the dashboard on a
+      //     transient /plan failure — the exact wrong-tier defect FAR-1809
+      //     exists to remove. Fail open here; the backend 402 still enforces
+      //     the real licence on the gated API routes.
+      // The devMode/visibility branch below is deliberately NOT flipped: a
+      // private_preview surface stays hidden when dev mode is unknown, which
+      // is the safe default for a hidden surface (unchanged, out of scope).
+      planStore.loaded &&
       !planStore.isAtMinimumTier(to.meta.requiredTier)
     ) {
       return { name: 'dashboard' }

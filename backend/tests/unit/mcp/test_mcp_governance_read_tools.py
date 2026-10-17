@@ -8,10 +8,9 @@ get_schema_versions, get_pipeline_diff.
 Authz: every tool maps to the same permission key as the corresponding REST
 route and is gated through ``_check_agent_tool_scope``; list_feature_flags
 additionally enforces the strict system-admin gate REST's
-``require_system_permission`` applies. list_teams and get_pipeline_diff also
-carry REST-parity plan-feature gates (``team_rbac`` /
-``pipeline_diff_rollback`` — the same features ``require_feature`` enforces on
-the REST routes). The pipeline-diff tool must mask
+``require_system_permission`` applies. list_teams also carries a REST-parity
+plan-feature gate (``team_rbac`` — the same feature ``require_feature``
+enforces on the REST route). The pipeline-diff tool must mask
 credential-bearing node fields (FAR-1181 parity with the REST route), and the
 SSO listing must never surface client secrets.
 """
@@ -366,14 +365,14 @@ class TestListFeatureFlags(AuthContext):
         from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
 
         org = MagicMock()
-        org.settings_json = {"feature_overrides": {"pipeline_diff_rollback": True}}
+        org.settings_json = {"feature_overrides": {"schema_version_history": True}}
         mock_org.return_value = org
         plan_ctx = MagicMock()
         plan_ctx.tier.return_value = "community"
         mock_plan.return_value = plan_ctx
 
         flag = MagicMock()
-        flag.name = "pipeline_diff_rollback"
+        flag.name = "schema_version_history"
         flag.description = "Snapshot diff + rollback"
         flag.tier = "team"
         flag.currently_active = False
@@ -996,23 +995,28 @@ class TestGetPipelineDiff(AuthContext):
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.api.mcp_server._pipeline_owner_team_id", new_callable=AsyncMock)
     @patch("modulo.db.crud.pipeline_snapshot_versioning.diff_snapshots", new_callable=AsyncMock)
-    async def test_feature_gate_off_returns_feature_required(
+    async def test_community_plan_proceeds_without_feature_gate(
         self,
         mock_diff: AsyncMock,
         mock_owner: AsyncMock,
         mock_session: AsyncMock,
         mock_validate: AsyncMock,
     ) -> None:
+        """FAR-1819: the pipeline_diff_rollback REST-parity gate is retired —
+        a Community plan (every plan feature disabled) no longer returns
+        ``feature_required``; the tool proceeds to read snapshot data."""
+        mock_owner.return_value = None
+        mock_diff.return_value = None
         mock_session.return_value = make_session_context(AsyncMock())
 
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=False)
         with org_patch, plan_patch, settings_patch:
             result = await get_pipeline_diff(str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()))
 
-        assert result["error"] == "feature_required"
-        assert "pipeline_diff_rollback" in result["detail"]
-        # The gate must refuse BEFORE any snapshot data is read.
-        mock_diff.assert_not_awaited()
+        assert result["error"] != "feature_required"
+        # Where the gate used to refuse BEFORE any snapshot data was read,
+        # the tool now reaches the diff query itself.
+        mock_diff.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -1392,6 +1396,70 @@ class TestListFeatureFlagsErrorArms(AuthContext):
 
         assert "error" not in result
         assert not result["flags"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.core.license.get_license", return_value=None)
+    @patch("modulo.core.feature_flags.FeatureFlagRegistry.from_db", new_callable=AsyncMock)
+    @patch("modulo.api.mcp_server.resolve_plan_context", new_callable=AsyncMock)
+    @patch("modulo.db.crud.organisation.get_organisation", new_callable=AsyncMock)
+    @patch("modulo.core.feature_flags.resolve_effective_license")
+    async def test_is_valid_comes_from_shared_ladder(
+        self,
+        mock_ladder: MagicMock,
+        mock_org: AsyncMock,
+        mock_plan: AsyncMock,
+        mock_from_db: AsyncMock,
+        mock_license: MagicMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        """FAR-1849: ``is_valid`` is the OUTCOME of the one canonical ladder
+        (``core.feature_flags.resolve_effective_license``), not an inline
+        re-verification of its rungs — a licence from the helper reports
+        ``True`` even when no key present in this call would verify — while
+        ``has_license_key`` stays the independent presence aggregate the REST
+        registry input uses (the env rung there still requires verification).
+        """
+        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
+        from modulo.core.license import LicenseData
+
+        mock_ladder.return_value = LicenseData(
+            tier="team",
+            features=["sso"],
+            expires_at="2099-01-01T00:00:00+00:00",
+            org_id="test-org",
+            raw_payload={},
+            raw_key="x.y",
+        )
+        mock_org.return_value = MagicMock(settings_json={})
+        plan_ctx = MagicMock()
+        plan_ctx.tier.return_value = "team"
+        mock_plan.return_value = plan_ctx
+        registry = MagicMock()
+        registry.current_tier = "team"
+        registry.has_license_key = False
+        registry.list_flags.return_value = []
+        registry.tier_gap_flags.return_value = []
+        mock_from_db.return_value = registry
+        mock_session.return_value = make_session_context(AsyncMock())
+        _ctx_role.set("admin")
+        _ctx_is_system_admin.set(True)
+        try:
+            settings = MagicMock()
+            settings.modulo_license_key = "not-a-valid-key"
+            settings.modulo_dev_mode = False
+            with patch("modulo.api.mcp_server.get_settings", return_value=settings):
+                result = await list_feature_flags()
+        finally:
+            _ctx_is_system_admin.set(False)
+
+        # The shared helper resolved a licence, so is_valid follows it even
+        # though the env key held by this call cannot verify.
+        assert result["license"]["is_valid"] is True
+        # has_license_key does NOT follow the ladder: the env rung counts only
+        # a verified key, so this one still does not count.
+        assert mock_from_db.call_args.kwargs["has_license_key"] is False
 
 
 class TestGetAuditLogErrorArms(AuthContext):

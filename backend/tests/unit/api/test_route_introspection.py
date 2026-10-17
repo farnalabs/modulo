@@ -133,6 +133,13 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/admin/users/{user_id}/reactivate"): "admin.py inline _require_admin",
     ("POST", "/api/v1/admin/users/{user_id}/reset-password"): "admin.py inline _require_admin",
     ("PUT", "/api/v1/admin/users/{user_id}"): "admin.py inline _require_admin",
+    # FAR-1478: service-account lifecycle carries an inline _require_admin
+    # check in the handler (admin-only), same pattern as the admin user
+    # routes above. The key-mint route is NOT exempt — it is tagged via
+    # require_permission_any_credential("api_key.create").
+    ("POST", "/api/v1/service-accounts"): "service_accounts.py inline _require_admin",
+    ("PATCH", "/api/v1/service-accounts/{service_account_id}"): "service_accounts.py inline _require_admin",
+    ("POST", "/api/v1/service-accounts/{service_account_id}/decommission"): "service_accounts.py inline _require_admin",
     ("POST", "/api/v1/admin/teams"): "admin.py inline _require_admin",
     ("PUT", "/api/v1/admin/teams/{team_id}"): "admin.py inline _require_admin",
     ("DELETE", "/api/v1/admin/teams/{team_id}"): "admin.py inline _require_admin",
@@ -251,18 +258,23 @@ def test_run_trigger_status_use_any_credential() -> None:
 
 
 def test_team_membership_gate_present_on_team_pipeline_routes() -> None:
-    """PATCH/DELETE/graph + the node-conversion writes carry the team-scope gate.
+    """PUT/graph, the node patch + DELETE carry the team-scope gate.
 
     The node-conversion pair (convert-to-agent / revert-to-manual) used to be
     the odd pair out: they mutated a pipeline's graph with NEITHER this
     request-time dependency nor an in-txn re-check, while their sibling graph
     writes had both. The enumeration is deliberate - a route listed here that
     ever loses its ``team_scope`` tag fails this test.
+
+    ``/graph/nodes/{node_id}`` (FAR-1829) is enumerated for the same reason:
+    it is a graph write like any other, so losing the gate there would be a
+    silent privilege widening rather than a missing assertion.
     """
     for route in get_mutating_routes(app):
         if route.path in (
             "/api/v1/pipelines/{pipeline_id}",
             "/api/v1/pipelines/{pipeline_id}/graph",
+            "/api/v1/pipelines/{pipeline_id}/graph/nodes/{node_id}",
             "/api/v1/pipelines/{pipeline_id}/nodes/{node_id}/convert-to-agent",
             "/api/v1/pipelines/{pipeline_id}/nodes/{node_id}/revert-to-manual",
         ):

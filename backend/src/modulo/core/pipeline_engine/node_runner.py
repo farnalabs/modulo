@@ -64,7 +64,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, TypeGuard
+from typing import TYPE_CHECKING, Any, NamedTuple, TypeGuard, cast, get_args
 
 import httpx
 import jinja2
@@ -107,7 +107,11 @@ from modulo.core.credential_issuer import (
     default_credential_issuer,
 )
 from modulo.core.eval_engine import EvalEngine, EvalResult
-from modulo.core.guardrails.loop_intercept import LoopInterceptConfig
+from modulo.core.guardrails.loop_intercept import (
+    BRIDGE_ESCALATED_EXIT_CODE,
+    LoopInterceptConfig,
+    parse_bridge_escalation_marker,
+)
 from modulo.core.model_class_registry import effective_model_template_value
 from modulo.core.node_output_split import (
     DEFAULT_NODE_TYPE,
@@ -707,6 +711,32 @@ SANDBOX_AGENT_FAILED_SUMMARY = "Sandbox agent execution failed"
 # carries the runner's internal marker) can never collide. Single source of
 # truth so runner and executor cannot drift.
 MODULO_SYNTHETIC_FAILURE_MARKER = "modulo_synthetic_failure"
+
+
+def _bridge_escalation_failure_detail(exit_code: int, stdout_raw: str) -> str | None:
+    """Failure detail for a loop stopped by an in-loop escalation (FAR-1694 S2).
+
+    The sandbox bridge client refuses an ``escalate``-verdict call, prints a
+    ``MODULO_BRIDGE_ESCALATED:<json>`` marker and exits with
+    ``BRIDGE_ESCALATED_EXIT_CODE``. Returns a summary-only descriptor of the
+    escalation (tool / guardrail / reason — never raw args), or ``None`` when
+    the run was not stopped by an escalation. The mid-loop suspension that turns
+    this into ``interrupt()``/``awaiting_human`` is a later FAR-1694 slice; here
+    it only explains the failure.
+
+    UNTRUSTED CHANNEL (FAR-1694 S2 security note): both *exit_code* and the
+    marker inside *stdout_raw* come from the wrapped agent's process, which can
+    forge them. This helper therefore produces a human-readable failure
+    EXPLANATION only — it must never gate a control decision. S3 must
+    authenticate the escalation channel (a host-recorded decision the agent
+    cannot write) before turning it into ``interrupt()``/``awaiting_human``.
+    """
+    if exit_code != BRIDGE_ESCALATED_EXIT_CODE:
+        return None
+    escalation = parse_bridge_escalation_marker(stdout_raw)
+    if escalation is None:
+        return None
+    return f"Agent loop escalation requested — human decision required ({escalation.describe()})"
 
 
 async def _resolve_egress_allowlist(
@@ -5172,6 +5202,13 @@ def _hitl_review_approve_reject_result(
     return gate_result
 
 
+#: The closed human-decision vocabulary the resume path resolves (FAR-541).
+#: Defined ABOVE its first consumer (``_hitl_review_resume_result``) so the
+#: vocabulary has exactly one home — the resume path checks membership here
+#: instead of inlining the set.
+_HUMAN_DECISION_ACTIONS = ("approved", "rejected", "deliver_manual")
+
+
 async def _hitl_review_resume_result(
     decision: Any,
     review_id: str,
@@ -5218,16 +5255,20 @@ async def _hitl_review_resume_result(
             extra={"review_id": review_id, "decision_review_id": stamped_gate},
         )
         return (False, None)
-    if action == "deliver_manual":
-        gate_result = _hitl_review_deliver_manual_result(review_id, decision)
-        _inject_answer_state(review_id, decision, gate_result[1])
-        return gate_result
-    if action not in ("approved", "rejected"):
+    # FAR-541 / M6: the closed vocabulary lives in exactly ONE place
+    # (``_HUMAN_DECISION_ACTIONS``) so this path and the Evidence grounding
+    # path can never drift apart. Anything outside it fails closed here —
+    # a missing action, an empty ``{}``, an unknown action value.
+    if action not in _HUMAN_DECISION_ACTIONS:
         _log.warning(
             "hitl_review.malformed_decision_ignored",
             extra={"review_id": review_id, "decision_type": type(decision).__name__, "action": action},
         )
         return (False, None)
+    if action == "deliver_manual":
+        gate_result = _hitl_review_deliver_manual_result(review_id, decision)
+        _inject_answer_state(review_id, decision, gate_result[1])
+        return gate_result
     is_rejected = action == "rejected"
     await _dispatch_reject_correction_best_effort(
         state, decision, review_id, hitl_review_config, session_factory, org_id
@@ -5237,6 +5278,248 @@ async def _hitl_review_resume_result(
     )
     _inject_answer_state(review_id, decision, ar_result)
     return (True, ar_result)
+
+
+def _human_gated_dtos(eval_definitions: Sequence[EvalDefDTO]) -> list[EvalDefDTO]:
+    """The HUMAN-governed, gate-owned DTOs baked into this gate.
+
+    Extracted from :func:`_ground_human_gate_evidence` for the
+    cognitive-complexity budget (S3776); behaviour unchanged.
+    """
+    return [
+        dto
+        for dto in eval_definitions
+        if getattr(dto, "policy_gate_evaluation_mode", None) == "human" and dto.policy_gate_id is not None
+    ]
+
+
+def _build_human_gate_decision(action: Any, decision: Any) -> Any:
+    """Construct the resolver's ``HumanDecision`` from the resume payload.
+
+    Extracted from :func:`_ground_human_gate_evidence` for the
+    cognitive-complexity budget (S3776); behaviour unchanged. The lazy import
+    runs at call time so this MUST be called inside the fail-open guard
+    (criterion 12): the resume path only resolves the three recognised
+    actions (anything else fails closed before this call) and the cast
+    carries a stray value through to the resolver's fail-closed branch.
+    """
+    from modulo.core.eval_engine.policy_gate import HumanDecision
+
+    return HumanDecision(
+        action=cast("Any", action),
+        decided_by=decision.get("decided_by") if isinstance(decision, dict) else None,
+        reason=decision.get("reason") if isinstance(decision, dict) else None,
+    )
+
+
+def _ground_one_human_gate_evidence(
+    session: Any,
+    dto: EvalDefDTO,
+    *,
+    human_decision: Any,
+    gate_actions_in_set: set[Any],
+    org_id: Any,
+    run_id: Any,
+    review_id: str,
+    action: Any,
+) -> None:
+    """Resolve and ground ONE human-gated DTO on an Evidence row.
+
+    Extracted from :func:`_ground_human_gate_evidence` for the
+    cognitive-complexity budget (S3776); behaviour unchanged. Called with the
+    session already open, inside the fail-open guard (criterion 12). The
+    lazy imports run at call time and therefore stay inside that guard.
+    """
+    from modulo.core.eval_engine.evidence_layer import append_evidence
+    from modulo.core.eval_engine.policy_gate import (
+        HumanGateView,
+        resolve_human_evaluation,
+    )
+
+    # Re-checked here so mypy narrows policy_gate_id (the list comprehension
+    # filter in ``_human_gated_dtos`` does not narrow the element type).
+    if dto.policy_gate_id is None:
+        return
+    if dto.failure_behaviour not in gate_actions_in_set:
+        # Loud, but deliberately NOT a skip: the live row's CHECK admits
+        # ``escalate`` (FAR-1694/0305) while the Outcome contract does not,
+        # so the resolver fail-closes the out-of-set action to ``block`` (M3)
+        # and the decision is still grounded (criterion 9).
+        _log.warning(
+            "hitl_review.human_gate_action_out_of_set",
+            extra={
+                "review_id": review_id,
+                "policy_gate_id": str(dto.policy_gate_id),
+                "action": dto.failure_behaviour,
+            },
+        )
+    outcome = resolve_human_evaluation(
+        HumanGateView(
+            policy_gate_id=dto.policy_gate_id,
+            eval_id=dto.id,
+            # Live rows carry a plain `str` action (the CHECK
+            # admits escalate); the resolver narrows it.
+            action=cast("Any", dto.failure_behaviour),
+            version=dto.policy_gate_version or 1,
+        ),
+        human_decision,
+    )
+    if not isinstance(outcome.result, bool):
+        # result=None (unrecognised action) is not a decision —
+        # nothing to ground.
+        _log.warning(
+            "hitl_review.human_gate_evidence_unresolved_decision",
+            extra={
+                "review_id": review_id,
+                "policy_gate_id": str(dto.policy_gate_id),
+                "human_action": action,
+            },
+        )
+        return
+    append_evidence(
+        session,
+        organisation_id=org_id,
+        key=f"gate_decision_{dto.policy_gate_id}",
+        subject_type="run",
+        subject_id=str(run_id),
+        value=outcome.result,
+        producer_type="policy_gate",
+        producer_id=dto.policy_gate_id,
+    )
+
+
+async def _ground_human_gate_evidence_body(
+    decision: Any,
+    eval_definitions: Sequence[EvalDefDTO],
+    *,
+    session_factory: Any,
+    org_id: Any,
+    run_id: Any,
+    review_id: str,
+    action: Any,
+) -> None:
+    """Post-decision grounding body, executed INSIDE the fail-open guard.
+
+    Extracted from :func:`_ground_human_gate_evidence` for the
+    cognitive-complexity budget (S3776); behaviour unchanged. Every line
+    that can raise after the human's decision committed runs here — the DTO
+    scan, the missing-context bail, the lazy imports, the ``HumanDecision``
+    construction, the session and the Evidence writes (criterion 12).
+    """
+    human_dtos = _human_gated_dtos(eval_definitions)
+    if not human_dtos:
+        return
+
+    if session_factory is None or org_id is None or run_id is None:
+        _log.warning(
+            "hitl_review.human_gate_evidence_grounding_skipped",
+            extra={
+                "review_id": review_id,
+                "run_id": str(run_id),
+                "human_action": action,
+                "reason": "missing_session_org_or_run",
+            },
+        )
+        return
+
+    from modulo.core.eval_engine.policy_gate import HumanGateAction
+
+    human_decision = _build_human_gate_decision(action, decision)
+
+    # M6: the gate-action vocabulary is DERIVED from the policy_gate
+    # module's HumanGateAction literal — never restated here, so the
+    # two cannot drift.
+    gate_actions_in_set = set(get_args(HumanGateAction))
+
+    async with session_factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        await set_rls_execution_context(session)
+        for dto in human_dtos:
+            _ground_one_human_gate_evidence(
+                session,
+                dto,
+                human_decision=human_decision,
+                gate_actions_in_set=gate_actions_in_set,
+                org_id=org_id,
+                run_id=run_id,
+                review_id=review_id,
+                action=action,
+            )
+
+
+async def _ground_human_gate_evidence(
+    decision: Any,
+    eval_definitions: Sequence[EvalDefDTO] | None,
+    *,
+    session_factory: Any,
+    org_id: Any,
+    run_id: Any,
+    review_id: str,
+) -> None:
+    """Ground a human gate decision on Evidence rows (FAR-939 chunk 12 §3.4).
+
+    For EACH human-governed eval DTO baked into this gate, append ONE
+    Evidence row through the store's single write path
+    (``append_evidence`` → ``assert_write_authorisation``, which fails
+    CLOSED on an unowned key):
+
+    * ``key`` = ``gate_decision_<policy_gate_id>``
+    * ``subject_type`` / ``subject_id`` = ``run`` / ``<run_id>``
+    * ``value`` = the gate's boolean evaluation result — ``true`` for
+      ``approved`` / ``deliver_manual``, ``false`` for ``rejected``
+      (resolved through ``resolve_human_evaluation``; the configured
+      enforcement ``warn``/``block`` is NOT duplicated into ``value``)
+    * ``producer_type`` / ``producer_id`` = ``policy_gate`` /
+      ``<policy_gate_id>``
+
+    The human's decision has ALREADY committed in the route transaction
+    before resume runs, so the grounding write is **fail-open with a
+    structured log** — it must never retro-fail an already-committed
+    decision (mirrors chunk 4's fail-open decision-record philosophy).
+    The guard covers the WHOLE post-decision body — the extracted
+    :func:`_ground_human_gate_evidence_body` runs entirely inside this
+    ``try``, so the DTO scan, the lazy imports, the ``HumanDecision``
+    construction, the session and the Evidence write are all inside it
+    (criterion 12 / §3.4). ``CancelledError`` propagates.
+
+    Called from the gate node's RESUME path only — the write happens after
+    the human's decision exists, never before. No ``PolicyGateDecision``
+    row is written here (chunk 12 §3.5 — the reconciler's NULL
+    ``eval_result_id`` invariant stays absolute).
+    """
+    if not eval_definitions:
+        return
+    action = decision.get("action") if isinstance(decision, dict) else None
+    # M8 (criterion 12): EVERYTHING that can raise after the human's
+    # decision committed lives INSIDE this fail-open guard — including the
+    # lazy imports and the HumanDecision construction (which the body
+    # performs), which previously sat above the ``try`` and could escape
+    # ``resume`` with the decision already durable.
+    try:
+        await _ground_human_gate_evidence_body(
+            decision,
+            eval_definitions,
+            session_factory=session_factory,
+            org_id=org_id,
+            run_id=run_id,
+            review_id=review_id,
+            action=action,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # Fail-OPEN: the human's decision already committed in the route
+        # transaction — a grounding failure must never retro-fail it.
+        _log.warning(
+            "hitl_review.human_gate_evidence_grounding_failed",
+            extra={
+                "review_id": review_id,
+                "run_id": str(run_id),
+                "organisation_id": str(org_id),
+                "human_action": action,
+            },
+            exc_info=True,
+        )
 
 
 #: Deterministic cap for each serialised ``condition_result`` member carried
@@ -5547,6 +5830,18 @@ def make_hitl_review_fn(
             org_id,
         )
         if resumed:
+            # FAR-939 chunk 12 §3.4: ground each human-governed gate's
+            # decision on an Evidence row (fail-open, after the human's
+            # decision has committed). Ordinary automatic-mode gates have no
+            # human-governed DTOs and pay only the list scan.
+            await _ground_human_gate_evidence(
+                state.get("_hitl_decision"),
+                eval_definitions,
+                session_factory=session_factory,
+                org_id=org_id,
+                run_id=state.get("_run_id"),
+                review_id=review_id,
+            )
             return resume_result  # type: ignore[return-value]
 
         # --- Conditional gate (Section 8.17) — evaluate condition against state. ---
@@ -11121,7 +11416,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # watchdog fired, FAR-98) carries a distinct stall_reason so the
         # two failure modes are distinguishable.
         command_error: str = ""
-        if cmd_result is None:
+        # FAR-1694 S2 (bridge protocol): detect an in-loop escalation marker and
+        # surface its typed context. No control-flow change — a non-zero exit
+        # still fails the node (fail-closed) until the suspension slice lands.
+        _bridge_escalation_error = _bridge_escalation_failure_detail(exit_code, agent_stdout_raw)
+        if _bridge_escalation_error is not None:
+            command_error = _bridge_escalation_error
+        elif cmd_result is None:
             if stall_reason:
                 command_error = stall_reason
             else:

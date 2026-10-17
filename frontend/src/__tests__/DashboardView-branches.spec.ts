@@ -38,20 +38,12 @@ const mockSummaryData = {
   ],
 }
 
-const mockFlagData = {
-  license: { tier: 'community', has_license_key: false, is_valid: false },
-  // FAR-92: the rolling-window toggle is gated on analytics_page — on by
-  // default here so the toggle tests see it.
+// FAR-92: the rolling-window toggle is gated on analytics_page — on by
+// default here so the toggle tests see it.
+const mockPlanData = {
+  license: { tier: 'community', expires_at: null, org_id: null },
+  dev_mode: false,
   flags: [{ name: 'analytics_page', currently_active: true }],
-  would_activate: [],
-}
-
-const mockLicenseData = {
-  has_license: false,
-  tier: 'community',
-  features: [],
-  expires_at: null,
-  org_id: null,
 }
 
 const mockGet = vi.hoisted(() => vi.fn())
@@ -59,6 +51,8 @@ vi.mock('../lib/api/client', () => ({
   api: { GET: mockGet },
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
   clearAccessToken: vi.fn(),
+  // useEventStream registers a module-scope re-arm listener on import (FAR-1842).
+  onAuthChange: vi.fn(() => vi.fn()),
 }))
 
 import DashboardView from '../views/DashboardView.vue'
@@ -66,8 +60,7 @@ import DashboardView from '../views/DashboardView.vue'
 function setupDefaultMocks() {
   mockGet.mockImplementation((url: string) => {
     if (url === '/api/v1/dashboard/summary') return Promise.resolve({ data: mockSummaryData, error: undefined })
-    if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-    if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+    if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
     return Promise.resolve({ data: null, error: undefined })
   })
 }
@@ -107,8 +100,7 @@ describe('DashboardView branches — cardValue', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -146,8 +138,7 @@ describe('DashboardView branches — cardValue', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -185,8 +176,7 @@ describe('DashboardView branches — cardValue', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -226,8 +216,7 @@ describe('DashboardView branches — evalRateDisplay', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -251,8 +240,7 @@ describe('DashboardView branches — evalRateDisplay', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -281,8 +269,7 @@ describe('DashboardView branches — evalTrend flat', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -304,8 +291,7 @@ describe('DashboardView branches — evalTrend flat', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -342,8 +328,7 @@ describe('DashboardView branches — evalDeltaPctText', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -381,8 +366,7 @@ describe('DashboardView branches — evalDeltaPctText', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -422,8 +406,7 @@ describe('DashboardView branches — spendDeltaPctText', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -465,8 +448,7 @@ describe('DashboardView branches — deltaDirection', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -576,8 +558,7 @@ describe('DashboardView branches — trendData', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -598,8 +579,7 @@ describe('DashboardView branches — trendData', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -620,8 +600,7 @@ describe('DashboardView branches — recent_runs', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -648,8 +627,7 @@ describe('DashboardView branches — teams', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -679,8 +657,7 @@ describe('DashboardView branches — team expansion', () => {
       if (url === '/api/v1/dashboard/summary') {
         return Promise.resolve({ data: teamSummaryData, error: undefined })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
 
@@ -717,8 +694,7 @@ describe('DashboardView branches — error state', () => {
   it('shows ErrorAlert when error and no summary', async () => {
     mockGet.mockImplementation((url: string) => {
       if (url === '/api/v1/dashboard/summary') return Promise.reject(new Error('Network error'))
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -735,8 +711,7 @@ describe('DashboardView branches — loading skeleton', () => {
     const dashboardDefer = new Promise<{ data: typeof mockSummaryData; error: undefined }>(() => {})
     mockGet.mockImplementation((url: string) => {
       if (url === '/api/v1/dashboard/summary') return dashboardDefer
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -759,8 +734,7 @@ describe('DashboardView branches — eval null display', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -777,7 +751,7 @@ describe('DashboardView branches — onMounted', () => {
     await flushPromises()
     // Should have fetched plan for community tier
     const urls = mockGet.mock.calls.map((c: unknown[]) => c[0])
-    expect(urls).toContain('/api/v1/admin/license')
+    expect(urls).toContain('/api/v1/plan')
     wrapper.unmount()
   })
 })
@@ -800,8 +774,7 @@ describe('DashboardView branches — evalTrendClass', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -841,8 +814,7 @@ describe('DashboardView branches — spendDeltaClass', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -884,8 +856,7 @@ describe('DashboardView branches — evalDeltaArrow', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)

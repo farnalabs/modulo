@@ -2,14 +2,19 @@
 
 import logging
 import secrets
+import uuid
 import xml.sax.saxutils
+from collections.abc import Awaitable, Callable
+from functools import partial
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.datastructures import FormData
 
 from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
@@ -20,6 +25,11 @@ from modulo.api.dependencies import (
     resolve_anonymous_plan_context,
 )
 from modulo.auth.sso import (
+    SSO_ERROR_AUTH_FAILED,
+    SSO_ERROR_NOT_INVITED,
+    SSO_ERROR_PROVIDER_UNAVAILABLE,
+    SsoCallbackError,
+    SsoProvisioningDeniedError,
     _read_system_saml_provider_by_slug,
     _set_default_rls_org,
     oidc_get_authorize_url,
@@ -39,7 +49,7 @@ from modulo.db.crud.sso_provider import (
     get_provider_by_provider_id,
     list_enabled_oidc_providers,
 )
-from modulo.db.models.organisation import SYSTEM_ORG_ID
+from modulo.db.models.organisation import SYSTEM_ORG_ID, Organisation
 from modulo.db.models.sso_provider import SsoProvider
 from modulo.settings import Settings, get_settings
 
@@ -85,6 +95,91 @@ def _redirect_to_frontend(tokens: dict[str, str], settings: Settings) -> Redirec
         # the SPA can still present it on the cookie-only /auth/refresh call.
         _set_csrf_cookie(response, secrets.token_hex(32), settings, max_age_seconds=_refresh_cookie_ttl(settings))
     return response
+
+
+# ---------------------------------------------------------------------------
+# SSO callback failure -> frontend login page (FAR-1791)
+# ---------------------------------------------------------------------------
+# The IdP navigates the BROWSER to the callback routes, so a failure used to
+# surface as a raw JSON page (FastAPI's HTTPException renderer) — e.g. a user
+# who authenticated at the IdP but was never invited saw
+# ``{"detail":"You have not been invited to this organisation."}``. Instead the
+# routes RAISE :class:`SsoCallbackError` (a whitelisted code, never exception
+# text), which the app's registered handler renders as a 303 back to the login
+# page. Raising — rather than returning the redirect inline — is what lets the
+# ``audited_system("saml_acs_attempted", ...)`` dependency observe the failure
+# and record ``outcome="error"``. The real error is still logged server-side.
+#
+# The vocabulary + typed error live in ``modulo.auth.sso`` (next to the other
+# SSO callback error, SsoProvisioningDeniedError) so there is ONE definition;
+# the redirect target itself is built in the handler
+# (``modulo.api.exception_handlers.sso_error_redirect``).
+
+
+async def _resolve_org_slug_for_error(session: AsyncSession, org_id: uuid.UUID | None) -> str | None:
+    """Best-effort org-slug lookup for the SSO error redirect target.
+
+    Sends a denied user back to *their* org's login page. Any read failure
+    (unbound RLS, missing row, DB error) returns ``None`` so the caller falls
+    back to the base ``/login`` URL — the redirect must never be masked by a
+    lookup fault on an already-failing path.
+    """
+    if org_id is None:
+        return None
+    try:
+        if session.in_transaction():
+            result = await session.execute(select(Organisation.slug).where(Organisation.id == org_id))
+        else:
+            async with session.begin():
+                result = await session.execute(select(Organisation.slug).where(Organisation.id == org_id))
+        return result.scalar_one_or_none()
+    except Exception:
+        _log.warning("sso.error_redirect_slug_lookup_failed", exc_info=True)
+        return None
+
+
+async def _run_sso_callback_process(
+    session: AsyncSession,
+    process: Callable[[], Awaitable[dict[str, str]]],
+    *,
+    log_context: str,
+    contract_tag: str,
+) -> dict[str, str]:
+    """Run an SSO callback's token exchange, mapping every failure to a redirect.
+
+    Shared by the OIDC callback and both SAML ACS routes (FAR-1791). Because the
+    IdP navigates the BROWSER here, a failure must raise :class:`SsoCallbackError`
+    (rendered as the 303 login redirect by ``sso_callback_error_handler``) rather
+    than a raw JSON error page. The transaction is opened here so a
+    ``session.begin()`` fault is mapped on the same path.
+
+    Exception ordering is load-bearing and identical for every caller:
+    ``SsoProvisioningDeniedError`` is a ``ValueError`` subclass, so its arm MUST
+    precede ``except ValueError``; ``ProgrammingError`` is a ``SQLAlchemyError``,
+    so it precedes its base.
+    """
+    try:
+        async with session.begin():
+            return await process()
+    except SsoProvisioningDeniedError as exc:
+        _log.warning("%s join denied: %s", log_context, sanitise_log_value(exc), exc_info=True)
+        slug = await _resolve_org_slug_for_error(session, exc.org_id)
+        raise SsoCallbackError(SSO_ERROR_NOT_INVITED, slug) from exc
+    except ValueError as exc:
+        _log.warning("%s failed: %s", log_context, sanitise_log_value(exc), exc_info=True)
+        raise SsoCallbackError(SSO_ERROR_AUTH_FAILED) from exc
+    except ProgrammingError as exc:
+        _log.warning("%s failed — DB table missing: %s", log_context, exc, exc_info=True)
+        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, contract_tag)
+        _log.warning("%s DB error: %s", log_context, exc, exc_info=True)
+        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.exception("%s.unexpected_error", contract_tag)
+        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
 
 
 class OidcProviderInfo(BaseModel):
@@ -289,49 +384,19 @@ async def oidc_callback(
     code = request.query_params.get("code")
     state = request.query_params.get("state")
     if not code or not state:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing 'code' or 'state' query parameter",
-        )
+        # FAR-1791: a browser-facing callback failure redirects to the login
+        # page with an error code rather than rendering a raw JSON page.
+        raise SsoCallbackError(SSO_ERROR_AUTH_FAILED)
 
     public_url = get_public_url(settings).rstrip("/")
     redirect_uri = f"{public_url}/api/v1/auth/oidc/{provider}/callback"
 
-    try:
-        async with session.begin():
-            tokens = await oidc_process_callback(code, state, settings, system_session, session, redirect_uri)
-    except ValueError as exc:
-        _log.warning(
-            "OIDC callback failed for provider %s: %s",
-            sanitise_log_value(provider),
-            sanitise_log_value(exc),
-            exc_info=True,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(exc),
-        ) from None
-    except ProgrammingError as exc:
-        _log.warning("OIDC callback failed — DB table missing: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from exc
-    except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "sso.oidc_callback")
-        _log.warning("OIDC callback DB error: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=MSG_DB_ERROR_PLEASE_TRY,
-        ) from exc
-    except HTTPException:
-        raise
-    except Exception as e:
-        _log.exception("sso.oidc_callback.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
-        ) from e
+    tokens = await _run_sso_callback_process(
+        session,
+        partial(oidc_process_callback, code, state, settings, system_session, session, redirect_uri),
+        log_context=f"OIDC callback for provider {sanitise_log_value(provider)}",
+        contract_tag="sso.oidc_callback",
+    )
 
     return _redirect_to_frontend(tokens, settings)
 
@@ -444,6 +509,26 @@ async def _saml_login_redirect(
     return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
 
 
+async def _read_acs_form(request: Request) -> FormData:
+    """Read a SAML ACS POST form, mapping a parse failure to the login redirect.
+
+    FAR-1791: the IdP navigates the BROWSER to the ACS, so a body the parser
+    rejects must not escape as an opaque JSON page. ``request.form()`` raises
+    the BASE ``starlette.exceptions.HTTPException`` for a malformed multipart
+    body, which ``handle_db_errors`` does not pass through (its arm catches the
+    ``fastapi`` subclass), so an unguarded parse surfaces as a 500
+    ``{"detail": "An unexpected error occurred."}`` — the very outcome this
+    contract exists to avoid. A body we cannot parse carries no
+    ``SAMLResponse``, which is exactly the missing-response case the callers
+    already map to ``SSO_ERROR_AUTH_FAILED``; both now take the same 303 path.
+    """
+    try:
+        return await request.form()
+    except Exception as exc:
+        _log.warning("sso.saml_acs_form_parse_failed", exc_info=True)
+        raise SsoCallbackError(SSO_ERROR_AUTH_FAILED) from exc
+
+
 # FAR-1516: PRE-AUTH route — the browser posts the IdP's SAML response with no
 # session, and the identity is established inside the handler, so
 # audited(principal_dep=...) has nothing to resolve. The actor-less variant
@@ -472,9 +557,14 @@ async def saml_acs_provider(
     Resolves the provider by its globally unique ``provider_id`` slug. The
     response is validated against THIS provider's SP entity ID and ACS URL.
 
+    Because the IdP navigates the BROWSER here, a handled callback failure —
+    including an unknown, disabled or non-SAML ``provider_id`` — is rendered
+    as a 303 redirect to the login page carrying a whitelisted ``sso_error``
+    code (FAR-1791), never the uniform JSON 404 the non-ACS routes keep.
+
     RelayState verification (FAR-1003, defense-in-depth):
     - valid signed RelayState for THIS provider → proceed
-    - tampered / wrong provider / expired → reject (401)
+    - tampered / wrong provider / expired → reject (303 to the login page)
     - absent → do NOT fail; proceed on URL path (IdP-initiated SSO)
 
     Security reasoning: with routing by URL path, a forged RelayState
@@ -484,18 +574,48 @@ async def saml_acs_provider(
     signal, not the control.
     """
     bind_audit_org(request, SYSTEM_ORG_ID)
-    provider = await _resolve_saml_for_route(provider_id, system_session, session)
+    try:
+        provider = await _resolve_saml_for_route(provider_id, system_session, session)
+    except HTTPException as exc:
+        # FAR-1791: the ACS is browser-facing, so an unknown / disabled /
+        # non-SAML slug must redirect to the login page rather than render the
+        # uniform JSON 404 the non-ACS routes keep. The 303 is exactly as
+        # opaque as the 404 (ADR 036): all three cases raise the SAME uniform
+        # ``_SAML_NOT_FOUND`` above and map to the SAME code here, so nothing
+        # new is disclosed.
+        raise SsoCallbackError(SSO_ERROR_AUTH_FAILED) from exc
+    except ProgrammingError as exc:
+        # FAR-1791: a DB fault during provider resolution is the same outage
+        # the process-response arms below already map to ``provider_unavailable``
+        # — the browser must get the 303, not ``handle_db_errors``' raw 501 JSON.
+        _log.warning("SAML ACS provider resolution failed — DB table missing: %s", exc, exc_info=True)
+        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
+    except SQLAlchemyError as exc:
+        # Specific arms stay ahead of their bases: ``ProgrammingError`` above is
+        # a ``SQLAlchemyError``, and a session-contract violation is delegated to
+        # the shared classifier (500) exactly as the process-response arm does.
+        raise_session_contract_error(exc, "sso.saml_acs_provider_resolution")
+        _log.warning("SAML ACS provider resolution DB error: %s", exc, exc_info=True)
+        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
+    except Exception as exc:
+        # FAR-1791: an UNEXPECTED (non-HTTP, non-DB) fault resolving the provider
+        # must reach the browser as the same login-page 303 the process-response
+        # arms give, never ``handle_db_errors``' raw JSON 500 — the resolution
+        # path's contract is uniform with ``_run_sso_callback_process``'s
+        # catch-all. Logged (not swallowed), so the real cause stays visible.
+        _log.exception("sso.saml_acs_provider_resolution.unexpected_error")
+        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
     # FAR-1516: the provider names its org — record the ACS attempt there (an
-    # unknown slug 404s above and keeps the sentinel).
+    # unknown slug redirects above and keeps the sentinel).
     bind_audit_org(request, provider.organisation_id)
 
-    form = await request.form()
+    form = await _read_acs_form(request)
     raw_saml: object = form.get("SAMLResponse", "")
     if not isinstance(raw_saml, str) or not raw_saml:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing 'SAMLResponse' in form data",
-        )
+        # FAR-1791: the IdP POSTs the browser here, so a failure redirects to
+        # the login page (303 converts the POST to a GET) rather than
+        # rendering a raw JSON page.
+        raise SsoCallbackError(SSO_ERROR_AUTH_FAILED)
 
     # RelayState verification (FAR-1003): when present, verify HMAC signature
     # and provider_id match. Absence is tolerated — IdP-initiated SSO may
@@ -508,56 +628,21 @@ async def saml_acs_provider(
                 "sso.saml_relay_state_invalid",
                 extra={"provider_id": provider_id},
             )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired RelayState",
-            )
+            raise SsoCallbackError(SSO_ERROR_AUTH_FAILED)
         relay_pid = relay_payload.get("pid")
         if relay_pid != provider_id:
             _log.warning(
                 "sso.saml_relay_state_provider_mismatch",
                 extra={"expected": provider_id, "relay_pid": relay_pid},
             )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="RelayState does not match the ACS provider",
-            )
+            raise SsoCallbackError(SSO_ERROR_AUTH_FAILED)
 
-    try:
-        async with session.begin():
-            tokens = await saml_process_response(raw_saml, settings, system_session, session, provider_id=provider_id)
-    except ValueError as exc:
-        _log.warning(
-            "SAML ACS failed for provider %s: %s",
-            sanitise_log_value(provider_id),
-            sanitise_log_value(exc),
-            exc_info=True,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(exc),
-        ) from None
-    except ProgrammingError as exc:
-        _log.warning("SAML ACS failed — DB table missing: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from exc
-    except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "sso.saml_acs_provider")
-        _log.warning("SAML ACS DB error: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=MSG_DB_ERROR_PLEASE_TRY,
-        ) from exc
-    except HTTPException:
-        raise
-    except Exception as e:
-        _log.exception("sso.saml_acs_provider.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
-        ) from e
+    tokens = await _run_sso_callback_process(
+        session,
+        partial(saml_process_response, raw_saml, settings, system_session, session, provider_id=provider_id),
+        log_context=f"SAML ACS for provider {sanitise_log_value(provider_id)}",
+        contract_tag="sso.saml_acs_provider",
+    )
 
     return _redirect_to_frontend(tokens, settings)
 
@@ -709,48 +794,34 @@ async def saml_acs(
     # attribute the attempt to the provider's org. Env-only config has no row,
     # so the sentinel published above stays.
     if system_session is not None and not system_session.in_transaction():
-        async with system_session.begin():
-            legacy_provider = await get_enabled_saml_provider(system_session)
+        try:
+            async with system_session.begin():
+                legacy_provider = await get_enabled_saml_provider(system_session)
+        except ProgrammingError as exc:
+            # FAR-1791: resolve-provider DB faults are browser-facing here too —
+            # map them to the login-page 303, never ``handle_db_errors``' raw
+            # 501/503 JSON. Specific arm ahead of its base (MRO).
+            _log.warning("SAML ACS provider resolution failed — DB table missing: %s", exc, exc_info=True)
+            raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
+        except SQLAlchemyError as exc:
+            raise_session_contract_error(exc, "sso.saml_acs_resolution")
+            _log.warning("SAML ACS provider resolution DB error: %s", exc, exc_info=True)
+            raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
         if legacy_provider is not None:
             bind_audit_org(request, legacy_provider.organisation_id)
-    form = await request.form()
+    form = await _read_acs_form(request)
     raw_saml: object = form.get("SAMLResponse", "")
     if not isinstance(raw_saml, str) or not raw_saml:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing 'SAMLResponse' in form data",
-        )
+        # FAR-1791: browser-facing callback failure -> login page (see the
+        # per-provider ACS route for the 303-over-POST rationale).
+        raise SsoCallbackError(SSO_ERROR_AUTH_FAILED)
 
-    try:
-        async with session.begin():
-            tokens = await saml_process_response(raw_saml, settings, system_session, session)
-    except ValueError as exc:
-        _log.warning("SAML ACS failed: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(exc),
-        ) from None
-    except ProgrammingError as exc:
-        _log.warning("SAML ACS failed — DB table missing: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from exc
-    except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "sso.saml_acs")
-        _log.warning("SAML ACS DB error: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=MSG_DB_ERROR_PLEASE_TRY,
-        ) from exc
-    except HTTPException:
-        raise
-    except Exception as e:
-        _log.exception("sso.saml_acs.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
-        ) from e
+    tokens = await _run_sso_callback_process(
+        session,
+        partial(saml_process_response, raw_saml, settings, system_session, session),
+        log_context="SAML ACS",
+        contract_tag="sso.saml_acs",
+    )
 
     return _redirect_to_frontend(tokens, settings)
 

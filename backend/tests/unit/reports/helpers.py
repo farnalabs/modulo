@@ -10,7 +10,7 @@ different shapes. Changes to how the scheduler / CRUD layer interacts with
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -47,11 +47,35 @@ class MockSession:
     ``delete``/``flush`` for the CRUD paths.
     """
 
-    def __init__(self, execute_side_effect: list[MagicMock] | None = None) -> None:
-        self.execute = AsyncMock(side_effect=execute_side_effect or [])
+    def __init__(
+        self,
+        execute_side_effect: list[MagicMock] | None = None,
+        *,
+        raise_on: Callable[[object], bool] | None = None,
+    ) -> None:
+        self._results = list(execute_side_effect or [])
+        self._raise_on = raise_on
+        self.execute = AsyncMock(side_effect=self._next_result)
         self.delete = AsyncMock()
         self.flush = AsyncMock()
         self.added: list[object] = []
+
+    async def _next_result(self, *args: object, **kwargs: object) -> MagicMock:
+        """Replay the queued results, then a blank result for any further call.
+
+        The FAR-1822 fire path issues more statements than the pre-fix
+        read-then-write flow (short-lock claim + terminal stamp), so a test
+        cannot always predict the exact count; an exhausted queue must not be
+        an error.
+
+        ``raise_on`` lets a test make a specific statement (e.g. the terminal
+        stamp) fail without counting statements.
+        """
+        if self._raise_on is not None and args and self._raise_on(args[0]):
+            raise RuntimeError("scripted statement failure")
+        if self._results:
+            return self._results.pop(0)
+        return MagicMock()
 
     async def __aenter__(self) -> Self:
         return self
@@ -169,13 +193,13 @@ def has_predicate(clause: Any, operator: Any, column_name: str, value: Any = _UN
 
 @contextmanager
 def report_firing_env(session: MockSession) -> Iterator[None]:
-    """Patch the scheduler's engine/session/RLS plumbing to run *session*.
+    """Patch the scheduler's engine/session/RLS/lease plumbing to run *session*.
 
-    Collapses the three-patch prologue every ``_fire_scheduled_report`` test
-    repeats: the engine singleton is stubbed out, the async session factory
-    hands out *session*, and RLS-org setup is a no-op. Tests that also stub the
-    registry or ``compute_next_send`` stack those patches on top in the same
-    ``with`` block.
+    Collapses the prologue every ``_fire_scheduled_report`` test repeats: the
+    engine singleton is stubbed out, the async session factory hands out
+    *session*, RLS-org setup is a no-op, and the per-report fire lease (FAR-1822)
+    is granted without a real Redis. Tests that also stub the registry or
+    ``compute_next_send`` stack those patches on top in the same ``with`` block.
     """
     with (
         patch("modulo.core.reports.scheduler._get_engine"),
@@ -184,6 +208,12 @@ def report_firing_env(session: MockSession) -> Iterator[None]:
             return_value=MockSessionFactory(session),
         ),
         patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
+        patch(
+            "modulo.core.reports.scheduler._acquire_report_fire_lease",
+            new_callable=AsyncMock,
+            return_value="lease-token",
+        ),
+        patch("modulo.core.reports.scheduler._release_report_fire_lease", new_callable=AsyncMock),
     ):
         yield
 

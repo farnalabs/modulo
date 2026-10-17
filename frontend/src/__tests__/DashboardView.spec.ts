@@ -48,20 +48,12 @@ const mockSummaryData = {
   ],
 }
 
-const mockFlagData = {
-  license: { tier: 'community', has_license_key: false, is_valid: false },
-  // FAR-92: the rolling-window toggle is gated on analytics_page — on by
-  // default here so the toggle tests see it; flag-off cases override.
+// FAR-92: the rolling-window toggle is gated on analytics_page — on by
+// default here so the toggle tests see it.
+const mockPlanData = {
+  license: { tier: 'community', expires_at: null, org_id: null },
+  dev_mode: false,
   flags: [{ name: 'analytics_page', currently_active: true }],
-  would_activate: [],
-}
-
-const mockLicenseData = {
-  has_license: false,
-  tier: 'community',
-  features: [],
-  expires_at: null,
-  org_id: null,
 }
 
 const mockGet = vi.hoisted(() => vi.fn())
@@ -69,6 +61,8 @@ vi.mock('../lib/api/client', () => ({
   api: { GET: mockGet },
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
   clearAccessToken: vi.fn(),
+  // useEventStream registers a module-scope re-arm listener on import (FAR-1842).
+  onAuthChange: vi.fn(() => vi.fn()),
 }))
 
 import DashboardView from '../views/DashboardView.vue'
@@ -77,8 +71,7 @@ import StatCard from '../components/StatCard.vue'
 function setupDefaultMocks() {
   mockGet.mockImplementation((url: string) => {
     if (url === '/api/v1/dashboard/summary') return Promise.resolve({ data: mockSummaryData, error: undefined })
-    if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-    if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+    if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
     return Promise.resolve({ data: null, error: undefined })
   })
 }
@@ -99,8 +92,7 @@ function setupEmptyMocks() {
         error: undefined,
       })
     }
-    if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-    if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+    if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
     return Promise.resolve({ data: null, error: undefined })
   })
 }
@@ -133,8 +125,7 @@ function setupPeriodSpendMock(delta_pct: number | null) {
         error: undefined,
       })
     }
-    if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-    if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+    if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
     return Promise.resolve({ data: null, error: undefined })
   })
 }
@@ -194,12 +185,12 @@ describe('DashboardView', () => {
 
   it('renders the run activity trend section when the dashboard_charts flag is on', async () => {
     mockGet.mockImplementation((url: string) => {
-      if (url === '/api/v1/admin/feature-flags') {
+      if (url === '/api/v1/plan') {
         return Promise.resolve({
           // analytics_page on keeps the rolling-window toggle visible — the
           // 7d/30d/90d labels asserted below are its window buttons.
           data: {
-            ...mockFlagData,
+            ...mockPlanData,
             flags: [
               { name: 'dashboard_charts', currently_active: true },
               { name: 'analytics_page', currently_active: true },
@@ -208,7 +199,6 @@ describe('DashboardView', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
       if (url === '/api/v1/dashboard/summary') return Promise.resolve({ data: mockSummaryData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
@@ -258,8 +248,7 @@ describe('DashboardView', () => {
     const dashboardDefer = new Promise<{ data: typeof mockSummaryData; error: undefined }>(() => {})
     mockGet.mockImplementation((url: string) => {
       if (url === '/api/v1/dashboard/summary') return dashboardDefer
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -289,10 +278,9 @@ describe('DashboardView', () => {
 
   it('hides the rolling-window toggle when the analytics_page flag is off but still renders the summary', async () => {
     mockGet.mockImplementation((url: string) => {
-      if (url === '/api/v1/admin/feature-flags') {
-        return Promise.resolve({ data: { ...mockFlagData, flags: [] }, error: undefined })
+      if (url === '/api/v1/plan') {
+        return Promise.resolve({ data: { ...mockPlanData, flags: [] }, error: undefined })
       }
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
       if (url === '/api/v1/dashboard/summary') return Promise.resolve({ data: mockSummaryData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
@@ -390,8 +378,7 @@ describe('DashboardView', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -468,8 +455,7 @@ describe('DashboardView', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -492,8 +478,7 @@ describe('DashboardView', () => {
   it('shows error alert when fetch fails', async () => {
     mockGet.mockImplementation((url: string) => {
       if (url === '/api/v1/dashboard/summary') return Promise.reject(new Error('Network error'))
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -526,8 +511,7 @@ describe('DashboardView', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -562,8 +546,7 @@ describe('DashboardView', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
 
@@ -614,8 +597,7 @@ describe('DashboardView', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -651,8 +633,7 @@ describe('DashboardView', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -709,8 +690,7 @@ describe('DashboardView', () => {
           error: undefined,
         })
       }
-      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
-      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)

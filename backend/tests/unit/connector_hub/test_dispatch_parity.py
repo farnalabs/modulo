@@ -1047,9 +1047,12 @@ def test_every_id_the_dispatch_accept_set_names_is_a_hub_buildable_type() -> Non
     )
     from modulo.core.connector_hub import _build_connector
 
-    assert frozenset({"github_actions_ci", "gitlab_ci"}) == _HUB_CI_RUNNER_TYPE_IDS
+    assert frozenset({"github_actions_ci", "gitlab_ci", "woodpecker"}) == _HUB_CI_RUNNER_TYPE_IDS
     for type_id in sorted(_HUB_CI_RUNNER_TYPE_IDS):
-        built = _build_connector(type_id, {}, {"token": "test-token"})  # nosec - fake credential
+        # Woodpecker is self-hosted-only: a buildable instance always carries a
+        # tenant base_url, and the hub requires it at construction.
+        config = {"base_url": "https://ci.example.com"} if type_id == "woodpecker" else {}
+        built = _build_connector(type_id, config, {"token": "test-token"})  # nosec - fake credential
         assert isinstance(built, CIRunnerBase), f"{type_id!r} must build a CI runner"
         assert connector_type_supports_dispatch(type_id) is True
 

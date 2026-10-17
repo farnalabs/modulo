@@ -40,6 +40,7 @@ from modulo.connectors.azure_pipelines import AzurePipelinesConnector
 from modulo.connectors.azure_repos import AzureReposConnector
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery
 from modulo.connectors.ci_runner.gitlab_ci import GitLabCIRunner
+from modulo.connectors.ci_runner.woodpecker import WoodpeckerCIRunner
 from modulo.connectors.confluence import ConfluenceConnector
 from modulo.connectors.gitea import GiteaConnector
 from modulo.connectors.gitlab import GitLabConnector
@@ -48,6 +49,7 @@ from modulo.connectors.jenkins import JenkinsConnector
 from modulo.connectors.jira import JiraConnector
 from modulo.connectors.n8n import N8NConnector
 from modulo.connectors.onepassword import OnePasswordConnector
+from modulo.connectors.plane import PlaneConnector
 from modulo.connectors.sentry import SentryConnector
 from modulo.connectors.sonarqube import SonarQubeConnector
 from modulo.connectors.teamcity import TeamCityConnector
@@ -89,6 +91,11 @@ def _build(name: str, base_url: str) -> Any:
         # The gitlab_ci CI runner is on the same trust boundary: connector_hub
         # passes config['base_url'] straight through from tenant config.
         "gitlab_ci": lambda: GitLabCIRunner(token=TOKEN, base_url=base_url),
+        # Woodpecker (FAR-1766) is a self-hosted instance root from tenant
+        # config, so it is gated exactly the same way.
+        "woodpecker": lambda: WoodpeckerCIRunner(token=TOKEN, base_url=base_url),
+        # Plane (FAR-1767) targets a self-hosted / air-gapped instance root.
+        "plane": lambda: PlaneConnector(token=TOKEN, base_url=base_url, workspace_slug="acme"),
     }
     return builders[name]()
 
@@ -111,6 +118,8 @@ CONNECTOR_NAMES = [
     "grafana",
     "confluence",
     "gitlab_ci",
+    "woodpecker",
+    "plane",
 ]
 
 

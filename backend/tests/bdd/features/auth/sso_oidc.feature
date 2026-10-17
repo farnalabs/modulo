@@ -27,12 +27,13 @@ Feature: SSO OIDC Integration
 
   Scenario: State parameter guards against CSRF
     When the OIDC callback returns a valid code with a tampered state
-    Then the response status is 401
-    And the error detail mentions "CSRF"
+    Then the response status is 303
+    And the login redirect reports SSO error "auth_failed"
 
   Scenario: Missing callback parameters are rejected
     When the OIDC callback returns without code or state
-    Then the response status is 400
+    Then the response status is 303
+    And the login redirect reports SSO error "auth_failed"
 
   Scenario: Team gate blocks OIDC on Community tier
     Given I do not have a Team license

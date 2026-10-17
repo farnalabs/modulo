@@ -39,10 +39,12 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def _seed_repo(tmp_path: Path, monkeypatch, nav: str, locale: str) -> None:
+def _seed_repo(tmp_path: Path, monkeypatch, nav: str, locale: str, manifest: str | None = None) -> None:
     monkeypatch.setattr(mod, "REPO_ROOT", str(tmp_path))
     _write(tmp_path / mod._NAV_PATH, nav)
     _write(tmp_path / mod._LOCALE_PATH, locale)
+    if manifest is not None:
+        _write(tmp_path / mod._MANIFEST_PATH, manifest)
 
 
 def test_main_ok_when_all_keys_defined(tmp_path, monkeypatch, capsys):
@@ -143,3 +145,159 @@ def test_invalid_diff_range_exits_nonzero():
         mod._files_changed("bad range")
 
     assert exc_info.value.code == 1
+
+
+def test_files_changed_true_when_manifest_in_diff(monkeypatch):
+    monkeypatch.setattr(
+        mod.subprocess,
+        "run",
+        lambda *args, **kwargs: _Completed(stdout=f"{mod._MANIFEST_PATH}\n"),
+    )
+
+    assert mod._files_changed("main...HEAD") is True
+
+
+# ---------------------------------------------------------------------------
+# FAR-52: manifest label-key parity (forward) and the vice-versa liveness
+# check, plus the real-tree PASS case.
+# ---------------------------------------------------------------------------
+
+_MANIFEST_SEED = """\
+sidebar_groups:
+    build:
+        label: BUILD
+        order: 1
+        default_expanded: true
+        labelKey: components.SidebarNav.group_build
+"""
+
+
+def _locale_with_block(*keys: str) -> str:
+    """A locale file whose SidebarNav block defines exactly ``keys``."""
+    body = "".join(f'        "{key}": "Label {key}",\n' for key in keys)
+    return 'export default {\n    "SidebarNav": {\n' + body + "    },\n};\n"
+
+
+def test_main_ok_on_real_repo(capsys):
+    """PASS case: the shipped nav + locale + manifest satisfy every rule."""
+    assert mod._main([]) == 0
+    assert "OK - all" in capsys.readouterr().err
+
+
+def test_manifest_label_key_missing_in_locale_fails(tmp_path, monkeypatch, capsys):
+    _seed_repo(
+        tmp_path,
+        monkeypatch,
+        "nav = [{ label: 'components.SidebarNav.item_home' }];\n",
+        _locale_with_block("item_home"),
+        _MANIFEST_SEED,
+    )
+
+    assert mod._main([]) == 1
+    err = capsys.readouterr().err
+    assert "components.SidebarNav.group_build" in err
+    assert "missing translation key" in err
+
+
+def test_manifest_label_key_present_passes(tmp_path, monkeypatch, capsys):
+    _seed_repo(
+        tmp_path,
+        monkeypatch,
+        "nav = [{ label: 'components.SidebarNav.item_home' }];\n",
+        _locale_with_block("item_home", "group_build"),
+        _MANIFEST_SEED,
+    )
+
+    assert mod._main([]) == 0
+    assert "OK - all 2 sidebar nav translation keys present" in capsys.readouterr().err
+
+
+def test_orphan_locale_group_key_fails(tmp_path, monkeypatch, capsys):
+    """Vice versa: a group_* key in the locale must be a manifest-declared key."""
+    _seed_repo(
+        tmp_path,
+        monkeypatch,
+        "nav = [{ label: 'components.SidebarNav.item_home' }];\n",
+        _locale_with_block("item_home", "group_build", "group_extra"),
+        _MANIFEST_SEED,
+    )
+
+    assert mod._main([]) == 1
+    err = capsys.readouterr().err
+    assert "orphaned group key" in err
+    assert "group_extra" in err
+
+
+def test_manifest_group_without_labelkey_uses_fallback(tmp_path, monkeypatch, capsys):
+    """A group that declares no labelKey is live via the group_<id> fallback."""
+    manifest = "\n".join(line for line in _MANIFEST_SEED.splitlines(keepends=True) if "labelKey" not in line)
+    _seed_repo(
+        tmp_path,
+        monkeypatch,
+        "nav = [{ label: 'components.SidebarNav.item_home' }];\n",
+        _locale_with_block("item_home", "group_build"),
+        manifest,
+    )
+
+    assert mod._main([]) == 0
+    assert "OK - all 2 sidebar nav translation keys present" in capsys.readouterr().err
+
+
+def test_nav_ts_group_key_missing_in_locale_fails(tmp_path, monkeypatch, capsys):
+    """navigation.ts's groupLabelKeyMap keys are checked too (were item_*-only)."""
+    _seed_repo(
+        tmp_path,
+        monkeypatch,
+        "nav = [{ label: 'components.SidebarNav.group_build' }];\n",
+        _locale_with_block("item_home"),
+    )
+
+    assert mod._main([]) == 1
+    err = capsys.readouterr().err
+    assert "components.SidebarNav.group_build" in err
+    assert "missing translation key" in err
+
+
+def test_warning_for_unreferenced_item_keys(tmp_path, monkeypatch, capsys):
+    """Dead locale item_* keys are loud but non-blocking (cleanup tracked separately)."""
+    _seed_repo(
+        tmp_path,
+        monkeypatch,
+        "nav = [{ label: 'components.SidebarNav.item_home' }];\n",
+        _locale_with_block("item_home", "item_stale"),
+    )
+
+    assert mod._main([]) == 0
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "item_stale" in err
+
+
+def test_orphan_hyphenated_group_key_fails(tmp_path, monkeypatch, capsys):
+    """A hyphenated / underscored orphan group key is flagged (was single-word only)."""
+    _seed_repo(
+        tmp_path,
+        monkeypatch,
+        "nav = [{ label: 'components.SidebarNav.item_home' }];\n",
+        _locale_with_block("item_home", "group_build", "group_run-queue"),
+        _MANIFEST_SEED,
+    )
+
+    assert mod._main([]) == 1
+    err = capsys.readouterr().err
+    assert "orphaned group key" in err
+    assert "group_run-queue" in err
+
+
+def test_ui_hint_group_keys_are_not_orphans(tmp_path, monkeypatch, capsys):
+    """SidebarNav.vue's group_collapsed_hint / group_expanded_hint are hints, not groups."""
+    _seed_repo(
+        tmp_path,
+        monkeypatch,
+        "nav = [{ label: 'components.SidebarNav.item_home' }];\n",
+        _locale_with_block("item_home", "group_build", "group_collapsed_hint", "group_expanded_hint"),
+        _MANIFEST_SEED,
+    )
+
+    assert mod._main([]) == 0
+    assert "orphaned group key" not in capsys.readouterr().err

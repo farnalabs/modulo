@@ -127,3 +127,76 @@ class TestBuildDecisionRowIsPure:
 
         assert row.policy_gate_id == review_id
         assert row.eval_id == eval_id
+
+
+class TestResolvedActionVocabularyUnchanged:
+    """FAR-939 chunk 12 criterion 13: the ``resolved_action`` vocabulary is
+    untouched by this chunk.
+
+    The shipped vocabulary is ``('continue', 'warn', 'block', 'escalate')`` —
+    widened from ``('continue', 'warn', 'block')`` by FAR-1694 migration
+    0305 (a guardrail-action change, NOT this chunk). Chunk 12 adds NO value
+    to it: in particular there is no ``'timeout'`` and no human-path
+    ``'escalate'`` — human-path resolutions never write a
+    ``PolicyGateDecision`` row at all (they are grounded on an Evidence row;
+    criterion 11 proves the row-absence end to end).
+    """
+
+    def test_resolved_action_values_constant_unchanged(self) -> None:
+        from modulo.db.models.policy_gate_decision import RESOLVED_ACTION_VALUES
+
+        assert RESOLVED_ACTION_VALUES == ("continue", "warn", "block", "escalate")
+
+    def test_human_resolver_never_emits_timeout_or_escalate(self) -> None:
+        """Every action ``resolve_human_evaluation`` can return is inside the
+        shipped vocabulary — and never ``'timeout'`` (a run-level record, not
+        a decision-row action, per chunk 12 §3.5) and never ``'escalate'``
+        (RQ1 — a routing transition, not a terminal resolution).
+
+        The guard is exercised against an **escalate-shaped** gate view: the
+        live ``policy_gates.action`` CHECK admits ``escalate`` since
+        FAR-1694/0305, so that is the input which can actually leak. The
+        version of this test this replaces only ever built ``action="block"``
+        views, so no input could produce an escalate Outcome — an assertion
+        that cannot fail is not coverage.
+        """
+        import uuid as _uuid
+
+        from modulo.core.eval_engine.policy_gate import (
+            HumanDecision,
+            HumanGateView,
+            resolve_human_evaluation,
+        )
+
+        block_view = HumanGateView(
+            policy_gate_id=_uuid.uuid4(),
+            eval_id=_uuid.uuid4(),
+            action="block",
+            version=1,
+        )
+        # Built with a deliberate type ignore: the VIEW's contract is
+        # warn|block, but a live row can carry escalate — this is the
+        # runtime-shaped input the resolver must fail closed on.
+        escalate_view = HumanGateView(
+            policy_gate_id=_uuid.uuid4(),
+            eval_id=_uuid.uuid4(),
+            action="escalate",  # type: ignore[arg-type]
+            version=1,
+        )
+        for action in ("approved", "rejected", "deliver_manual", "timeout", "escalated", ""):
+            for view in (block_view, escalate_view):
+                outcome = resolve_human_evaluation(view, HumanDecision(action=action))  # type: ignore[arg-type]
+                assert outcome.action in ("continue", "warn", "block")
+                assert outcome.action != "timeout"
+                assert outcome.action != "escalate"
+
+        # Fail-closed proof (M3): a REJECTED decision on an escalate-shaped
+        # gate resolves to `block`, never to `escalate`.
+        rejected = resolve_human_evaluation(escalate_view, HumanDecision(action="rejected"))
+        assert rejected.result is False
+        assert rejected.action == "block"
+        # ...and so does the undefined/unrecognised branch.
+        undefined = resolve_human_evaluation(escalate_view, HumanDecision(action="wobble"))  # type: ignore[arg-type]
+        assert undefined.result is None
+        assert undefined.action == "block"
+        assert undefined.error == "unrecognized_human_action"

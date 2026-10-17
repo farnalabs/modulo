@@ -63,6 +63,21 @@ _BROKEN_PLUGIN_SRC = """\
 raise ImportError("deliberately broken plugin module")
 """
 
+# A plugin whose entry-point builder is a CALLABLE OBJECT rather than a plain
+# function. This is a legitimate, documented ``Callable`` target — entry points
+# resolve to whatever the module attribute names — and it is the state no unit
+# test constructs, because every in-repo builder is a ``def``. Reading
+# ``builder.__name__`` in the error handler raised AttributeError from inside
+# that handler, so the caller lost the real failure and its cause.
+_CALLABLE_OBJECT_PLUGIN_SRC = """\
+class CallableObjectBuilder:
+    def __call__(self, config, creds):
+        raise RuntimeError('callable-object builder misbehaving')
+
+
+build_connector = CallableObjectBuilder()
+"""
+
 
 def _write_plugin(site: pathlib.Path, name: str, entry_points: str, module_src: str) -> None:
     """Write a self-contained plugin package + metadata into ``site``."""
@@ -106,6 +121,12 @@ def plugin_site(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
         "modulo-raising-plugin",
         "[modulo.connectors]\nraising_connector = modulo_raising_plugin:build_connector\n",
         "def build_connector(config, creds):\n    raise RuntimeError('builder misbehaving')\n",
+    )
+    _write_plugin(
+        site,
+        "modulo-callable-object-plugin",
+        "[modulo.connectors]\ncallable_object_connector = modulo_callable_object_plugin:build_connector\n",
+        _CALLABLE_OBJECT_PLUGIN_SRC,
     )
 
     sys.path.insert(0, str(site))
@@ -206,3 +227,39 @@ def test_plugin_site_is_genuinely_metadata_backed(plugin_site: pathlib.Path) -> 
     assert ep
     builder = next(iter(ep)).load()
     assert callable(builder)
+
+
+def test_callable_object_builder_raises_runtime_error_not_attribute_error(plugin_site: pathlib.Path) -> None:
+    """A callable-object builder must surface the documented RuntimeError.
+
+    The entry point really resolves to an instance of ``CallableObjectBuilder``
+    (no ``__name__``), so this exercises the exact state the in-repo unit tests
+    never construct. Before the fix the error handler itself raised
+    ``AttributeError: 'CallableObjectBuilder' object has no attribute '__name__'``
+    and the RuntimeError's cause was discarded.
+    """
+    registry = PluginRegistry()
+    registry.discover_plugins()
+
+    builder = importlib.import_module("modulo_callable_object_plugin").build_connector
+    assert callable(builder)
+    assert not hasattr(builder, "__name__")
+
+    with pytest.raises(RuntimeError, match="Connector builder for type 'callable_object_connector' failed") as excinfo:
+        registry.build_connector("callable_object_connector", {}, {})
+
+    # The real cause survives, which is what makes the error actionable.
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "callable-object builder misbehaving" in str(excinfo.value.__cause__)
+
+
+def test_callable_object_builder_is_discovered_as_a_connector_type(plugin_site: pathlib.Path) -> None:
+    """The callable-object builder must also register normally on the happy path."""
+    registry = PluginRegistry()
+    registry.discover_plugins()
+
+    assert registry.has_connector_type("callable_object_connector")
+    manifest = registry.get_plugin("modulo-callable-object-plugin")
+    assert manifest is not None
+    assert manifest.version == "1.0.0"
+    assert "connector_type" in manifest.capabilities

@@ -68,7 +68,13 @@ their own.
 | OpenAI | `OpenAIBackend` | `modulo.model_backends.openai` |
 | Azure OpenAI | `AzureOpenAIBackend` | `modulo.model_backends.azure_openai` |
 | Ollama | `OllamaBackend` | `modulo.model_backends.ollama` |
-| Custom | `YourBackend` | plugin `modulo.model_backends.your_backend` |
+| Custom plugin | `YourBackend` | plugin group `modulo.model_backends.your_backend` |
+
+> The per-provider classes in this table are the authoring surface, but most are
+> not the objects the hub instantiates: `ModelBackendHub._build_backend`
+> constructs `module.OpenAICompatibleBackend` directly for the OpenAI-compatible
+> providers, special-casing only a few. Implement the documented ABC contract
+> rather than assuming the hub calls your class.
 
 ## Implementation example
 
@@ -162,8 +168,14 @@ manifest = PluginManifest(
 )
 
 registry = get_plugin_registry()
-registry.register_model_backend("custom", build_my_backend, manifest)
+registry.register_model_backend("my-provider", build_my_backend, manifest)
 ```
+
+> **Pick a provider id other than `"custom"`.** `ModelBackendHub._build_backend`
+> intercepts `provider == "custom"` before it ever consults the plugin registry
+> and returns a stub backend, so a plugin registered under `"custom"` is dead
+> code at run time. Any other id reaches the plugin fallback and the registry
+> lookup.
 
 `register_model_backend(provider, builder, manifest)` always takes a
 `PluginManifest`; pass the plugin's manifest object so it can track plugin
