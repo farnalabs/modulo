@@ -271,3 +271,17 @@ class TestIsCompleteFernetToken:
         assert _is_complete_fernet_token(b"bytes-not-str") is False
         assert _is_complete_fernet_token(123) is False
         assert _is_complete_fernet_token("") is False
+
+
+async def test_read_rls_org_id_postgres_ignores_populated_info() -> None:
+    """FAR-1884: on Postgres the GUC is authoritative, not ``session.info``.
+
+    ``set_rls_org`` never writes ``session.info`` on Postgres, so a populated
+    (stale/foreign) value must not resolve the decrypt against the wrong tenant.
+    """
+    from modulo.auth.secret_storage import _read_rls_org_id
+
+    foreign = uuid.uuid4()
+    session = _make_session(dialect="postgresql", info={"org_id": str(foreign)}, current_setting=str(_ORG_ID))
+
+    assert await _read_rls_org_id(session) == _ORG_ID

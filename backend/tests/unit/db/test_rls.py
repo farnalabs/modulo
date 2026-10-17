@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.rls import (
     _RLS_CONFIG_NAMES,
     _set_config_statement,
+    read_rls_org,
     register_rls_reset_hook,
     set_rls_org,
     set_rls_user_context,
@@ -212,3 +213,40 @@ class TestCheckoutResetListener:
 
         assert any("failed to clear RLS session context" in message for message in caplog.messages)
         cursor.close.assert_called_once()
+
+
+class TestReadRlsOrgDialectOrder:
+    """FAR-1884: the session's dialect selects the authoritative RLS source.
+
+    On Postgres the ``current_setting`` GUC is authoritative — ``set_rls_org``
+    never writes ``session.info`` there — so a populated ``session.info['org_id']``
+    must NOT shadow it (the pre-FAR-1884 order consulted ``session.info`` first).
+    """
+
+    async def test_postgres_ignores_populated_session_info(self) -> None:
+        """Prove-the-fix: the GUC wins over a populated ``session.info`` value."""
+        guc_org = uuid.UUID("00000000-0000-0000-0000-0000000000ff")
+        session = _make_session(dialect="postgresql")
+        session.info = {"org_id": str(_ORG_ID)}
+        result = MagicMock()
+        result.scalar.return_value = str(guc_org)
+        session.execute = AsyncMock(return_value=result)
+
+        assert await read_rls_org(session) == guc_org
+
+    async def test_postgres_empty_guc_does_not_fall_back_to_info(self) -> None:
+        """A populated ``session.info`` must not leak when the GUC is unset."""
+        session = _make_session(dialect="postgresql")
+        session.info = {"org_id": str(_ORG_ID)}
+        result = MagicMock()
+        result.scalar.return_value = ""
+        session.execute = AsyncMock(return_value=result)
+
+        assert await read_rls_org(session) is None
+
+    async def test_generic_backend_reads_session_info(self) -> None:
+        """Generic backends (no GUC) keep the ``session.info`` path."""
+        session = _make_session(dialect="sqlite")
+        session.info = {"org_id": str(_ORG_ID)}
+
+        assert await read_rls_org(session) == _ORG_ID
