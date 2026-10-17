@@ -206,7 +206,7 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     expect(doc.scrollHeight).toBeLessThanOrEqual(doc.clientHeight)
   })
 
-  test('a short viewport yields the 240px floor instead of scrolling the page', { tag: '@regression' }, async ({ page, env }) => {
+  test('a short viewport shrinks the editor to the space left instead of scrolling the page', { tag: '@regression' }, async ({ page, env }) => {
     // The original mobile fix pinned the editor to a hard 240px minimum, so on
     // any viewport where the chrome stack above the editor left less than 240px
     // the editor was forced to 240px and spilled below the fold, re-introducing
