@@ -420,6 +420,50 @@ describe('PipelineSnapshotCompare', () => {
     expect(labels.some((label) => label.includes('#snap-mis'))).toBe(true)
   })
 
+  it('re-fetches a snapshot whose targeted lookup failed transiently, so a retry yields the real label', async () => {
+    let snapshotLookupAttempts = 0
+    apiGet.mockImplementation((url: string) => {
+      if (url.includes('/snapshots/{snapshot_id}')) {
+        snapshotLookupAttempts += 1
+        if (snapshotLookupAttempts === 1) {
+          // Transient failure: the id must NOT be marked as fetched.
+          return Promise.resolve({
+            data: undefined,
+            error: { type: 'urn:problem:modulo:internal_error', title: 'Internal Error', status: 500, detail: 'transient' },
+          })
+        }
+        return Promise.resolve({
+          data: { id: 'snap-deep', snapshot_version: 7, tag: null, created_at: null },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: { items: SNAPSHOTS, total: SNAPSHOTS.length }, error: undefined })
+    })
+    // The diff fails on first attempt too, so the Retry control is reachable.
+    apiPost.mockResolvedValueOnce({
+      data: undefined,
+      error: { type: 'urn:problem:modulo:internal_error', title: 'Internal Error', status: 500, detail: 'transient' },
+    })
+    const wrapper = await flushCompare({ baseSnapshotId: 'snap-deep', compareSnapshotId: 'snap-9' })
+    await flushPromises()
+
+    // First (failed) lookup leaves the deep link on the fallback label.
+    const labelsBefore = wrapper.find('[data-testid="pipeline-compare-base"]').findAll('option').map((o) => o.text())
+    expect(labelsBefore.some((label) => label.includes('Version #snap-dee'))).toBe(true)
+    expect(labelsBefore.some((label) => label.includes('v7'))).toBe(false)
+
+    // Retry: the unmarked id is looked up again and now resolves to the real
+    // version label instead of staying stranded on the fallback.
+    apiPost.mockResolvedValueOnce({ data: DIFF, error: undefined })
+    await wrapper.find('[data-testid="pipeline-compare-retry"]').trigger('click')
+    await flushPromises()
+
+    expect(snapshotLookupAttempts).toBe(2)
+    const labelsAfter = wrapper.find('[data-testid="pipeline-compare-base"]').findAll('option').map((o) => o.text())
+    expect(labelsAfter.some((label) => label.includes('v7'))).toBe(true)
+    expect(labelsAfter.some((label) => label.includes('Version #snap-dee'))).toBe(false)
+  })
+
   it('handles an empty snapshot list without crashing', async () => {
     const wrapper = await flushCompare({ snapshots: [] })
     expect(wrapper.find('[data-testid="pipeline-compare"]').exists()).toBe(true)

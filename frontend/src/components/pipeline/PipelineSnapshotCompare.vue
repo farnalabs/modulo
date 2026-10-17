@@ -91,7 +91,7 @@
         type="button"
         class="mt-2 underline"
         data-testid="pipeline-compare-retry"
-        @click="loadDiff"
+        @click="retryCompare"
       >
         {{ $t('components.PipelineSnapshotCompare.retry') }}
       </button>
@@ -490,7 +490,6 @@ async function loadFullCatalog(): Promise<void> {
 async function ensureSnapshotLoaded(id: string | null): Promise<void> {
   if (!id || fetchedSnapshotIds.has(id)) return
   if (mergedSnapshots.value.some((snap) => snap.id === id)) return
-  fetchedSnapshotIds.add(id)
   try {
     const { data, error } = await withTimeout((signal) =>
       api.GET('/api/v1/pipelines/{pipeline_id}/snapshots/{snapshot_id}', {
@@ -498,12 +497,17 @@ async function ensureSnapshotLoaded(id: string | null): Promise<void> {
         signal,
       }),
     )
+    // Only a SUCCESSFUL lookup marks the id as fetched. A transient failure
+    // (network blip, 5xx, timeout) must not permanently strand the picker on
+    // the fallback label — leaving the id out of the set lets the next time it
+    // is needed retry it.
     if (error || !data) return
+    fetchedSnapshotIds.add(id)
     const snap = readSnapshot(data)
     if (snap) extraSnapshots.value = [...extraSnapshots.value, snap]
   } catch {
-    // A missing / foreign / malformed id (404/422/value error) keeps the
-    // fallback option label; the diff request surfaces the authoritative error.
+    // A transient failure (timeout, network) keeps the fallback option label
+    // AND leaves the id unmarked, so a later Retry re-attempts it.
   }
 }
 
@@ -812,6 +816,17 @@ async function loadDiff(): Promise<void> {
   } finally {
     if (diffAbort === controller) diffAbort = null
   }
+}
+
+/**
+ * Retry the current pair. Alongside the diff, it re-resolves either side's
+ * snapshot label so a version whose targeted lookup failed transiently is
+ * re-fetched instead of being stuck on the fallback label.
+ */
+function retryCompare(): void {
+  void ensureSnapshotLoaded(props.baseSnapshotId)
+  void ensureSnapshotLoaded(effectiveCompareId.value)
+  void loadDiff()
 }
 
 onMounted(() => {
