@@ -34,16 +34,25 @@ Metric-correctness notes (deliberate, and different from older readers):
   the live reader must not inflate depth with cancelled rows.
 * Slots are attributed from the status the row holds at read time. An org cap
   held entirely by ``awaiting_human`` rows is visible as ``parked_total`` so it
-  is not mistaken for a leak of executing runs.
+  is not mistaken for a leak of executing runs. The leak/stall signal therefore
+  requires the **executing** total to hold the cap (FAR-1343 M2): a cap held
+  only by human-waiting rows is never reported as ``stall_suspected``.
+* The active-run health section is computed from an **org-wide** row set, not
+  the caller's team-scoped one (FAR-1343 M3). Its denominator
+  (``org_run_concurrency_limit``) is org-wide and the panel labels it "Org cap
+  use", so the numerator must be org-wide too — comparing a team's runs against
+  the org's cap reported a false utilisation and a false ``cap_held``. The
+  queue/drain/series sections stay team-scoped.
 
 The scan is bounded (``CAPACITY_MAX_RAW_ROWS``); overflow is a typed validation
 error telling the caller to narrow the window — never a silent truncation (a
-partial scan yields wrong depth/age numbers).
+partial scan yields wrong depth/age numbers). The bucket count is bounded too
+(``MAX_CAPACITY_BUCKETS``), and the interval series is built by a single pass
+over the rows rather than rescanning them per bucket (FAR-1343 M4).
 """
 
 from __future__ import annotations
 
-import heapq
 import uuid
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -76,6 +85,14 @@ from modulo.settings import Settings
 # hours), so a bigger scan means a pathological org or a bad window — reject it
 # with an actionable message rather than bucket a truncated scan.
 CAPACITY_MAX_RAW_ROWS = 50_000
+
+# Upper bound on the number of intervals the series may contain. The report is
+# synchronous inside an async route (no statement timeout), and the interval
+# series is the only user-controlled dimension that multiplies the row scan —
+# 1440 minutes at a 60s interval would be 1,440 buckets over up to
+# ``CAPACITY_MAX_RAW_ROWS`` rows. Above this, the caller is asked to widen the
+# interval or narrow the window (FAR-1343 M4). The default request is 12.
+MAX_CAPACITY_BUCKETS = 480
 
 EXECUTING_STATUSES: frozenset[str] = frozenset(
     ACTIVE_RUN_STATUSES - {"pending", AWAITING_HUMAN_STATUS, HITL_PARKED_STATUS}
@@ -132,6 +149,12 @@ def validate_capacity_params(params: CapacityParams) -> CapacityParams:
         raise AnalyticsValidationError(f"stall_intervals must be between 1 and {_MAX_STALL_INTERVALS}")
     if params.interval_seconds > params.window_minutes * 60:
         raise AnalyticsValidationError("interval_seconds must not exceed the window length")
+    bucket_count = (params.window_minutes * 60) // params.interval_seconds
+    if bucket_count > MAX_CAPACITY_BUCKETS:
+        raise AnalyticsValidationError(
+            f"window_minutes / interval_seconds yields {bucket_count} intervals; "
+            f"the maximum is {MAX_CAPACITY_BUCKETS} — widen interval_seconds or narrow window_minutes"
+        )
     return params
 
 
@@ -208,6 +231,40 @@ def build_pipeline_meta_query(org_id: uuid.UUID, params: CapacityParams) -> Any:
         else:
             stmt = stmt.where(sa.or_(Pipeline.owner_team_id.is_(None), Pipeline.owner_team_id.in_(params.team_ids)))
     return stmt.order_by(Pipeline.name)
+
+
+def build_capacity_health_query(org_id: uuid.UUID, *, window_start: datetime) -> Any:
+    """Org-wide active-run facts for the active-health section (FAR-1343 M3).
+
+    Deliberately NOT team- or pipeline-scoped: the section's denominator
+    (``org_run_concurrency_limit``) is org-wide and the panel labels it "Org cap
+    use", so the numerator must be org-wide too. A team- or pipeline-scoped
+    numerator compared against an org-wide cap reports a false utilisation, a
+    false ``cap_held`` and (via M2) a silently unavailable stall signal.
+
+    Includes every currently-live status (a long-running leaked slot older than
+    the window must still be attributed) PLUS any run completed inside the
+    window (the trailing zero-completion signal the stall detector reads).
+    """
+    return (
+        sa.select(
+            Run.pipeline_id,
+            Run.status,
+            Run.created_at,
+            Run.started_at,
+            Run.completed_at,
+            Run.heartbeat_at,
+            Run.cancellation_requested,
+        )
+        .where(
+            Run.organisation_id == org_id,
+            sa.or_(
+                Run.completed_at >= window_start,
+                Run.status.in_(LIVE_STATUSES),
+            ),
+        )
+        .limit(CAPACITY_MAX_RAW_ROWS + 1)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -295,20 +352,60 @@ def _queued_intervals(
     return intervals
 
 
-def _depth_at(intervals: list[tuple[datetime, datetime | None]], at: datetime) -> tuple[int, float | None]:
-    """``(depth, oldest_age_seconds)`` of queued items at instant *at*.
+def _depth_series(
+    intervals: list[tuple[datetime, datetime | None]],
+    ats: list[datetime],
+) -> list[tuple[int, float | None]]:
+    """``(depth, oldest_age_seconds)`` at every instant in *ats* (ascending).
 
-    A min-heap of active queue entries keyed by ``created_at`` gives the oldest
-    age; the depth is the number of entries whose interval covers *at*. An open
-    interval (``end is None``) covers *at* when ``start <= at``.
+    One forward sweep instead of rescanning ``intervals`` per instant (FAR-1343
+    M4: the build is synchronous in an async route, so the per-bucket rescan was
+    O(buckets x rows)). Starts and ends are walked with two forward pointers and
+    the oldest active start is tracked with a single monotonic index, so the
+    whole series is ``O(S log S)`` to sort plus ``O(S + A)`` for *S* intervals
+    and *A* instants.
+
+    An interval covers *at* when ``start <= at`` and (``end is None`` or
+    ``at < end``); an open interval covers every instant at or after its start.
+    Note the comparison is always against a plain ``datetime`` — the ``end`` is
+    never part of an ordering key, so an open (``None``) end alongside a closed
+    one at the same start can never raise (FAR-1343 C1).
     """
-    active: list[tuple[datetime, datetime | None]] = []
-    for start, end in intervals:
-        if start <= at and (end is None or at < end):
-            heapq.heappush(active, (start, end))
-    depth = len(active)
-    oldest = _seconds(at - active[0][0]) if active else None
-    return depth, oldest
+    if not ats:
+        return []
+    by_start = sorted(intervals, key=lambda interval: interval[0])
+    starts = [interval[0] for interval in by_start]
+    ends = sorted(end for _, end in by_start if end is not None)
+    results: list[tuple[int, float | None]] = []
+    next_start = 0  # next interval start to activate
+    next_end = 0  # next interval end to retire
+    oldest = 0  # index into by_start of the oldest still-active interval
+    depth = 0
+    for at in ats:
+        while next_start < len(starts) and starts[next_start] <= at:
+            next_start += 1
+            depth += 1
+        while next_end < len(ends) and ends[next_end] <= at:
+            next_end += 1
+            depth -= 1
+        # Advance the oldest candidate past intervals that have already ended.
+        # ``oldest`` only ever moves forward, so this is amortised O(S).
+        while oldest < next_start:
+            end = by_start[oldest][1]
+            if end is not None and end <= at:
+                oldest += 1
+                continue
+            break
+        if oldest < next_start:
+            results.append((depth, _seconds(at - starts[oldest])))
+        else:
+            results.append((depth, None))
+    return results
+
+
+def _depth_at(intervals: list[tuple[datetime, datetime | None]], at: datetime) -> tuple[int, float | None]:
+    """``(depth, oldest_age_seconds)`` of queued items at instant *at*."""
+    return _depth_series(intervals, [at])[0]
 
 
 def _count_in_window(row: Any, field: str, start: datetime, end: datetime) -> bool:
@@ -338,51 +435,18 @@ def _heartbeat_reference(row: Any, now: datetime) -> datetime | None:
     return _aware(_field(row, "created_at"))
 
 
-def compute_capacity_report(
-    *,
+def _active_health_counts(
     rows: list[Any],
-    pipelines: list[Any],
-    org_run_limit: int | None,
-    sandbox_cap: int | None,
-    sandbox_is_default: bool,
-    sandbox_active: int,
+    *,
     now: datetime,
-    window_start: datetime,
-    interval_seconds: int,
-    stall_intervals: int,
     stale_heartbeat_seconds: int,
+    pipeline_name: dict[str, Any],
 ) -> dict[str, Any]:
-    """Build the whole capacity report from already-fetched rows (pure)."""
-    now = to_utc_aware(now)
-    window_start = to_utc_aware(window_start)
-    pipeline_name = {str(_field(p, "id")): _field(p, "name") for p in pipelines}
-    pipeline_cap = {str(_field(p, "id")): int(_field(p, "max_concurrent_runs") or 0) for p in pipelines}
+    """Count the gate/executing/parked rows and build per-pipeline attribution.
 
-    pending = _pending_rows(rows)
-    cause_counts = Counter(dict.fromkeys(_CAUSES, 0))
-    per_pipeline_pending: dict[str, list[Any]] = defaultdict(list)
-    for row in pending:
-        cause_counts[_cause_of(row)] += 1
-        per_pipeline_pending[str(_field(row, "pipeline_id"))].append(row)
-
-    pending_created = [c for c in (_aware(_field(r, "created_at")) for r in pending) if c is not None]
-    oldest_pending: datetime | None = min(pending_created) if pending_created else None
-    pending_by_pipeline: list[dict[str, Any]] = []
-    for pid, items in per_pipeline_pending.items():
-        item_created = [c for c in (_aware(_field(r, "created_at")) for r in items) if c is not None]
-        oldest = min(item_created) if item_created else None
-        pending_by_pipeline.append(
-            {
-                "pipeline_id": pid,
-                "pipeline_name": pipeline_name.get(pid),
-                "pending_count": len(items),
-                "oldest_pending_age_seconds": _seconds(now - oldest) if oldest else None,
-                "max_concurrent_runs": pipeline_cap.get(pid),
-            }
-        )
-    pending_by_pipeline.sort(key=lambda item: (-item["pending_count"], item["pipeline_name"] or ""))
-
-    # --- active-run health -------------------------------------------------
+    Extracted so the org-wide health row set can be counted independently of
+    the (team-scoped) queue row set — see ``build_capacity_health_query``.
+    """
     executing_total = 0
     running_total = 0
     parked_total = 0
@@ -432,23 +496,168 @@ def compute_capacity_report(
                 att["stale_heartbeat_count"] += 1
 
     attribution_list = sorted(attribution.values(), key=lambda a: (-a["executing"], a["pipeline_name"] or ""))
+    return {
+        "gate_total": gate_total,
+        "executing_total": executing_total,
+        "running_total": running_total,
+        "parked_total": parked_total,
+        "cancelling_total": cancelling_total,
+        "attribution": attribution_list,
+        "stale_heartbeat_count": sum(a["stale_heartbeat_count"] for a in attribution_list),
+    }
 
-    # --- interval series + drain rate --------------------------------------
+
+def _trailing_zero_completion_intervals(
+    rows: list[Any],
+    bounds: list[datetime],
+    *,
+    now: datetime,
+    window_start: datetime,
+    interval_seconds: int,
+) -> int:
+    """Trailing run of COMPLETE intervals with zero completions.
+
+    Counted from the org-wide health rows so the stall signal's completion side
+    matches its org-wide cap denominator (FAR-1343 M3). Completions are binned
+    in a single pass (FAR-1343 M4) rather than rescanned per bucket. The partial
+    current interval is never counted (it must not read as "nothing completed
+    while at cap").
+    """
+    counts = _bin_counts(rows, "completed_at", bounds, window_start=window_start, interval_seconds=interval_seconds)
+    zero_completion_intervals = 0
+    for index in range(len(counts) - 1, -1, -1):
+        start, end = bounds[index], bounds[index + 1]
+        if not (end < now and (end - start).total_seconds() >= interval_seconds):
+            continue
+        if counts[index] == 0:
+            zero_completion_intervals += 1
+        else:
+            break
+    return zero_completion_intervals
+
+
+def _bin_counts(
+    rows: list[Any],
+    field: str,
+    bounds: list[datetime],
+    *,
+    window_start: datetime,
+    interval_seconds: int,
+) -> list[int]:
+    """One pass over *rows* into per-bucket counts for *field* (FAR-1343 M4).
+
+    Replaces the per-bucket ``sum(1 for r in rows ...)`` rescan (O(buckets x
+    rows)) with a single pass (O(rows)), mapping each value to its bucket by
+    index. Semantics match ``_count_in_window``: a value belongs to bucket *i*
+    when ``bounds[i] <= value < bounds[i + 1]``.
+    """
+    counts = [0] * (len(bounds) - 1)
+    bucket_total = len(counts)
+    for row in rows:
+        value = _aware(_field(row, field))
+        if value is None or value < window_start or value >= bounds[-1]:
+            continue
+        index = int((value - window_start).total_seconds() // interval_seconds)
+        if index >= bucket_total:
+            index = bucket_total - 1
+        counts[index] += 1
+    return counts
+
+
+def compute_capacity_report(
+    *,
+    rows: list[Any],
+    pipelines: list[Any],
+    org_run_limit: int | None,
+    sandbox_cap: int | None,
+    sandbox_is_default: bool,
+    sandbox_active: int,
+    now: datetime,
+    window_start: datetime,
+    interval_seconds: int,
+    stall_intervals: int,
+    stale_heartbeat_seconds: int,
+    health_rows: list[Any] | None = None,
+) -> dict[str, Any]:
+    """Build the whole capacity report from already-fetched rows (pure).
+
+    *rows* drive the team-scoped queue/drain/series sections. *health_rows*
+    (defaulting to *rows*) drive the org-wide active-run health section — the
+    caller passes a genuinely org-wide row set when the queue rows are
+    team-scoped, so the org cap ratio and the leak/stall signal are computed
+    against the org-wide cap they are labelled with (FAR-1343 M3).
+    """
+    now = to_utc_aware(now)
+    window_start = to_utc_aware(window_start)
+    active_rows = rows if health_rows is None else health_rows
+    pipeline_name = {str(_field(p, "id")): _field(p, "name") for p in pipelines}
+    pipeline_cap = {str(_field(p, "id")): int(_field(p, "max_concurrent_runs") or 0) for p in pipelines}
+
+    pending = _pending_rows(rows)
+    cause_counts = Counter(dict.fromkeys(_CAUSES, 0))
+    per_pipeline_pending: dict[str, list[Any]] = defaultdict(list)
+    for row in pending:
+        cause_counts[_cause_of(row)] += 1
+        per_pipeline_pending[str(_field(row, "pipeline_id"))].append(row)
+
+    pending_created = [c for c in (_aware(_field(r, "created_at")) for r in pending) if c is not None]
+    oldest_pending: datetime | None = min(pending_created) if pending_created else None
+    pending_by_pipeline: list[dict[str, Any]] = []
+    for pid, items in per_pipeline_pending.items():
+        item_created = [c for c in (_aware(_field(r, "created_at")) for r in items) if c is not None]
+        oldest = min(item_created) if item_created else None
+        pending_by_pipeline.append(
+            {
+                "pipeline_id": pid,
+                "pipeline_name": pipeline_name.get(pid),
+                "pending_count": len(items),
+                "oldest_pending_age_seconds": _seconds(now - oldest) if oldest else None,
+                "max_concurrent_runs": pipeline_cap.get(pid),
+            }
+        )
+    pending_by_pipeline.sort(key=lambda item: (-item["pending_count"], item["pipeline_name"] or ""))
+
+    # --- active-run health (ORG-WIDE — see build_capacity_health_query) ----
+    health = _active_health_counts(
+        active_rows, now=now, stale_heartbeat_seconds=stale_heartbeat_seconds, pipeline_name=pipeline_name
+    )
+    gate_total = health["gate_total"]
+    executing_total = health["executing_total"]
+    running_total = health["running_total"]
+    parked_total = health["parked_total"]
+    cancelling_total = health["cancelling_total"]
+    attribution_list = health["attribution"]
+    attribution = {a["pipeline_id"]: a for a in attribution_list}
+
+    # --- interval series + drain rate (team-scoped) ------------------------
     bounds = _bucket_boundaries(window_start, now, interval_seconds)
     queued = _queued_intervals(rows, now=now)
     all_queued = [interval for intervals in queued.values() for interval in intervals]
     baseline_depth, baseline_oldest_age = _depth_at(all_queued, window_start)
 
+    bucket_ends = bounds[1:]
+    overall_depths = _depth_series(all_queued, bucket_ends)
+    pipeline_depths = {pipe_id: _depth_series(intervals, bucket_ends) for pipe_id, intervals in queued.items()}
+    created_counts = _bin_counts(
+        rows, "created_at", bounds, window_start=window_start, interval_seconds=interval_seconds
+    )
+    started_counts = _bin_counts(
+        rows, "started_at", bounds, window_start=window_start, interval_seconds=interval_seconds
+    )
+    completed_counts = _bin_counts(
+        rows, "completed_at", bounds, window_start=window_start, interval_seconds=interval_seconds
+    )
+
     buckets: list[dict[str, Any]] = []
     for index in range(len(bounds) - 1):
         start, end = bounds[index], bounds[index + 1]
-        created = sum(1 for r in rows if _count_in_window(r, "created_at", start, end))
-        started = sum(1 for r in rows if _count_in_window(r, "started_at", start, end))
-        completed = sum(1 for r in rows if _count_in_window(r, "completed_at", start, end))
-        depth, oldest_age = _depth_at(all_queued, end)
+        created = created_counts[index]
+        started = started_counts[index]
+        completed = completed_counts[index]
+        depth, oldest_age = overall_depths[index]
         by_pipeline: list[dict[str, Any]] = []
-        for pipe_id, intervals in queued.items():
-            pipe_depth, pipe_oldest = _depth_at(intervals, end)
+        for pipe_id, series in pipeline_depths.items():
+            pipe_depth, pipe_oldest = series[index]
             if pipe_depth == 0 and pipe_oldest is None:
                 continue
             by_pipeline.append(
@@ -495,17 +704,21 @@ def compute_capacity_report(
 
     # Trailing zero-completion run over COMPLETE intervals only — the partial
     # current interval must never read as "nothing completed while at cap".
-    zero_completion_intervals = 0
-    for bucket in reversed(buckets):
-        if not bucket["complete"]:
-            continue
-        if bucket["completed"] == 0:
-            zero_completion_intervals += 1
-        else:
-            break
+    # Counted from the ORG-WIDE health rows so the stall signal's completion
+    # side matches its org-wide cap denominator.
+    zero_completion_intervals = _trailing_zero_completion_intervals(
+        active_rows, bounds, now=now, window_start=window_start, interval_seconds=interval_seconds
+    )
+    completions_in_window = sum(1 for row in active_rows if _count_in_window(row, "completed_at", window_start, now))
 
     cap_held = org_run_limit is not None and gate_total >= org_run_limit
-    stall_suspected = bool(cap_held and zero_completion_intervals >= stall_intervals)
+    # FAR-1343 M2: the leak/stall signature is about EXECUTING runs holding the
+    # cap, not runs parked on a human decision. ``gate_total`` deliberately
+    # counts parked runs (they hold an org admission slot), so requiring only
+    # ``cap_held`` would report a cap held entirely by human-waiting rows as a
+    # leak. Require the executing total itself to reach the cap.
+    executing_holds_cap = org_run_limit is not None and executing_total >= org_run_limit
+    stall_suspected = bool(executing_holds_cap and zero_completion_intervals >= stall_intervals)
     if stall_suspected:
         verdict = "stalled"
 
@@ -617,12 +830,12 @@ def compute_capacity_report(
             "cancelling_total": cancelling_total,
             "utilisation": utilisation,
             "cap_held": cap_held,
-            "completions_in_window": completed_total,
+            "completions_in_window": completions_in_window,
             "zero_completion_intervals": zero_completion_intervals,
             "stall_intervals": stall_intervals,
             "stall_suspected": stall_suspected,
             "stale_heartbeat_threshold_seconds": stale_heartbeat_seconds,
-            "stale_heartbeat_count": sum(a["stale_heartbeat_count"] for a in attribution_list),
+            "stale_heartbeat_count": health["stale_heartbeat_count"],
             "attribution": attribution_list,
         },
         "series": buckets,
@@ -649,6 +862,12 @@ async def run_capacity_query(
     configured limits, and the sandbox gate's cap/count. The sandbox count is
     the SAME reader the dispatch gate uses, so the utilisation shown here is the
     utilisation the gate enforces.
+
+    Two row scans are issued: the team-scoped queue scan (``params``) and an
+    org-wide active-health scan (``build_capacity_health_query``). The health
+    section's denominator is the org-wide ``org_run_concurrency_limit``, so its
+    numerator must be org-wide too (FAR-1343 M3) — a team viewer otherwise saw
+    their team's runs measured against the whole org's cap.
     """
     params = validate_capacity_params(params)
     if _rate_limited(str(org_id)):
@@ -669,6 +888,13 @@ async def run_capacity_query(
                 raise AnalyticsValidationError(
                     f"capacity scan exceeded the {CAPACITY_MAX_RAW_ROWS}-row cap — "
                     "narrow the window or add a pipeline filter"
+                )
+            health_rows = list(
+                (await session.execute(build_capacity_health_query(org_id, window_start=window_start))).all()
+            )
+            if len(health_rows) > CAPACITY_MAX_RAW_ROWS:
+                raise AnalyticsValidationError(
+                    f"capacity active-run scan exceeded the {CAPACITY_MAX_RAW_ROWS}-row cap — narrow the window"
                 )
             pipelines = list((await session.execute(build_pipeline_meta_query(org_id, params))).all())
             org_run_limit = await get_org_run_concurrency_limit(session, org_id)
@@ -692,6 +918,7 @@ async def run_capacity_query(
         interval_seconds=params.interval_seconds,
         stall_intervals=params.stall_intervals,
         stale_heartbeat_seconds=int(stale_heartbeat_seconds),
+        health_rows=health_rows,
     )
 
 

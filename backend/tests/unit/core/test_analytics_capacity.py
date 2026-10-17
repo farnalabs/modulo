@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from modulo.core.analytics import capacity as capacity_module
 from modulo.core.analytics.capacity import (
     CAPACITY_MAX_RAW_ROWS,
     CAUSE_ORG_RUN,
@@ -80,7 +81,9 @@ def _compute(
     sandbox_cap: int | None = None,
     sandbox_active: int = 0,
     pipelines: list[dict[str, Any]] | None = None,
+    health_rows: list[Any] | None = None,
 ) -> dict[str, Any]:
+    health_kwargs: dict[str, Any] = {} if health_rows is None else {"health_rows": health_rows}
     return compute_capacity_report(
         rows=rows,
         pipelines=pipelines
@@ -98,6 +101,7 @@ def _compute(
         interval_seconds=interval_seconds,
         stall_intervals=stall_intervals,
         stale_heartbeat_seconds=1800,
+        **health_kwargs,
     )
 
 
@@ -124,6 +128,21 @@ class TestValidateParams:
 
     def test_max_raw_rows_constant_is_positive(self) -> None:
         assert CAPACITY_MAX_RAW_ROWS > 0
+
+    def test_bucket_count_above_maximum_is_rejected(self) -> None:
+        # Regression (FAR-1343 M4): 1440 minutes at a 60s interval is 1,440
+        # buckets — the unbounded O(buckets x rows) build a caller could force.
+        with pytest.raises(AnalyticsValidationError):
+            validate_capacity_params(CapacityParams(window_minutes=1440, interval_seconds=60))
+
+    def test_bucket_count_at_maximum_is_accepted(self) -> None:
+        bucket_count = (1440 * 60) // 180
+        assert bucket_count == capacity_module.MAX_CAPACITY_BUCKETS
+        params = validate_capacity_params(CapacityParams(window_minutes=1440, interval_seconds=180))
+        assert params.interval_seconds == 180
+
+    def test_max_capacity_buckets_constant_is_positive(self) -> None:
+        assert capacity_module.MAX_CAPACITY_BUCKETS > 0
 
 
 class TestCauseClassification:
@@ -173,6 +192,21 @@ class TestHelpers:
         depth, oldest = _depth_at([(start, _NOW)], _NOW)
         assert depth == 0
         assert oldest is None
+
+    def test_depth_at_shared_start_with_open_and_closed_end_does_not_raise(self) -> None:
+        # Regression (FAR-1343 C1): two queue entries sharing ``created_at``
+        # where one is still open (end=None) and one has started. The old
+        # min-heap pushed ``(start, end)`` tuples, so on an equal start Python
+        # compared the second element and raised
+        # ``TypeError: '<' not supported between 'datetime.datetime' and 'NoneType'``.
+        shared = _NOW - timedelta(minutes=20)
+        intervals: list[tuple[datetime, datetime | None]] = [
+            (shared, None),
+            (shared, _NOW + timedelta(minutes=5)),
+        ]
+        depth, oldest = _depth_at(intervals, _NOW)
+        assert depth == 2
+        assert oldest == 1200.0
 
     def test_heartbeat_reference_falls_back_to_started_then_created(self) -> None:
         started = _NOW - timedelta(minutes=5)
@@ -270,6 +304,26 @@ class TestQueueReport:
         assert report["drain"]["verdict"] == "draining"
         assert report["pending"]["oldest_pending_age_seconds"] is None
 
+    def test_shared_created_at_started_and_pending_row_builds_series(self) -> None:
+        # Regression (FAR-1343 C1) at the report level: two runs sharing
+        # ``created_at`` (one pending, one already started) is the shape
+        # ``server_default=func.current_timestamp()`` + a multi-run transaction
+        # produces. The series build must not raise, and the pre-start slices
+        # must show both entries queued.
+        created = _minutes_before(_NOW, 20)
+        rows = [
+            _row(status="pending", created_at=created),
+            _row(
+                status="running",
+                created_at=created,
+                started_at=_minutes_before(_NOW, 15),
+                heartbeat_at=_NOW,
+            ),
+        ]
+        report = _compute(rows)
+        assert max(bucket["pending_depth"] for bucket in report["series"]) == 2
+        assert report["series"][-1]["pending_depth"] == 1
+
 
 class TestActiveHealth:
     def test_parked_runs_are_not_counted_as_executing(self) -> None:
@@ -324,6 +378,39 @@ class TestActiveHealth:
         assert health["zero_completion_intervals"] >= 3
         assert health["stall_suspected"] is True
         assert report["drain"]["verdict"] == "stalled"
+
+    def test_cap_held_entirely_by_parked_runs_is_not_a_stall(self) -> None:
+        # Regression (FAR-1343 M2): ``gate_total`` counts human-waiting rows
+        # (the org admission gate holds their slot), so the stall signature must
+        # not fire when NO run is actually executing. A cap held solely by
+        # awaiting_human/hitl_parked runs is not a leaked-slot stall.
+        rows = [
+            _row(
+                status="awaiting_human",
+                created_at=_minutes_before(_NOW, 60),
+                started_at=_minutes_before(_NOW, 55),
+            ),
+            _row(
+                pipeline_id=_P2,
+                status="hitl_parked",
+                created_at=_minutes_before(_NOW, 60),
+                started_at=_minutes_before(_NOW, 55),
+            ),
+        ]
+        report = _compute(
+            rows,
+            window_start=_NOW - timedelta(minutes=30),
+            interval_seconds=300,
+            stall_intervals=3,
+            org_run_limit=2,
+        )
+        health = report["active_health"]
+        assert health["gate_total"] == 2
+        assert health["executing_total"] == 0
+        assert health["parked_total"] == 2
+        assert health["cap_held"] is True
+        assert health["stall_suspected"] is False
+        assert report["drain"]["verdict"] != "stalled"
 
     def test_completions_prevent_a_stall(self) -> None:
         rows = [
@@ -386,6 +473,47 @@ class TestActiveHealth:
         health = report["active_health"]
         assert health["gate_total"] == 0
         assert health["cancelling_total"] == 1
+
+    def test_org_health_uses_org_wide_rows_not_team_scoped(self) -> None:
+        # Regression (FAR-1343 M3): the active-health denominator
+        # (``org_run_limit``) is org-wide. A team viewer whose ``rows`` are
+        # scoped to their own team must still see the ORG's utilisation and
+        # cap_held from the org-wide health rows — never their team's handful of
+        # runs divided by the whole org's cap.
+        team_rows = [
+            _row(
+                status="running",
+                created_at=_minutes_before(_NOW, 30),
+                started_at=_minutes_before(_NOW, 25),
+                heartbeat_at=_NOW,
+            ),
+            _row(created_at=_minutes_before(_NOW, 20)),
+        ]
+        org_rows = [
+            _row(
+                status="running",
+                created_at=_minutes_before(_NOW, 30),
+                started_at=_minutes_before(_NOW, 25),
+                heartbeat_at=_NOW,
+            )
+        ] + [
+            _row(
+                pipeline_id=_P2,
+                status="running",
+                created_at=_minutes_before(_NOW, 30),
+                started_at=_minutes_before(_NOW, 25),
+                heartbeat_at=_NOW,
+            )
+            for _ in range(4)
+        ]
+        report = _compute(team_rows, org_run_limit=5, health_rows=org_rows)
+        health = report["active_health"]
+        assert health["gate_total"] == 5
+        assert health["executing_total"] == 5
+        assert health["utilisation"] == 1.0
+        assert health["cap_held"] is True
+        # The queue section stays team-scoped: only the caller's pending run.
+        assert report["pending"]["total"] == 1
 
 
 class TestBinding:
