@@ -11835,21 +11835,6 @@ def _group_housekeeping_items(items: list[dict[str, str]], errors: list[dict[str
     return grouped
 
 
-async def _delete_housekeeping_entity(s: AsyncSession, model_cls: Any, eid: str, org_id: uuid.UUID) -> bool:
-    """Delete a single entity by id under a savepoint. Returns True if deleted."""
-    from sqlalchemy import select as _sa_select
-
-    stmt = _sa_select(model_cls).where(
-        model_cls.id == eid,
-        model_cls.organisation_id == org_id,
-    )
-    obj = (await s.execute(stmt)).scalar_one_or_none()
-    if obj is not None:
-        await s.delete(obj)
-        return True
-    return False
-
-
 async def _delete_housekeeping_group(
     s: AsyncSession,
     entity_type: str,
@@ -11859,12 +11844,18 @@ async def _delete_housekeeping_group(
     errors: list[dict[str, str]],
 ) -> int:
     """Delete each id in *ids* under a savepoint. Returns the number deleted."""
+    from modulo.core.housekeeping import delete_one_in_savepoint
+
     deleted_count = 0
     for eid in ids:
         try:
-            async with s.begin_nested():
-                if await _delete_housekeeping_entity(s, model_cls, eid, org_id):
-                    deleted_count += 1
+            # FAR-1857: count only AFTER the savepoint released.
+            # ``delete_one_in_savepoint`` returns True only once the DELETE
+            # (flushed on savepoint exit) has committed, so an FK RESTRICT
+            # refusal cannot be counted as a deletion. Shared with the REST
+            # route so the two cannot drift.
+            if await delete_one_in_savepoint(s, model_cls, eid, org_id):
+                deleted_count += 1
         except IntegrityError as exc:
             _log.warning("IntegrityError cleaning up %s %s", entity_type, eid)
             from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error

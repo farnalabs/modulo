@@ -1,7 +1,7 @@
 """Unit tests for the FAR-795 org-flag substrate (core.runtime_config.org_flags)."""
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -27,12 +27,19 @@ def _clean_cache():
 
 
 def _session_for_settings(settings_json):
-    """Mock session whose org row exposes *settings_json*."""
+    """Mock session whose org row exposes *settings_json*.
+
+    ``session.info`` carries the bound org RLS context: real sessions get it
+    from ``set_rls_org`` on generic backends, and the FAR-1830/FAR-1832 atomic
+    settings patch (behind ``set_org_flag``) reads it back through its strict
+    fail-closed tenant guard.
+    """
     org = MagicMock()
     org.settings_json = settings_json
     result = MagicMock()
     result.scalar_one_or_none.return_value = org
     session = AsyncMock()
+    session.info = {"org_id": str(ORG_ID)}
     session.execute.return_value = result
     return session
 
@@ -135,12 +142,37 @@ class TestIsOrgFlagEnabled:
 
 class TestSetOrgFlag:
     @pytest.mark.anyio
-    async def test_set_persists_with_row_lock(self):
+    async def test_set_persists_via_the_atomic_settings_patch(self):
+        """The write lands through the FAR-1830 patch helper (generic-dialect
+        fallback on this mock: read-merge-write under the helper's own lock)."""
         session = _session_for_settings({})
         await set_org_flag(session, ORG_ID, FLAG_WORK_ITEM_AGENT_MINTING_ENABLED, True)
         org = session.execute.return_value.scalar_one_or_none.return_value
         assert org.settings_json[FLAG_WORK_ITEM_AGENT_MINTING_ENABLED] is True
-        assert "FOR UPDATE" in str(session.execute.await_args_list[0].args[0])
+
+    @pytest.mark.anyio
+    async def test_set_delegates_to_the_patch_with_only_its_own_key(self):
+        """FAR-1832: ``set_org_flag`` emits ONLY its flag key through the atomic
+        patch — no ``SELECT ... FOR UPDATE`` + whole-column read-modify-write.
+
+        Fails against the old shape: the old code never called the patch
+        helper (``captured`` stays empty) and issued a locked org select.
+        """
+        session = _session_for_settings({})
+        captured: dict[str, object] = {}
+
+        async def _fake_patch(_session, org_id, patch=None, delete_keys=None, **kwargs):
+            captured["org_id"] = org_id
+            captured["patch"] = patch
+            captured["delete_keys"] = delete_keys
+            return dict(patch or {})
+
+        with patch("modulo.db.crud.organisation.update_org_settings_patch", new=_fake_patch):
+            await set_org_flag(session, ORG_ID, FLAG_WORK_ITEM_AGENT_MINTING_ENABLED, True)
+        assert captured["org_id"] == ORG_ID
+        assert captured["patch"] == {FLAG_WORK_ITEM_AGENT_MINTING_ENABLED: True}
+        for call in session.execute.await_args_list:
+            assert "FOR UPDATE" not in str(call.args[0]), f"writer must not pre-lock the org row: {call.args[0]}"
 
     @pytest.mark.anyio
     async def test_set_preserves_other_settings(self):

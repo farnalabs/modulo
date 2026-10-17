@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.housekeeping import (
     NON_DELETABLE_ENTITY_TYPES,
+    _lifecycle_map_has_no_stages,
     _scan_degraded_composite_templates,
     _scan_duplicate_triggers,
     _scan_edit_snapshot_retention,
@@ -419,6 +420,22 @@ class TestEmptyLifecycleMaps:
         session.add(
             LifecycleMap(id=uuid.uuid4(), organisation_id=_ORG_A, account_id=_ACCOUNT, name="empty", content_json={})
         )
+        # ``{}`` is a REAL shape, not a seed/test artefact: the API persists it
+        # for a map created with no content (``LifecycleMapCreate.content_json``
+        # defaults to ``{}`` and ``normalize_content`` leaves an empty payload
+        # untouched). The three-key shape below is what the editor's save path
+        # writes after every stage is deleted. Both must be surfaced; before
+        # FAR-1856 an equality against ``{}`` never matched the UI-emptied shape
+        # (and on Postgres raised outright — ``jsonb = json``).
+        session.add(
+            LifecycleMap(
+                id=uuid.uuid4(),
+                organisation_id=_ORG_A,
+                account_id=_ACCOUNT,
+                name="ui-emptied",
+                content_json={"stages": [], "edges": [], "notes": ""},
+            )
+        )
         session.add(
             LifecycleMap(
                 id=uuid.uuid4(),
@@ -441,7 +458,29 @@ class TestEmptyLifecycleMaps:
 
         candidates = await _scan_empty_lifecycle_maps(session, _ORG_A)
 
-        assert _candidate_names(candidates) == ["empty"]
+        assert _candidate_names(candidates) == ["empty", "ui-emptied"]
+
+    def test_has_no_stages_uses_postgres_jsonb_functions(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The Postgres arm builds a jsonb-typed predicate (FAR-1856).
+
+        The scanner fixture runs on SQLite, so the scanner test above only ever
+        reaches ``_lifecycle_map_has_no_stages``'s sqlite arm — leaving the
+        product (Postgres/jsonb) arm uncovered. That arm is the whole reason the
+        predicate is dialect-branched: the column is ``jsonb`` on Postgres, so a
+        predicate that bound as ``json`` would raise ``operator does not exist:
+        jsonb = json``. Drive the postgresql arm directly and prove the compiled
+        SQL uses the jsonb length/type functions.
+        """
+        from sqlalchemy.dialects import postgresql
+
+        from modulo.core import housekeeping
+
+        monkeypatch.setattr(housekeeping, "resolve_dialect", lambda _session: "postgresql")
+        expression = _lifecycle_map_has_no_stages(session=object())  # type: ignore[arg-type]
+
+        sql = str(expression.compile(dialect=postgresql.dialect()))
+        assert "jsonb_array_length" in sql
+        assert "jsonb_typeof" in sql
 
 
 class TestDuplicateTriggers:

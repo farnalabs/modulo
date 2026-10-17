@@ -13,6 +13,8 @@ import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from modulo.db.crud.environment_profile import (
     get_environment_profile,
     list_environment_profiles,
@@ -132,9 +134,30 @@ async def test_update_otel_config_merges_into_opted_in_read() -> None:
     session = AsyncMock()
     session.execute = AsyncMock(return_value=_result(scalar=org))
     session.flush = AsyncMock()
+    # FAR-1832 QA F3: the OTel writer now runs through the shared patch
+    # machinery, whose fail-closed tenant guard requires a bound org context
+    # (``set_rls_org`` in production; the info key here — this session
+    # presents a non-Postgres dialect, where info is the authoritative store).
+    org_id = uuid.uuid4()
+    session.info = {"org_id": str(org_id)}
 
-    merged = await update_otel_config(session, uuid.uuid4(), {"sampling": 0.5})
+    merged = await update_otel_config(session, org_id, {"sampling": 0.5})
 
     assert merged == {"endpoint": "http://otel-collector:4317", "sampling": 0.5}
     assert org.otel_config_json == merged
     session.flush.assert_awaited_once()
+
+
+async def test_update_otel_config_missing_org_raises_value_error() -> None:
+    """A ``LookupError`` from the shared patch helper (org missing) is
+    translated into the CRUD's ``ValueError("Organisation not found")``
+    contract at this boundary."""
+    session = AsyncMock()
+    with (
+        patch(
+            "modulo.db.crud.organisation.update_org_json_column_patch",
+            new=AsyncMock(side_effect=LookupError("organisation not found")),
+        ),
+        pytest.raises(ValueError, match="Organisation not found"),
+    ):
+        await update_otel_config(session, uuid.uuid4(), {"sampling": 0.5})

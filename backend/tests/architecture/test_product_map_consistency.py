@@ -574,6 +574,7 @@ OWNED_PAGES = {
     "/composites/:id/editor": "frontend/src/views/pipeline/CompositeEditorView.vue",
     "/pipelines/:id/editor": (
         "frontend/src/views/PipelineEditorView.vue",
+        "frontend/src/components/pipeline/PipelineSnapshotTimeline.vue",
         "frontend/src/components/pipeline/SandboxCommandsEditor.vue",
         "frontend/src/components/pipeline/SnapshotLockCard.vue",
     ),
