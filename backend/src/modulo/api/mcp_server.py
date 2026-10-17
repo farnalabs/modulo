@@ -175,6 +175,7 @@ from modulo.core.library_service import (
 from modulo.core.logging_config import org_id_var
 from modulo.core.mcp.scope_validator import (
     MCPAuthorizationError,
+    MCPSystemAdminRequiredError,
     check_tool_scope,
     set_request_allowed_tools,
 )
@@ -560,14 +561,11 @@ def _ctx_is_system_admin_val() -> bool:
 def _system_admin_denied(tool_name: str) -> dict[str, Any]:
     """Log and build the refusal for a system-admin-gated MCP tool (FAR-1879).
 
-    Both MCP housekeeping tools mirror REST routes whose real gate is
-    ``require_system_permission`` — an admin org-role floor (pinned in the MCP
-    scope map) AND a strict ``is_system_admin`` claim. The shared scope
-    resolver (``resolve_tool_access``) has no system-admin concept, so each
-    such tool re-checks the claim in its own body; ``list_feature_flags``
-    carries the same inline shape. That per-tool duplication is ticketed for
-    centralisation, deliberately NOT done here because the shared resolver is
-    used by every MCP tool.
+    FAR-1930: the system-admin requirement now lives in the shared scope
+    resolver (``SYSTEM_ADMIN_TOOLS`` declares the tools; ``resolve_tool_access``
+    enforces the claim). This helper survives as the canonical refusal envelope
+    and call-site log for that denial — ``_check_agent_tool_scope`` invokes it
+    when the resolver raises ``MCPSystemAdminRequiredError``.
 
     The refusal is logged because ``mcp_audited`` records only a coarse
     ``outcome="error"`` with no call-site line: without this, a stream of
@@ -597,16 +595,29 @@ def _check_agent_tool_scope(tool_name: str, action: str | None = None) -> None:
     FAR-620: the request's credential caller-scope (``_ctx_key_scope``) and
     auth type are threaded into the chokepoint so the caller-scope leg of the
     tool-scope decision sees the live credential class (None fails closed).
+
+    FAR-1930: the request's live ``is_system_admin`` claim is threaded too, so
+    the resolver's system-admin leg (for the tools declared in
+    ``SYSTEM_ADMIN_TOOLS``) is evaluated here rather than in each tool body.
     """
-    check_tool_scope(
-        _ctx_role_val(),
-        tool_name,
-        action=action,
-        allowed_tools=_ctx_node_allowed_tools_val(),
-        key_scope=_ctx_key_scope.get(None),
-        auth_type=_ctx_auth_type.get(None),
-        grants=_ctx_key_grants.get(None),
-    )
+    try:
+        check_tool_scope(
+            _ctx_role_val(),
+            tool_name,
+            action=action,
+            allowed_tools=_ctx_node_allowed_tools_val(),
+            key_scope=_ctx_key_scope.get(None),
+            auth_type=_ctx_auth_type.get(None),
+            grants=_ctx_key_grants.get(None),
+            is_system_admin=_ctx_is_system_admin_val(),
+        )
+    except MCPSystemAdminRequiredError:
+        # FAR-1930: the shared resolver owns the gate; this adapter preserves
+        # the FAR-1879 call-site warning (``mcp_audited`` records only a coarse
+        # outcome) and re-raises the canonical refusal detail so the tool
+        # handler's ``except MCPAuthorizationError`` envelope is byte-identical
+        # to the pre-centralisation response.
+        raise MCPAuthorizationError(_system_admin_denied(tool_name)["detail"]) from None
 
 
 # FAR-1184: raising or clearing a pipeline's spend circuit-breaker threshold
@@ -9607,16 +9618,12 @@ async def list_feature_flags() -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-696/FAR-1930: the REST route is ``require_system_permission`` — a
+        # STRICT is_system_admin gate with no org-role fall-through. The
+        # requirement is declared in the shared scope map (SYSTEM_ADMIN_TOOLS)
+        # and enforced by ``_check_agent_tool_scope``; API keys and OAuth
+        # tokens always fail it.
         _check_agent_tool_scope("list_feature_flags")
-        # FAR-696: the REST route is ``require_system_permission`` — a STRICT
-        # is_system_admin gate with no org-role fall-through. The scope-map
-        # entry pins the org-role floor; this check is the load-bearing
-        # system-admin gate (API keys and OAuth tokens always fail it).
-        if not _ctx_is_system_admin_val():
-            return {
-                "error": "insufficient_scope",
-                "detail": "list_feature_flags requires system admin role",
-            }
 
         from modulo.core.feature_flags import FeatureFlagRegistry, resolve_effective_license
         from modulo.core.license import get_license, verify_license_key
@@ -11825,15 +11832,15 @@ async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1879/FAR-1930: the REST list route is gated by
+        # ``require_permission`` (admin org-role floor, pinned in the scope
+        # map) AND ``require_system_permission`` (a strict is_system_admin gate
+        # with no org-role fall-through). Both legs are enforced by
+        # ``_check_agent_tool_scope``: the org-role floor via the scope map and
+        # the claim via SYSTEM_ADMIN_TOOLS. The scan surfaces org-wide secret
+        # NAMES and other entities, so a runner/operator credential must not
+        # reach it.
         _check_agent_tool_scope("list_housekeeping")
-        # FAR-1879: same posture as ``perform_housekeeping`` below. The REST
-        # list route is gated by ``require_permission`` (admin org-role floor,
-        # pinned in the scope map) AND ``require_system_permission`` (a strict
-        # is_system_admin gate with no org-role fall-through). This check is
-        # that load-bearing gate: the scan surfaces org-wide secret NAMES and
-        # other entities, so a runner/operator credential must not reach it.
-        if not _ctx_is_system_admin_val():
-            return _system_admin_denied("list_housekeeping")
         from modulo.core.housekeeping import scan_all as hk_scan_all
 
         org_id = _ctx_org_id_val()
@@ -11958,17 +11965,14 @@ async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1879/FAR-1930: the REST cleanup route is ``require_permission``
+        # (admin org-role floor, pinned in the scope map) AND
+        # ``require_system_permission`` — a STRICT is_system_admin gate with no
+        # org-role fall-through. Both legs are enforced centrally by
+        # ``_check_agent_tool_scope`` (the claim via SYSTEM_ADMIN_TOOLS), so
+        # the destructive MCP path matches REST and API keys/OAuth tokens
+        # always fail it.
         _check_agent_tool_scope("perform_housekeeping")
-        # FAR-1879: the REST cleanup route is ``require_permission`` (admin
-        # org-role floor, pinned in the scope map) AND ``require_system_permission``
-        # — a STRICT is_system_admin gate with no org-role fall-through. This
-        # check is that load-bearing gate (API keys and OAuth tokens always
-        # fail it), so the destructive MCP path matches REST. The gate is
-        # duplicated per tool because the shared scope resolver has no
-        # system-admin concept; centralising it there is ticketed, not done in
-        # this security-tightening change.
-        if not _ctx_is_system_admin_val():
-            return _system_admin_denied("perform_housekeeping")
         from modulo.core.housekeeping import ENTITY_MODEL_MAP as HK_ENTITY_MAP
 
         org_id = _ctx_org_id_val()

@@ -53,14 +53,17 @@ def get_request_allowed_tools() -> Sequence[str] | None:
 __all__ = [
     "CALLER_SCOPE_REQUIREMENTS",
     "READ_ONLY_TOOLS",
+    "SYSTEM_ADMIN_TOOLS",
     "TOOL_SCOPE_REQUIREMENTS",
     "MCPAuthorizationError",
     "MCPConfigurationError",
+    "MCPSystemAdminRequiredError",
     "check_tool_scope",
     "classify_caller_scope",
     "get_request_allowed_tools",
     "resolve_tool_access",
     "set_request_allowed_tools",
+    "tool_requires_system_admin",
 ]
 
 
@@ -70,6 +73,17 @@ class MCPAuthorizationError(Exception):
 
 class MCPConfigurationError(Exception):
     """Raised when a scope-requirement configuration error is detected."""
+
+
+class MCPSystemAdminRequiredError(MCPAuthorizationError):
+    """Raised when a system-admin-gated tool is called without the claim.
+
+    FAR-1930: a subclass of ``MCPAuthorizationError`` so every existing
+    ``except MCPAuthorizationError`` handler (the MCP tool handlers that build
+    the ``insufficient_scope`` envelope) catches it unchanged. The MCP surface
+    distinguishes it only to attach the call-site warning to that refusal; the
+    decision itself is the resolver's.
+    """
 
 
 # tool (or ``tool:action``) -> permission key in ``PERMISSIONS``
@@ -131,15 +145,10 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     # each gated by BOTH ``require_permission("housekeeping.manage")`` (admin
     # org-role floor) and ``require_system_permission(...)`` (a strict
     # is_system_admin gate with no org-role fall-through). These scope-map
-    # entries pin ONLY the org-role floor: this resolver has no system-admin
-    # concept, so each tool enforces the load-bearing gate in its own body.
-    # That per-tool duplication — the same in-body shape as
-    # ``list_feature_flags``, which is pinned in ``READ_ONLY_TOOLS`` below
-    # rather than in this map — is ticketed for centralisation. It is
-    # deliberately NOT refactored here: this resolver is used by every MCP
-    # tool, so changing it inside a security-tightening change would widen the
-    # blast radius. Until it is centralised, a new system-admin-gated tool must
-    # replicate the in-body gate itself.
+    # entries pin the org-role floor; the system-admin requirement is declared
+    # in ``SYSTEM_ADMIN_TOOLS`` below and enforced by the same resolver's leg 6
+    # (FAR-1930). A new system-admin-gated tool declares it THERE — never with
+    # an in-body check.
     "list_housekeeping": "housekeeping.manage",
     "perform_housekeeping": "housekeeping.manage",
     "create_connector": "connector.create",
@@ -229,13 +238,48 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset(
         "list_schemas",
         "validate_payload",
         # FAR-696: the REST route's real gate is the strict
-        # ``require_system_permission`` check (no org-role fall-through),
-        # which the tool enforces in-body from the is_system_admin context.
+        # ``require_system_permission`` check (no org-role fall-through).
         # Pinning here keeps the role leg from inventing an org-admin
-        # fall-through the REST surface does not have.
+        # fall-through the REST surface does not have; the load-bearing
+        # system-admin gate is declared in ``SYSTEM_ADMIN_TOOLS`` below
+        # (FAR-1930 centralised it out of the tool bodies).
         "list_feature_flags",
     }
 )
+
+# ---------------------------------------------------------------------------
+# FAR-1930: system-admin requirement (the strict ``is_system_admin`` claim)
+# ---------------------------------------------------------------------------
+
+# Tools whose REST twin is guarded by ``require_system_permission`` — a STRICT
+# ``is_system_admin`` claim with NO org-role fall-through. This frozenset is the
+# SINGLE per-tool declaration of that requirement; ``resolve_tool_access``
+# enforces it as a deny-only, kill-switch-ineligible leg, so a tool cannot ship
+# the requirement without the gate, and a new system-admin-gated tool declares
+# it here rather than re-implementing an in-body check.
+#
+# Distinct from ``TOOL_SCOPE_REQUIREMENTS`` (which pins the org-role floor):
+# ``list_housekeeping`` / ``perform_housekeeping`` carry BOTH (admin org role
+# AND the claim), while ``list_feature_flags`` is pinned read-only at the role
+# leg and carries only this requirement.
+SYSTEM_ADMIN_TOOLS: frozenset[str] = frozenset(
+    {
+        "list_feature_flags",
+        "list_housekeeping",
+        "perform_housekeeping",
+    }
+)
+
+
+def tool_requires_system_admin(tool: str) -> bool:
+    """True when ``tool`` declares a system-admin requirement (FAR-1930).
+
+    Public so the MCP surface can attach its call-site warning without
+    duplicating the declaration. It is a DECLARATION lookup only — the
+    authoritative access decision is made by ``resolve_tool_access``.
+    """
+    return tool in SYSTEM_ADMIN_TOOLS
+
 
 # ---------------------------------------------------------------------------
 # FAR-620: caller-scope dimension (org-only | caller-scoped | any)
@@ -343,6 +387,7 @@ def resolve_tool_access(
     allowed_tools: set[str] | None,
     kill_switch: bool,
     grants: frozenset[str] | None = None,
+    is_system_admin: bool = False,
 ) -> tuple[bool, str]:
     """Pure tool-access decision for one MCP call (FAR-620).
 
@@ -363,11 +408,15 @@ def resolve_tool_access(
         grants: FAR-1477 API-key grant-set (``None`` = legacy role bundle, no
             narrowing; empty = deny-all). A deny-only, kill-switch-INELIGIBLE
             leg: ``effective = grants INTERSECT bundle(live_role)``.
+        is_system_admin: the caller's live ``is_system_admin`` claim
+            (FAR-1930). Required for any tool declared in
+            ``SYSTEM_ADMIN_TOOLS``; defaults False (fail-closed), so a caller
+            that never resolved the claim cannot reach a system-admin tool.
 
     Returns ``(allowed, permission_key)``. ``permission_key`` is the resolved
     key for error/log detail, or ``""`` when the tool could not be resolved.
 
-    Composes five deny-only legs in a fixed order (never widen):
+    Composes six deny-only legs in a fixed order (never widen):
 
     1. node allowed_tools narrowing (FAR-418/436 semantics preserved exactly).
     2. resolution — the tool/action must map to a permission key
@@ -383,11 +432,18 @@ def resolve_tool_access(
     4. role leg — kill-switch-ELIGIBLE: the org-role hierarchy check; the
        kill switch OFF bypasses the comparison (never the identity checks,
        which deny above).
-    5. grant-set leg (FAR-1477) — runs LAST, after the role leg:
+    5. grant-set leg (FAR-1477) — runs after the role leg:
        ``grants_permit`` requires the permission to be in the key's grant-set
        and still delegable (live exclusion read). KILL-SWITCH-INELIGIBLE: it
        applies even when the authz kill switch is OFF, because a grant-set
        only ever narrows. ``grants is None`` is a no-op.
+    6. system-admin leg (FAR-1930) — runs LAST: a tool declared in
+       ``SYSTEM_ADMIN_TOOLS`` requires ``is_system_admin`` (a strict identity
+       claim, mirroring REST's ``require_system_permission``).
+       KILL-SWITCH-INELIGIBLE (identity, like the caller-scope leg) and
+       deny-only. It is last so a tool that also fails an earlier leg keeps
+       that leg's existing denial reason; it fires only when every other leg
+       passed. A tool NOT so declared ignores the flag entirely.
     """
     # Leg 1: node-level allowed_tools narrowing. When the node's
     # capability_scope declares an allow-list it is an ADDITIONAL filter —
@@ -421,6 +477,12 @@ def resolve_tool_access(
         return False, permission_key
     # Leg 5 (FAR-1477): grant-set membership + live non-delegable exclusion.
     if not grants_permit(grants, permission_key):
+        return False, permission_key
+    # Leg 6 (FAR-1930): system-admin requirement. A strict identity claim with
+    # no org-role fall-through, so the org-role kill switch never bypasses it.
+    # Last, and gated on the per-tool declaration, so a tool outside
+    # ``SYSTEM_ADMIN_TOOLS`` is wholly unaffected by the flag.
+    if tool_requires_system_admin(tool) and not is_system_admin:
         return False, permission_key
     return True, permission_key
 
@@ -462,17 +524,26 @@ def check_tool_scope(
     key_scope: str | None = None,
     auth_type: str | None = None,
     grants: frozenset[str] | None = None,
+    is_system_admin: bool = False,
 ) -> None:
     """Single tool-dispatch chokepoint (delegates to ``resolve_tool_access``).
 
     FAR-620: the DECISION is made by the pure resolver; this wrapper keeps the
     input validation, the ContextVar wiring (node allowed-tools fallback, the
     request-scoped authz-enforce kill switch) and the per-leg denial messages.
-    ``key_scope`` / ``auth_type`` arrive from the MCP middleware's ContextVars
-    via ``_check_agent_tool_scope``; direct callers that omit them keep
-    today's behaviour (key_scope None fails closed on caller-scoped tools —
-    e.g. the FAR-614 ``.self`` tools ``get_hitl_email_alerts`` /
-    ``set_hitl_email_alerts`` — and leaves the role/org legs untouched).
+    ``key_scope`` / ``auth_type`` / ``is_system_admin`` arrive from the MCP
+    middleware's ContextVars via ``_check_agent_tool_scope``; direct callers
+    that omit them keep today's behaviour (key_scope None fails closed on
+    caller-scoped tools — e.g. the FAR-614 ``.self`` tools
+    ``get_hitl_email_alerts`` / ``set_hitl_email_alerts`` — the role/org legs
+    are untouched, and ``is_system_admin`` defaults False so a system-admin
+    tool is denied unless the caller passes the live claim).
+
+    Raises ``MCPSystemAdminRequiredError`` (a subclass of
+    ``MCPAuthorizationError``) when the ONLY failing leg is the FAR-1930
+    system-admin requirement — so the MCP surface can attach its call-site
+    warning while every existing ``except MCPAuthorizationError`` handler
+    keeps working unchanged.
     """
     # FAR-418: when no explicit allow-list is passed, fall back to the
     # request-scoped node allowed_tools (set by McpAuthMiddleware from the
@@ -503,6 +574,7 @@ def check_tool_scope(
     if allowed_tools is not None:
         allowed_set = {_sanitize(t, name="allowed_tool") for t in allowed_tools}
 
+    kill_switch = authz_enforce_enabled()
     allowed, _permission_key = resolve_tool_access(
         tool=normalized,
         action=act,
@@ -510,8 +582,9 @@ def check_tool_scope(
         key_scope=key_scope,
         auth_type=auth_type,
         allowed_tools=allowed_set,
-        kill_switch=authz_enforce_enabled(),
+        kill_switch=kill_switch,
         grants=grants,
+        is_system_admin=is_system_admin,
     )
     if not allowed:
         message = _denial_message(
@@ -524,9 +597,58 @@ def check_tool_scope(
             auth_type=auth_type,
             allowed_set=allowed_set,
             grants=grants,
+            is_system_admin=is_system_admin,
         )
         _log.warning("Scope check failed: %s", message)
+        if _is_sole_system_admin_denial(
+            tool=normalized,
+            action=act,
+            role=current_role,
+            key_scope=key_scope,
+            auth_type=auth_type,
+            allowed_set=allowed_set,
+            kill_switch=kill_switch,
+            grants=grants,
+            is_system_admin=is_system_admin,
+        ):
+            raise MCPSystemAdminRequiredError(message)
         raise MCPAuthorizationError(message)
+
+
+def _is_sole_system_admin_denial(
+    *,
+    tool: str,
+    action: str | None,
+    role: str,
+    key_scope: str | None,
+    auth_type: str | None,
+    allowed_set: set[str] | None,
+    kill_switch: bool,
+    grants: frozenset[str] | None,
+    is_system_admin: bool,
+) -> bool:
+    """True when the FAR-1930 system-admin leg is the ONLY failing leg.
+
+    The system-admin leg is last and independent, so re-resolving with
+    ``is_system_admin=True`` isolates it: an ALLOWED re-resolution proves every
+    other leg passed and the requirement alone denied. Used solely to select
+    the exception SUBCLASS (the MCP surface attaches a call-site warning to
+    it); the access decision itself is always the resolver's.
+    """
+    if is_system_admin or not tool_requires_system_admin(tool):
+        return False
+    allowed_ignoring_requirement, _ = resolve_tool_access(
+        tool=tool,
+        action=action,
+        role=role,
+        key_scope=key_scope,
+        auth_type=auth_type,
+        allowed_tools=allowed_set,
+        kill_switch=kill_switch,
+        grants=grants,
+        is_system_admin=True,
+    )
+    return allowed_ignoring_requirement
 
 
 def _denial_message(
@@ -540,6 +662,7 @@ def _denial_message(
     auth_type: str | None,
     allowed_set: set[str] | None,
     grants: frozenset[str] | None = None,
+    is_system_admin: bool = False,
 ) -> str:
     """Re-derive the specific denial message for a resolver denial.
 
@@ -579,4 +702,8 @@ def _denial_message(
     # Leg 5: grant-set (FAR-1477).
     if not grants_permit(grants, permission_key):
         return f"Tool '{tool_name}' requires '{permission_key}', which is not granted to this API key"
+    # Leg 6 (FAR-1930): system-admin requirement. Reached only when every other
+    # leg passed; the detail matches the MCP refusal envelope verbatim.
+    if tool_requires_system_admin(normalized) and not is_system_admin:
+        return f"{tool_name} requires system admin role"
     return f"Tool '{tool_name}' access denied"

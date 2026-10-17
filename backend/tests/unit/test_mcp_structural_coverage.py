@@ -17,6 +17,8 @@ import re
 from collections.abc import Iterator
 from pathlib import Path
 
+import pytest
+
 from modulo.core.mcp.scope_validator import READ_ONLY_TOOLS, TOOL_SCOPE_REQUIREMENTS
 
 _EXPECTED_TOOLS = frozenset(
@@ -323,3 +325,179 @@ def test_create_api_key_classified_org_only() -> None:
     """Minting is an org-level operation: under a user-scoped key the
     ``create_api_key`` MCP tool is denied (user minting is REST-JWT-only)."""
     assert _classified_caller_scope("create_api_key") == _ORG_ONLY
+
+
+# ---------------------------------------------------------------------------
+# FAR-1930: the system-admin requirement is DECLARED once and ENFORCED by the
+# shared resolver — never re-implemented per tool.
+#
+# Before centralisation each system-admin-gated tool carried its own in-body
+# ``if not _ctx_is_system_admin_val(): return ...`` check. The requirement now
+# lives in ``scope_validator.SYSTEM_ADMIN_TOOLS`` and the resolver enforces it,
+# so a tool cannot ship the declaration without the gate. These guards walk the
+# declaration and prove the gate is live; the can-fail test proves the guard
+# itself is not vacuous.
+# ---------------------------------------------------------------------------
+
+_EXPECTED_SYSTEM_ADMIN_TOOLS = frozenset(
+    {
+        "list_feature_flags",
+        "list_housekeeping",
+        "perform_housekeeping",
+    }
+)
+
+
+def _system_admin_declared_tools() -> frozenset[str]:
+    """Read the declaration through the MODULE (so a monkeypatch is visible)
+    rather than a bound import."""
+    import modulo.core.mcp.scope_validator as sv
+
+    return sv.SYSTEM_ADMIN_TOOLS
+
+
+def _unenforced_system_admin_declarations(declared: frozenset[str]) -> list[str]:
+    """Return declared tools whose system-admin requirement is NOT enforced.
+
+    A live gate means: for a caller whose other legs all pass (an ``admin``
+    org role, an org-wide JWT credential), the resolver ALLOWS the tool when
+    the claim is present and DENIES it when the claim is absent. A declared
+    tool that is unmapped — or whose resolver leg was removed — cannot satisfy
+    the first condition, so it is reported.
+    """
+    from modulo.core.mcp.scope_validator import resolve_tool_access
+
+    unenforced: list[str] = []
+    for tool in sorted(declared):
+        with_claim, _ = resolve_tool_access(
+            tool=tool,
+            action=None,
+            role="admin",
+            key_scope="org",
+            auth_type="jwt",
+            allowed_tools=None,
+            kill_switch=True,
+            is_system_admin=True,
+        )
+        without_claim, _ = resolve_tool_access(
+            tool=tool,
+            action=None,
+            role="admin",
+            key_scope="org",
+            auth_type="jwt",
+            allowed_tools=None,
+            kill_switch=True,
+            is_system_admin=False,
+        )
+        if not with_claim or without_claim:
+            unenforced.append(tool)
+    return unenforced
+
+
+def test_system_admin_declaration_is_pinned() -> None:
+    """The declared set is pinned so adding a system-admin-gated tool is a
+    deliberate, reviewed change (not an accidental omission)."""
+    assert _system_admin_declared_tools() == _EXPECTED_SYSTEM_ADMIN_TOOLS
+
+
+def test_every_declared_system_admin_tool_is_registered() -> None:
+    registered = _registered_tool_names()
+    for tool in _system_admin_declared_tools():
+        assert tool in registered, f"SYSTEM_ADMIN_TOOLS declares unregistered tool '{tool}'"
+
+
+def test_every_declared_system_admin_tool_is_enforced_by_the_shared_resolver() -> None:
+    """Every declared tool's requirement is enforced by ``resolve_tool_access``.
+
+    A declaration with no live gate (the tool is unmapped, or the resolver leg
+    was removed) fails here — the structural guard against shipping the
+    declaration without the enforcement.
+    """
+    unenforced = _unenforced_system_admin_declarations(_system_admin_declared_tools())
+    assert not unenforced, (
+        f"declared system-admin tools with NO live enforcement in the shared "
+        f"resolver: {unenforced} — declare the tool in SYSTEM_ADMIN_TOOLS only "
+        f"when resolve_tool_access actually denies it without the claim"
+    )
+
+
+def test_structural_guard_catches_a_declaration_without_a_live_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prove the guard can fail: a declared tool that the resolver cannot gate
+    (here, unmapped) is reported by ``_unenforced_system_admin_declarations``.
+
+    Without this, the guard could pass vacuously for every declaration.
+    """
+    import modulo.core.mcp.scope_validator as sv
+
+    monkeypatch.setattr(
+        sv,
+        "SYSTEM_ADMIN_TOOLS",
+        sv.SYSTEM_ADMIN_TOOLS | {"not_a_real_tool"},
+    )
+    assert _unenforced_system_admin_declarations(sv.SYSTEM_ADMIN_TOOLS) == ["not_a_real_tool"]
+
+
+def test_system_admin_flag_is_inert_for_every_undeclared_tool() -> None:
+    """FAR-1930 blast-radius proof: the system-admin leg cannot change any tool
+    OUTSIDE the declaration.
+
+    The resolver is on the path of every MCP tool, so a centralised gate has to
+    leave every other tool's effective access bit-identical. This enumerates
+    every registered tool NOT in ``SYSTEM_ADMIN_TOOLS`` across the role/
+    credential matrix and asserts the decision (allow/deny AND the resolved
+    permission key) is identical whether the claim is absent or present.
+    """
+    from modulo.core.mcp.scope_validator import resolve_tool_access
+
+    declared = _system_admin_declared_tools()
+    undeclared = _registered_tool_names() - declared
+    assert undeclared, "expected many tools outside the system-admin declaration"
+
+    for tool in sorted(undeclared):
+        for role in ("viewer", "runner", "operator", "admin"):
+            for key_scope, auth_type in (("org", "api_key"), ("user", "jwt"), (None, None)):
+                with_claim = resolve_tool_access(
+                    tool=tool,
+                    action=None,
+                    role=role,
+                    key_scope=key_scope,
+                    auth_type=auth_type,
+                    allowed_tools=None,
+                    kill_switch=True,
+                    is_system_admin=True,
+                )
+                without_claim = resolve_tool_access(
+                    tool=tool,
+                    action=None,
+                    role=role,
+                    key_scope=key_scope,
+                    auth_type=auth_type,
+                    allowed_tools=None,
+                    kill_switch=True,
+                    is_system_admin=False,
+                )
+                assert with_claim == without_claim, (
+                    f"tool '{tool}' decision changed with the system-admin flag "
+                    f"(role={role}, key_scope={key_scope}, auth_type={auth_type}); "
+                    f"it does not declare a requirement and must be unaffected"
+                )
+
+
+def test_system_admin_flag_is_read_only_by_the_shared_dispatch_wrapper() -> None:
+    """The ``_ctx_is_system_admin_val()`` ContextVar is read at exactly ONE
+    call site in the MCP server — the shared dispatch wrapper
+    ``_check_agent_tool_scope`` (plus its definition).
+
+    A per-tool in-body gate (the duplicated shape FAR-1930 centralised away)
+    reintroduces a second reader and fails here.
+    """
+    path = _SRC_ROOT / "api" / "mcp_server.py"
+    call_sites = len(re.findall(r"_ctx_is_system_admin_val\(\)", path.read_text(encoding="utf-8")))
+    assert call_sites == 2, (
+        f"expected exactly one _ctx_is_system_admin_val() call site (the shared "
+        f"wrapper) plus its definition in api/mcp_server.py, found {call_sites} — "
+        f"a per-tool system-admin gate has crept back in; enforce the "
+        f"requirement through SYSTEM_ADMIN_TOOLS instead"
+    )

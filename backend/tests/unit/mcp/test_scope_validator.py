@@ -16,6 +16,7 @@ import pytest
 
 from modulo.core.mcp.scope_validator import (
     CALLER_SCOPE_REQUIREMENTS,
+    SYSTEM_ADMIN_TOOLS,
     TOOL_SCOPE_REQUIREMENTS,
     VALID_CALLER_SCOPE_CLASSIFICATIONS,
     MCPAuthorizationError,
@@ -89,7 +90,10 @@ class TestCheckToolScope:
         ],
     )
     def test_authorized_role_passes(self, role: str, tool: str) -> None:
-        assert check_tool_scope(role, tool) is None
+        # FAR-1930: the admin housekeeping rows also carry the system-admin
+        # requirement, now enforced by the shared resolver — supply the claim
+        # for the declared tools so this row still pins the ROLE leg.
+        assert check_tool_scope(role, tool, is_system_admin=tool in SYSTEM_ADMIN_TOOLS) is None
 
     def test_query_analytics_resolves_to_viewer(self) -> None:
         from modulo.auth.permissions import resolve_required
@@ -102,11 +106,13 @@ class TestCheckToolScope:
             assert check_tool_scope(role, "query_analytics") is None
 
     def test_housekeeping_tools_resolve_to_admin(self) -> None:
-        """FAR-1879: both MCP housekeeping tools pin the admin org-role floor.
+        """FAR-1879/FAR-1930: both MCP housekeeping tools pin BOTH gates.
 
-        This is the mapping-level pin (``test_mcp_config_tools`` pins the
-        handler-level behaviour); a regression of either mapping to a
-        runner/operator key fails here independently of the in-body gate.
+        The admin org-role floor is the mapping-level pin (a regression of
+        either mapping to a runner/operator key fails here), and the
+        system-admin requirement comes from ``SYSTEM_ADMIN_TOOLS``. A caller
+        must hold both: the claim alone does not lift the role floor, and the
+        admin role alone does not satisfy the claim.
         """
         from modulo.auth.permissions import resolve_required
         from modulo.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
@@ -114,9 +120,15 @@ class TestCheckToolScope:
         for tool in ("list_housekeeping", "perform_housekeeping"):
             assert TOOL_SCOPE_REQUIREMENTS[tool] == "housekeeping.manage"
             assert resolve_required("housekeeping.manage") == "admin"
-            assert check_tool_scope("admin", tool) is None
+            assert tool in SYSTEM_ADMIN_TOOLS
+            # Admin role + the claim → allowed.
+            assert check_tool_scope("admin", tool, is_system_admin=True) is None
+            # The claim does NOT lift the org-role floor.
             with pytest.raises(MCPAuthorizationError):
-                check_tool_scope("operator", tool)
+                check_tool_scope("operator", tool, is_system_admin=True)
+            # The admin role does NOT satisfy the claim on its own.
+            with pytest.raises(MCPAuthorizationError):
+                check_tool_scope("admin", tool)
 
     @pytest.mark.parametrize(
         ("role", "tool"),
