@@ -11,7 +11,13 @@
         </template>
       </PageHeader>
 
-      <div v-if="loading" class="space-y-4">
+      <output
+        v-if="loading"
+        class="block space-y-4"
+        aria-busy="true"
+        :aria-label="$t('common.loading')"
+        data-testid="hk-loading"
+      >
         <div
           v-for="n in 3"
           :key="`hk-skeleton-${n}`"
@@ -30,7 +36,7 @@
             <SkeletonBlock height-class="h-3 w-5/6" />
           </div>
         </div>
-      </div>
+      </output>
 
       <ErrorAlert
         v-else-if="error"
