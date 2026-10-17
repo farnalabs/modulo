@@ -93,8 +93,11 @@
  *   `getTarget()` reads `process.env.E2E_TARGET` and lowercases it; valid
  *   values are `local` (default), `staging`, `app`. `getBaseUrl()` honours
  *   `E2E_BASE_URL` when set, else the per-target default
- *   (local `http://127.0.0.1:5173`, staging `https://staging.modulo.run`,
- *   app `https://app.modulo.run`). Login uses the fixtures' `loginAsAdmin`
+ *   (staging `https://staging.modulo.run`, app `https://app.modulo.run`).
+ *   For `local` the default is NOT a fixed port: it is the worktree-derived
+ *   `http://127.0.0.1:<port>` (FAR-1900), overridable with `E2E_PORT`, or
+ *   `http://127.0.0.1:5173` when `E2E_NO_WEBSERVER=true` targets a hand-started
+ *   server. Login uses the fixtures' `loginAsAdmin`
  *   with `E2E_ADMIN_EMAIL` / `E2E_ADMIN_PASSWORD` on non-local targets
  *   (`E2E_ORG_SLUG` selects the org on multi-org instances); non-local
  *   targets additionally reuse the `storageState-staging.json` written by

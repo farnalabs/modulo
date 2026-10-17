@@ -4099,7 +4099,7 @@ export default {
       "open_navigation": "Open navigation",
       "collapse_sidebar": "Collapse sidebar",
       "expand_sidebar": "Expand sidebar",
-      "user_profile": "User profile",
+      "user_profile_link": "User profile {label}",
       "main_navigation": "Main navigation",
       "loading_navigation": "Loading navigation"
     },

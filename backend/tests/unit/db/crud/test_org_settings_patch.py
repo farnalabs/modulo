@@ -20,11 +20,13 @@ from modulo.db.crud.organisation import (
     OrgSettingsPatchContextAbsentError,
     OrgSettingsPatchContextUnreadableError,
     OrgSettingsPatchOrgMismatch,
-    _apply_settings_patch_generic,
-    _apply_settings_patch_postgres,
+    _apply_json_column_patch_generic,
+    _apply_json_column_patch_postgres,
     _coerce_org_uuid,
+    _pg_patch_statement,
     _strict_read_rls_org,
     _sync_identity_map,
+    update_org_json_column_patch,
     update_org_settings_patch,
 )
 from modulo.db.models.organisation import Organisation
@@ -40,6 +42,9 @@ class _FakeResult:
         return self._rows[0] if self._rows else None
 
     def first(self) -> object:
+        return self._rows[0] if self._rows else None
+
+    def scalar_one_or_none(self) -> object:
         return self._rows[0] if self._rows else None
 
 
@@ -111,8 +116,8 @@ def _stub_dependencies(
     monkeypatch.setattr(organisation_mod, "_strict_read_rls_org", AsyncMock(return_value=bound_org))
     postgres = AsyncMock(return_value={"path": "postgres"})
     generic = AsyncMock(return_value={"path": "generic"})
-    monkeypatch.setattr(organisation_mod, "_apply_settings_patch_postgres", postgres)
-    monkeypatch.setattr(organisation_mod, "_apply_settings_patch_generic", generic)
+    monkeypatch.setattr(organisation_mod, "_apply_json_column_patch_postgres", postgres)
+    monkeypatch.setattr(organisation_mod, "_apply_json_column_patch_generic", generic)
     invalidate = MagicMock()
     monkeypatch.setattr(organisation_mod, "_invalidate_settings_derived_caches", invalidate)
     return {"postgres": postgres, "generic": generic, "invalidate": invalidate}
@@ -198,36 +203,74 @@ async def test_strict_read_postgres_read_failure_raises() -> None:
         await _strict_read_rls_org(session, "postgresql")
 
 
+async def test_strict_read_postgres_ignores_session_info_entirely() -> None:
+    """FAR-1832 QA F4: on Postgres the GUC is authoritative — a planted
+    ``session.info['org_id']`` must NOT satisfy the guard.
+
+    ``set_rls_org`` on Postgres writes only the GUC, so an info value there is
+    unrelated to the transaction's actual RLS context. Before the fix the info
+    lookup ran FIRST (before any dialect check), so this session read as
+    bound-to-``value`` and the tenant guard passed against a context the
+    database never saw.
+    """
+    value = uuid.uuid4()
+    # rows=[None] is the GUC read returning "unset"; info claims ``value``.
+    session = _FakeSession(info={"org_id": str(value)}, rows=[None])
+    assert await _strict_read_rls_org(session, "postgresql") is None
+
+
+async def test_strict_read_postgres_guc_wins_over_conflicting_session_info() -> None:
+    """On Postgres the bound org comes from the GUC even when info disagrees."""
+    guc_org = uuid.uuid4()
+    info_org = uuid.uuid4()
+    session = _FakeSession(info={"org_id": str(info_org)}, rows=[str(guc_org)])
+    assert await _strict_read_rls_org(session, "postgresql") == guc_org
+
+
 # ---------------------------------------------------------------------------
-# _apply_settings_patch_postgres
+# _apply_json_column_patch_postgres
 # ---------------------------------------------------------------------------
 
 
 async def test_apply_postgres_returns_dict_row() -> None:
     session = _FakeSession(rows=[({"a": 1},)])
-    assert await _apply_settings_patch_postgres(session, uuid.uuid4(), {"a": 1}, []) == {"a": 1}
+    assert await _apply_json_column_patch_postgres(session, uuid.uuid4(), {"a": 1}, []) == {"a": 1}
 
 
 async def test_apply_postgres_parses_json_string_row() -> None:
     session = _FakeSession(rows=[('{"a": 2}',)])
-    assert await _apply_settings_patch_postgres(session, uuid.uuid4(), {"a": 2}, []) == {"a": 2}
+    assert await _apply_json_column_patch_postgres(session, uuid.uuid4(), {"a": 2}, []) == {"a": 2}
 
 
 async def test_apply_postgres_missing_row_raises() -> None:
     session = _FakeSession(rows=[])
     with pytest.raises(LookupError):
-        await _apply_settings_patch_postgres(session, uuid.uuid4(), {}, [])
+        await _apply_json_column_patch_postgres(session, uuid.uuid4(), {}, [])
 
 
 async def test_apply_postgres_refreshes_loaded_identity() -> None:
     org = Organisation(id=uuid.uuid4(), name="Org", slug="org", settings_json={})
     session = _FakeSession(rows=[({"logo_url": "x"},)], identity_map=_IdentityMap(org))
-    assert await _apply_settings_patch_postgres(session, org.id, {"logo_url": "x"}, []) == {"logo_url": "x"}
+    assert await _apply_json_column_patch_postgres(session, org.id, {"logo_url": "x"}, []) == {"logo_url": "x"}
     assert org.settings_json == {"logo_url": "x"}
 
 
+async def test_apply_postgres_nested_patch_binds_nested_params() -> None:
+    """QA F1: a nested_patch on the Postgres path binds the nested key/value
+    parameters (the jsonb_set sub-field compose) alongside the top-level patch."""
+    session = _FakeSession(rows=[({"block": {"sub": 1, "other": 2}},)])
+    result = await _apply_json_column_patch_postgres(
+        session,
+        uuid.uuid4(),
+        {},
+        [],
+        nested_patch={"block": {"sub": 1}},
+    )
+    assert result == {"block": {"sub": 1, "other": 2}}
+
+
 # ---------------------------------------------------------------------------
-# _apply_settings_patch_generic
+# _apply_json_column_patch_generic
 # ---------------------------------------------------------------------------
 
 
@@ -236,7 +279,7 @@ async def test_apply_generic_merges_and_deletes(monkeypatch: pytest.MonkeyPatch)
     org.settings_json = {"keep": 1, "drop": 2}
     monkeypatch.setattr(organisation_mod, "get_organisation", AsyncMock(return_value=org))
     session = _FakeSession()
-    result = await _apply_settings_patch_generic(session, uuid.uuid4(), {"add": 3}, ["drop"])
+    result = await _apply_json_column_patch_generic(session, uuid.uuid4(), {"add": 3}, ["drop"])
     assert result == {"keep": 1, "add": 3}
     assert org.settings_json == {"keep": 1, "add": 3}
     assert session.flushed == 1
@@ -246,13 +289,191 @@ async def test_apply_generic_non_dict_settings_starts_empty(monkeypatch: pytest.
     org = MagicMock()
     org.settings_json = None
     monkeypatch.setattr(organisation_mod, "get_organisation", AsyncMock(return_value=org))
-    assert await _apply_settings_patch_generic(_FakeSession(), uuid.uuid4(), {"a": 1}, []) == {"a": 1}
+    assert await _apply_json_column_patch_generic(_FakeSession(), uuid.uuid4(), {"a": 1}, []) == {"a": 1}
 
 
 async def test_apply_generic_missing_org_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(organisation_mod, "get_organisation", AsyncMock(return_value=None))
     with pytest.raises(LookupError):
-        await _apply_settings_patch_generic(_FakeSession(), uuid.uuid4(), {"a": 1}, [])
+        await _apply_json_column_patch_generic(_FakeSession(), uuid.uuid4(), {"a": 1}, [])
+
+
+# ---------------------------------------------------------------------------
+# FAR-1832 QA F3: shared machinery parameterised over the JSON column
+# ---------------------------------------------------------------------------
+
+
+def test_pg_patch_statement_selects_the_two_supported_configurations() -> None:
+    """The shared Postgres statement is selected from CONSTANTS per
+    (column, require_live_row) — never interpolated from input."""
+    settings_sql = str(_pg_patch_statement("settings_json", True)).lower()
+    assert "settings_json" in settings_sql
+    assert "deleted_at is null" in settings_sql
+
+    otel_sql = str(_pg_patch_statement("otel_config_json", False)).lower()
+    assert "otel_config_json" in otel_sql
+    assert "deleted_at" not in otel_sql, "the FAR-1025 OTel path must carry no live-row predicate"
+
+    with pytest.raises(ValueError, match="unsupported org JSON patch configuration"):
+        _pg_patch_statement("settings_json", False)
+    with pytest.raises(ValueError, match="unsupported org JSON patch configuration"):
+        _pg_patch_statement("otel_config_json", True)
+
+
+async def test_update_org_json_column_patch_rejects_unknown_column(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_dependencies(monkeypatch, dialect="sqlite", bound_org=uuid.uuid4())
+    with pytest.raises(ValueError, match="unsupported organisation JSON column"):
+        await update_org_json_column_patch(
+            _FakeSession(),
+            uuid.uuid4(),
+            patch={},
+            delete_keys=[],
+            column="evil_column",
+            require_live_row=True,
+        )
+
+
+async def test_nested_patch_rejects_more_than_one_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QA F1: at most ONE nested key per call — a multi-key compose would need
+    chained jsonb_set statements that do not yet have a caller."""
+    _stub_dependencies(monkeypatch, dialect="sqlite", bound_org=uuid.uuid4())
+    with pytest.raises(ValueError, match="at most one top-level key"):
+        await update_org_settings_patch(
+            _FakeSession(),
+            uuid.uuid4(),
+            nested_patch={"a": {"x": 1}, "b": {"y": 2}},
+        )
+
+
+async def test_nested_patch_rejects_overlap_with_top_level_patch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A key in BOTH patch and nested_patch would have an ambiguous compose
+    order — refused rather than silently resolved."""
+    _stub_dependencies(monkeypatch, dialect="sqlite", bound_org=uuid.uuid4())
+    with pytest.raises(ValueError, match="also appear in patch"):
+        await update_org_settings_patch(
+            _FakeSession(),
+            uuid.uuid4(),
+            {"block": {"whole": True}},
+            nested_patch={"block": {"sub": 1}},
+        )
+
+
+def test_nested_patch_settings_postgres_statement_shape() -> None:
+    """The nested settings statement is a jsonb_set sub-field compose — not a
+    whole-block replace — that HEALS a non-object stored value (QA F13b)."""
+    sql = str(_pg_patch_statement("settings_json", True, nested=True)).lower()
+    assert "jsonb_set" in sql
+    assert ":nested_patch" in sql
+    assert ":nested_key" in sql
+    assert "deleted_at is null" in sql
+    # QA F13b: the stored key is coerced to an object with a CASE, not a bare
+    # COALESCE (which catches only SQL NULL and would corrupt a JSON null or a
+    # non-object block into an array through ``jsonb || jsonb``).
+    assert "jsonb_typeof" in sql
+    assert "case when" in sql
+    assert "= 'object'" in sql
+
+
+async def test_update_org_json_column_patch_rejects_forbidden_column_live_row_pair() -> None:
+    """QA F13a: the (column, require_live_row) policy table is enforced ONCE in
+    the shared entry point, so the generic path can no longer accept the
+    forbidden ``("settings_json", require_live_row=False)`` — the soft-deleted
+    org settings write FAR-1830 forbids. Refused before any dialect branch."""
+    with pytest.raises(ValueError, match="unsupported org JSON patch configuration"):
+        await update_org_json_column_patch(
+            _FakeSession(),
+            uuid.uuid4(),
+            patch={},
+            delete_keys=[],
+            column="settings_json",
+            require_live_row=False,
+        )
+    with pytest.raises(ValueError, match="unsupported org JSON patch configuration"):
+        await update_org_json_column_patch(
+            _FakeSession(),
+            uuid.uuid4(),
+            patch={},
+            delete_keys=[],
+            column="otel_config_json",
+            require_live_row=True,
+        )
+
+
+async def test_delete_keys_overlapping_patch_is_refused() -> None:
+    """QA F13c: a key in delete_keys AND patch is an ambiguous compose — refused
+    rather than silently resolved delete-wins."""
+    with pytest.raises(ValueError, match="appear in both delete_keys and patch/nested_patch"):
+        await update_org_settings_patch(_FakeSession(), uuid.uuid4(), {"block": 1}, delete_keys=["block"])
+
+
+async def test_delete_keys_overlapping_nested_patch_is_refused() -> None:
+    """QA F13c: the same refusal applies to a nested_patch key."""
+    with pytest.raises(ValueError, match="appear in both delete_keys and patch/nested_patch"):
+        await update_org_settings_patch(
+            _FakeSession(),
+            uuid.uuid4(),
+            nested_patch={"block": {"sub": 1}},
+            delete_keys=["block"],
+        )
+
+
+async def test_strict_read_postgres_non_uuid_guc_fails_closed() -> None:
+    """QA F13d: a NON-EMPTY GUC that is not a UUID is a corrupt context, not
+    'genuinely unbound' — it must fail closed, never read as None."""
+    session = _FakeSession(info={}, rows=["not-a-uuid"])
+    with pytest.raises(OrgSettingsPatchContextUnreadableError):
+        await _strict_read_rls_org(session, "postgresql")
+
+
+async def test_non_uuid_guc_fails_closed_even_with_allow_unbound(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QA F13d: ``allow_unbound_context=True`` must NOT permit a write on a
+    corrupt (non-empty, uncoercible) GUC context."""
+    monkeypatch.setattr(organisation_mod, "_take_settings_patch_lock_wait", AsyncMock())
+    monkeypatch.setattr(organisation_mod, "_settings_patch_dialect", AsyncMock(return_value="postgresql"))
+    session = _FakeSession(info={}, rows=["not-a-uuid"])
+    with pytest.raises(OrgSettingsPatchContextUnreadableError):
+        await update_org_settings_patch(session, uuid.uuid4(), {"k": 1}, allow_unbound_context=True)
+
+
+async def test_apply_postgres_otel_path_patches_the_otel_column_without_live_predicate() -> None:
+    """The OTel Postgres branch writes ``otel_config_json`` and syncs THAT
+    column on the identity map — same machinery, different column."""
+    org = Organisation(id=uuid.uuid4(), name="Org", slug="org", otel_config_json={"a": 1})
+    session = _FakeSession(rows=[({"a": 1, "b": 2},)], identity_map=_IdentityMap(org))
+    result = await _apply_json_column_patch_postgres(
+        session,
+        org.id,
+        {"b": 2},
+        [],
+        column="otel_config_json",
+        require_live_row=False,
+    )
+    assert result == {"a": 1, "b": 2}
+    assert org.otel_config_json == {"a": 1, "b": 2}
+
+
+async def test_apply_generic_otel_path_writes_the_otel_column_without_live_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The OTel generic branch reads via include_soft_deleted (NOT the
+    soft-delete-filtered ``get_organisation``) and writes the otel column."""
+    org = MagicMock()
+    org.otel_config_json = {"a": 1}
+
+    async def _no_settings_read(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("the OTel generic path must not use the live-row settings read")
+
+    monkeypatch.setattr(organisation_mod, "get_organisation", _no_settings_read)
+    session = _FakeSession(rows=[org])
+    result = await _apply_json_column_patch_generic(
+        session,
+        uuid.uuid4(),
+        {"b": 2},
+        [],
+        column="otel_config_json",
+        require_live_row=False,
+    )
+    assert result == {"a": 1, "b": 2}
+    assert org.otel_config_json == {"a": 1, "b": 2}
+    assert session.flushed == 1
 
 
 # ---------------------------------------------------------------------------
@@ -272,3 +493,60 @@ def test_sync_identity_map_updates_loaded_org() -> None:
     org = Organisation(id=uuid.uuid4(), name="Org", slug="org", settings_json={})
     _sync_identity_map(_FakeSession(identity_map=_IdentityMap(org)), org.id, {"logo_url": "x"})
     assert org.settings_json == {"logo_url": "x"}
+
+
+# ---------------------------------------------------------------------------
+# FAR-1832: update_organisation forbids the whole-column settings_json dumper
+# ---------------------------------------------------------------------------
+
+
+async def test_update_organisation_refuses_settings_json_writes() -> None:
+    """The whole-column dumper shape cannot return: any ``settings_json`` key
+    is refused BEFORE any database work.
+
+    The session's ``execute`` raises — if the guard were missing, the call
+    would reach ``get_organisation`` and surface that RuntimeError instead of
+    the ValueError (the failure shape this test pins).
+    """
+    session = _FakeSession(exc=RuntimeError("db work must not start"))
+    with pytest.raises(ValueError, match="settings_json"):
+        await organisation_mod.update_organisation(
+            session, uuid.uuid4(), {"settings_json": {"logo_url": "https://x/l.png"}}
+        )
+
+
+async def test_update_organisation_refuses_settings_json_alongside_other_keys() -> None:
+    """A mixed updates dict (legit column + settings_json) is refused whole —
+    the guard runs before anything is applied, so no partial write happens."""
+    session = _FakeSession(exc=RuntimeError("db work must not start"))
+    with pytest.raises(ValueError, match="settings_json"):
+        await organisation_mod.update_organisation(
+            session, uuid.uuid4(), {"name": "Renamed", "settings_json": {"k": 1}}
+        )
+
+
+async def test_update_organisation_refuses_otel_config_json_writes() -> None:
+    """QA F14: the twin tenant JSON column is refused on the same dumper-guard
+    grounds as ``settings_json`` — before any database work (the session's
+    ``execute`` raises if the guard is missing)."""
+    session = _FakeSession(exc=RuntimeError("db work must not start"))
+    with pytest.raises(ValueError, match="otel_config_json"):
+        await organisation_mod.update_organisation(
+            session, uuid.uuid4(), {"otel_config_json": {"otlp_endpoint": "http://x:4317"}}
+        )
+
+
+async def test_update_organisation_still_writes_non_settings_columns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Legitimate non-settings callers (``name``, ``plan_id``, ...) are
+    unaffected by the guard."""
+    org = Organisation(id=uuid.uuid4(), name="Org", slug="org", settings_json={"license_key": "keep"})
+    monkeypatch.setattr(organisation_mod, "get_organisation", AsyncMock(return_value=org))
+    session = _FakeSession()
+
+    result = await organisation_mod.update_organisation(session, uuid.uuid4(), {"name": "Renamed", "plan_id": "pro"})
+
+    assert result is org
+    assert org.name == "Renamed"
+    assert org.plan_id == "pro"
+    assert org.settings_json == {"license_key": "keep"}
+    assert session.flushed == 1

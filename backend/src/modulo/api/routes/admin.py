@@ -28,7 +28,7 @@ from modulo.api.constants import (
     MSG_THIS_FEATURE_NOT_AVAILABLE,
     MSG_UNEXPECTED_ERROR,
 )
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import handle_db_errors, raise_lock_timeout_conflict_if, raise_session_contract_error
 from modulo.api.dependencies import (
     deny_break_glass_mint,
     get_db_session,
@@ -38,6 +38,7 @@ from modulo.api.dependencies import (
     require_system_permission,
 )
 from modulo.api.models.problem import ProblemException, ProblemType
+from modulo.api.routes._org_settings import apply_org_settings_patch_or_404
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
@@ -156,6 +157,7 @@ _CODE_ADMIN_EVAL_DASHBOARD = "admin.eval_dashboard"
 _CODE_ADMIN_EVAL_REGRESSIONS = "admin.eval_regressions"
 _CODE_ADMIN_OKR_PROGRESS = "admin.okr_progress"
 _CODE_ADMIN_ADMIN_MANUAL_PURGE = "admin.admin_manual_purge"
+_CODE_ADMIN_ADMIN_UPDATE_RETENTION = "admin.admin_update_retention"
 
 
 logger = logging.getLogger(__name__)
@@ -1041,7 +1043,12 @@ async def admin_update_org(
         logger.exception("admin_update_org ProgrammingError", extra={"org_id": str(current_user.organisation_id)})
         _raise_feature_not_available()
     except SQLAlchemyError as exc:
+        # FAR-1464: the session-contract guard leads (a session-contract error
+        # is a 500, never a 503 outage); it RETURNS for any other error, so the
+        # FAR-1832 QA F2 lock-timeout 409 classification below still runs before
+        # the generic 503.
         raise_session_contract_error(exc, "admin.admin_update_org")
+        raise_lock_timeout_conflict_if(exc, "admin.admin_update_org")
         logger.exception("admin_update_org SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         _raise_db_unavailable("Database error while updating org profile.")
 
@@ -2667,18 +2674,8 @@ async def confirm_org_deletion(
 
             # FAR-1517: the hard delete destroys this org's audit trail, so the
             # record of the destructive act goes to the org-independent ledger
-            # FIRST, in the same transaction — it commits only if the delete
-            # commits, and a failed append aborts the delete (fail-closed).
-            await append_system_audit_event(
-                session,
-                event_type="org_deletion_completed",
-                org_id=current_user.organisation_id,
-                actor_user_id=current_user.account_id,
-                resource_type="organisation",
-                resource_id=current_user.organisation_id,
-                payload_json={"flow": "deletion_confirm", "immediate": False, "force": req.force},
-            )
-
+            # IN the same transaction — it commits only if the delete commits,
+            # and a failed append aborts the delete (fail-closed).
             try:
                 result = await _confirm_deletion(
                     session,
@@ -2689,6 +2686,26 @@ async def confirm_org_deletion(
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+            # FAR-1832 (R4): append AFTER the crud call, not before it. This
+            # was the one org-deletion FSM path that performed an in-transaction
+            # write BEFORE the org-row ``FOR UPDATE`` (every sibling route —
+            # request, cancel, immediate delete, and (QA F6) the cross-org
+            # ``admin_orgs.admin_delete_org`` — locks/deletes the org row
+            # first). ``system_audit_events`` is deliberately not hash-chained,
+            # so ``append_system_audit_event`` takes no chain-head lock; it is a
+            # plain INSERT. Same transaction, so atomicity and the fail-closed
+            # property are unchanged; only the ordering is repaired to the
+            # global order (org FSM lock, then the audit append).
+            await append_system_audit_event(
+                session,
+                event_type="org_deletion_completed",
+                org_id=current_user.organisation_id,
+                actor_user_id=current_user.account_id,
+                resource_type="organisation",
+                resource_id=current_user.organisation_id,
+                payload_json={"flow": "deletion_confirm", "immediate": False, "force": req.force},
+            )
     except IntegrityError:
         logger.exception(_CODE_ADMIN_CONFIRM_ORG_DELETION)
         _raise_conflict()
@@ -3916,28 +3933,33 @@ async def admin_update_retention(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            try:
-                # FAR-1830: emit ONLY the ``retention_days`` key via the atomic
-                # patch. A whole-column write from a stale read would drop every
-                # other concern's key committed in the read→write window. A
-                # soft-deleted org is refused (LookupError) — matching the patch
-                # helper's generic path.
-                await update_org_settings_patch(
-                    session, current_user.organisation_id, {"retention_days": req.retention_days}
-                )
-            except LookupError:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND) from None
+            # FAR-1830: emit ONLY the ``retention_days`` key via the atomic
+            # patch. A whole-column write from a stale read would drop every
+            # other concern's key committed in the read→write window. A
+            # soft-deleted org is refused with ``LookupError`` → the shared
+            # route helper's 404 (QA F7/F12), byte-identical to the hand-copied
+            # block it replaces.
+            await apply_org_settings_patch_or_404(
+                session,
+                current_user.organisation_id,
+                patch={"retention_days": req.retention_days},
+            )
     except asyncio.CancelledError:
         raise
     except IntegrityError:
-        logger.exception("admin.admin_update_retention")
+        logger.exception(_CODE_ADMIN_ADMIN_UPDATE_RETENTION)
         _raise_conflict()
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_ADMIN)
 
         _raise_this_feature_not_available()
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin.admin_update_retention")
+        # FAR-1464: the session-contract guard leads (a session-contract error
+        # is a 500, never a 503 outage); it RETURNS for any other error, so the
+        # FAR-1832 QA F2 lock-timeout 409 classification below still runs before
+        # the generic 503.
+        raise_session_contract_error(exc, _CODE_ADMIN_ADMIN_UPDATE_RETENTION)
+        raise_lock_timeout_conflict_if(exc, _CODE_ADMIN_ADMIN_UPDATE_RETENTION)
         logger.exception(_CODE_ROUTES_ADMIN)
 
         _raise_db_error_occurred()
@@ -4013,7 +4035,12 @@ async def _run_admin_rls_txn(
             detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
+        # FAR-1464: the session-contract guard leads (a session-contract error
+        # is a 500, never a 503 outage); it RETURNS for any other error, so the
+        # FAR-1832 QA F2 lock-timeout 409 classification below still runs before
+        # the generic 503.
         raise_session_contract_error(exc, "admin._run_admin_rls_txn")
+        raise_lock_timeout_conflict_if(exc, "admin._run_admin_rls_txn")
         logger.exception(_CODE_ROUTES_ADMIN)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -4112,27 +4139,22 @@ async def admin_update_sandbox_concurrency(
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             try:
-                # FAR-589 D3b: row-level lock (SELECT ... FOR UPDATE) so the
-                # read-modify-write of settings_json cannot drop a concurrent
-                # writer's change between the read and the flush.
-                # FAR-1025: opt out of the global soft-delete filter — a
-                # pending-deletion org is still operationally live during the
-                # confirmation window.
-                result = await session.execute(
-                    include_soft_deleted(
-                        select(Organisation)
-                        .where(Organisation.id == current_user.organisation_id)
-                        .limit(1)
-                        .with_for_update()
-                    )
+                # FAR-1832: a single-statement atomic patch (FAR-1830 helper)
+                # replaces the FAR-589 D3b ``FOR UPDATE`` read-modify-write —
+                # the helper emits ONLY this concern's key, so no concurrent
+                # writer's keys can be dropped, and the org row is no longer
+                # pre-locked across the read→write window. An explicit ``null``
+                # is STORED (not deleted): ``is_default`` distinguishes an
+                # absent key (Docker-tier default) from a stored no-gate null.
+                # A soft-deleted org (pending-deletion window) is refused with
+                # ``LookupError`` → 404 via the shared route helper (QA F7),
+                # matching the FAR-1830 retention writer's precedent — reads
+                # keep their FAR-1025 opt-out.
+                await apply_org_settings_patch_or_404(
+                    session,
+                    current_user.organisation_id,
+                    patch={"sandbox_concurrency_limit": req.sandbox_concurrency_limit},
                 )
-                org = result.scalar_one_or_none()
-                if org is None:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
-                settings = dict(org.settings_json) if org.settings_json else {}
-                settings["sandbox_concurrency_limit"] = req.sandbox_concurrency_limit
-                org.settings_json = settings
-                await session.flush()
             except IntegrityError:
                 logger.exception("admin.admin_update_sandbox_concurrency")
                 raise HTTPException(
@@ -4236,31 +4258,29 @@ async def admin_update_hitl_review_window(
     async def _do_write() -> None:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            # FAR-589 D3b row-level lock (SELECT ... FOR UPDATE) so the
-            # read-modify-write of settings_json cannot drop a concurrent
-            # writer's change between the read and the flush. FAR-1025: opt out
-            # of the global soft-delete filter — a pending-deletion org is still
-            # operationally live during the confirmation window.
-            result = await session.execute(
-                include_soft_deleted(
-                    select(Organisation)
-                    .where(Organisation.id == current_user.organisation_id)
-                    .limit(1)
-                    .with_for_update()
-                )
-            )
-            org = result.scalar_one_or_none()
-            if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
-            # Merge, never replace: every OTHER settings_json key (license,
-            # retention, feature_overrides, sandbox_concurrency, ...) survives.
-            settings = dict(org.settings_json) if org.settings_json else {}
+            # FAR-1832: the FAR-589 D3b ``FOR UPDATE`` read-modify-write is
+            # replaced by the single-statement atomic patch (FAR-1830 helper) —
+            # it emits ONLY ``hitl_review_window_seconds`` (or deletes exactly
+            # that key on an explicit ``null``), so concurrent writers'
+            # settings survive and the org row is no longer pre-locked. A
+            # soft-deleted org (pending-deletion window) is refused with
+            # ``LookupError`` → 404 via the shared route helper (QA F7),
+            # matching the FAR-1830 retention writer's precedent — reads keep
+            # their FAR-1025 opt-out.
             if req.hitl_review_window_seconds is None:
-                settings.pop(ORG_HITL_REVIEW_WINDOW_KEY, None)
+                # ``null`` CLEARS the key (inherit the instance default) —
+                # never stores a meaningless zero-window.
+                await apply_org_settings_patch_or_404(
+                    session,
+                    current_user.organisation_id,
+                    delete_keys=[ORG_HITL_REVIEW_WINDOW_KEY],
+                )
             else:
-                settings[ORG_HITL_REVIEW_WINDOW_KEY] = req.hitl_review_window_seconds
-            org.settings_json = settings
-            await session.flush()
+                await apply_org_settings_patch_or_404(
+                    session,
+                    current_user.organisation_id,
+                    patch={ORG_HITL_REVIEW_WINDOW_KEY: req.hitl_review_window_seconds},
+                )
 
     await _run_admin_rls_txn(
         session,

@@ -212,11 +212,18 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     // with a hard floor the editor was forced to 240px and spilled ~80px below
     // the fold, re-introducing the trapped page scroll FAR-1841 removed. The
     // floor must yield to the viewport (FAR-1861) — the editor shrinks to the
-    // space left instead of overflowing. The invariant is CHROME-RELATIVE (the
-    // pinned height equals the room left below the chrome), never a fixed pixel
-    // count: the mocked e2e chrome is shorter than production's, so an absolute
-    // `< 240` here would be asserting the mock's chrome height, not the floor
-    // yielding.
+    // space left instead of overflowing.
+    //
+    // The chrome height (fixed mobile header + breadcrumb + any ambient banners
+    // such as the DB-capacity or onboarding banner) differs by environment, so
+    // 640x480 does NOT guarantee a sub-240px leftover — on staging the chrome is
+    // only ~110px, leaving ~370px, and a fixed 640x480 assertion failed. Measure
+    // the chrome and shrink the height so ~180px remains below it: that
+    // deterministically exercises the floor-yields case with or without a
+    // banner. The invariant is CHROME-RELATIVE (the pinned height equals the
+    // room left below the chrome), never a fixed pixel count: the mocked e2e
+    // chrome is shorter than production's, so an absolute `< 240` here would be
+    // asserting the mock's chrome height, not the floor yielding.
     await loginAsAdmin(page, env)
     await mockEditorWithNode(page)
     await page.setViewportSize({ width: 640, height: 480 })

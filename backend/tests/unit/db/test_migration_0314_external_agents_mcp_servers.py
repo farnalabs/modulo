@@ -48,7 +48,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0314_external_agents_mcp_servers"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0313_collection_install_drop_installed_entities"
-_HEAD_MIGRATION = "0317_drop_retired_pipeline_diff_rollback_flag"
+_HEAD_MIGRATION = "0318_trigger_event_required_refs_missing"
 
 _EXTERNAL_AGENTS = "external_agents"
 _MCP_SERVERS = "mcp_servers"

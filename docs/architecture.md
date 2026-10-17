@@ -865,7 +865,7 @@ non-production use.
 
 Hosted Ubicloud runners (ubicloud-standard-2). Workflows:
 - Lint, type-check, unit test, frontend build, audit, and WCAG contrast test on every push
-- Each backend/frontend container is built once, scanned with Trivy, and published to ghcr.io only from `main` or a version tag
+- Each backend/frontend container is built once and published to ghcr.io only from `main` or a version tag, gated by image smoke checks (`import modulo`, `nginx -t`) only. The publish job does not yet scan the built image — the trivy/grype gates, digest-drift guard and cosign/SBOM attest are the D4 GA/CI follow-up item noted above. CI's Trivy check is a filesystem scan of the repository (dependency CVEs + misconfigurations), not a scan of the built images
 - Staging smoke, WCAG, and regression suites share one dependency/browser setup while retaining separate result artifacts
 - Release workflow (tag-driven, semver)
 

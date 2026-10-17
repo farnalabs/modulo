@@ -197,9 +197,12 @@ inactivity timeout through the proxy – a silent exec longer than that is cut
 by the proxy. This is consistent with (and backup to) Modulo's own stall
 detection, which kills the exec first.
 
-**Weekly scan cadence**: the proxy image and the runner image are digest-
-pinned and ride the weekly trivy cadence on published tags (new high/critical
-opens an issue; off-cycle rebuild for critical CVEs). The digest-drift guard
+**Weekly scan cadence (target)**: the proxy image and the runner image are
+digest-pinned, and the intended cadence is a weekly trivy scan of the published
+tags (new high/critical opens an issue; off-cycle rebuild for critical CVEs).
+That scan is not yet automated — the automated trivy/grype image gate is part of
+the same GA/CI follow-up item listed under "What is NOT (yet) enforced" below.
+The digest-drift guard
 (the release job asserts the seed/docs digest constant matches the latest
 `released-<minor>` tag) is a GA/CI item; until it exists, digest advances are
 manual and the pinned digests in `deploy/compose/runner.yml` +

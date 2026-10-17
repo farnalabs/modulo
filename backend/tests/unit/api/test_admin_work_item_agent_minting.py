@@ -53,6 +53,11 @@ def mock_session(org_settings):
     result.scalar_one_or_none.return_value = org
 
     session = AsyncMock()
+    # Real SQLAlchemy sessions expose ``info`` as a dict; the route binds RLS
+    # via ``set_rls_org`` which stores the org id here on generic backends, and
+    # the FAR-1830/FAR-1832 patch helper (behind ``set_org_flag``) reads it
+    # back through its strict fail-closed tenant guard.
+    session.info = {}
     begin_cm = MagicMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -86,6 +91,7 @@ def _direct_session() -> AsyncMock:
     result = MagicMock()
     result.scalar_one_or_none.return_value = org
     session = AsyncMock()
+    session.info = {}
     session.begin = _begin_cm()
     session.execute.return_value = result
     session.flush = AsyncMock()
@@ -511,6 +517,10 @@ async def test_put_audit_unexpected_error_swallowed(client_admin):
 async def test_put_audit_cancelled_error_propagates():
     user = _admin("admin")
     session = _direct_session()
+    # The real ``set_org_flag`` write path goes through the FAR-1832 atomic
+    # settings patch, whose fail-closed tenant guard needs a bound org context
+    # — the route's ``set_rls_org`` is stubbed below, so bind it directly.
+    session.info["org_id"] = str(user.organisation_id)
     with (
         patch.object(admin_routes, "set_rls_org", new=AsyncMock()),
         patch.object(admin_routes, "set_rls_user_context", new=AsyncMock()),

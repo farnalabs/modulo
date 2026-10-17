@@ -1,6 +1,6 @@
 # Public Launch Checklist
 
-Production deployment readiness checklist for the Modulo V1 Core public launch. Each item must be verified before marking the launch as complete.
+Production deployment readiness checklist for the Modulo Alpha public launch. Each item must be verified before marking the launch as complete.
 
 ---
 
@@ -54,7 +54,10 @@ Production deployment readiness checklist for the Modulo V1 Core public launch. 
 - [ ] **Row-Level Security** is enabled on all tenant-scoped tables
   - RLS test suite passes: `uv run pytest tests/unit/db/test_rls.py -v`
 - [ ] **Secrets** are injected via environment, not hardcoded in any file or committed to git
-- [ ] **Container images** have zero critical/high CVEs (Trivy scan)
+- [ ] **Container images** have zero critical/high CVEs - scan the published image
+  yourself (`trivy image ghcr.io/farnalabs/modulo:<version>`); CI does not scan built
+  images (the Trivy job in `ci.yml` is a filesystem scan, and `publish-images.yml`
+  has no vulnerability gate; see [`docs/deployment-security.md`](./deployment-security.md) §5.1)
 - [ ] **Containers** run as non-root user
 - [ ] **Read-only root filesystem** enabled for backend containers
 - [ ] **Firewall** blocks all inbound ports except 443 (HTTPS)
@@ -82,7 +85,7 @@ See [`docs/deployment-security.md`](./deployment-security.md) for the full secur
   - Audit chain integrity failure
   - Failed login rate spike (>10/min per IP)
   - Migration failure (crash loop)
-  - Container image with Critical CVE
+  - Container image with Critical CVE (from the operator-run image scan in §3)
 
 ---
 
