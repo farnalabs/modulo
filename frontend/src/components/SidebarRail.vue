@@ -19,11 +19,14 @@
       <LogoMark :size="24" transparent />
     </router-link>
 
+    <!-- The accessible name must CONTAIN the visible text (the initial), or axe
+         raises label-content-name-mismatch (WCAG 2.5.3). Marking the initial
+         aria-hidden does not help: axe's visible-text computation ignores it. -->
     <router-link
       to="/admin/my-profile"
       class="avatar-ring"
       :class="size === 'touch' ? 'flex h-11 w-11 items-center justify-center' : undefined"
-      :aria-label="$t('components.AppLayout.user_profile')"
+      :aria-label="$t('components.AppLayout.user_profile_link', { label: userInitial })"
     >
       <div
         class="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary"
