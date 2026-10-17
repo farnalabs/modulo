@@ -42,15 +42,23 @@
         <div v-for="i in 3" :key="i" class="h-5 w-3/4 bg-muted rounded animate-pulse" />
       </div>
 
-      <div v-else-if="error" class="px-3 py-2 text-sm text-destructive">
-        {{ error }}
+      <div v-else-if="error" class="px-3 py-2">
+        <!-- Failure is recoverable: retry re-fetches (ErrorAlert supplies the
+             retry label). A live region so the bad shape is announced. -->
+        <ErrorAlert
+          :message="error"
+          :on-retry="loadFolders"
+          :compact="true"
+          role="alert"
+          data-testid="folder-tree-error"
+        />
       </div>
 
       <div v-else-if="flatTree.length === 0" class="px-3 py-4 text-xs text-muted-foreground text-center">
         No folders yet
       </div>
 
-      <div>
+      <div v-else>
         <div
           v-for="element in flatTree"
           :key="element.folder.id"

@@ -484,3 +484,67 @@ describe('FolderTree alphabetical sorting', () => {
     ])
   })
 })
+
+describe('FolderTree stale rows under an error', () => {
+  it('removes stale interactive rows when a later refresh resolves a bad shape', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      // First load is good and renders one row.
+      getMock.mockResolvedValueOnce([makeFolder()])
+      const wrapper = mountTree()
+      await flushPromises()
+      expect(wrapper.findAll('[data-testid^="folder-tree-item-"]')).toHaveLength(1)
+
+      // A later reload (here: the delete flow's refresh) returns a bad shape.
+      // The earlier good load left the row in allFolders, but it must NOT stay
+      // rendered — the row is clickable (role=button) and a drop target that
+      // emits a real move-pipeline mutation, so a stale row under an error is
+      // both misleading and actionable.
+      getMock.mockResolvedValueOnce([null])
+      const deleteBtn = wrapper.findAll('button').find(b => b.attributes('aria-label') === 'Delete Folder')
+      await deleteBtn!.trigger('click')
+      const dialog = wrapper.find('[data-testid="dialog-stub"]')
+      await dialog.findAll('button').find(b => b.text() === 'Delete')!.trigger('click')
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('The server returned an invalid folder list.')
+      expect(wrapper.findAll('[data-testid^="folder-tree-item-"]')).toHaveLength(0)
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it('re-fetches and restores rows when the error-state retry is clicked', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      getMock.mockResolvedValueOnce([makeFolder()])
+      const wrapper = mountTree()
+      await flushPromises()
+
+      // Bad refresh -> the error state renders with a retry control.
+      getMock.mockResolvedValueOnce([null])
+      const deleteBtn = wrapper.findAll('button').find(b => b.attributes('aria-label') === 'Delete Folder')
+      await deleteBtn!.trigger('click')
+      const dialog = wrapper.find('[data-testid="dialog-stub"]')
+      await dialog.findAll('button').find(b => b.text() === 'Delete')!.trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[data-testid="folder-tree-error"]').exists()).toBe(true)
+      expect(
+        wrapper.find('[data-testid="folder-tree-error"] [data-testid="error-alert-retry"]').exists(),
+      ).toBe(true)
+
+      // Retry resolves a good list -> the error clears and rows return.
+      getMock.mockResolvedValueOnce([makeFolder({ id: 'f2', name: 'Restored' })])
+      await wrapper
+        .find('[data-testid="folder-tree-error"] [data-testid="error-alert-retry"]')
+        .trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="folder-tree-error"]').exists()).toBe(false)
+      expect(wrapper.findAll('[data-testid^="folder-tree-item-"]')).toHaveLength(1)
+      expect(wrapper.text()).toContain('Restored')
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+})

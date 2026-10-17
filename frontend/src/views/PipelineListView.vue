@@ -40,11 +40,22 @@
         @folders-changed="loadPipelines"
         @move-pipeline="onMovePipeline"
       />
-      <p v-if="folderError" class="px-4 py-2 text-xs text-destructive">
-        {{ $t('views.PipelineListView.failed_to_load_folders', { error: folderError }) }}
-      </p>
-
       <main class="flex-1 page-wide min-w-0 overflow-y-auto">
+        <!-- Folder-list load failure. Rendered as the first child of <main>
+             (never as a flex sibling of the sidebar, which would squeeze it into
+             a vertical column between the tree and the table) and as a live
+             region so a screen reader announces it. The failure is recoverable:
+             retry re-fetches; the table keeps rendering underneath. -->
+        <ErrorAlert
+          v-if="folderError"
+          :message="$t('views.PipelineListView.failed_to_load_folders', { error: folderError })"
+          :on-retry="loadFolders"
+          :dismiss-label="$t('common.close')"
+          :on-dismiss="() => { folderError = null }"
+          class="mb-4"
+          role="alert"
+          data-testid="pipeline-list-folder-error"
+        />
         <!-- retry = re-drop / re-save the move; banner is dismissible, no separate loader -->
         <ErrorAlert
           v-if="moveError && !showMoveToFolder"
