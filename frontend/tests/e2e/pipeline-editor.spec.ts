@@ -207,12 +207,18 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
   })
 
   test('a short viewport yields the 240px floor instead of scrolling the page', { tag: '@regression' }, async ({ page, env }) => {
-    // 640x480 (short landscape) is where the chrome stack above the editor
-    // exceeds the 240px usability floor the original mobile fix introduced:
-    // with a hard floor the editor was forced to 240px and spilled ~80px below
-    // the fold, re-introducing the trapped page scroll FAR-1841 removed. The
-    // floor must yield to the viewport (FAR-1861) — the editor shrinks to the
-    // space left instead of overflowing.
+    // The original mobile fix pinned the editor to a hard 240px minimum, so on
+    // any viewport where the chrome stack above the editor left less than 240px
+    // the editor was forced to 240px and spilled below the fold, re-introducing
+    // the trapped page scroll FAR-1841 removed. FAR-1861 made the floor yield to
+    // the viewport — the editor shrinks to the space left instead of overflowing.
+    //
+    // The chrome height (fixed mobile header + breadcrumb + any ambient banners
+    // such as the DB-capacity or onboarding banner) differs by environment, so
+    // 640x480 does NOT guarantee a sub-240px leftover — on staging the chrome is
+    // only ~110px, leaving ~370px, and the old fixed 640x480 assertion failed.
+    // Measure the chrome and shrink the height so ~180px remains below it: that
+    // deterministically exercises the floor-yields case with or without a banner.
     await loginAsAdmin(page, env)
     await mockEditorWithNode(page)
     await page.setViewportSize({ width: 640, height: 480 })
@@ -221,6 +227,12 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
     const flow = page.locator('.vue-flow').first()
     await expect(flow).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+
+    const chromeTop = await page
+      .getByTestId('pipeline-editor-root')
+      .evaluate((el) => Math.round(el.getBoundingClientRect().top + window.scrollY))
+    expect(chromeTop).toBeGreaterThan(0)
+    await page.setViewportSize({ width: 640, height: chromeTop + 180 })
 
     // The fit resolves async (chrome above the editor mounts/measures on its
     // own schedule) — poll until the document settles with no vertical scroll.
