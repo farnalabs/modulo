@@ -23,10 +23,14 @@
     </div>
 
     <div class="flex items-center gap-2 pt-2 pb-2 border-b mb-2">
+      <!-- Both links name the visible text they display (the initial and the
+           identity), which is what WCAG 2.5.3 requires — an accessible name
+           that does not contain the visible label is the
+           label-content-name-mismatch violation this fixes. -->
       <router-link
         to="/admin/my-profile"
         class="avatar-ring"
-        :aria-label="$t('components.AppLayout.user_profile')"
+        :aria-label="$t('components.AppLayout.user_profile_link', { label: userInitial })"
       >
         <div
           class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary"
@@ -38,7 +42,7 @@
       <router-link
         to="/admin/my-profile"
         class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors flex-1 min-w-0"
-        :aria-label="$t('components.AppLayout.user_profile')"
+        :aria-label="$t('components.AppLayout.user_profile_link', { label: userEmail })"
       >
         {{ userEmail }}
       </router-link>

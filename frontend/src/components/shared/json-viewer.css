@@ -169,6 +169,30 @@
   line-height: 1.5;
 }
 
+/* FAR-1901: keep the trailing comma with its truncated value at desktop
+   width. vue-json-pretty renders the comma as its own classless <span>
+   sibling of the value inside the value wrapper. A truncated value is an
+   atomic inline-flex box: its shrink-to-fit width equals the whole line (its
+   max-content dominates), so the following comma is pushed onto a line of
+   its own below the value (measured: a full 20px line lower, at the row's
+   left edge). Reserving one character of the line (the comma is 1ch in this
+   mono face) lets the comma share the value's last line, and bottom-aligning
+   it attaches the comma to that line instead of the inline-flex box's
+   first-line baseline. The value block and its controls keep their existing
+   desktop layout — only the comma moves. Desktop only (>= 641px): the
+   FAR-1840 mobile layout stacks the value and its controls and is scoped to
+   its own media query below, so it is untouched. Non-virtual only, to keep
+   virtual trees' `white-space: nowrap` horizontal-scroll contract. */
+@media (min-width: 641px) {
+  .json-viewer .vjs-tree:not(.is-virtual) .vjs-tree-node > span:not([class]) > .vjs-value > .json-viewer-string-truncated {
+    max-width: calc(100% - 1ch);
+  }
+
+  .json-viewer .vjs-tree:not(.is-virtual) .vjs-tree-node > span:not([class]) > span:not([class]) {
+    vertical-align: bottom;
+  }
+}
+
 /* FAR-1840: narrow viewports (<= 640px). The shrink-proof expand toggle +
    char count squeeze the preview to its min-content — with
    `overflow-wrap: anywhere` that floor is ONE character, so at 375px the

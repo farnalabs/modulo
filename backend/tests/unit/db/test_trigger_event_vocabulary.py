@@ -16,8 +16,10 @@ constraint with the FULL 21-value vocabulary. This file asserts:
 * the chain has a single linear head — ``0110_schema_pipeline_runtime``
   owned the original 21-value constraint; FAR-604's
   ``0176_trigger_event_validation_results`` widened it with ``coalesced`` /
-  ``backpressure_skipped`` and is now the constraint's owner and the chain
-  head.
+  ``backpressure_skipped``; FAR-1144's ``0255_trigger_event_value_filter_label``
+  added ``event_value_filter_not_accepted``; FAR-1916's
+  ``0318_trigger_event_required_refs_missing`` (the current constraint owner and
+  chain head) added ``required_refs_missing``.
 
 The old SQLite round-trip (which ran the migration's upgrade/downgrade against
 a mock ``op``) is obsolete: the reconciliation migration expresses the
@@ -29,14 +31,17 @@ no-op. The drift-guard tests below are the meaningful contract.
 from __future__ import annotations
 
 import importlib.util
+import uuid
 from pathlib import Path
 from types import ModuleType
 
 from alembic.script import ScriptDirectory
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from modulo.db.models.trigger_event import VALIDATION_RESULT_VALUES
+from modulo.db.models.base import Base
+from modulo.db.models.trigger_event import VALIDATION_RESULT_VALUES, TriggerEvent
 
-_MIGRATION_NAME = "0255_trigger_event_value_filter_label"
+_MIGRATION_NAME = "0318_trigger_event_required_refs_missing"
 _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
@@ -181,10 +186,12 @@ _MIGRATION_PATH = (
 # 0313_collection_install_drop_installed_entities chained onto 0312_memberships_active_lookups, and
 # 0314_external_agents_mcp_servers chained onto 0313_collection_install_drop_installed_entities, and
 # 0315_service_accounts_lifecycle chained onto 0314_external_agents_mcp_servers, and
-# 0317_drop_retired_pipeline_diff_rollback_flag chained onto 0316_policy_gate_evaluation_mode as the chain head.
-# (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
-# migration under test, not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0317_drop_retired_pipeline_diff_rollback_flag"
+# 0317_drop_retired_pipeline_diff_rollback_flag chained onto 0316_policy_gate_evaluation_mode, and
+# 0318_trigger_event_required_refs_missing (FAR-1916) chained onto 0317 as the chain head.
+# (_MIGRATION_NAME above is pinned to the migration that owns the widened
+# constraint under test — FAR-1916 moved that ownership to
+# 0318_trigger_event_required_refs_missing.)
+_CHAIN_HEAD_MIGRATION_NAME = "0318_trigger_event_required_refs_missing"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
@@ -219,8 +226,15 @@ class TestModelVocabulary:
         # FAR-1144: distinct label for the value-filter gate (event_filters).
         assert "event_value_filter_not_accepted" in VALIDATION_RESULT_VALUES
 
-    def test_model_vocabulary_is_24_values(self) -> None:
-        assert len(VALIDATION_RESULT_VALUES) == 24
+    def test_far1916_value_in_model_vocabulary(self) -> None:
+        # FAR-1916: a work_item_refs_required pipeline refused a delivery with
+        # no refs. The engine wrote this value but it was missing from the
+        # vocabulary, so the refusal INSERT violated the CHECK and no event
+        # ever persisted (the 422 was a 503).
+        assert "required_refs_missing" in VALIDATION_RESULT_VALUES
+
+    def test_model_vocabulary_is_25_values(self) -> None:
+        assert len(VALIDATION_RESULT_VALUES) == 25
         assert len(set(VALIDATION_RESULT_VALUES)) == len(VALIDATION_RESULT_VALUES)
 
     def test_orm_check_constraint_includes_auto_deactivated(self) -> None:
@@ -282,3 +296,47 @@ class TestReconciliationMigration:
         assert "regexp_replace(pg_get_constraintdef(oid), '\\s+', '', 'g')" in drop_stmt
         assert "::charactervarying" in drop_stmt
         assert "character varying" not in drop_stmt
+
+
+class TestRequiredRefsMissingRoundTrip:
+    """FAR-1916: the new ``required_refs_missing`` value must be INSERTABLE.
+
+    The whole point of widening the vocabulary is that a write site can now
+    persist the value; before the change the CHECK — a HARD DB gate — rejected
+    it (``IntegrityError``), so the refusal event could never survive. This is a
+    REAL round-trip against an in-memory SQLite database (the ORM CHECK
+    constraint is enforced by the engine, so a missing vocabulary entry fails
+    the INSERT, not a mock assertion)."""
+
+    async def test_required_refs_missing_event_persists(self) -> None:
+        engine = create_async_engine("sqlite+aiosqlite://", echo=False)
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(lambda c: Base.metadata.create_all(c, tables=[TriggerEvent.__table__]))
+                await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
+            maker = async_sessionmaker(engine, expire_on_commit=False)
+            org_id = uuid.uuid4()
+            trigger_id = uuid.uuid4()
+            async with maker() as session, session.begin():
+                session.add(
+                    TriggerEvent(
+                        organisation_id=org_id,
+                        trigger_id=trigger_id,
+                        trigger_type="webhook",
+                        raw_payload_hash="a" * 64,
+                        validation_result="required_refs_missing",
+                        error_detail="Required work-item refs missing",
+                    )
+                )
+            # The row exists once the request/transaction returned — read it back
+            # through the same engine rather than trusting the write.
+            from sqlalchemy import select
+
+            async with maker() as session:
+                stored = (
+                    await session.execute(select(TriggerEvent).where(TriggerEvent.trigger_id == trigger_id))
+                ).scalar_one()
+                assert stored.validation_result == "required_refs_missing"
+                assert stored.organisation_id == org_id
+        finally:
+            await engine.dispose()

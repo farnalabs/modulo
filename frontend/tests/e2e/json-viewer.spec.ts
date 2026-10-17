@@ -488,6 +488,140 @@ test.describe('JsonViewer design-token theming', { tag: '@regression' }, () => {
     })
   })
 
+  test('keeps the trailing comma with its truncated value (FAR-1901)', { tag: '@regression' }, async ({ page, env }) => {
+    await loginAsAdmin(page, env)
+
+    // agent_stdout is NOT the last key, so vue-json-pretty renders the value's
+    // trailing comma as its own classless <span> after the (truncated) value.
+    const longText = 'The quick brown fox jumps over the lazy dog. '.repeat(60)
+
+    await page.route('**/api/v1/runs/run-json-viewer', (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            run_id: 'run-json-viewer',
+            run_number: 42,
+            pipeline_id: 'p-1',
+            pipeline_name: 'JSON Viewer Test',
+            status: 'failed',
+            trace_id: 'trace-abc',
+            total_cost_usd: '0.000100',
+            node_token_usage: { format: { input_tokens: 10, output_tokens: 20, total_tokens: 30 } },
+          }),
+        })
+      }
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+    })
+    await page.route('**/api/v1/runs/run-json-viewer/events*', (route) => {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ events: [] }) })
+    })
+    await page.route('**/api/v1/runs/run-json-viewer/io', (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ input_payload: { agent_stdout: longText, result: 'success' } }),
+      })
+    })
+
+    await page.goto('/runs/run-json-viewer')
+    await expect(page.locator('[data-testid="run-detail-input-payload"]')).toBeVisible()
+
+    const truncated = page.getByTestId('json-viewer-string-truncated').first()
+    await expect(truncated).toBeVisible()
+    await truncated.scrollIntoViewIfNeeded()
+
+    const geometry = await truncated.evaluate((el) => {
+      // The value wrapper is the dep's classless <span> (the truncated span's
+      // grandparent); the trailing comma is the wrapper's own classless <span>
+      // sibling of `.vjs-value`.
+      const wrapper = el.parentElement?.parentElement
+      const comma = wrapper?.querySelector(':scope > span:not([class])') as HTMLElement | null
+      const text = el.querySelector('.json-viewer-string-truncated-text') as HTMLElement | null
+      if (!comma || !text) return null
+
+      // Per-line boxes of the whole truncated value (preview text + its
+      // controls), keyed by line-box top. The comma is a sibling of the
+      // value, so it must share the value's last line box.
+      const range = document.createRange()
+      range.selectNodeContents(el)
+      const byLine = new Map<number, { top: number; bottom: number }>()
+      for (const r of Array.from(range.getClientRects()).filter((r) => r.width > 0)) {
+        const top = Math.round(r.top)
+        const prior = byLine.get(top)
+        byLine.set(top, {
+          top,
+          bottom: prior ? Math.max(prior.bottom, Math.round(r.bottom)) : Math.round(r.bottom),
+        })
+      }
+      const lines = Array.from(byLine.values()).sort((a, b) => a.top - b.top)
+      const lastLine = lines[lines.length - 1]
+      const commaRect = comma.getBoundingClientRect()
+      const blockRect = el.getBoundingClientRect()
+      // The scroller is the viewer's own `overflow-auto` container; the comma
+      // must sit inside it (not clipped by horizontal scrolling).
+      const scroller = el.closest('.overflow-auto')?.getBoundingClientRect()
+      const commaStyle = getComputedStyle(comma)
+
+      return {
+        lineCount: lines.length,
+        lastLineTop: lastLine?.top ?? null,
+        commaTop: Math.round(commaRect.top),
+        commaLeft: Math.round(commaRect.left),
+        commaWidth: Math.round(commaRect.width),
+        commaHeight: Math.round(commaRect.height),
+        commaText: comma.textContent,
+        commaDisplay: commaStyle.display,
+        blockTop: Math.round(blockRect.top),
+        blockBottom: Math.round(blockRect.bottom),
+        blockLeft: Math.round(blockRect.left),
+        withinScroller:
+          scroller !== undefined &&
+          commaRect.left >= scroller.left - 1 &&
+          commaRect.right <= scroller.right + 1 &&
+          commaRect.top >= scroller.top - 1 &&
+          commaRect.bottom <= scroller.bottom + 1,
+      }
+    })
+    expect(geometry, 'truncated value + trailing comma rendered').not.toBeNull()
+    console.log(`[far-1901] desktop trailing-comma geometry: ${JSON.stringify(geometry)}`)
+
+    // The defect needs a multi-line value: the preview wraps at desktop width.
+    expect(geometry!.lineCount, 'preview wraps to several lines at desktop width').toBeGreaterThan(1)
+
+    // The trailing comma shares the value's FINAL line — its top sits inside the
+    // last line box. Pre-fix the comma was pushed onto its own line ~20px below
+    // the last line (a full line-height lower), so this is the discriminating
+    // assertion.
+    expect(
+      Math.abs(geometry!.commaTop - geometry!.lastLineTop!),
+      `comma top ${geometry!.commaTop} must sit on the value's last line (top ${geometry!.lastLineTop})`,
+    ).toBeLessThanOrEqual(4)
+
+    // ...and it stays within the value block rather than on a line beneath it.
+    expect(
+      geometry!.commaTop,
+      `comma top ${geometry!.commaTop} must stay inside the value block (${geometry!.blockTop}..${geometry!.blockBottom})`,
+    ).toBeLessThan(geometry!.blockBottom)
+
+    // The punctuator is the comma glyph, rendered and inside the viewer's
+    // scroll box (a regression that removed or clipped it fails here).
+    expect(geometry!.commaText, 'trailing punctuator is the comma glyph').toBe(',')
+    expect(geometry!.commaDisplay, 'comma is displayed').not.toBe('none')
+    expect(geometry!.commaWidth, 'comma has a non-zero width').toBeGreaterThan(0)
+    expect(geometry!.commaHeight, 'comma has a non-zero height').toBeGreaterThan(0)
+    expect(geometry!.withinScroller, 'comma sits inside the viewer scroll container').toBe(true)
+
+    // It follows the value content on that line rather than being wrapped back
+    // to the row's left edge (the pre-fix comma sat at the value's left edge,
+    // x = blockLeft, on its own line).
+    expect(
+      geometry!.commaLeft,
+      `comma left ${geometry!.commaLeft} must sit after the value's start (block left ${geometry!.blockLeft})`,
+    ).toBeGreaterThan(geometry!.blockLeft)
+  })
+
   test('copy still copies the FULL long string value when the tree truncates it', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
 
