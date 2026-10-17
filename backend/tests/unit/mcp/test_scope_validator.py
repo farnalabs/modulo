@@ -130,6 +130,51 @@ class TestCheckToolScope:
             with pytest.raises(MCPAuthorizationError):
                 check_tool_scope("admin", tool)
 
+    def test_system_admin_subclass_only_when_it_is_the_sole_failing_leg(self) -> None:
+        """FAR-1930: ``MCPSystemAdminRequiredError`` is selected from the leg
+        the resolver REPORTS — never by re-resolving. A denial on any other leg
+        stays a plain ``MCPAuthorizationError``."""
+        from modulo.core.mcp.scope_validator import MCPSystemAdminRequiredError
+
+        with pytest.raises(MCPSystemAdminRequiredError):
+            check_tool_scope("admin", "list_housekeeping")
+
+        with pytest.raises(MCPAuthorizationError) as excinfo:
+            check_tool_scope("operator", "list_housekeeping", is_system_admin=True)
+        assert not isinstance(excinfo.value, MCPSystemAdminRequiredError)
+
+    def test_resolver_reports_the_failing_leg(self) -> None:
+        """FAR-1930: the resolver reports WHICH leg denied so the caller never
+        re-runs it (the removed ``_is_sole_system_admin_denial`` re-resolution
+        depended on an unstated leg-ordering invariant). Pins the reported leg
+        for the system-admin, grants and unmapped legs — so reordering a leg
+        after the system-admin leg changes this test, not just the subclass."""
+        import modulo.core.mcp.scope_validator as sv
+
+        base = {
+            "tool": "list_housekeeping",
+            "action": None,
+            "role": "admin",
+            "key_scope": "org",
+            "auth_type": "jwt",
+            "allowed_tools": None,
+            "kill_switch": True,
+        }
+        allowed, _key, leg = sv._resolve_tool_access_detail(**base, grants=None, is_system_admin=False)
+        assert (allowed, leg) == (False, sv._LEG_SYSTEM_ADMIN)
+        allowed, _key, leg = sv._resolve_tool_access_detail(**base, grants=None, is_system_admin=True)
+        assert (allowed, leg) == (True, None)
+        # The grant-set leg runs BEFORE the system-admin leg, and the resolver
+        # reports it — the ordering is observed, not assumed.
+        allowed, _key, leg = sv._resolve_tool_access_detail(
+            **base, grants=frozenset({"run.trigger"}), is_system_admin=False
+        )
+        assert (allowed, leg) == (False, sv._LEG_GRANTS)
+        allowed, _key, leg = sv._resolve_tool_access_detail(
+            **{**base, "tool": "not_a_real_tool"}, grants=None, is_system_admin=False
+        )
+        assert (allowed, leg) == (False, sv._LEG_UNMAPPED)
+
     @pytest.mark.parametrize(
         ("role", "tool"),
         [
@@ -940,19 +985,21 @@ class TestCallerScopeClassificationFailFast:
 
 class TestCheckToolScopeDelegation:
     """``check_tool_scope`` stays the single entry point and delegates the
-    decision to the pure resolver — the seam test patches
-    ``resolve_tool_access`` and asserts handlers reach it transitively."""
+    decision to the pure resolver — the seam test patches the authoritative
+    ``_resolve_tool_access_detail`` and asserts handlers reach it
+    transitively. (FAR-1930: ``check_tool_scope`` reads the failing leg from
+    that detailed resolver so it never re-resolves.)"""
 
     def test_seam_check_tool_scope_calls_resolver(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import modulo.core.mcp.scope_validator as sv
 
         calls: list[dict[str, object]] = []
 
-        def _fake_resolve(**kwargs: object) -> tuple[bool, str]:
+        def _fake_resolve(**kwargs: object) -> tuple[bool, str, str | None]:
             calls.append(kwargs)
-            return True, "run.trigger"
+            return True, "run.trigger", None
 
-        monkeypatch.setattr(sv, "resolve_tool_access", _fake_resolve)
+        monkeypatch.setattr(sv, "_resolve_tool_access_detail", _fake_resolve)
         sv.check_tool_scope("runner", "trigger_pipeline", key_scope="org", auth_type="api_key")
         assert len(calls) == 1
         call = calls[0]
@@ -964,18 +1011,18 @@ class TestCheckToolScopeDelegation:
     @pytest.mark.asyncio
     async def test_seam_handler_reaches_resolver_transitively(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The production wiring: an MCP tool handler → _check_agent_tool_scope
-        → check_tool_scope → resolve_tool_access, with key_scope/auth_type
-        threaded from the request ContextVars."""
+        → check_tool_scope → _resolve_tool_access_detail, with
+        key_scope/auth_type threaded from the request ContextVars."""
         import modulo.api.mcp_server as ms
         import modulo.core.mcp.scope_validator as sv
 
         calls: list[dict[str, object]] = []
 
-        def _fake_resolve(**kwargs: object) -> tuple[bool, str]:
+        def _fake_resolve(**kwargs: object) -> tuple[bool, str, str | None]:
             calls.append(kwargs)
-            return True, "hitl.list"
+            return True, "hitl.list", None
 
-        monkeypatch.setattr(sv, "resolve_tool_access", _fake_resolve)
+        monkeypatch.setattr(sv, "_resolve_tool_access_detail", _fake_resolve)
         token_role = ms._ctx_role.set("runner")
         token_org = ms._ctx_org_id.set(uuid.UUID(_FAKE_ID))
         token_scope = ms._ctx_key_scope.set("org")

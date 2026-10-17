@@ -14,6 +14,7 @@ registry is the single source of truth (ADR 047).
 import contextvars
 import types
 from collections.abc import Sequence
+from dataclasses import dataclass
 from logging import getLogger
 
 from modulo.auth.permissions import (
@@ -63,7 +64,6 @@ __all__ = [
     "get_request_allowed_tools",
     "resolve_tool_access",
     "set_request_allowed_tools",
-    "tool_requires_system_admin",
 ]
 
 
@@ -86,7 +86,39 @@ class MCPSystemAdminRequiredError(MCPAuthorizationError):
     """
 
 
-# tool (or ``tool:action``) -> permission key in ``PERMISSIONS``
+# ---------------------------------------------------------------------------
+# FAR-1930: the SINGLE per-tool requirement registry
+# ---------------------------------------------------------------------------
+# One entry per registered MCP tool — plus a ``tool:action`` key for sub-scope
+# actions — declares BOTH scope requirements together:
+#
+#   * ``permission_key`` — the org-role floor in ``PERMISSIONS``. ``None``
+#     means the tool is on the read-only allowlist (pinned at
+#     ``resource.read_only``).
+#   * ``system_admin`` — the strict ``is_system_admin`` claim whose REST twin
+#     is gated by ``require_system_permission`` (no org-role fall-through).
+#
+# The three public views — ``TOOL_SCOPE_REQUIREMENTS`` (mapped tools),
+# ``READ_ONLY_TOOLS`` (the read-only pin) and ``SYSTEM_ADMIN_TOOLS`` (the
+# claim) — are all DERIVED from this registry, so there is no second per-tool
+# list to keep in sync: a system-admin tool is declared ONCE, and the resolver
+# enforces it. The two gates stay independently visible as the two fields of
+# each entry.
+
+
+@dataclass(frozen=True, slots=True)
+class ToolRequirement:
+    """The scope requirements declared for one MCP tool (or ``tool:action``).
+
+    ``permission_key`` is the org-role permission key, or ``None`` when the
+    tool is on the read-only allowlist (pinned at ``resource.read_only``).
+    ``system_admin`` declares the FAR-1930 strict ``is_system_admin`` claim.
+    """
+
+    permission_key: str | None = None
+    system_admin: bool = False
+
+
 # Secret-management permission shared by the create/delete/list secret tools.
 _SCOPE_SECRET_MANAGE = "secret.manage"  # nosec B105 — permission scope name, not a credential
 _SCOPE_CONNECTOR_LIST = "connector.list"  # nosec B105 — permission scope name, not a credential
@@ -95,188 +127,182 @@ _SCOPE_HITL_LIST = "hitl.list"  # nosec B105 — permission scope name, not a cr
 _SCOPE_PIPELINE_UPDATE = "pipeline.update"  # nosec B105 — permission scope name, not a credential
 _SCOPE_EVAL_LIST = "eval.list"  # nosec B105 — permission scope name, not a credential
 
-_TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
-    "trigger_pipeline": "run.trigger",
-    "cancel_run": "run.cancel",
-    "review_hitl": "hitl.review",
-    "review_hitl:claim": "hitl.claim",
-    "review_hitl:approve": "hitl.approve",
-    "review_hitl:reject": "hitl.reject",
-    "review_hitl:deliver_manual": "hitl.deliver_manual",
-    "copy_library_primitive": "library.copy",
-    "list_pending_hitl": _SCOPE_HITL_LIST,
-    "list_hitl_reviews": _SCOPE_HITL_LIST,
-    "get_hitl_review": _SCOPE_HITL_LIST,
-    "get_pipeline_reviews": "pipeline.graph.read",
-    "get_run_output": "run.output",
-    "create_pipeline": "pipeline.create",
-    "update_pipeline_graph": "pipeline.graph.update",
-    "bind_connector_to_node": "pipeline.bind_connector",
+_TOOL_REQUIREMENTS: dict[str, ToolRequirement] = {
+    "trigger_pipeline": ToolRequirement("run.trigger"),
+    "cancel_run": ToolRequirement("run.cancel"),
+    "review_hitl": ToolRequirement("hitl.review"),
+    "review_hitl:claim": ToolRequirement("hitl.claim"),
+    "review_hitl:approve": ToolRequirement("hitl.approve"),
+    "review_hitl:reject": ToolRequirement("hitl.reject"),
+    "review_hitl:deliver_manual": ToolRequirement("hitl.deliver_manual"),
+    "copy_library_primitive": ToolRequirement("library.copy"),
+    "list_pending_hitl": ToolRequirement(_SCOPE_HITL_LIST),
+    "list_hitl_reviews": ToolRequirement(_SCOPE_HITL_LIST),
+    "get_hitl_review": ToolRequirement(_SCOPE_HITL_LIST),
+    "get_pipeline_reviews": ToolRequirement("pipeline.graph.read"),
+    "get_run_output": ToolRequirement("run.output"),
+    "create_pipeline": ToolRequirement("pipeline.create"),
+    "update_pipeline_graph": ToolRequirement("pipeline.graph.update"),
+    "bind_connector_to_node": ToolRequirement("pipeline.bind_connector"),
     # FAR-1182: pipeline monthly spend circuit breaker threshold - same
     # permission key as the REST PATCH /pipelines/{id} that also sets it.
-    "set_pipeline_circuit_breaker": _SCOPE_PIPELINE_UPDATE,
+    "set_pipeline_circuit_breaker": ToolRequirement(_SCOPE_PIPELINE_UPDATE),
     # FAR-1161: accountability owners - same permission key as the REST
     # PATCH /pipelines/{id} that also sets them (eligibility runs in the
     # shared CRUD layer, identical to the REST path).
-    "set_pipeline_owners": _SCOPE_PIPELINE_UPDATE,
+    "set_pipeline_owners": ToolRequirement(_SCOPE_PIPELINE_UPDATE),
     # FAR-1175 (ADR 043 S1): manual autonomy demote/promote - same permission
     # key as the REST POST /pipelines/{id}/autonomy/{demote,promote}; the
     # admin/owner gate is enforced in-handler on both surfaces.
-    "demote_pipeline_autonomy": _SCOPE_PIPELINE_UPDATE,
-    "promote_pipeline_autonomy": _SCOPE_PIPELINE_UPDATE,
+    "demote_pipeline_autonomy": ToolRequirement(_SCOPE_PIPELINE_UPDATE),
+    "promote_pipeline_autonomy": ToolRequirement(_SCOPE_PIPELINE_UPDATE),
     # FAR-1599: environment-profile binding - same permission key as the REST
     # PATCH /pipelines/{id} that also sets it (the shared FAR-1558 predicate
     # validates the binding on both surfaces).
-    "update_pipeline": _SCOPE_PIPELINE_UPDATE,
-    "create_model_backend": "model_backend.create",
-    "list_runs": "run.list",
-    "get_run_evals": "run.evals",
-    "list_eval_definitions": _SCOPE_EVAL_LIST,
-    "create_eval_definition": "eval.definition.create",
-    "update_eval_definition": "eval.definition.update",
-    "delete_eval_definition": "eval.definition.delete",
-    "list_triggers": "trigger.list",
-    "get_trigger": "trigger.list",
-    "update_trigger": "trigger.update",
-    "delete_trigger": "trigger.delete",
-    "set_org_triggers_paused": "org.triggers.pause.manage",
-    # FAR-1879: both MCP housekeeping tools mirror their REST twins
+    "update_pipeline": ToolRequirement(_SCOPE_PIPELINE_UPDATE),
+    "create_model_backend": ToolRequirement("model_backend.create"),
+    "list_runs": ToolRequirement("run.list"),
+    "get_run_evals": ToolRequirement("run.evals"),
+    "list_eval_definitions": ToolRequirement(_SCOPE_EVAL_LIST),
+    "create_eval_definition": ToolRequirement("eval.definition.create"),
+    "update_eval_definition": ToolRequirement("eval.definition.update"),
+    "delete_eval_definition": ToolRequirement("eval.definition.delete"),
+    "list_triggers": ToolRequirement("trigger.list"),
+    "get_trigger": ToolRequirement("trigger.list"),
+    "update_trigger": ToolRequirement("trigger.update"),
+    "delete_trigger": ToolRequirement("trigger.delete"),
+    "set_org_triggers_paused": ToolRequirement("org.triggers.pause.manage"),
+    # FAR-1879/FAR-1930: both MCP housekeeping tools mirror their REST twins
     # (GET /api/v1/admin/housekeeping and POST /api/v1/admin/housekeeping/cleanup),
     # each gated by BOTH ``require_permission("housekeeping.manage")`` (admin
     # org-role floor) and ``require_system_permission(...)`` (a strict
-    # is_system_admin gate with no org-role fall-through). These scope-map
-    # entries pin the org-role floor; the system-admin requirement is declared
-    # in ``SYSTEM_ADMIN_TOOLS`` below and enforced by the same resolver's leg 6
-    # (FAR-1930). A new system-admin-gated tool declares it THERE — never with
-    # an in-body check.
-    "list_housekeeping": "housekeeping.manage",
-    "perform_housekeeping": "housekeeping.manage",
-    "create_connector": "connector.create",
-    "delete_connector": "connector.delete",
-    "create_trigger": "trigger.create",
-    "delete_pipeline": "pipeline.delete",
-    "create_agent": "agent.create",
-    "create_schema": "schema.create",
-    "infer_schema": "schema.infer",
-    "create_secret": _SCOPE_SECRET_MANAGE,
-    "delete_secret": _SCOPE_SECRET_MANAGE,
-    "list_secrets": _SCOPE_SECRET_MANAGE,
-    "create_api_key": "api_key.create",
-    "list_api_keys": "api_key.update",
-    "revoke_api_key": "api_key.revoke",
+    # is_system_admin gate with no org-role fall-through). Both requirements are
+    # declared on these ONE entries; the resolver's system-admin leg enforces
+    # the claim. A new system-admin-gated tool declares it on its single entry
+    # here — never with an in-body check.
+    "list_housekeeping": ToolRequirement("housekeeping.manage", system_admin=True),
+    "perform_housekeeping": ToolRequirement("housekeeping.manage", system_admin=True),
+    "create_connector": ToolRequirement("connector.create"),
+    "delete_connector": ToolRequirement("connector.delete"),
+    "create_trigger": ToolRequirement("trigger.create"),
+    "delete_pipeline": ToolRequirement("pipeline.delete"),
+    "create_agent": ToolRequirement("agent.create"),
+    "create_schema": ToolRequirement("schema.create"),
+    "infer_schema": ToolRequirement("schema.infer"),
+    "create_secret": ToolRequirement(_SCOPE_SECRET_MANAGE),
+    "delete_secret": ToolRequirement(_SCOPE_SECRET_MANAGE),
+    "list_secrets": ToolRequirement(_SCOPE_SECRET_MANAGE),
+    "create_api_key": ToolRequirement("api_key.create"),
+    "list_api_keys": ToolRequirement("api_key.update"),
+    "revoke_api_key": ToolRequirement("api_key.revoke"),
     # FAR-614: the first caller-scoped (``.self``) MCP tools — get/set the
     # CALLER's own HITL email-alert preference. Target = the caller's account
     # by construction; no target parameter exists to misuse.
-    "get_hitl_email_alerts": "hitl_email.self",
-    "set_hitl_email_alerts": "hitl_email.self",
-    "list_trigger_events": "trigger.events.list",
-    "query_analytics": "analytics.query",
-    "query_analytics_concurrency": "analytics.query",
+    "get_hitl_email_alerts": ToolRequirement("hitl_email.self"),
+    "set_hitl_email_alerts": ToolRequirement("hitl_email.self"),
+    "list_trigger_events": ToolRequirement("trigger.events.list"),
+    "query_analytics": ToolRequirement("analytics.query"),
+    "query_analytics_concurrency": ToolRequirement("analytics.query"),
     # FAR-695: read/list tools for the build-time entities that previously had
     # MCP write surfaces only. Each maps to the SAME permission key as the
     # corresponding REST route (agent.list / connector.list / etc.).
-    "list_agents": "agent.list",
-    "get_agent": "agent.list",
-    "list_connectors": _SCOPE_CONNECTOR_LIST,
-    "get_connector": _SCOPE_CONNECTOR_LIST,
-    "list_connector_types": _SCOPE_CONNECTOR_LIST,
-    "list_model_backends": "model_backend.list",
-    "get_model_backend": "model_backend.list",
-    "list_environment_profiles": "environment_profile.list",
-    "list_parameter_schemas": _SCOPE_PARAMETER_SCHEMA_LIST,
-    "create_parameter_schema": "parameter_schema.create",
-    "get_parameter_schema": _SCOPE_PARAMETER_SCHEMA_LIST,
-    "update_parameter_schema": "parameter_schema.update",
-    "delete_parameter_schema": "parameter_schema.delete",
-    "restore_parameter_schema": "parameter_schema.update",
-    "get_parameter_schema_references": _SCOPE_PARAMETER_SCHEMA_LIST,
-    "validate_parameter_schema": "parameter_schema.validate",
-    "list_parameter_sets": _SCOPE_PARAMETER_SCHEMA_LIST,
-    "create_parameter_set": "parameter_schema.set.create",
-    "get_parameter_set": _SCOPE_PARAMETER_SCHEMA_LIST,
-    "update_parameter_set": "parameter_schema.set.update",
-    "delete_parameter_set": "parameter_schema.set.delete",
-    "restore_parameter_set": "parameter_schema.set.update",
+    "list_agents": ToolRequirement("agent.list"),
+    "get_agent": ToolRequirement("agent.list"),
+    "list_connectors": ToolRequirement(_SCOPE_CONNECTOR_LIST),
+    "get_connector": ToolRequirement(_SCOPE_CONNECTOR_LIST),
+    "list_connector_types": ToolRequirement(_SCOPE_CONNECTOR_LIST),
+    "list_model_backends": ToolRequirement("model_backend.list"),
+    "get_model_backend": ToolRequirement("model_backend.list"),
+    "list_environment_profiles": ToolRequirement("environment_profile.list"),
+    "list_parameter_schemas": ToolRequirement(_SCOPE_PARAMETER_SCHEMA_LIST),
+    "create_parameter_schema": ToolRequirement("parameter_schema.create"),
+    "get_parameter_schema": ToolRequirement(_SCOPE_PARAMETER_SCHEMA_LIST),
+    "update_parameter_schema": ToolRequirement("parameter_schema.update"),
+    "delete_parameter_schema": ToolRequirement("parameter_schema.delete"),
+    "restore_parameter_schema": ToolRequirement("parameter_schema.update"),
+    "get_parameter_schema_references": ToolRequirement(_SCOPE_PARAMETER_SCHEMA_LIST),
+    "validate_parameter_schema": ToolRequirement("parameter_schema.validate"),
+    "list_parameter_sets": ToolRequirement(_SCOPE_PARAMETER_SCHEMA_LIST),
+    "create_parameter_set": ToolRequirement("parameter_schema.set.create"),
+    "get_parameter_set": ToolRequirement(_SCOPE_PARAMETER_SCHEMA_LIST),
+    "update_parameter_set": ToolRequirement("parameter_schema.set.update"),
+    "delete_parameter_set": ToolRequirement("parameter_schema.set.delete"),
+    "restore_parameter_set": ToolRequirement("parameter_schema.set.update"),
     # FAR-696: governance-entity read/list tools. Each maps to the SAME
     # permission key as the corresponding REST route (team.list /
     # user.list / audit.manage / admin.notification.manage /
     # lifecycle_map.list / plugin.list / sso.manage / eval.list /
-    # schema.list / pipeline.list). ``list_feature_flags`` is pinned at
-    # ``resource.read_only`` via READ_ONLY_TOOLS below because the REST
-    # route's real gate is the strict ``require_system_permission`` check,
-    # which the tool enforces in-body from the is_system_admin context —
-    # mapping it to the ``system.config.manage`` placeholder role would let
-    # an org admin through the role leg.
-    "list_teams": "team.list",
-    "list_users": "user.list",
-    "get_audit_log": "audit.manage",
-    "list_notification_deliveries": "admin.notification.manage",
-    "list_lifecycle_maps": "lifecycle_map.list",
-    "get_lifecycle_map": "lifecycle_map.list",
-    "list_plugins": "plugin.list",
-    "list_sso_providers": "sso.manage",
-    "list_eval_suites": _SCOPE_EVAL_LIST,
-    "get_eval_suite": _SCOPE_EVAL_LIST,
-    "get_schema_versions": "schema.list",
-    "get_pipeline_diff": "pipeline.list",
+    # schema.list / pipeline.list).
+    "list_teams": ToolRequirement("team.list"),
+    "list_users": ToolRequirement("user.list"),
+    "get_audit_log": ToolRequirement("audit.manage"),
+    "list_notification_deliveries": ToolRequirement("admin.notification.manage"),
+    "list_lifecycle_maps": ToolRequirement("lifecycle_map.list"),
+    "get_lifecycle_map": ToolRequirement("lifecycle_map.list"),
+    "list_plugins": ToolRequirement("plugin.list"),
+    "list_sso_providers": ToolRequirement("sso.manage"),
+    "list_eval_suites": ToolRequirement(_SCOPE_EVAL_LIST),
+    "get_eval_suite": ToolRequirement(_SCOPE_EVAL_LIST),
+    "get_schema_versions": ToolRequirement("schema.list"),
+    "get_pipeline_diff": ToolRequirement("pipeline.list"),
+    # Explicit read-only tools (pinned at viewer via ``resource.read_only``).
+    # Unmapped mutating tools FAIL under deny-by-default; an unmapped read-only
+    # tool is declared here with NO permission key instead.
+    "list_pipelines": ToolRequirement(),
+    "get_pipeline_graph": ToolRequirement(),
+    "get_run_status": ToolRequirement(),
+    "search_library": ToolRequirement(),
+    "search_documentation": ToolRequirement(),
+    "get_integration_status": ToolRequirement(),
+    # FAR-1879 follow-up: ``get_org_config`` mirrors the SYSTEM-ADMIN-ONLY REST
+    # route ``GET /api/v1/system-admin/config`` but is today neither declared
+    # with the system-admin claim nor routed through the shared chokepoint — a
+    # known, pre-existing authz gap tracked SEPARATELY (changing a shipped
+    # tool's authorisation model has its own caller check). It is pinned
+    # read-only here so the wired-chain guard below reports it as a deliberate,
+    # reviewed exception rather than silently normalising it.
+    "get_org_config": ToolRequirement(),
+    "get_available_features": ToolRequirement(),
+    "list_schemas": ToolRequirement(),
+    "validate_payload": ToolRequirement(),
+    # FAR-696/FAR-1930: the REST route's real gate is the strict
+    # ``require_system_permission`` check (no org-role fall-through). The tool
+    # is pinned read-only at the role leg — mapping it to the
+    # ``system.config.manage`` placeholder role would let an org admin through —
+    # AND carries the system-admin claim; both declared on this ONE entry.
+    "list_feature_flags": ToolRequirement(system_admin=True),
 }
 
+# Derived view: mapped tool/action key -> permission key. Kept as the public
+# ``Mapping[str, str]`` so every existing consumer (capability_scope, the role
+# parity tests, per-leg resolution) is unchanged.
+_TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
+    key: req.permission_key for key, req in _TOOL_REQUIREMENTS.items() if req.permission_key is not None
+}
 TOOL_SCOPE_REQUIREMENTS: types.MappingProxyType[str, str] = types.MappingProxyType(_TOOL_SCOPE_REQUIREMENTS)
 
-# Explicit read-only tools (pinned at viewer). Unmapped mutating tools FAIL
-# under deny-by-default; unmapped read-only tools are pinned at viewer here.
+# Derived view: tools with no permission key are the explicit read-only
+# allowlist (pinned at viewer).
 READ_ONLY_TOOLS: frozenset[str] = frozenset(
-    {
-        "list_pipelines",
-        "get_pipeline_graph",
-        "get_run_status",
-        "search_library",
-        "search_documentation",
-        "get_integration_status",
-        "get_org_config",
-        "get_available_features",
-        "list_schemas",
-        "validate_payload",
-        # FAR-696: the REST route's real gate is the strict
-        # ``require_system_permission`` check (no org-role fall-through).
-        # Pinning here keeps the role leg from inventing an org-admin
-        # fall-through the REST surface does not have; the load-bearing
-        # system-admin gate is declared in ``SYSTEM_ADMIN_TOOLS`` below
-        # (FAR-1930 centralised it out of the tool bodies).
-        "list_feature_flags",
-    }
+    key for key, req in _TOOL_REQUIREMENTS.items() if req.permission_key is None
 )
 
-# ---------------------------------------------------------------------------
-# FAR-1930: system-admin requirement (the strict ``is_system_admin`` claim)
-# ---------------------------------------------------------------------------
-
-# Tools whose REST twin is guarded by ``require_system_permission`` — a STRICT
-# ``is_system_admin`` claim with NO org-role fall-through. This frozenset is the
-# SINGLE per-tool declaration of that requirement; ``resolve_tool_access``
-# enforces it as a deny-only, kill-switch-ineligible leg, so a tool cannot ship
-# the requirement without the gate, and a new system-admin-gated tool declares
-# it here rather than re-implementing an in-body check.
-#
-# Distinct from ``TOOL_SCOPE_REQUIREMENTS`` (which pins the org-role floor):
-# ``list_housekeeping`` / ``perform_housekeeping`` carry BOTH (admin org role
-# AND the claim), while ``list_feature_flags`` is pinned read-only at the role
-# leg and carries only this requirement.
-SYSTEM_ADMIN_TOOLS: frozenset[str] = frozenset(
-    {
-        "list_feature_flags",
-        "list_housekeeping",
-        "perform_housekeeping",
-    }
-)
+# Derived view (FAR-1930): tools whose REST twin is guarded by
+# ``require_system_permission`` — a STRICT ``is_system_admin`` claim with NO
+# org-role fall-through. ``resolve_tool_access`` enforces it as a deny-only,
+# kill-switch-ineligible leg, so a tool cannot ship the requirement without the
+# gate. Distinct from the org-role floor: ``list_housekeeping`` /
+# ``perform_housekeeping`` carry BOTH fields, while ``list_feature_flags`` is
+# read-only at the role leg and carries only the claim.
+SYSTEM_ADMIN_TOOLS: frozenset[str] = frozenset(key for key, req in _TOOL_REQUIREMENTS.items() if req.system_admin)
 
 
-def tool_requires_system_admin(tool: str) -> bool:
-    """True when ``tool`` declares a system-admin requirement (FAR-1930).
+def _tool_requires_system_admin(tool: str) -> bool:
+    """True when ``tool``'s registry entry declares the system-admin claim (FAR-1930).
 
-    Public so the MCP surface can attach its call-site warning without
-    duplicating the declaration. It is a DECLARATION lookup only — the
-    authoritative access decision is made by ``resolve_tool_access``.
+    Module-private: the declaration is read through ``SYSTEM_ADMIN_TOOLS`` (or
+    the registry entry) and the authoritative access decision is made by
+    ``resolve_tool_access`` — no external surface consumes this lookup.
     """
     return tool in SYSTEM_ADMIN_TOOLS
 
@@ -378,6 +404,80 @@ def classify_caller_scope(tool: str, permission_key: str | None) -> str:
     return _CALLER_SCOPE_ORG_ONLY
 
 
+# FAR-1930: the resolver reports WHICH leg denied (or ``None`` when allowed),
+# so the caller selects the exception subclass and log line from the decision
+# itself — never by re-running the resolver (which would re-read live grant
+# state and depend on an unstated leg-ordering invariant).
+_LEG_ALLOWED_TOOLS = "allowed_tools"
+_LEG_UNMAPPED = "unmapped"
+_LEG_CALLER_SCOPE = "caller_scope"
+_LEG_ROLE = "role"
+_LEG_GRANTS = "grants"
+_LEG_SYSTEM_ADMIN = "system_admin"
+
+
+def _resolve_tool_access_detail(
+    *,
+    tool: str,
+    action: str | None,
+    role: str | None,
+    key_scope: str | None,
+    auth_type: str | None,
+    allowed_tools: set[str] | None,
+    kill_switch: bool,
+    grants: frozenset[str] | None,
+    is_system_admin: bool,
+) -> tuple[bool, str, str | None]:
+    """Resolve one MCP call and report the failing leg (FAR-1930).
+
+    Returns ``(allowed, permission_key, denied_leg)``; ``denied_leg`` is
+    ``None`` when allowed, otherwise one of the ``_LEG_*`` constants. This is
+    the authoritative six-leg decision; ``resolve_tool_access`` is the
+    two-value public wrapper and ``check_tool_scope`` reads the leg from HERE
+    so it never re-resolves (and so never depends on the leg order).
+    """
+    # Leg 1: node-level allowed_tools narrowing. When the node's
+    # capability_scope declares an allow-list it is an ADDITIONAL filter —
+    # the role must still permit the tool. Absent (None) = UNRESTRICTED;
+    # an explicit EMPTY set is deny-by-default.
+    if allowed_tools is not None and tool not in allowed_tools:
+        return False, "", _LEG_ALLOWED_TOOLS
+
+    # Leg 2: resolution. Unmapped + not read-only ⇒ deny (deny-by-default).
+    permission_key = _permission_key_for(tool, action)
+    if permission_key is None:
+        return False, "", _LEG_UNMAPPED
+
+    # Leg 3: caller-scope (kill-switch-ineligible).
+    classification = classify_caller_scope(tool, permission_key)
+    if classification == _CALLER_SCOPE_CALLER and key_scope != "user":
+        return False, permission_key, _LEG_CALLER_SCOPE
+    if classification == _CALLER_SCOPE_ORG_ONLY and key_scope == "user" and auth_type == "api_key":
+        return False, permission_key, _LEG_CALLER_SCOPE
+
+    # Leg 4: role hierarchy (kill-switch-eligible). Fail-closed on a
+    # missing/unknown role regardless of the kill switch, mirroring
+    # ``assert_org_role``'s identity checks.
+    required = resolve_required(permission_key)
+    if role is None or not isinstance(role, str) or not role:
+        return False, permission_key, _LEG_ROLE
+    actual_level = ORG_ROLE_HIERARCHY.get(role.strip().lower())
+    if actual_level is None:
+        return False, permission_key, _LEG_ROLE
+    if kill_switch and actual_level < ORG_ROLE_HIERARCHY[required]:
+        return False, permission_key, _LEG_ROLE
+    # Leg 5 (FAR-1477): grant-set membership + live non-delegable exclusion.
+    if not grants_permit(grants, permission_key):
+        return False, permission_key, _LEG_GRANTS
+    # Leg 6 (FAR-1930): system-admin requirement. A strict identity claim with
+    # no org-role fall-through, so the org-role kill switch never bypasses it.
+    # Last, and gated on the per-tool declaration, so a tool outside
+    # ``SYSTEM_ADMIN_TOOLS`` is wholly unaffected by the flag.
+    if _tool_requires_system_admin(tool) and not is_system_admin:
+        return False, permission_key, _LEG_SYSTEM_ADMIN
+    return True, permission_key, None
+
+
 def resolve_tool_access(
     tool: str,
     action: str | None,
@@ -415,6 +515,8 @@ def resolve_tool_access(
 
     Returns ``(allowed, permission_key)``. ``permission_key`` is the resolved
     key for error/log detail, or ``""`` when the tool could not be resolved.
+    Delegates to ``_resolve_tool_access_detail``, which additionally reports
+    the failing leg.
 
     Composes six deny-only legs in a fixed order (never widen):
 
@@ -445,46 +547,18 @@ def resolve_tool_access(
        that leg's existing denial reason; it fires only when every other leg
        passed. A tool NOT so declared ignores the flag entirely.
     """
-    # Leg 1: node-level allowed_tools narrowing. When the node's
-    # capability_scope declares an allow-list it is an ADDITIONAL filter —
-    # the role must still permit the tool. Absent (None) = UNRESTRICTED;
-    # an explicit EMPTY set is deny-by-default.
-    if allowed_tools is not None and tool not in allowed_tools:
-        return False, ""
-
-    # Leg 2: resolution. Unmapped + not read-only ⇒ deny (deny-by-default).
-    permission_key = _permission_key_for(tool, action)
-    if permission_key is None:
-        return False, ""
-
-    # Leg 3: caller-scope (kill-switch-ineligible).
-    classification = classify_caller_scope(tool, permission_key)
-    if classification == _CALLER_SCOPE_CALLER and key_scope != "user":
-        return False, permission_key
-    if classification == _CALLER_SCOPE_ORG_ONLY and key_scope == "user" and auth_type == "api_key":
-        return False, permission_key
-
-    # Leg 4: role hierarchy (kill-switch-eligible). Fail-closed on a
-    # missing/unknown role regardless of the kill switch, mirroring
-    # ``assert_org_role``'s identity checks.
-    required = resolve_required(permission_key)
-    if role is None or not isinstance(role, str) or not role:
-        return False, permission_key
-    actual_level = ORG_ROLE_HIERARCHY.get(role.strip().lower())
-    if actual_level is None:
-        return False, permission_key
-    if kill_switch and actual_level < ORG_ROLE_HIERARCHY[required]:
-        return False, permission_key
-    # Leg 5 (FAR-1477): grant-set membership + live non-delegable exclusion.
-    if not grants_permit(grants, permission_key):
-        return False, permission_key
-    # Leg 6 (FAR-1930): system-admin requirement. A strict identity claim with
-    # no org-role fall-through, so the org-role kill switch never bypasses it.
-    # Last, and gated on the per-tool declaration, so a tool outside
-    # ``SYSTEM_ADMIN_TOOLS`` is wholly unaffected by the flag.
-    if tool_requires_system_admin(tool) and not is_system_admin:
-        return False, permission_key
-    return True, permission_key
+    allowed, permission_key, _denied_leg = _resolve_tool_access_detail(
+        tool=tool,
+        action=action,
+        role=role,
+        key_scope=key_scope,
+        auth_type=auth_type,
+        allowed_tools=allowed_tools,
+        kill_switch=kill_switch,
+        grants=grants,
+        is_system_admin=is_system_admin,
+    )
+    return allowed, permission_key
 
 
 # Import-time fail-fast validation: every tool's permission key must resolve
@@ -526,7 +600,7 @@ def check_tool_scope(
     grants: frozenset[str] | None = None,
     is_system_admin: bool = False,
 ) -> None:
-    """Single tool-dispatch chokepoint (delegates to ``resolve_tool_access``).
+    """Single tool-dispatch chokepoint (delegates to ``_resolve_tool_access_detail``).
 
     FAR-620: the DECISION is made by the pure resolver; this wrapper keeps the
     input validation, the ContextVar wiring (node allowed-tools fallback, the
@@ -575,7 +649,7 @@ def check_tool_scope(
         allowed_set = {_sanitize(t, name="allowed_tool") for t in allowed_tools}
 
     kill_switch = authz_enforce_enabled()
-    allowed, _permission_key = resolve_tool_access(
+    allowed, _permission_key, denied_leg = _resolve_tool_access_detail(
         tool=normalized,
         action=act,
         role=current_role,
@@ -599,56 +673,15 @@ def check_tool_scope(
             grants=grants,
             is_system_admin=is_system_admin,
         )
-        _log.warning("Scope check failed: %s", message)
-        if _is_sole_system_admin_denial(
-            tool=normalized,
-            action=act,
-            role=current_role,
-            key_scope=key_scope,
-            auth_type=auth_type,
-            allowed_set=allowed_set,
-            kill_switch=kill_switch,
-            grants=grants,
-            is_system_admin=is_system_admin,
-        ):
+        if denied_leg == _LEG_SYSTEM_ADMIN:
+            # FAR-1930: the MCP adapter (``_check_agent_tool_scope``) owns the
+            # single canonical warning for a system-admin refusal — it holds
+            # the call-site context and emits the ``system_admin_required``
+            # reason. The subclass selects that path; do NOT also log the
+            # generic line here, or every denial double-logs.
             raise MCPSystemAdminRequiredError(message)
+        _log.warning("Scope check failed: %s", message)
         raise MCPAuthorizationError(message)
-
-
-def _is_sole_system_admin_denial(
-    *,
-    tool: str,
-    action: str | None,
-    role: str,
-    key_scope: str | None,
-    auth_type: str | None,
-    allowed_set: set[str] | None,
-    kill_switch: bool,
-    grants: frozenset[str] | None,
-    is_system_admin: bool,
-) -> bool:
-    """True when the FAR-1930 system-admin leg is the ONLY failing leg.
-
-    The system-admin leg is last and independent, so re-resolving with
-    ``is_system_admin=True`` isolates it: an ALLOWED re-resolution proves every
-    other leg passed and the requirement alone denied. Used solely to select
-    the exception SUBCLASS (the MCP surface attaches a call-site warning to
-    it); the access decision itself is always the resolver's.
-    """
-    if is_system_admin or not tool_requires_system_admin(tool):
-        return False
-    allowed_ignoring_requirement, _ = resolve_tool_access(
-        tool=tool,
-        action=action,
-        role=role,
-        key_scope=key_scope,
-        auth_type=auth_type,
-        allowed_tools=allowed_set,
-        kill_switch=kill_switch,
-        grants=grants,
-        is_system_admin=True,
-    )
-    return allowed_ignoring_requirement
 
 
 def _denial_message(
@@ -704,6 +737,6 @@ def _denial_message(
         return f"Tool '{tool_name}' requires '{permission_key}', which is not granted to this API key"
     # Leg 6 (FAR-1930): system-admin requirement. Reached only when every other
     # leg passed; the detail matches the MCP refusal envelope verbatim.
-    if tool_requires_system_admin(normalized) and not is_system_admin:
+    if _tool_requires_system_admin(normalized) and not is_system_admin:
         return f"{tool_name} requires system admin role"
     return f"Tool '{tool_name}' access denied"

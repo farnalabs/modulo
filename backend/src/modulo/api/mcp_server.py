@@ -558,30 +558,24 @@ def _ctx_is_system_admin_val() -> bool:
     return bool(_ctx_is_system_admin.get(False))
 
 
-def _system_admin_denied(tool_name: str) -> dict[str, Any]:
-    """Log and build the refusal for a system-admin-gated MCP tool (FAR-1879).
+def _log_system_admin_denial(tool_name: str) -> None:
+    """Emit the single canonical warning for a system-admin MCP refusal (FAR-1879/FAR-1930).
 
-    FAR-1930: the system-admin requirement now lives in the shared scope
-    resolver (``SYSTEM_ADMIN_TOOLS`` declares the tools; ``resolve_tool_access``
-    enforces the claim). This helper survives as the canonical refusal envelope
-    and call-site log for that denial — ``_check_agent_tool_scope`` invokes it
-    when the resolver raises ``MCPSystemAdminRequiredError``.
+    FAR-1930: the requirement now lives in the shared scope resolver
+    (``SYSTEM_ADMIN_TOOLS`` declares the tools; ``resolve_tool_access``
+    enforces the claim). The resolver recognises the denial but does not log
+    it, because the MCP surface owns the one call-site line: ``mcp_audited``
+    records only a coarse ``outcome="error"`` with no call-site context, so
+    without this a stream of refusals is invisible and indistinguishable from
+    operational errors.
 
-    The refusal is logged because ``mcp_audited`` records only a coarse
-    ``outcome="error"`` with no call-site line: without this, a stream of
-    refusals is invisible in logs and indistinguishable from operational
-    errors. The reason code is log-only — the caller-facing envelope is
-    unchanged, so a caller cannot tell an absent auth context from a
-    non-system-admin denial (which leaks nothing about the deployment).
+    The reason is always ``system_admin_required``: ``check_tool_scope``
+    denies an unset auth context with a plain ``MCPAuthorizationError`` before
+    the system-admin leg is reached, so a system-admin denial always has a
+    live role. The caller-facing envelope is built from the resolver's own
+    message in ``_check_agent_tool_scope`` — this helper only logs.
     """
-    # ``_ctx_role`` has no default, so an unset role means the request never
-    # populated the auth context at all (stdio / an unsupported transport).
-    reason = "no_auth_context" if _ctx_role.get(None) is None else "system_admin_required"
-    _log.warning("MCP tool '%s' refused: %s", tool_name, reason)
-    return {
-        "error": "insufficient_scope",
-        "detail": f"{tool_name} requires system admin role",
-    }
+    _log.warning("MCP tool '%s' refused: system_admin_required", tool_name)
 
 
 def _check_agent_tool_scope(tool_name: str, action: str | None = None) -> None:
@@ -611,13 +605,14 @@ def _check_agent_tool_scope(tool_name: str, action: str | None = None) -> None:
             grants=_ctx_key_grants.get(None),
             is_system_admin=_ctx_is_system_admin_val(),
         )
-    except MCPSystemAdminRequiredError:
-        # FAR-1930: the shared resolver owns the gate; this adapter preserves
-        # the FAR-1879 call-site warning (``mcp_audited`` records only a coarse
-        # outcome) and re-raises the canonical refusal detail so the tool
-        # handler's ``except MCPAuthorizationError`` envelope is byte-identical
-        # to the pre-centralisation response.
-        raise MCPAuthorizationError(_system_admin_denied(tool_name)["detail"]) from None
+    except MCPSystemAdminRequiredError as exc:
+        # FAR-1930: the shared resolver owns the gate. This adapter emits the
+        # single canonical call-site warning and re-raises the resolver's own
+        # refusal message, so the tool handler's ``except
+        # MCPAuthorizationError`` envelope is byte-identical to the
+        # pre-centralisation response.
+        _log_system_admin_denial(tool_name)
+        raise MCPAuthorizationError(str(exc)) from None
 
 
 # FAR-1184: raising or clearing a pipeline's spend circuit-breaker threshold

@@ -20,6 +20,7 @@ non-system-admin role is rejected by the system-admin leg.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -206,3 +207,42 @@ class TestPerformHousekeepingSystemAdminParity(_ParityAuthContext):
             result = await perform_housekeeping(items=[])
 
         assert result == {"deleted_count": 0, "errors": []}
+
+
+# ---------------------------------------------------------------------------
+# FAR-1930 (finding C): exactly ONE canonical warning per system-admin denial
+#
+# Centralising the gate must not double the log volume. The shared resolver
+# recognises the denial but stays silent; the MCP adapter emits the single
+# call-site line carrying the tool name and the ``system_admin_required``
+# reason. Before the fix the resolver's generic ``Scope check failed`` line
+# AND the adapter line both fired (housekeeping 1 -> 2 warnings;
+# ``list_feature_flags`` 0 -> 2).
+# ---------------------------------------------------------------------------
+
+
+class TestSystemAdminDenialLogging(_ParityAuthContext):
+    @pytest.fixture(autouse=True)
+    def _validate_auth(self) -> Iterator[None]:
+        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+            yield
+
+    @pytest.mark.parametrize("tool", ["list_feature_flags", "list_housekeeping", "perform_housekeeping"])
+    async def test_denial_logs_exactly_one_canonical_line(self, tool: str, caplog: pytest.LogCaptureFixture) -> None:
+        import modulo.api.mcp_server as ms
+
+        ms._ctx_role.set("admin")
+        with caplog.at_level(logging.WARNING):
+            if tool == "list_feature_flags":
+                result = await ms.list_feature_flags()
+            elif tool == "list_housekeeping":
+                result = await ms.list_housekeeping()
+            else:
+                result = await ms.perform_housekeeping(items=[])
+
+        assert result["error"] == "insufficient_scope"
+        assert result["detail"] == _SYS_ADMIN_DETAIL.format(tool=tool)
+        messages = [record.getMessage() for record in caplog.records]
+        assert sum("system_admin_required" in message for message in messages) == 1, messages
+        assert not any(message.startswith("Scope check failed") for message in messages), messages
+        assert any(tool in message for message in messages), messages
