@@ -100,9 +100,9 @@ describe('AppLayout', () => {
       // mode here — an unresolved store must render the pending placeholder
       // instead (asserted in the FAR-1237 block below).
       usePlanStore().features['mobile_sidebar_rail'] = false
-      // The mocked onboarding API resolves ready=true with isFirstRun defaulting
-      // to true, so the banner would otherwise be active. Dismiss it to isolate
-      // the header-only offset path this test exercises.
+      // The onboarding banner renders in normal flow and reserves its own
+      // height, so its active/dismissed state does not change <main>'s padding
+      // class at all. Dismiss it here purely for determinism.
       const onboarding = useOnboardingStore()
       onboarding.dismissed = true
       await nextTick()
@@ -112,7 +112,11 @@ describe('AppLayout', () => {
       expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(true)
     })
 
-    it('combines header + banner offsets into one additive padding class when both are active on mobile', async () => {
+    it('keeps header-only padding when the mobile header and the onboarding banner are both active', async () => {
+      // Regression pin: the onboarding banner is in normal flow, so it reserves
+      // its own height and <main> must NOT add a banner offset. The padding here
+      // is identical to the banner-inactive case ("pt-14" on mobile) — any
+      // banner term would double-count the gap.
       mockMatchMedia(false)
       const wrapper = mount(AppLayout, {
         global: {
@@ -126,13 +130,23 @@ describe('AppLayout', () => {
       store.dismissed = false
       await nextTick()
       await nextTick()
+      // Pin the premise: the banner must actually be RENDERED for the
+      // no-offset assertions below to mean anything. The trigger button lives
+      // inside OnboardingBanner's `v-if="store.isActive"` root, so it only
+      // exists when the banner is active (same locator the active-banner and
+      // inactive-banner tests in this file use).
+      expect(wrapper.find('[data-testid="onboarding-banner-trigger"]').exists()).toBe(true)
       const main = wrapper.find('main')
-      expect(main.classes()).toContain('pt-[calc(3.5rem+8.25rem)]')
-      expect(main.classes()).not.toContain('pt-14')
+      expect(main.classes()).toContain('pt-14')
+      expect(main.classes()).not.toContain('pt-[calc(3.5rem+8.25rem)]')
       expect(main.classes()).not.toContain('pt-[8.25rem]')
+      expect(main.classes()).not.toContain('md:pt-20')
     })
 
-    it('uses banner-only padding on mobile when the rail header (flag ON) replaces the fixed header', async () => {
+    it('adds no padding when the rail (flag ON) replaces the fixed header, even with the banner active', async () => {
+      // The rail is in-flow, so there is no fixed header to clear and the
+      // in-flow banner needs no offset — the padding matches the
+      // banner-inactive rail case (empty). Banner state does not vary padding.
       mockMatchMedia(false)
       const wrapper = mount(AppLayout, {
         global: {
@@ -149,8 +163,10 @@ describe('AppLayout', () => {
       await nextTick()
       await nextTick()
       const main = wrapper.find('main')
-      expect(main.classes()).toContain('pt-[8.25rem]')
       expect(main.classes()).not.toContain('pt-14')
+      expect(main.classes()).not.toContain('pt-[8.25rem]')
+      expect(main.classes()).not.toContain('pt-[calc(3.5rem+8.25rem)]')
+      expect(main.classes()).not.toContain('md:pt-20')
     })
   })
 

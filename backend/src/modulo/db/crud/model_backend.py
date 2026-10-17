@@ -114,7 +114,8 @@ async def list_model_backends(
         items = list((await session.execute(items_stmt)).scalars())
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
-    return PageResult(items=items, total=total, page=page, page_size=page_size)
+    has_more = (offset + len(items)) < total
+    return PageResult(items=items, total=total, page=page, page_size=page_size, has_more=has_more)
 
 
 async def update_model_backend(
@@ -349,4 +350,5 @@ async def list_pipeline_references_for_backend(
     total = len(all_refs)
     start = (page - 1) * page_size
     end = start + page_size
-    return PageResult(items=all_refs[start:end], total=total, page=page, page_size=page_size)
+    has_more = end < total
+    return PageResult(items=all_refs[start:end], total=total, page=page, page_size=page_size, has_more=has_more)

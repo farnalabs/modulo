@@ -42,6 +42,11 @@ def _make_mock_session() -> AsyncMock:
     execute_result.scalars.return_value = scalars_mock
     # scalar_one_or_none is called synchronously in viewmodel code, not awaited
     execute_result.scalar_one_or_none = MagicMock(return_value=None)
+    # The offset-pagination count reads (e.g. list_views) go through
+    # scalar_one()/scalar(); a bare MagicMock there makes the new has_more
+    # comparison raise TypeError, so serve a real 0 (empty page) total.
+    execute_result.scalar_one = MagicMock(return_value=0)
+    execute_result.scalar = MagicMock(return_value=0)
     session.execute = AsyncMock(return_value=execute_result)
     return session
 

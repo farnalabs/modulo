@@ -85,7 +85,8 @@ async def list_external_agents(
     if org_filter is not None:
         items_stmt = items_stmt.where(org_filter)
     items = list((await session.execute(items_stmt)).scalars())
-    return PageResult(items=items, total=total, page=page, page_size=page_size)
+    has_more = (offset + len(items)) < total
+    return PageResult(items=items, total=total, page=page, page_size=page_size, has_more=has_more)
 
 
 async def update_external_agent(

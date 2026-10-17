@@ -90,6 +90,9 @@ async def list_triggers(
             has_more=cp.has_more,
         )
 
+    # Non-cursor branch: the query carries NO limit, so this returns the
+    # COMPLETE filtered trigger list (total = len(items)). Nothing exists
+    # beyond it — has_more=False is correct by construction, not a default.
     result = await session.execute(q)
     items = list(result.scalars().all())
     total = len(items)
