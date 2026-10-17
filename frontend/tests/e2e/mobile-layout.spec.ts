@@ -1,4 +1,4 @@
-import { devices, type Page, type Response } from '@playwright/test'
+import { devices, type ConsoleMessage, type Frame, type Page, type Request, type Response } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 import yaml from 'js-yaml'
 import fs from 'node:fs'
@@ -169,6 +169,289 @@ const APP_MOUNT_TIMEOUT_MS = 30_000
 // and keep the config's 180s default.
 const LOCAL_SWEEP_TIMEOUT_MS = 45_000
 
+// ---------------------------------------------------------------------------
+// FAR-1890: on-failure mount diagnostics.
+//
+// The full sweep intermittently fails a route with "did not mount within
+// 30000ms" at the FIRST (deliberately unmocked) goto, where the app's bootstrap
+// API calls hit the dev proxy with no backend behind it. A bare timeout says
+// nothing about WHY `#app` stayed empty, and the competing explanations are
+// indistinguishable without evidence:
+//
+//   a) the module graph never finished loading (a hung/unanswered request);
+//   b) Vite re-optimised dependencies mid-sweep and forced a full page reload,
+//      so the document was torn down before any component could mount;
+//   c) the graph loaded but a bootstrap promise never settled (an unbounded
+//      await on the mount critical path, upstream of the router guard);
+//   d) an uncaught error aborted the bootstrap path.
+//
+// So on failure we capture: browser console (incl. the `[vite]` client's own
+// lines), page errors, failed responses, requests still in flight at the moment
+// of failure, whether `#app` ever had children, the document load count, and the
+// `vite:*` window events. The dump is written to stdout and to
+// tests/e2e/.mount-diagnostics/.
+// ---------------------------------------------------------------------------
+
+const DIAG_DIR = path.join(__dirname, '.mount-diagnostics')
+const DIAG_CONSOLE_CAP = 500
+
+interface MountDiagnostics {
+  console: string[]
+  consoleDropped: number
+  pageErrors: string[]
+  requestFailed: string[]
+  badResponses: string[]
+  navigations: string[]
+  requestsStarted: number
+  requestsFinished: number
+  inflight: Map<Request, number>
+  dispose: () => void
+}
+
+const diagnosticsByPage = new WeakMap<Page, MountDiagnostics>()
+
+// Runs in the page before any application code, on EVERY document load.
+// Accumulates across reloads via sessionStorage, so a document that reloads
+// repeatedly is distinguishable from one that never loaded at all — the
+// decisive signal for candidate (b). `vite:*` events are dispatched by Vite's
+// own client, so they distinguish a Vite-triggered reload from any other
+// navigation.
+const DIAG_INIT_SCRIPT = `
+(() => {
+  const bump = (key) => {
+    try {
+      const next = Number(sessionStorage.getItem(key) || '0') + 1
+      sessionStorage.setItem(key, String(next))
+      return next
+    } catch { return 0 }
+  }
+  window.__diagAppChildMax = 0
+  window.__diagNav = bump('__diag_nav')
+  for (const evt of ['vite:beforeFullReload', 'vite:ws:disconnect', 'vite:error', 'vite:invalidate', 'vite:ws:connect']) {
+    window.addEventListener(evt, () => bump('__diag_' + evt))
+  }
+  setInterval(() => {
+    try {
+      const app = document.querySelector('#app')
+      const n = app ? app.children.length : 0
+      if (n > window.__diagAppChildMax) window.__diagAppChildMax = n
+    } catch { /* document torn down mid-poll */ }
+  }, 100)
+})()
+`
+
+// Attach BEFORE the first goto so the initial load is captured in full.
+function attachMountDiagnostics(page: Page): MountDiagnostics {
+  const existing = diagnosticsByPage.get(page)
+  if (existing) return existing
+
+  const diag: MountDiagnostics = {
+    console: [],
+    consoleDropped: 0,
+    pageErrors: [],
+    requestFailed: [],
+    badResponses: [],
+    navigations: [],
+    requestsStarted: 0,
+    requestsFinished: 0,
+    inflight: new Map<Request, number>(),
+    dispose: () => {},
+  }
+
+  const onConsole = (msg: ConsoleMessage) => {
+    if (diag.console.length >= DIAG_CONSOLE_CAP) {
+      diag.consoleDropped += 1
+      return
+    }
+    diag.console.push(`[${msg.type()}] ${msg.text()}`)
+  }
+  const onPageError = (err: Error) => {
+    diag.pageErrors.push(err.stack ?? err.message)
+  }
+  const onRequest = (req: Request) => {
+    diag.requestsStarted += 1
+    diag.inflight.set(req, Date.now())
+  }
+  const onRequestFinished = (req: Request) => {
+    diag.requestsFinished += 1
+    diag.inflight.delete(req)
+  }
+  const onRequestFailed = (req: Request) => {
+    diag.inflight.delete(req)
+    diag.requestFailed.push(`${req.method()} ${req.url()} — ${req.failure()?.errorText ?? 'unknown failure'}`)
+  }
+  const onResponse = (res: Response) => {
+    if (res.status() >= 400) diag.badResponses.push(`${res.status()} ${res.url()}`)
+  }
+  const onFrameNavigated = (frame: Frame) => {
+    if (frame === page.mainFrame()) diag.navigations.push(frame.url())
+  }
+
+  page.on('console', onConsole)
+  page.on('pageerror', onPageError)
+  page.on('request', onRequest)
+  page.on('requestfinished', onRequestFinished)
+  page.on('requestfailed', onRequestFailed)
+  page.on('response', onResponse)
+  page.on('framenavigated', onFrameNavigated)
+
+  diag.dispose = () => {
+    page.off('console', onConsole)
+    page.off('pageerror', onPageError)
+    page.off('request', onRequest)
+    page.off('requestfinished', onRequestFinished)
+    page.off('requestfailed', onRequestFailed)
+    page.off('response', onResponse)
+    page.off('framenavigated', onFrameNavigated)
+  }
+
+  diagnosticsByPage.set(page, diag)
+  return diag
+}
+
+interface MountPageState {
+  readyState: string
+  url: string
+  appExists: boolean
+  appChildren: number
+  appChildMax: number
+  navCount: number
+  bodyLength: number
+  moduleScripts: string[]
+  resourceCount: number
+  sessionNav: number
+  viteBeforeFullReload: number
+  viteWsDisconnect: number
+  viteWsConnect: number
+  viteError: number
+  viteInvalidate: number
+}
+
+async function collectMountDiagnostics(page: Page, diag: MountDiagnostics, route: string): Promise<string> {
+  const lines: string[] = []
+  const push = (s: string) => lines.push(s)
+
+  let state: MountPageState | null = null
+  let stateError = ''
+  try {
+    state = await page.evaluate(() => {
+      const w = window as unknown as Record<string, unknown>
+      const app = document.querySelector('#app')
+      const session = (k: string) => {
+        try { return Number(sessionStorage.getItem(k) || '0') } catch { return -1 }
+      }
+      return {
+        readyState: document.readyState,
+        url: location.href,
+        appExists: app !== null,
+        appChildren: app ? app.children.length : -1,
+        appChildMax: Number(w.__diagAppChildMax ?? -1),
+        navCount: Number(w.__diagNav ?? -1),
+        bodyLength: document.body ? document.body.innerHTML.length : -1,
+        moduleScripts: Array.from(document.querySelectorAll('script[type="module"]'))
+          .map(e => (e as HTMLScriptElement).src || '(inline)'),
+        resourceCount: performance.getEntriesByType('resource').length,
+        sessionNav: session('__diag_nav'),
+        viteBeforeFullReload: session('__diag_vite:beforeFullReload'),
+        viteWsDisconnect: session('__diag_vite:ws:disconnect'),
+        viteWsConnect: session('__diag_vite:ws:connect'),
+        viteError: session('__diag_vite:error'),
+        viteInvalidate: session('__diag_vite:invalidate'),
+      } satisfies MountPageState
+    })
+  } catch (err) {
+    stateError = err instanceof Error ? err.message : String(err)
+  }
+
+  push('='.repeat(78))
+  push(`[FAR-1890 mount diagnostics] route=${route} at ${new Date().toISOString()}`)
+  push('='.repeat(78))
+
+  if (state) {
+    push('-- in-page state -----------------------------------------------')
+    push(`url:               ${state.url}`)
+    push(`readyState:        ${state.readyState}`)
+    push(`#app exists:       ${state.appExists}`)
+    push(`#app children:     ${state.appChildren}   (max ever seen: ${state.appChildMax})`)
+    push(`document load #:   ${state.sessionNav}   (framenavigated events: ${diag.navigations.length})`)
+    push(`body innerHTML:    ${state.bodyLength} chars`)
+    push(`completed xhr/res: ${state.resourceCount}`)
+    push(`module scripts:    ${state.moduleScripts.length}${state.moduleScripts.length > 0 ? ' -> ' + state.moduleScripts.join(', ') : ''}`)
+    if (state.sessionNav > 1) {
+      push(`*** DOCUMENT RELOADED ${state.sessionNav} TIMES — the page was torn down repeatedly`)
+    }
+  } else {
+    push(`-- in-page state unavailable: ${stateError}`)
+  }
+
+  push('-- vite client events (session-cumulative) ---------------------')
+  if (state) {
+    push(`vite:beforeFullReload=${state.viteBeforeFullReload}  vite:ws:disconnect=${state.viteWsDisconnect}  ` +
+      `vite:ws:connect=${state.viteWsConnect}  vite:error=${state.viteError}  vite:invalidate=${state.viteInvalidate}`)
+    if (state.viteWsDisconnect > 0 && state.viteWsConnect === 0) {
+      push('*** Vite HMR websocket disconnected and never reconnected')
+    }
+  }
+
+  push('-- navigation events (main frame) ------------------------------')
+  if (diag.navigations.length === 0) push('(none recorded)')
+  for (const [i, url] of diag.navigations.entries()) push(`${i + 1}. ${url}`)
+
+  push('-- requests still in flight at failure -------------------------')
+  const now = Date.now()
+  const pending = [...diag.inflight.entries()]
+    .map(([req, startedAt]) => ({ url: `${req.method()} ${req.url()}`, ms: now - startedAt }))
+    .sort((a, b) => b.ms - a.ms)
+  push(`started=${diag.requestsStarted} finished=${diag.requestsFinished} inflight=${pending.length}`)
+  if (pending.length === 0) push('(none — nothing was hanging)')
+  for (const p of pending) push(`  ${String(p.ms).padStart(7)}ms  ${p.url}`)
+
+  push('-- failed requests ---------------------------------------------')
+  if (diag.requestFailed.length === 0) push('(none)')
+  for (const r of diag.requestFailed) push(`  ${r}`)
+
+  push('-- responses with status >= 400 --------------------------------')
+  if (diag.badResponses.length === 0) push('(none)')
+  for (const r of diag.badResponses) push(`  ${r}`)
+
+  push('-- uncaught page errors ----------------------------------------')
+  if (diag.pageErrors.length === 0) push('(none)')
+  for (const e of diag.pageErrors) push(`  ${e}`)
+
+  const viteConsole = diag.console.filter(l => l.includes('[vite]'))
+  push('-- browser console: vite lines ---------------------------------')
+  if (viteConsole.length === 0) push('(none)')
+  for (const l of viteConsole) push(`  ${l}`)
+
+  push(`-- browser console: all ${diag.console.length} lines (cap ${DIAG_CONSOLE_CAP}, dropped ${diag.consoleDropped}) --`)
+  for (const l of diag.console) push(`  ${l}`)
+
+  push('='.repeat(78))
+  return lines.join('\n')
+}
+
+async function writeMountDiagnostics(page: Page, route: string, reason: string): Promise<void> {
+  const diag = diagnosticsByPage.get(page)
+  if (!diag) return
+  let report: string
+  try {
+    report = await collectMountDiagnostics(page, diag, route)
+  } catch (err) {
+    const detail = err instanceof Error ? (err.stack ?? err.message) : String(err)
+    report = `[FAR-1890] diagnostics collection itself failed for ${route}:\n${detail}`
+  }
+  let file = '(not written)'
+  try {
+    fs.mkdirSync(DIAG_DIR, { recursive: true })
+    file = path.join(DIAG_DIR, `${route.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '') || 'root'}-${Date.now()}.log`)
+    fs.writeFileSync(file, `reason: ${reason}\n${report}\n`)
+  } catch (err) {
+    file = `(write failed: ${err instanceof Error ? err.message : String(err)})`
+  }
+  process.stdout.write(`\n${report}\ndiagnostics file: ${file}\n\n`)
+  diag.dispose()
+}
+
 // Wait for the Vue app to mount, failing fast with the HTTP status whenever the
 // target serves an error/non-SPA page instead of the app shell. A 5xx edge
 // response (the app is down) is detected immediately rather than after the
@@ -187,9 +470,11 @@ async function waitForAppMount(page: Page, route: string, response: Response | n
       { timeout: APP_MOUNT_TIMEOUT_MS },
     )
   } catch {
+    await writeMountDiagnostics(page, route, `did not mount within ${APP_MOUNT_TIMEOUT_MS}ms`)
     throw new Error(
       `[mobile-layout] ${route} did not mount within ${APP_MOUNT_TIMEOUT_MS}ms (${page.url()}) — ` +
-        'the target returned an error/non-SPA page; aborting route checks.',
+        'the target returned an error/non-SPA page; aborting route checks. ' +
+        '(FAR-1890: full mount diagnostics dumped above and under tests/e2e/.mount-diagnostics/)',
     )
   }
 }
@@ -201,6 +486,11 @@ async function waitForAppMount(page: Page, route: string, response: Response | n
 type PageReadiness = 'rendered' | 'deactivated'
 
 async function preparePage(page: Page, route: string, env: TestEnv): Promise<PageReadiness> {
+  // FAR-1890: attach BEFORE the first goto so the initial load — the load the
+  // intermittent failure lands on — is captured in full.
+  await page.addInitScript({ content: DIAG_INIT_SCRIPT })
+  attachMountDiagnostics(page)
+
   const response = await page.goto(route)
 
   await waitForAppMount(page, route, response)
