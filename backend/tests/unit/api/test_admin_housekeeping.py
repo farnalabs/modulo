@@ -258,6 +258,32 @@ class TestPerformCleanup:
         assert not body["errors"]
         session.delete.assert_awaited_once_with(obj)
 
+    def test_absent_row_is_not_counted(self, client: TestClient) -> None:
+        """A row absent, or owned by another org, is a no-op — not counted.
+
+        ``delete_one_in_savepoint``'s org-scoped SELECT returns ``None`` for a
+        missing/foreign-org id, so it returns False and the counter must not
+        advance (FAR-1857). This exercises the False arm of the count-only-
+        after-release guard in the REST cleanup route.
+        """
+        with patch("modulo.api.routes.admin_housekeeping.set_rls_org"):
+            session = _make_mock_session()
+            session.begin_nested = MagicMock(return_value=_make_begin_nested())
+            session.execute = AsyncMock()
+            session.execute.return_value.scalar_one_or_none = MagicMock(return_value=None)
+
+            async def override_session() -> AsyncGenerator[AsyncMock, None]:
+                yield session
+
+            client.app.dependency_overrides[get_db_session] = override_session
+            resp = client.post(self.URL, json={"items": [{"id": str(uuid.uuid4()), "entity_type": "secret"}]})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["deleted_count"] == 0
+        assert not body["errors"]
+        session.delete.assert_not_awaited()
+
     def test_unknown_entity_type_reports_error(self, client: TestClient) -> None:
         with patch("modulo.api.routes.admin_housekeeping.set_rls_org"):
             session = _make_mock_session()
