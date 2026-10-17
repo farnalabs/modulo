@@ -394,7 +394,7 @@ def _node_started_policy_allows(row: Any) -> tuple[bool, str]:
         budget = _retry_after_policy(policy, "stalled", "executor_stalled")
     if budget is None:
         return False, "the pipeline retry policy covers neither the failure nor the stall class"
-    attempt = max(int(getattr(row, "node_attempt_count", 0) or 0), max(0, int(row.claim_count) - 1))
+    attempt = max(int(getattr(row, "node_attempt_count", 0) or 0), 0, int(row.claim_count) - 1)
     if attempt > budget:
         return False, f"retry budget exhausted (attempt {attempt} > max_retries {budget})"
     return True, ""
