@@ -85,6 +85,7 @@ async def list_library_primitives(
     primitive_type: str | None = None,
     primitive_types: list[str] | None = None,
     search: str | None = None,
+    source: str | None = None,
     cursor: str | None = None,
     excluded_tiers: list[str] | None = None,
 ) -> PageResult[LibraryPrimitive]:
@@ -105,6 +106,12 @@ async def list_library_primitives(
     if search is not None and search.strip():
         term = f"%{search.strip()}%"
         conditions.append(LibraryPrimitive.name.ilike(term))
+
+    if source is not None:
+        # Pushed into the shared ``conditions`` so the COUNT, the row page and
+        # the cursor path all narrow to the same source-filtered universe — a
+        # Python-side post-filter cannot make ``total`` exact.
+        conditions.append(LibraryPrimitive.source == source)
 
     if excluded_tiers:
         conditions.append(~LibraryPrimitive.tier.in_(excluded_tiers))

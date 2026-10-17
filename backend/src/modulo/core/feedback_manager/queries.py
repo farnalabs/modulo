@@ -101,7 +101,6 @@ async def paginate_feedback_records(
     conditions: list[Any],
     page: int,
     page_size: int,
-    include_total: bool = True,
 ) -> tuple[list[FeedbackRecord], int]:
     """Paginate FeedbackRecord queries with tenant-scoped conditions."""
     from modulo.core.feedback_manager.exceptions import ValidationError
@@ -117,10 +116,8 @@ async def paginate_feedback_records(
     if not conditions:
         logger.warning("paginate_feedback_records called with empty conditions — no tenant filter applied")
 
-    total = 0
-    if include_total:
-        total_q = select(func.count()).select_from(select(FeedbackRecord).where(*conditions).subquery())
-        total = (await session.execute(total_q)).scalar() or 0
+    total_q = select(func.count()).select_from(select(FeedbackRecord).where(*conditions).subquery())
+    total = (await session.execute(total_q)).scalar() or 0
 
     offset = (page - 1) * page_size
     q = (
@@ -155,20 +152,16 @@ def paginated_response(
     page: int,
     page_size: int,
     extra: dict[str, Any] | None = None,
-    include_total: bool = True,
 ) -> dict[str, Any]:
     """Build the standard paginated response dict, optionally with extra keys.
 
-    ``has_more`` is derived so the envelope never contradicts itself:
-
-    * with a real ``total`` (``include_total=True``) it is exact —
-      ``(page - 1) * page_size + len(rows) < total``;
-    * without one (``include_total=False``) the count is unknown, so a full
-      page is the only signal that more rows may exist. That is a heuristic,
-      never an exact answer.
+    ``has_more`` is exact — ``(page - 1) * page_size + len(rows) < total`` —
+    because ``total`` is always a real row count (see
+    ``paginate_feedback_records``). The envelope can therefore never contradict
+    itself.
     """
     consumed = (page - 1) * page_size + len(rows)
-    has_more = consumed < total if include_total else len(rows) == page_size
+    has_more = consumed < total
     response: dict[str, Any] = {
         "items": rows,
         "total": total,

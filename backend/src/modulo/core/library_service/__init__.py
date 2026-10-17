@@ -1018,6 +1018,7 @@ async def _load_org_page(
                 primitive_type=primitive_type,
                 primitive_types=primitive_types,
                 search=search,
+                source=source,
                 cursor=cursor,
                 excluded_tiers=excluded_tiers,
             )
@@ -1036,19 +1037,6 @@ async def _load_org_page(
     except Exception:
         logger.exception("list_primitives — DB query failed for org %s", org_id)
     return org_page, db_community
-
-
-def _filter_org_by_source(
-    org_page: PageResult[LibraryPrimitive],
-    source: str | None,
-) -> tuple[list[LibraryPrimitive], int]:
-    """Narrow the org items (and total) to the requested source when given."""
-    org_items = list(org_page.items)
-    org_total = org_page.total
-    if source is not None:
-        org_items = [p for p in org_items if p.source == source]
-        org_total = len(org_items)
-    return org_items, org_total
 
 
 def _gather_in_memory_sources(
@@ -1131,7 +1119,9 @@ async def list_primitives(
     example pipelines, ``source="modulo"`` returns only Native library
     built-ins, ``source="local"`` returns only the org's own saved
     primitives. When omitted, all sources are merged (existing default
-    behaviour, unchanged for backwards compatibility).
+    behaviour, unchanged for backwards compatibility). The filter is applied
+    in SQL alongside the COUNT, so ``total`` and ``has_more`` stay exact on
+    the ``?source=`` path.
 
     ``primitive_types`` (when given) restricts the result to any of the
     listed primitive types, e.g. ``["workflow", "agent"]``. It takes
@@ -1153,7 +1143,10 @@ async def list_primitives(
         excluded_tiers=excluded_tiers,
     )
 
-    org_items, org_total = _filter_org_by_source(org_page, source)
+    # ``source`` is applied inside ``list_library_primitives`` (it shares the
+    # COUNT and row-page ``conditions``), so ``org_page.total`` is already the
+    # exact source-filtered universe count — no Python-side narrowing.
+    org_items, org_total = list(org_page.items), org_page.total
     modulo, community = _gather_in_memory_sources(
         primitive_type=primitive_type,
         primitive_types=primitive_types,
@@ -1169,18 +1162,26 @@ async def list_primitives(
     # ``has_more`` is derived here rather than forwarded from ``org_page.has_more``
     # so the envelope can never contradict its own items.
     #
-    # The two narrowing steps differ in whether ``total`` stays exact:
-    # * ``excluded_tiers`` does NOT narrow the total — the org COUNT query applies
-    #   the same tier filter as the items query (see ``_exclude_tiers``).
-    # * ``source`` DOES collapse it (see ``_filter_org_by_source``): that filter
-    #   runs only in Python after the offset query, with no count query behind it,
-    #   so on the ``?source=`` path ``total`` describes the returned page.
+    # Both narrowing steps keep ``total`` exact because each is pushed into the
+    # org COUNT query alongside the row page (see ``_exclude_tiers`` for tiers
+    # and ``list_primitives``'s ``source`` argument for the source filter).
+    # ``org_page.total`` is therefore the true universe count, and
+    # ``has_more`` is ``(page - 1) * page_size + len(all_items) < total``.
     has_more = (page - 1) * page_size + len(all_items) < total
     return PageResult(
         items=all_items,
         total=total,
         page=page,
         page_size=page_size,
+        # ``next_cursor`` is forwarded from the org page on purpose, even though
+        # the in-memory ``modulo``/``community`` items are appended whole and are
+        # NOT cursor-paginated. The cursor continues the org page only; the
+        # in-memory sources (which are bounded, small, and already complete in
+        # memory) are re-merged in full on every page. Making the two coexist
+        # under one cursor would require paginating a set that has no ordering
+        # key shared with the org rows, so the asymmetry is deliberate, not an
+        # oversight. ``has_more`` above is the authoritative "is there another
+        # page" signal; ``next_cursor`` is only meaningful for the org slice.
         next_cursor=org_page.next_cursor,
         has_more=has_more,
     )
