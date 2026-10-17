@@ -135,7 +135,7 @@ async def test_status_percent_clamped_to_100() -> None:
     resolved = capacity._ResolvedCapacity(100_000_000, 150_000_000, "env")
     with (
         patch("modulo.db.capacity.get_settings", return_value=_fake_settings(capacity_bytes=100_000_000)),
-        patch("modulo.db.capacity._resolve_capacity", new=AsyncMock(return_value=resolved)),
+        patch("modulo.db.capacity._resolve_capacity", new=MagicMock(return_value=resolved)),
     ):
         status = await db_capacity_status(engine)
     assert status["capacity_percent"] == 100.0
@@ -463,6 +463,25 @@ def test_filesystem_probe_clamps_a_negative_free_to_zero() -> None:
         new=MagicMock(return_value=SimpleNamespace(total=100, free=-5)),
     ):
         assert capacity._probe_filesystem_capacity("/vol") == (100, 0)
+
+
+# --- _try_source / _warn_no_capacity_source --------------------------------
+
+
+def test_try_source_returns_none_for_an_unknown_candidate() -> None:
+    # Defensive fall-through: a candidate that is neither ``env`` nor
+    # ``filesystem`` resolves nothing (fail-open) rather than raising, so a
+    # future source name cannot crash a dispatch by being unhandled.
+    assert capacity._try_source("bogus", _fake_settings(capacity_bytes=100_000_000), None) is None
+
+
+def test_warn_no_capacity_source_is_warn_once() -> None:
+    # The latch is a module-global warn-once: the second call is silent so a
+    # repeatedly-polled monitor cannot flood the log.
+    with patch("modulo.db.capacity._log") as log:
+        capacity._warn_no_capacity_source("/vol", "auto")
+        capacity._warn_no_capacity_source("/vol", "auto")
+    assert log.warning.call_count == 1
 
 
 # --- capacity_hard_stop (mode gating) --------------------------------------

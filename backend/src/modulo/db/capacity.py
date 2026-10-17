@@ -190,7 +190,7 @@ def _warn_no_capacity_source(path: str, source_pref: str) -> None:
     )
 
 
-async def _resolve_capacity(
+def _resolve_capacity(
     settings: Settings,
     source_pref: str,
     measured_pg_size: int | None,
@@ -290,7 +290,7 @@ async def db_capacity_status(engine: AsyncEngine) -> dict[str, Any]:
         measured = await _query_used_bytes(engine)
         used_bytes = measured if measured is not None else 0
         if mode == "fixed":
-            resolved = await _resolve_capacity(settings, source_pref, measured)
+            resolved = _resolve_capacity(settings, source_pref, measured)
             capacity_bytes = resolved.capacity_bytes
             source = resolved.source
             if resolved.used_bytes is not None:
