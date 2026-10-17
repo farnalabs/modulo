@@ -13267,6 +13267,8 @@ export interface components {
             used_bytes: number;
             /** Capacity Bytes */
             capacity_bytes: number | null;
+            /** Source */
+            source: string;
         };
         /** DeleteOAuthClientResponse */
         DeleteOAuthClientResponse: {

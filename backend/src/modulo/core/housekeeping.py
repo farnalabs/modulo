@@ -8,11 +8,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.graph_validator.mask_sentinel import find_mask_sentinel_values
 from modulo.db.bundled_runner_template import BUNDLED_RUNNER_PROVIDER_TYPE
+from modulo.db.crud.run_node_outputs import resolve_dialect
 from modulo.db.crud.run_retention import CHECKPOINT_RETENTION_DAYS, _checkpoint_detail
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
@@ -94,6 +95,37 @@ ENTITY_MODEL_MAP: dict[str, type] = {
 # Submitting a candidate from one of these to the cleanup endpoint returns a
 # clear triage message instead of a misleading "Unknown entity type" error.
 NON_DELETABLE_ENTITY_TYPES: frozenset[str] = frozenset({"invalid_org_fk", "degraded_composite_template"})
+
+
+async def delete_one_in_savepoint(
+    session: AsyncSession,
+    model_cls: type[Any],
+    entity_id: str,
+    organisation_id: uuid.UUID,
+) -> bool:
+    """Delete one org-scoped row; True only if its savepoint committed.
+
+    The org-scoped ``select`` (matching ``id`` AND ``organisation_id``) lives
+    here, so both callers — the REST cleanup route and the MCP
+    ``perform_housekeeping`` tool — share one implementation and cannot drift.
+
+    The DELETE is flushed when the nested transaction releases, so an FK
+    RESTRICT refusal raises here and the row survives — callers must count
+    only a True return (FAR-1857). An absent / foreign-org row is a no-op
+    returning False; a genuine ``IntegrityError`` propagates to the caller so
+    each call site keeps its own existing error handling.
+    """
+    deleted = False
+    async with session.begin_nested():
+        stmt = select(model_cls).where(
+            model_cls.id == entity_id,
+            model_cls.organisation_id == organisation_id,
+        )
+        obj = (await session.execute(stmt)).scalar_one_or_none()
+        if obj is not None:
+            await session.delete(obj)
+            deleted = True
+    return deleted
 
 
 @dataclass(frozen=True)
@@ -907,6 +939,61 @@ async def _scan_unused_schemas(session: AsyncSession, org_id: uuid.UUID) -> list
     ]
 
 
+def _lifecycle_map_has_no_stages(session: AsyncSession) -> ColumnElement[bool]:
+    """SQL predicate: the map has no stages configured.
+
+    Emptiness is derived structurally ("no stages"), never by dict equality
+    against ``{}`` (FAR-1856). Both real production shapes must count as empty:
+
+    * the three-key shape ``{"stages": [], "edges": [], "notes": ""}`` that the
+      editor's **save** path writes (``normalize_content`` in
+      ``core/lifecycle_map/validation.py``) once every stage is deleted; and
+    * a bare ``{}``, which the API persists for a map created with no content:
+      ``LifecycleMapCreate.content_json`` defaults to ``{}`` and
+      ``normalize_content`` leaves an empty payload ``{}`` (it validates only the
+      keys present and injects nothing).
+
+    Both are REQUIRED, not dead/legacy: a map created empty is empty just as
+    much as one the UI has emptied. A missing ``stages`` key, an empty array and
+    a malformed non-array value all count as "no stages" — matching the other
+    readers' ``content.get("stages") or []`` / ``isinstance(stages, list)``
+    guards (``api/routes/lifecycle_maps.py``, ``derive_lifecycle_map_stages``).
+
+    Dialect-branched because the array-length function and its type guard differ
+    between Postgres (``jsonb``; the product DB) and SQLite (the unit scanner
+    suite's dialect). ``jsonb_typeof`` returns NULL for a missing key, so the
+    CASE falls through to 0; the type guard stops ``jsonb_array_length`` raising
+    on a non-array value (Postgres refuses array length of a non-array).
+    """
+    stages = LifecycleMap.content_json["stages"]
+    dialect = resolve_dialect(session)
+    if dialect == "postgresql":
+        # ``jsonb_typeof`` is NULL for a missing key, so the CASE falls through
+        # to 0; the guard keeps ``jsonb_array_length`` from raising on a
+        # non-array value (Postgres refuses array length of a non-array).
+        length = case(
+            (func.jsonb_typeof(stages) == "array", func.jsonb_array_length(stages)),
+            else_=0,
+        )
+    elif dialect == "sqlite":
+        # SQLite: ``json_type`` is NULL for a missing path and
+        # ``json_array_length`` returns 0 for any non-array value.
+        length = case(
+            (func.json_type(LifecycleMap.content_json, "$.stages") == "array", func.json_array_length(stages)),
+            else_=0,
+        )
+    else:
+        # Fail loud on any other dialect rather than falling through to the
+        # SQLite branch: ``json_type``/``json_array_length`` are invalid on e.g.
+        # MySQL/MariaDB, where they would raise and ``scan_all`` would swallow
+        # the per-scanner exception into an empty category — the exact
+        # silent-failure class FAR-1856 fixed. Mirrors ``dialect_insert``.
+        raise NotImplementedError(
+            f"_lifecycle_map_has_no_stages is not implemented for the {dialect!r} backend (postgres/sqlite only)"
+        )
+    return func.coalesce(length, 0) == 0
+
+
 async def _scan_empty_lifecycle_maps(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
     """Lifecycle maps with empty content (no stages configured)."""
     maps = (
@@ -915,7 +1002,7 @@ async def _scan_empty_lifecycle_maps(session: AsyncSession, org_id: uuid.UUID) -
                 select(LifecycleMap).where(
                     LifecycleMap.organisation_id == org_id,
                     LifecycleMap.deleted_at.is_(None),
-                    LifecycleMap.content_json == {},  # empty dict = no content
+                    _lifecycle_map_has_no_stages(session),
                 )
             )
         )

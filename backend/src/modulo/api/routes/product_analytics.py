@@ -11,16 +11,19 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import delete, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR, MSG_ORGANISATION_NOT_FOUND
+from modulo.api.db_error_handling import handle_db_errors, raise_lock_timeout_conflict_if
 from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.routes._org_settings import apply_org_settings_patch_or_404
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
@@ -31,10 +34,9 @@ from modulo.core.product_analytics.consent import (
     is_egress_allowed,
     is_instance_analytics_enabled,
     is_prompt_eligible,
-    merge_product_analytics_block,
     set_level,
 )
-from modulo.core.product_analytics.constants import DEFAULT_LEVEL, LEVEL_OFF
+from modulo.core.product_analytics.constants import DEFAULT_LEVEL, LEVEL_OFF, PRODUCT_ANALYTICS_KEY
 from modulo.db.models.metrics_staging import MetricsStaging
 from modulo.db.models.organisation import Organisation
 from modulo.db.rls import set_rls_org
@@ -81,27 +83,26 @@ class LevelUpdateResponse(BaseModel):
 async def _get_org_or_404(
     session: AsyncSession,
     org_id: uuid.UUID,
-    *,
-    for_update: bool = False,
 ) -> Organisation:
     """Fetch an organisation by ID or raise 404.
 
-    When *for_update* is True, acquires a FOR UPDATE row lock to make
-    check-then-act sequences atomic within the enclosing transaction.
+    FAR-1025: opts out of the global soft-delete filter -- a pending-deletion
+    org is still operationally live; the consent check must still work during
+    the confirmation window.
 
-    FAR-1025: both paths opt out of the global soft-delete filter -- a
-    pending-deletion org is still operationally live; the consent check
-    must still work during the confirmation window.
+    FAR-1832: this is a READ-ONLY existence check. The writers no longer take
+    a ``FOR UPDATE`` row lock here — they write through the single-statement
+    atomic settings patch, whose UPDATE takes the row lock only for its own
+    statement (and refuses a soft-deleted org with ``LookupError``, which the
+    handlers map to the same 404).
     """
     stmt = include_soft_deleted(select(Organisation).where(Organisation.id == org_id))
-    if for_update:
-        stmt = stmt.with_for_update()
     result = await session.execute(stmt)
     org = result.scalar_one_or_none()
     if org is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Organisation not found.",
+            detail=MSG_ORGANISATION_NOT_FOUND,
         )
     return org
 
@@ -165,7 +166,7 @@ async def post_consent(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            org = await _get_org_or_404(session, current_user.organisation_id, for_update=True)
+            org = await _get_org_or_404(session, current_user.organisation_id)
 
             consent = get_product_analytics_block(org.settings_json)
 
@@ -176,9 +177,37 @@ async def post_consent(
                     detail="Consent prompt is not currently eligible. Dismissed prompts re-appear after 7 days.",
                 )
 
-            updated_consent = apply_consent_action(consent, req.action)
-            new_settings = merge_product_analytics_block(org.settings_json, updated_consent)
-            org.settings_json = new_settings
+            # FAR-1832 QA F1/F8: NESTED sub-field patch, composed ONLY from the
+            # request — ``apply_consent_action({}, action, now)`` derives the
+            # exact sub-fields this action changes WITHOUT consulting the
+            # stored block, and the helper's ``jsonb_set(… ||
+            # :nested_patch)`` composes them into the STORED product_analytics
+            # value at the sub-field level. Option (b) over a FOR UPDATE
+            # pre-lock because the write does NOT depend on the previous stored
+            # value: each action emits only its own sub-fields — ``accept`` and
+            # ``decline`` write ``level``, ``level_changed_at`` AND the
+            # ``prompted*`` pair, while ``dismiss`` writes only ``prompted*`` —
+            # so two concurrent writers of DIFFERENT sub-fields both survive
+            # (the old whole-block patch replaced the entire product_analytics
+            # value and lost one of them). A soft-deleted org
+            # (pending-deletion window) is refused with ``LookupError`` → the
+            # same 404 — the FAR-1830 retention-writer precedent; reads keep
+            # their FAR-1025 opt-out above.
+            now = datetime.now(UTC)
+            subpatch = apply_consent_action({}, req.action, now)
+            # QA F8: drive the response payload AND the LEVEL_OFF purge decision
+            # from the block the patch RETURNED (the committed post-write state),
+            # never a pre-write read. Under a concurrent writer that lands a
+            # different level between our read and our write, a stale pre-read
+            # would report — and purge on — a level the org is no longer on. The
+            # ``LookupError`` → 404 translation is the shared route helper
+            # (QA F7), byte-identical to the hand-copied block it replaces.
+            returned = await apply_org_settings_patch_or_404(
+                session,
+                current_user.organisation_id,
+                nested_patch={PRODUCT_ANALYTICS_KEY: subpatch},
+            )
+            updated_consent = get_product_analytics_block(returned)
 
             # Consent withdrawn -> drop staged events immediately (FAR-1717);
             # they can never be dumped for a non-consenting org anyway.
@@ -199,6 +228,15 @@ async def post_consent(
     except HTTPException:
         raise
     except asyncio.CancelledError:
+        raise
+    except SQLAlchemyError as exc:
+        # FAR-1832 QA F2: the settings patch bounds its row-lock wait, so a
+        # 55P03 lock timeout is reachable here. Classify it (409 conflict)
+        # via the shared classifier, then re-raise every other DB error so
+        # ``handle_db_errors`` maps it — genuine connection/unavailability
+        # errors stay 503, session-contract violations stay 500 — instead of
+        # the old blanket 500 below.
+        raise_lock_timeout_conflict_if(exc, "product_analytics.consent")
         raise
     except Exception:
         _log.exception("product_analytics.consent unexpected error")
@@ -261,12 +299,26 @@ async def update_product_analytics_level(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            org = await _get_org_or_404(session, current_user.organisation_id, for_update=True)
+            await _get_org_or_404(session, current_user.organisation_id)
 
-            consent = get_product_analytics_block(org.settings_json)
-            updated_consent = set_level(consent, req.level)
-            new_settings = merge_product_analytics_block(org.settings_json, updated_consent)
-            org.settings_json = new_settings
+            now = datetime.now(UTC)
+            # FAR-1832 QA F1/F8: same contract as the consent POST — the subpatch
+            # is composed ONLY from the request (``set_level({}, level, now)``
+            # emits exactly this toggle's sub-fields) and is written through
+            # the helper's nested sub-field patch, so a concurrent consent
+            # writer's prompted* sub-fields survive (no ``FOR UPDATE``
+            # pre-lock, no whole-block replace, soft-deleted org → 404). The
+            # response and the LEVEL_OFF purge decision both read the block the
+            # patch RETURNED, never a stale pre-write read (QA F8). A soft-deleted
+            # org is refused with ``LookupError`` → the shared route helper's 404
+            # (QA F7), whose body matches the org-missing read's (QA F11).
+            subpatch = set_level({}, req.level, now)
+            returned = await apply_org_settings_patch_or_404(
+                session,
+                current_user.organisation_id,
+                nested_patch={PRODUCT_ANALYTICS_KEY: subpatch},
+            )
+            updated_consent = get_product_analytics_block(returned)
 
             # Turning analytics OFF withdraws consent: drop staged events now
             # (FAR-1717), in the same transaction as the level write.
@@ -288,6 +340,12 @@ async def update_product_analytics_level(
     except HTTPException:
         raise
     except asyncio.CancelledError:
+        raise
+    except SQLAlchemyError as exc:
+        # FAR-1832 QA F2: same contract as the consent POST — 55P03 is a 409
+        # conflict via the shared classifier; other DB errors re-raise to
+        # ``handle_db_errors`` (503 for outages) instead of a blanket 500.
+        raise_lock_timeout_conflict_if(exc, "product_analytics.update_level")
         raise
     except Exception:
         _log.exception("product_analytics.update_level unexpected error")

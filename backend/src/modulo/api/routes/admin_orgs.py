@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from sqlalchemy.engine import CursorResult
 
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR, MSG_ORGANISATION_NOT_FOUND
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import handle_db_errors, raise_lock_timeout_conflict_if, raise_session_contract_error
 from modulo.api.dependencies import (
     deny_break_glass_mint,
     get_db_session,
@@ -23,6 +23,7 @@ from modulo.api.dependencies import (
     require_target_org_role,
     resolve_audit_principal,
 )
+from modulo.api.routes._org_settings import apply_org_settings_patch_or_404
 from modulo.api.routes.admin_license import invalidate_license_status_cache
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
@@ -40,7 +41,6 @@ from modulo.db.crud.organisation import (
     get_organisation,
     get_organisation_by_slug,
     list_organisations,
-    update_organisation,
 )
 from modulo.db.models.organisation import MODULO_REGISTRY_ORG_ID, SYSTEM_ORG_ID, Organisation
 from modulo.db.rls import set_rls_org
@@ -86,7 +86,16 @@ def _raise_programming_error(code: str, detail: str, exc: ProgrammingError) -> N
 
 
 def _raise_db_unavailable(code: str, detail: str, exc: SQLAlchemyError) -> NoReturn:
-    """503 -- database error while servicing the request."""
+    """503 -- database error while servicing the request.
+
+    FAR-1832 QA F2: a bounded lock timeout (SQLSTATE 55P03 — the settings
+    patch's ``set_mutation_row_lock_timeout`` expiring on a contended org
+    row) is classified FIRST through the shared canonical classifier and
+    raised as a 409 conflict — it is a busy-row contention, not an outage,
+    and a generic 503 would invite a retry storm against the busy lock.
+    Genuine connection/unavailability errors keep the 503 below.
+    """
+    raise_lock_timeout_conflict_if(exc, code)
     logger.error(code, exc_info=exc)
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -446,7 +455,9 @@ async def admin_create_org_user(
     # FAR-1517: NO audited() dependency — this handler hard-deletes the org, so
     # a post-commit org-scoped append can never satisfy the audit_events FK
     # (fail-open, recording nothing). The durable org-independent record is
-    # written IN-transaction before the delete instead.
+    # written IN-transaction AFTER ``delete_organisation`` (QA F6 moved it from
+    # before the delete so the org-row lock is taken first), before the
+    # transaction commits.
     status_code=status.HTTP_204_NO_CONTENT,
 )
 @handle_db_errors("admin.orgs.admin_delete_org")
@@ -463,10 +474,28 @@ async def admin_delete_org(
             if org is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
 
-            # FAR-1517: hard-deleting an org cascades away its entire audit
-            # trail, so the record of WHO deleted it goes to the org-independent
-            # ledger BEFORE the org row is removed — same transaction, so it
-            # commits only with the delete (a failed append aborts the delete).
+            # Capture the identity before the delete flushes (the ORM object
+            # stays readable, but taking it up front is the explicit shape).
+            org_identity = {
+                "organisation_name": org.name,
+                "organisation_slug": org.slug,
+            }
+
+            deleted = await delete_organisation(session, org_id)
+            if not deleted:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
+
+            # FAR-1517 + QA F6: hard-deleting an org cascades away its entire
+            # audit trail, so the record of WHO deleted it goes to the
+            # org-independent ledger — same transaction, so it commits only
+            # with the delete (a failed append aborts the delete). QA F6
+            # reorders this to AFTER the crud call: every in-transaction
+            # append site locks the org row FIRST (the DELETE statement's own
+            # row lock), then appends — matching confirm_org_deletion and the
+            # R6 lock order the change establishes. ``system_audit_events``
+            # carries no FK to ``organisations``, so appending after the row
+            # removal is safe (this is the FAR-1025-independent reason; the
+            # table exists precisely so the delete cannot affect the append).
             await append_system_audit_event(
                 session,
                 event_type="org_deletion_completed",
@@ -477,14 +506,9 @@ async def admin_delete_org(
                 payload_json={
                     "flow": "admin_delete_org",
                     "immediate": True,
-                    "organisation_name": org.name,
-                    "organisation_slug": org.slug,
+                    **org_identity,
                 },
             )
-
-            deleted = await delete_organisation(session, org_id)
-            if not deleted:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
     except ProgrammingError as exc:
         _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_DELETE_ORG, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:
@@ -582,18 +606,6 @@ def _verify_license_key(req: SetOrgLicenseRequest) -> Any:
     return validation.license_data
 
 
-def _set_org_license_key(settings_json: dict[str, Any], license_key: str) -> dict[str, Any]:
-    merged = dict(settings_json)
-    merged["license_key"] = license_key
-    return merged
-
-
-def _clear_org_license_key(settings_json: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(settings_json)
-    merged.pop("license_key", None)
-    return merged
-
-
 @router.put(
     "/{org_id}/license",
     dependencies=[
@@ -609,14 +621,20 @@ async def admin_set_org_license(
     settings: Settings = Depends(get_settings),
 ) -> OrgLicenseResponse:
     try:
-        # Single locked transaction: read the org FOR UPDATE, verify, then
-        # write. Holding the row lock across read→write closes the TOCTOU
-        # window where a concurrent license rotate/clear could interleave
-        # between the read and the re-read inside update_organisation and
-        # resurrect a license key that was concurrently cleared (#1798).
+        # Single transaction: read the org (no lock), verify, then write via
+        # the single-statement atomic patch. FAR-1832 replaces the #1798
+        # ``FOR UPDATE`` + whole-column ``update_organisation`` dumper:
+        # atomicity now comes from the patch statement itself (each write
+        # composes at the settings top level, so a concurrent rotate/clear
+        # can no longer interleave a stale blob over a fresher one), so the
+        # org row is not pre-locked.
         async with session.begin():
+            # FAR-1832 (D5): bind the org RLS context first — the patch
+            # helper's tenant guard FAILS CLOSED on a session with no readable
+            # org context, and this cross-org admin route never set one before.
+            await set_rls_org(session, org_id)
             try:
-                org = await get_organisation(session, org_id, for_update=True)
+                org = await get_organisation(session, org_id)
             except ProgrammingError as exc:
                 _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_SET, MSG_FEATURE_NOT_AVAILABLE, exc)
             except SQLAlchemyError as exc:
@@ -636,9 +654,11 @@ async def admin_set_org_license(
             # preserves the prior API contract (FAR #1798 regression).
             d = _verify_license_key(req)
 
-            settings_json = _set_org_license_key(org.settings_json or {}, req.license_key)
-
-            await update_organisation(session, org_id, {"settings_json": settings_json})
+            # FAR-1832: patch ONLY the ``license_key`` key — sibling settings
+            # survive by jsonb composition, never by re-writing a stale blob.
+            # The ``LookupError`` → 404 translation is the shared route helper
+            # (QA F7), byte-identical to the hand-copied block it replaces.
+            await apply_org_settings_patch_or_404(session, org_id, patch={"license_key": req.license_key})
     except ProgrammingError as exc:
         _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_SET, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:
@@ -678,12 +698,19 @@ async def admin_remove_org_license(
     settings: Settings = Depends(get_settings),
 ) -> OrgLicenseResponse:
     try:
-        # Same locked read-modify-write transaction as admin_set_org_license —
-        # a concurrent rotate must not be clobbered by a delete committed from
-        # a stale pre-write read (#1798).
+        # Single transaction: read the org (no lock), then clear via the
+        # atomic patch's ``delete_keys`` form. FAR-1832 replaces the #1798
+        # ``FOR UPDATE`` + whole-column ``update_organisation`` dumper: the
+        # clear deletes exactly one top-level key in one statement, so it can
+        # neither resurrect a concurrently-cleared key from a stale blob nor
+        # drop a concurrent writer's keys, and the org row is not pre-locked.
         async with session.begin():
+            # FAR-1832 (D5): bind the org RLS context first — the patch
+            # helper's tenant guard FAILS CLOSED on a session with no readable
+            # org context, and this cross-org admin route never set one before.
+            await set_rls_org(session, org_id)
             try:
-                org = await get_organisation(session, org_id, for_update=True)
+                org = await get_organisation(session, org_id)
             except ProgrammingError as exc:
                 _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_REMOVE, MSG_FEATURE_NOT_AVAILABLE, exc)
             except SQLAlchemyError as exc:
@@ -698,9 +725,9 @@ async def admin_remove_org_license(
             if org is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
 
-            settings_json = _clear_org_license_key(org.settings_json or {})
-
-            await update_organisation(session, org_id, {"settings_json": settings_json})
+            # The ``LookupError`` → 404 translation is the shared route helper
+            # (QA F7), byte-identical to the hand-copied block it replaces.
+            await apply_org_settings_patch_or_404(session, org_id, delete_keys=["license_key"])
     except ProgrammingError as exc:
         _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_REMOVE, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:

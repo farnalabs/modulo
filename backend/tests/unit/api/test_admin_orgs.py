@@ -499,13 +499,18 @@ async def test_org_member_read_is_org_scoped(client_tenant_member, mock_session)
         org_settings.get_organisation = original_get_org
 
 
-# ── /{org_id}/license TOCTOU locked read-modify-write (#1798) ───────────────
+# ── /{org_id}/license atomic settings patch (#1798 TOCTOU, FAR-1832) ────────
 
 
-class TestOrgLicenseLockedRmw:
-    """The license set/remove endpoints must read AND write the org row inside
-    one transaction, with the read taken FOR UPDATE, so a concurrent license
-    rotation cannot interleave between the handler's read and its write."""
+class TestOrgLicenseAtomicPatch:
+    """The license set/remove endpoints write ONLY their own settings key via
+    the single-statement atomic patch, inside one transaction, with no
+    ``FOR UPDATE`` pre-lock.
+
+    FAR-1832 replaces #1798's locked whole-column read-modify-write: atomicity
+    now comes from the patch statement itself (a concurrent rotate/clear can no
+    longer interleave a stale blob over a fresher one), so the org row is not
+    pre-locked across the read→write window."""
 
     def _wire_session_events(self, mock_session, events):
         """Record begin() enter/exit on the shared events list."""
@@ -527,7 +532,7 @@ class TestOrgLicenseLockedRmw:
         monkeypatch.setattr("modulo.api.dependencies._resolve_live_org_role", AsyncMock(return_value="admin"))
         monkeypatch.setattr("modulo.db.settings_resolver.resolve_authz_enforce", AsyncMock(return_value=False))
         # License signature verification is covered in test_admin_license.py —
-        # stub it here so the RMW transaction is the thing under test.
+        # stub it here so the single-transaction patch is the thing under test.
         validation = SimpleNamespace(
             valid=True,
             error=None,
@@ -539,18 +544,28 @@ class TestOrgLicenseLockedRmw:
             events.append(f"get(for_update={for_update})")
             return org
 
-        async def update_side_effect(session, oid, updates):
-            events.append(f"update({updates['settings_json']})")
-            return org
+        async def patch_side_effect(session, oid, patch=None, delete_keys=None, **kwargs):
+            if delete_keys:
+                events.append(f"patch_delete({list(delete_keys)})")
+            else:
+                events.append(f"patch({dict(patch or {})})")
+            return dict(org.settings_json or {})
 
         get_recorder = AsyncMock(side_effect=get_side_effect)
-        update_recorder = AsyncMock(side_effect=update_side_effect)
+        patch_recorder = AsyncMock(side_effect=patch_side_effect)
         monkeypatch.setattr(admin_orgs, "get_organisation", get_recorder)
-        monkeypatch.setattr(admin_orgs, "update_organisation", update_recorder)
-        return get_recorder, update_recorder
+        monkeypatch.setattr("modulo.api.routes._org_settings.update_org_settings_patch", patch_recorder)
+        return get_recorder, patch_recorder
+
+    @staticmethod
+    def _assert_no_prelatch(get_recorder) -> None:
+        """The existence read must NOT be a ``FOR UPDATE`` read (FAR-1832)."""
+        assert get_recorder.call_args.kwargs.get("for_update") is not True, (
+            "the org read must no longer take FOR UPDATE — atomicity comes from the single-statement patch"
+        )
 
     @pytest.mark.anyio
-    async def test_set_license_reads_for_update_and_writes_inside_one_transaction(
+    async def test_set_license_patches_inside_one_transaction_without_prelatch(
         self, client_admin, mock_session, monkeypatch
     ):
         from modulo.api.routes import admin_orgs
@@ -559,39 +574,39 @@ class TestOrgLicenseLockedRmw:
         self._wire_session_events(mock_session, events)
         org = MagicMock()
         org.settings_json = {"existing": True}
-        get_recorder, update_recorder = self._patch_crud(monkeypatch, admin_orgs, org, events)
+        get_recorder, patch_recorder = self._patch_crud(monkeypatch, admin_orgs, org, events)
 
         resp = await client_admin.put(f"/api/v1/admin/orgs/{ORG_ID}/license", json={"license_key": "abc.123"})
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
-        # The read is taken FOR UPDATE.
-        assert get_recorder.call_args.kwargs["for_update"] is True
-        # Exactly one transaction wraps the read→write; the write is flushed
-        # BEFORE the transaction exits (i.e. inside the same locked txn).
+        self._assert_no_prelatch(get_recorder)
+        # Exactly one transaction wraps read→patch; the patch happens BEFORE
+        # the transaction exits (i.e. inside the same txn).
         handler_begins = [i for i, e in enumerate(events) if e == "begin-enter"]
         assert len(handler_begins) >= 1
         last_begin = handler_begins[-1]
         reads = [i for i, e in enumerate(events) if e.startswith("get(")]
-        writes = [i for i, e in enumerate(events) if e.startswith("update(")]
+        writes = [i for i, e in enumerate(events) if e.startswith("patch(")]
         exits = [i for i, e in enumerate(events) if e == "begin-exit"]
         assert reads == [last_begin + 1], f"read not immediately inside txn: {events}"
         exit_idx = min(e for e in exits if e > last_begin)
         assert writes == [exit_idx - 1], f"write not inside the transaction: {events}"
-        assert update_recorder.call_count == 1
+        assert patch_recorder.call_count == 1
 
     @pytest.mark.anyio
-    async def test_set_license_write_preserves_preexisting_settings(self, client_admin, mock_session, monkeypatch):
+    async def test_set_license_patches_only_license_key(self, client_admin, mock_session, monkeypatch):
+        """FAR-1832: the write emits ONLY ``license_key`` — sibling settings
+        survive by jsonb composition, never by re-writing a stale blob (the
+        whole-column dumper shape is forbidden)."""
         from modulo.api.routes import admin_orgs
 
         org = MagicMock()
         org.settings_json = {"existing": True}
-        _, update_recorder = self._patch_crud(monkeypatch, admin_orgs, org, [])
+        _, patch_recorder = self._patch_crud(monkeypatch, admin_orgs, org, [])
 
         resp = await client_admin.put(f"/api/v1/admin/orgs/{ORG_ID}/license", json={"license_key": "abc.123"})
         assert resp.status_code == 200
-        # Pre-existing settings keys are preserved alongside the license key.
-        written = update_recorder.call_args.args[2]["settings_json"]
-        assert written["existing"] is True
-        assert written["license_key"] == "abc.123"
+        written = patch_recorder.call_args.args[2]
+        assert written == {"license_key": "abc.123"}
 
     @pytest.mark.anyio
     async def test_set_license_missing_org_returns_404_without_write(self, client_admin, mock_session, monkeypatch):
@@ -603,15 +618,15 @@ class TestOrgLicenseLockedRmw:
         get_recorder = admin_orgs.get_organisation
         get_recorder.side_effect = None
         get_recorder.return_value = None
-        update_mock = AsyncMock()
-        monkeypatch.setattr(admin_orgs, "update_organisation", update_mock)
+        patch_mock = AsyncMock()
+        monkeypatch.setattr("modulo.api.routes._org_settings.update_org_settings_patch", patch_mock)
 
         resp = await client_admin.put(f"/api/v1/admin/orgs/{ORG_ID}/license", json={"license_key": "abc.123"})
         assert resp.status_code == 404
-        update_mock.assert_not_called()
+        patch_mock.assert_not_called()
 
     @pytest.mark.anyio
-    async def test_remove_license_reads_for_update_and_writes_inside_one_transaction(
+    async def test_remove_license_patches_delete_keys_inside_one_transaction(
         self, client_admin, mock_session, monkeypatch
     ):
         from modulo.api.routes import admin_orgs
@@ -620,20 +635,24 @@ class TestOrgLicenseLockedRmw:
         self._wire_session_events(mock_session, events)
         org = MagicMock()
         org.settings_json = {"license_key": "old"}
-        get_recorder, update_recorder = self._patch_crud(monkeypatch, admin_orgs, org, events)
+        get_recorder, patch_recorder = self._patch_crud(monkeypatch, admin_orgs, org, events)
 
         resp = await client_admin.delete(f"/api/v1/admin/orgs/{ORG_ID}/license")
         assert resp.status_code == 200
-        assert get_recorder.call_args.kwargs["for_update"] is True
-        # The write merges from the SAME locked read: the removed key is gone
-        # from the settings object that gets flushed.
-        written = update_recorder.call_args.args[2]["settings_json"]
-        assert written == {}
+        self._assert_no_prelatch(get_recorder)
+        # The clear goes through the patch helper's ``delete_keys`` form —
+        # exactly one top-level key removed, in the same transaction — and no
+        # whole-column blob is passed. QA F12: the route helper now always
+        # passes ``patch`` positionally (as ``None`` here), so the positional
+        # args are session + org id + None; no patch blob is smuggled in.
+        assert patch_recorder.call_args.kwargs.get("delete_keys") == ["license_key"]
+        assert len(patch_recorder.call_args.args) == 3
+        assert patch_recorder.call_args.args[2] is None
         handler_begins = [i for i, e in enumerate(events) if e == "begin-enter"]
         last_begin = handler_begins[-1]
         exits = [i for i, e in enumerate(events) if e == "begin-exit"]
         exit_idx = min(e for e in exits if e > last_begin)
-        writes = [i for i, e in enumerate(events) if e.startswith("update(")]
+        writes = [i for i, e in enumerate(events) if e.startswith("patch_delete(")]
         assert writes == [exit_idx - 1], f"write not inside the transaction: {events}"
 
 

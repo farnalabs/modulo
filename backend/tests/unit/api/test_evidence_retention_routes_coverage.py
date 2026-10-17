@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 
 import modulo.api.routes.admin_evidence_retention as retention_routes
 from modulo.api.dependencies import get_db_session
@@ -274,6 +274,29 @@ def test_update_policy_db_and_unexpected_error_mapping(exc: Exception, expected:
         assert resp.json()["detail"] == detail
     finally:
         app.dependency_overrides.clear()
+
+
+def _lock_timeout_operational() -> OperationalError:
+    """An ``OperationalError`` whose driver error carries SQLSTATE 55P03."""
+
+    class _PgError(Exception):
+        sqlstate = "55P03"
+
+    return OperationalError("UPDATE organisations ...", {}, _PgError("canceling statement due to lock timeout"))
+
+
+def test_update_policy_lock_timeout_is_409(client: tuple[TestClient, AsyncMock]) -> None:
+    """FAR-1832 QA F16: ``save_policy`` writes through the bounded-lock
+    org-settings patch, so 55P03 is reachable on this route. Pre-F16 the local
+    ``except SQLAlchemyError`` arm collapsed it to a 503 outage reply — and this
+    route carries no ``@handle_db_errors`` backstop, so that arm was the only
+    translation."""
+    http, _ = client
+    with patch.object(retention_routes, "save_policy", new_callable=AsyncMock, side_effect=_lock_timeout_operational()):
+        resp = http.put(_BASE_URL, json={"max_age_days": 30})
+
+    assert resp.status_code == 409, resp.text
+    assert "another change is in progress" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

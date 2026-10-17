@@ -21,7 +21,11 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import (
+    handle_db_errors,
+    raise_lock_timeout_conflict_if,
+    raise_session_contract_error,
+)
 from modulo.api.dependencies import get_db_session, require_system_permission, resolve_audit_principal
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.audit_coverage import audited
@@ -544,7 +548,14 @@ async def toggle_feature_flag(
             },
         )
     except SQLAlchemyError as exc:
+        # FAR-1832 QA F16: this arm fronts ``_apply_org_flag_override`` →
+        # ``_write_org_override`` → the bounded-lock org-settings patch, so a
+        # 55P03 is reachable here — the F10 sweep converted the org-override
+        # sibling writers but missed this toggle arm. FAR-1464: the
+        # session-contract guard leads (it returns for other errors); the F2
+        # lock-timeout 409 classification below runs before the generic 503.
         raise_session_contract_error(exc, "admin_feature_flags.toggle_feature_flag")
+        raise_lock_timeout_conflict_if(exc, "admin_feature_flags.toggle_feature_flag")
         logger.exception(_CODE_FEATURE_FLAGS_TOGGLE_FAILED, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -662,6 +673,7 @@ async def set_org_flag_override(
         )
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "admin_feature_flags.set_org_flag_override")
+        raise_lock_timeout_conflict_if(exc, "admin_feature_flags.set_org_flag_override")
         logger.exception(_CODE_FEATURE_FLAGS_SET_ORG, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -745,6 +757,7 @@ async def clear_org_flag_override(
         )
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "admin_feature_flags.clear_org_flag_override")
+        raise_lock_timeout_conflict_if(exc, "admin_feature_flags.clear_org_flag_override")
         logger.exception(_CODE_FEATURE_FLAGS_CLEAR_ORG, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
