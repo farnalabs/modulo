@@ -252,6 +252,12 @@ describe('AppSidebar', () => {
       await flushPromises()
       const link = wrapper.find('#mobile-sidebar').find('a')
       expect(link.attributes('href')).toBe('/admin/my-profile')
+      // WCAG 2.5.3 (Label in Name): the accessible name must contain the
+      // link's visible text, which here is the user's email. A bare
+      // aria-label="User profile" over this text is a violation (FAR-1907).
+      const visible = link.text().trim()
+      expect(visible).toBe('admin@modulo.run')
+      expect(link.attributes('aria-label')).toContain(visible)
       const avatar = wrapper.find('#mobile-sidebar').find('.avatar-ring')
       expect(avatar.exists()).toBe(true)
     })
