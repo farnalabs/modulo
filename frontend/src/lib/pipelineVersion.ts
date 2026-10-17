@@ -16,6 +16,21 @@
  * silently folded into the run bucket, which would hide a real version.
  */
 
+/**
+ * The page size BOTH version surfaces fetch when reading
+ * `GET /pipelines/{id}/snapshots` (the endpoint caps at 100, defaults to 20).
+ *
+ * It is ONE shared constant on purpose. The toolbar chip resolves the current
+ * version from the editor's snapshot list and the timeline renders that same
+ * history, so if the two fetched different windows they could disagree about a
+ * version that genuinely exists: with the editor on the 20-row default, once
+ * the newest 20 snapshots are all `run` kind (a scheduled pipeline creates one
+ * per run) `currentSubstantiveVersion` returns null and the chip silently
+ * vanishes while the 100-row timeline still shows the substantive version.
+ * A single number cannot drift; two independent numbers can. (FAR-1816/1817)
+ */
+export const SNAPSHOT_PAGE_SIZE = 100
+
 /** created_kind → i18n label key, shared by the timeline and the chip. */
 export const CREATED_KIND_LABEL_KEYS: Readonly<Record<string, string>> = {
   initial: 'components.PipelineVersionChip.kind_initial',

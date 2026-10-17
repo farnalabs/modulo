@@ -1900,7 +1900,7 @@ import { useProductAnalytics } from '../composables/useProductAnalytics'
 import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
 import { useEnvironmentProfilesStore } from '../stores/environmentProfiles'
 import { runnerTierLabelKeyForProvider } from '../lib/runnerTiers'
-import { currentSubstantiveVersion } from '../lib/pipelineVersion'
+import { currentSubstantiveVersion, SNAPSHOT_PAGE_SIZE } from '../lib/pipelineVersion'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 import { Pencil as PencilIcon, LoaderCircle as LoaderCircleIcon, Download as DownloadIcon, Play as PlayIcon, Plus as PlusIcon, Maximize2 as Maximize2Icon, X as XIcon, ExternalLink as ExternalLinkIcon } from '@lucide/vue'
@@ -2891,6 +2891,14 @@ async function loadGraph() {
 // resolveVersionAlias()'s own bounded search over the same endpoint (page 1
 // at page_size=100 + a binary search), so a partial or failed catalog load
 // can never make an existing deep version read as missing.
+//
+// FAR-1816/1817 parity: fetch the SAME widened window the timeline fetches
+// (lib/pipelineVersion SNAPSHOT_PAGE_SIZE), never the endpoint's 20-row
+// default. With the default, a run-heavy recent history (one `run` snapshot
+// per run) pushes the newest substantive version off page 1 and
+// currentSubstantiveVersion returns null, so the chip silently disappears
+// while the 100-row timeline still shows that version. One shared constant
+// keeps the two surfaces reading the same history.
 async function loadCatalog() {
   pageError.value = null
   try {
@@ -2900,7 +2908,7 @@ async function loadCatalog() {
       withTimeout((signal) => api.GET('/api/v1/model-backends', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
       withTimeout((signal) => api.GET('/api/v1/schemas', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
       withTimeout((signal) => api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
-        params: { path: { pipeline_id: pipelineId } },
+        params: { path: { pipeline_id: pipelineId }, query: { page_size: SNAPSHOT_PAGE_SIZE } },
         signal,
       }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
       withTimeout((signal) => api.GET('/api/v1/parameter-schemas', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
@@ -3923,7 +3931,7 @@ const requestedVersion = computed(() => {
 // exact promise the feature exists to keep. The search here is BOUNDED by
 // construction:
 //
-//   * page 1 at SNAPSHOT_LOOKUP_PAGE_SIZE — a single request covers the top
+//   * page 1 at SNAPSHOT_PAGE_SIZE — a single request covers the top
 //     100 versions (every pipeline up to 100 versions), and
 //   * for deeper versions, a binary search over the remaining pages — at
 //     most log2(pageCount) further requests, hard-capped at
@@ -3934,7 +3942,10 @@ const requestedVersion = computed(() => {
 // latency change for the canonical link. Nothing depends on loadCatalog's
 // page-1 list, so a partial or failed catalog load cannot make an existing
 // deep version read as missing either.
-const SNAPSHOT_LOOKUP_PAGE_SIZE = 100
+//
+// FAR-1816/1817: SNAPSHOT_PAGE_SIZE is the shared window both the chip and
+// the timeline fetch (lib/pipelineVersion), so the lookup, the catalog and the
+// timeline can never drift onto three different page sizes.
 const SNAPSHOT_LOOKUP_MAX_PROBES = 12
 
 type VersionLookupStatus = 'idle' | 'loading' | 'found' | 'absent' | 'failed'
@@ -3949,7 +3960,7 @@ async function fetchSnapshotLookupPage(
 ): Promise<{ items: components['schemas']['SnapshotResponse'][]; total: number }> {
   const { data, error } = await withTimeout((signal) =>
     api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
-      params: { path: { pipeline_id: pipelineId }, query: { page, page_size: SNAPSHOT_LOOKUP_PAGE_SIZE } },
+      params: { path: { pipeline_id: pipelineId }, query: { page, page_size: SNAPSHOT_PAGE_SIZE } },
       signal,
     }),
   )
@@ -3985,7 +3996,7 @@ async function findSnapshotIdByVersion(version: number): Promise<string | null> 
   }
   // Below page 1: binary search the remaining pages by the range each spans.
   let lo = 2
-  let hi = Math.ceil(pageOne.total / SNAPSHOT_LOOKUP_PAGE_SIZE)
+  let hi = Math.ceil(pageOne.total / SNAPSHOT_PAGE_SIZE)
   let probes = 0
   while (lo <= hi) {
     if (probes >= SNAPSHOT_LOOKUP_MAX_PROBES) {
@@ -3999,7 +4010,7 @@ async function findSnapshotIdByVersion(version: number): Promise<string | null> 
     // bound can never truncate the search below the target's new rank (a
     // false "no longer available" of exactly the kind this search exists to
     // prevent). Termination is unaffected: `probes` still caps the loop.
-    hi = Math.max(hi, Math.ceil(page.total / SNAPSHOT_LOOKUP_PAGE_SIZE))
+    hi = Math.max(hi, Math.ceil(page.total / SNAPSHOT_PAGE_SIZE))
     if (page.items.length === 0) {
       hi = mid - 1 // past the end (list shrank) — search earlier
       continue

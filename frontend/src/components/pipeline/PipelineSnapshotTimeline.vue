@@ -259,7 +259,7 @@ import LoadingSpinner from '../shared/LoadingSpinner.vue'
 import { formatDateShort } from '../../lib/formatDate'
 import { api } from '../../lib/api/client'
 import { formatApiError } from '../../lib/api/formatError'
-import { isSubstantiveKind, createdKindLabel } from '../../lib/pipelineVersion'
+import { isSubstantiveKind, createdKindLabel, SNAPSHOT_PAGE_SIZE } from '../../lib/pipelineVersion'
 
 interface TimelineSnapshot {
   id: string
@@ -323,9 +323,6 @@ let snapshotsRequestSeq = 0
 // M6: an earlier restore-dialog open must not land after a later one and show
 // the wrong version's summary beside an enabled Confirm.
 let diffRequestSeq = 0
-
-/** The page size the grouping loads; the endpoint caps at 100. */
-const SNAPSHOT_PAGE_SIZE = 100
 
 const hasMore = computed(() => snapshots.value.length < snapshotsTotal.value)
 

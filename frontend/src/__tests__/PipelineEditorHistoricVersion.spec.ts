@@ -244,6 +244,65 @@ function seedPagedSnapshots(versions: number[], opts: { drop?: number[] } = {}) 
   apiPatchMock.mockResolvedValue({ data: {}, error: undefined })
 }
 
+/**
+ * A run-heavy recent history served WITH the real endpoint's pagination
+ * (default page_size=20). `runCount` `run` snapshots (version-DESC) sit ABOVE
+ * one substantive `edit` version. Under the endpoint default the editor's
+ * catalog page holds only run snapshots, so `currentSubstantiveVersion`
+ * returns null and the version chip vanishes; the shared 100-row window
+ * (lib/pipelineVersion SNAPSHOT_PAGE_SIZE) keeps the substantive version on
+ * the page. (FAR-1816/FAR-1817)
+ */
+function seedRunHeavySnapshots(runCount: number) {
+  const rows: Array<Record<string, unknown>> = []
+  for (let v = runCount + 1; v > 1; v -= 1) {
+    rows.push({
+      id: `snap-run-v${v}`,
+      pipeline_id: 'test-pipeline-id',
+      snapshot_version: v,
+      tag: null,
+      notes: null,
+      created_at: '2026-08-01T12:00:00Z',
+      created_by: 'acct-0123456789abcdef',
+      version_kind: 'run',
+      created_kind: 'run',
+      draft: false,
+      channel: 'none',
+    })
+  }
+  rows.push({
+    id: 'snap-substantive-v1',
+    pipeline_id: 'test-pipeline-id',
+    snapshot_version: 1,
+    tag: null,
+    notes: null,
+    created_at: '2026-07-01T12:00:00Z',
+    created_by: 'acct-0123456789abcdef',
+    version_kind: 'edit',
+    created_kind: 'edit',
+    draft: false,
+    channel: 'none',
+  })
+  apiGetMock.mockImplementation((url: string, init?: any) => {
+    if (url.endsWith('/snapshots')) {
+      const query = (init?.params?.query ?? {}) as { page?: number; page_size?: number }
+      const page = query.page ?? 1
+      const pageSize = query.page_size ?? 20
+      const items = structuredClone(rows.slice((page - 1) * pageSize, page * pageSize))
+      return Promise.resolve({ data: { items, total: rows.length }, error: undefined })
+    }
+    if (url.includes('/pipelines/{pipeline_id}/graph')) {
+      return Promise.resolve({ data: structuredClone(LIVE_GRAPH), error: undefined })
+    }
+    if (url.includes('/pipelines/{pipeline_id}')) {
+      return Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline' }, error: undefined })
+    }
+    return Promise.resolve({ data: { items: [] }, error: undefined })
+  })
+  apiPostMock.mockResolvedValue({ data: {}, error: undefined })
+  apiPatchMock.mockResolvedValue({ data: {}, error: undefined })
+}
+
 async function mountEditor(
   query: Record<string, string> = {},
   afterSeed?: () => void,
@@ -539,6 +598,18 @@ describe('PipelineEditorView — historic version view (FAR-1812)', () => {
     expect(vm.isViewing).toBe(true)
     expect(vm.versionMissing).toBe(false)
     expect(wrapper.find('[data-testid="pipeline-editor-historic-banner"]').text()).toContain('Viewing v42')
+    wrapper.unmount()
+  })
+
+  it('keeps the version chip when a run-heavy history fills more than one default page (FAR-1816/FAR-1817)', async () => {
+    // 30 run snapshots above the substantive v1. The endpoint default (20)
+    // returns only run snapshots, so currentSubstantiveVersion is null and the
+    // chip silently vanishes — while the timeline's 100-row window still shows
+    // v1. The shared SNAPSHOT_PAGE_SIZE keeps the two surfaces on one window.
+    const wrapper = await mountEditor({}, () => seedRunHeavySnapshots(30))
+    const chip = wrapper.find('[data-testid="pipeline-editor-version-chip"]')
+    expect(chip.exists()).toBe(true)
+    expect(chip.text()).toBe('v1')
     wrapper.unmount()
   })
 

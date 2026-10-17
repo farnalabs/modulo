@@ -3774,6 +3774,30 @@ elements:
       - testid: snapshot-timeline-rollback
         type: button
         dynamic_testid: false
+      - testid: snapshot-timeline-load-error
+        type: element
+        dynamic_testid: false
+      - testid: snapshot-timeline-load-retry
+        type: button
+        dynamic_testid: false
+      - testid: snapshot-timeline-earlier
+        type: element
+        dynamic_testid: false
+      - testid: snapshot-timeline-earlier-toggle
+        type: button
+        dynamic_testid: false
+      - testid: snapshot-timeline-earlier-list
+        type: element
+        dynamic_testid: false
+      - testid: snapshot-timeline-truncated
+        type: element
+        dynamic_testid: false
+      - testid: snapshot-timeline-load-more
+        type: button
+        dynamic_testid: false
+      - testid: snapshot-timeline-load-more-error
+        type: element
+        dynamic_testid: false
       - testid: pipeline-editor-snapshot-lock
         type: element
         dynamic_testid: false
@@ -3825,6 +3849,21 @@ elements:
         dynamic_testid: false
       - testid: pipeline-editor-restore-diff
         type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-restore-diff-error
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-restore-diff-retry
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-restore-diff-current
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-restore-diff-no-baseline
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-restore-diff-reload
+        type: button
         dynamic_testid: false
       - testid: pipeline-editor-restore-notice
         type: element
