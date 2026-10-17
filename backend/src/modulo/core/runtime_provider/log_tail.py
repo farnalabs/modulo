@@ -20,8 +20,12 @@ def combine_log_entries(entries: list[Any], limit: int) -> list[str]:
     """Split E2B log entries into preferred-level and rest, then tail the union.
 
     Entries at informative levels (info/warn/warning/error) sort ahead of the
-    remainder so the most actionable lines survive the ``limit`` window.
+    remainder so the most actionable lines survive the ``limit`` window. A
+    non-positive ``limit`` yields no lines (a bare ``[-limit:]`` slice would
+    otherwise return the *whole* list for ``limit == 0``).
     """
+    if limit <= 0:
+        return []
     preferred: list[str] = []
     rest: list[str] = []
     for entry in entries:
