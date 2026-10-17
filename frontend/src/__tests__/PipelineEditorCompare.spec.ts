@@ -102,9 +102,10 @@ const CompareStub = {
   template: `<div data-testid="pipeline-compare-stub" :data-base="baseSnapshotId" :data-compare="compareSnapshotId === null ? 'null' : compareSnapshotId" :data-latest="latestSnapshotId === null ? 'null' : latestSnapshotId"></div>`,
 }
 
-async function mountEditor(query: Record<string, string> = {}) {
+async function mountEditor(query: Record<string, string> = {}, overrideGet?: (url: string) => Promise<unknown>) {
   seedRoute(query)
   seedApi()
+  if (overrideGet) apiGetMock.mockImplementation(overrideGet)
   const pinia = createPinia()
   setActivePinia(pinia)
   const store = usePlanStore()
@@ -221,6 +222,101 @@ describe('PipelineEditorView — version compare mode (FAR-1818)', () => {
     const link = vm.historicShareLink()
     expect(link).toContain('snapshot=snap-4')
     expect(link).toContain('compare=snap-9')
+    expect(link).toContain('snapshot=snap-4')
+    expect(link).toContain('compare=snap-9')
+    wrapper.unmount()
+  })
+
+  it('does not navigate when the compare entry point has no resolved base', async () => {
+    const wrapper = await mountEditor({})
+    const vm = wrapper.vm as any
+
+    vm.openCompare()
+    expect(router.push).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('opens compare against an empty latest id when the catalog is empty', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' }, (url: string) => {
+      if (url.endsWith('/snapshots')) return Promise.resolve({ data: { items: [] }, error: undefined })
+      if (url.includes('/snapshots/{snapshot_id}')) {
+        return Promise.resolve({ data: { ...structuredClone(SNAPSHOT_DETAIL), graph_json: structuredClone(FROZEN_GRAPH) }, error: undefined })
+      }
+      if (url.includes('/pipelines/{pipeline_id}/graph')) {
+        return Promise.resolve({ data: structuredClone(LIVE_GRAPH), error: undefined })
+      }
+      return Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline' }, error: undefined })
+    })
+    await flushPromises()
+    await wrapper.find('[data-testid="pipeline-editor-historic-compare"]').trigger('click')
+    expect(router.push).toHaveBeenCalledWith({
+      path: '/pipelines/test-pipeline-id/editor',
+      query: { snapshot: 'snap-4', compare: '' },
+    })
+    wrapper.unmount()
+  })
+
+  it('ignores a pair-picker change with no base id', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4', compare: 'snap-9' })
+    const vm = wrapper.vm as any
+
+    vm.updateCompare({ base: '', compare: 'snap-9' })
+    expect(router.push).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('leaves compare without a snapshot param when no base is resolved', async () => {
+    const wrapper = await mountEditor({})
+    const vm = wrapper.vm as any
+
+    vm.exitCompare()
+    expect(router.push).toHaveBeenCalledWith({
+      path: '/pipelines/test-pipeline-id/editor',
+      query: {},
+    })
+    wrapper.unmount()
+  })
+
+  it('share link resolves an empty compare id to the latest version', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4', compare: '' })
+    const vm = wrapper.vm as any
+
+    const link = vm.historicShareLink()
+    expect(link).toContain('snapshot=snap-4')
+    expect(link).toContain('compare=snap-9')
+    expect(link).toContain('snapshot=snap-4')
+    expect(link).toContain('compare=snap-9')
+    wrapper.unmount()
+  })
+
+  it('share link keeps an empty compare id when no version is known', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4', compare: '' }, (url: string) => {
+      if (url.endsWith('/snapshots')) return Promise.resolve({ data: { items: [] }, error: undefined })
+      if (url.includes('/snapshots/{snapshot_id}')) {
+        return Promise.resolve({ data: { ...structuredClone(SNAPSHOT_DETAIL), graph_json: structuredClone(FROZEN_GRAPH) }, error: undefined })
+      }
+      if (url.includes('/pipelines/{pipeline_id}/graph')) {
+        return Promise.resolve({ data: structuredClone(LIVE_GRAPH), error: undefined })
+      }
+      return Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline' }, error: undefined })
+    })
+    await flushPromises()
+    const vm = wrapper.vm as any
+
+    expect(vm.compareMode).toBe(true)
+    const link = vm.historicShareLink()
+    expect(link).toContain('snapshot=snap-4')
+    expect(link).toContain('compare=')
+    wrapper.unmount()
+  })
+
+  it('share link omits every version param when nothing is resolved', async () => {
+    const wrapper = await mountEditor({})
+    const vm = wrapper.vm as any
+
+    const link = vm.historicShareLink()
+    expect(link).not.toContain('snapshot=')
+    expect(link).not.toContain('compare=')
     wrapper.unmount()
   })
 })

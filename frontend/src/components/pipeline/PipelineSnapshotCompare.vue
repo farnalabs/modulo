@@ -382,7 +382,7 @@ const errorMessage = ref<string | null>(null)
 const showRaw = ref(false)
 
 const rawRegionId = 'pipeline-compare-raw-region'
-const rawJson = computed(() => JSON.stringify(diff.value ?? {}, null, 2))
+const rawJson = computed(() => JSON.stringify(diff.value, null, 2))
 
 // `compare` defaults to the latest version when the query carries no id.
 const effectiveCompareId = computed(() => props.compareSnapshotId ?? props.latestSnapshotId ?? '')

@@ -4414,12 +4414,14 @@ watch([isViewing, resolvedSnapshotId], async () => {
   void runInitialFitView()
 })
 
+const VERSION_SELECTION_KEYS = new Set(['snapshot', 'version', 'compare'])
+
 function versionParamsExceptSnapshot(): LocationQueryRaw {
   const out: LocationQueryRaw = {}
   for (const [key, value] of Object.entries(route.query)) {
     // `compare` is a view-selection param too (FAR-1818): leaving the version
     // view must not strand a stale compare id in the URL.
-    if (key !== 'snapshot' && key !== 'version' && key !== 'compare') out[key] = value
+    if (!VERSION_SELECTION_KEYS.has(key)) out[key] = value
   }
   return out
 }
@@ -4732,7 +4734,13 @@ function historicShareLink(): string {
   if (id) params.set('snapshot', id)
   // FAR-1818: while comparing, the canonical share link carries the compare id
   // too (an empty compare id means "against latest", which the link preserves).
-  if (compareMode.value) params.set('compare', compareParam.value ?? latestSnapshotId.value ?? '')
+  if (compareMode.value) {
+    // An empty compare id means "against latest", which the link preserves.
+    let compareId = compareParam.value
+    if (compareId === null) compareId = latestSnapshotId.value
+    if (compareId === null) compareId = ''
+    params.set('compare', compareId)
+  }
   const query = params.toString()
   return query ? `${window.location.origin}${route.path}?${query}` : `${window.location.origin}${route.path}`
 }

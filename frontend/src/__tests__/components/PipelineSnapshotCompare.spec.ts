@@ -496,3 +496,388 @@ describe('PipelineSnapshotCompare', () => {
     expect(wrapper.emitted('close')).toHaveLength(1)
   })
 })
+
+// Sparse/edge-shaped payloads. Every optional collection in the diff response
+// is genuinely optional on the wire, so the presentation must render every
+// shape without a warning or a blank pane — not just the fully-populated one.
+describe('PipelineSnapshotCompare — sparse and edge-shaped diffs', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    apiPost.mockResolvedValue({ data: DIFF, error: undefined })
+    apiGet.mockResolvedValue({ data: { items: [], total: 0 }, error: undefined })
+  })
+
+  it('renders a diff that omits every optional collection', async () => {
+    apiPost.mockResolvedValue({
+      data: { snapshot_a: { graph: { nodes: [] } }, snapshot_b: { graph: { nodes: [] } } },
+      error: undefined,
+    })
+    const wrapper = await flushCompare()
+    expect(wrapper.find('[data-testid="pipeline-compare-summary"]').text()).toContain('0 nodes added')
+    expect(wrapper.find('[data-testid="pipeline-compare-structural-none"]').exists()).toBe(true)
+  })
+
+  it('renders a diff with no frozen graphs at all', async () => {
+    apiPost.mockResolvedValue({ data: {}, error: undefined })
+    const wrapper = await flushCompare()
+    expect(wrapper.find('[data-testid="pipeline-compare-summary"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-compare-impacted"]').text()).toContain('None')
+  })
+
+  it('renders removed edges and a modified entry that carries no node id', async () => {
+    apiPost.mockResolvedValue({
+      data: {
+        snapshot_a: { graph: { nodes: [{ id: 'n1', label: 'Start' }, { id: 'n2', label: 'Steady' }] } },
+        snapshot_b: { graph: { nodes: [{ id: 'n1', label: 'Start' }, { id: 'n2', label: 'Steady' }, { id: 'n9' }] } },
+        nodes_modified: [{ changes: { label: { old: 'Steady', new: 'Steady 2' } } }],
+        edges_removed: [{ source: 'n1', target: 'n2' }],
+      },
+      error: undefined,
+    })
+    const wrapper = await flushCompare()
+    expect(wrapper.find('[data-testid="pipeline-compare-edges-removed"]').text()).toContain('− Start → Steady')
+    // No node id: the label falls back truthfully instead of an "undefined".
+    const modified = wrapper.find('[data-testid="pipeline-compare-node-modified"]')
+    expect(modified.text()).toContain('—')
+    expect(modified.text()).toContain('Label: Steady → Steady 2')
+  })
+
+  it('labels nodes and edges that omit ids, labels or types', async () => {
+    apiPost.mockResolvedValue({
+      data: {
+        snapshot_a: { graph: {} },
+        snapshot_b: { graph: { nodes: [{ id: 'sparse' }, {}] } },
+        nodes_added: [{}, { id: 'known', label: 'Known' }, { id: 'unlabelled' }],
+        edges_added: [{}, { source_node_id: 'known', target_node_id: 'ghost' }],
+      },
+      error: undefined,
+    })
+    const wrapper = await flushCompare()
+    const added = wrapper.find('[data-testid="pipeline-compare-nodes-added"]')
+    expect(added.text()).toContain('Known')
+    expect(added.text()).toContain('#unlabell')
+    // An id-less edge renders the no-value glyph for each missing endpoint.
+    const edges = wrapper.find('[data-testid="pipeline-compare-edges-added"]')
+    expect(edges.text()).toContain('— → —')
+    expect(edges.text()).toContain('#known → #ghost')
+  })
+
+  it('renders every field-value shape without leaking raw JSON', async () => {
+    const circular: Record<string, unknown> = {}
+    circular.self = circular
+    apiPost.mockResolvedValue({
+      data: {
+        snapshot_a: { graph: { nodes: [{ id: 'n1', label: 'Start' }] } },
+        snapshot_b: { graph: { nodes: [{ id: 'n1', label: 'Start' }] } },
+        nodes_modified: [
+          {
+            node_id: 'n1',
+            changes: {
+              label: { old: 42, new: true },
+              bare: 'added-value',
+              nullish: null,
+              arr: [1, 2],
+              obj: { unrelated: 1 },
+              empty: '',
+              onlyNew: { new: 'fresh' },
+              nested: { old: { a: 1 }, new: { b: 2 } },
+              cyclic: { old: circular, new: 'x' },
+              ports: [
+                { direction: 'input', port: null, change: 'added' },
+                { direction: 'output', change: 'modified' },
+                { change: 'added' },
+                { direction: 'sideways', port: 'p', change: 'weird' },
+                { direction: 'sideways', port: 'p' },
+              ],
+            },
+          },
+          // No changes at all: the field reader must tolerate an absent map.
+          { node_id: 'n2' },
+        ],
+      },
+      error: undefined,
+    })
+    const wrapper = await flushCompare()
+    const modified = wrapper.find('[data-testid="pipeline-compare-node-modified"]')
+    expect(modified.text()).toContain('Label: 42 → true')
+    expect(modified.text()).toContain('bare: added-value → —')
+    expect(modified.text()).toContain('nullish: — → —')
+    expect(modified.text()).toContain('arr: [1,2] → —')
+    expect(modified.text()).toContain('obj: {"unrelated":1} → —')
+    expect(modified.text()).toContain('empty: — → —')
+    expect(modified.text()).toContain('onlyNew: — → fresh')
+    expect(modified.text()).toContain('nested: {"a":1} → {"b":2}')
+    // A value that cannot be serialised is rendered with String(), never thrown.
+    expect(modified.text()).toContain('[object Object]')
+    // Port deltas: input/added, output/modified, an absent direction, and an
+    // unknown change kind each get a truthful label.
+    expect(modified.text()).toContain("input port '' added")
+    expect(modified.text()).toContain("output port '' schema changed")
+    expect(modified.text()).toContain(" port '' added")
+    expect(modified.text()).toContain("sideways port 'p' (weird)")
+    expect(modified.text()).toContain("sideways port 'p' ()")
+  })
+
+  it('renders modified edges with missing or malformed port deltas', async () => {
+    apiPost.mockResolvedValue({
+      data: {
+        ...DIFF,
+        edges_modified: [
+          { changes: { source_port: { old: 'a', new: 'b' } } },
+          { edge: { source: 'n1', target: 'n3' }, changes: { ports: [] } },
+          { edge: { source: 'n1', target: 'n3' }, changes: { ports: { source_port: 'bare' } } },
+          { edge: { source: 'n1', target: 'n3' }, changes: { ports: { target_port: { old: 'x', new: 'y' }, added_port: { new: 'z' } } } },
+        ],
+      },
+      error: undefined,
+    })
+    const wrapper = await flushCompare()
+    const modified = wrapper.find('[data-testid="pipeline-compare-edges-modified"]')
+    // No `edge` payload: the endpoints fall back to the no-value glyphs.
+    expect(modified.text()).toContain('— → — (Source port: a → b)')
+    // An array or a bare value in `ports` is not a port delta dict -> bare ends.
+    expect(modified.text()).toContain('Start → Steady')
+    expect(modified.text()).toContain('Target port: x → y')
+  })
+
+  it('labels breaking-change severities and unknown impacted nodes', async () => {
+    apiPost.mockResolvedValue({
+      data: {
+        ...DIFF,
+        semantic: {
+          breaking_changes: [
+            { severity: 'warning', reason: 'warn-reason' },
+            { severity: 'info', reason: 'info-reason' },
+            { reason: 'plain-reason' },
+          ],
+          impacted_nodes: ['ghost', 'n1'],
+          port_changes: [],
+        },
+      },
+      error: undefined,
+    })
+    const wrapper = await flushCompare()
+    const breaking = wrapper.find('[data-testid="pipeline-compare-breaking"]')
+    expect(breaking.text()).toContain('warning — warn-reason')
+    expect(breaking.text()).toContain('info — info-reason')
+    expect(breaking.text()).toContain('warning — plain-reason')
+    expect(wrapper.find('[data-testid="pipeline-compare-impacted"]').text()).toContain('#ghost')
+  })
+
+  it('treats a 200 with no body as an error state rather than a blank diff', async () => {
+    apiPost.mockResolvedValue({ data: undefined, error: undefined })
+    const wrapper = await flushCompare()
+    const error = wrapper.find('[data-testid="pipeline-compare-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('no comparison data')
+  })
+
+  it('surfaces a non-timeout rejection through the API error formatter', async () => {
+    apiPost.mockRejectedValueOnce(new Error('network exploded'))
+    const wrapper = await flushCompare()
+    const error = wrapper.find('[data-testid="pipeline-compare-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('network exploded')
+  })
+
+  it('drops a superseded request that rejects after a newer pair was requested', async () => {
+    const pending: Array<{ resolve: (value: unknown) => void; reject: (reason: unknown) => void }> = []
+    apiPost.mockImplementation(
+      () => new Promise((resolve, reject) => { pending.push({ resolve, reject }) }),
+    )
+    const wrapper = mountCompare()
+    await flushPromises()
+    expect(pending).toHaveLength(1)
+
+    await wrapper.setProps({ baseSnapshotId: 'snap-9', compareSnapshotId: 'snap-4' })
+    await flushPromises()
+    expect(pending).toHaveLength(2)
+
+    pending[0].reject(new Error('stale boom'))
+    await flushPromises()
+    // The stale rejection must not surface: the newer request is still in flight.
+    expect(wrapper.find('[data-testid="pipeline-compare-loading"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-compare-error"]').exists()).toBe(false)
+
+    pending[1].resolve({ data: DIFF, error: undefined })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="pipeline-compare-summary"]').exists()).toBe(true)
+  })
+
+  it('ignores a picker update that is not a non-empty string', async () => {
+    const wrapper = await flushCompare()
+    const [base, against] = wrapper.findAllComponents(SelectStub)
+    base.vm.$emit('update:modelValue', 42)
+    base.vm.$emit('update:modelValue', '')
+    against.vm.$emit('update:modelValue', { id: 'snap-1' })
+    against.vm.$emit('update:modelValue', '')
+    expect(wrapper.emitted('change')).toBeUndefined()
+  })
+
+  it('leaves the history picker intact when the catalog request errors', async () => {
+    apiGet.mockResolvedValue({
+      data: undefined,
+      error: { type: 'urn:problem:modulo:internal_error', title: 'Internal Error', status: 500, detail: 'catalog down' },
+    })
+    const wrapper = await flushCompare()
+    const labels = wrapper.find('[data-testid="pipeline-compare-base"]').findAll('option').map((o) => o.text())
+    expect(labels.some((label) => label.includes('v9'))).toBe(true)
+  })
+
+  it('leaves the history picker intact when the catalog returns no body', async () => {
+    apiGet.mockResolvedValue({ data: undefined, error: undefined })
+    const wrapper = await flushCompare()
+    const labels = wrapper.find('[data-testid="pipeline-compare-base"]').findAll('option').map((o) => o.text())
+    expect(labels.some((label) => label.includes('v9'))).toBe(true)
+  })
+
+  it('accepts a catalog page without an items array or with invalid rows', async () => {
+    apiGet.mockImplementation((url: string) => {
+      if (url.endsWith('/snapshots')) {
+        return Promise.resolve({
+          data: {
+            total: 4,
+            items: [
+              { id: null, snapshot_version: 2 },
+              { id: 'zero', snapshot_version: 0 },
+              { id: 'ok', snapshot_version: 2, tag: null, created_at: null },
+            ],
+          },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: undefined, error: undefined })
+    })
+    const wrapper = await flushCompare()
+    const labels = wrapper.find('[data-testid="pipeline-compare-base"]').findAll('option').map((o) => o.text())
+    expect(labels.some((label) => label.includes('v2'))).toBe(true)
+    expect(labels.some((label) => label.includes('zero'))).toBe(false)
+  })
+
+  it('stops paging when the server reports no total and returns a short page', async () => {
+    apiGet.mockImplementation((url: string) => {
+      if (url.endsWith('/snapshots')) {
+        return Promise.resolve({ data: { items: SNAPSHOTS }, error: undefined })
+      }
+      return Promise.resolve({ data: undefined, error: undefined })
+    })
+    const wrapper = await flushCompare()
+    const labels = wrapper.find('[data-testid="pipeline-compare-base"]').findAll('option').map((o) => o.text())
+    expect(labels.some((label) => label.includes('v9'))).toBe(true)
+    expect(labels.some((label) => label.includes('v1'))).toBe(false)
+  })
+
+  it('pages past a full catalog page when the server reports no total', async () => {
+    const fullPage = Array.from({ length: 100 }, (_, i) => ({
+      id: `bulk-${i}`,
+      snapshot_version: 200 - i,
+      tag: null,
+      created_at: null,
+    }))
+    apiGet.mockImplementation((url: string, options?: { params?: { query?: { page?: number } } }) => {
+      if (url.endsWith('/snapshots')) {
+        const page = options?.params?.query?.page ?? 1
+        if (page === 1) return Promise.resolve({ data: { items: fullPage }, error: undefined })
+        return Promise.resolve({
+          data: { items: [{ id: 'bulk-last', snapshot_version: 1, tag: null, created_at: null }] },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: undefined, error: undefined })
+    })
+    const wrapper = await flushCompare()
+    const labels = wrapper.find('[data-testid="pipeline-compare-base"]').findAll('option').map((o) => o.text())
+    expect(labels.some((label) => label.includes('v1'))).toBe(true)
+  })
+
+  it('cancels an in-flight catalog load on unmount', async () => {
+    let resolveCatalog: ((value: unknown) => void) | undefined
+    apiGet.mockImplementation((url: string) => {
+      if (url.endsWith('/snapshots')) {
+        return new Promise((resolve) => { resolveCatalog = resolve })
+      }
+      return Promise.resolve({ data: undefined, error: undefined })
+    })
+    const wrapper = mountCompare()
+    await flushPromises()
+    wrapper.unmount()
+    expect(resolveCatalog).toBeDefined()
+    resolveCatalog!({ data: { items: SNAPSHOTS, total: 2 }, error: undefined })
+    await flushPromises()
+  })
+
+  it('aborts the in-flight diff on unmount', async () => {
+    const pending: Array<{ resolve: (value: unknown) => void }> = []
+    let capturedSignal: AbortSignal | undefined
+    apiPost.mockImplementation((_url: string, options?: { signal?: AbortSignal }) => {
+      capturedSignal = options?.signal
+      return new Promise((resolve) => { pending.push({ resolve }) })
+    })
+    const wrapper = mountCompare()
+    await flushPromises()
+    expect(capturedSignal?.aborted).toBe(false)
+    wrapper.unmount()
+    expect(capturedSignal?.aborted).toBe(true)
+    pending[0].resolve({ data: DIFF, error: undefined })
+    await flushPromises()
+  })
+
+  it('resolves shared nodes when the newer frozen graph is absent', async () => {
+    apiPost.mockResolvedValue({
+      data: {
+        snapshot_a: { graph: { nodes: [{ id: 'n1' }] } },
+        nodes_added: [{ id: 'n2', label: 'New' }],
+        semantic: {
+          port_changes: [{ node_id: 'n1', direction: 'output', port: 'out', change: 'removed' }],
+          impacted_nodes: [],
+          breaking_changes: [],
+        },
+      },
+      error: undefined,
+    })
+    const wrapper = await flushCompare()
+    // port_changes names n1, but only a graph present in BOTH versions can
+    // prove a signature change — a missing B graph proves nothing.
+    expect(wrapper.find('[data-testid="pipeline-compare-summary"]').text()).not.toContain('port signature')
+    expect(wrapper.find('[data-testid="pipeline-compare-structural"]').text()).toContain('New')
+  })
+
+  it('accepts a catalog page that omits the items array', async () => {
+    apiGet.mockImplementation((url: string) => {
+      if (url.endsWith('/snapshots')) return Promise.resolve({ data: { total: 2 }, error: undefined })
+      return Promise.resolve({ data: undefined, error: undefined })
+    })
+    const wrapper = await flushCompare()
+    const labels = wrapper.find('[data-testid="pipeline-compare-base"]').findAll('option').map((o) => o.text())
+    expect(labels.some((label) => label.includes('v9'))).toBe(true)
+  })
+
+  it('keeps the picker usable when the catalog request rejects', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    apiGet.mockImplementation((url: string) => {
+      if (url.endsWith('/snapshots')) return Promise.reject(new Error('catalog down'))
+      return Promise.resolve({ data: undefined, error: undefined })
+    })
+    const wrapper = await flushCompare()
+    const labels = wrapper.find('[data-testid="pipeline-compare-base"]').findAll('option').map((o) => o.text())
+    expect(labels.some((label) => label.includes('v9'))).toBe(true)
+    expect(warn.mock.calls.some((args) => String(args[0]).includes('Failed to load the full snapshot history'))).toBe(true)
+    warn.mockRestore()
+  })
+
+  it('ignores a rejecting catalog request that was superseded by unmount', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const pending: Array<{ reject: (reason: unknown) => void }> = []
+    apiGet.mockImplementation((url: string) => {
+      if (url.endsWith('/snapshots')) return new Promise((_resolve, reject) => { pending.push({ reject }) })
+      return Promise.resolve({ data: undefined, error: undefined })
+    })
+    const wrapper = mountCompare()
+    await flushPromises()
+    wrapper.unmount()
+    pending[0].reject(new Error('late catalog failure'))
+    await flushPromises()
+    expect(warn.mock.calls.some((args) => String(args[0]).includes('Failed to load the full snapshot history'))).toBe(false)
+    warn.mockRestore()
+  })
+})

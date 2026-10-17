@@ -50,7 +50,7 @@ export function withTimeout<T>(
   try {
     request = factory(controller.signal)
   } catch (e: unknown) {
-    if (timer !== undefined) clearTimeout(timer)
+    clearTimeout(timer)
     deadline.catch(() => {})
     externalSignal?.removeEventListener('abort', abort)
     return Promise.reject(e)
@@ -61,7 +61,7 @@ export function withTimeout<T>(
   request.catch(() => {})
   deadline.catch(() => {})
   return Promise.race([request, deadline]).finally(() => {
-    if (timer !== undefined) clearTimeout(timer)
+    clearTimeout(timer)
     externalSignal?.removeEventListener('abort', abort)
   })
 }
