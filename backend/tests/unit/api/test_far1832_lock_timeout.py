@@ -41,6 +41,7 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
 _CONSENT_URL = "/api/v1/org/product-analytics/consent"
+_PRODUCT_ANALYTICS_LEVEL_URL = "/api/v1/org/product-analytics"
 
 _LOCK_TIMEOUT_DETAIL = "another change is in progress"
 
@@ -180,6 +181,23 @@ def test_consent_route_maps_genuine_db_outage_to_503() -> None:
     ``handle_db_errors``, which answers 503 — never the old blanket 500."""
     with _client_overrides(_failing_session(_operational("08006"))) as client:
         resp = client.post(_CONSENT_URL, json={"action": "accept"})
+    assert resp.status_code == 503, resp.text
+
+
+def test_update_level_route_maps_lock_timeout_to_409() -> None:
+    """FAR-1832 QA F2: the PUT level route's own SQLAlchemyError arm classifies
+    55P03 as a 409 conflict (the same contract as the consent POST)."""
+    with _client_overrides(_failing_session(_operational("55P03"))) as client:
+        resp = client.put(_PRODUCT_ANALYTICS_LEVEL_URL, json={"level": "all"})
+    assert resp.status_code == 409, resp.text
+    assert _LOCK_TIMEOUT_DETAIL in resp.json()["detail"]
+
+
+def test_update_level_route_maps_genuine_db_outage_to_503() -> None:
+    """A genuine connection/unavailability error on the PUT level route
+    re-raises to ``handle_db_errors``, which answers 503 — never a blanket 500."""
+    with _client_overrides(_failing_session(_operational("08006"))) as client:
+        resp = client.put(_PRODUCT_ANALYTICS_LEVEL_URL, json={"level": "all"})
     assert resp.status_code == 503, resp.text
 
 

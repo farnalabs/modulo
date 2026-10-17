@@ -157,6 +157,7 @@ _CODE_ADMIN_EVAL_DASHBOARD = "admin.eval_dashboard"
 _CODE_ADMIN_EVAL_REGRESSIONS = "admin.eval_regressions"
 _CODE_ADMIN_OKR_PROGRESS = "admin.okr_progress"
 _CODE_ADMIN_ADMIN_MANUAL_PURGE = "admin.admin_manual_purge"
+_CODE_ADMIN_ADMIN_UPDATE_RETENTION = "admin.admin_update_retention"
 
 
 logger = logging.getLogger(__name__)
@@ -3946,7 +3947,7 @@ async def admin_update_retention(
     except asyncio.CancelledError:
         raise
     except IntegrityError:
-        logger.exception("admin.admin_update_retention")
+        logger.exception(_CODE_ADMIN_ADMIN_UPDATE_RETENTION)
         _raise_conflict()
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_ADMIN)
@@ -3957,8 +3958,8 @@ async def admin_update_retention(
         # is a 500, never a 503 outage); it RETURNS for any other error, so the
         # FAR-1832 QA F2 lock-timeout 409 classification below still runs before
         # the generic 503.
-        raise_session_contract_error(exc, "admin.admin_update_retention")
-        raise_lock_timeout_conflict_if(exc, "admin.admin_update_retention")
+        raise_session_contract_error(exc, _CODE_ADMIN_ADMIN_UPDATE_RETENTION)
+        raise_lock_timeout_conflict_if(exc, _CODE_ADMIN_ADMIN_UPDATE_RETENTION)
         logger.exception(_CODE_ROUTES_ADMIN)
 
         _raise_db_error_occurred()

@@ -468,35 +468,54 @@ async def _strict_read_rls_org(session: AsyncSession, dialect: str) -> uuid.UUID
     its absence is genuinely-unbound (not a read error).
     """
     if dialect == "postgresql":
-        try:
-            result = await session.execute(text("SELECT current_setting('app.organisation_id', true)"))
-        except Exception as exc:
-            raise OrgSettingsPatchContextUnreadableError(
-                "could not read the session's app.organisation_id RLS context"
-            ) from exc
-        raw: object = result.scalar()
-        if raw is None:
-            return None
-        if isinstance(raw, str) and raw.strip() == "":
-            return None
-        coerced = _coerce_org_uuid(raw)
-        if coerced is None:
-            # QA F13d: a NON-EMPTY value that fails UUID coercion is a CORRUPT
-            # context, not "genuinely unbound". Treating it as unbound let
-            # ``allow_unbound_context=True`` permit the write against an unknown
-            # tenant boundary — fail closed instead, regardless of the flag.
-            raise OrgSettingsPatchContextUnreadableError(
-                f"the session's app.organisation_id RLS context is not a valid UUID: {raw!r}"
-            )
-        return coerced
+        return await _read_postgres_rls_org(session)
+    return _read_session_info_rls_org(session)
+
+
+async def _read_postgres_rls_org(session: AsyncSession) -> uuid.UUID | None:
+    """Read the bound org from the Postgres ``app.organisation_id`` GUC.
+
+    Split out of :func:`_strict_read_rls_org` (FAR-1832) so the dialect
+    dispatch stays a single branch. A failed GUC read raises (fail closed); an
+    absent/blank GUC is genuinely unbound and returns ``None``; a NON-EMPTY
+    value that fails UUID coercion is a CORRUPT context and raises
+    (:class:`OrgSettingsPatchContextUnreadableError`) rather than being treated
+    as unbound — otherwise ``allow_unbound_context=True`` would permit a write
+    against an unknown tenant boundary.
+    """
+    try:
+        result = await session.execute(text("SELECT current_setting('app.organisation_id', true)"))
+    except Exception as exc:
+        raise OrgSettingsPatchContextUnreadableError(
+            "could not read the session's app.organisation_id RLS context"
+        ) from exc
+    raw: object = result.scalar()
+    if raw is None:
+        return None
+    if isinstance(raw, str) and raw.strip() == "":
+        return None
+    coerced = _coerce_org_uuid(raw)
+    if coerced is None:
+        raise OrgSettingsPatchContextUnreadableError(
+            f"the session's app.organisation_id RLS context is not a valid UUID: {raw!r}"
+        )
+    return coerced
+
+
+def _read_session_info_rls_org(session: AsyncSession) -> uuid.UUID | None:
+    """Read the bound org from ``session.info`` (non-Postgres dialects only).
+
+    ``set_rls_org`` writes the tenant id to ``session.info`` on generic
+    backends; its absence is genuinely-unbound (not a read error), so an
+    absent key or a non-``dict`` ``info`` both return ``None``.
+    """
     info = getattr(session, "info", None)
-    if isinstance(info, dict):
-        value = info.get(_RLS_TENANT_KEY)
-        if value is not None:
-            parsed = _coerce_org_uuid(value)
-            if parsed is not None:
-                return parsed
-    return None
+    if not isinstance(info, dict):
+        return None
+    value = info.get(_RLS_TENANT_KEY)
+    if value is None:
+        return None
+    return _coerce_org_uuid(value)
 
 
 def _coerce_org_uuid(value: object) -> uuid.UUID | None:

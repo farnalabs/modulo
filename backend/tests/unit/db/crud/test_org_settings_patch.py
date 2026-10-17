@@ -255,6 +255,20 @@ async def test_apply_postgres_refreshes_loaded_identity() -> None:
     assert org.settings_json == {"logo_url": "x"}
 
 
+async def test_apply_postgres_nested_patch_binds_nested_params() -> None:
+    """QA F1: a nested_patch on the Postgres path binds the nested key/value
+    parameters (the jsonb_set sub-field compose) alongside the top-level patch."""
+    session = _FakeSession(rows=[({"block": {"sub": 1, "other": 2}},)])
+    result = await _apply_json_column_patch_postgres(
+        session,
+        uuid.uuid4(),
+        {},
+        [],
+        nested_patch={"block": {"sub": 1}},
+    )
+    assert result == {"block": {"sub": 1, "other": 2}}
+
+
 # ---------------------------------------------------------------------------
 # _apply_json_column_patch_generic
 # ---------------------------------------------------------------------------
