@@ -5,23 +5,16 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect, loginAsAdmin, setupLocalMockApi } from './setup/fixtures'
 import { getTarget, type TestEnv } from './setup/env'
+import { WCAG_TAGS, filterViolations } from './setup/wcag'
 
 // Layout checks are deterministic — retrying on flake is noise and triples run
 // time against live targets. Top-level scope applies to every test in this file.
 test.describe.configure({ retries: 0 })
 
-const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
-
-const ACCEPTABLE_VIOLATIONS = ['color-contrast', 'scrollable-region-focusable']
-
 // Mirror the fixtures.ts mock token values (not exported there) so the local
 // auth seed keeps the app's session markers consistent across specs.
 const MOCK_ACCESS_TOKEN = 'mock-access-token-for-e2e-tests'
 const MOCK_REFRESH_TOKEN = 'mock-refresh-token-for-e2e-tests'
-
-function filterViolations(violations: { id: string }[]) {
-  return violations.filter(v => !ACCEPTABLE_VIOLATIONS.includes(v.id))
-}
 
 // Above-the-fold screenshots land here for a later LLM visual review.
 const CAPTURE_DIR = path.join(__dirname, '.mobile-captures')
