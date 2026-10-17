@@ -1350,6 +1350,20 @@ SCANNERS_BY_CATEGORY: dict[str, Scanner] = {entry.category: entry for entry in _
 
 
 async def scan_all(session: AsyncSession, org_id: uuid.UUID) -> list[CategoryResult]:
+    """Run every registered scanner, best-effort, and return one result per category.
+
+    A housekeeping scan must not crash its endpoint, so a scanner that raises
+    does NOT abort the scan: the failure is caught, that scanner's category is
+    returned EMPTY, and every other category still runs.
+
+    The catch is deliberately OBSERVABLE (FAR-1906): the failure is logged at
+    ERROR with the scanner's category, the exception class and the traceback.
+    An operator can therefore tell "this category is empty because the scanner
+    FAILED" from "this category is empty because nothing matched". This matters
+    for scanners that REFUSE to run (e.g. raising ``NotImplementedError`` on an
+    unsupported SQL dialect): the refusal fails loud in the logs even though the
+    API response still carries an empty category rather than an error.
+    """
     results: list[CategoryResult] = []
     for entry in _SCANNERS:
         try:
@@ -1360,7 +1374,12 @@ async def scan_all(session: AsyncSession, org_id: uuid.UUID) -> list[CategoryRes
                 for c in candidates:
                     c.entity_type = entry.entity_type
             results.append(CategoryResult(category=entry.category, candidates=candidates))
-        except Exception:
-            _log.exception("Housekeeping scanner '%s' failed", entry.category)
+        except Exception as exc:
+            _log.exception(
+                "Housekeeping scanner '%s' failed with %s; reporting its category empty "
+                "- this is a scanner FAILURE, not a clean no-candidates scan",
+                entry.category,
+                type(exc).__name__,
+            )
             results.append(CategoryResult(category=entry.category, candidates=[]))
     return results

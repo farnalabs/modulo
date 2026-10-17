@@ -380,22 +380,23 @@ using the configured secrets backend (Fernet, Vault, or AWS Secrets Manager).
 
 ### 5.1 Image Vulnerability Scanning
 
-Modulo's CI does **not** currently scan the built container images. The
-`publish-images.yml` workflow builds each backend/frontend image once and gates
-the GHCR push on image smoke checks (`import modulo`, `nginx -t`) only. CI's
-Trivy check is a filesystem scan of the repository (dependency CVEs and
-misconfigurations), not a scan of the built images. The automated trivy/grype
-image gates, digest-drift guard and cosign/SBOM attestation are the D4 GA/CI
-follow-up item (see `docs/architecture.md` §CI/CD Pipeline).
+Modulo's CI does **not** currently scan the built container images. Trivy runs as a
+required CI check (`ci.yml`), scanning the repository filesystem for dependency CVEs
+and misconfigurations - it does not scan the built images. The `publish-images.yml`
+workflow builds each backend/frontend image once and gates the GHCR push on image
+smoke checks (`import modulo`, `nginx -t`) only, with no critical-vulnerability gate
+on the push. The automated trivy/grype image gates, digest-drift guard and
+cosign/SBOM attestation are the D4 GA/CI follow-up item (see `docs/architecture.md`
+§CI/CD Pipeline).
 
 Until that lands, scan a deployed image tag manually:
 
 ```bash
-# Manual scan
-trivy image ghcr.io/farnalabs/modulo:latest
+# Manual scan (pin the version you deployed; :latest tracks the newest release)
+trivy image ghcr.io/farnalabs/modulo:<version>
 
 # Scan with severity filter
-trivy image --severity CRITICAL,HIGH ghcr.io/farnalabs/modulo:latest
+trivy image --severity CRITICAL,HIGH ghcr.io/farnalabs/modulo:<version>
 ```
 
 **SLAs** (from `docs/security/dependency-policy.md`):
@@ -432,7 +433,7 @@ USER nginx
 
 **Verify:**
 ```bash
-docker run --rm ghcr.io/farnalabs/modulo:latest whoami
+docker run --rm ghcr.io/farnalabs/modulo:<version> whoami
 # Expected: appuser (not root)
 ```
 
@@ -579,10 +580,10 @@ Configure alerts for these events in your monitoring system:
 ### 7.2 Rollback Procedure
 
 ```bash
-# Docker Compose – re-tag and restart the previous image
+# Docker Compose – pin the previous image version and restart
 docker compose -f deploy/compose/docker-compose.prod.yml stop modulo
-docker tag ghcr.io/farnalabs/modulo:old ghcr.io/farnalabs/modulo:latest
-docker compose -f deploy/compose/docker-compose.prod.yml up -d
+docker tag ghcr.io/farnalabs/modulo:old ghcr.io/farnalabs/modulo:<previous-version>
+TAG=<previous-version> docker compose -f deploy/compose/docker-compose.prod.yml up -d
 ```
 
 For Fly.io, roll back by re-deploying the previous image tag via `fly deploy`

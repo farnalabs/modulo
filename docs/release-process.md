@@ -76,6 +76,14 @@ Server images are `linux/amd64` **only**. Nothing we ship is `arm64`: `publish-i
 
 `dry-run` builds each image with `push: false`, so it validates that every Dockerfile still builds on a clean runner without producing a loadable image. The post-publish smoke checks that guard against the 2026-07-06 stale-image regression (a `:latest` that did not even contain the `modulo` package) live in `publish-images.yml` and are *not* duplicated here - they belong with the publish path, and re-implementing them in a `push: false` build would be a parallel copy that could drift. Wiring them into this workflow is future work (see below).
 
+### How images are actually published
+
+`publish-images.yml` triggers on a `push` of a version tag (`v*`) - but a release's own tag push does NOT run it, so image publishing is owned by `release.yml` directly rather than by the tag trigger:
+
+- **The release job's tag push does not trigger the workflow.** The `release` job pushes its `vX.Y.Z-rc*` and `vX.Y.Z` tags with the default `github.token` (`GH_TOKEN: ${{ github.token }}`). GitHub deliberately suppresses workflow runs for events caused by that token, so the tag push triggers no workflow at all - which is also why the same job reaches `rc-validate.yml` by running `gh workflow run` rather than relying on the tag. A release therefore does not publish container images through the tag trigger; the `publish-images` job (FAR-1869) is the piece that will own publishing them directly.
+- **The dry-run's "no tag at all" rule stays correct.** It is conservative for the right reason: a HUMAN pushing a version-shaped tag - or any push made with a credential other than `github.token` - WOULD trigger `publish-images.yml` and publish images. The rationale above is unchanged; what is added here is that a WORKFLOW-initiated push behaves differently from a human one.
+- **The CHANGELOG commit's push to `main` triggers no CI either.** The same `github.token` pushes it, so `main`'s HEAD after a release is not CI-validated. That is observed behaviour, recorded here rather than changed.
+
 ## Not implemented yet
 
 `release.yml` today covers the RC/GA lifecycle and the rehearsal. The remaining publish steps are **deliberate, visible stubs** rather than silent gaps - each carries a comment naming its tracking ticket. They are gated so they can never execute.
@@ -110,3 +118,5 @@ gh workflow run "Release: Cut / Recut / Promote" -f action=release -f version=0.
 ## Version numbering
 
 The version is a plain `X.Y.Z`. A pre-release suffix (`-rc1`) lives in the git tag only and is never written into any file. See [upgrade-process.md](upgrade-process.md) for the version source of truth (`backend/pyproject.toml`) and how to bump it.
+
+**Legacy tags already on origin:** 42 `v*` tags predate this process (`v0.1.1`-`v0.1.41` and `v0.2.0`, committed June-August 2026, all predating `publish-images.yml`). The promote invariant that refuses to create a GA tag which already exists means none of those version numbers can be released through this process.
