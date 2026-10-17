@@ -327,4 +327,36 @@ describe('EvidenceView', () => {
     expect(mockGet).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('Choose a run')
   })
+
+  it('falls back to HTTP 0 when a failed response carries no status', async () => {
+    // A falsy error body ("") makes the `||` right-hand side run; with no
+    // response at all, `response?.status` is absent and the `?? 0` arm applies.
+    mockGet.mockResolvedValue({ data: undefined, error: '', response: undefined })
+    const wrapper = mountView()
+
+    await wrapper.find('[data-testid="evidence-run-id"]').setValue('run-1')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Could not load evidence (HTTP 0).')
+    expect(wrapper.find('[data-testid="evidence-loading"]').exists()).toBe(false)
+  })
+
+  it('renders the empty state when a successful response omits the data payload', async () => {
+    // A 200 with a nullish body takes the `data ?? []` empty-array arm.
+    mockGet.mockResolvedValue({
+      data: undefined,
+      error: undefined,
+      response: { status: 200, ok: true },
+    })
+    const wrapper = mountView()
+
+    await wrapper.find('[data-testid="evidence-run-id"]').setValue('run-1')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('No evidence rows were recorded for this run.')
+    expect(wrapper.find('[data-testid="evidence-count"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="evidence-loading"]').exists()).toBe(false)
+  })
 })
