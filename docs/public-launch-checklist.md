@@ -54,7 +54,7 @@ Production deployment readiness checklist for the Modulo V1 Core public launch. 
 - [ ] **Row-Level Security** is enabled on all tenant-scoped tables
   - RLS test suite passes: `uv run pytest tests/unit/db/test_rls.py -v`
 - [ ] **Secrets** are injected via environment, not hardcoded in any file or committed to git
-- [ ] **Container images** have zero critical/high CVEs (Trivy scan)
+- [ ] **Container images** have zero critical/high CVEs (manual `trivy image ghcr.io/farnalabs/modulo:<version>` scan — no automated image scan runs in CI; see [`docs/deployment-security.md`](./deployment-security.md) §5.1)
 - [ ] **Containers** run as non-root user
 - [ ] **Read-only root filesystem** enabled for backend containers
 - [ ] **Firewall** blocks all inbound ports except 443 (HTTPS)

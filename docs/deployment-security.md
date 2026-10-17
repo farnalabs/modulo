@@ -380,9 +380,15 @@ using the configured secrets backend (Fernet, Vault, or AWS Secrets Manager).
 
 ### 5.1 Image Vulnerability Scanning
 
-All Modulo Docker images are scanned with Trivy as part of CI. The workflow scans
-the exact locally loaded image produced by the cached Buildx build, and only pushes
-that image to GHCR after the critical-vulnerability gate passes:
+Modulo's CI does **not** currently scan the built container images. The
+`publish-images.yml` workflow builds each backend/frontend image once and gates
+the GHCR push on image smoke checks (`import modulo`, `nginx -t`) only. CI's
+Trivy check is a filesystem scan of the repository (dependency CVEs and
+misconfigurations), not a scan of the built images. The automated trivy/grype
+image gates, digest-drift guard and cosign/SBOM attestation are the D4 GA/CI
+follow-up item (see `docs/architecture.md` §CI/CD Pipeline).
+
+Until that lands, scan a deployed image tag manually:
 
 ```bash
 # Manual scan
