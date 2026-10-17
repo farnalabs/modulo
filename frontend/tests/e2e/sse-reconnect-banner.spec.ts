@@ -137,7 +137,7 @@ async function signalFreshSignIn(page: Page): Promise<void> {
 }
 
 test.describe('SSE reconnect banner lifecycle', { tag: '@regression' }, () => {
-  test('terminal 401 raises the banner; a manual reconnect clears it on a healthy stream', { tag: '@regression' }, async ({ page, env }) => {
+  test('terminal 401 raises the banner; a failed manual reconnect is cleared by a fresh sign-in', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     const events = await installEventStreamRoutes(page, 'auth-fail')
 
