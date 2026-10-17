@@ -64,9 +64,10 @@ jobs:
           tags: |
             # Always tag with the short git SHA for traceability.
             type=sha,prefix=
-            # Tag :latest only on a version tag push (v*), so :latest means the
-            # newest PUBLISHED RELEASE — never main's tip (which keeps type=sha).
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            # Tag :latest only on a stable version tag push (vX.Y.Z, not the
+            # vX.Y.Z-rcN release candidates), so :latest means the newest
+            # PUBLISHED RELEASE — never main's tip (which keeps type=sha).
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, 'rc') }}
             # On tag pushes (v*), tag with the version (e.g. v1.2.3 → 1.2.3).
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -134,9 +135,10 @@ jobs:
           tags: |
             # Always tag with the short git SHA for traceability.
             type=sha,prefix=
-            # Tag :latest only on a version tag push (v*), so :latest means the
-            # newest PUBLISHED RELEASE — never main's tip (which keeps type=sha).
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            # Tag :latest only on a stable version tag push (vX.Y.Z, not the
+            # vX.Y.Z-rcN release candidates), so :latest means the newest
+            # PUBLISHED RELEASE — never main's tip (which keeps type=sha).
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, 'rc') }}
             # On tag pushes (v*), tag with the version (e.g. v1.2.3 → 1.2.3).
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -195,9 +197,10 @@ jobs:
           images: ghcr.io/${{ github.repository }}/frontend
           tags: |
             type=sha,prefix=
-            # Tag :latest only on a version tag push (v*), so :latest means the
-            # newest PUBLISHED RELEASE — never main's tip (which keeps type=sha).
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            # Tag :latest only on a stable version tag push (vX.Y.Z, not the
+            # vX.Y.Z-rcN release candidates), so :latest means the newest
+            # PUBLISHED RELEASE — never main's tip (which keeps type=sha).
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, 'rc') }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
