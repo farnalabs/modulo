@@ -274,14 +274,14 @@
                     role="alert"
                     aria-live="assertive"
                     data-testid="policy-gate-error"
-                    class="flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive"
+                    class="flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive-text"
                   >
                     <span>{{ $t('views.EvalEditorView.policyGate.errorState') }}</span>
                     <button
                       type="button"
                       data-testid="policy-gate-retry"
                       :aria-label="$t('views.EvalEditorView.policyGate.retryAriaLabel')"
-                      class="rounded bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive hover:bg-destructive/20"
+                      class="rounded bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive-text hover:bg-destructive/20"
                       @click="retryPolicyGate"
                     >
                       {{ $t('views.EvalEditorView.policyGate.retry') }}
@@ -377,7 +377,7 @@
                     <span
                       v-if="evalGateActions[ev.id]"
                       class="inline-block rounded px-2 py-0.5 text-xs font-medium"
-                      :class="evalGateActions[ev.id] === 'block' ? 'bg-destructive/10 text-destructive' : 'bg-amber-500/10 text-amber-700 dark:text-amber-400'"
+                      :class="evalGateActions[ev.id] === 'block' ? 'bg-destructive/10 text-destructive-text' : 'bg-amber-500/10 text-amber-700 dark:text-amber-400'"
                       data-testid="policy-gate-badge"
                     >
                       {{ evalGateActions[ev.id] === 'block' ? $t('views.EvalEditorView.policyGate.badgeBlock') : $t('views.EvalEditorView.policyGate.badgeWarn') }}

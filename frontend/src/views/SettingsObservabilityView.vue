@@ -180,7 +180,7 @@
           v-if="testResult"
           data-testid="settings-observability-test-result"
           class="rounded-lg border p-4 text-sm"
-          :class="testResult.success ? 'border-success/50 bg-success/10 text-success' : 'border-destructive/50 bg-destructive/10 text-destructive'"
+          :class="testResult.success ? 'border-success/50 bg-success/10 text-success' : 'border-destructive/50 bg-destructive/10 text-destructive-text'"
         >
           <p class="font-medium">{{ testResult.success ? $t('views.SettingsObservabilityView.connection_successful') : $t('views.SettingsObservabilityView.connection_failed') }}</p>
           <p class="mt-1">{{ testResult.message }}</p>

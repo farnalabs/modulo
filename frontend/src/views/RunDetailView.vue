@@ -278,7 +278,7 @@
           type="button"
           :disabled="cancelling"
           data-testid="run-detail-cancel"
-          class="inline-flex items-center gap-2 rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50"
+          class="inline-flex items-center gap-2 rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-2 text-sm font-medium text-destructive-text hover:bg-destructive/20 disabled:opacity-50"
           @click="cancelRun"
         >
           <LoaderCircle v-if="cancelling" aria-hidden="true" class="h-4 w-4 animate-spin" />
@@ -1117,9 +1117,9 @@ function bucketClass(key: string): string {
   const classes: Record<string, string> = {
     evaluated: 'bg-muted text-muted-foreground',
     passed: 'bg-success/10 text-success',
-    violated: 'bg-destructive/10 text-destructive',
+    violated: 'bg-destructive/10 text-destructive-text',
     observed: 'bg-warning/10 text-warning-text',
-    errored: 'bg-destructive/10 text-destructive',
+    errored: 'bg-destructive/10 text-destructive-text',
     redacted: 'bg-purple-500/10 text-purple-600',
     skipped: 'bg-muted text-muted-foreground',
   }
@@ -2123,7 +2123,7 @@ function chipClass(state: NodeProgressState): string {
   const map: Record<NodeProgressState, string> = {
     completed: 'bg-success/10 text-success border border-success/30',
     running: 'bg-warning/10 text-warning-text border border-warning/30',
-    failed: 'bg-destructive/10 text-destructive border border-destructive/30',
+    failed: 'bg-destructive/10 text-destructive-text border border-destructive/30',
     pending: 'bg-muted text-muted-foreground border border-border',
   }
   return map[state]

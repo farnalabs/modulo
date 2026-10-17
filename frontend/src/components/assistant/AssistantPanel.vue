@@ -195,7 +195,7 @@
     <div
       v-if="store.error"
       class="flex items-center justify-between px-3 py-2 text-sm border-b"
-      :class="isRateLimitError ? 'text-orange-600 bg-orange-50 border-orange-200' : 'text-destructive bg-destructive/5'"
+      :class="isRateLimitError ? 'text-orange-600 bg-orange-50 border-orange-200' : 'text-destructive-text bg-destructive/5'"
     >
       <span>{{ store.error }}</span>
       <button type="button"

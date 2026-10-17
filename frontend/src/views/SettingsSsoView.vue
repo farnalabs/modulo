@@ -153,7 +153,7 @@
             <div v-if="testResultProviderId === provider.id" class="border-t p-4" @click.stop @keydown.stop>
                 <div
                   class="rounded-lg p-3 text-sm"
-                  :class="testResult?.success ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'"
+                  :class="testResult?.success ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive-text'"
                 >
                 <p class="font-medium">{{ testResult?.success ? $t('views.SettingsSsoView.connection_successful') : $t('views.SettingsSsoView.connection_failed') }}</p>
                 <p class="mt-1">{{ testResult?.message }}</p>

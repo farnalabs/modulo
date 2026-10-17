@@ -316,7 +316,7 @@ function healthBadgeClass(row: ProfileRow): string {
     case 'healthy':
       return 'bg-success/10 text-success'
     case 'engine_unreachable':
-      return 'bg-destructive/10 text-destructive'
+      return 'bg-destructive/10 text-destructive-text'
     case 'image_not_pulled':
       return 'bg-warning/10 text-warning-text'
     default:

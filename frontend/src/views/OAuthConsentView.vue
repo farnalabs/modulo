@@ -31,7 +31,7 @@
       <div
         v-if="contextError"
         role="alert"
-        class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive"
+        class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive-text"
         data-testid="oauth-consent-context-error"
       >
         {{ contextError }}

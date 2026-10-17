@@ -253,7 +253,7 @@ const ceilingLabel = computed(() =>
 )
 
 const btnDemote =
-  'inline-flex h-7 shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-destructive/50 bg-destructive/10 px-2 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20 disabled:cursor-not-allowed disabled:opacity-50'
+  'inline-flex h-7 shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-destructive/50 bg-destructive/10 px-2 text-xs font-medium text-destructive-text transition-colors hover:bg-destructive/20 disabled:cursor-not-allowed disabled:opacity-50'
 const btnPromote =
   'inline-flex h-7 shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-input bg-primary px-2 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50'
 

@@ -130,7 +130,7 @@ const dismissButtonRef = ref<HTMLElement | null>(null);
 
 const levelClass = computed(() => {
   const map: Record<string, string> = {
-    error: "bg-destructive/10 text-destructive",
+    error: "bg-destructive/10 text-destructive-text",
     warning: "bg-warning/10 text-warning-text",
     info: "bg-primary/10 text-primary",
     debug: "bg-muted text-muted-foreground",
