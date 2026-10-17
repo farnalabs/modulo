@@ -4808,10 +4808,21 @@ def _is_zero_progress_shape_row(row: Any) -> bool:
     """Row-level mirror of :data:`_ZERO_PROGRESS_SHAPE_SQL` (FAR-1740).
 
     True when the reconcile flags say ZERO node progress: no token usage, no
-    finalised store row (``outputs_absent``) and no LangGraph checkpoint
-    (``checkpoints_absent``). Fails CLOSED (``False``) when a flag is absent,
-    so a row source that forgets a column is never treated as zero-progress.
+    finalised store row (``outputs_absent``), no LangGraph checkpoint
+    (``checkpoints_absent``) AND no durably-recorded first-node start. Fails
+    CLOSED (``False``) when a flag is absent, so a row source that forgets a
+    column is never treated as zero-progress.
+
+    FAR-1914: the durable ``first_node_dispatched`` phase (FAR-1649) proves a
+    node STARTED even though no super-step completed, so such a row is NOT
+    zero-progress. The legacy implementation omitted this leg and therefore did
+    not mirror :data:`_ZERO_PROGRESS_SHAPE_SQL` (whose phase leg the node-started
+    guard relies on) — a started node was reported as zero-progress to the
+    FAR-1740 tail guard. The leg is additive: a row source without the column
+    keeps the existing zero-progress verdict.
     """
+    if getattr(row, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED:
+        return False
     return (
         getattr(row, "node_token_usage", None) is None
         and bool(getattr(row, "outputs_absent", False))
@@ -5057,6 +5068,53 @@ def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
     # Checkpoint leg LAST so the specific legs above stay the rejecting reason
     # for rows that carry them (keeps the per-leg tests discriminating).
     return bool(getattr(row, "checkpoints_absent", False))
+
+
+async def _fresh_row_is_node_started_or_gone(session: AsyncSession, run_id: uuid.UUID) -> bool:
+    """FAR-1914: re-verify the zero-node premise on the FRESH row before acting.
+
+    The reconcile SELECT returns a row SNAPSHOT; the per-row loop can act on it
+    tens of seconds later (a ballot of rows drains under budget), and the run's
+    own executor may have DISPATCHED its first node in that window, stamping
+    ``dispatch_phase='first_node_dispatched'``. Acting on the stale snapshot then
+    re-dispatches or terminal-fails a run whose node had just started.
+
+    Production evidence: run ``e6131612`` (2026-10-15) was terminal-failed
+    through the nodeless chokepoint with
+    ``dispatch_phase=first_node_dispatched dispatch_phase_elapsed=0.3s`` — its own
+    error_detail carried the self-contradicting label "FAR-1649 row should have
+    been excluded by the node-started selection legs". A node STARTED 0.3s
+    before the terminal write, so the scan-time phase was pre-node.
+
+    Returns True when the fresh row must NOT be treated as a claimed-but-nodeless
+    zombie: it has left ``running``, has durably STARTED a node, or carries node
+    token usage. Fails CLOSED (True) when the fresh state cannot be read — never
+    act on unverifiable state (a started node may have executed side effects, so
+    re-dispatch is unsafe — FAR-1649).
+    """
+    from modulo.db.models.run import Run
+
+    try:
+        fresh = await session.get(Run, run_id)
+    except Exception:
+        _log.warning(
+            "dispatcher_reconcile.fresh_nodeless_premise_unreadable run=%s — held back (fail closed)",
+            run_id,
+            exc_info=True,
+        )
+        return True
+    if fresh is None:
+        # The row vanished (deleted / not visible under this org's RLS): there
+        # is nothing safe to repair.
+        return True
+    if getattr(fresh, "status", None) != "running":
+        # Left running between the scan and now — the terminalizer/re-dispatch
+        # decision no longer applies.
+        return True
+    if getattr(fresh, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED:
+        # FAR-1649: a durably-recorded first-node start is not zero-node.
+        return True
+    return getattr(fresh, "node_token_usage", None) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -9112,6 +9170,23 @@ async def _reconcile_nodeless_repair(
     """
     if not _is_nodeless_zombie_row(row, nodeless_window):
         return None
+    # FAR-1914: the scan row is a SNAPSHOT — the run's own executor may have
+    # dispatched its first node since the SELECT (observed run e6131612:
+    # terminal-failed with dispatch_phase_elapsed=0.3s). Re-verify the zero-node
+    # premise on the FRESH row before acting: a node-started row is deferred (no
+    # re-dispatch — FAR-1649 — and no "dispatched no node" terminal-fail) and
+    # left to the caller's node-started belt / the age gate.
+    if await _fresh_row_is_node_started_or_gone(session, row.id):
+        summary["node_started_deferred"] += 1
+        _log.warning(
+            "dispatcher_reconcile.nodeless_fresh_premise_blocked run=%s org=%s "
+            "phase_snapshot=%s — a node started after the scan (or the row left running); "
+            "held back from re-dispatch/terminalise (FAR-1914)",
+            row.id,
+            org_id,
+            getattr(row, "dispatch_phase", None),
+        )
+        return None
     if not _should_redispatch_nodeless(row):
         # Budget exhausted (retry budget exhausted / policy excludes 'stall'):
         # terminal-fail exactly as before — even when throttled, since waiting
@@ -9407,11 +9482,23 @@ async def _reconcile_one_row(
     # min sooner.  The throttle uses the FULL nodeless_window (not the
     # early-detect window) so at most one early re-dispatch happens per full
     # cycle — preventing hot-loop re-dispatching while closing the gap.
-    if (
-        early_detect_minutes is not None
-        and _is_nodeless_zombie_row(row, early_detect_minutes)
-        and not _is_nodeless_redispatch_throttled(row, nodeless_window)
-    ):
+    early_detect_candidate = early_detect_minutes is not None and _is_nodeless_zombie_row(row, early_detect_minutes)
+    # FAR-1914: the scan row is a snapshot; re-verify the zero-node premise on
+    # the FRESH row before the early-detect branch acts (see
+    # ``_fresh_row_is_node_started_or_gone`` — run e6131612 started a node 0.3s
+    # before a stale-snapshot action). A node-started row is deferred here too,
+    # so the early path can never re-dispatch / terminal-fail a started node.
+    if early_detect_candidate and await _fresh_row_is_node_started_or_gone(session, row.id):
+        summary["node_started_deferred"] += 1
+        _log.warning(
+            "dispatcher_reconcile.nodeless_early_detect_fresh_premise_blocked run=%s org=%s "
+            "phase_snapshot=%s — a node started after the scan; held back (FAR-1914)",
+            row.id,
+            org_id,
+            getattr(row, "dispatch_phase", None),
+        )
+        return enqueue_failed_redispatched
+    if early_detect_candidate and not _is_nodeless_redispatch_throttled(row, nodeless_window):
         # Budget first, exactly as the full-window repair: budget exhaustion
         # terminal-fails REGARDLESS of the cap (terminal-fail reduces load; it
         # never enqueues), so waiting out the cap could never help.
