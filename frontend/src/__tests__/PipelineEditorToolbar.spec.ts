@@ -222,7 +222,18 @@ describe('PipelineEditorView toolbar & fit-on-load', () => {
     expect(select.props('ariaLabel')).toBe('New node type')
   })
 
-  it('labels and anchors the convert-to-agent dropdown', async () => {
+  it('teleports the empty-state node-type dropdown out of the clipped canvas too', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    // Empty graph → the canvas empty-state overlay renders its own node-type
+    // Select (a distinct in-tree instance from the toolbar one), also inside
+    // the clipped editor column, so it must teleport to <body> as well.
+    const select = componentByTestid(wrapper, 'pipeline-editor-empty-node-type-select')
+    expect(select.props('appendTo')).toBe('body')
+  })
+
+  it('labels and teleports the convert-to-agent dropdown', async () => {
     const wrapper = mountEditor()
     await flushPromises()
 
@@ -235,7 +246,9 @@ describe('PipelineEditorView toolbar & fit-on-load', () => {
     expect(el).not.toBeNull()
 
     const select = componentByTestid(wrapper, 'pipeline-editor-agent-select')
-    expect(select.props('appendTo')).toBe('self')
+    // FAR-1899 sweep: the dialog body (`.p-dialog-content`) is the same
+    // clipped/scrollable-ancestor class, so this Select escapes to <body> too.
+    expect(select.props('appendTo')).toBe('body')
     // PrimeVue v5 consumes aria-label as the ariaLabel prop.
     expect(select.props('ariaLabel')).toBe('Agent to convert to')
   })

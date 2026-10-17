@@ -664,19 +664,19 @@ describe('PipelineEditorView — toolbar popover anchoring (FAR-1899 changed-lin
   // rect so the editor's clipped scroll column (FAR-1861) cannot cut them off.
   // jsdom returns an all-zero rect for every element, so the geometry branches
   // (below vs flipped-above, the min-height clamp, the off-screen right/bottom
-  // clamps) are driven here by stubbing the toggle's rect — the Playwright
-  // specs do not feed the unit lcov report the gate reads.
-  type Rect = { top: number; right: number; bottom: number }
+  // clamps, and the left-edge clamp) are driven here by stubbing the toggle's
+  // rect — the Playwright specs do not feed the unit lcov report the gate reads.
+  type Rect = { top: number; right: number; bottom: number; left?: number }
 
-  function fakeRect({ top, right, bottom }: Rect): DOMRect {
+  function fakeRect({ top, right, bottom, left = 0 }: Rect): DOMRect {
     return {
       top,
       right,
       bottom,
-      left: 0,
-      width: 0,
-      height: 0,
-      x: 0,
+      left,
+      width: right - left,
+      height: bottom - top,
+      x: left,
       y: top,
       toJSON: () => ({}),
     } as DOMRect
@@ -692,7 +692,7 @@ describe('PipelineEditorView — toolbar popover anchoring (FAR-1899 changed-lin
     const wrapper = mountEditor()
     await flushPromises()
     const vm = wrapper.vm as any
-    expect(vm.anchoredPopoverStyle(null)).toEqual({})
+    expect(vm.anchoredPopoverStyle(null, 288)).toEqual({})
     // …and the panel positioner falls back to the class default.
     vm.retryPolicyToggleRef = null
     vm.positionRetryPolicyPanel()
@@ -704,15 +704,36 @@ describe('PipelineEditorView — toolbar popover anchoring (FAR-1899 changed-lin
     const wrapper = mountEditor()
     await flushPromises()
     setViewport(800)
-    stubToggleRect(wrapper, 'pipeline-editor-retry-policy-toggle', { top: 60, right: 200, bottom: 100 })
+    // A trigger near the RIGHT edge: the w-72 panel fits right-aligned under it.
+    stubToggleRect(wrapper, 'pipeline-editor-retry-policy-toggle', { top: 60, right: 900, bottom: 100 })
     await wrapper.get('[data-testid="pipeline-editor-retry-policy-toggle"]').trigger('click')
     await nextTick()
 
     const style = wrapper.get('[data-testid="pipeline-editor-retry-policy-panel"]').attributes('style') ?? ''
     expect(style).toContain('top: 104px')
     expect(style).toContain('bottom: auto')
-    expect(style).toContain(`right: ${window.innerWidth - 200}px`)
+    expect(style).toContain('left: auto')
+    expect(style).toContain(`right: ${window.innerWidth - 900}px`)
     expect(style).toContain('max-height: 688px')
+    wrapper.unmount()
+  })
+
+  it('clamps the LEFT edge when the trigger sits near the left edge', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+    setViewport(800)
+    // A left-edge trigger: a right-aligned w-72 panel would start at 40 − 288 =
+    // −248px, off-screen. The panel must instead left-anchor inside the margin.
+    stubToggleRect(wrapper, 'pipeline-editor-retry-policy-toggle', { top: 60, right: 100, bottom: 100, left: 40 })
+    await wrapper.get('[data-testid="pipeline-editor-retry-policy-toggle"]').trigger('click')
+    await nextTick()
+
+    const style = wrapper.get('[data-testid="pipeline-editor-retry-policy-panel"]').attributes('style') ?? ''
+    expect(style).toContain('left: 40px')
+    expect(style).toContain('right: auto')
+    // Still positioned below the trigger.
+    expect(style).toContain('top: 104px')
+    expect(style).toContain('bottom: auto')
     wrapper.unmount()
   })
 

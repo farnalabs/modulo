@@ -206,13 +206,17 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     expect(doc.scrollHeight).toBeLessThanOrEqual(doc.clientHeight)
   })
 
-  test('a short viewport yields the 240px floor instead of scrolling the page', { tag: '@regression' }, async ({ page, env }) => {
+  test('a short viewport yields the editor to the space left instead of a fixed floor', { tag: '@regression' }, async ({ page, env }) => {
     // 640x480 (short landscape) is where the chrome stack above the editor
     // exceeds the 240px usability floor the original mobile fix introduced:
     // with a hard floor the editor was forced to 240px and spilled ~80px below
     // the fold, re-introducing the trapped page scroll FAR-1841 removed. The
     // floor must yield to the viewport (FAR-1861) — the editor shrinks to the
-    // space left instead of overflowing.
+    // space left instead of overflowing. The invariant is CHROME-RELATIVE (the
+    // pinned height equals the room left below the chrome), never a fixed pixel
+    // count: the mocked e2e chrome is shorter than production's, so an absolute
+    // `< 240` here would be asserting the mock's chrome height, not the floor
+    // yielding.
     await loginAsAdmin(page, env)
     await mockEditorWithNode(page)
     await page.setViewportSize({ width: 640, height: 480 })
@@ -224,18 +228,37 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
 
     // The fit resolves async (chrome above the editor mounts/measures on its
     // own schedule) — poll until the document settles with no vertical scroll.
-    await expect
-      .poll(
-        async () => page.evaluate(() => document.documentElement.scrollHeight - document.documentElement.clientHeight),
-        { timeout: 15_000, message: 'short viewport must not scroll the page' },
-      )
-      .toBeLessThanOrEqual(0)
+    const settle = () =>
+      expect
+        .poll(
+          async () => page.evaluate(() => document.documentElement.scrollHeight - document.documentElement.clientHeight),
+          { timeout: 15_000, message: 'short viewport must not scroll the page' },
+        )
+        .toBeLessThanOrEqual(0)
+    await settle()
+
+    const root = page.getByTestId('pipeline-editor-root')
+    let rootBox = await root.boundingBox()
+    expect(rootBox).not.toBeNull()
+
+    // Put the editor squarely in the "available < floor" band regardless of the
+    // mocked-vs-production chrome height: shrink the viewport to the measured
+    // chrome height plus a sub-240 slice. The resize handler re-fits the pin.
+    const chromeHeight = Math.ceil(rootBox!.y)
+    await page.setViewportSize({ width: 640, height: chromeHeight + 180 })
+    await settle()
 
     const viewportHeight = await page.evaluate(() => document.documentElement.clientHeight)
-    const rootBox = await page.getByTestId('pipeline-editor-root').boundingBox()
+    rootBox = await root.boundingBox()
     expect(rootBox).not.toBeNull()
-    // The 240px floor yielded: the editor is shorter than 240px here.
-    expect(rootBox!.height).toBeLessThan(240)
+
+    const available = viewportHeight - rootBox!.y
+    // Precondition: genuinely below the old floor, so this only passes if the
+    // floor yielded (a hard 240px floor would leave this at 240, not available).
+    expect(available).toBeLessThan(240)
+    expect(rootBox!.height).toBeGreaterThan(0)
+    // The editor is the space actually left below the chrome — not a fixed pin.
+    expect(Math.abs(rootBox!.height - available)).toBeLessThanOrEqual(1)
     // …and ends at or above the fold, so nothing is trapped below it.
     expect(rootBox!.y + rootBox!.height).toBeLessThanOrEqual(viewportHeight + 1)
   })
@@ -347,6 +370,28 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     expect(box!.x).toBeGreaterThanOrEqual(0)
     expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width)
 
+    // …and actually anchored to its TRIGGER, not merely "somewhere on screen".
+    // An overlay teleported but detached to the viewport origin (0,0) — the
+    // exact FAR-851 regression body-append exists to prevent — satisfies every
+    // viewport-only assertion above, so pin the overlay's horizontal range to
+    // the trigger's and its near edge to the trigger's bottom (or top when
+    // PrimeVue flips it above).
+    const triggerBox = await page.getByTestId('pipeline-editor-node-type-select').boundingBox()
+    expect(triggerBox).not.toBeNull()
+    const overlapsTriggerX =
+      box!.x < triggerBox!.x + triggerBox!.width && triggerBox!.x < box!.x + box!.width
+    expect(overlapsTriggerX).toBe(true)
+
+    // PrimeVue places the overlay flush against the trigger's near edge (its
+    // own anchor gutter is at most a couple of px); allow a small slack.
+    const nearEdgeSlack = 8
+    const flippedAbove = box!.y + box!.height <= triggerBox!.y
+    if (flippedAbove) {
+      expect(Math.abs(triggerBox!.y - (box!.y + box!.height))).toBeLessThanOrEqual(nearEdgeSlack)
+    } else {
+      expect(Math.abs(box!.y - (triggerBox!.y + triggerBox!.height))).toBeLessThanOrEqual(nearEdgeSlack)
+    }
+
     // A clipped box still reports a rect, so also prove the overlay is
     // hit-testable at its own centre (i.e. actually visible, not cut off).
     const hitAtCentre = await page.evaluate(() => {
@@ -384,9 +429,10 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height)
 
     // The panel is bounded to the room available and scrolls its own content,
-    // instead of being cut off at the fold.
+    // instead of being cut off at the fold. Strict `>` — `>=` is always true
+    // (`scrollHeight` can never be below `clientHeight`) and asserts nothing.
     const scrollsInternally = await panel.evaluate(
-      (el) => getComputedStyle(el).overflowY === 'auto' && el.scrollHeight >= el.clientHeight,
+      (el) => getComputedStyle(el).overflowY === 'auto' && el.scrollHeight > el.clientHeight,
     )
     expect(scrollsInternally).toBe(true)
   })

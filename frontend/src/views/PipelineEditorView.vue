@@ -714,6 +714,7 @@
               class="toolbar-select w-40 text-xs"
               append-to="body"
               :aria-label="$t('views.PipelineEditorView.new_node_type')"
+              data-testid="pipeline-editor-empty-node-type-select"
             />
             <Button severity="secondary" outlined size="small" type="button" class="text-xs" @click="addNode()">{{ $t('views.PipelineEditorView.add_node') }}</Button>
           </div>
@@ -1355,7 +1356,7 @@
   :aria-label="$t('views.PipelineEditorView.edge_type')"
   v-model="edgeForm.edge_type"
   :disabled="isViewing"
-  append-to="self"
+  append-to="body"
   :placeholder="$t('views.PipelineEditorView.normal')"
   class="w-full"
   :options="[{ value: 'normal', label: $t('views.PipelineEditorView.normal') }, { value: 'reject', label: $t('views.PipelineEditorView.reject') }, { value: 'conditional', label: $t('views.PipelineEditorView.conditional') }, { value: 'loop', label: $t('views.PipelineEditorView.loop') }, { value: 'llm', label: $t('views.PipelineEditorView.llm_routing') }]"
@@ -1487,7 +1488,7 @@
   :aria-label="$t('views.PipelineEditorView.condition_type')"
   v-model="edgeForm.condition_type"
   :disabled="isViewing"
-  append-to="self"
+  append-to="body"
   :placeholder="$t('views.PipelineEditorView.none_always_gate')"
   class="w-full"
   :options="[{ value: 'none', label: $t('views.PipelineEditorView.none_always_gate') }, { value: 'jmespath', label: $t('views.PipelineEditorView.jmespath_expression') }, { value: 'eval', label: $t('views.PipelineEditorView.eval_reference') }]"
@@ -1540,7 +1541,7 @@
   :aria-label="$t('views.PipelineEditorView.operator')"
   v-model="edgeForm.eval_operator"
   :disabled="isViewing"
-  append-to="self"
+  append-to="body"
   :placeholder="$t('views.PipelineEditorView.eval_operator_placeholder')"
   class="w-full"
   :options="[{ value: 'lt', label: $t('views.PipelineEditorView.eval_operator_lt') }, { value: 'gt', label: $t('views.PipelineEditorView.eval_operator_gt') }, { value: 'lte', label: $t('views.PipelineEditorView.eval_operator_lte') }, { value: 'gte', label: $t('views.PipelineEditorView.eval_operator_gte') }, { value: 'eq', label: $t('views.PipelineEditorView.eval_operator_eq') }, { value: 'neq', label: $t('views.PipelineEditorView.eval_operator_neq') }]"
@@ -1582,7 +1583,7 @@
   :aria-label="$t('views.PipelineEditorView.agent_select_label')"
   :title="$t('views.PipelineEditorView.agent_select_hint')"
   v-model="pickerAgentId"
-  append-to="self"
+  append-to="body"
   @update:model-value="onAgentChange"
   :placeholder="$t('views.PipelineEditorView.select_agent_placeholder')"
   data-testid="pipeline-editor-agent-select"
@@ -1601,7 +1602,7 @@
             <Select
   :aria-label="$t('views.PipelineEditorView.connector')"
   v-model="pickerConnectorId"
-  append-to="self"
+  append-to="body"
   :placeholder="$t('views.PipelineEditorView.select_connector_placeholder')"
   data-testid="pipeline-editor-connector-select"
   class="w-full"
@@ -1649,7 +1650,7 @@
           <Select
   :aria-label="$t('views.PipelineEditorView.snapshot_label')"
   v-model="revertSnapshotId"
-  append-to="self"
+  append-to="body"
   :placeholder="$t('views.PipelineEditorView.select_snapshot_placeholder')"
   data-testid="pipeline-editor-snapshot-select"
   class="w-full"
@@ -2186,8 +2187,16 @@ const ownerlessGateAdvisory = computed(() => {
  * available: the panel scrolls its own content rather than being cut off.
  * Returns {} when the trigger ref is not bound yet (jsdom mounts), leaving the
  * CSS class fallback in charge.
+ *
+ * `preferredWidth` is the panel's CSS width in px (w-80 = 320, w-72 = 288),
+ * clamped here by the same `max-w-[calc(100vw-1rem)]` the class applies. The
+ * panel is RIGHT-aligned to the trigger's right edge; when that would push its
+ * LEFT edge off-screen (a trigger near the left edge — the w-80/w-72 panels are
+ * wider than the room left of a left-edge trigger), it falls back to
+ * LEFT-anchoring with the left edge clamped inside the margin, so both edges
+ * stay on screen.
  */
-function anchoredPopoverStyle(trigger: HTMLElement | null): Record<string, string> {
+function anchoredPopoverStyle(trigger: HTMLElement | null, preferredWidth: number): Record<string, string> {
   if (!trigger) return {}
   const rect = trigger.getBoundingClientRect()
   const margin = 8
@@ -2200,9 +2209,18 @@ function anchoredPopoverStyle(trigger: HTMLElement | null): Record<string, strin
   const openUp = spaceBelow < 160 && spaceAbove > spaceBelow
   const available = openUp ? spaceAbove : spaceBelow
   const maxHeight = Math.max(120, Math.min(available, window.innerHeight - margin * 2))
+  // Effective panel width: the class width, capped by the viewport cap.
+  const width = Math.min(preferredWidth, window.innerWidth - margin * 2)
+  // Right-aligned by default; left-anchor when the panel would overflow the
+  // left edge (a trigger within one panel-width of the viewport's left edge).
+  const overflowsLeft = rect.right - width < margin
+  const left = overflowsLeft
+    ? `${Math.max(margin, Math.min(rect.left, window.innerWidth - margin - width))}px`
+    : 'auto'
+  const right = overflowsLeft ? 'auto' : `${Math.max(margin, window.innerWidth - rect.right)}px`
   return {
-    left: 'auto',
-    right: `${Math.max(margin, window.innerWidth - rect.right)}px`,
+    left,
+    right,
     top: openUp ? 'auto' : `${rect.bottom + gap}px`,
     bottom: openUp ? `${Math.max(margin, window.innerHeight - rect.top + gap)}px` : 'auto',
     maxHeight: `${maxHeight}px`,
@@ -2228,8 +2246,13 @@ const retryPolicyPanelStyle = ref<Record<string, string>>({})
 const retryPolicyToggleId = 'pipeline-editor-retry-policy-toggle'
 const retryPolicyPanelId = 'pipeline-editor-retry-policy-panel'
 
+// Panel widths in px for the horizontal clamp: `w-72` = 18rem, `w-80` = 20rem
+// (16px root). Keep in sync with the class on each panel.
+const RETRY_POLICY_PANEL_WIDTH = 288
+const AUTONOMY_PANEL_WIDTH = 320
+
 function positionRetryPolicyPanel() {
-  retryPolicyPanelStyle.value = anchoredPopoverStyle(retryPolicyToggleRef.value)
+  retryPolicyPanelStyle.value = anchoredPopoverStyle(retryPolicyToggleRef.value, RETRY_POLICY_PANEL_WIDTH)
 }
 
 // Capture phase: scroll does not bubble, so this also catches the content
@@ -2436,7 +2459,7 @@ const autonomyPanelDialogRef = ref<HTMLDialogElement | null>(null)
 const autonomyPanelStyle = ref<Record<string, string>>({})
 
 function positionAutonomyPanel() {
-  autonomyPanelStyle.value = anchoredPopoverStyle(autonomyPanelToggleRef.value)
+  autonomyPanelStyle.value = anchoredPopoverStyle(autonomyPanelToggleRef.value, AUTONOMY_PANEL_WIDTH)
 }
 
 function bindAutonomyPanelPositioning() {

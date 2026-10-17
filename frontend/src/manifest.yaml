@@ -3669,6 +3669,9 @@ elements:
       - testid: pipeline-editor-node-type-select
         type: select
         dynamic_testid: false
+      - testid: pipeline-editor-empty-node-type-select
+        type: select
+        dynamic_testid: false
       - testid: pipeline-editor-add-node
         type: button
         dynamic_testid: false
