@@ -208,12 +208,12 @@ async def update_evidence_retention(
     except SQLAlchemyError as exc:
         # FAR-1832 QA F16: ``save_policy`` writes the ``evidence_retention``
         # key through the bounded-lock org-settings patch, so a 55P03 is
-        # reachable here. Classify it (409 conflict) FIRST, before the generic
-        # 503 below — and note this route carries NO ``@handle_db_errors``
-        # decorator, so this arm is the only translation (no backstop would
-        # have caught the miss).
-        raise_lock_timeout_conflict_if(exc, "admin_evidence_retention.update_evidence_retention")
+        # reachable here. This route carries NO ``@handle_db_errors`` decorator,
+        # so this arm is the only translation. FAR-1464: the session-contract
+        # guard leads (it returns for other errors); the FAR-1832 F2 lock-timeout
+        # 409 classification below runs before the generic 503.
         raise_session_contract_error(exc, "admin_evidence_retention.update_evidence_retention")
+        raise_lock_timeout_conflict_if(exc, "admin_evidence_retention.update_evidence_retention")
         _log.exception("evidence_retention.update.db_error")
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,

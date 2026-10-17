@@ -210,8 +210,8 @@ async def admin_update_email_settings(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_lock_timeout_conflict_if(exc, _CODE_ADMIN_EMAIL_ADMIN_UPDATE)
         raise_session_contract_error(exc, _CODE_ADMIN_EMAIL_ADMIN_UPDATE)
+        raise_lock_timeout_conflict_if(exc, _CODE_ADMIN_EMAIL_ADMIN_UPDATE)
         logger.exception(_CODE_ADMIN_EMAIL_ADMIN_UPDATE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

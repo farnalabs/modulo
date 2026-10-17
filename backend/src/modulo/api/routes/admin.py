@@ -1042,10 +1042,12 @@ async def admin_update_org(
         logger.exception("admin_update_org ProgrammingError", extra={"org_id": str(current_user.organisation_id)})
         _raise_feature_not_available()
     except SQLAlchemyError as exc:
-        # FAR-1832 QA F2: 55P03 (bounded lock timeout) is a 409 conflict, not
-        # an outage — classify before the generic 503.
-        raise_lock_timeout_conflict_if(exc, "admin.admin_update_org")
+        # FAR-1464: the session-contract guard leads (a session-contract error
+        # is a 500, never a 503 outage); it RETURNS for any other error, so the
+        # FAR-1832 QA F2 lock-timeout 409 classification below still runs before
+        # the generic 503.
         raise_session_contract_error(exc, "admin.admin_update_org")
+        raise_lock_timeout_conflict_if(exc, "admin.admin_update_org")
         logger.exception("admin_update_org SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         _raise_db_unavailable("Database error while updating org profile.")
 
@@ -3951,10 +3953,12 @@ async def admin_update_retention(
 
         _raise_this_feature_not_available()
     except SQLAlchemyError as exc:
-        # FAR-1832 QA F2: 55P03 (bounded lock timeout) is a 409 conflict, not
-        # an outage — classify before the generic 503.
-        raise_lock_timeout_conflict_if(exc, "admin.admin_update_retention")
+        # FAR-1464: the session-contract guard leads (a session-contract error
+        # is a 500, never a 503 outage); it RETURNS for any other error, so the
+        # FAR-1832 QA F2 lock-timeout 409 classification below still runs before
+        # the generic 503.
         raise_session_contract_error(exc, "admin.admin_update_retention")
+        raise_lock_timeout_conflict_if(exc, "admin.admin_update_retention")
         logger.exception(_CODE_ROUTES_ADMIN)
 
         _raise_db_error_occurred()
@@ -4030,11 +4034,12 @@ async def _run_admin_rls_txn(
             detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        # FAR-1832 QA F2: a bounded lock timeout (55P03) on the settings
-        # patch's row lock is a 409 conflict, not an outage — classify it
-        # BEFORE the generic 503 below.
-        raise_lock_timeout_conflict_if(exc, "admin._run_admin_rls_txn")
+        # FAR-1464: the session-contract guard leads (a session-contract error
+        # is a 500, never a 503 outage); it RETURNS for any other error, so the
+        # FAR-1832 QA F2 lock-timeout 409 classification below still runs before
+        # the generic 503.
         raise_session_contract_error(exc, "admin._run_admin_rls_txn")
+        raise_lock_timeout_conflict_if(exc, "admin._run_admin_rls_txn")
         logger.exception(_CODE_ROUTES_ADMIN)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

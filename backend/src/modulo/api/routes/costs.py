@@ -623,8 +623,8 @@ async def update_cost_controls(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_lock_timeout_conflict_if(exc, "costs.update_cost_controls")
         raise_session_contract_error(exc, "costs.update_cost_controls")
+        raise_lock_timeout_conflict_if(exc, "costs.update_cost_controls")
         _log.exception("update_cost_controls SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

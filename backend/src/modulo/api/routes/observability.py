@@ -224,8 +224,8 @@ async def update_observability_settings(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_lock_timeout_conflict_if(exc, _CODE_OBSERVABILITY_UPDATE_OBSERVABILITY_SETTINGS)
         raise_session_contract_error(exc, _CODE_OBSERVABILITY_UPDATE_OBSERVABILITY_SETTINGS)
+        raise_lock_timeout_conflict_if(exc, _CODE_OBSERVABILITY_UPDATE_OBSERVABILITY_SETTINGS)
         _log.exception(_CODE_OBSERVABILITY_UPDATE_OBSERVABILITY_SETTINGS)
         _log.warning(
             "observability.put.db_error",

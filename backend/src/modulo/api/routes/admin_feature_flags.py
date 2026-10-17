@@ -550,11 +550,12 @@ async def toggle_feature_flag(
     except SQLAlchemyError as exc:
         # FAR-1832 QA F16: this arm fronts ``_apply_org_flag_override`` →
         # ``_write_org_override`` → the bounded-lock org-settings patch, so a
-        # 55P03 is reachable here. Classify it (409 conflict) FIRST, before the
-        # generic 503 below — the F10 sweep converted the org-override sibling
-        # writers but missed this toggle arm.
-        raise_lock_timeout_conflict_if(exc, "admin_feature_flags.toggle_feature_flag")
+        # 55P03 is reachable here — the F10 sweep converted the org-override
+        # sibling writers but missed this toggle arm. FAR-1464: the
+        # session-contract guard leads (it returns for other errors); the F2
+        # lock-timeout 409 classification below runs before the generic 503.
         raise_session_contract_error(exc, "admin_feature_flags.toggle_feature_flag")
+        raise_lock_timeout_conflict_if(exc, "admin_feature_flags.toggle_feature_flag")
         logger.exception(_CODE_FEATURE_FLAGS_TOGGLE_FAILED, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -671,8 +672,8 @@ async def set_org_flag_override(
             },
         )
     except SQLAlchemyError as exc:
-        raise_lock_timeout_conflict_if(exc, "admin_feature_flags.set_org_flag_override")
         raise_session_contract_error(exc, "admin_feature_flags.set_org_flag_override")
+        raise_lock_timeout_conflict_if(exc, "admin_feature_flags.set_org_flag_override")
         logger.exception(_CODE_FEATURE_FLAGS_SET_ORG, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -755,8 +756,8 @@ async def clear_org_flag_override(
             },
         )
     except SQLAlchemyError as exc:
-        raise_lock_timeout_conflict_if(exc, "admin_feature_flags.clear_org_flag_override")
         raise_session_contract_error(exc, "admin_feature_flags.clear_org_flag_override")
+        raise_lock_timeout_conflict_if(exc, "admin_feature_flags.clear_org_flag_override")
         logger.exception(_CODE_FEATURE_FLAGS_CLEAR_ORG, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
