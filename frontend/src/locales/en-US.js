@@ -593,6 +593,7 @@ export default {
       "enter_your_password": "Enter your password",
       "modulo": "Modulo",
       "or_continue_with": "or continue with",
+      "saml": "SAML",
       "sign_in_to_org": "Sign in to {orgName}",
       "sign_in_with": "Sign in with {provider}",
       "used_last_time": "Used last time"
