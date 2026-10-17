@@ -12,7 +12,7 @@ vi.mock('../lib/api/client', () => ({
 
 import CapacityQueuePanel from '../components/analytics/CapacityQueuePanel.vue'
 import enUS from '../locales/en-US.js'
-import { useAnalyticsStore } from '../stores/analytics'
+import { formatCapacityDuration, useAnalyticsStore } from '../stores/analytics'
 
 const i18n = createI18n({
   legacy: false,
@@ -174,5 +174,139 @@ describe('CapacityQueuePanel', () => {
 
     expect(wrapper.find('[data-testid="capacity-error"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="capacity-error"]').text()).toContain('Capacity unavailable')
+  })
+
+  it('renders neutral labels when optional fields are absent', async () => {
+    const payload = capacityResponse({
+      generated_at: 'not-a-date',
+      limits: { org_run_concurrency_limit: null, sandbox_concurrency_limit: null, sandbox_limit_is_default: false },
+      drain: {
+        created: 0,
+        started: 0,
+        completed: 0,
+        ratio: null,
+        baseline_depth: 0,
+        baseline_oldest_pending_age_seconds: null,
+        final_depth: 0,
+        depth_change: 0,
+        verdict: 'stable',
+      },
+      binding: { scope: 'none', limit: null, in_use: null, headroom: null, pending_blocked: 0, admissible_if_raised: 0 },
+      pending: {
+        total: 1,
+        oldest_pending_age_seconds: null,
+        by_cause: { pipeline: 1 },
+        by_pipeline: [
+          {
+            pipeline_id: 'bbbbbbbb-2222-4222-8222-222222222222',
+            pipeline_name: null,
+            pending_count: 1,
+            oldest_pending_age_seconds: null,
+            max_concurrent_runs: null,
+          },
+        ],
+      },
+      active_health: { ...capacityResponse().active_health, utilisation: null, attribution: [] },
+    })
+    installResponse(payload)
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="capacity-verdict"]').text()).toContain('Stable')
+    expect(wrapper.find('[data-testid="capacity-oldest-pending"]').text()).toBe('—')
+    expect(wrapper.find('[data-testid="capacity-drain-ratio"]').text()).toBe('—')
+    expect(wrapper.find('[data-testid="capacity-org-cap-use"]').text()).toBe('—')
+    expect(wrapper.find('[data-testid="capacity-limits"]').text()).toContain('None')
+    expect(wrapper.find('[data-testid="capacity-binding"]').text()).toContain('None')
+    // No pipeline_name -> the short id (first 8 chars) is shown.
+    expect(wrapper.text()).toContain('bbbbbbbb')
+    // Missing by_cause keys default to zero rather than undefined.
+    expect(wrapper.find('[data-testid="capacity-cause-unmarked"]').text()).toBe('0')
+  })
+
+  it('falls back to the stable label for an unknown verdict', async () => {
+    const base = capacityResponse()
+    installResponse(capacityResponse({ drain: { ...base.drain, verdict: 'mystery' } }))
+    const wrapper = mountPanel()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="capacity-verdict"]').text()).toContain('Stable')
+  })
+
+  it('falls back to the stable label for a missing verdict', async () => {
+    const base = capacityResponse()
+    installResponse(
+      capacityResponse({ drain: { ...base.drain, verdict: undefined as unknown as string } }),
+    )
+    const wrapper = mountPanel()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="capacity-verdict"]').text()).toContain('Stable')
+  })
+
+  it('renders the default and unknown-binding labels', async () => {
+    const base = capacityResponse()
+    installResponse(
+      capacityResponse({
+        limits: { org_run_concurrency_limit: 5, sandbox_concurrency_limit: 4, sandbox_limit_is_default: true },
+        binding: { ...base.binding, scope: 'mystery' },
+      }),
+    )
+    const wrapper = mountPanel()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="capacity-limits"]').text()).toContain('4 (default)')
+    expect(wrapper.find('[data-testid="capacity-binding"]').text()).toContain('None')
+  })
+
+  it('refetches the capacity report when refresh is clicked', async () => {
+    installResponse(capacityResponse())
+    const wrapper = mountPanel()
+    await flushPromises()
+    const callsBefore = mockGet.mock.calls.length
+
+    await wrapper.find('[data-testid="capacity-refresh"]').trigger('click')
+    await flushPromises()
+
+    expect(mockGet.mock.calls.length).toBeGreaterThan(callsBefore)
+  })
+
+  it('ignores a stale capacity failure superseded by a newer request', async () => {
+    setActivePinia(createPinia())
+    const store = useAnalyticsStore()
+    let rejectFirst: (reason: unknown) => void = () => {}
+    const first = new Promise((_resolve, reject) => {
+      rejectFirst = reject
+    })
+    mockGet
+      .mockImplementationOnce(() => first)
+      .mockImplementationOnce(() => Promise.resolve({ data: capacityResponse(), error: undefined }))
+
+    const stale = store.fetchCapacity()
+    const fresh = store.fetchCapacity()
+    rejectFirst(new Error('stale request failed'))
+
+    await Promise.allSettled([stale, fresh])
+    expect(store.capacityError).toBeNull()
+    expect(store.capacity?.pending.total).toBe(3)
+  })
+
+  it('formats capacity durations across every magnitude', () => {
+    expect(formatCapacityDuration(null)).toBe('—')
+    expect(formatCapacityDuration(undefined)).toBe('—')
+    expect(formatCapacityDuration(7200)).toBe('2.0h')
+    expect(formatCapacityDuration(120)).toBe('2m')
+    expect(formatCapacityDuration(30)).toBe('30s')
+  })
+
+  it('uses empty capacity defaults before the store has loaded', () => {
+    setActivePinia(createPinia())
+    mockGet.mockImplementation(() => new Promise(() => {}))
+    const wrapper = mountPanel()
+    // The panel keeps an empty stand-in until the first fetch resolves. The
+    // setup-state computed may be exposed either wrapped or unwrapped.
+    const setupState = (wrapper.vm as unknown as {
+      $: { setupState: { capacity: { drain: { verdict: string }; value?: { drain: { verdict: string } } } } }
+    }).$.setupState
+    const capacity = setupState.capacity.value ?? setupState.capacity
+    expect(capacity.drain.verdict).toBe('stable')
+    wrapper.unmount()
   })
 })

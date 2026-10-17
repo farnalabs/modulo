@@ -11,9 +11,12 @@ interval never reads as "nothing completed").
 
 from __future__ import annotations
 
+import contextlib
 import uuid
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.dialects import postgresql
@@ -29,12 +32,23 @@ from modulo.core.analytics.capacity import (
     _bucket_boundaries,
     _cause_of,
     _depth_at,
+    _depth_series,
+    _field,
     _heartbeat_reference,
+    _queued_intervals,
+    _sandbox_state,
+    build_capacity_health_query,
     build_capacity_rows_query,
+    build_pipeline_meta_query,
     compute_capacity_report,
+    run_capacity_query,
     validate_capacity_params,
 )
-from modulo.core.analytics.service import AnalyticsValidationError
+from modulo.core.analytics.service import (
+    AnalyticsDatabaseError,
+    AnalyticsRateLimitedError,
+    AnalyticsValidationError,
+)
 
 _NOW = datetime(2026, 10, 17, 12, 0, 0, tzinfo=UTC)
 _WINDOW_START = _NOW - timedelta(minutes=60)
@@ -478,6 +492,15 @@ class TestActiveHealth:
         assert health["gate_total"] == 0
         assert health["cancelling_total"] == 1
 
+    def test_running_row_without_started_at_has_no_executing_age(self) -> None:
+        # A running row that has not stamped started_at yet still counts as
+        # executing but contributes no oldest-age (and beats via heartbeat).
+        rows = [_row(status="running", created_at=_minutes_before(_NOW, 10), heartbeat_at=_NOW)]
+        report = _compute(rows)
+        att = report["active_health"]["attribution"][0]
+        assert att["running"] == 1
+        assert att["oldest_executing_age_seconds"] is None
+
     def test_org_health_uses_org_wide_rows_not_team_scoped(self) -> None:
         # Regression (FAR-1343 M3): the active-health denominator
         # (``org_run_limit``) is org-wide. A team viewer whose ``rows`` are
@@ -702,3 +725,221 @@ class TestTeamScopePredicate:
         sql = _compiled_scope_sql(CapacityParams(team_ids=None))
         assert "coalesce" not in sql
         assert "LEFT OUTER JOIN" not in sql
+
+
+def _compile(stmt: Any) -> str:
+    return str(stmt.compile(dialect=postgresql.dialect()))
+
+
+class TestQueryBuilders:
+    """The query builders' optional-filter arms, exercised without a DB."""
+
+    def test_rows_query_applies_pipeline_filter(self) -> None:
+        sql = _compile(build_capacity_rows_query(_P1, CapacityParams(pipeline_ids=(_P2,)), window_start=_WINDOW_START))
+        assert "runs.pipeline_id IN" in sql
+
+    def test_rows_query_without_pipeline_filter_has_no_pipeline_predicate(self) -> None:
+        sql = _compile(build_capacity_rows_query(_P1, CapacityParams(), window_start=_WINDOW_START))
+        assert "runs.pipeline_id IN" not in sql
+
+    def test_pipeline_meta_query_unconstrained_team_is_org_wide(self) -> None:
+        sql = _compile(build_pipeline_meta_query(_P1, CapacityParams(team_ids=None)))
+        assert "owner_team_id" not in sql
+
+    def test_pipeline_meta_query_empty_team_fails_closed(self) -> None:
+        sql = _compile(build_pipeline_meta_query(_P1, CapacityParams(team_ids=())))
+        assert "pipelines.owner_team_id IS NULL" in sql
+
+    def test_pipeline_meta_query_scopes_to_own_teams(self) -> None:
+        sql = _compile(build_pipeline_meta_query(_P1, CapacityParams(team_ids=(_P2,))))
+        assert "pipelines.owner_team_id IS NULL" in sql
+        assert "pipelines.owner_team_id IN" in sql
+
+    def test_pipeline_meta_query_applies_pipeline_filter(self) -> None:
+        sql = _compile(build_pipeline_meta_query(_P1, CapacityParams(pipeline_ids=(_P2,))))
+        assert "pipelines.id IN" in sql
+
+    def test_health_query_is_org_wide_without_a_team_join(self) -> None:
+        sql = _compile(build_capacity_health_query(_P1, window_start=_WINDOW_START))
+        assert "JOIN" not in sql
+        assert "completed_at" in sql
+
+
+class TestHelperEdges:
+    """The helper arms the report-level scenarios never reach."""
+
+    def test_field_reads_object_attributes_not_only_dicts(self) -> None:
+        row = SimpleNamespace(status="running")
+        assert _field(row, "status") == "running"
+        assert _field(row, "absent") is None
+
+    def test_queued_intervals_skip_missing_and_future_created_at(self) -> None:
+        rows = [
+            _row(created_at=None),
+            _row(created_at=_NOW + timedelta(minutes=5)),
+            _row(created_at=_minutes_before(_NOW, 10)),
+        ]
+        intervals = _queued_intervals(rows, now=_NOW)
+        assert sum(len(items) for items in intervals.values()) == 1
+
+    def test_depth_series_with_no_instants_is_empty(self) -> None:
+        assert _depth_series([(_WINDOW_START, None)], []) == []
+
+    def test_heartbeat_reference_for_missing_row_is_none(self) -> None:
+        assert _heartbeat_reference(None, _NOW) is None
+
+    def test_draining_verdict_from_a_started_surge(self) -> None:
+        # A pending row older than the window keeps depth_change at 0; runs that
+        # started inside the window but were created before it make the drain
+        # ratio >= 1, so the verdict is "draining".
+        rows = [
+            _row(created_at=_minutes_before(_NOW, 90)),
+            _row(
+                status="complete",
+                created_at=_minutes_before(_NOW, 30),
+                started_at=_minutes_before(_NOW, 25),
+                completed_at=_minutes_before(_NOW, 10),
+            ),
+        ]
+        report = _compute(rows)
+        assert report["drain"]["baseline_depth"] == 1
+        assert report["drain"]["depth_change"] == 0
+        assert report["drain"]["ratio"] >= 1
+        assert report["drain"]["verdict"] == "draining"
+
+    def test_stable_verdict_when_depth_and_drain_are_flat(self) -> None:
+        # A pending row older than the window yields no in-window creations
+        # (ratio None) and no depth change, so the verdict is "stable".
+        rows = [_row(created_at=_minutes_before(_NOW, 90))]
+        report = _compute(rows)
+        assert report["drain"]["ratio"] is None
+        assert report["drain"]["verdict"] == "stable"
+
+    def test_pipeline_without_metadata_is_ignored_for_binding(self) -> None:
+        # A pending run whose pipeline is not in the meta set has no cap, so it
+        # can never be the binding pipeline (its metadata is None).
+        rows = [_row(pipeline_id=_P2, created_at=_minutes_before(_NOW, 20), error_code="pipeline_capacity")]
+        report = _compute(rows, pipelines=[{"id": _P1, "name": "alpha", "max_concurrent_runs": 5}])
+        entry = report["pending"]["by_pipeline"][0]
+        assert entry["max_concurrent_runs"] is None
+        assert report["binding"]["scope"] == "none"
+
+
+def _execute_result(rows: list[Any]) -> MagicMock:
+    result = MagicMock()
+    result.all.return_value = rows
+    return result
+
+
+def _capacity_session(execute_results: list[list[Any]]) -> MagicMock:
+    session = MagicMock()
+    session.execute = AsyncMock(side_effect=[_execute_result(rows) for rows in execute_results])
+    return session
+
+
+class TestRunCapacityQuery:
+    """The bounded session service: happy path and every typed failure arm."""
+
+    async def _run(
+        self,
+        session: MagicMock | None = None,
+        *,
+        team_ids: tuple[uuid.UUID, ...] | None = None,
+        rate_limited: bool = False,
+        sandbox_state: Any = (None, False, 0),
+        sandbox_error: BaseException | None = None,
+    ) -> dict[str, Any]:
+        @contextlib.asynccontextmanager
+        async def fake_guarded_session(*_args: Any, **_kwargs: Any):
+            assert session is not None
+            yield session
+
+        state_mock = AsyncMock(return_value=sandbox_state)
+        if sandbox_error is not None:
+            state_mock = AsyncMock(side_effect=sandbox_error)
+        with (
+            patch.object(capacity_module, "_guarded_session", fake_guarded_session),
+            patch.object(capacity_module, "_rate_limited", return_value=rate_limited),
+            patch.object(capacity_module, "get_org_run_concurrency_limit", AsyncMock(return_value=10)),
+            patch.object(capacity_module, "_sandbox_state", state_mock),
+        ):
+            return await run_capacity_query(
+                org_id=_P1,
+                params=CapacityParams(team_ids=team_ids),
+                factory=MagicMock(),
+                settings=MagicMock(),
+            )
+
+    async def test_happy_path_returns_report(self) -> None:
+        rows = [_row(created_at=_minutes_before(_NOW, 20))]
+        session = _capacity_session([rows, rows, [{"id": _P1, "name": "alpha", "max_concurrent_runs": 5}]])
+        report = await self._run(session)
+        assert report["pending"]["total"] == 1
+        assert report["active_health"]["org_run_limit"] == 10
+
+    async def test_team_scope_limits_attribution_to_the_visible_set(self) -> None:
+        rows = [_row(created_at=_minutes_before(_NOW, 20))]
+        session = _capacity_session([rows, rows, [{"id": _P1, "name": "alpha", "max_concurrent_runs": 5}]])
+        report = await self._run(session, team_ids=(_P2,))
+        assert report["active_health"]["attribution"] == []
+
+    async def test_rate_limited_before_opening_a_session(self) -> None:
+        with pytest.raises(AnalyticsRateLimitedError):
+            await self._run(MagicMock(), rate_limited=True)
+
+    async def test_row_scan_over_cap_is_rejected(self) -> None:
+        over = [_row(created_at=_minutes_before(_NOW, 20))] * (CAPACITY_MAX_RAW_ROWS + 1)
+        session = _capacity_session([over])
+        with pytest.raises(AnalyticsValidationError):
+            await self._run(session)
+
+    async def test_health_scan_over_cap_is_rejected(self) -> None:
+        one = [_row(created_at=_minutes_before(_NOW, 20))]
+        over = one * (CAPACITY_MAX_RAW_ROWS + 1)
+        session = _capacity_session([one, over])
+        with pytest.raises(AnalyticsValidationError):
+            await self._run(session)
+
+    async def test_database_error_passthrough(self) -> None:
+        session = _capacity_session([[_row(created_at=_minutes_before(_NOW, 20))]])
+        with pytest.raises(AnalyticsDatabaseError):
+            await self._run(session, sandbox_error=AnalyticsDatabaseError("down"))
+
+    async def test_unexpected_error_maps_to_database_error(self) -> None:
+        session = _capacity_session([[_row(created_at=_minutes_before(_NOW, 20))]])
+        with pytest.raises(AnalyticsDatabaseError):
+            await self._run(session, sandbox_error=RuntimeError("boom"))
+
+
+class TestSandboxState:
+    async def test_absent_cap_reports_none_and_zero_active(self) -> None:
+        with (
+            patch(
+                "modulo.core.runner_capacity.read_runner_cap_contract",
+                AsyncMock(return_value=(None, True)),
+            ),
+            patch(
+                "modulo.db.crud.run.get_sandbox_concurrency_limit",
+                AsyncMock(return_value=SimpleNamespace(is_default=True)),
+            ),
+        ):
+            cap, is_default, active = await _sandbox_state(MagicMock(), _P1)
+        assert (cap, is_default, active) == (None, True, 0)
+
+    async def test_present_cap_counts_active_dispatches(self) -> None:
+        with (
+            patch(
+                "modulo.core.runner_capacity.read_runner_cap_contract",
+                AsyncMock(return_value=(4, False)),
+            ),
+            patch(
+                "modulo.db.crud.run.get_sandbox_concurrency_limit",
+                AsyncMock(return_value=SimpleNamespace(is_default=False)),
+            ),
+            patch(
+                "modulo.core.runner_capacity.count_active_runner_dispatches_for_decision",
+                AsyncMock(return_value=3),
+            ),
+        ):
+            cap, is_default, active = await _sandbox_state(MagicMock(), _P1)
+        assert (cap, is_default, active) == (4, False, 3)

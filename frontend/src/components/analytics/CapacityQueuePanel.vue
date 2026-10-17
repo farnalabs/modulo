@@ -10,16 +10,15 @@
         </p>
       </div>
       <div class="flex items-center gap-2">
-        <span
+        <output
           v-if="store.capacity"
           class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
           :class="verdictClass"
           data-testid="capacity-verdict"
-          role="status"
-          aria-live="polite"
+          aria-labelledby="capacity-queue-heading"
         >
           {{ verdictLabel }}
-        </span>
+        </output>
         <button
           type="button"
           class="rounded-md border border-border px-2.5 py-1 text-xs font-medium transition-colors hover:bg-muted"
@@ -280,12 +279,12 @@ const VERDICT_KEYS: Record<string, string> = {
 };
 
 const verdictLabel = computed(() => {
-  const verdict = capacity.value?.drain.verdict ?? "stable";
+  const verdict = capacity.value.drain.verdict ?? "stable";
   return t(VERDICT_KEYS[verdict] ?? "views.AnalyticsView.capacity_verdict_stable");
 });
 
 const verdictClass = computed(() => {
-  const verdict = capacity.value?.drain.verdict;
+  const verdict = capacity.value.drain.verdict;
   if (verdict === "stalled" || verdict === "backing_up") {
     return "bg-destructive/10 text-destructive";
   }
@@ -296,7 +295,7 @@ const verdictClass = computed(() => {
 });
 
 const drainRatioLabel = computed(() => {
-  const ratio = capacity.value?.drain.ratio;
+  const ratio = capacity.value.drain.ratio;
   return ratio == null ? "—" : ratio.toFixed(2);
 });
 
@@ -307,9 +306,9 @@ const orgCapUseLabel = computed(() => {
 });
 
 const sandboxCapLabel = computed(() => {
-  const cap = capacity.value?.limits.sandbox_concurrency_limit;
+  const cap = capacity.value.limits.sandbox_concurrency_limit;
   if (cap == null) return t("views.AnalyticsView.capacity_none");
-  return capacity.value?.limits.sandbox_limit_is_default
+  return capacity.value.limits.sandbox_limit_is_default
     ? `${cap} (${t("views.AnalyticsView.capacity_default")})`
     : String(cap);
 });
@@ -321,7 +320,7 @@ const BINDING_KEYS: Record<string, string> = {
 };
 
 const bindingLabel = computed(() => {
-  const scope = capacity.value?.binding.scope;
+  const scope = capacity.value.binding.scope;
   if (!scope || scope === "none") return t("views.AnalyticsView.capacity_binding_none");
   return t(BINDING_KEYS[scope] ?? "views.AnalyticsView.capacity_binding_none");
 });
@@ -336,7 +335,7 @@ const CAUSES = [
 const causes = computed(() =>
   CAUSES.map((cause) => ({
     ...cause,
-    count: capacity.value?.pending.by_cause[cause.key] ?? 0,
+    count: capacity.value.pending.by_cause[cause.key] ?? 0,
   })),
 );
 
@@ -351,9 +350,9 @@ interface PipelineRow {
 
 const pipelineRows = computed<PipelineRow[]>(() => {
   const attribution = new Map<string, CapacityAttribution>(
-    (store.capacity?.active_health.attribution ?? []).map((entry) => [entry.pipeline_id, entry]),
+    capacity.value.active_health.attribution.map((entry) => [entry.pipeline_id, entry]),
   );
-  return (capacity.value?.pending.by_pipeline ?? []).map((row) => ({
+  return capacity.value.pending.by_pipeline.map((row) => ({
     ...row,
     stale_heartbeat_count: attribution.get(row.pipeline_id)?.stale_heartbeat_count ?? 0,
   }));

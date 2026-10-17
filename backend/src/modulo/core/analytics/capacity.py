@@ -373,6 +373,26 @@ def _queued_intervals(
     return intervals
 
 
+def _oldest_active_index(
+    by_start: list[tuple[datetime, datetime | None]],
+    next_start: int,
+    at: datetime,
+    oldest: int,
+) -> int:
+    """Advance *oldest* past by_start entries that have already ended at *at*.
+
+    ``oldest`` only ever moves forward across the whole sweep, so the caller's
+    repeated invocation is amortised O(S) for *S* intervals.
+    """
+    while oldest < next_start:
+        end = by_start[oldest][1]
+        if end is not None and end <= at:
+            oldest += 1
+            continue
+        break
+    return oldest
+
+
 def _depth_series(
     intervals: list[tuple[datetime, datetime | None]],
     ats: list[datetime],
@@ -401,22 +421,13 @@ def _depth_series(
     next_start = 0  # next interval start to activate
     next_end = 0  # next interval end to retire
     oldest = 0  # index into by_start of the oldest still-active interval
-    depth = 0
     for at in ats:
         while next_start < len(starts) and starts[next_start] <= at:
             next_start += 1
-            depth += 1
         while next_end < len(ends) and ends[next_end] <= at:
             next_end += 1
-            depth -= 1
-        # Advance the oldest candidate past intervals that have already ended.
-        # ``oldest`` only ever moves forward, so this is amortised O(S).
-        while oldest < next_start:
-            end = by_start[oldest][1]
-            if end is not None and end <= at:
-                oldest += 1
-                continue
-            break
+        oldest = _oldest_active_index(by_start, next_start, at, oldest)
+        depth = next_start - next_end
         if oldest < next_start:
             results.append((depth, _seconds(at - starts[oldest])))
         else:
@@ -454,6 +465,44 @@ def _heartbeat_reference(row: Any, now: datetime) -> datetime | None:
     if started is not None and started <= now:
         return started
     return _aware(_field(row, "created_at"))
+
+
+def _health_row_bucket(row: Any) -> str | None:
+    """Classify a live row into its health bucket (``None`` when not gated).
+
+    ``cancelling`` = cancellation-requested (the admission gate excludes these,
+    so they are counted for transparency but never as held capacity);
+    ``parked`` = awaiting_human / hitl_parked (they hold a slot but no execution);
+    ``running`` = the actively-executing ``running`` status; ``executing`` = any
+    other status that holds a slot.
+    """
+    status = _field(row, "status")
+    if status not in GATE_STATUSES:
+        return None
+    if _field(row, "cancellation_requested"):
+        return "cancelling"
+    if status in PARKED_STATUSES:
+        return "parked"
+    if status == "running":
+        return "running"
+    return "executing"
+
+
+def _record_running_health(
+    att: dict[str, Any],
+    row: Any,
+    now: datetime,
+    stale_heartbeat_seconds: int,
+) -> None:
+    """Fold one ``running`` row's oldest-age and heartbeat-liveness into *att*."""
+    started = _aware(_field(row, "started_at"))
+    if started is not None:
+        age = _seconds(now - started)
+        current = att["oldest_executing_age_seconds"]
+        att["oldest_executing_age_seconds"] = age if current is None else max(current, age)
+    reference = _heartbeat_reference(row, now)
+    if reference is None or (now - reference).total_seconds() > stale_heartbeat_seconds:
+        att["stale_heartbeat_count"] += 1
 
 
 def _active_health_counts(
@@ -495,36 +544,27 @@ def _active_health_counts(
         }
     )
     for row in rows:
-        status = _field(row, "status")
-        if status not in GATE_STATUSES:
+        bucket = _health_row_bucket(row)
+        if bucket is None:
             continue
         pid = str(_field(row, "pipeline_id"))
         att = attribution[pid]
         att["pipeline_id"] = pid
         att["pipeline_name"] = pipeline_name.get(pid)
-        if _field(row, "cancellation_requested"):
-            # The admission gate excludes cancellation-requested rows; count
-            # them for transparency but never as held capacity.
+        if bucket == "cancelling":
             cancelling_total += 1
             continue
         gate_total += 1
-        if status in PARKED_STATUSES:
+        if bucket == "parked":
             parked_total += 1
             att["parked"] += 1
             continue
         executing_total += 1
         att["executing"] += 1
-        if status == "running":
+        if bucket == "running":
             running_total += 1
             att["running"] += 1
-            running_started_at = _aware(_field(row, "started_at"))
-            if running_started_at is not None:
-                age = _seconds(now - running_started_at)
-                current = att["oldest_executing_age_seconds"]
-                att["oldest_executing_age_seconds"] = age if current is None else max(current, age)
-            reference = _heartbeat_reference(row, now)
-            if reference is None or (now - reference).total_seconds() > stale_heartbeat_seconds:
-                att["stale_heartbeat_count"] += 1
+            _record_running_health(att, row, now, stale_heartbeat_seconds)
 
     attribution_list = sorted(attribution.values(), key=lambda a: (-a["executing"], a["pipeline_name"] or ""))
     # Org-wide heartbeat total is taken before the team filter so the aggregate
@@ -588,16 +628,247 @@ def _bin_counts(
     when ``bounds[i] <= value < bounds[i + 1]``.
     """
     counts = [0] * (len(bounds) - 1)
-    bucket_total = len(counts)
     for row in rows:
         value = _aware(_field(row, field))
         if value is None or value < window_start or value >= bounds[-1]:
             continue
+        # ``bounds[-1]`` is *now*, and the grid is stepped from ``window_start``,
+        # so ``(value - window_start) // interval_seconds`` is always < the
+        # bucket count for any ``value`` in ``[window_start, bounds[-1])``.
         index = int((value - window_start).total_seconds() // interval_seconds)
-        if index >= bucket_total:
-            index = bucket_total - 1
         counts[index] += 1
     return counts
+
+
+def _pending_metrics(
+    rows: list[Any],
+    pipeline_name: dict[str, Any],
+    pipeline_cap: dict[str, int],
+    now: datetime,
+) -> tuple[list[Any], Counter[str], list[dict[str, Any]], datetime | None]:
+    """Return ``(pending, cause_counts, pending_by_pipeline, oldest_pending)``."""
+    pending = _pending_rows(rows)
+    cause_counts: Counter[str] = Counter(dict.fromkeys(_CAUSES, 0))
+    per_pipeline_pending: dict[str, list[Any]] = defaultdict(list)
+    for row in pending:
+        cause_counts[_cause_of(row)] += 1
+        per_pipeline_pending[str(_field(row, "pipeline_id"))].append(row)
+
+    pending_created = [c for c in (_aware(_field(r, "created_at")) for r in pending) if c is not None]
+    oldest_pending: datetime | None = min(pending_created) if pending_created else None
+    pending_by_pipeline = [
+        _pending_pipeline_entry(pid, items, pipeline_name, pipeline_cap, now)
+        for pid, items in per_pipeline_pending.items()
+    ]
+    pending_by_pipeline.sort(key=lambda item: (-item["pending_count"], item["pipeline_name"] or ""))
+    return pending, cause_counts, pending_by_pipeline, oldest_pending
+
+
+def _pending_pipeline_entry(
+    pid: str,
+    items: list[Any],
+    pipeline_name: dict[str, Any],
+    pipeline_cap: dict[str, int],
+    now: datetime,
+) -> dict[str, Any]:
+    """The pending summary row for one pipeline."""
+    item_created = [c for c in (_aware(_field(r, "created_at")) for r in items) if c is not None]
+    oldest = min(item_created) if item_created else None
+    return {
+        "pipeline_id": pid,
+        "pipeline_name": pipeline_name.get(pid),
+        "pending_count": len(items),
+        "oldest_pending_age_seconds": _seconds(now - oldest) if oldest else None,
+        "max_concurrent_runs": pipeline_cap.get(pid),
+    }
+
+
+def _bucket_by_pipeline(
+    pipeline_depths: dict[uuid.UUID, list[tuple[int, float | None]]],
+    index: int,
+    pipeline_name: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """The non-empty per-pipeline depth rows for one bucket, sorted."""
+    entries: list[dict[str, Any]] = []
+    for pipe_id, series in pipeline_depths.items():
+        pipe_depth, pipe_oldest = series[index]
+        if pipe_depth == 0 and pipe_oldest is None:
+            continue
+        entries.append(
+            {
+                "pipeline_id": str(pipe_id),
+                "pipeline_name": pipeline_name.get(str(pipe_id)),
+                "pending_depth": pipe_depth,
+                "oldest_pending_age_seconds": pipe_oldest,
+            }
+        )
+    entries.sort(key=lambda item: (-item["pending_depth"], item["pipeline_name"] or ""))
+    return entries
+
+
+def _build_series(
+    rows: list[Any],
+    queued: dict[uuid.UUID, list[tuple[datetime, datetime | None]]],
+    bounds: list[datetime],
+    *,
+    now: datetime,
+    window_start: datetime,
+    interval_seconds: int,
+    pipeline_name: dict[str, Any],
+) -> tuple[list[dict[str, Any]], int, float | None]:
+    """The interval series plus the baseline depth/age at ``window_start``."""
+    bucket_ends = bounds[1:]
+    all_queued = [interval for intervals in queued.values() for interval in intervals]
+    baseline_depth, baseline_oldest_age = _depth_at(all_queued, window_start)
+    overall_depths = _depth_series(all_queued, bucket_ends)
+    pipeline_depths = {pipe_id: _depth_series(intervals, bucket_ends) for pipe_id, intervals in queued.items()}
+    created_counts = _bin_counts(
+        rows, "created_at", bounds, window_start=window_start, interval_seconds=interval_seconds
+    )
+    started_counts = _bin_counts(
+        rows, "started_at", bounds, window_start=window_start, interval_seconds=interval_seconds
+    )
+    completed_counts = _bin_counts(
+        rows, "completed_at", bounds, window_start=window_start, interval_seconds=interval_seconds
+    )
+
+    buckets: list[dict[str, Any]] = []
+    for index in range(len(bounds) - 1):
+        start, end = bounds[index], bounds[index + 1]
+        created = created_counts[index]
+        started = started_counts[index]
+        depth, oldest_age = overall_depths[index]
+        # A bucket is COMPLETE only when it ends at or before now and spans a
+        # full interval (the final bucket is the partial "so far" slice).
+        complete = end < now and (end - start).total_seconds() >= interval_seconds
+        buckets.append(
+            {
+                "interval_start": start.isoformat(),
+                "interval_end": end.isoformat(),
+                "created": created,
+                "started": started,
+                "completed": completed_counts[index],
+                "pending_depth": depth,
+                "oldest_pending_age_seconds": oldest_age,
+                "drain_ratio": round(started / created, 3) if created else None,
+                "complete": complete,
+                "by_pipeline": _bucket_by_pipeline(pipeline_depths, index, pipeline_name),
+            }
+        )
+    return buckets, baseline_depth, baseline_oldest_age
+
+
+def _drain_verdict(
+    pending: list[Any],
+    depth_change: int,
+    drain_ratio: float | None,
+    *,
+    stall_suspected: bool,
+) -> str:
+    """The operator-facing queue verdict (stall overrides, then drain)."""
+    if stall_suspected:
+        return "stalled"
+    if not pending:
+        return "draining"
+    if depth_change > 0 or (drain_ratio is not None and drain_ratio < 1):
+        return "backing_up"
+    if depth_change < 0 or (drain_ratio is not None and drain_ratio >= 1):
+        return "draining"
+    return "stable"
+
+
+def _pipeline_capacity_pending(
+    pending: list[Any],
+    pipeline_cap: dict[str, int],
+    attribution: dict[str, dict[str, Any]],
+) -> int:
+    """Pending rows blocked because their OWN pipeline is at its cap."""
+    total = 0
+    for row in pending:
+        if _cause_of(row) != CAUSE_PIPELINE:
+            continue
+        pid = str(_field(row, "pipeline_id"))
+        cap = pipeline_cap.get(pid)
+        if cap is None:
+            continue
+        if attribution.get(pid, {}).get("executing", 0) >= cap:
+            total += 1
+    return total
+
+
+def _first_bound_pipeline(
+    pending_by_pipeline: list[dict[str, Any]],
+    attribution: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    """The first pipeline whose executing count has reached its own cap."""
+    for item in pending_by_pipeline:
+        cap = item["max_concurrent_runs"]
+        if cap is None:
+            continue
+        if attribution.get(str(item["pipeline_id"]), {}).get("executing", 0) >= cap:
+            return item
+    return None
+
+
+def _blocking_binding(
+    scope: str,
+    limit: int,
+    in_use: int,
+    pending: list[Any],
+    org_marked_pending: int,
+) -> dict[str, Any]:
+    """An org/sandbox binding that is fully held (zero headroom)."""
+    total = len(pending)
+    return {
+        "scope": scope,
+        "limit": limit,
+        "in_use": in_use,
+        "headroom": 0,
+        "pending_blocked": org_marked_pending,
+        "admissible_if_raised": min(total, org_marked_pending or total),
+    }
+
+
+def _binding_section(
+    pending: list[Any],
+    pending_by_pipeline: list[dict[str, Any]],
+    attribution: dict[str, dict[str, Any]],
+    *,
+    sandbox_cap: int | None,
+    sandbox_active: int,
+    org_run_limit: int | None,
+    gate_total: int,
+    pipeline_capacity_pending: int,
+    org_marked_pending: int,
+) -> dict[str, Any]:
+    """The currently-binding limit and its headroom (FAR-1343 binding section)."""
+    if sandbox_cap is not None and sandbox_active >= sandbox_cap:
+        return _blocking_binding("sandbox", sandbox_cap, sandbox_active, pending, org_marked_pending)
+    if org_run_limit is not None and gate_total >= org_run_limit:
+        return _blocking_binding("org_run", org_run_limit, gate_total, pending, org_marked_pending)
+    bound_pipeline = _first_bound_pipeline(pending_by_pipeline, attribution)
+    if bound_pipeline is None:
+        return {
+            "scope": "none",
+            "limit": None,
+            "in_use": None,
+            "headroom": None,
+            "pending_blocked": 0,
+            "admissible_if_raised": 0,
+        }
+    cap = bound_pipeline["max_concurrent_runs"] or 0
+    in_use = attribution.get(str(bound_pipeline["pipeline_id"]), {}).get("executing", 0)
+    return {
+        "scope": "pipeline",
+        "limit": cap,
+        "in_use": in_use,
+        "headroom": max(0, cap - in_use),
+        "pending_blocked": pipeline_capacity_pending,
+        "admissible_if_raised": min(
+            bound_pipeline["pending_count"],
+            pipeline_capacity_pending or bound_pipeline["pending_count"],
+        ),
+    }
 
 
 def compute_capacity_report(
@@ -634,29 +905,9 @@ def compute_capacity_report(
     pipeline_name = {str(_field(p, "id")): _field(p, "name") for p in pipelines}
     pipeline_cap = {str(_field(p, "id")): int(_field(p, "max_concurrent_runs") or 0) for p in pipelines}
 
-    pending = _pending_rows(rows)
-    cause_counts = Counter(dict.fromkeys(_CAUSES, 0))
-    per_pipeline_pending: dict[str, list[Any]] = defaultdict(list)
-    for row in pending:
-        cause_counts[_cause_of(row)] += 1
-        per_pipeline_pending[str(_field(row, "pipeline_id"))].append(row)
-
-    pending_created = [c for c in (_aware(_field(r, "created_at")) for r in pending) if c is not None]
-    oldest_pending: datetime | None = min(pending_created) if pending_created else None
-    pending_by_pipeline: list[dict[str, Any]] = []
-    for pid, items in per_pipeline_pending.items():
-        item_created = [c for c in (_aware(_field(r, "created_at")) for r in items) if c is not None]
-        oldest = min(item_created) if item_created else None
-        pending_by_pipeline.append(
-            {
-                "pipeline_id": pid,
-                "pipeline_name": pipeline_name.get(pid),
-                "pending_count": len(items),
-                "oldest_pending_age_seconds": _seconds(now - oldest) if oldest else None,
-                "max_concurrent_runs": pipeline_cap.get(pid),
-            }
-        )
-    pending_by_pipeline.sort(key=lambda item: (-item["pending_count"], item["pipeline_name"] or ""))
+    pending, cause_counts, pending_by_pipeline, oldest_pending = _pending_metrics(
+        rows, pipeline_name, pipeline_cap, now
+    )
 
     # --- active-run health (ORG-WIDE totals; team-scoped attribution) ------
     health = _active_health_counts(
@@ -677,60 +928,15 @@ def compute_capacity_report(
     # --- interval series + drain rate (team-scoped) ------------------------
     bounds = _bucket_boundaries(window_start, now, interval_seconds)
     queued = _queued_intervals(rows, now=now)
-    all_queued = [interval for intervals in queued.values() for interval in intervals]
-    baseline_depth, baseline_oldest_age = _depth_at(all_queued, window_start)
-
-    bucket_ends = bounds[1:]
-    overall_depths = _depth_series(all_queued, bucket_ends)
-    pipeline_depths = {pipe_id: _depth_series(intervals, bucket_ends) for pipe_id, intervals in queued.items()}
-    created_counts = _bin_counts(
-        rows, "created_at", bounds, window_start=window_start, interval_seconds=interval_seconds
+    buckets, baseline_depth, baseline_oldest_age = _build_series(
+        rows,
+        queued,
+        bounds,
+        now=now,
+        window_start=window_start,
+        interval_seconds=interval_seconds,
+        pipeline_name=pipeline_name,
     )
-    started_counts = _bin_counts(
-        rows, "started_at", bounds, window_start=window_start, interval_seconds=interval_seconds
-    )
-    completed_counts = _bin_counts(
-        rows, "completed_at", bounds, window_start=window_start, interval_seconds=interval_seconds
-    )
-
-    buckets: list[dict[str, Any]] = []
-    for index in range(len(bounds) - 1):
-        start, end = bounds[index], bounds[index + 1]
-        created = created_counts[index]
-        started = started_counts[index]
-        completed = completed_counts[index]
-        depth, oldest_age = overall_depths[index]
-        by_pipeline: list[dict[str, Any]] = []
-        for pipe_id, series in pipeline_depths.items():
-            pipe_depth, pipe_oldest = series[index]
-            if pipe_depth == 0 and pipe_oldest is None:
-                continue
-            by_pipeline.append(
-                {
-                    "pipeline_id": str(pipe_id),
-                    "pipeline_name": pipeline_name.get(str(pipe_id)),
-                    "pending_depth": pipe_depth,
-                    "oldest_pending_age_seconds": pipe_oldest,
-                }
-            )
-        by_pipeline.sort(key=lambda item: (-item["pending_depth"], item["pipeline_name"] or ""))
-        # A bucket is COMPLETE only when it ends at or before now and spans a
-        # full interval (the final bucket is the partial "so far" slice).
-        complete = end < now and (end - start).total_seconds() >= interval_seconds
-        buckets.append(
-            {
-                "interval_start": start.isoformat(),
-                "interval_end": end.isoformat(),
-                "created": created,
-                "started": started,
-                "completed": completed,
-                "pending_depth": depth,
-                "oldest_pending_age_seconds": oldest_age,
-                "drain_ratio": round(started / created, 3) if created else None,
-                "complete": complete,
-                "by_pipeline": by_pipeline,
-            }
-        )
 
     created_total = sum(b["created"] for b in buckets)
     started_total = sum(b["started"] for b in buckets)
@@ -738,14 +944,6 @@ def compute_capacity_report(
     final_depth = buckets[-1]["pending_depth"] if buckets else len(pending)
     depth_change = final_depth - baseline_depth
     drain_ratio = round(started_total / created_total, 3) if created_total else None
-    if not pending:
-        verdict = "draining"
-    elif depth_change > 0 or (drain_ratio is not None and drain_ratio < 1):
-        verdict = "backing_up"
-    elif depth_change < 0 or (drain_ratio is not None and drain_ratio >= 1):
-        verdict = "draining"
-    else:
-        verdict = "stable"
 
     # Trailing zero-completion run over COMPLETE intervals only — the partial
     # current interval must never read as "nothing completed while at cap".
@@ -764,73 +962,24 @@ def compute_capacity_report(
     # leak. Require the executing total itself to reach the cap.
     executing_holds_cap = org_run_limit is not None and executing_total >= org_run_limit
     stall_suspected = bool(executing_holds_cap and zero_completion_intervals >= stall_intervals)
-    if stall_suspected:
-        verdict = "stalled"
+    verdict = _drain_verdict(pending, depth_change, drain_ratio, stall_suspected=stall_suspected)
 
     utilisation = round(gate_total / org_run_limit, 3) if org_run_limit else None
 
     # --- binding limit + headroom -----------------------------------------
-    pipeline_capacity_pending = sum(
-        1
-        for row in pending
-        if _cause_of(row) == CAUSE_PIPELINE
-        and pipeline_cap.get(str(_field(row, "pipeline_id"))) is not None
-        and attribution.get(str(_field(row, "pipeline_id")), {}).get("executing", 0)
-        >= pipeline_cap.get(str(_field(row, "pipeline_id")), 0)
-    )
+    pipeline_capacity_pending = _pipeline_capacity_pending(pending, pipeline_cap, attribution)
     org_marked_pending = sum(1 for row in pending if _cause_of(row) in (CAUSE_ORG_RUN, CAUSE_SANDBOX))
-
-    binding: dict[str, Any] = {
-        "scope": "none",
-        "limit": None,
-        "in_use": None,
-        "headroom": None,
-        "pending_blocked": 0,
-        "admissible_if_raised": 0,
-    }
-    if sandbox_cap is not None and sandbox_active >= sandbox_cap:
-        binding = {
-            "scope": "sandbox",
-            "limit": sandbox_cap,
-            "in_use": sandbox_active,
-            "headroom": 0,
-            "pending_blocked": org_marked_pending,
-            "admissible_if_raised": min(len(pending), org_marked_pending or len(pending)),
-        }
-    elif org_run_limit is not None and gate_total >= org_run_limit:
-        binding = {
-            "scope": "org_run",
-            "limit": org_run_limit,
-            "in_use": gate_total,
-            "headroom": 0,
-            "pending_blocked": org_marked_pending,
-            "admissible_if_raised": min(len(pending), org_marked_pending or len(pending)),
-        }
-    else:
-        bound_pipeline = next(
-            (
-                item
-                for item in pending_by_pipeline
-                if item["max_concurrent_runs"] is not None
-                and attribution.get(str(item["pipeline_id"]), {}).get("executing", 0) >= item["max_concurrent_runs"]
-            ),
-            None,
-        )
-        if bound_pipeline is not None:
-            cap = bound_pipeline["max_concurrent_runs"] or 0
-            in_use = attribution.get(str(bound_pipeline["pipeline_id"]), {}).get("executing", 0)
-            binding = {
-                "scope": "pipeline",
-                "limit": cap,
-                "in_use": in_use,
-                "headroom": max(0, cap - in_use),
-                "pending_blocked": pipeline_capacity_pending,
-                "admissible_if_raised": min(
-                    bound_pipeline["pending_count"],
-                    pipeline_capacity_pending or bound_pipeline["pending_count"],
-                ),
-            }
-
+    binding = _binding_section(
+        pending,
+        pending_by_pipeline,
+        attribution,
+        sandbox_cap=sandbox_cap,
+        sandbox_active=sandbox_active,
+        org_run_limit=org_run_limit,
+        gate_total=gate_total,
+        pipeline_capacity_pending=pipeline_capacity_pending,
+        org_marked_pending=org_marked_pending,
+    )
     pending_after_raise = max(0, len(pending) - binding["admissible_if_raised"])
 
     return {

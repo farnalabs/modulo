@@ -199,6 +199,28 @@ class TestCapacityRoute:
             )
         assert excinfo.value.status_code == 429
 
+    async def test_http_exception_is_reraised_unchanged(self) -> None:
+        with (
+            patch.object(route, "_resolve_scoped_team_ids", new=AsyncMock(return_value=None)),
+            patch.object(route, "_analytics_session_factory", return_value=MagicMock()),
+            patch.object(
+                route,
+                "run_capacity_query",
+                new=AsyncMock(side_effect=HTTPException(status_code=404, detail="gone")),
+            ),
+            pytest.raises(HTTPException) as excinfo,
+        ):
+            await route.analytics_capacity(
+                pipeline_id=None,
+                window_minutes=60,
+                interval_seconds=300,
+                stall_intervals=3,
+                settings=MagicMock(),
+                principal=_principal(),
+                _=None,
+            )
+        assert excinfo.value.status_code == 404
+
     async def test_validation_error_maps_to_422(self) -> None:
         with (
             patch.object(route, "_resolve_scoped_team_ids", new=AsyncMock(return_value=None)),
