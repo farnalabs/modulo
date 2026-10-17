@@ -1,0 +1,3 @@
+# FAR-1890 mount diagnostics — written by mobile-layout.spec.ts when a route
+# fails to mount. Transient debugging output, never committed.
+.mount-diagnostics/
