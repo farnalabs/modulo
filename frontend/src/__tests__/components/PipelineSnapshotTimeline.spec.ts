@@ -475,3 +475,254 @@ describe('PipelineSnapshotTimeline', () => {
     expect(wrapper.emitted('close')).toHaveLength(1)
   })
 })
+
+describe('PipelineSnapshotTimeline — defensive branches and edge states', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    apiPost.mockResolvedValue({ data: {}, error: undefined })
+  })
+
+  function pageOf100(): TimelineSnapshot[] {
+    return Array.from({ length: 100 }, (_, i) =>
+      makeSnapshot({ id: `snap-${101 - i}`, snapshot_version: 101 - i, created_kind: 'edit', tag: null }),
+    )
+  }
+  const olderRow = () => makeSnapshot({ id: 'snap-oldest', snapshot_version: 1, created_kind: 'initial', tag: null })
+
+  it('renders the channel badge only for versions with a real channel', async () => {
+    const wrapper = await flushMount([
+      makeSnapshot({ id: 'snap-3', snapshot_version: 3, created_kind: 'edit', channel: 'stable', tag: null }),
+      makeSnapshot({ id: 'snap-2', snapshot_version: 2, created_kind: 'edit', channel: 'none', tag: null }),
+      makeSnapshot({ id: 'snap-1', snapshot_version: 1, created_kind: 'edit', channel: '', tag: null }),
+    ])
+    expect(rowFor(wrapper, 'snap-3').text()).toContain('stable')
+    expect(rowFor(wrapper, 'snap-2').text()).not.toContain('stable')
+    expect(rowFor(wrapper, 'snap-1').text()).not.toContain('stable')
+  })
+
+  it('surfaces a structured load error (no thrown exception) with a retry (M3)', async () => {
+    apiGet.mockResolvedValue({ data: undefined, error: { detail: 'load unavailable' } })
+    const wrapper = mount(PipelineSnapshotTimeline, {
+      props: { pipelineId: 'pipe-1' },
+      global: { stubs: { Select: SelectStub } },
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="snapshot-timeline-load-error"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('No snapshots yet')
+    expect(wrapper.find('[data-testid="snapshot-timeline-load-retry"]').exists()).toBe(true)
+  })
+
+  it('treats a null payload with no error as an empty history', async () => {
+    apiGet.mockResolvedValue({ data: null, error: undefined })
+    const wrapper = mount(PipelineSnapshotTimeline, {
+      props: { pipelineId: 'pipe-1' },
+      global: { stubs: { Select: SelectStub } },
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('No snapshots yet')
+  })
+
+  it('ignores a stale mount load that rejects after a newer reload lands (M6)', async () => {
+    let rejectFirst: (reason?: unknown) => void = () => {}
+    const first = new Promise((_resolve, reject) => { rejectFirst = reject })
+    let call = 0
+    apiGet.mockImplementation(() => {
+      call += 1
+      if (call === 1) return first
+      return Promise.resolve({
+        data: { items: [makeSnapshot({ id: 'newer', snapshot_version: 5, created_kind: 'edit', tag: null })], total: 1 },
+        error: undefined,
+      })
+    })
+    const wrapper = mount(PipelineSnapshotTimeline, {
+      props: { pipelineId: 'pipe-1' },
+      global: { stubs: { Select: SelectStub } },
+    })
+    ;(wrapper.vm as unknown as { reload: () => Promise<void> }).reload()
+    await flushPromises()
+    rejectFirst(new Error('stale socket failure'))
+    await flushPromises()
+    expect(wrapper.find('[data-testid="snapshot-timeline-row-newer"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="snapshot-timeline-load-error"]').exists()).toBe(false)
+  })
+
+  it('clears a selection that disappears from the reloaded page', async () => {
+    let call = 0
+    apiGet.mockImplementation(() => {
+      call += 1
+      if (call === 1) return Promise.resolve({ data: { items: twoSubstantive(), total: 2 }, error: undefined })
+      return Promise.resolve({
+        data: { items: [makeSnapshot({ id: 'snap-2', snapshot_version: 2, created_kind: 'edit', tag: null })], total: 1 },
+        error: undefined,
+      })
+    })
+    const wrapper = mount(PipelineSnapshotTimeline, {
+      props: { pipelineId: 'pipe-1' },
+      global: { stubs: { Select: SelectStub } },
+    })
+    await flushPromises()
+    await selectVersion(wrapper, 'snap-1')
+    expect(wrapper.find('[data-testid="snapshot-timeline-rollback"]').attributes('disabled')).toBeUndefined()
+    ;(wrapper.vm as unknown as { reload: () => Promise<void> }).reload()
+    await flushPromises()
+    // snap-1 is gone, so the restore action falls back to disabled.
+    expect(wrapper.find('[data-testid="snapshot-timeline-rollback"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('does not emit a restore for a selection that is no longer a version', async () => {
+    const wrapper = await flushMount(modernHistory())
+    const vm = wrapper.vm as unknown as { selectedSnapshotId: string | null; requestRestore: () => void }
+    vm.selectedSnapshotId = 'ghost-snapshot'
+    vm.requestRestore()
+    expect(wrapper.emitted('restore')).toBeUndefined()
+  })
+
+  it('ignores a second Load more while one is already in flight (M1)', async () => {
+    let resolvePage2: (value: unknown) => void = () => {}
+    apiGet.mockImplementation((_url: string, init?: any) => {
+      const page = (init?.params?.query?.page ?? 1) as number
+      if (page === 1) return Promise.resolve({ data: { items: pageOf100(), total: 101 }, error: undefined })
+      return new Promise((resolve) => { resolvePage2 = resolve })
+    })
+    const wrapper = mount(PipelineSnapshotTimeline, {
+      props: { pipelineId: 'pipe-1' },
+      global: { stubs: { Select: SelectStub } },
+    })
+    await flushPromises()
+    const btn = wrapper.find('[data-testid="snapshot-timeline-load-more"]')
+    await btn.trigger('click')
+    await btn.trigger('click')
+    expect(apiGet).toHaveBeenCalledTimes(2)
+    resolvePage2({ data: { items: [olderRow()], total: 101 }, error: undefined })
+    await flushPromises()
+  })
+
+  it('does nothing when Load more runs with no further pages', async () => {
+    const wrapper = await flushMount([makeSnapshot()])
+    ;(wrapper.vm as unknown as { loadMoreSnapshots: () => Promise<void> }).loadMoreSnapshots()
+    await flushPromises()
+    expect(apiGet).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores a stale Load more response superseded by a full reload (M6)', async () => {
+    let resolvePage2: (value: unknown) => void = () => {}
+    let call = 0
+    apiGet.mockImplementation((_url: string, init?: any) => {
+      call += 1
+      const page = (init?.params?.query?.page ?? 1) as number
+      if (page === 1) return Promise.resolve({ data: { items: pageOf100(), total: 101 }, error: undefined })
+      if (call === 2) return new Promise((resolve) => { resolvePage2 = resolve })
+      return Promise.resolve({ data: { items: pageOf100(), total: 101 }, error: undefined })
+    })
+    const wrapper = mount(PipelineSnapshotTimeline, {
+      props: { pipelineId: 'pipe-1' },
+      global: { stubs: { Select: SelectStub } },
+    })
+    await flushPromises()
+    await wrapper.find('[data-testid="snapshot-timeline-load-more"]').trigger('click')
+    ;(wrapper.vm as unknown as { reload: () => Promise<void> }).reload()
+    await flushPromises()
+    resolvePage2({ data: { items: [olderRow()], total: 101 }, error: undefined })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="snapshot-timeline-row-snap-oldest"]').exists()).toBe(false)
+  })
+
+  it('handles a null Load more payload as no additional rows', async () => {
+    apiGet.mockImplementation((_url: string, init?: any) => {
+      const page = (init?.params?.query?.page ?? 1) as number
+      if (page === 1) return Promise.resolve({ data: { items: pageOf100(), total: 101 }, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(PipelineSnapshotTimeline, {
+      props: { pipelineId: 'pipe-1' },
+      global: { stubs: { Select: SelectStub } },
+    })
+    await flushPromises()
+    await wrapper.find('[data-testid="snapshot-timeline-load-more"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="snapshot-timeline-row-snap-101"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="snapshot-timeline-load-more-error"]').exists()).toBe(false)
+  })
+
+  it('reports a thrown Load more failure without blanking rows (M1/M3)', async () => {
+    apiGet.mockImplementation((_url: string, init?: any) => {
+      const page = (init?.params?.query?.page ?? 1) as number
+      if (page === 1) return Promise.resolve({ data: { items: pageOf100(), total: 101 }, error: undefined })
+      return Promise.reject(new Error('page two down'))
+    })
+    const wrapper = mount(PipelineSnapshotTimeline, {
+      props: { pipelineId: 'pipe-1' },
+      global: { stubs: { Select: SelectStub } },
+    })
+    await flushPromises()
+    await wrapper.find('[data-testid="snapshot-timeline-load-more"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="snapshot-timeline-load-more-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="snapshot-timeline-row-snap-101"]').exists()).toBe(true)
+  })
+
+  it('does nothing when Diff is invoked without a selection or a compare base', async () => {
+    const wrapper = await flushMount(twoSubstantive())
+    const vm = wrapper.vm as unknown as {
+      selectedSnapshotId: string | null
+      compareB: string | null
+      runDiff: () => Promise<void>
+    }
+    await vm.runDiff()
+    expect(apiPost).not.toHaveBeenCalled()
+    vm.selectedSnapshotId = 'snap-1'
+    await vm.runDiff()
+    expect(apiPost).not.toHaveBeenCalled()
+    vm.compareB = 'snap-2'
+    await vm.runDiff()
+    expect(apiPost).toHaveBeenCalledTimes(1)
+  })
+
+  it('applies only the newest diff response, ignoring a slower earlier one (M6)', async () => {
+    let resolveFirst: (value: unknown) => void = () => {}
+    const first = new Promise((resolve) => { resolveFirst = resolve })
+    let call = 0
+    apiPost.mockImplementation(() => {
+      call += 1
+      if (call === 1) return first
+      return Promise.resolve({
+        data: { semantic: { impacted_nodes: ['node-newest-1'], breaking_changes: [] } },
+        error: undefined,
+      })
+    })
+    const wrapper = await flushMount(twoSubstantive())
+    await selectVersion(wrapper, 'snap-1')
+    await wrapper.find('[data-testid="mock-select"]').setValue('0')
+    const diffBtn = wrapper.find('[data-testid="snapshot-timeline-diff"]')
+    await diffBtn.trigger('click')
+    await diffBtn.trigger('click')
+    await flushPromises()
+    resolveFirst({ data: { semantic: { impacted_nodes: ['node-stale-1'], breaking_changes: [] } }, error: undefined })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="snapshot-timeline-diff-result"]').text()).toContain('node-new')
+    expect(wrapper.find('[data-testid="snapshot-timeline-diff-result"]').text()).not.toContain('node-sta')
+  })
+
+  it('shows no diff result when the endpoint returns no body and no error', async () => {
+    apiPost.mockResolvedValue({ data: null, error: undefined })
+    const wrapper = await flushMount(twoSubstantive())
+    await selectVersion(wrapper, 'snap-1')
+    await wrapper.find('[data-testid="mock-select"]').setValue('0')
+    await wrapper.find('[data-testid="snapshot-timeline-diff"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="snapshot-timeline-diff-result"]').exists()).toBe(false)
+    expect(apiPost).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens the historic view for a run in the earlier-versions bucket (M2)', async () => {
+    const mixed = [
+      makeSnapshot({ id: 'snap-3', snapshot_version: 3, created_kind: 'run', version_kind: 'run', tag: null }),
+      makeSnapshot({ id: 'snap-2', snapshot_version: 2, created_kind: 'edit', version_kind: 'edit', tag: null }),
+      makeSnapshot({ id: 'snap-1', snapshot_version: 1, created_kind: 'run', version_kind: 'run', tag: null }),
+    ]
+    const wrapper = await flushMount(mixed)
+    await wrapper.find('[data-testid="snapshot-timeline-earlier-toggle"]').trigger('click')
+    await wrapper.find('[data-testid="snapshot-timeline-earlier-run-snap-1"]').trigger('click')
+    expect(wrapper.emitted('view')).toEqual([['snap-1']])
+  })
+})

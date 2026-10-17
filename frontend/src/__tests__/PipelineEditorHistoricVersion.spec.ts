@@ -1643,3 +1643,198 @@ describe('PipelineEditorView — FAR-1812 defensive arms', () => {
     wrapper.unmount()
   })
 })
+
+describe('PipelineEditorView — restore helpers and change-summary edge states', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('builds every restore-success notice variant without emitting an empty version', async () => {
+    const wrapper = await mountEditor()
+    const vm = wrapper.vm as any
+    expect(vm.restoreSuccessNotice(4, 10)).toBe('Restored v4. Created v10.')
+    expect(vm.restoreSuccessNotice(4, null)).toBe('Restored v4.')
+    expect(vm.restoreSuccessNotice(null, 10)).toBe('Restored. Created v10.')
+    expect(vm.restoreSuccessNotice(null, null)).toBe('This version was restored.')
+    wrapper.unmount()
+  })
+
+  it('clears the restore notice after the display window and replaces a prior timer', async () => {
+    const wrapper = await mountEditor()
+    const vm = wrapper.vm as any
+    vi.useFakeTimers()
+    try {
+      vm.setRestoreNotice('first')
+      expect(vm.restoreNotice).toBe('first')
+      // A second notice clears the first timer before scheduling its own.
+      vm.setRestoreNotice('second')
+      expect(vm.restoreNotice).toBe('second')
+      vi.advanceTimersByTime(8000)
+      expect(vm.restoreNotice).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+    wrapper.unmount()
+  })
+
+  it('lists restored and removed connections and both breaking-change severities', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    mockRestoreEndpoints({
+      diff: {
+        nodes_added: [{ id: 'n1' }],
+        edges_added: [{ id: 'e1' }, { id: 'e2' }],
+        edges_removed: [{ id: 'e3' }],
+        semantic: {
+          impacted_nodes: ['down-1'],
+          breaking_changes: [
+            { severity: 'block', reason: 'Input port removed' },
+            { severity: 'warn', reason: 'Port type widened' },
+          ],
+        },
+      },
+      rollback: { snapshot_version: 10 },
+    })
+    await wrapper.find('[data-testid="pipeline-editor-historic-restore"]').trigger('click')
+    await flushPromises()
+    const box = document.querySelector('[data-testid="pipeline-editor-restore-diff"]')
+    const text = box?.textContent ?? ''
+    expect(text).toContain('2 connections will be restored')
+    expect(text).toContain('1 connection will be removed')
+    expect(text).toContain('Input port removed')
+    expect(text).toContain('Port type widened')
+    // The block severity renders with the destructive token; the warn one does not.
+    expect(box?.innerHTML ?? '').toContain('text-destructive')
+    expect(box?.innerHTML ?? '').toContain('text-warning-text')
+    wrapper.unmount()
+  })
+
+  it('opens the restore dialog in latest mode with no version to name the intro by', async () => {
+    const wrapper = await mountEditor()
+    const vm = wrapper.vm as any
+    mockRestoreEndpoints({ diff: { nodes_added: [], nodes_removed: [], semantic: {} } })
+    await vm.openRestoreConfirm()
+    await flushPromises()
+    expect(vm.showRestoreConfirm).toBe(true)
+    expect(vm.restoreTargetVersion).toBeNull()
+    const intro = document.body.textContent ?? ''
+    expect(intro).toContain('current configuration with version')
+    expect(intro).not.toContain('undefined')
+    wrapper.unmount()
+  })
+
+  it('surfaces a thrown change-summary request as the retryable error', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    mockRestoreEndpoints({ diffThrows: new Error('socket down'), rollback: { snapshot_version: 10 } })
+    await wrapper.find('[data-testid="pipeline-editor-historic-restore"]').trigger('click')
+    await flushPromises()
+    expect(document.querySelector('[data-testid="pipeline-editor-restore-diff-error"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="pipeline-editor-restore-diff-retry"]')).not.toBeNull()
+    wrapper.unmount()
+  })
+
+  it('renders the unavailable fallback when the change-summary body is empty', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    const vm = wrapper.vm as any
+    apiPostMock.mockImplementation((url: string) => {
+      if (url.includes('/snapshots/diff')) return Promise.resolve({ data: null, error: undefined })
+      return Promise.resolve({ data: { snapshot_version: 10 }, error: undefined })
+    })
+    await wrapper.find('[data-testid="pipeline-editor-historic-restore"]').trigger('click')
+    await flushPromises()
+    expect(vm.restoreDiff).toBeNull()
+    expect(document.querySelector('[data-testid="pipeline-editor-restore-diff"]')?.textContent ?? '')
+      .toContain('change summary is not available')
+    wrapper.unmount()
+  })
+
+  it('applies only the newest change-summary response (M6)', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    const vm = wrapper.vm as any
+    const first = deferred<any>()
+    let call = 0
+    apiPostMock.mockImplementation((url: string) => {
+      if (url.includes('/snapshots/diff')) {
+        call += 1
+        if (call === 1) return first.promise
+        return Promise.resolve({ data: { nodes_added: [{ id: 'n' }] }, error: undefined })
+      }
+      return Promise.resolve({ data: { snapshot_version: 10 }, error: undefined })
+    })
+    await wrapper.find('[data-testid="pipeline-editor-historic-restore"]').trigger('click')
+    void vm.loadRestoreDiff()
+    await flushPromises()
+    first.resolve({ data: { nodes_removed: [{ id: 'x' }] }, error: undefined })
+    await flushPromises()
+    const text = document.querySelector('[data-testid="pipeline-editor-restore-diff"]')?.textContent ?? ''
+    expect(text).toContain('node will be restored')
+    expect(text).not.toContain('stop being used')
+    wrapper.unmount()
+  })
+
+  it('ignores a stale change-summary request that throws (M6)', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    const vm = wrapper.vm as any
+    const first = deferred<any>()
+    let call = 0
+    apiPostMock.mockImplementation((url: string) => {
+      if (url.includes('/snapshots/diff')) {
+        call += 1
+        if (call === 1) return first.promise
+        return Promise.resolve({ data: { nodes_added: [{ id: 'n' }] }, error: undefined })
+      }
+      return Promise.resolve({ data: { snapshot_version: 10 }, error: undefined })
+    })
+    await wrapper.find('[data-testid="pipeline-editor-historic-restore"]').trigger('click')
+    void vm.loadRestoreDiff()
+    await flushPromises()
+    first.reject(new Error('stale socket'))
+    await flushPromises()
+    expect(document.querySelector('[data-testid="pipeline-editor-restore-diff-error"]')).toBeNull()
+    expect(document.querySelector('[data-testid="pipeline-editor-restore-diff"]')?.textContent ?? '')
+      .toContain('node will be restored')
+    wrapper.unmount()
+  })
+
+  it('falls back to the viewed version when restore is opened without explicit version args', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    const vm = wrapper.vm as any
+    mockRestoreEndpoints({ diff: { nodes_added: [], nodes_removed: [], semantic: {} } })
+    await vm.openRestoreConfirm()
+    await flushPromises()
+    expect(vm.restoreTargetId).toBe('snap-4')
+    expect(vm.restoreTargetVersion).toBe(4)
+    wrapper.unmount()
+  })
+
+  it('confirms a restore using the viewed version when the target version is unset', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    const vm = wrapper.vm as any
+    mockRestoreEndpoints({
+      diff: { nodes_added: [], nodes_removed: [], semantic: {} },
+      rollback: { snapshot_version: 10 },
+    })
+    await vm.openRestoreConfirm()
+    await flushPromises()
+    vm.restoreTargetVersion = null
+    await vm.confirmRestore()
+    await flushPromises()
+    expect(vm.restoreNotice).toBe('Restored v4. Created v10.')
+    wrapper.unmount()
+  })
+
+  it('confirms a restore when neither a target version nor a viewed snapshot is known', async () => {
+    const wrapper = await mountEditor()
+    const vm = wrapper.vm as any
+    apiPostMock.mockImplementation((url: string) => {
+      if (url.includes('/snapshots/diff')) return Promise.resolve({ data: {}, error: undefined })
+      return Promise.resolve({ data: { snapshot_version: 10 }, error: undefined })
+    })
+    vm.restoreTargetId = 'snap-9'
+    vm.restoreTargetVersion = null
+    expect(vm.viewSnapshot).toBeNull()
+    await vm.confirmRestore()
+    await flushPromises()
+    expect(vm.restoreNotice).toBe('Restored. Created v10.')
+    wrapper.unmount()
+  })
+})

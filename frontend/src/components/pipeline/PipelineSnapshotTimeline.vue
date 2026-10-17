@@ -389,10 +389,15 @@ const versionGroups = computed(() => groupedHistory.value.groups)
 const earlierRuns = computed(() => groupedHistory.value.earlierRuns)
 
 const compareOptions = computed(() =>
-  versionGroups.value.map(g => ({
-    value: g.anchor.id,
-    label: `v${g.anchor.snapshot_version} — ${kindLabel(g.kind)}${g.anchor.tag ? ` — ${g.anchor.tag}` : ''}`,
-  })),
+  versionGroups.value.map((g) => {
+    // S4624: build the optional tag suffix separately rather than nesting a
+    // second template literal inside the row label.
+    const tagSuffix = g.anchor.tag ? ` — ${g.anchor.tag}` : ''
+    return {
+      value: g.anchor.id,
+      label: `v${g.anchor.snapshot_version} — ${kindLabel(g.kind)}${tagSuffix}`,
+    }
+  }),
 )
 
 const canDiff = computed(() => compareB.value != null && selectedSnapshotId.value != null && compareB.value !== selectedSnapshotId.value)
