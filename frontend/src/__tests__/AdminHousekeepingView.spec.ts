@@ -135,6 +135,16 @@ describe('AdminHousekeepingView — scan', () => {
     await nextTick()
     expect(wrapper.text()).toContain('not-a-date')
   })
+
+  it('shows an em-dash placeholder when the candidate has no created_at', async () => {
+    mockGet.mockResolvedValue(scanPayload([
+      category('stale_pipelines', [candidate('p-1', 'Undated', { created_at: null })]),
+    ]))
+    const wrapper = mountView()
+    await nextTick()
+    expect(wrapper.find('[data-testid="hk-candidate-checkbox"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('—')
+  })
 })
 
 describe('AdminHousekeepingView — selection', () => {
