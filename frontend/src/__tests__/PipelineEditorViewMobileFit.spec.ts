@@ -650,7 +650,11 @@ describe('PipelineEditorView — edge badge variants (FAR-1861 changed-lines gat
 
     const html = wrapper.html()
     expect(html).toContain('(5)')
-    expect(html).toContain('retry')
+    // Scope this to the llm badge: a bare `toContain('retry')` is satisfied by
+    // the toolbar's `pipeline-editor-retry-policy-toggle` testid even when the
+    // `: {routing_label}` suffix ternary renders nothing. `LLM: retry` is a
+    // sentinel ONLY the suffix ternary (badge label + ': ' + label) produces.
+    expect(html).toContain('LLM: retry')
     wrapper.unmount()
   })
 })
