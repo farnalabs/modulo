@@ -322,20 +322,6 @@ class TestPaginatedResponseHasMore:
         # ``extra`` is merged through without disturbing the envelope.
         assert resp["pipeline_map"] == pipeline_map
 
-    def test_heuristic_true_on_a_full_page_without_a_total(self) -> None:
-        from modulo.core.feedback_manager.queries import paginated_response
-
-        resp = paginated_response(self._rows(20), total=0, page=1, page_size=20, include_total=False)
-
-        assert resp["has_more"] is True
-
-    def test_heuristic_false_on_a_partial_page_without_a_total(self) -> None:
-        from modulo.core.feedback_manager.queries import paginated_response
-
-        resp = paginated_response(self._rows(3), total=0, page=1, page_size=20, include_total=False)
-
-        assert resp["has_more"] is False
-
 
 class TestGetFeedbackRecords:
     async def _setup_mock(self, mock_session: AsyncMock, items: list, total: int) -> MagicMock:

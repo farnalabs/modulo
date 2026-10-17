@@ -28,8 +28,8 @@ unredacted, and EVERY other role â€” including the default org role ``runner`` â
 falls back to BOTH classes. (This deliberately narrows acceptance criterion 3's
 "no matching rule -> no redaction" to trusted roles only.)
 
-Revision ID: 0319_evidence_redaction_rules
-Revises: 0317_drop_retired_pipeline_diff_rollback_flag
+Revision ID: 0320_evidence_redaction_rules
+Revises: 0319_trigger_event_parse_failed
 Create Date: 2026-10-14
 """
 
@@ -40,8 +40,8 @@ from alembic import op
 from sqlalchemy import inspect, text
 from sqlalchemy.dialects.postgresql import ARRAY
 
-revision = "0319_evidence_redaction_rules"
-down_revision = "0318_trigger_event_required_refs_missing"
+revision = "0320_evidence_redaction_rules"
+down_revision = "0319_trigger_event_parse_failed"
 branch_labels = None
 depends_on = None
 

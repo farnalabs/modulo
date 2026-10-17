@@ -18,8 +18,10 @@ constraint with the FULL 21-value vocabulary. This file asserts:
   ``0176_trigger_event_validation_results`` widened it with ``coalesced`` /
   ``backpressure_skipped``; FAR-1144's ``0255_trigger_event_value_filter_label``
   added ``event_value_filter_not_accepted``; FAR-1916's
-  ``0318_trigger_event_required_refs_missing`` (the current constraint owner)
-  added ``required_refs_missing``.
+  ``0318_trigger_event_required_refs_missing`` added ``required_refs_missing``;
+  and the Slack parse-failure drift fix's
+  ``0319_trigger_event_parse_failed`` (the current constraint owner and chain
+  head) added ``parse_failed``.
 
 The old SQLite round-trip (which ran the migration's upgrade/downgrade against
 a mock ``op``) is obsolete: the reconciliation migration expresses the
@@ -41,7 +43,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from modulo.db.models.base import Base
 from modulo.db.models.trigger_event import VALIDATION_RESULT_VALUES, TriggerEvent
 
-_MIGRATION_NAME = "0318_trigger_event_required_refs_missing"
+_MIGRATION_NAME = "0319_trigger_event_parse_failed"
 _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
@@ -188,11 +190,12 @@ _MIGRATION_PATH = (
 # 0315_service_accounts_lifecycle chained onto 0314_external_agents_mcp_servers, and
 # 0317_drop_retired_pipeline_diff_rollback_flag chained onto 0316_policy_gate_evaluation_mode, and
 # 0318_trigger_event_required_refs_missing (FAR-1916) chained onto 0317, and
-# 0319_evidence_redaction_rules chained onto 0318_trigger_event_required_refs_missing as the chain head.
+# 0319_trigger_event_parse_failed (Slack parse-failure drift fix) chained onto
+# 0318 as the chain head.
 # (_MIGRATION_NAME above is pinned to the migration that owns the widened
-# constraint under test — FAR-1916 moved that ownership to
-# 0318_trigger_event_required_refs_missing.)
-_CHAIN_HEAD_MIGRATION_NAME = "0319_evidence_redaction_rules"
+# constraint under test — the Slack parse-failure fix moved that ownership to
+# 0319_trigger_event_parse_failed.)
+_CHAIN_HEAD_MIGRATION_NAME = "0320_evidence_redaction_rules"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
@@ -234,8 +237,14 @@ class TestModelVocabulary:
         # ever persisted (the 422 was a 503).
         assert "required_refs_missing" in VALIDATION_RESULT_VALUES
 
-    def test_model_vocabulary_is_25_values(self) -> None:
-        assert len(VALIDATION_RESULT_VALUES) == 25
+    def test_parse_failed_value_in_model_vocabulary(self) -> None:
+        # The Slack app_mention engine writes ``parse_failed`` when a payload
+        # cannot be parsed. It was missing from the vocabulary, so the audit
+        # INSERT violated the CHECK and no parse-failure event ever persisted.
+        assert "parse_failed" in VALIDATION_RESULT_VALUES
+
+    def test_model_vocabulary_is_26_values(self) -> None:
+        assert len(VALIDATION_RESULT_VALUES) == 26
         assert len(set(VALIDATION_RESULT_VALUES)) == len(VALIDATION_RESULT_VALUES)
 
     def test_orm_check_constraint_includes_auto_deactivated(self) -> None:
@@ -338,6 +347,51 @@ class TestRequiredRefsMissingRoundTrip:
                     await session.execute(select(TriggerEvent).where(TriggerEvent.trigger_id == trigger_id))
                 ).scalar_one()
                 assert stored.validation_result == "required_refs_missing"
+                assert stored.organisation_id == org_id
+        finally:
+            await engine.dispose()
+
+
+class TestParseFailedRoundTrip:
+    """The Slack ``parse_failed`` value must be INSERTABLE.
+
+    ``slack_app_mention._parse_mention`` audits a malformed ``app_mention``
+    payload with ``validation_result="parse_failed"``. Before the vocabulary
+    was widened the CHECK — a HARD DB gate — rejected it (``IntegrityError``),
+    so the audit row could never survive. This is a REAL round-trip against an
+    in-memory SQLite database: the ORM CHECK constraint is enforced by the
+    engine, so a missing vocabulary entry fails the INSERT rather than a mock
+    assertion."""
+
+    async def test_parse_failed_event_persists(self) -> None:
+        engine = create_async_engine("sqlite+aiosqlite://", echo=False)
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(lambda c: Base.metadata.create_all(c, tables=[TriggerEvent.__table__]))
+                await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
+            maker = async_sessionmaker(engine, expire_on_commit=False)
+            org_id = uuid.uuid4()
+            trigger_id = uuid.uuid4()
+            async with maker() as session, session.begin():
+                session.add(
+                    TriggerEvent(
+                        organisation_id=org_id,
+                        trigger_id=trigger_id,
+                        trigger_type="slack",
+                        raw_payload_hash="b" * 64,
+                        validation_result="parse_failed",
+                        error_detail="app_mention payload could not be parsed",
+                    )
+                )
+            # Read the row back through the same engine rather than trusting
+            # the write.
+            from sqlalchemy import select
+
+            async with maker() as session:
+                stored = (
+                    await session.execute(select(TriggerEvent).where(TriggerEvent.trigger_id == trigger_id))
+                ).scalar_one()
+                assert stored.validation_result == "parse_failed"
                 assert stored.organisation_id == org_id
         finally:
             await engine.dispose()

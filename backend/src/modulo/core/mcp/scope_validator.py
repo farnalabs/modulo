@@ -126,8 +126,22 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "update_trigger": "trigger.update",
     "delete_trigger": "trigger.delete",
     "set_org_triggers_paused": "org.triggers.pause.manage",
-    "list_housekeeping": "housekeeping.list",
-    "perform_housekeeping": "housekeeping.perform",
+    # FAR-1879: both MCP housekeeping tools mirror their REST twins
+    # (GET /api/v1/admin/housekeeping and POST /api/v1/admin/housekeeping/cleanup),
+    # each gated by BOTH ``require_permission("housekeeping.manage")`` (admin
+    # org-role floor) and ``require_system_permission(...)`` (a strict
+    # is_system_admin gate with no org-role fall-through). These scope-map
+    # entries pin ONLY the org-role floor: this resolver has no system-admin
+    # concept, so each tool enforces the load-bearing gate in its own body.
+    # That per-tool duplication — the same in-body shape as
+    # ``list_feature_flags``, which is pinned in ``READ_ONLY_TOOLS`` below
+    # rather than in this map — is ticketed for centralisation. It is
+    # deliberately NOT refactored here: this resolver is used by every MCP
+    # tool, so changing it inside a security-tightening change would widen the
+    # blast radius. Until it is centralised, a new system-admin-gated tool must
+    # replicate the in-body gate itself.
+    "list_housekeeping": "housekeeping.manage",
+    "perform_housekeeping": "housekeeping.manage",
     "create_connector": "connector.create",
     "delete_connector": "connector.delete",
     "create_trigger": "trigger.create",

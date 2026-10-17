@@ -3,7 +3,7 @@
 Structural + SQLite-model contract (no Postgres / Testcontainers needed):
 
 * **Revision chain** — 0309 revises ``0308_runs_dispatch_phase_history``; the
-  migrations directory has exactly one head (``0319_evidence_redaction_rules``,
+  migrations directory has exactly one head (``0317_drop_retired_pipeline_diff_rollback_flag``,
   pinned by all sibling chain tests), the revision id matches the filename, and
   neither ``branch_labels`` nor ``depends_on`` is set (the pre-commit
   check-migration-heads hook and every ``test_single_head_*`` pin depend on
@@ -47,7 +47,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0309_hitl_claims_decision_sweep"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0308_runs_dispatch_phase_history"
-_HEAD_MIGRATION = "0319_evidence_redaction_rules"
+_HEAD_MIGRATION = "0320_evidence_redaction_rules"
 
 _TABLE = "hitl_claims"
 _INDEX_NAME = "ix_hitl_claims_sweep_actor_window"
@@ -90,7 +90,7 @@ class _OpRecorder:
 
 
 class TestChain:
-    def test_single_head_is_0319_evidence_redaction_rules(self) -> None:
+    def test_single_head_is_0317_drop_retired_pipeline_diff_rollback_flag(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 

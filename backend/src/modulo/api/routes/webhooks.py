@@ -345,7 +345,8 @@ async def _record_rejected_delivery(
     Two caller shapes share this helper. The RECEIVE path holds the refused
     delivery's raw body, so it passes ``raw_body``/``raw_payload`` and the
     recorder stores a fresh payload row (replayable from the event log). The
-    REPLAY path (FAR-1916) holds no raw body — the original event's payload
+    REPLAY path (FAR-1904, extended by FAR-1916's rate-limit and
+    required-refs families) holds no raw body — the original event's payload
     already exists — so it passes ``source_event_id`` instead: the recorder
     carries the ORIGINAL event's payload hash onto the refusal row and stores
     no duplicate payload row (the ``_replay_busy_path`` busy-replay shape).
@@ -355,9 +356,34 @@ async def _record_rejected_delivery(
     underlying recorders open their own session from the shared engine and
     never raise; this helper is the same shape.
 
+    Exactly ONE payload source is required: the receive path passes
+    ``raw_body``/``raw_payload``; the replay path passes ``source_event_id``.
+    A call with neither would write a TriggerEvent with an empty
+    ``raw_payload_hash`` and no ``WebhookPayload`` row — the silent-empty-record
+    class this path exists to avoid — so it is refused (logged) rather than
+    silently persisted. A call with both is equally refused: the two sources
+    are mutually exclusive by design, and accepting both would leave which one
+    is authoritative ambiguous.
+
     Returns ``True`` when a re-record was attempted (the org was resolved),
-    ``False`` when there is nothing to record against. Never raises.
+    ``False`` when there is nothing to record against (no org, or an invalid
+    payload-source shape). Never raises.
     """
+    if (raw_body is None) == (source_event_id is None):
+        # Reject the shape that would silently persist an empty refusal:
+        # exactly one payload source is required (see the docstring). Logged
+        # loudly — a swallowed programming error here is exactly the
+        # silent-empty-record failure this guard exists to prevent.
+        _log.warning(
+            "webhooks.record_rejected_delivery.invalid_payload_source "
+            "kind=%s trigger=%s has_raw_body=%s has_source_event_id=%s "
+            "— exactly one payload source is required",
+            kind,
+            trigger_id,
+            raw_body is not None,
+            source_event_id is not None,
+        )
+        return False
     if org_id is None:
         return False
     # The receive path holds the raw body and hashes it; the replay path omits
@@ -1332,9 +1358,31 @@ async def replay_webhook(
             detail="Duplicate webhook payload",
         ) from exc
     except ConcurrentRunLimitError as exc:
+        # FAR-1904: the replay mirror of receive_webhook's FAR-1863 post-unwind
+        # re-record. The engine's in-transaction ``concurrency_limit_reached``
+        # write rolls back with the unwound main transaction, so re-record the
+        # refusal in a FRESH transaction AFTER the unwind — the refused replay
+        # stays auditable, never silent (a bare 429 left no trace at all). The
+        # original event's payload already exists, so the re-record carries its
+        # hash via ``source_event_id`` (the _replay_busy_path busy-replay shape)
+        # and stores no duplicate payload row. The 429 is reject-and-retry, so
+        # it carries a Retry-After (the receive path's shape) and the caller
+        # re-fires once a slot frees.
+        _log.info(
+            "webhooks.replay_webhook.concurrent_limit_refused trigger=%s limit=%s",
+            trigger_id,
+            exc.limit,
+        )
+        await _record_rejected_delivery(
+            kind="concurrency",
+            trigger_id=trigger_id,
+            org_id=org_id,
+            source_event_id=event_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Concurrent run limit of {exc.limit} reached",
+            headers={"Retry-After": "5"},
         ) from exc
     except SnapshotLockNotAvailableError as exc:
         from modulo.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS

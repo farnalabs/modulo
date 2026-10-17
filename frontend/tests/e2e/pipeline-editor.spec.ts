@@ -206,7 +206,7 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     expect(doc.scrollHeight).toBeLessThanOrEqual(doc.clientHeight)
   })
 
-  test('a short viewport yields the 240px floor instead of scrolling the page', { tag: '@regression' }, async ({ page, env }) => {
+  test('a short viewport shrinks the editor to the space left instead of scrolling the page', { tag: '@regression' }, async ({ page, env }) => {
     // The original mobile fix pinned the editor to a hard 240px minimum, so on
     // any viewport where the chrome stack above the editor left less than 240px
     // the editor was forced to 240px and spilled below the fold, re-introducing
@@ -214,11 +214,12 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     // the viewport — the editor shrinks to the space left instead of overflowing.
     //
     // The chrome height (fixed mobile header + breadcrumb + any ambient banners
-    // such as the DB-capacity or onboarding banner) differs by environment, so
-    // 640x480 does NOT guarantee a sub-240px leftover — on staging the chrome is
-    // only ~110px, leaving ~370px, and the old fixed 640x480 assertion failed.
-    // Measure the chrome and shrink the height so ~180px remains below it: that
-    // deterministically exercises the floor-yields case with or without a banner.
+    // such as the DB-capacity or onboarding banner) varies by environment, so a
+    // fixed 640x480 does NOT guarantee a sub-240px leftover — on staging the
+    // chrome is ~110px, leaving ~370px, and the old absolute assertion failed.
+    // Measure the chrome, then shrink the height so ~180px remains below it:
+    // that deterministically exercises the floor-yields case with or without a
+    // banner (the fit maths itself stays pinned by PipelineEditorViewMobileFit).
     await loginAsAdmin(page, env)
     await mockEditorWithNode(page)
     await page.setViewportSize({ width: 640, height: 480 })
@@ -228,6 +229,8 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     const flow = page.locator('.vue-flow').first()
     await expect(flow).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
 
+    // Measure the chrome above the editor, then size the viewport so only ~180px
+    // is left for the editor — below the 240px floor, independent of environment.
     const chromeTop = await page
       .getByTestId('pipeline-editor-root')
       .evaluate((el) => Math.round(el.getBoundingClientRect().top + window.scrollY))

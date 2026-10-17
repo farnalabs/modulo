@@ -15,7 +15,7 @@ test.describe('First-Run Golden Path', { tag: "@regression" }, () => {
     // Step 2: Navigate to pipelines list
     await page.goto('/pipelines')
     await expect(page.locator('h1')).toContainText('Pipelines')
-    await expect(page.getByTestId('pipeline-list-search')).toBeVisible()
+    await expect(page.getByTestId('filter-bar-search')).toBeVisible()
 
     // Step 3: The demo pipeline row is reachable
     const pipelineRow = page.getByTestId('pipeline-tree-row-1').first()

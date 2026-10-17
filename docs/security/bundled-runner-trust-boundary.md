@@ -197,15 +197,18 @@ inactivity timeout through the proxy – a silent exec longer than that is cut
 by the proxy. This is consistent with (and backup to) Modulo's own stall
 detection, which kills the exec first.
 
-**Weekly scan cadence (target)**: the proxy image and the runner image are
-digest-pinned, and the intended cadence is a weekly trivy scan of the published
-tags (new high/critical opens an issue; off-cycle rebuild for critical CVEs).
-That scan is not yet automated — the automated trivy/grype image gate is part of
-the same GA/CI follow-up item listed under "What is NOT (yet) enforced" below.
-The digest-drift guard
+**Image scanning**: the proxy image and the runner image are digest-pinned,
+but no weekly image-scan cadence exists yet. Trivy runs in CI as a repository
+*filesystem* scan (`ci.yml`, `scan-type: 'fs'`, `scan-ref: '.'`) for
+dependency CVEs and misconfigurations — it does not scan the built images.
+`publish-images.yml` gates the GHCR push on image smoke checks (`import
+modulo`, `nginx -t`) only, with no vulnerability gate. Until the automated
+trivy/grype image gate lands (the GA/CI item below), scanning a published
+image tag is a manual operator step:
+`trivy image ghcr.io/farnalabs/modulo:<version>`. The digest-drift guard
 (the release job asserts the seed/docs digest constant matches the latest
-`released-<minor>` tag) is a GA/CI item; until it exists, digest advances are
-manual and the pinned digests in `deploy/compose/runner.yml` +
+`released-<minor>` tag) is likewise a GA/CI item; until it exists, digest
+advances are manual and the pinned digests in `deploy/compose/runner.yml` +
 `modulo/db/bundled_runner_template.py` are the source of truth. The CI
 rig's proxy pin in `deploy/compose/runner-ci.yml` is ALIGNED to production's
 digest – digest bumps must move the two compose files together, asserted by
