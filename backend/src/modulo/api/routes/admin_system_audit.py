@@ -69,12 +69,16 @@ class SystemAuditEventItem(BaseModel):
 
 
 class SystemAuditEventPage(BaseModel):
-    """Repo-standard offset page envelope (items / total / page / page_size)."""
+    """Repo-standard offset page envelope (items / total / page / page_size / has_more)."""
 
     items: list[SystemAuditEventItem]
     total: int
     page: int
     page_size: int
+    #: True when further pages exist — the rows before this page plus the rows
+    #: on it are fewer than ``total``. Derived from the real count this surface
+    #: always computes, so it never contradicts ``total``.
+    has_more: bool = False
 
 
 def _to_item(event: Any) -> SystemAuditEventItem:
@@ -136,6 +140,7 @@ async def admin_list_system_audit_events(
             total=total,
             page=max(1, page),
             page_size=page_size,
+            has_more=(max(1, page) - 1) * page_size + len(events) < total,
         )
     except HTTPException:
         raise

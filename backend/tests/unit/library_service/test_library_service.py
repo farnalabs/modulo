@@ -579,6 +579,49 @@ async def test_list_primitives_custom_excluded_tiers_filters_modulo():
     assert preview_prim not in result.items
 
 
+async def test_list_primitives_has_more_reflects_the_narrowed_page():
+    """``source``/``excluded_tiers`` narrow AFTER the offset query, so the org page's
+    own ``has_more`` can contradict the returned items (FAR-1881). The envelope must
+    describe the page actually returned: a full org page forwarded verbatim would
+    claim a next page for a response that is smaller than its own page size.
+    """
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    org_prim = _fake_primitive()
+    org_prim.source = "local"
+    # The org query saw a full page, so it believes a next page exists...
+    org_page: PageResult = PageResult(items=[org_prim], total=100, page=1, page_size=20, has_more=True)
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page),
+    ):
+        # ...but ?source=community narrows to the in-memory community set.
+        result = await list_primitives(session, org_id, source="community")
+
+    assert len(result.items) == len(_EXPECTED_COMMUNITY_SLUGS)
+    assert len(result.items) < result.page_size
+    assert result.has_more is False
+
+
+async def test_list_primitives_has_more_true_when_the_org_page_has_a_next_page():
+    """With ``excluded_tiers=[]`` the org total is preserved, so a full org page whose
+    total exceeds what it returned genuinely has more rows to fetch."""
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    org_items = [_fake_primitive() for _ in range(20)]
+    org_page: PageResult = PageResult(items=org_items, total=100, page=1, page_size=20, has_more=True)
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page),
+    ):
+        result = await list_primitives(session, org_id, page_size=20, excluded_tiers=[])
+
+    assert result.has_more is True
+    assert len(result.items) >= 20
+
+
 # ---------------------------------------------------------------------------
 # copy_to_adapt
 # ---------------------------------------------------------------------------

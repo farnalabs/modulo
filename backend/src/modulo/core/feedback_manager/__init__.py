@@ -322,7 +322,7 @@ class FeedbackManager:
     ) -> dict[str, Any]:
         conditions = _build_org_scoped_conditions(self._org_id, status, pipeline_id)
         rows, total = await paginate_feedback_records(self._session, conditions, page, page_size, include_total)
-        return _paginated_response(rows, total, page, page_size)
+        return _paginated_response(rows, total, page, page_size, include_total=include_total)
 
     @_rls
     async def get_feedback_record(self, record_id: UUID) -> FeedbackRecord | None:
@@ -829,7 +829,9 @@ class FeedbackManager:
         rows, total = await paginate_feedback_records(self._session, conditions, page, page_size, include_total)
         pipeline_map = await _enrich_with_pipeline_names(self._session, rows)
 
-        return _paginated_response(rows, total, page, page_size, extra={"pipeline_map": pipeline_map})
+        return _paginated_response(
+            rows, total, page, page_size, extra={"pipeline_map": pipeline_map}, include_total=include_total
+        )
 
     @_rls
     async def get_eval_proposals(
@@ -844,4 +846,4 @@ class FeedbackManager:
             FeedbackRecord.feedback_status.in_(["pending", "routing"]),
         ]
         rows, total = await paginate_feedback_records(self._session, conditions, page, page_size, include_total)
-        return _paginated_response(rows, total, page, page_size)
+        return _paginated_response(rows, total, page, page_size, include_total=include_total)

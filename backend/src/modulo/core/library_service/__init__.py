@@ -1154,11 +1154,18 @@ async def list_primitives(
     org_items, org_total, modulo, community = _exclude_tiers(org_items, org_total, modulo, community, excluded_tiers)
 
     all_items: list[LibraryPrimitive] = org_items + modulo + community
+    total = org_total + len(modulo) + len(community)
+    # ``total`` and ``has_more`` describe the RETURNED page, not the org query's
+    # pre-narrowing universe: the ``source`` and ``excluded_tiers`` filters drop
+    # rows after the offset query ran, so forwarding the org page's own
+    # ``has_more`` can contradict the items and total below it. Deriving it from
+    # the narrowed counts keeps the envelope self-consistent.
+    has_more = (page - 1) * page_size + len(all_items) < total
     return PageResult(
         items=all_items,
-        total=org_total + len(modulo) + len(community),
+        total=total,
         page=page,
         page_size=page_size,
         next_cursor=org_page.next_cursor,
-        has_more=org_page.has_more,
+        has_more=has_more,
     )
