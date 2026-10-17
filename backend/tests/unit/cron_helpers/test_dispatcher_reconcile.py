@@ -1825,6 +1825,38 @@ class TestMidGraphWedgeTerminalizer:
         session.record_facts.assert_awaited_once_with(row.id, ORG)
 
 
+class TestClaimCapTerminalizerCoversPending:
+    """FAR-1903: the claim-cap predicate must cover ``pending`` as well as
+    ``running``.
+
+    The claim UPDATE is gated ``AND claim_count < :claim_cap``, so a ``pending``
+    row at the cap can never be claimed again — every enqueue is a silent no-op
+    that wedges it forever. ``status='running'``-only left exactly that shape
+    unterminalisable. Semantic proof against real Postgres lives in
+    ``tests/integration/test_org_sandbox_capacity.py``; these pin the SQL shape
+    so a future edit cannot silently drop either arm or the freshness guard.
+    """
+
+    @pytest.mark.asyncio
+    async def test_predicate_covers_pending_and_running(self) -> None:
+        session = _MockSession([])
+        await ch._terminalize_claim_cap_exhausted(session, ORG, claim_cap=20, stale_seconds=600)
+        sql = str(session.executed[-1][0])
+        assert "status IN ('running','pending')" in sql
+        assert "claim_count >= :cap" in sql
+
+    @pytest.mark.asyncio
+    async def test_stale_heartbeat_guard_survives_the_widening(self) -> None:
+        """A ``pending`` row at ``cap - 1`` is still claimable; the freshness
+        guard is what keeps a live row safe, so it must remain part of the
+        predicate rather than being replaced by the status widening."""
+        session = _MockSession([])
+        await ch._terminalize_claim_cap_exhausted(session, ORG, claim_cap=20, stale_seconds=600)
+        sql = str(session.executed[-1][0])
+        assert "heartbeat_at IS NULL" in sql
+        assert "heartbeat_at < now() - (:stale * interval '1 second')" in sql
+
+
 class TestAgedNodelessRouting:
     """FAR-1329: a run at the age bound with ZERO node progress takes the
     purpose-built nodeless path, not the mid-graph-wedge path.
