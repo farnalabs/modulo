@@ -110,10 +110,12 @@ class TestSystemAdminGate:
 
         assert resp.status_code == 200
         body = resp.json()
-        assert set(body) == {"items", "total", "page", "page_size"}
+        assert set(body) == {"items", "total", "page", "page_size", "has_more"}
         assert body["total"] == 1
         assert body["page"] == 1
         assert body["page_size"] == 50
+        # One row of a one-row result: there is no next page.
+        assert body["has_more"] is False
         assert body["items"][0]["event_type"] == "org_deletion_requested"
         assert body["items"][0]["org_id"] == str(_ORG)
         assert body["items"][0]["created_at"] == "2026-10-01T12:00:00+00:00"
@@ -173,6 +175,9 @@ class TestFiltersForwarded:
         # The envelope echoes the requested page, not a hard-coded first page.
         assert resp.json()["page"] == 3
         assert resp.json()["page_size"] == 25
+        # Page 3 skips 50 rows and returns 1, so 51 are consumed against a 1-row
+        # total: (3 - 1) * 25 + 1 = 51, which is not < 1.
+        assert resp.json()["has_more"] is False
 
     def test_invalid_org_id_is_422(self) -> None:
         session = _make_session()
@@ -205,6 +210,38 @@ class TestFiltersForwarded:
         assert kwargs["to_date"] is None
         assert kwargs["page"] == 1
         assert kwargs["page_size"] == 50
+
+
+class TestHasMore:
+    """``has_more`` lets a caller page without re-deriving the arithmetic (FAR-1881).
+
+    It is derived from the requested page/page_size and the total row count, so
+    both the "a next page exists" and the "this is the last page" arms need
+    pinning - a default-``False`` field would pass the latter alone.
+    """
+
+    def test_true_when_more_rows_follow_the_page(self) -> None:
+        session = _make_session()
+        client = _build(session, _principal(system_admin=True))
+        events, _ = _page_return_value()
+        # The fixture returns a single event, so page 1 consumes 1 row against a
+        # 100-row total: (1 - 1) * 50 + 1 = 1, which is < 100.
+        with _patch_read((events, 100)):
+            resp = client.get(_URL, params={"page": 1, "page_size": 50})
+
+        assert resp.status_code == 200
+        assert resp.json()["has_more"] is True
+
+    def test_false_when_the_page_is_the_last_one(self) -> None:
+        session = _make_session()
+        client = _build(session, _principal(system_admin=True))
+        events, _ = _page_return_value()
+        # A one-row result fits entirely in the first page.
+        with _patch_read((events, 1)):
+            resp = client.get(_URL, params={"page": 1, "page_size": 50})
+
+        assert resp.status_code == 200
+        assert resp.json()["has_more"] is False
 
 
 class TestDbErrorMapping:

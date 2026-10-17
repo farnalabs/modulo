@@ -46,7 +46,8 @@ index and dropping the sweep back to a full-table scan of ``runs`` every
 ``0307_runs_guardrail_override_resume_pending`` then ``0308_runs_dispatch_phase_history`` then
 ``0314_external_agents_mcp_servers`` then
 ``0315_service_accounts_lifecycle`` then
-``0316_policy_gate_evaluation_mode`` as the
+``0316_policy_gate_evaluation_mode`` then
+``0317_drop_retired_pipeline_diff_rollback_flag`` as the
 single linear head) and the
 ``ORDER BY id`` / ``LIMIT 200`` access shape
 the ``(id)`` key is chosen to serve.
@@ -74,7 +75,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0278_runs_workspace_drift_sweep_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0277_run_daily_facts_trigger_dispatch_phase"
-_CHAIN_HEAD_MIGRATION = "0316_policy_gate_evaluation_mode"
+_CHAIN_HEAD_MIGRATION = "0317_drop_retired_pipeline_diff_rollback_flag"
 _INDEX_NAME = "ix_runs_workspace_drift_sweep"
 _KEY_COLUMNS = ("id",)
 

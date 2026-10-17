@@ -244,6 +244,7 @@ def _when_get_inbox(request: Any, query: str = "") -> None:
             "total": 1,
             "page": 1,
             "page_size": 20,
+            "has_more": False,
         }
     )
     ctx["session"] = _make_session()
@@ -333,6 +334,7 @@ def _when_get_proposals(request: Any) -> None:
             "total": 1,
             "page": 1,
             "page_size": 20,
+            "has_more": False,
         }
     )
     ctx["session"] = _make_session()

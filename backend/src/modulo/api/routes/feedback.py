@@ -299,6 +299,7 @@ async def list_feedback(
         "total": result["total"],
         "page": result["page"],
         "page_size": result["page_size"],
+        "has_more": result["has_more"],
     }
 
 
@@ -367,6 +368,7 @@ async def list_feedback_inbox(
         "total": result["total"],
         "page": result["page"],
         "page_size": result["page_size"],
+        "has_more": result["has_more"],
     }
 
 
@@ -461,6 +463,7 @@ async def list_eval_proposals(
         "total": result["total"],
         "page": result["page"],
         "page_size": result["page_size"],
+        "has_more": result["has_more"],
     }
 
 

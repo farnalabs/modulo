@@ -116,6 +116,19 @@ export function getBaseUrl(target?: string): string {
   return process.env.E2E_BASE_URL || BASE_URLS[t] || BASE_URLS.local
 }
 
+// Read-only opt-out for non-local runs. `global-setup.ts` otherwise seeds the
+// target with a test pipeline plus retention / email / cost-control settings
+// before logging in — a capture of a real deployment must be able to run
+// without writing anything to it. True iff `E2E_SKIP_SEED` trims/case-folds to
+// one of `1` / `true` / `yes` / `on`; false when unset, empty, or any other
+// value, so leaving the flag out preserves today's seeding behaviour exactly.
+// Dependency-free by design — it is read on the global-setup path before any
+// target work happens.
+export function shouldSkipSeed(): boolean {
+  const raw = (process.env.E2E_SKIP_SEED ?? '').trim().toLowerCase()
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on'
+}
+
 export function getTestEnv(): TestEnv {
   const target = getTarget()
   if (!ENVS[target]) {

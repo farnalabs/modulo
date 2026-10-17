@@ -208,6 +208,11 @@ jobs:
         # signature (or a PyPI connection error), never when pip-audit reports
         # actual vulnerabilities, so a genuine finding is never masked. Mirrors
         # the signature-gated retry used for the SonarCloud scan below.
+        # The signature list must include socket read/connect timeouts — a plain
+        # `Read timed out` / `ReadTimeout` to pypi.org is the most common
+        # transient failure and, when absent, was misread as "non-transient
+        # error" and failed the check without retrying (observed on main at
+        # 71a55aab0 in deploy.yml's mirror of this gate).
         run: |
           set -uo pipefail
           LOG="$(mktemp)"
@@ -222,7 +227,7 @@ jobs:
               echo "::notice::pip-audit succeeded on attempt ${attempt}/3."
               exit 0
             fi
-            if grep -qE "pip_audit\._service\.interface\.(ServiceError|ConnectionError)|[0-9]{3} Server Error|Backend is unhealthy|Could not connect to PyPI|PyPI is not redirecting properly" "$LOG"; then
+            if grep -qE "pip_audit\._service\.interface\.(ServiceError|ConnectionError)|[0-9]{3} Server Error|Backend is unhealthy|Could not connect to PyPI|PyPI is not redirecting properly|Read timed out|ReadTimeout|ConnectTimeout|Connection timed out|Max retries exceeded|HTTPSConnectionPool\(host='pypi\.org'" "$LOG"; then
               if [ "$attempt" -lt 3 ]; then
                 echo "::warning::pip-audit hit a transient PyPI service error (attempt ${attempt}/3); retrying."
                 sleep $((attempt * 10))
