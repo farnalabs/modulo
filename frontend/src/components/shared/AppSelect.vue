@@ -9,7 +9,7 @@
     satisfies the accessibility/static-analysis requirement.  See
     AgentRunnerBindings.vue for the same pattern.
   -->
-  <label>
+  <label ref="rootEl">
     <Select
       v-bind="$attrs"
       :options="options"
@@ -39,11 +39,14 @@
 <script setup lang="ts">
 /**
  * AppSelect - thin wrapper around PrimeVue Select that:
- *   - resolves the overlay's `appendTo` as: explicit `append-to` prop →
- *     injected `SELECT_APPEND_TARGET` (provided by dialog hosts, FAR-1908) →
- *     `'self'`. The `'self'` fallback keeps the overlay inside the Select's own
+ *   - resolves the overlay's `appendTo` as: an explicit `append-to` prop →
+ *     `'body'` when the Select is rendered inside a dialog's scrolling content
+ *     box → `'self'`. `'self'` keeps the overlay inside the Select's own
  *     `position: relative` wrapper instead of being portalled to `<body>`
- *     (FAR-851: filter dropdowns detaching to the viewport origin);
+ *     (FAR-851: filter dropdowns detaching to the viewport origin); `'body'`
+ *     escapes a dialog's `.p-dialog-content` scroll container, which otherwise
+ *     clips the overlay and hides its lower options behind `.p-dialog-footer`
+ *     (FAR-1908);
  *   - wraps the inner Select in a `<label>` and binds an explicit `aria-label`
  *     so the rendered `<input>` is never flagged by SonarCloud's
  *     `Web:InputWithoutLabelCheck`;
@@ -52,13 +55,22 @@
  * All Select instances across the app should use this wrapper instead of
  * importing `primevue/select` directly (enforced by appselect-guard.spec.ts).
  *
+ * NOTE: the dialog case is detected from the rendered DOM (`.p-dialog-content`
+ * ancestor) rather than declared by the host. A host-provided flag can only ever
+ * be opt-in: a new dialog that forgets it silently reintroduces the clipping
+ * bug (FAR-1908 review). Detection is structural, so every Select inside every
+ * dialog — including raw `<Dialog>` hosts and PrimeVue's own content box — is
+ * safe without the host doing anything.
+ *
  * NOTE: `appendTo` is a declared prop with NO default, so "consumer did not
- * pass one" is distinguishable from an explicit value and the injection can
- * supply the dialog default. Consumers that pass `append-to` keep control; a
- * hardcoded `append-to="self"` after `v-bind="$attrs"` would silently override
- * the consumer's value. Declaring it (rather than reading it out of `$attrs`)
- * is required because Vue keys fallthrough attrs by their original name, so
- * `$attrs.appendTo` is undefined for a kebab-case `append-to`.
+ * pass one" is distinguishable from an explicit value. Consumers that pass a
+ * non-empty `append-to` keep control; an empty string is treated as "not
+ * given" (passing `append-to=""` to PrimeVue is meaningless and would bypass
+ * the dialog default). A hardcoded `append-to="self"` after `v-bind="$attrs"`
+ * would silently override the consumer's value. Declaring it (rather than
+ * reading it out of `$attrs`) is required because Vue keys fallthrough attrs by
+ * their original name, so `$attrs.appendTo` is undefined for a kebab-case
+ * `append-to`.
  *
  * NOTE: events are declared in `defineEmits` for consumer type-safety AND
  * re-emitted to the inner PrimeVue `Select` below. Declaring an event in
@@ -67,9 +79,8 @@
  * `Select` would never propagate `update:modelValue` back to the parent and
  * `v-model` would silently break. Re-emitting here restores the passthrough.
  */
-import { computed, inject, useAttrs } from 'vue'
+import { computed, onMounted, ref, useAttrs } from 'vue'
 import Select from 'primevue/select'
-import { SELECT_APPEND_TARGET } from './selectAppendTarget'
 
 // Keep $attrs (e.g. data-testid) on the inner PrimeVue <Select> only.
 // With default inheritance the wrapper <label> would also receive them,
@@ -111,14 +122,24 @@ const props = withDefaults(
 
 const attrs = useAttrs()
 
-// A dialog host provides its overlay append target so that AppSelect overlays
-// escape the dialog's scrolling content box (FAR-1908). Deliberately NOT
-// defaulted on the prop: an explicit `append-to` must still win.
-const injectedAppendTo = inject(SELECT_APPEND_TARGET, undefined)
+const rootEl = ref<HTMLElement | null>(null)
+const isInDialogContent = ref(false)
 
-const resolvedAppendTo = computed(
-  () => props.appendTo ?? injectedAppendTo ?? 'self',
-)
+// FAR-1908: a dialog renders its body in `.p-dialog-content`, which is a scroll
+// container (`overflow-y: auto`) that clips an in-place overlay and leaves its
+// lower options covered by the dialog footer. Detect that container from the
+// rendered DOM so the safe append target is structural rather than opt-in.
+onMounted(() => {
+  isInDialogContent.value = rootEl.value?.closest('.p-dialog-content') != null
+})
+
+// Precedence: explicit prop → dialog-derived → FAR-851 'self'. An empty-string
+// prop is treated as absent (PrimeVue cannot use '' as an append target, and
+// passing it through would silently bypass the dialog default).
+const resolvedAppendTo = computed(() => {
+  if (props.appendTo) return props.appendTo
+  return isInDialogContent.value ? 'body' : 'self'
+})
 
 // Consumers usually pass `aria-label` through `$attrs`; surface it explicitly
 // so the label association is statically visible and the meaningful

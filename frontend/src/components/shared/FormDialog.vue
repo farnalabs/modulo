@@ -19,15 +19,8 @@
 </template>
 
 <script setup lang="ts">
-import { provide } from 'vue'
 import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
-import { SELECT_APPEND_TARGET } from './selectAppendTarget'
-
-// FAR-1908: the dialog body is a scroll container, so an AppSelect overlay
-// rendered inside it (`appendTo: 'self'`) is clipped by it and its lower
-// options end up hidden behind the footer. Portal the overlays to <body>.
-provide(SELECT_APPEND_TARGET, 'body')
 
 const props = defineProps<{
   title: string

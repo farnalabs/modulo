@@ -1,17 +1,6 @@
 import { test, expect } from './setup/fixtures'
 import AxeBuilder from '@axe-core/playwright'
-
-const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
-
-// aria-hidden-focus: PrimeVue renders hidden tabbable focus-trap spans
-// (`p-hidden-accessible p-hidden-focusable`) inside its Select/overlay panels
-// for a11y navigation. axe flags these as aria-hidden-focus; they are a
-// library-internal navigation affordance, not a Modulo defect.
-const ACCEPTABLE_VIOLATIONS = ['color-contrast', 'scrollable-region-focusable', 'aria-hidden-focus']
-
-function filterViolations(violations: { id: string }[]) {
-  return violations.filter(v => !ACCEPTABLE_VIOLATIONS.includes(v.id))
-}
+import { WCAG_TAGS, filterViolations } from './setup/wcag'
 
 test.describe('PrimeVue Select overlay WCAG + keyboard nav', { tag: "@regression" }, () => {
   test('open filter-bar-status overlay has no unexpected WCAG AA violations', { tag: "@regression" }, async ({ page, env }) => {

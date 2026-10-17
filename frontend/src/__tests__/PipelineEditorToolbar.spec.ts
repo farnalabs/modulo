@@ -231,7 +231,10 @@ describe('PipelineEditorView toolbar & fit-on-load', () => {
     expect(el).not.toBeNull()
 
     const select = componentByTestid(wrapper, 'pipeline-editor-agent-select')
-    expect(select.props('appendTo')).toBe('self')
+    // FAR-1908: this Select lives inside a dialog's scrollable content box, so
+    // AppSelect derives appendTo="body" to escape the container that would
+    // clip the overlay and hide its lower options behind the footer.
+    expect(select.props('appendTo')).toBe('body')
     // PrimeVue v5 consumes aria-label as the ariaLabel prop.
     expect(select.props('ariaLabel')).toBe('Agent to convert to')
   })
