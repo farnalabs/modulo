@@ -1,8 +1,5 @@
 ﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
-
-const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
-
-const knownViolations = new Set(['color-contrast'])
+import { WCAG_TAGS, filterViolations } from './setup/wcag'
 
 test.describe('WCAG AA audit (local)', { tag: "@regression" }, () => {
   test('login page has no WCAG AA violations', { tag: "@regression" }, async ({ page }) => {
@@ -18,7 +15,7 @@ test.describe('WCAG AA audit (local)', { tag: "@regression" }, () => {
         console.log(`[${v.impact}] ${v.id} (${v.nodes.length} nodes): ${v.help}`)
       }
     }
-    expect(results.violations.filter(v => !knownViolations.has(v.id))).toEqual([])
+    expect(filterViolations(results.violations)).toEqual([])
   })
 
   // Core authenticated pages — sampled to avoid full-suite timeout cascades
@@ -43,7 +40,7 @@ test.describe('WCAG AA audit (local)', { tag: "@regression" }, () => {
           console.log(`[${v.impact}] ${v.id} (${v.nodes.length} nodes): ${v.help}`)
         }
       }
-      expect(results.violations.filter(v => !knownViolations.has(v.id))).toEqual([])
+      expect(filterViolations(results.violations)).toEqual([])
     })
   }
 })
