@@ -3968,6 +3968,7 @@ export default {
       "FolderTree": {
         "parent_folder": "Parent folder",
         "no_parent_root_level": "No parent (root level)",
+        "invalid_list_response": "The server returned an invalid folder list.",
         "delete_confirm_empty": "Are you sure you want to delete this folder?",
         "delete_confirm_with_items": "Are you sure you want to delete this folder? {itemNoun} will be moved to {uncategorisedLabel}."
       }

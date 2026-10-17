@@ -311,7 +311,22 @@ async function loadFolders() {
   loading.value = true
   error.value = null
   try {
-    allFolders.value = await get<FolderItem[]>(apiBase.value)
+    const response = await get<FolderItem[]>(apiBase.value)
+    // The `get<FolderItem[]>` generic is an unchecked compile-time cast — at
+    // runtime useApi returns whatever body arrived, and `undefined as T` on a
+    // 204. The computeds below call .filter()/iterate this value on every
+    // render, so assigning a non-array would crash the whole view with an
+    // unhandled render error. Surface a bad shape as the error state instead of
+    // silently coercing it to [] (which would hide a real contract violation).
+    if (!Array.isArray(response)) {
+      console.error(
+        `[FolderTree] Invalid folder list response from ${apiBase.value}: expected an array, received ${response === null ? 'null' : typeof response}`,
+        response,
+      )
+      error.value = t('components.pipelines.FolderTree.invalid_list_response')
+      return
+    }
+    allFolders.value = response
   } catch (e: unknown) {
     error.value = formatApiError(e)
   } finally {
