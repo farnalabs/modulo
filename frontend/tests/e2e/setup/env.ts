@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto'
+import { resolve } from 'node:path'
+
 export interface TestEnv {
   name: 'local' | 'staging' | 'app'
   // Multi-org instances (FAR-856/857) render a slug-entry step on /login
@@ -107,13 +110,67 @@ export const BASE_URLS: Record<string, string> = {
   app: 'https://app.modulo.run',
 }
 
+// ---------------------------------------------------------------------------
+// Local e2e port selection (FAR-1900)
+//
+// Many worktrees / agents run concurrently on one machine. A fixed local port
+// (5173) plus `reuseExistingServer: !CI` let Playwright silently attach to a
+// DIFFERENT worktree's dev server and test that worktree's code — a
+// screenshot-backed failure that does not exist on the branch under test.
+//
+// A local run now derives a stable, worktree-unique port. Combined with
+// `strictPort: true` and `reuseExistingServer: false` in playwright.config.ts,
+// a local run either binds ITS OWN server or fails loudly at startup — it can
+// never silently reuse a foreign server.
+//
+// CI keeps the historical 5173: it runs a single checkout on a single runner,
+// so the collision this guards against cannot occur there, and its behaviour
+// must not change. An explicit `E2E_PORT` always wins; `E2E_BASE_URL` and
+// `E2E_NO_WEBSERVER` continue to work exactly as before.
+// ---------------------------------------------------------------------------
+const LOCAL_E2E_PORT_MIN = 4000
+const LOCAL_E2E_PORT_SPAN = 6000
+
+export function isCI(): boolean {
+  return Boolean(process.env.CI)
+}
+
+export function getLocalE2ePort(): number {
+  if (isCI()) return 5173
+
+  const explicit = Number.parseInt(process.env.E2E_PORT ?? '', 10)
+  if (Number.isInteger(explicit) && explicit >= 1024 && explicit <= 65535) return explicit
+
+  // Hash the worktree root (this file lives at <worktree>/frontend/tests/e2e/
+  // setup/env.ts), which is unique per worktree, into a stable port. The range
+  // is wide enough that simultaneous worktrees almost never collide; if they
+  // ever do, `strictPort` turns the collision into a loud startup error rather
+  // than a silent cross-worktree reuse.
+  const worktreeRoot = resolve(__dirname, '..', '..', '..', '..')
+  const digest = createHash('sha1').update(worktreeRoot).digest()
+  return LOCAL_E2E_PORT_MIN + (digest.readUInt32BE(0) % LOCAL_E2E_PORT_SPAN)
+}
+
+export function getLocalE2eBaseUrl(): string {
+  return `http://127.0.0.1:${getLocalE2ePort()}`
+}
+
 export function getTarget(): string {
   return (process.env.E2E_TARGET || 'local').toLowerCase()
 }
 
 export function getBaseUrl(target?: string): string {
   const t = target ?? getTarget()
-  return process.env.E2E_BASE_URL || BASE_URLS[t] || BASE_URLS.local
+  if (process.env.E2E_BASE_URL) return process.env.E2E_BASE_URL
+  if (t === 'local') {
+    // A caller that opted out of Playwright's webServer is managing its own
+    // server; honour the historical fixed local URL so `E2E_NO_WEBSERVER=true`
+    // on its own still targets a hand-started server on 5173. This is an
+    // explicit opt-out, not the silent-reuse path the guard closes.
+    const noServer = (process.env.E2E_NO_WEBSERVER || '').toLowerCase() === 'true'
+    return noServer ? BASE_URLS.local : getLocalE2eBaseUrl()
+  }
+  return BASE_URLS[t] || BASE_URLS.local
 }
 
 // Read-only opt-out for non-local runs. `global-setup.ts` otherwise seeds the
