@@ -42,14 +42,14 @@ async function openRoleSelect(page: Page) {
   await expect(page.getByRole('listbox')).toBeVisible()
 }
 
-test.describe('Dialog Select overlay', () => {
+test.describe('Dialog Select overlay', { tag: "@regression" }, () => {
   test.beforeEach(async ({ page, env }) => {
     test.skip(env.name !== 'local', 'local mock only')
     await setupLocalMockApi(page)
     await loginForSystemRoute(page, env)
   })
 
-  test('renders its overlay outside the dialog scroll container @regression', async ({ page }) => {
+  test('renders its overlay outside the dialog scroll container', { tag: "@regression" }, async ({ page }) => {
     await openRoleSelect(page)
 
     const overlayIsInsideContent = await page.evaluate(() => {
@@ -60,7 +60,7 @@ test.describe('Dialog Select overlay', () => {
     expect(overlayIsInsideContent).toBe(false)
   })
 
-  test('every option is the topmost element at its own centre @regression', async ({ page }) => {
+  test('every option is the topmost element at its own centre', { tag: "@regression" }, async ({ page }) => {
     await openRoleSelect(page)
 
     const probe = await page.evaluate(() => {
@@ -80,7 +80,7 @@ test.describe('Dialog Select overlay', () => {
     expect(probe.misses).toHaveLength(0)
   })
 
-  test('clicking an option where it is drawn selects it @regression', async ({ page }) => {
+  test('clicking an option where it is drawn selects it', { tag: "@regression" }, async ({ page }) => {
     await openRoleSelect(page)
 
     const centre = await page
@@ -99,7 +99,7 @@ test.describe('Dialog Select overlay', () => {
     )
   })
 
-  test('options stay keyboard-selectable inside the modal @regression', async ({ page }) => {
+  test('options stay keyboard-selectable inside the modal', { tag: "@regression" }, async ({ page }) => {
     await openCreateUserDialog(page)
 
     // Drive the Select entirely from its combobox with the keyboard — the real
@@ -137,7 +137,7 @@ test.describe('Dialog Select overlay', () => {
     await expect(page.getByRole('dialog')).toBeVisible()
   })
 
-  test('open overlay inside the dialog has no unexpected WCAG AA violations @regression', async ({
+  test('open overlay inside the dialog has no unexpected WCAG AA violations', { tag: "@regression" }, async ({
     page,
   }) => {
     await openRoleSelect(page)
