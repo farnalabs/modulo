@@ -40,7 +40,7 @@ from modulo.api.dependencies import (
     system_engine_is_fallback,
 )
 from modulo.api.routes.runs import pipeline_not_runnable_http
-from modulo.api.trigger_busy import BUSY_ACK_DETAIL, record_busy_delivery
+from modulo.api.trigger_busy import BUSY_ACK_DETAIL, _record_refused_delivery, record_busy_delivery
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.secret_storage import SecretStorageError
 from modulo.core.audit_coverage import audited_system, bind_audit_org
@@ -87,6 +87,15 @@ from modulo.settings import get_settings
 from modulo.version import get_version
 
 _CODE_SLACK_RECEIVE_EVENT = "slack.receive_event"
+
+# FAR-1916 (slack mirror): the refused-delivery outcome recorded when an
+# app_mention delivery hits the pipeline's configured rate limit. Reuses the
+# engine's own ``rate_limited`` vocabulary value (the engine writes it
+# in-transaction at both raise sites, and that transaction rolls back with the
+# refusal), so the refusal is stored with its raw payload and needs no schema
+# change. Mirrors the webhook receive path's constants exactly.
+_RATE_LIMIT_REFUSAL_VALIDATION_RESULT = "rate_limited"
+_RATE_LIMIT_REFUSAL_ERROR_DETAIL = "Pipeline rate limit reached — delivery not executed"
 
 
 _log = logging.getLogger(__name__)
@@ -346,13 +355,17 @@ async def _run_slack_pipeline(
 
     The trigger/signature error family is mapped by the shared
     :func:`_map_trigger_delivery_errors` context manager (the same ladder the
-    bootstrap stage uses). Two families deliberately PROPAGATE to the route's
+    bootstrap stage uses). Three families deliberately PROPAGATE to the route's
     ladder instead of being caught here:
 
     * ``TriggerBusyError`` — the engine raises BEFORE any TriggerEvent is
       written and the main transaction must ROLL BACK; the route records the
       busy delivery in a fresh transaction AFTER the unwind (a return from
       inside this transaction would commit the snapshot instead).
+    * ``PipelineRateLimitError`` — the engine writes its ``rate_limited``
+      TriggerEvent INSIDE this transaction before raising, so that write rolls
+      back with the refusal; the route re-records the refusal post-unwind in a
+      fresh transaction (FAR-1916 slack mirror), never an in-transaction arm.
     * the ``ProgrammingError`` / ``SQLAlchemyError`` / ``HTTPException`` /
       ``Exception`` tail — same post-unwind placement as the original
       route-level ladder (rollback first, then the mapped response).
@@ -398,11 +411,12 @@ async def _run_slack_pipeline(
     # EventNotAcceptedError is deliberately not caught here: the Slack path
     # (handle_app_mention) never calls _enforce_event_acceptance, so this
     # error cannot be raised from the Slack trigger route today.
-    except PipelineRateLimitError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=str(exc),
-        ) from exc
+    # PipelineRateLimitError is deliberately not caught here (FAR-1916 slack
+    # mirror): the engine writes its ``rate_limited`` TriggerEvent INSIDE this
+    # transaction before raising, so catching it inside the begin-block would
+    # either commit that write with the unwound transaction or lose it. The
+    # route's outer ladder re-records the refusal in a FRESH transaction AFTER
+    # the unwind and only then raises the 429.
     except PipelineNotRunnableError as exc:
         # FAR-1528: the app-mention delivery is refused at the create_run
         # choke point when the target pipeline is archived/soft-deleted — 409
@@ -615,6 +629,40 @@ async def receive_slack_event(
         # the delivery is visible in the event log, never silently lost.
         _log.info("slack.receive_event.trigger_busy trigger=%s", trigger_id)
         return await _ack_slack_busy_delivery(trigger_id=trigger_id, org_id=org_id, raw_body=raw_body)
+    except PipelineRateLimitError as exc:
+        # FAR-1916 (slack mirror): the pipeline's configured rate limit refused
+        # the app_mention delivery. The engine writes the ``rate_limited``
+        # TriggerEvent INSIDE the main transaction (both raise sites), so that
+        # write rolls back with the unwound transaction — re-record the refusal
+        # + raw payload in a FRESH transaction AFTER the unwind (the shared
+        # ``_record_refused_delivery`` writer, the same post-unwind recorder the
+        # webhook receive path uses), or a rate-limited delivery is refused but
+        # invisible in the event log. Slack app_mention deliveries are not
+        # replayable, so there is no ``source_event_id`` to forward: the route
+        # passes the raw body + parsed payload it already holds. The 429
+        # status/detail contract is unchanged, and unlike the busy refusal this
+        # arm has never carried a Retry-After — this fix deliberately does not
+        # add one.
+        _log.info(
+            "slack.receive_event.rate_limited trigger=%s pipeline=%s",
+            trigger_id,
+            exc.pipeline_id,
+        )
+        if org_id is not None:
+            await _record_refused_delivery(
+                trigger_id=trigger_id,
+                org_id=org_id,
+                trigger_type="slack_app_mention",
+                validation_result=_RATE_LIMIT_REFUSAL_VALIDATION_RESULT,
+                error_detail=_RATE_LIMIT_REFUSAL_ERROR_DETAIL,
+                payload_hash=sha256_hex(raw_body),
+                raw_body=raw_body,
+                raw_payload=raw_payload,
+            )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc),
+        ) from exc
     except ProgrammingError:
         _log.exception(_CODE_SLACK_RECEIVE_EVENT)
         raise HTTPException(
