@@ -44,17 +44,13 @@ export function withTimeout<T>(
   })
   // A factory may throw SYNCHRONOUSLY (before returning a promise) rather than
   // rejecting — e.g. a malformed argument or a programming error raised while
-  // building the request. That path must still clear the deadline timer, so the
-  // setup is wrapped instead of relying on the promise chain's `.finally`.
-  let request: Promise<T>
-  try {
-    request = factory(controller.signal)
-  } catch (e: unknown) {
-    clearTimeout(timer)
-    deadline.catch(() => {})
-    externalSignal?.removeEventListener('abort', abort)
-    return Promise.reject(e)
-  }
+  // building the request. Running the invocation inside a `Promise` executor
+  // turns that throw into a rejection, so the shared `.finally` below clears the
+  // deadline timer on BOTH failure modes. A `try`/`catch` around the call would
+  // look like it handled async rejections too, which it cannot.
+  const request = new Promise<T>((resolve) => {
+    resolve(factory(controller.signal))
+  })
   // Swallow whichever side of the race loses, so a factory that rejects on
   // abort AFTER the deadline already settled the race is never an unhandled
   // rejection.
