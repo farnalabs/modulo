@@ -42,7 +42,12 @@
     <!-- FAR-250: classified-reconnect banner — shown when the SSE stream
          stopped on a terminal 401/403. Stays visible while a manual restart
          is in flight ('attempting') so the click is acknowledged, and shows
-         an explicit failure message when recovery is impossible (FAR-1842). -->
+         an explicit failure message when recovery is impossible (FAR-1842).
+         The 'failed' copy tells the user to sign in again, so the button is
+         disabled alongside it (FAR-1861): a Reconnect click without a fresh
+         token would only re-run the refresh+retry that just failed, and the
+         auth-change re-arm restarts the stream automatically the moment a
+         fresh token lands. -->
     <div
       v-if="showReconnectBanner"
       data-testid="sse-reconnect-banner"
@@ -61,7 +66,7 @@
         type="button"
         data-testid="sse-reconnect-button"
         class="rounded bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-60"
-        :disabled="reconnectFeedback === 'attempting'"
+        :disabled="reconnectFeedback === 'attempting' || reconnectFeedback === 'failed'"
         @click="eventBus.reconnect()"
       >
         {{

@@ -113,7 +113,10 @@ class _MockSession:
             return r
         if "UPDATE runs SET" in s:
             ids = self.terminalizer_rows.get("dispatch_failed", [])
-            if "node_attempt_count" in s:
+            if "stranded_age_minutes" in s:
+                # FAR-1862 stranded-pending backstop: empty by default.
+                ids = self.terminalizer_rows.get("stranded_pending", [])
+            elif "node_attempt_count" in s:
                 ids = self.terminalizer_rows.get("no_progress", [])
             elif "claim_cap_exhausted" in s:
                 ids = self.terminalizer_rows.get("claim_cap_exhausted", [])

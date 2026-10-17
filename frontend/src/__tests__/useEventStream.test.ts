@@ -281,9 +281,12 @@ describe('classified reconnect (FAR-250)', () => {
   it('treats 429 as transient: retries with backoff instead of the terminal banner (FAR-1842)', async () => {
     // Regression for the FAR-1842 defect: 429 (rate-limit / connection cap)
     // used to classify as terminal auth_failed and demand a fresh sign-in.
-    // It must retry with capped backoff like 5xx.
+    // It must retry with capped backoff like 5xx — and must NOT trip the
+    // permanent-client-error warning (FAR-1861): rate limiting is expected
+    // to resolve on its own and must never read as permanent.
     vi.useFakeTimers()
     mockRandomFraction(0)
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.mocked(fetch).mockResolvedValue({ ok: false, status: 429, body: null } as unknown as Response)
 
     const { eventBus } = await import('../composables/useEventStream')
@@ -293,10 +296,95 @@ describe('classified reconnect (FAR-250)', () => {
     expect(fetch).toHaveBeenCalledTimes(1)
     expect(eventBus.state).toBe('reconnecting')
     expect(eventBus.reconnectRequired).toBe(false)
+    expect(
+      warnSpy.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('HTTP 429')),
+    ).toHaveLength(0)
 
     await vi.advanceTimersByTimeAsync(1000)
     expect(fetch).toHaveBeenCalledTimes(2)
     unsub()
+  })
+
+  it('warns loudly on a permanent non-auth 4xx instead of retrying silently (FAR-1861)', async () => {
+    // A 400/404 keeps the 'retry' classification (only 401/403 are terminal),
+    // but looping every backoff tick with no signal was silent — the first
+    // occurrence must warn, and the streak must re-signal every 10th attempt
+    // rather than spamming every tick. Without the fix this fails at the
+    // first assertion (no warning is ever emitted).
+    vi.useFakeTimers()
+    mockRandomFraction(0)
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(fetch).mockResolvedValue({ ok: false, status: 404, body: null } as unknown as Response)
+
+    const { eventBus } = await import('../composables/useEventStream')
+    const unsub = eventBus.subscribe('run', vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+
+    const warnings = () =>
+      warnSpy.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('HTTP 404'))
+    expect(warnings()).toHaveLength(1)
+
+    // Classification is unchanged: still retrying, no terminal banner.
+    expect(eventBus.state).toBe('reconnecting')
+    expect(eventBus.reconnectRequired).toBe(false)
+
+    // Attempt 2: same status, inside the streak — no repeat warning yet.
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(warnings()).toHaveLength(1)
+
+    // Attempts 3..10 (half-jitter with random()=0: delays 1s, 2s, 4s, 8s,
+    // then the 15s cap → attempt 10 lands at t=75.5s) — attempt 10 re-signals.
+    await vi.advanceTimersByTimeAsync(74_500)
+    expect(fetch).toHaveBeenCalledTimes(10)
+    expect(warnings()).toHaveLength(2)
+    unsub()
+  })
+
+  it('does not let the 30s connect timeout abort an in-flight token refresh (FAR-1861)', async () => {
+    // The connect timeout guards the SSE fetch; a refresh runs on its OWN
+    // request, so a timeout firing mid-refresh cannot stop it — it could only
+    // flip signal.aborted and discard a refresh that was about to succeed,
+    // pushing a recoverable expiry onto the terminal banner. Without the fix
+    // the 30s advance below aborts the controller, the resolved-fresh token
+    // is discarded, and the final assertions (fetch x2 / connected) fail.
+    vi.useFakeTimers()
+    mockRandomFraction(0)
+    let resolveRefresh!: (value: boolean) => void
+    h.attemptTokenRefresh.mockImplementation(
+      () => new Promise<boolean>((resolve) => { resolveRefresh = resolve }),
+    )
+    vi.mocked(fetch)
+      .mockResolvedValueOnce({ ok: false, status: 401, body: null } as unknown as Response)
+      .mockResolvedValue({
+        ok: true,
+        body: {
+          getReader: () => ({
+            read: () => new Promise(() => {}),
+            cancel: vi.fn().mockResolvedValue(undefined),
+          }),
+        },
+      } as unknown as Response)
+
+    const { eventBus } = await import('../composables/useEventStream')
+    eventBus.subscribe('run', vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+
+    // 401 received, refresh in flight, no second fetch yet.
+    expect(h.attemptTokenRefresh).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledTimes(1)
+
+    // The 30s connect timeout elapses while the refresh is still pending.
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    resolveRefresh(true)
+    await vi.advanceTimersByTimeAsync(0)
+
+    // The successful refresh is still used: retried fetch, connected state,
+    // no terminal banner.
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(eventBus.state).toBe('connected')
+    expect(eventBus.reconnectRequired).toBe(false)
   })
 
   it('recovers a 401 via attemptTokenRefresh instead of raising the terminal banner (FAR-1842)', async () => {

@@ -64,6 +64,7 @@ def _classify_statement(stmt: Any, params: dict[str, Any]) -> str:
       claim_cap            ``_terminalize_claim_cap_exhausted``
       mid_graph_wedge      ``_terminalize_mid_graph_wedges``
       aged_nodeless        ``_terminalize_aged_nodeless_zombies``' router SELECT (FAR-1329)
+      stranded_pending     ``_terminalize_stranded_pending_runs`` (FAR-1862)
       hitl_expired         ``_terminalize_expired_hitl_reviews`` (FAR-648)
       hitl_missing         ``_terminalize_hitl_review_missing`` (FAR-721)
       hitl_guard           F6a guard SELECTs (``{oid, rid}`` params) — FIFO pop
@@ -84,6 +85,11 @@ def _classify_statement(stmt: Any, params: dict[str, Any]) -> str:
     keys = set(params)
     if raw.strip().upper().startswith("SELECT SET_CONFIG("):
         return "set_config"
+    # FAR-1862: the stranded-pending age backstop binds the distinctive
+    # ``stranded_age_minutes`` param; route it to an empty-by-default row set
+    # (it must not consume the FIFO result queue).
+    if "stranded_age_minutes" in keys:
+        return "stranded_pending"
     if "marker_seen" in keys:
         return "clear_dispatch_marker"
     if {"rid", "code", "detail"} <= keys and params["code"] == ch._DISPATCH_FAILED_ERROR_CODE:
@@ -175,6 +181,7 @@ class _MockSession:
             "claim_cap": "claim_cap_exhausted",
             "mid_graph_wedge": "no_progress",
             "aged_nodeless": "aged_nodeless",
+            "stranded_pending": "stranded_pending",
             "hitl_expired": "hitl_review_expired",
             "hitl_missing": "hitl_review_missing",
         }[kind]
@@ -2158,6 +2165,25 @@ class TestTerminalizerSyntheticErrorDetail:
         # The detail travels as a named bind param ("error_detail = :detail").
         assert "detail" in stmt._bindparams
         assert params["detail"] == ch._DISPATCH_FAILED_ERROR_DETAIL
+
+    @pytest.mark.asyncio
+    async def test_stranded_pending_writes_no_progress_detail_and_returns_ids(self) -> None:
+        """FAR-1862: the stranded-pending age backstop stamps the truthful
+        no-progress code + detail and returns the terminalized ids.
+
+        This is the ROW-RETURNING arm of the batched ``UPDATE ... RETURNING id``
+        backstop — the empty-rows path every other test exercises never enters
+        the per-row loop, so the batch terminalizer's warning log was never run.
+        """
+        ids = [uuid.uuid4(), uuid.uuid4()]
+        session = _MockSession([])
+        session.terminalizer_rows["stranded_pending"] = ids
+        returned = await ch._terminalize_stranded_pending_runs(session, ORG, max_age_minutes=135, max_rows=9)
+        assert returned == ids
+        _stmt, params = session.executed[-1]
+        assert params["code"] == ch._NO_PROGRESS_ERROR_CODE
+        assert params["detail"] == ch._STRANDED_PENDING_ERROR_DETAIL
+        assert params["stranded_age_minutes"] == 135
 
 
 class TestAwaitingHumanHasCommittedDecision:

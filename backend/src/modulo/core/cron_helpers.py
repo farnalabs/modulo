@@ -331,6 +331,15 @@ _DISPATCH_FAILED_ERROR_CODE = "dispatch_failed"
 # NULL one presents through the registry guidance.)
 _CLAIM_CAP_EXHAUSTED_ERROR_DETAIL = "Claim capacity exhausted."
 _DISPATCH_FAILED_ERROR_DETAIL = "Run was never dispatched (enqueue/Redis failure)."
+# FAR-1862: the stranded-pending age backstop's detail. Written with the
+# ``no_progress`` registry code (the same truthful age-gate code the mid-graph
+# wedge gate writes) — a pending FOREIGN-dispatcher run that never reached its
+# first claim made no node progress within the bound, and no reclaim pass
+# re-dispatched it.
+_STRANDED_PENDING_ERROR_DETAIL = (
+    "Pending run stranded past the reconcile age bound (foreign dispatcher, never re-dispatched); "
+    "terminal-failed by dispatcher_reconcile's stranded-pending backstop."
+)
 
 # ---------------------------------------------------------------------------
 # Age-bound mid-graph wedge terminalizer (B4). A run stuck mid-graph for longer
@@ -5477,8 +5486,17 @@ def _build_re_dispatch_predicate(
     IS NULL``, and a dedicated ``enqueue_failed_stale`` branch re-dispatches a
     pending run whose enqueue-failure marker is set once its heartbeat is stale
     past ``enqueue_failed_redispatch_seconds``. ``enqueue_failed_at`` is read via
-    raw SQL (the column ships in a parallel migration; the ORM model on this
-    branch does not yet map it).
+    raw SQL in the branch (the column IS mapped on the ORM — see
+    ``db.models.run.Run``; the SQL leg is retained for exact parity with the
+    historical predicate).
+
+    FAR-1862: a ``pending`` row with a SET ``dispatched_at`` and a ``dispatcher``
+    that is neither NULL nor ``'saq'`` matches a dedicated foreign-dispatcher
+    leg. Before it, that shape matched NO branch and was stranded ``pending``
+    (see the leg's comment). The composed predicate is made TOTAL over the
+    pending state space: every ``(dispatched_at, dispatcher, enqueue_failed_at,
+    error_code)`` combination is either matched here or covered by the
+    stranded-pending age backstop (``_terminalize_stranded_pending_runs``).
 
     FAR-1728 (guardrail-override resume self-heal): a RUNNING branch admits the
     guardrail-override resume flip's lost-job shape — ``first_node_dispatched``
@@ -5546,6 +5564,26 @@ def _build_re_dispatch_predicate(
                 Run.heartbeat_at.is_(None),
                 Run.heartbeat_at < func_now_minus(enqueue_failed_redispatch_seconds),
             ),
+        ),
+        # FAR-1862 — the foreign-dispatcher gap. A ``pending`` row with a SET
+        # ``dispatched_at`` whose ``dispatcher`` is neither NULL nor ``'saq'``
+        # matched NO leg before this one: the two dispatcher-NULL legs require
+        # NULL, the FAR-1649 re-enqueue leg requires ``'saq'``, and the
+        # capacity-deferred leg requires a NULL ``dispatched_at``. Such a row
+        # (a legacy/foreign dispatcher value — the only non-``'saq'`` writer is
+        # historical) sat ``pending`` forever: no reconciler leg selected it and
+        # no age backstop terminalised it (the never-dispatched sweep needs a
+        # NULL ``dispatched_at``; the capacity sweep needs a capacity marker).
+        # Re-dispatched as ``execute_run`` (the status-derived job type) — the
+        # row is provably not executing under SAQ (a live claim flips it to
+        # ``running``), so nothing is double-executed. A foreign row this leg
+        # cannot re-dispatch is bounded by the stranded-pending age backstop
+        # below, which is this leg's exact complement.
+        and_(
+            Run.status == "pending",
+            Run.dispatched_at.is_not(None),
+            Run.dispatcher.is_not(None),
+            Run.dispatcher != "saq",
         ),
         and_(
             Run.status == "pending",
@@ -6396,6 +6434,101 @@ async def _terminalize_claim_cap_exhausted(
     return [run_id for (run_id,) in rows]
 
 
+async def _terminalize_stranded_pending_runs(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    max_age_minutes: int,
+    max_rows: int | None = None,
+) -> list[uuid.UUID]:
+    """FAR-1862 age backstop: terminal-fail a stranded FOREIGN-dispatcher pending run.
+
+    DB-only, org-scoped. Selection = ``pending`` + a SET ``dispatched_at`` +
+    a FOREIGN dispatcher (neither NULL nor ``'saq'``) + no enqueue-failure marker
+    + not cancellation-requested + older than the age bound ANCHORED ON
+    ``dispatched_at`` + outside the capacity markers.
+
+    Scope is deliberately the EXACT complement of the FAR-1862 foreign-dispatcher
+    reclaim leg: that leg RE-DISPATCHES a foreign row; this backstop is the
+    give-up bound for a foreign row the leg's per-row guard cannot recover. It
+    collects NOTHING else — every other pending shape is either handled by a
+    reclaim leg or is still executable by its live SAQ job:
+
+    * ``dispatcher='saq'`` + a SET ``dispatched_at`` is the NORMAL queued state:
+      ``dispatch_run`` stamps ``dispatched_at`` at ENQUEUE time while the status
+      stays ``pending`` until a worker's claim flips it to ``running``. SAQ's own
+      ``timeout`` bounds job EXECUTION only; a job merely waiting in the queue
+      has no TTL and ``sweep()`` aborts only ACTIVE jobs, so queue residency is
+      unbounded (observed prod: ``avg_queued`` ~57-60 against concurrency 5 —
+      tail queue waits of hours). An age backstop that collected this shape
+      would mass-fail runs that are still going to execute, and their job would
+      then no-op (a ``failed`` row cannot be claimed), silently losing the work.
+      What keeps that shape from being re-dispatched while its job is live is
+      the row loop's per-row ``q.job()`` gate (``_reconcile_one_row``); a
+      DB-only age backstop cannot reproduce that determination — and cannot be
+      made to, because a recovery re-dispatch enqueues under
+      ``run:{id}:{suffix}`` while that gate (and any probe here) reads the
+      unsuffixed ``run:{id}`` key, so a job-absence probe would report "absent"
+      for a healthy queued run and terminalise it.
+    * ``dispatcher IS NULL`` + a SET ``enqueue_failed_at`` is owned by
+      :func:`_reconcile_enqueue_failed`, which keeps the row ``pending`` on
+      purpose while Redis is unverifiable (``dispatch_failed`` fires only after
+      a Redis re-check succeeds). This backstop must never override that
+      fail-safe, so the marker shape is excluded.
+    * ``dispatcher IS NULL`` without the marker is the zombie leg's.
+
+    A foreign dispatcher (the only non-``'saq'`` value is historical) is
+    provably NOT executing under SAQ, so a row matched here can never be the
+    live job of an SAQ worker — that is the safe-only perimeter of this
+    backstop.
+
+    The age bound is the SAME one the mid-graph wedge gate uses
+    (``saq_zero_progress_max_age_minutes``, ~135 min >> SAQ's own run timeout),
+    anchored on ``dispatched_at`` (NOT ``created_at``) so a run that waited a
+    long time for admission is never counted as aged from its creation.
+    Capacity-marked rows are excluded (``capacity_timeout`` owns their budget
+    grace). Idempotent: the single guarded UPDATE re-validates the whole
+    predicate at execution time, so a row a reclaim leg recovered (or that
+    terminalised elsewhere) between ticks no longer matches.
+
+    FAR-746 batch cap: *max_rows* bounds the SELECT (and therefore the UPDATE)
+    per tick; the predicate re-selects the remainder next tick. ``None`` (or a
+    non-int stand-in) means uncapped.
+    """
+    result = await session.execute(
+        text(
+            "UPDATE runs SET status='failed', error_code=:code, error_detail=:detail, completed_at=now() "
+            "WHERE ctid IN ("
+            "  SELECT ctid FROM runs "
+            "  WHERE organisation_id=:oid AND status='pending' "
+            "  AND dispatched_at IS NOT NULL "
+            "  AND dispatcher IS NOT NULL AND dispatcher != 'saq' "
+            "  AND enqueue_failed_at IS NULL "
+            "  AND cancellation_requested=false "
+            "  AND dispatched_at < now() - (:stranded_age_minutes * interval '1 minute') "
+            "  AND (error_code IS NULL OR error_code NOT IN ('org_capacity_limited', 'pipeline_capacity')) "
+            "  LIMIT :max_rows) "
+            "RETURNING id"
+        ),
+        {
+            "oid": str(org_id),
+            "code": _NO_PROGRESS_ERROR_CODE,
+            "detail": _STRANDED_PENDING_ERROR_DETAIL,
+            "stranded_age_minutes": max_age_minutes,
+            "max_rows": _terminalize_max_rows(max_rows),
+        },
+    )
+    rows = result.all()
+    for (run_id,) in rows:
+        _log.warning(
+            "dispatcher_reconcile: stranded foreign-dispatcher pending run terminalized %s "
+            "(pending past the age bound %d min; no reclaim leg could recover it)",
+            run_id,
+            max_age_minutes,
+        )
+    return [run_id for (run_id,) in rows]
+
+
 async def _terminalize_expired_hitl_reviews(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -6705,6 +6838,24 @@ _TERMINALIZERS: tuple[ReconcileTerminalizer, ...] = (
         blob_keys=("dispatch_failed_terminalized", "enqueue_failed_ttl_terminalized"),
         stall_reason="dispatch_failed",
     ),
+    # FAR-1862: the stranded-pending age backstop. It is the EXACT complement
+    # of the foreign-dispatcher reclaim leg: a pending row with a foreign
+    # dispatcher that no reclaim pass re-dispatched is terminalised at the age
+    # bound instead of sitting ``pending`` for the run's whole life. It collects
+    # NOTHING else — a ``dispatcher='saq'`` queued row is the normal enqueued
+    # state and may still execute, and a marker-holding row is owned by
+    # ``_reconcile_enqueue_failed`` (which keeps it pending while Redis is
+    # unverifiable).
+    ReconcileTerminalizer(
+        key="stranded_pending",
+        stats_key="stranded_pending_terminalized",
+        blob_keys=("stranded_pending_terminalized",),
+        # The truthful age-gate code (same registry entry the mid-graph wedge
+        # gate writes): the run made no node progress within the bound.
+        stall_reason=_NO_PROGRESS_ERROR_CODE,
+        coroutine_name="_terminalize_stranded_pending_runs",
+        tuning_kwargs={"max_age_minutes": "max_age_minutes"},
+    ),
     ReconcileTerminalizer(
         key="hitl_review",
         stats_key="hitl_review_expired_terminalized",
@@ -6741,6 +6892,10 @@ _BATCH_TERMINALIZER_SPECS: tuple[ReconcileTerminalizer, ...] = (
     _TERMINALIZERS_BY_KEY["nodeless"],
     _TERMINALIZERS_BY_KEY["mid_graph"],
     _TERMINALIZERS_BY_KEY["claim_cap"],
+    # FAR-1862: after the running-row gates (their predicates are disjoint from
+    # ``pending``) so a stranded pending row is terminalised before the row
+    # select would offer it to the reclaim legs one final time.
+    _TERMINALIZERS_BY_KEY["stranded_pending"],
     _TERMINALIZERS_BY_KEY["hitl_review"],
     _TERMINALIZERS_BY_KEY["hitl_review_missing"],
 )
@@ -6913,6 +7068,25 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         older than ``ENQUEUE_FAILED_TTL_BACKSTOP_MINUTES`` (60m) is
         terminal-failed ``dispatch_failed`` — ONLY when Redis is verifiably
         reachable (lightweight ping); Redis down -> keep pending.
+      * pending + dispatched_at set + ``dispatcher`` neither NULL nor
+        ``'saq'`` (FAR-1862): the foreign-dispatcher gap — re-dispatched as
+        ``execute_run`` because no other leg matches the shape (the two
+        dispatcher-NULL legs require NULL, the re-enqueue leg requires
+        ``'saq'``, and the capacity-deferred leg requires a NULL
+        ``dispatched_at``). A ``pending`` row is not executing under SAQ, so
+        nothing is double-executed. A foreign row this leg cannot get past is
+        bounded by the stranded-pending age backstop below (its exact
+        complement: the leg reclaims, the backstop gives up).
+      * pending + a SET ``dispatched_at`` + a FOREIGN dispatcher + no
+        ``enqueue_failed_at`` marker + past the age bound + no capacity marker
+        (FAR-1862, batch terminalizer ``stranded_pending``): the stranded-
+        pending backstop. It is the complement of the foreign-dispatcher leg
+        and collects NOTHING else — a ``dispatcher='saq'`` queued row is the
+        normal enqueued state and may still execute (queue residency is
+        unbounded), and a marker-holding row is owned by
+        ``_reconcile_enqueue_failed`` (which keeps it pending while Redis is
+        unverifiable). Written ``no_progress``, anchored on ``dispatched_at``
+        at the same age bound the mid-graph gate uses.
       * running: ``dispatcher='saq'``, heartbeat stale by 2*SAQ_JOB_HEARTBEAT
         — EXCLUDING a durably node-STARTED run (``dispatch_phase=
         'first_node_dispatched'``, FAR-1649): re-dispatch would re-execute the
