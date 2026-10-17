@@ -813,6 +813,39 @@ describe('analytics store', () => {
     errorSpy.mockRestore()
   })
 
+  it('skips folder options when the folder request errors, without aborting the pipeline options', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // Folders are best-effort options: a rejected folder request must leave
+    // `folders` empty and must NOT be logged as a shape failure (there is no
+    // response to classify) or abort the sibling pipeline-options load.
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/pipeline-folders') {
+        return Promise.resolve({
+          data: undefined,
+          error: {
+            type: 'urn:problem:modulo:internal_error',
+            title: 'Internal Server Error',
+            status: 500,
+            detail: 'folders unavailable',
+          },
+        })
+      }
+      if (url === '/api/v1/pipelines') {
+        return Promise.resolve({
+          data: { items: [{ id: 'p-1', name: 'Pipeline One' }], total: 1, page: 1, page_size: 100, next_cursor: null, has_more: false },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const store = useAnalyticsStore()
+    await expect(store.fetchOptions()).resolves.toBeUndefined()
+    expect(store.folders).toEqual([])
+    expect(store.pipelines).toEqual([{ id: 'p-1', name: 'Pipeline One' }])
+    expect(errorSpy).not.toHaveBeenCalled()
+    errorSpy.mockRestore()
+  })
+
   it('still populates folder options for a valid folder list (best-effort path unchanged)', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     mockGet.mockImplementation((url: string) => {

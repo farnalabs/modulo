@@ -33,12 +33,13 @@ export type FolderItem = Pick<components['schemas']['FolderResponse'], 'id' | 'n
  */
 export function isFolderList(value: unknown): value is FolderItem[] {
   if (!Array.isArray(value)) return false
-  // Iterate the indices, not `every`: Array.prototype.every SKIPS holes, so a
-  // container-only `every` check returned true for `isFolderList(new Array(2))`
-  // and every consumer then crashed reading each hole as a folder row. Reading
-  // by index visits a hole as `undefined` and `isFolderItem` rejects it.
-  for (let i = 0; i < value.length; i++) {
-    if (!isFolderItem(value[i])) return false
+  // Iterate with `for...of`, not `every`: Array.prototype.every SKIPS holes, so
+  // a container-only `every` check returned true for `isFolderList(new Array(2))`
+  // and every consumer then crashed reading each hole as a folder row. The
+  // array iterator `for...of` uses yields a hole as `undefined`, and
+  // `isFolderItem` rejects it, so sparse arrays are rejected too.
+  for (const item of value) {
+    if (!isFolderItem(item)) return false
   }
   return true
 }
