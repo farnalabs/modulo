@@ -118,7 +118,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { getAuthHeaders } from '../lib/api/client'
+import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 
 interface EvidenceRow {
@@ -165,21 +165,24 @@ async function load(): Promise<void> {
   loadError.value = null
 
   try {
-    const params = new URLSearchParams()
-    params.set('run_id', runId.value)
-    if (nodeId.value) params.set('node_id', nodeId.value)
-    if (keyFilter.value) params.set('key', keyFilter.value)
-
-    const res = await fetch(`/api/v1/evidence?${params.toString()}`, {
-      headers: { ...getAuthHeaders() },
+    const { data, error, response } = await api.GET('/api/v1/evidence', {
+      params: {
+        query: {
+          run_id: runId.value,
+          node_id: nodeId.value || undefined,
+          key: keyFilter.value || undefined,
+        },
+      },
     })
-    if (!res.ok) {
-      const detail: unknown = await res.json().catch(() => null)
-      throw new Error(formatApiError(detail) || t('views.EvidenceView.load_failed', { status: res.status }))
+    if (error || !response?.ok) {
+      throw new Error(
+        formatApiError(error) ||
+          t('views.EvidenceView.load_failed', { status: response?.status ?? 0 }),
+      )
     }
     // The payload is already redacted server-side — render it as-is, with no
     // client-side field filtering.
-    rows.value = (await res.json()) as EvidenceRow[]
+    rows.value = data ?? []
     hasLoaded.value = true
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : String(err)

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
@@ -10,8 +10,12 @@ vi.mock('vue-router', () => ({
   useRoute: () => routeState,
 }))
 
+const { mockGet } = vi.hoisted(() => ({ mockGet: vi.fn() }))
+
 vi.mock('../lib/api/client', () => ({
-  getAuthHeaders: () => ({ Authorization: 'Bearer test-token' }),
+  api: {
+    GET: mockGet,
+  },
 }))
 
 import EvidenceView from '../views/EvidenceView.vue'
@@ -47,8 +51,14 @@ function row(over: Partial<Row> = {}): Row {
   }
 }
 
-function response(payload: unknown, ok = true, status = 200) {
-  return { ok, status, json: () => Promise.resolve(payload) }
+/** A successful `api.GET` result carrying a list of evidence rows. */
+function ok(payload: Row[]) {
+  return { data: payload, error: undefined, response: { status: 200, ok: true } }
+}
+
+/** A failed `api.GET` result: the parsed/unparsed error body plus its status. */
+function fail(error: unknown, status: number) {
+  return { data: undefined, error, response: { status, ok: false } }
 }
 
 function mountView() {
@@ -56,16 +66,9 @@ function mountView() {
 }
 
 describe('EvidenceView', () => {
-  let fetchMock: ReturnType<typeof vi.fn>
-
   beforeEach(() => {
     routeState.query = {}
-    fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
-  })
-
-  afterEach(() => {
-    vi.unstubAllGlobals()
+    mockGet.mockReset()
   })
 
   it('renders the form and the pre-load prompt without fetching', async () => {
@@ -78,7 +81,7 @@ describe('EvidenceView', () => {
     expect(wrapper.find('[data-testid="evidence-key"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="evidence-load"]').text()).toBe('Load evidence')
     expect(wrapper.text()).toContain('Choose a run')
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(mockGet).not.toHaveBeenCalled()
   })
 
   it('rejects a submit with no run id before calling the API', async () => {
@@ -89,11 +92,11 @@ describe('EvidenceView', () => {
 
     expect(wrapper.text()).toContain('Enter a run ID to load its evidence.')
     expect(wrapper.text()).not.toContain('Choose a run')
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(mockGet).not.toHaveBeenCalled()
   })
 
   it('sends run, node and key filters and renders the redacted rows as-is', async () => {
-    fetchMock.mockResolvedValue(response([row()]))
+    mockGet.mockResolvedValue(ok([row()]))
     const wrapper = mountView()
 
     await wrapper.find('[data-testid="evidence-run-id"]').setValue('run-1')
@@ -102,12 +105,12 @@ describe('EvidenceView', () => {
     await wrapper.find('form').trigger('submit')
     await flushPromises()
 
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(fetchMock.mock.calls[0][0]).toBe(
-      '/api/v1/evidence?run_id=run-1&node_id=node-1&key=eval.guardrail',
-    )
-    expect(fetchMock.mock.calls[0][1]).toEqual({
-      headers: { Authorization: 'Bearer test-token' },
+    expect(mockGet).toHaveBeenCalledTimes(1)
+    expect(mockGet.mock.calls[0][0]).toBe('/api/v1/evidence')
+    expect(mockGet.mock.calls[0][1]).toEqual({
+      params: {
+        query: { run_id: 'run-1', node_id: 'node-1', key: 'eval.guardrail' },
+      },
     })
     expect(wrapper.find('[data-testid="evidence-count"]').text()).toBe('1 row')
     expect(wrapper.text()).toContain('eval.guardrail')
@@ -118,22 +121,27 @@ describe('EvidenceView', () => {
   })
 
   it('omits the optional filters when they are blank', async () => {
-    fetchMock.mockResolvedValue(response([row()]))
+    mockGet.mockResolvedValue(ok([row()]))
     const wrapper = mountView()
 
     await wrapper.find('[data-testid="evidence-run-id"]').setValue('run-9')
     await wrapper.find('form').trigger('submit')
     await flushPromises()
 
-    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/evidence?run_id=run-9')
+    expect(mockGet.mock.calls[0][0]).toBe('/api/v1/evidence')
+    expect(mockGet.mock.calls[0][1]).toEqual({
+      params: {
+        query: { run_id: 'run-9', node_id: undefined, key: undefined },
+      },
+    })
   })
 
   it('shows the loading status while the request is in flight', async () => {
-    let resolveFetch!: (value: unknown) => void
+    let resolveGet!: (value: unknown) => void
     const pending = new Promise((resolve) => {
-      resolveFetch = resolve
+      resolveGet = resolve
     })
-    fetchMock.mockReturnValue(pending)
+    mockGet.mockReturnValue(pending)
     const wrapper = mountView()
 
     await wrapper.find('[data-testid="evidence-run-id"]').setValue('run-1')
@@ -143,14 +151,14 @@ describe('EvidenceView', () => {
     expect(wrapper.find('[data-testid="evidence-loading"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="evidence-loading"]').attributes('aria-live')).toBe('polite')
 
-    resolveFetch(response([row()]))
+    resolveGet(ok([row()]))
     await flushPromises()
 
     expect(wrapper.find('[data-testid="evidence-loading"]').exists()).toBe(false)
   })
 
   it('renders the empty state when the run has no evidence', async () => {
-    fetchMock.mockResolvedValue(response([]))
+    mockGet.mockResolvedValue(ok([]))
     const wrapper = mountView()
 
     await wrapper.find('[data-testid="evidence-run-id"]').setValue('run-1')
@@ -163,15 +171,14 @@ describe('EvidenceView', () => {
   })
 
   it('surfaces the server problem detail on a failed request', async () => {
-    fetchMock.mockResolvedValue(
-      response(
+    mockGet.mockResolvedValue(
+      fail(
         {
           type: 'urn:problem:modulo:validation_error',
           title: 'Validation Error',
           status: 422,
           detail: 'run_id must be a UUID',
         },
-        false,
         422,
       ),
     )
@@ -185,7 +192,7 @@ describe('EvidenceView', () => {
   })
 
   it('falls back to the status message when the error body has no detail', async () => {
-    fetchMock.mockResolvedValue(response('', false, 500))
+    mockGet.mockResolvedValue(fail('', 500))
     const wrapper = mountView()
 
     await wrapper.find('[data-testid="evidence-run-id"]').setValue('run-1')
@@ -195,25 +202,21 @@ describe('EvidenceView', () => {
     expect(wrapper.text()).toContain('Could not load evidence (HTTP 500).')
   })
 
-  it('treats an unparseable error body as unknown rather than throwing', async () => {
-    fetchMock.mockResolvedValue({
-      ok: false,
-      status: 502,
-      json: () => Promise.reject(new Error('invalid json')),
-    })
+  it('surfaces an unparseable error body without throwing', async () => {
+    // openapi-fetch leaves a non-JSON error body as the raw response text.
+    mockGet.mockResolvedValue(fail('invalid json', 502))
     const wrapper = mountView()
 
     await wrapper.find('[data-testid="evidence-run-id"]').setValue('run-1')
     await wrapper.find('form').trigger('submit')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('Unknown error')
+    expect(wrapper.text()).toContain('invalid json')
+    expect(wrapper.find('[data-testid="evidence-count"]').exists()).toBe(false)
   })
 
-  it('renders a rejected fetch message and retries through the error alert', async () => {
-    fetchMock
-      .mockRejectedValueOnce(new Error('network down'))
-      .mockResolvedValueOnce(response([row()]))
+  it('renders a rejected api client call and retries through the error alert', async () => {
+    mockGet.mockRejectedValueOnce(new Error('network down')).mockResolvedValueOnce(ok([row()]))
     const wrapper = mountView()
 
     await wrapper.find('[data-testid="evidence-run-id"]').setValue('run-1')
@@ -225,13 +228,13 @@ describe('EvidenceView', () => {
     await wrapper.find('[data-testid="error-alert-retry"]').trigger('click')
     await flushPromises()
 
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/evidence?run_id=run-1')
+    expect(mockGet).toHaveBeenCalledTimes(2)
+    expect(mockGet.mock.calls[1][0]).toBe('/api/v1/evidence')
     expect(wrapper.find('[data-testid="evidence-count"]').text()).toBe('1 row')
   })
 
   it('stringifies a non-Error rejection', async () => {
-    fetchMock.mockRejectedValue('socket closed')
+    mockGet.mockRejectedValue('socket closed')
     const wrapper = mountView()
 
     await wrapper.find('[data-testid="evidence-run-id"]').setValue('run-1')
@@ -244,8 +247,8 @@ describe('EvidenceView', () => {
   it('formats string, undefined and circular values without throwing', async () => {
     const circular: Record<string, unknown> = {}
     circular.self = circular
-    fetchMock.mockResolvedValue(
-      response([
+    mockGet.mockResolvedValue(
+      ok([
         row({ id: 'ev-string', value: 'plain text' }),
         row({ id: 'ev-undefined', value: undefined }),
         row({ id: 'ev-circular', value: circular }),
@@ -266,14 +269,17 @@ describe('EvidenceView', () => {
 
   it('auto-loads from string query params on mount', async () => {
     routeState.query = { run_id: 'run-q', node_id: 'node-q', key: 'eval.q' }
-    fetchMock.mockResolvedValue(response([row()]))
+    mockGet.mockResolvedValue(ok([row()]))
 
     const wrapper = mountView()
     await flushPromises()
 
-    expect(fetchMock.mock.calls[0][0]).toBe(
-      '/api/v1/evidence?run_id=run-q&node_id=node-q&key=eval.q',
-    )
+    expect(mockGet.mock.calls[0][0]).toBe('/api/v1/evidence')
+    expect(mockGet.mock.calls[0][1]).toEqual({
+      params: {
+        query: { run_id: 'run-q', node_id: 'node-q', key: 'eval.q' },
+      },
+    })
     expect((wrapper.find('[data-testid="evidence-run-id"]').element as HTMLInputElement).value).toBe(
       'run-q',
     )
@@ -288,12 +294,16 @@ describe('EvidenceView', () => {
 
   it('ignores non-string node and key query params but still loads the run', async () => {
     routeState.query = { run_id: 'run-q', node_id: ['a', 'b'], key: ['x'] }
-    fetchMock.mockResolvedValue(response([row()]))
+    mockGet.mockResolvedValue(ok([row()]))
 
     const wrapper = mountView()
     await flushPromises()
 
-    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/evidence?run_id=run-q')
+    expect(mockGet.mock.calls[0][1]).toEqual({
+      params: {
+        query: { run_id: 'run-q', node_id: undefined, key: undefined },
+      },
+    })
     expect((wrapper.find('[data-testid="evidence-node-id"]').element as HTMLInputElement).value).toBe('')
     expect((wrapper.find('[data-testid="evidence-key"]').element as HTMLInputElement).value).toBe('')
   })
@@ -304,7 +314,7 @@ describe('EvidenceView', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(mockGet).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('Choose a run')
   })
 
@@ -314,7 +324,7 @@ describe('EvidenceView', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(mockGet).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('Choose a run')
   })
 })
