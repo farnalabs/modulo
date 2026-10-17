@@ -117,7 +117,7 @@ function clipsOverflow(style: CSSStyleDeclaration): boolean {
   if (CLIPPING_OVERFLOW.has(style.overflowX) || CLIPPING_OVERFLOW.has(style.overflowY)) {
     return true
   }
-  const shorthand = (style.overflow ?? '').trim()
+  const shorthand = style.overflow.trim()
   if (!shorthand) return false
   return shorthand.split(/\s+/).some((value) => CLIPPING_OVERFLOW.has(value))
 }
@@ -137,8 +137,9 @@ function isClippingContainer(node: HTMLElement): boolean {
 }
 
 /**
- * Walk the ancestor chain (stopping before `<body>`/`<html>`, which are not
- * clipping containers) and report whether any ancestor clips its overflow.
+ * Walk from the element up through its ancestors (stopping at `<body>`/`<html>`,
+ * which are not clipping containers) and report whether any of them clips its
+ * overflow.
  *
  * `getComputedStyle` reads the used value in a browser, so a real dialog's
  * `.p-dialog-content` (`overflow-y: auto`) is detected without layout being
@@ -147,9 +148,11 @@ function isClippingContainer(node: HTMLElement): boolean {
  * the Select several levels deep.
  */
 function hasClippingAncestor(el: HTMLElement | null): boolean {
-  let node: HTMLElement | null = el?.parentElement ?? null
-  while (node && node !== document.body && node !== document.documentElement) {
-    if (isClippingContainer(node)) return true
+  let node: HTMLElement | null = el
+  while (node) {
+    if (node !== document.body && node !== document.documentElement && isClippingContainer(node)) {
+      return true
+    }
     node = node.parentElement
   }
   return false

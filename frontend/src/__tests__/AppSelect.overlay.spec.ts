@@ -32,6 +32,18 @@ const InsideCustomClippingPanel = defineComponent({
     '<div class="custom-panel" style="overflow: auto"><AppSelect :model-value="\'\'" :append-to="appendTo" /></div>',
 })
 
+// FAR-1920: a browser exposes `overflow` as its `overflow-x`/`overflow-y`
+// longhands, so the longhand arm of the predicate is the path a real
+// dialog/drawer/custom box takes. jsdom does not expand the `overflow`
+// shorthand (its longhands stay `visible`), so this host sets a longhand
+// directly to exercise that arm.
+const InsideLonghandClippingPanel = defineComponent({
+  components: { AppSelect },
+  props: { appendTo: { type: String, default: undefined } },
+  template:
+    '<div class="custom-panel" style="overflow-x: hidden"><AppSelect :model-value="\'\'" :append-to="appendTo" /></div>',
+})
+
 const OutsideDialogContent = defineComponent({
   components: { AppSelect },
   props: { appendTo: { type: String, default: undefined } },
@@ -168,6 +180,16 @@ describe('AppSelect overlay append target — any clipping ancestor (FAR-1920)',
       template: '<div class="page-shell" style="overflow: hidden"><AppSelect :model-value="\'\'" /></div>',
     })
     const wrapper = mount(Clipped)
+    await wrapper.vm.$nextTick()
+    expect(wrapper.findComponent(innerSelect).props('appendTo')).toBe('body')
+  })
+
+  it('portals to body when an ancestor clips a single axis via a longhand', async () => {
+    // The browser-real path: `overflow: auto` is reported as the longhands
+    // `overflow-x`/`overflow-y`, so a container that clips one axis only must
+    // still be recognised. jsdom keeps the longhands `visible` for the
+    // shorthand, so this host pins the longhand arm of the predicate directly.
+    const wrapper = mount(InsideLonghandClippingPanel)
     await wrapper.vm.$nextTick()
     expect(wrapper.findComponent(innerSelect).props('appendTo')).toBe('body')
   })
