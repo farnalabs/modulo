@@ -380,16 +380,17 @@ using the configured secrets backend (Fernet, Vault, or AWS Secrets Manager).
 
 ### 5.1 Image Vulnerability Scanning
 
-All Modulo Docker images are scanned with Trivy as part of CI. The workflow scans
-the exact locally loaded image produced by the cached Buildx build, and only pushes
-that image to GHCR after the critical-vulnerability gate passes:
+Trivy runs as a required CI check (`ci.yml`), scanning the repository filesystem for
+dependency CVEs and misconfigurations - it does not scan the built images. The built
+container images are not image-scanned in CI, and `publish-images.yml` has no
+critical-vulnerability gate on its GHCR push. Scan the published image tag you deployed:
 
 ```bash
-# Manual scan
-trivy image ghcr.io/farnalabs/modulo:latest
+# Manual scan (pin the version you deployed; :latest tracks the newest release)
+trivy image ghcr.io/farnalabs/modulo:<version>
 
 # Scan with severity filter
-trivy image --severity CRITICAL,HIGH ghcr.io/farnalabs/modulo:latest
+trivy image --severity CRITICAL,HIGH ghcr.io/farnalabs/modulo:<version>
 ```
 
 **SLAs** (from `docs/security/dependency-policy.md`):
@@ -426,7 +427,7 @@ USER nginx
 
 **Verify:**
 ```bash
-docker run --rm ghcr.io/farnalabs/modulo:latest whoami
+docker run --rm ghcr.io/farnalabs/modulo:<version> whoami
 # Expected: appuser (not root)
 ```
 
@@ -573,10 +574,10 @@ Configure alerts for these events in your monitoring system:
 ### 7.2 Rollback Procedure
 
 ```bash
-# Docker Compose – re-tag and restart the previous image
+# Docker Compose – pin the previous image version and restart
 docker compose -f deploy/compose/docker-compose.prod.yml stop modulo
-docker tag ghcr.io/farnalabs/modulo:old ghcr.io/farnalabs/modulo:latest
-docker compose -f deploy/compose/docker-compose.prod.yml up -d
+docker tag ghcr.io/farnalabs/modulo:old ghcr.io/farnalabs/modulo:<previous-version>
+TAG=<previous-version> docker compose -f deploy/compose/docker-compose.prod.yml up -d
 ```
 
 For Fly.io, roll back by re-deploying the previous image tag via `fly deploy`

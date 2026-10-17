@@ -196,10 +196,10 @@ only while it is being rolled forward.
 ### Application Rollback
 
 ```bash
-# Docker Compose – re-tag and restart
+# Docker Compose – pin the previous image version and restart
 docker compose -f deploy/compose/docker-compose.prod.yml stop modulo
-docker tag ghcr.io/farnalabs/modulo:old ghcr.io/farnalabs/modulo:latest
-docker compose -f deploy/compose/docker-compose.prod.yml up -d
+docker tag ghcr.io/farnalabs/modulo:old ghcr.io/farnalabs/modulo:<previous-version>
+TAG=<previous-version> docker compose -f deploy/compose/docker-compose.prod.yml up -d
 
 # Self-hosted
 git checkout <previous-tag>
