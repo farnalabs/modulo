@@ -3,14 +3,17 @@
 import asyncio
 import logging
 import uuid
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import UnboundExecutionError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.rls import (
     _RLS_CONFIG_NAMES,
+    _read_guc_org,
     _set_config_statement,
     read_rls_org,
     register_rls_reset_hook,
@@ -250,3 +253,116 @@ class TestReadRlsOrgDialectOrder:
         session.info = {"org_id": str(_ORG_ID)}
 
         assert await read_rls_org(session) == _ORG_ID
+
+    async def test_no_bind_session_double_keeps_info_first_order(self) -> None:
+        """Finding 4(a): a session double exposing only ``execute``/``info`` — and
+        no readable dialect (no ``get_bind`` at all) — resolves via
+        ``session.info`` exactly as it did before the dialect split.
+
+        Non-vacuous: the info org and the GUC probe value are DIFFERENT UUIDs, so
+        a regression that treated this shape as Postgres (GUC-first) or dropped
+        the generic fallback would return the GUC value and fail here. ``execute``
+        is never reached because the info lookup short-circuits.
+        """
+        guc_org = uuid.UUID("00000000-0000-0000-0000-0000000000ee")
+        session = _NoBindSessionDouble(info={"org_id": str(_ORG_ID)}, guc_value=str(guc_org))
+
+        result = await read_rls_org(session)
+
+        assert result == _ORG_ID
+        assert result != guc_org
+        assert session.execute_count == 0
+
+    async def test_unbound_session_keeps_info_first_order(self) -> None:
+        """The narrowed catch still keeps the generic path for an unbound session.
+
+        ``AsyncSession.get_bind()`` raises ``UnboundExecutionError`` when nothing
+        is bound; that must NOT be mistaken for an unreadable dialect (which
+        fails closed). The differing-UUID assertions make the distinction real.
+        """
+        guc_org = uuid.UUID("00000000-0000-0000-0000-0000000000ee")
+        session = _UnboundSessionDouble(info={"org_id": str(_ORG_ID)}, guc_value=str(guc_org))
+
+        result = await read_rls_org(session)
+
+        assert result == _ORG_ID
+        assert result != guc_org
+
+    async def test_unreadable_dialect_fails_closed_to_guc(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Finding 1: a bind that EXISTS but exposes no readable dialect must NOT
+        silently fall back to the info-first order — it fails closed to the GUC
+        probe (and logs loudly).
+
+        Non-vacuous: ``session.info`` holds ``_ORG_ID`` while the GUC probe
+        returns a DIFFERENT org, so the silent-degradation regression (treating
+        an unreadable bind as a generic backend) would resolve via info and fail.
+        """
+        guc_org = uuid.UUID("00000000-0000-0000-0000-0000000000ee")
+        session = _UnreadableDialectSessionDouble(info={"org_id": str(_ORG_ID)}, guc_value=str(guc_org))
+
+        with caplog.at_level(logging.WARNING, logger="modulo.db.rls"):
+            result = await read_rls_org(session)
+
+        assert result == guc_org
+        assert result != _ORG_ID
+        assert any("no readable dialect" in message for message in caplog.messages)
+
+
+class _NoBindSessionDouble:
+    """A session double exposing only ``execute``/``info`` — NO ``get_bind``.
+
+    Mirrors the many lightweight unit fakes that satisfy ``read_rls_org`` without
+    a real ``AsyncSession`` bind (a real unbound session raises
+    ``UnboundExecutionError``). ``info['org_id']`` is the pre-FAR-1884 result and
+    must keep winning on this shape.
+    """
+
+    def __init__(self, *, info: dict[str, object] | None = None, guc_value: str = "") -> None:
+        self.info = dict(info or {})
+        self._guc_value = guc_value
+        self.execute_count = 0
+
+    async def execute(self, _stmt: object, _params: object = None) -> MagicMock:
+        self.execute_count += 1
+        result = MagicMock()
+        result.scalar.return_value = self._guc_value
+        return result
+
+
+class _UnboundSessionDouble(_NoBindSessionDouble):
+    """Same no-bind shape, but ``get_bind`` raises ``UnboundExecutionError``."""
+
+    def get_bind(self) -> object:
+        raise UnboundExecutionError("This session is not bound to a single Engine or Connection.")
+
+
+class _UnreadableDialectSessionDouble(_NoBindSessionDouble):
+    """A bind EXISTS but exposes no ``dialect`` — its name is unreadable."""
+
+    def get_bind(self) -> object:
+        return SimpleNamespace()
+
+
+class TestReadGucOrgDegradation:
+    """Finding 2: ``_read_guc_org`` degrades BOTH the execute AND the fetch to None."""
+
+    async def test_execute_failure_degrades_to_none(self) -> None:
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=RuntimeError("connection closed"))
+
+        assert await _read_guc_org(session) is None
+
+    async def test_scalar_fetch_failure_degrades_to_none(self) -> None:
+        """Prove-the-fix: a fetch-time failure (``result.scalar()``) is now INSIDE
+        the guarded region.
+
+        Non-vacuous: the pre-fix structure left ``result.scalar()`` outside the
+        ``try``, so this exact input raised ``RuntimeError`` out of
+        ``_read_guc_org`` instead of returning ``None``.
+        """
+        session = AsyncMock()
+        result = MagicMock()
+        result.scalar.side_effect = RuntimeError("server-side cursor closed mid-fetch")
+        session.execute = AsyncMock(return_value=result)
+
+        assert await _read_guc_org(session) is None
