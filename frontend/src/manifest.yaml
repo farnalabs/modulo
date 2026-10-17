@@ -934,6 +934,18 @@ elements:
       - testid: panel-next-page
         type: button
         dynamic_testid: false
+      - testid: panel-dismiss-all
+        type: button
+        dynamic_testid: false
+      - testid: panel-dismiss-all-error
+        type: element
+        dynamic_testid: false
+      - testid: panel-dismiss-all-success
+        type: element
+        dynamic_testid: false
+      - testid: panel-dismiss-all-nothing
+        type: element
+        dynamic_testid: false
       - testid: sparkline
         type: element
         dynamic_testid: false
@@ -3170,6 +3182,18 @@ elements:
         dynamic_testid: false
     /notifications:
       - testid: notifications-loading
+        type: element
+        dynamic_testid: false
+      - testid: notifications-dismiss-all
+        type: button
+        dynamic_testid: false
+      - testid: notifications-dismiss-all-error
+        type: element
+        dynamic_testid: false
+      - testid: notifications-dismiss-all-success
+        type: element
+        dynamic_testid: false
+      - testid: notifications-dismiss-all-nothing
         type: element
         dynamic_testid: false
       - testid: notifications-reset-filters
@@ -6156,6 +6180,10 @@ features:
             - "[x] Run-linked notifications carry point-in-time run metadata resolved at READ time on GET /dashboard, GET '' and GET /{id}: run_id parsed from the /runs/{run_id} deep link, run_status, run_terminal computed against db.models.run.TERMINAL_STATUSES, and run_cancel_reason (FAR-1233) — the notification row itself is never re-stamped, so a hitl.awaiting raised before the run was cancelled reports run_terminal true at read time; a non-run deep link or an unreadable run degrades to null/false instead of failing the read (tests/unit/api/test_in_app_notifications_run_metadata.py)"
             - "[x] A hitl.awaiting notification whose linked run is terminal is demoted in the UI: the 'Awaiting your review' affordance is replaced by a 'No review needed' label carrying the current run state announced via role=status + aria-live=polite, while a live or unresolvable run keeps the neutral wording (never a guessed 'lapsed' claim); the run state line and its cancel reason render under the body on both the dashboard panel and /notifications"
             - "[x] The clear affordances (Review Later / Dismiss) are reachable without hover: revealed on card hover as before, on focus-within for keyboard/AT users (the previous hidden + group-hover:flex took them out of the tab order entirely), and rendered as a trailing full-width row on no-hover pointers; dismissing a run-linked notification for a CANCELLED run returns 200, leaves status=active and the dashboard, and appears under status=dismissed_self (test_in_app_notifications_run_metadata.py)"
+
+            # FAR-1926 — viewport-anchored bell dropdown + Dismiss all
+            - "[x] The bell dropdown is viewport-anchored rather than blindly right-aligned to the bell (FAR-1926): on mount it right-aligns the panel to the bell only when that stays inside the window and otherwise clamps it into the viewport (position: fixed, so the rails'/sidebar's overflow-hidden cannot clip it), keeping the panel fully visible in the mobile drawer header, the mobile icon rail, the collapsed desktop rail and the expanded desktop sidebar alike; the a11y contract (native dialog, initial focus, Escape, click-outside, focus return to the bell) is unchanged (tests/e2e/notifications.spec.ts viewport-anchoring suite)"
+            - "[x] A per-user 'Dismiss all' control is offered on all three in-app surfaces — the bell dropdown (the former 'Mark all as read' button, relabelled), the dashboard notifications panel (expanded-content header) and /notifications (beside the filters) — all routed through the ONE shared store action dismissAll, which POSTs mark-all-read (the server files dismiss_scope='self' rows: for-me only, never scope-wide), then refreshes the dropdown list, the bell badge and the surface's own list/badge from the server post-state; each surface shows progress on the button, disables it when there is nothing to dismiss, announces success via aria-live and failure via role=alert, and never renders a falsely cleared list on failure"
 
             # Admin delivery log + webhooks + email
             - "[x] GET /api/v1/admin/notifications/deliveries is the cursor-paginated org-wide delivery log (filter by status / event_type / endpoint_id / from / to), and POST /deliveries/retry-all-failed re-dispatches every failed + dead-lettered delivery"

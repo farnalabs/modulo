@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 
 const h = vi.hoisted(() => ({
   mockFetchNotifications: vi.fn(),
@@ -13,6 +14,9 @@ vi.mock('../lib/api/notifications', () => ({
   reviewLater: vi.fn(),
   fetchUnreadCount: h.mockFetchUnreadCount,
   dismissNotification: vi.fn(),
+  // The panel's shared notifications store (FAR-1926) imports these two.
+  markAllNotificationsRead: vi.fn(),
+  fetchDashboardNotifications: vi.fn().mockResolvedValue({ notifications: [], total_unread: 0 }),
 }))
 
 vi.mock('../stores/syncRegistry', () => ({
@@ -41,6 +45,7 @@ import DashboardNotificationsPanel from '../components/DashboardNotificationsPan
 describe('DashboardNotificationsPanel reconnect backfill (FAR-250)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    setActivePinia(createPinia())
     h.mockFetchNotifications.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 10 })
     h.mockFetchUnreadCount.mockResolvedValue(0)
   })
