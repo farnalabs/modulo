@@ -585,7 +585,15 @@ jobs:
               echo "::notice::pip-audit succeeded on attempt ${attempt}/3."
               break
             fi
-            if grep -qE "pip_audit\._service\.interface\.(ServiceError|ConnectionError)|[0-9]{3} Server Error|Backend is unhealthy|Could not connect to PyPI|PyPI is not redirecting properly" "$LOG"; then
+            # Retry ONLY on a transient PyPI signature, never when pip-audit
+            # reports actual vulnerabilities (a genuine finding never matches
+            # these network-error phrases, so it still fails the gate). The
+            # signature list must include socket read/connect timeouts — a plain
+            # `Read timed out` / `ReadTimeout` to pypi.org is the most common
+            # transient failure and, when absent from this list, was misread as
+            # "non-transient error" and failed pre-deploy-gate without retrying
+            # (observed on main at 71a55aab0).
+            if grep -qE "pip_audit\._service\.interface\.(ServiceError|ConnectionError)|[0-9]{3} Server Error|Backend is unhealthy|Could not connect to PyPI|PyPI is not redirecting properly|Read timed out|ReadTimeout|ConnectTimeout|Connection timed out|Max retries exceeded|HTTPSConnectionPool\(host='pypi\.org'" "$LOG"; then
               if [ "$attempt" -lt 3 ]; then
                 echo "::warning::pip-audit hit a transient PyPI service error (attempt ${attempt}/3); retrying."
                 sleep $((attempt * 10))
