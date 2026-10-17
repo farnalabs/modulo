@@ -55,9 +55,9 @@ Production deployment readiness checklist for the Modulo Alpha public launch. Ea
   - RLS test suite passes: `uv run pytest tests/unit/db/test_rls.py -v`
 - [ ] **Secrets** are injected via environment, not hardcoded in any file or committed to git
 - [ ] **Container images** have zero critical/high CVEs - scan the published image
-  yourself (`trivy image ghcr.io/farnalabs/modulo:latest`); CI does not scan built
+  yourself (`trivy image ghcr.io/farnalabs/modulo:<version>`); CI does not scan built
   images (the Trivy job in `ci.yml` is a filesystem scan, and `publish-images.yml`
-  has no vulnerability gate)
+  has no vulnerability gate; see [`docs/deployment-security.md`](./deployment-security.md) §5.1)
 - [ ] **Containers** run as non-root user
 - [ ] **Read-only root filesystem** enabled for backend containers
 - [ ] **Firewall** blocks all inbound ports except 443 (HTTPS)
