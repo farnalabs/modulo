@@ -5,6 +5,7 @@ import { api } from "../lib/api/client";
 import { withTimeout } from "../lib/asyncUtils";
 import { toProblemDetail, type ProblemDetail } from "../lib/api/formatError";
 import { formatDateShortWithTime } from "../lib/formatDate";
+import { invalidFolderListMessage, isFolderList, type FolderItem } from "../lib/api/folders";
 
 export type AnalyticsMeasure =
   | "count"
@@ -744,8 +745,18 @@ export const useAnalyticsStore = defineStore("analytics", () => {
           "Analytics pipelines request",
         ),
       ]);
-      if (!foldersRes.error && Array.isArray(foldersRes.data)) {
-        folders.value = foldersRes.data.map((f: OptionItem) => ({ id: f.id, name: f.name }));
+      if (!foldersRes.error) {
+        // `api.GET<T>` is an unchecked compile-time cast, so validate the
+        // runtime shape before dereferencing it: a non-array OR an array with a
+        // bad element (e.g. `[null]`) would otherwise throw on `f.id` — and that
+        // throw aborts the sibling pipeline-options load below. Options are
+        // best-effort, so a bad folder list is logged and skipped, never
+        // surfaced as a hard error and never thrown.
+        if (isFolderList(foldersRes.data)) {
+          folders.value = foldersRes.data.map((f: FolderItem) => ({ id: f.id, name: f.name }));
+        } else {
+          console.error(invalidFolderListMessage("/api/v1/pipeline-folders", foldersRes.data));
+        }
       }
       const pipelineItems = pipelinesRes.data?.items;
       if (!pipelinesRes.error && Array.isArray(pipelineItems)) {
