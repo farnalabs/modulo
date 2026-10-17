@@ -29,7 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.api.routes.pipelines import _sync_agent_row_commands
-from modulo.db.crud.pipeline import GraphWriteRecording, replace_pipeline_graph
+from modulo.db.crud.pipeline import GraphWriteActor, GraphWriteRecording, replace_pipeline_graph
 from modulo.db.crud.pipeline_snapshot import _materialize_agent_fields
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
@@ -143,9 +143,10 @@ async def _patch_graph(
     """Drive the REAL ``replace_pipeline_graph`` (shared by the REST
     ``PUT /{id}/graph`` route and the MCP ``update_pipeline_graph`` tool).
 
-    The MCP call shape is used (real actor id, ``is_privileged=True``,
-    ``is_guardrail_admin=True``) so the guardrail-strip / live-role paths
-    short-circuit exactly as the audit tests do on SQLite.
+    The MCP call shape is used (real actor id, ``GraphWriteActor`` carrying
+    ``is_privileged=True`` / ``is_guardrail_admin=True``) so the
+    guardrail-strip / live-role paths short-circuit exactly as the audit tests
+    do on SQLite.
     """
     return await replace_pipeline_graph(
         session,
@@ -153,10 +154,12 @@ async def _patch_graph(
         org_id=_ORG_ID,
         nodes=nodes,
         edges=edges,
-        is_privileged=True,
-        caller_type="mcp",
-        account_id=_ACCOUNT_ID,
-        is_guardrail_admin=True,
+        actor=GraphWriteActor(
+            is_privileged=True,
+            caller_type="mcp",
+            account_id=_ACCOUNT_ID,
+            is_guardrail_admin=True,
+        ),
         recording=GraphWriteRecording(record_snapshot=record_snapshot),
     )
 
