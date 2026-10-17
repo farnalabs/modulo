@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import JSON, Boolean, CheckConstraint, ForeignKey, Integer, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import JSONB_COL, OrgScoped
 
 if TYPE_CHECKING:
     from modulo.db.models.environment_profile import EnvironmentProfile
@@ -85,19 +85,19 @@ class PipelineSnapshot(OrgScoped):
         nullable=True,
         index=True,
     )
-    graph_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    connector_bindings_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
-    schema_pins_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
-    prompt_pins_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
-    model_backend_pins_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
-    composite_bindings_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=True, default=list)
-    parameter_bindings_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    graph_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False)
+    connector_bindings_json: Mapped[list[dict[str, Any]]] = mapped_column(JSONB_COL, nullable=False)
+    schema_pins_json: Mapped[list[dict[str, Any]]] = mapped_column(JSONB_COL, nullable=False)
+    prompt_pins_json: Mapped[list[dict[str, Any]]] = mapped_column(JSONB_COL, nullable=False)
+    model_backend_pins_json: Mapped[list[dict[str, Any]]] = mapped_column(JSONB_COL, nullable=False)
+    composite_bindings_json: Mapped[list[dict[str, Any]]] = mapped_column(JSONB_COL, nullable=True, default=list)
+    parameter_bindings_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL, nullable=True)
     # Guardrail snapshot pin (FAR-223 item 10): the guardrail set that was
     # bound at snapshot creation, serialized by ``serialize_guardrail_pin``.
     # Replays evaluate the PINNED set (the ORIGINAL conditions), not the live
     # rows; a pinned guardrail whose live row is gone is skipped-with-audit +
     # enforcement-gap alert. Mirrors the ``composite_bindings_json`` shape.
-    guardrail_pins_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True, default=list)
+    guardrail_pins_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB_COL, nullable=True, default=list)
     # Run-start snapshot-integrity fingerprint (FAR-309 PR B): canonical SHA-256
     # over the serialized ``guardrail_pins_json`` captured at snapshot creation.
     # The replay seam re-computes the fingerprint of the LOADED pins and fails
@@ -133,8 +133,8 @@ class PipelineSnapshot(OrgScoped):
     # the SNAPSHOT, not the live row, so the ceiling must travel with it.
     # NULL = effective ceiling is the snapshot's default_autonomy_level.
     max_autonomy_level: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
-    run_context_defaults: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    config_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
+    run_context_defaults: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
     # FAR-811: pipeline-level default for sandbox stdout retention, frozen at
     # snapshot time. Shape: {"mode": "tail"|"full", "max_bytes": <positive int>}
     # or None (no pipeline override).

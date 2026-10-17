@@ -2,11 +2,10 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Uuid, text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped, SoftDeleteMixin
+from modulo.db.models.base import JSONB_COL, OrgScoped, SoftDeleteMixin
 
 
 class LifecycleMap(SoftDeleteMixin, OrgScoped):
@@ -44,15 +43,13 @@ class LifecycleMap(SoftDeleteMixin, OrgScoped):
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     # The DB column is ``jsonb`` (migration 0147_json_to_jsonb_standardize).
-    # The PG variant aligns the ORM declaration to that real column type, so a
+    # JSONB_COL aligns the ORM declaration to that real column type, so a
     # comparison cannot bind as ``json`` and fail with ``operator does not
     # exist: jsonb = json`` — housekeeping's lifecycle-map emptiness predicate
     # was the demonstrated instance (FAR-1856). Generic ``JSON`` keeps SQLite
-    # parity for the unit suites; the wider json-to-jsonb ORM alignment is
-    # tracked as FAR-1878.
-    content_json: Mapped[dict[str, Any]] = mapped_column(
-        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=dict
-    )
+    # parity for the unit suites; FAR-1878 aligned every other 0147-converted
+    # column the same way.
+    content_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True

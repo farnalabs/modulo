@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy import JSON, CheckConstraint, ForeignKey, Integer, Numeric, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped, SoftDeleteMixin
+from modulo.db.models.base import JSONB_COL, OrgScoped, SoftDeleteMixin
 
 
 class EvalDefinition(SoftDeleteMixin, OrgScoped):
@@ -34,7 +34,7 @@ class EvalDefinition(SoftDeleteMixin, OrgScoped):
     node_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     eval_type: Mapped[str] = mapped_column(String(30), nullable=False)
-    config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    config_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
     failure_behaviour: Mapped[str] = mapped_column(String(10), nullable=False, server_default="warn")
     pass_threshold: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
     suite_id: Mapped[str | None] = mapped_column(String(255), nullable=True)

@@ -1,10 +1,10 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import JSON, ForeignKey, Index, Integer, String, Text, Uuid, text
+from sqlalchemy import ForeignKey, Index, Integer, String, Text, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped, SoftDeleteMixin
+from modulo.db.models.base import JSONB_COL, OrgScoped, SoftDeleteMixin
 
 
 class ParameterSet(SoftDeleteMixin, OrgScoped):
@@ -26,7 +26,7 @@ class ParameterSet(SoftDeleteMixin, OrgScoped):
     schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
-    values: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    values: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )

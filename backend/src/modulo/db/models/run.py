@@ -18,13 +18,12 @@ from sqlalchemy import (
     Uuid,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import expression
 from sqlalchemy.sql.compiler import SQLCompiler
 
-from modulo.db.models.base import ONDELETE_SET_NULL, OrgScoped
+from modulo.db.models.base import JSONB_COL, ONDELETE_SET_NULL, OrgScoped
 
 if TYPE_CHECKING:
     from modulo.db.models.organisation import Organisation
@@ -484,11 +483,11 @@ class Run(OrgScoped):
     total_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     # Cost breakdown — list of component snapshots (amounts as strings).
     # NULL for pre-migration runs. Migration 0066.
-    cost_breakdown: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON().with_variant(JSONB(), "postgresql"))
+    cost_breakdown: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB_COL)
     # Ledger guards (migration 0066) — terminal-only spend recording (PR A2).
     ledger_written: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     ledger_refused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    node_token_usage: Mapped[dict[str, Any] | None] = mapped_column(JSON().with_variant(JSONB(), "postgresql"))
+    node_token_usage: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL)
     error_detail: Mapped[str | None] = mapped_column(Text)
     error_code: Mapped[str | None] = mapped_column(String(255))
     # FAR-153 / §15.1: the GLOBAL unique constraint this column used to carry
@@ -591,7 +590,7 @@ class Run(OrgScoped):
     # INTERNAL ONLY: not API-projected (like ``dispatch_phase`` above).
     # NULL for rows that predate migration 0308.
     dispatch_phase_history: Mapped[list[dict[str, Any]] | None] = mapped_column(
-        JSON().with_variant(JSONB(), "postgresql"),
+        JSONB_COL,
         nullable=True,
     )
     # FAR-1714 / FAR-1511: how many durable phase writes this run ABANDONED

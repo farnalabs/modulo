@@ -2,11 +2,11 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, LargeBinary, String, Uuid
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, LargeBinary, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.enums import ModelBackendProvider
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import JSONB_COL, OrgScoped
 
 _PROVIDER_VALUES = sorted(m.value for m in ModelBackendProvider)
 _PROVIDER_SQL = f"provider IN ({', '.join(repr(v) for v in _PROVIDER_VALUES)})"
@@ -33,7 +33,7 @@ class ModelBackend(OrgScoped):
     provider: Mapped[str] = mapped_column(String(30), nullable=False)
     model_id: Mapped[str] = mapped_column(String(255), nullable=False)
     credentials_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    default_params: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    default_params: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
     cost_tracking: Mapped[str] = mapped_column(String(10), nullable=False, server_default="enabled")
     currency: Mapped[str] = mapped_column(String(3), nullable=False, server_default="USD")
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -44,7 +44,7 @@ class ModelBackend(OrgScoped):
     last_health_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_health_check_error: Mapped[str | None] = mapped_column(String(2000))
     validation_level: Mapped[str | None] = mapped_column(String(30))
-    fallback_backend_ids: Mapped[list[uuid.UUID] | None] = mapped_column(JSON, nullable=True)
+    fallback_backend_ids: Mapped[list[uuid.UUID] | None] = mapped_column(JSONB_COL, nullable=True)
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )

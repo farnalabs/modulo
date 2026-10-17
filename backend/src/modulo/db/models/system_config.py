@@ -2,10 +2,10 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Uuid, func, text
+from sqlalchemy import DateTime, ForeignKey, String, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import Base
+from modulo.db.models.base import JSONB_COL, Base
 
 
 class SystemConfig(Base):
@@ -15,7 +15,7 @@ class SystemConfig(Base):
         Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
     )
     key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
-    value: Mapped[Any] = mapped_column(JSON, nullable=False)
+    value: Mapped[Any] = mapped_column(JSONB_COL, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.current_timestamp(),
