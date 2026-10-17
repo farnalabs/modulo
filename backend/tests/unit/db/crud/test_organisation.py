@@ -8,6 +8,7 @@ Tests for:
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -184,3 +185,25 @@ class TestSeedEvidenceRedactionCatchAll:
             await create_organisation(session, name="Fresh Org", slug="fresh-org")
 
         seed.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_create_organisation_survives_a_failed_catch_all_seed(self, caplog: pytest.LogCaptureFixture) -> None:
+        # The seed is best-effort: a failure must be logged and swallowed so org
+        # creation still commits, rather than rolling back the new organisation.
+        session = AsyncMock()
+        session.add = MagicMock()  # sync call — not awaitable
+
+        with (
+            patch(
+                "modulo.db.crud.organisation._seed_evidence_redaction_catch_all",
+                new=AsyncMock(side_effect=RuntimeError("seed failed")),
+            ),
+            caplog.at_level(logging.WARNING, logger="modulo.db.crud.organisation"),
+        ):
+            org = await create_organisation(session, name="Survivor Org", slug="survivor-org")
+
+        assert org.name == "Survivor Org"
+        assert org.slug == "survivor-org"
+        assert any(
+            "seed.evidence_redaction_catch_all_failed_for_new_org" in record.getMessage() for record in caplog.records
+        )

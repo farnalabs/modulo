@@ -332,7 +332,7 @@ class TestRedactionRulesAdminSurface:
 class TestListEvidenceQueryShape:
     """The list query is bounded and run-scoped (FAR-944 review)."""
 
-    async def _capture_stmt(self, node_id: str | None) -> Any:
+    async def _capture_stmt(self, node_id: str | None, key: str | None = None) -> Any:
         captured: dict[str, Any] = {}
 
         class _ScalarResult:
@@ -348,7 +348,7 @@ class TestListEvidenceQueryShape:
             return _Result()
 
         session = types.SimpleNamespace(execute=_execute)
-        await evidence_routes._load_evidence_rows(session, _ORG_ID, _RUN_ID, node_id, None)
+        await evidence_routes._load_evidence_rows(session, _ORG_ID, _RUN_ID, node_id, key)
         return captured["stmt"]
 
     async def test_run_level_query_has_limit_and_subject_type_guard(self) -> None:
@@ -360,6 +360,8 @@ class TestListEvidenceQueryShape:
         # The run branch is guarded on subject_type so a future non-run subject
         # whose subject_id equals the run id is not returned.
         assert "subject_type" in compiled
+        # No key filter was requested, so the query must not narrow by key.
+        assert "evidence.key" not in str(stmt.whereclause)
 
     async def test_node_level_query_keeps_node_execution_branch(self) -> None:
         stmt = await self._capture_stmt("node-1")
@@ -367,3 +369,130 @@ class TestListEvidenceQueryShape:
 
         assert "node_execution" in compiled
         assert "LIMIT" in compiled
+
+    async def test_key_filter_narrows_the_query_when_provided(self) -> None:
+        stmt = await self._capture_stmt(None, key="eval.guardrail")
+        compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+
+        assert "evidence.key" in str(stmt.whereclause)
+        assert "eval.guardrail" in compiled
+
+
+class TestLoadEvidenceRowHelper:
+    """``_load_evidence_row`` scopes the single-row read to the caller's org."""
+
+    async def _load(self, row: Any) -> tuple[Any, Any]:
+        captured: dict[str, Any] = {}
+
+        class _Result:
+            def scalar_one_or_none(self) -> Any:
+                return row
+
+        async def _execute(statement: Any) -> _Result:
+            captured["stmt"] = statement
+            return _Result()
+
+        session = types.SimpleNamespace(execute=_execute)
+        found = await evidence_routes._load_evidence_row(session, _ORG_ID, _EVIDENCE_ID)
+        return found, captured["stmt"]
+
+    async def test_returns_the_scoped_row_and_binds_both_ids(self) -> None:
+        row = _fake_evidence()
+
+        found, stmt = await self._load(row)
+
+        assert found is row
+        compiled = stmt.compile()
+        # Both the id and the organisation are bound, so the read cannot cross
+        # an org boundary even if the caller supplies a foreign row id.
+        assert set(compiled.params.values()) == {_ORG_ID, _EVIDENCE_ID}
+
+    async def test_returns_none_when_the_row_is_absent(self) -> None:
+        found, _ = await self._load(None)
+
+        assert found is None
+
+
+class TestLoadRedactionRulesHelper:
+    """``_load_redaction_rules`` returns the org's rules in a deterministic order."""
+
+    async def test_returns_rules_ordered_by_pattern_then_role(self) -> None:
+        rules = [_fake_rule(), _fake_rule(key_pattern="*", role="viewer")]
+        captured: dict[str, Any] = {}
+
+        class _ScalarResult:
+            def all(self) -> list[Any]:
+                return rules
+
+        class _Result:
+            def scalars(self) -> _ScalarResult:
+                return _ScalarResult()
+
+        async def _execute(statement: Any) -> _Result:
+            captured["stmt"] = statement
+            return _Result()
+
+        session = types.SimpleNamespace(execute=_execute)
+        loaded = await evidence_routes._load_redaction_rules(session, _ORG_ID)
+
+        assert loaded == rules
+        compiled = str(captured["stmt"])
+        assert "ORDER BY" in compiled
+        assert "key_pattern" in compiled
+        assert "role" in compiled
+
+
+class TestUpsertRedactionRuleHelper:
+    """``_upsert_redaction_rule`` creates, updates, and restores in place."""
+
+    async def _upsert(self, existing: Any) -> tuple[Any, AsyncMock, Any]:
+        captured: dict[str, Any] = {}
+
+        class _Result:
+            def scalar_one_or_none(self) -> Any:
+                return existing
+
+        async def _execute(statement: Any) -> _Result:
+            captured["stmt"] = statement
+            return _Result()
+
+        session = AsyncMock()
+        session.add = MagicMock()  # sync call — not awaitable
+        session.execute = _execute
+        rule = await evidence_routes._upsert_redaction_rule(
+            session,
+            _ORG_ID,
+            "llm_judge.*",
+            "viewer",
+            ["internal_metadata"],
+        )
+        return rule, session, captured["stmt"]
+
+    async def test_creates_a_new_rule_when_none_exists(self) -> None:
+        rule, session, stmt = await self._upsert(None)
+
+        session.add.assert_called_once()
+        added = session.add.call_args.args[0]
+        assert added is rule
+        assert added.organisation_id == _ORG_ID
+        assert added.key_pattern == "llm_judge.*"
+        assert added.role == "viewer"
+        assert added.redacted_fields == ["internal_metadata"]
+        session.flush.assert_awaited_once()
+        # The lookup must opt IN to seeing soft-deleted rows, otherwise a
+        # previously-retired rule would be treated as absent and the insert
+        # would violate the org+pattern+role unique constraint.
+        assert stmt.get_execution_options().get("include_deleted") is True
+
+    async def test_updates_and_restores_an_existing_rule_in_place(self) -> None:
+        existing = MagicMock()
+        existing.redacted_fields = ["sensitive_output"]
+        existing.deleted_at = _NOW
+
+        rule, session, _ = await self._upsert(existing)
+
+        assert rule is existing
+        session.add.assert_not_called()
+        assert existing.redacted_fields == ["internal_metadata"]
+        assert existing.deleted_at is None
+        session.flush.assert_awaited_once()
