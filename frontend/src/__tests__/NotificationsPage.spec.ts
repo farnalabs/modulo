@@ -242,4 +242,94 @@ describe('NotificationsPage', () => {
     expect(wrapper.findComponent(NotificationCard).exists()).toBe(true)
     expect(mockFetchNotifications).not.toHaveBeenCalled()
   })
+
+  // QA FAR-1926 — the bulk action only clears LIVE notifications, so it is
+  // gated to the active-status view.
+  it('gates Dismiss all to the live view: enabled under active, disabled under a dismissed filter', async () => {
+    mockFetchNotifications.mockResolvedValue(pageResponse([makeNotification('n-1')], 1, 1))
+    const wrapper = mount(NotificationsPage)
+    await flushPromises()
+    await nextTick()
+
+    const activeButton = wrapper.find('[data-testid="notifications-dismiss-all"]')
+    expect((activeButton.element as HTMLButtonElement).disabled).toBe(false)
+
+    // Dismissed-self view with ONE row: the total stays 1, so only the
+    // status gate can be what disables the button.
+    mockFetchNotifications.mockResolvedValue(pageResponse([makeNotification('n-2')], 1, 1))
+    const filterBar = wrapper.findComponent(FilterBar)
+    await filterBar.vm.$emit('update:filter', 'status', 'dismissed_self')
+    await flushPromises()
+    await nextTick()
+
+    expect(mockFetchNotifications).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: 'dismissed_self' }),
+    )
+    const dismissedButton = wrapper.find('[data-testid="notifications-dismiss-all"]')
+    expect((dismissedButton.element as HTMLButtonElement).disabled).toBe(true)
+    // A click in the dismissed view must never post the bulk action.
+    await dismissedButton.trigger('click')
+    await flushPromises()
+    expect(mockMarkAllRead).not.toHaveBeenCalled()
+
+    // Back to the live view: enabled again.
+    mockFetchNotifications.mockResolvedValue(pageResponse([makeNotification('n-1')], 1, 1))
+    await filterBar.vm.$emit('update:filter', 'status', 'active')
+    await flushPromises()
+    await nextTick()
+    expect(
+      (wrapper.find('[data-testid="notifications-dismiss-all"]').element as HTMLButtonElement).disabled,
+    ).toBe(false)
+  })
+
+  // QA FAR-1926 — truthful copy: the SERVER's marked count picks the outcome.
+  it('shows "Nothing to dismiss" instead of a success claim when the server marks zero rows', async () => {
+    mockFetchNotifications.mockResolvedValue(pageResponse([makeNotification('n-1')], 1, 1))
+    const wrapper = mount(NotificationsPage)
+    await flushPromises()
+    await nextTick()
+
+    mockMarkAllRead.mockResolvedValue({ status: 'marked_read', marked: 0 })
+    await wrapper.find('[data-testid="notifications-dismiss-all"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(mockMarkAllRead).toHaveBeenCalledTimes(1)
+    const nothing = wrapper.find('[data-testid="notifications-dismiss-all-nothing"]')
+    expect(nothing.exists()).toBe(true)
+    expect(nothing.text()).toBe('Nothing to dismiss')
+    expect(nothing.attributes('aria-live')).toBe('polite')
+    // Never the dismissed-success claim, and never an error.
+    expect(wrapper.find('[data-testid="notifications-dismiss-all-success"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="notifications-dismiss-all-error"]').exists()).toBe(false)
+  })
+
+  // QA FAR-1926 — the dismiss-all error is LOCAL to this surface (the store
+  // holds none) and retires on the next successful attempt.
+  it('keeps the dismiss-all error local and clears it on the next successful attempt', async () => {
+    mockFetchNotifications.mockResolvedValue(pageResponse([makeNotification('n-1')], 1, 1))
+    const wrapper = mount(NotificationsPage)
+    await flushPromises()
+    await nextTick()
+
+    mockMarkAllRead.mockRejectedValue(new Error('boom'))
+    await wrapper.find('[data-testid="notifications-dismiss-all"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const alert = wrapper.find('[data-testid="notifications-dismiss-all-error"]')
+    expect(alert.exists()).toBe(true)
+    // The store throws an Error carrying the FORMATTED API message.
+    expect(alert.text()).toBe('boom')
+
+    // The next attempt succeeds — the local error retires with it.
+    mockMarkAllRead.mockResolvedValue({ status: 'marked_read', marked: 1 })
+    mockFetchNotifications.mockResolvedValue(pageResponse([], 0, 1))
+    await wrapper.find('[data-testid="notifications-dismiss-all"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="notifications-dismiss-all-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="notifications-dismiss-all-success"]').exists()).toBe(true)
+  })
 })

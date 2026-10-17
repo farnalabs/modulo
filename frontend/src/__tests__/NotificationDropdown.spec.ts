@@ -222,9 +222,33 @@ describe('NotificationDropdown (FAR-249)', () => {
     const alert = wrapper.find('[data-testid="notification-mark-all-read-error"]')
     expect(alert.exists()).toBe(true)
     expect(alert.attributes('role')).toBe('alert')
+    // The store throws an Error carrying the FORMATTED API message and the
+    // panel renders its own LOCAL ref — never a shared store error (QA FAR-1926).
+    expect(alert.text()).toBe('boom')
     // No success region, and the list is untouched — the clear did not happen.
     expect(wrapper.find('[data-testid="notification-mark-all-read-success"]').exists()).toBe(false)
     expect(wrapper.findAll('[data-testid="notification-dropdown"] li')).toHaveLength(1)
+  })
+
+  // QA FAR-1926 — truthful copy: the SERVER's marked count picks the outcome.
+  it('shows "Nothing to dismiss" instead of a success claim when the server marks zero rows', async () => {
+    h.mockFetchDashboard.mockResolvedValue({
+      notifications: [notification()],
+      total_unread: 1,
+    })
+    const wrapper = await mountDropdown()
+    h.mockMarkAllRead.mockResolvedValue({ status: 'marked_read', marked: 0 })
+
+    await wrapper.find('[data-testid="notification-mark-all-read"]').trigger('click')
+    await flushPromises()
+
+    expect(h.mockMarkAllRead).toHaveBeenCalledTimes(1)
+    const nothing = wrapper.find('[data-testid="notification-mark-all-read-nothing"]')
+    expect(nothing.exists()).toBe(true)
+    expect(nothing.text()).toBe('Nothing to dismiss')
+    expect(nothing.attributes('aria-live')).toBe('polite')
+    expect(wrapper.find('[data-testid="notification-mark-all-read-success"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="notification-mark-all-read-error"]').exists()).toBe(false)
   })
 
   it('emits close when a notification link is clicked', async () => {

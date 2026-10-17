@@ -631,7 +631,8 @@ export default {
       "dismiss_all": "Dismiss all",
       "dismissing_all": "Dismissing…",
       "dismissed_all_status": "All notifications dismissed for you",
-      "failed_to_dismiss_all": "Failed to dismiss all notifications"
+      "failed_to_dismiss_all": "Failed to dismiss all notifications",
+      "nothing_to_dismiss": "Nothing to dismiss"
     },
     "EnvironmentProfileForm": {
       "back_to_profiles": "Back to environment profiles",
@@ -4437,6 +4438,7 @@ export default {
       "dismissing_all": "Dismissing…",
       "dismissed_all_status": "All notifications dismissed for you",
       "failed_to_dismiss_all": "Failed to dismiss all notifications",
+      "nothing_to_dismiss": "Nothing to dismiss",
       "failed_to_load": "Couldn't load notifications",
       "retry": "Retry",
       "no_notifications": "No notifications",
@@ -4465,7 +4467,8 @@ export default {
       "dismiss_all": "Dismiss all",
       "dismissing_all": "Dismissing…",
       "dismissed_all_status": "All notifications dismissed for you",
-      "failed_to_dismiss_all": "Failed to dismiss all notifications"
+      "failed_to_dismiss_all": "Failed to dismiss all notifications",
+      "nothing_to_dismiss": "Nothing to dismiss"
     },
     "PipelineSnapshotTimeline": {
       "version_timeline": "Version timeline",

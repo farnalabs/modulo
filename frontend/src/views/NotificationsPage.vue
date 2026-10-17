@@ -34,7 +34,7 @@
           type="button"
           data-testid="notifications-dismiss-all"
           class="rounded-md border px-4 py-2 text-sm font-medium text-primary hover:bg-muted transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-          :disabled="dismissingAll || loading || total === 0"
+          :disabled="dismissingAll || loading || total === 0 || filterStatus !== 'active'"
           @click="onDismissAll"
         >
           {{ dismissingAll ? $t('views.NotificationsPage.dismissing_all') : $t('views.NotificationsPage.dismiss_all') }}
@@ -43,13 +43,16 @@
       </template>
     </FilterBar>
 
+    <!-- Failure, success and no-op are three MUTUALLY EXCLUSIVE outcomes of
+         this page's OWN dismiss-all attempt — the error ref is local (never
+         shared store state, QA FAR-1926) and only ever set here. -->
     <p
-      v-if="store.dismissAllError"
+      v-if="dismissAllError"
       data-testid="notifications-dismiss-all-error"
       role="alert"
       class="text-sm text-destructive"
     >
-      {{ $t('views.NotificationsPage.failed_to_dismiss_all') }}
+      {{ dismissAllError }}
     </p>
     <output
       v-else-if="dismissedAll"
@@ -59,6 +62,17 @@
       class="block text-sm text-muted-foreground"
     >
       {{ $t('views.NotificationsPage.dismissed_all_status') }}
+    </output>
+    <!-- The server marked nothing (no-op re-run): say so neutrally rather
+         than claiming a clear that did not happen. -->
+    <output
+      v-else-if="nothingToDismiss"
+      data-testid="notifications-dismiss-all-nothing"
+      :aria-label="$t('views.NotificationsPage.nothing_to_dismiss')"
+      aria-live="polite"
+      class="block text-sm text-muted-foreground"
+    >
+      {{ $t('views.NotificationsPage.nothing_to_dismiss') }}
     </output>
 
     <!-- States -->
@@ -148,6 +162,18 @@ const page = ref(1);
 const pageSize = ref(20);
 const dismissingAll = ref(false);
 const dismissedAll = ref(false);
+/**
+ * Neutral outcome for a no-op re-run (the server marked 0 rows): mutually
+ * exclusive with `dismissedAll` so a zero never claims a clear.
+ */
+const nothingToDismiss = ref(false);
+/**
+ * THIS surface's dismiss-all error (QA FAR-1926). Local by design — the
+ * shared store holds no error state, so a failure here can never render as a
+ * stale alert on the bell dropdown or the dashboard panel. Cleared at the
+ * start of each attempt and whenever a list load succeeds below.
+ */
+const dismissAllError = ref<string | null>(null);
 
 const filterLevel = ref("");
 const filterScope = ref("");
@@ -183,6 +209,10 @@ watch(data, (d) => {
     notifications.value = d.items
     total.value = d.total
     page.value = d.page
+    // A successful list load retires any earlier dismiss-all error — the
+    // fresh server state is the new truth (failures leave `data` untouched,
+    // so a failed load never clears it).
+    dismissAllError.value = null
   }
 }, { immediate: true })
 
@@ -218,19 +248,31 @@ function onDismissed(id: string) {
 }
 
 async function onDismissAll(): Promise<void> {
+  // Gated to the live view (QA FAR-1926): the bulk action only clears LIVE
+  // notifications, so a dismissed-status list is never a valid target. The
+  // button's :disabled carries the same condition; this guard covers any
+  // programmatic invocation so the API is never posted from a dismissed view.
+  if (filterStatus.value !== "active") return;
   dismissingAll.value = true;
   dismissedAll.value = false;
+  nothingToDismiss.value = false;
+  dismissAllError.value = null;
   try {
     // One shared action path (FAR-1926): same store action as the bell
     // dropdown and the dashboard panel — per-user scope only.
-    await store.dismissAll();
-    dismissedAll.value = true;
+    const marked = await store.dismissAll();
+    // Truthful copy: the SERVER's marked count picks the outcome — a no-op
+    // reports "Nothing to dismiss", never the dismissed-success message.
+    nothingToDismiss.value = marked === 0;
+    dismissedAll.value = marked > 0;
     // Re-read THIS page's filtered list from the server's post-state so the
     // active view empties for real, never because of a local mutation.
     await loadNotifications();
-  } catch {
-    // store.dismissAllError holds the message rendered by the alert region.
+  } catch (e: unknown) {
+    // The store throws an Error carrying the formatted API message; keep it
+    // in THIS surface's local ref so no other surface can render it.
     // The list is deliberately left untouched: nothing was cleared.
+    dismissAllError.value = e instanceof Error ? e.message : String(e);
   } finally {
     dismissingAll.value = false;
   }

@@ -43,9 +43,17 @@ vi.mock('../stores/syncRegistry', () => ({
   registerHandler: mockRegisterHandler,
 }))
 
-vi.mock('../lib/api/formatError', () => ({
-  formatApiError: (e: unknown) => (e instanceof Error ? e.message : 'Unknown error'),
-}))
+vi.mock('../lib/api/formatError', async (importOriginal) => {
+  // Re-export the real module (it has no imports of its own) so any component
+  // mounted here — e.g. the notifications page imported for the cross-surface
+  // assertion below — can resolve names like isProblemDetail, and override
+  // only the formatter under test.
+  const actual = await importOriginal<typeof import('../lib/api/formatError')>()
+  return {
+    ...actual,
+    formatApiError: (e: unknown) => (e instanceof Error ? e.message : 'Unknown error'),
+  }
+})
 
 vi.mock('@vueuse/core', () => ({
   useStorage: (_key: string, defaultValue: boolean) => {
@@ -54,6 +62,9 @@ vi.mock('@vueuse/core', () => ({
 }))
 
 import DashboardNotificationsPanel from '../components/DashboardNotificationsPanel.vue'
+// QA FAR-1926 — cross-surface assertion: a failure raised on the panel must
+// not render on a DIFFERENT mounted surface (the notifications page).
+import NotificationsPage from '../views/NotificationsPage.vue'
 
 function makeNotifications(count: number) {
   return Array.from({ length: count }, (_, i) => ({
@@ -396,9 +407,63 @@ describe('DashboardNotificationsPanel', () => {
     const alert = wrapper.find('[data-testid="panel-dismiss-all-error"]')
     expect(alert.exists()).toBe(true)
     expect(alert.attributes('role')).toBe('alert')
+    // The store throws an Error carrying the FORMATTED API message, and the
+    // panel renders its own local ref (never a shared store error).
+    expect(alert.text()).toBe('boom')
     expect(wrapper.find('[data-testid="panel-dismiss-all-success"]').exists()).toBe(false)
     // The list is untouched — no clear, no post-failure reload.
     expect(wrapper.findAll('.notification-card')).toHaveLength(2)
     expect(mockFetchNotifications).not.toHaveBeenCalled()
+  })
+
+  // QA FAR-1926 — truthful copy: the SERVER's marked count picks the outcome.
+  it('shows "Nothing to dismiss" instead of a success claim when the server marks zero rows', async () => {
+    const wrapper = await mountAndExpand(makeNotifications(2), 2, 2)
+    mockMarkAllRead.mockResolvedValue({ status: 'marked_read', marked: 0 })
+
+    await wrapper.find('[data-testid="panel-dismiss-all"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(mockMarkAllRead).toHaveBeenCalledTimes(1)
+    const nothing = wrapper.find('[data-testid="panel-dismiss-all-nothing"]')
+    expect(nothing.exists()).toBe(true)
+    expect(nothing.text()).toBe('Nothing to dismiss')
+    expect(nothing.attributes('aria-live')).toBe('polite')
+    expect(wrapper.find('[data-testid="panel-dismiss-all-success"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="panel-dismiss-all-error"]').exists()).toBe(false)
+  })
+
+  // QA FAR-1926 — the dismiss-all error is LOCAL to the surface that raised
+  // it (the store holds no error state any more) and retires on that
+  // surface's own next successful attempt.
+  it('scopes a dismiss-all failure to this surface: another mounted surface never renders it, and it clears on the next success', async () => {
+    const wrapper = await mountAndExpand(makeNotifications(2), 2, 2)
+    mockMarkAllRead.mockRejectedValue(new Error('boom'))
+
+    await wrapper.find('[data-testid="panel-dismiss-all"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="panel-dismiss-all-error"]').exists()).toBe(true)
+
+    // A DIFFERENT surface mounting on the SAME store must not render the
+    // stale error (pre-fix the shared store ref made the page show it).
+    mockFetchNotifications.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 })
+    const page = mount(NotificationsPage)
+    await flushPromises()
+    await nextTick()
+    expect(page.find('[data-testid="notifications-dismiss-all-error"]').exists()).toBe(false)
+    page.unmount()
+
+    // The local error retires on this surface's own next successful attempt.
+    mockMarkAllRead.mockResolvedValue({ status: 'marked_read', marked: 2 })
+    mockFetchNotifications.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 10 })
+    mockFetchUnreadCount.mockResolvedValue(0)
+    await wrapper.find('[data-testid="panel-dismiss-all"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="panel-dismiss-all-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="panel-dismiss-all-success"]').exists()).toBe(true)
   })
 })

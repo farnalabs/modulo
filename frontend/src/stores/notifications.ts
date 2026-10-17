@@ -20,12 +20,15 @@ export const DROPDOWN_LIMIT = 10
  * suppression, reconnect backfill) stays in `NotificationBell.vue` — it
  * drives these actions rather than living here, so the store stays a plain
  * data/actions layer with no stream lifecycle.
+ *
+ * Deliberately holds NO dismiss-all error state: a failure raised from one
+ * surface must never render as a stale alert on the others, so each surface
+ * keeps its own local error (QA FAR-1926).
  */
 export const useNotificationsStore = defineStore('notifications', () => {
   const unreadCount = ref(0)
   const recentNotifications = ref<NotificationResponse[]>([])
   const loadingRecent = ref(false)
-  const dismissAllError = ref<string | null>(null)
   /** Set when the dropdown's recent-list fetch fails (FAR-249 QA). */
   const fetchError = ref<string | null>(null)
 
@@ -78,26 +81,35 @@ export const useNotificationsStore = defineStore('notifications', () => {
    * This is the ONE shared action path behind every "Dismiss all" control
    * (bell dropdown, dashboard panel, notifications page). After the write it
    * refreshes the dropdown's list and the bell badge so the UI reflects the
-   * server's post-state. Re-throws on failure (after recording a
-   * user-facing message) so the caller can surface the error instead of
-   * showing a cleared state that did not happen.
+   * server's post-state.
+   *
+   * Returns the server's `marked` count so a surface can tell a real clear
+   * (marked > 0) from a no-op re-run (marked === 0) and show truthful copy
+   * either way — a zero must never be announced as "All notifications
+   * dismissed".
+   *
+   * On failure it throws an Error carrying the FORMATTED API message
+   * (`formatApiError`) rather than recording shared store state: the caller
+   * stores it in its own local error ref, so one surface's failure never
+   * renders as a stale alert on the others (QA FAR-1926). The list refresh is
+   * skipped on failure so no surface shows a cleared state that did not
+   * happen.
    */
-  async function dismissAll(): Promise<void> {
-    dismissAllError.value = null
+  async function dismissAll(): Promise<number> {
+    let marked: number
     try {
-      await markAllNotificationsRead()
+      marked = (await markAllNotificationsRead()).marked
     } catch (e: unknown) {
-      dismissAllError.value = formatApiError(e)
-      throw e
+      throw new Error(formatApiError(e), { cause: e })
     }
     await Promise.all([fetchRecent(), refreshUnreadCount()])
+    return marked
   }
 
   return {
     unreadCount,
     recentNotifications,
     loadingRecent,
-    dismissAllError,
     fetchError,
     refreshUnreadCount,
     fetchRecent,

@@ -31,13 +31,16 @@
         </button>
       </div>
 
+      <!-- Failure, success and no-op are MUTUALLY EXCLUSIVE outcomes of THIS
+           panel's own attempt; dismissAllError is a local ref (never shared
+           store state, QA FAR-1926) and dies with the panel on close. -->
       <p
-        v-if="store.dismissAllError"
+        v-if="dismissAllError"
         data-testid="notification-mark-all-read-error"
         role="alert"
         class="border-b border-border px-3 py-2 text-xs text-destructive"
       >
-        {{ $t("components.NotificationDropdown.failed_to_dismiss_all") }}
+        {{ dismissAllError }}
       </p>
       <output
         v-else-if="dismissedAll"
@@ -47,6 +50,17 @@
         class="block border-b border-border px-3 py-2 text-xs text-muted-foreground"
       >
         {{ $t("components.NotificationDropdown.dismissed_all_status") }}
+      </output>
+      <!-- The server marked nothing (no-op re-run): neutral copy, never the
+           dismissed-success claim. -->
+      <output
+        v-else-if="nothingToDismiss"
+        data-testid="notification-mark-all-read-nothing"
+        :aria-label="$t('components.NotificationDropdown.nothing_to_dismiss')"
+        aria-live="polite"
+        class="block border-b border-border px-3 py-2 text-xs text-muted-foreground"
+      >
+        {{ $t("components.NotificationDropdown.nothing_to_dismiss") }}
       </output>
 
       <LoadingSpinner v-if="store.loadingRecent" />
@@ -144,6 +158,15 @@ const store = useNotificationsStore();
 const dropdownRef = ref<HTMLElement | null>(null);
 const dismissingAll = ref(false);
 const dismissedAll = ref(false);
+/** No-op outcome (server marked 0 rows): mutually exclusive with success. */
+const nothingToDismiss = ref(false);
+/**
+ * THIS panel's dismiss-all error (QA FAR-1926) — a local ref, never shared
+ * store state, so a failure here cannot leak onto the dashboard panel or the
+ * notifications page. Cleared at the start of each attempt; it also resets
+ * naturally on close because the bell mounts this panel behind `v-if`.
+ */
+const dismissAllError = ref<string | null>(null);
 
 /**
  * Placement of the panel (FAR-1926). Starts as the legacy bell-anchored
@@ -214,13 +237,19 @@ onUnmounted(() => {
 async function onDismissAll(): Promise<void> {
   dismissingAll.value = true;
   dismissedAll.value = false;
+  nothingToDismiss.value = false;
+  dismissAllError.value = null;
   try {
-    await store.dismissAll();
-    dismissedAll.value = true;
-  } catch {
-    // store.dismissAllError already holds the user-facing message; the
-    // alert region above renders it. Focus stays on the button so the user
-    // can retry, and the list is never shown cleared.
+    // One shared action path (FAR-1926); the returned count keeps the copy
+    // truthful: a no-op (marked === 0) reports "Nothing to dismiss".
+    const marked = await store.dismissAll();
+    dismissedAll.value = marked > 0;
+    nothingToDismiss.value = marked === 0;
+  } catch (e: unknown) {
+    // The store throws an Error carrying the formatted API message; keep it
+    // in this panel's local ref (never shared state). Focus stays on the
+    // button so the user can retry, and the list is never shown cleared.
+    dismissAllError.value = e instanceof Error ? e.message : String(e);
   } finally {
     dismissingAll.value = false;
   }

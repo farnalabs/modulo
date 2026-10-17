@@ -42,13 +42,17 @@
         >
           {{ dismissingAll ? $t('components.DashboardNotificationsPanel.dismissing_all') : $t('components.DashboardNotificationsPanel.dismiss_all') }}
         </button>
+        <!-- Failure, success and no-op are MUTUALLY EXCLUSIVE outcomes of
+             this panel's own attempt; dismissAllError is a local ref (never
+             shared store state, QA FAR-1926) so a failure here cannot leak
+             onto the bell dropdown or the notifications page. -->
         <p
-          v-if="store.dismissAllError"
+          v-if="dismissAllError"
           data-testid="panel-dismiss-all-error"
           role="alert"
           class="text-xs text-destructive"
         >
-          {{ $t('components.DashboardNotificationsPanel.failed_to_dismiss_all') }}
+          {{ dismissAllError }}
         </p>
         <output
           v-else-if="dismissedAll"
@@ -58,6 +62,17 @@
           class="text-xs text-muted-foreground"
         >
           {{ $t('components.DashboardNotificationsPanel.dismissed_all_status') }}
+        </output>
+        <!-- The server marked nothing (no-op re-run): neutral copy, never the
+             dismissed-success claim. -->
+        <output
+          v-else-if="nothingToDismiss"
+          data-testid="panel-dismiss-all-nothing"
+          :aria-label="$t('components.DashboardNotificationsPanel.nothing_to_dismiss')"
+          aria-live="polite"
+          class="text-xs text-muted-foreground"
+        >
+          {{ $t('components.DashboardNotificationsPanel.nothing_to_dismiss') }}
         </output>
       </div>
       <LoadingSpinner v-if="loading" />
@@ -141,6 +156,15 @@ const page = ref(1);
 const total = ref(0);
 const dismissingAll = ref(false);
 const dismissedAll = ref(false);
+/** No-op outcome (server marked 0 rows): mutually exclusive with success. */
+const nothingToDismiss = ref(false);
+/**
+ * THIS panel's dismiss-all error (QA FAR-1926) — a local ref, never shared
+ * store state, so a failure here cannot leak onto the bell dropdown or the
+ * notifications page. Cleared at the start of each attempt and whenever
+ * loadPage() below succeeds.
+ */
+const dismissAllError = ref<string | null>(null);
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)));
 
@@ -191,17 +215,24 @@ async function onReviewLater(id: string) {
 async function onDismissAll(): Promise<void> {
   dismissingAll.value = true;
   dismissedAll.value = false;
+  nothingToDismiss.value = false;
+  dismissAllError.value = null;
   try {
     // One shared action path (FAR-1926): the store action posts the
-    // per-user mark-all-read and refreshes the bell's badge/list.
-    await store.dismissAll();
-    dismissedAll.value = true;
+    // per-user mark-all-read and refreshes the bell's badge/list. The
+    // returned count keeps the copy truthful — a no-op (marked === 0)
+    // reports "Nothing to dismiss", never the dismissed-success message.
+    const marked = await store.dismissAll();
+    dismissedAll.value = marked > 0;
+    nothingToDismiss.value = marked === 0;
     // This panel keeps its OWN list and badge, so re-read both from the
     // server's post-state — never a locally-invented clear.
     await loadPage();
-  } catch {
-    // store.dismissAllError holds the message rendered by the alert region.
+  } catch (e: unknown) {
+    // The store throws an Error carrying the formatted API message; keep it
+    // in THIS surface's local ref so no other surface can render it.
     // The list is deliberately left untouched: nothing was cleared.
+    dismissAllError.value = e instanceof Error ? e.message : String(e);
   } finally {
     dismissingAll.value = false;
   }
@@ -252,6 +283,10 @@ async function loadPage() {
     });
     notifications.value = result.items;
     total.value = result.total;
+    // A successful list load retires any earlier dismiss-all error — the
+    // fresh server state is the new truth (a failed load never reaches here,
+    // so it cannot clear a genuine failure).
+    dismissAllError.value = null;
     // Badge reflects the severity-filtered unread count, not the raw total.
     await refreshUnreadCount();
   } catch (e: unknown) {
