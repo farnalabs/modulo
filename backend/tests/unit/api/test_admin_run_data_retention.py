@@ -13,8 +13,10 @@ import uuid
 from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -313,3 +315,108 @@ class TestPurge:
         client = _build(session, _principal(role="operator"))
         resp = client.post(PURGE_URL, json={"confirm": True})
         assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# @handle_db_errors backstop (FAR-1905)
+# ---------------------------------------------------------------------------
+#
+# ``candidates`` and ``purge`` each reach the DB in-body (``_run_scoped`` plus
+# the CRUD call) but, before this change, translated an unexpected DB error only
+# through their hand-written ``except`` arms — no ``@handle_db_errors``
+# backstop. The arms already cover a DB error raised INSIDE the handler's own
+# ``try`` (ProgrammingError -> 501, SQLAlchemyError -> 503, Exception -> 500,
+# IntegrityError -> 409 on purge), so those are mapped with or without the
+# decorator. The backstop's distinguishing job is to catch a DB error that
+# ESCAPES the handler's arms. ``_resolve_org_id`` is the one seam each handler
+# calls BEFORE its ``try`` block, so raising from it is the faithful way to
+# exercise exactly that class of escape.
+#
+# ``export`` is intentionally NOT wrapped: its DB work runs inside the
+# StreamingResponse generator after the handler returns, so a route-level
+# decorator could not catch it.
+
+_SQL = SQLAlchemyError("boom")
+_PROG = ProgrammingError("s", {}, Exception())
+_MSG_503 = "Database temporarily unavailable."
+_MSG_501 = "Feature is not available. Run database migrations to enable it."
+
+
+def _build_unhandled(session: AsyncMock, principal: TenantPrincipal) -> TestClient:
+    """A client that surfaces the app catch-all 500 as a status, not a raise.
+
+    ``raise_server_exceptions=False`` matters for the prove-the-fix assertion:
+    without the decorator the DB error escapes to the app's catch-all handler,
+    which answers 500; TestClient would otherwise re-raise it.
+    """
+    _ClientBuilder(session, principal)
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def _issue(client: TestClient, method: str, url: str, body: dict[str, object] | None) -> httpx.Response:
+    """Issue one request for a parametrised route (keeps ``**kwargs`` out of mypy)."""
+    if method == "get":
+        return client.get(url)
+    return client.post(url, json=body)
+
+
+@pytest.mark.parametrize(
+    ("method", "url", "body"),
+    [
+        ("get", CANDIDATES_URL, None),
+        ("post", PURGE_URL, {"confirm": True}),
+    ],
+    ids=["candidates", "purge"],
+)
+@pytest.mark.parametrize(
+    ("exc", "expected", "detail"),
+    [(_SQL, 503, _MSG_503), (_PROG, 501, _MSG_501)],
+    ids=["sqlalchemy-503", "programming-501"],
+)
+def test_backstop_maps_escaping_db_error_to_standard_status(
+    method: str, url: str, body: dict[str, object] | None, exc: Exception, expected: int, detail: str
+) -> None:
+    """FAR-1905 prove-the-fix: an unexpected DB error escaping the handler body.
+
+    ``_resolve_org_id`` runs before each handler's ``try``, so a DB error raised
+    from it is exactly the error class the hand-written arms do NOT cover. Only
+    the ``@handle_db_errors`` backstop maps it: 503 for a generic
+    ``SQLAlchemyError``, 501 for a ``ProgrammingError``. Without the decorator
+    the error escapes to the app's catch-all handler, which answers 500 with the
+    generic internal-error detail — so this assertion fails.
+    """
+    session = _make_session()
+    client = _build_unhandled(session, _principal())
+    try:
+        with patch("modulo.api.routes.admin_run_retention._resolve_org_id", side_effect=exc):
+            resp = _issue(client, method, url, body)
+        assert resp.status_code == expected, resp.text
+        assert resp.json()["detail"] == detail
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_backstop_does_not_shadow_purge_conflict_verdict() -> None:
+    """The purge arm's own IntegrityError -> 409 verdict survives the backstop.
+
+    ``handle_db_errors`` maps ``IntegrityError`` -> 409 with its own generic
+    detail ("Resource conflict. The operation could not be completed."). The
+    route's hand-written arm raises the purge-specific detail first, inside its
+    ``try``; the decorator re-raises an ``HTTPException`` unchanged, so the
+    arm's exact detail must win. Asserting that specific detail (which differs
+    from the backstop's) is the discriminating check that the new backstop did
+    not shadow the route's own classification.
+    """
+    session = _make_session()
+    client = _build(session, _principal())
+    with (
+        patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+        patch(
+            "modulo.api.routes.admin_run_retention.purge_terminal_runs",
+            new=AsyncMock(side_effect=IntegrityError("s", {}, Exception())),
+        ),
+    ):
+        resp = client.post(PURGE_URL, json={"confirm": True})
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == "Resource conflict. The purge could not be completed."
