@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import AppSelect from '../components/shared/AppSelect.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
+import { SELECT_APPEND_TARGET } from '../components/shared/selectAppendTarget'
 
 // Look the inner component up by name so this spec never imports
 // `primevue/select` directly (appselect-guard.spec.ts forbids it).
@@ -53,6 +54,31 @@ describe('AppSelect', () => {
       props: { modelValue: '' },
     })
     expect(wrapper.findComponent(innerSelect).props('ariaLabel')).toBe('Select')
+  })
+})
+
+describe('AppSelect overlay append target (FAR-1908)', () => {
+  it('uses the target provided by an ancestor when no append-to prop is given', () => {
+    // Dialog hosts provide 'body' so the overlay escapes the dialog's
+    // scrolling content box instead of being clipped by it.
+    const wrapper = mount(AppSelect, {
+      props: { modelValue: '' },
+      global: { provide: { [SELECT_APPEND_TARGET as symbol]: 'body' } },
+    })
+    expect(wrapper.findComponent(innerSelect).props('appendTo')).toBe('body')
+  })
+
+  it('lets an explicit append-to prop win over the provided target', () => {
+    const wrapper = mount(AppSelect, {
+      props: { modelValue: '', appendTo: 'self' },
+      global: { provide: { [SELECT_APPEND_TARGET as symbol]: 'body' } },
+    })
+    expect(wrapper.findComponent(innerSelect).props('appendTo')).toBe('self')
+  })
+
+  it('falls back to self when neither a prop nor a provided target exists (FAR-851)', () => {
+    const wrapper = mount(AppSelect, { props: { modelValue: '' } })
+    expect(wrapper.findComponent(innerSelect).props('appendTo')).toBe('self')
   })
 })
 

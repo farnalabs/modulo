@@ -17,7 +17,7 @@
       :option-value="optionValue"
       :model-value="modelValue"
       :placeholder="placeholder"
-      :append-to="appendTo"
+      :append-to="resolvedAppendTo"
       :aria-label="resolvedAriaLabel"
       @update:model-value="emit('update:modelValue', $event)"
       @blur="emit('blur', $event)"
@@ -39,9 +39,11 @@
 <script setup lang="ts">
 /**
  * AppSelect - thin wrapper around PrimeVue Select that:
- *   - defaults `appendTo` to `'self'` so the overlay is rendered inside the
- *     Select's own `position: relative` wrapper instead of being portalled to
- *     `<body>` (FAR-851: filter dropdowns detaching to the viewport origin);
+ *   - resolves the overlay's `appendTo` as: explicit `append-to` prop →
+ *     injected `SELECT_APPEND_TARGET` (provided by dialog hosts, FAR-1908) →
+ *     `'self'`. The `'self'` fallback keeps the overlay inside the Select's own
+ *     `position: relative` wrapper instead of being portalled to `<body>`
+ *     (FAR-851: filter dropdowns detaching to the viewport origin);
  *   - wraps the inner Select in a `<label>` and binds an explicit `aria-label`
  *     so the rendered `<input>` is never flagged by SonarCloud's
  *     `Web:InputWithoutLabelCheck`;
@@ -50,12 +52,13 @@
  * All Select instances across the app should use this wrapper instead of
  * importing `primevue/select` directly (enforced by appselect-guard.spec.ts).
  *
- * NOTE: `appendTo` is a declared prop defaulting to `'self'`. Consumers that
- * pass `append-to` keep control; a hardcoded `append-to="self"` after
- * `v-bind="$attrs"` would silently override the consumer's value. Declaring it
- * (rather than reading it out of `$attrs`) is required because Vue keys
- * fallthrough attrs by their original name, so `$attrs.appendTo` is undefined
- * for a kebab-case `append-to`.
+ * NOTE: `appendTo` is a declared prop with NO default, so "consumer did not
+ * pass one" is distinguishable from an explicit value and the injection can
+ * supply the dialog default. Consumers that pass `append-to` keep control; a
+ * hardcoded `append-to="self"` after `v-bind="$attrs"` would silently override
+ * the consumer's value. Declaring it (rather than reading it out of `$attrs`)
+ * is required because Vue keys fallthrough attrs by their original name, so
+ * `$attrs.appendTo` is undefined for a kebab-case `append-to`.
  *
  * NOTE: events are declared in `defineEmits` for consumer type-safety AND
  * re-emitted to the inner PrimeVue `Select` below. Declaring an event in
@@ -64,8 +67,9 @@
  * `Select` would never propagate `update:modelValue` back to the parent and
  * `v-model` would silently break. Re-emitting here restores the passthrough.
  */
-import { computed, useAttrs } from 'vue'
+import { computed, inject, useAttrs } from 'vue'
 import Select from 'primevue/select'
+import { SELECT_APPEND_TARGET } from './selectAppendTarget'
 
 // Keep $attrs (e.g. data-testid) on the inner PrimeVue <Select> only.
 // With default inheritance the wrapper <label> would also receive them,
@@ -101,12 +105,20 @@ const props = withDefaults(
     label?: string
   }>(),
   {
-    appendTo: 'self',
     label: '',
   },
 )
 
 const attrs = useAttrs()
+
+// A dialog host provides its overlay append target so that AppSelect overlays
+// escape the dialog's scrolling content box (FAR-1908). Deliberately NOT
+// defaulted on the prop: an explicit `append-to` must still win.
+const injectedAppendTo = inject(SELECT_APPEND_TARGET, undefined)
+
+const resolvedAppendTo = computed(
+  () => props.appendTo ?? injectedAppendTo ?? 'self',
+)
 
 // Consumers usually pass `aria-label` through `$attrs`; surface it explicitly
 // so the label association is statically visible and the meaningful

@@ -79,12 +79,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, provide } from 'vue'
 import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
 import Select from '../../shared/AppSelect.vue'
 import ErrorAlert from '../../shared/ErrorAlert.vue'
+import { SELECT_APPEND_TARGET } from '../../shared/selectAppendTarget'
 import type { PipelineSummary } from '../../../types/lifecycleMap'
+
+// FAR-1908: a dialog's content box scrolls (`overflow-y: auto`), which clips an
+// in-place AppSelect overlay and hides its lower options behind the footer.
+// Portal the overlays to <body> (same contract as FormDialog).
+provide(SELECT_APPEND_TARGET, 'body')
 
 const props = defineProps<{
   open: boolean
