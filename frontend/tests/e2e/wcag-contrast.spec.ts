@@ -94,6 +94,15 @@ test.describe('WCAG AA audit (CI — Vite dev server)', { tag: "@regression" }, 
       // Wait for the Vue app to mount before running axe
       await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
 
+      // Flipping the theme triggers PrimeVue's 0.2s colour transition on every
+      // control. A cross-fade between the two themes passes through a
+      // low-contrast midpoint (dark ink on a bright fill fading to light ink
+      // on a dark fill), so an axe scan that lands mid-transition reports a
+      // `color-contrast` violation the settled theme does not have (observed:
+      // the login submit button measures 4.33:1 mid-transition, 4.60:1 once
+      // settled). The settled colours are what the theme actually ships, so
+      // suppress transitions before the flip and audit those.
+      await page.addStyleTag({ content: '*, *::before, *::after { transition: none !important; }' })
       await page.evaluate(() => {
         document.documentElement.classList.add('light')
         document.documentElement.classList.remove('dark')
