@@ -97,6 +97,127 @@ export interface OptionItem {
   name: string;
 }
 
+// ---------------------------------------------------------------------------
+// FAR-1343: capacity / queue-pressure observability (GET /api/v1/analytics/capacity)
+// ---------------------------------------------------------------------------
+
+export interface CapacityLimits {
+  org_run_concurrency_limit: number | null;
+  sandbox_concurrency_limit: number | null;
+  sandbox_limit_is_default: boolean;
+}
+
+export interface CapacityPendingByPipeline {
+  pipeline_id: string;
+  pipeline_name?: string | null;
+  pending_count: number;
+  oldest_pending_age_seconds?: number | null;
+  max_concurrent_runs?: number | null;
+}
+
+export interface CapacityPending {
+  total: number;
+  oldest_pending_age_seconds?: number | null;
+  by_cause: Record<string, number>;
+  by_pipeline: CapacityPendingByPipeline[];
+}
+
+export interface CapacityDrain {
+  created: number;
+  started: number;
+  completed: number;
+  ratio?: number | null;
+  baseline_depth: number;
+  baseline_oldest_pending_age_seconds?: number | null;
+  final_depth: number;
+  depth_change: number;
+  verdict: string;
+}
+
+export interface CapacityBinding {
+  scope: string;
+  limit?: number | null;
+  in_use?: number | null;
+  headroom?: number | null;
+  pending_blocked: number;
+  admissible_if_raised: number;
+}
+
+export interface CapacityQueueIfRaised {
+  pending_now: number;
+  admissible_if_binding_raised: number;
+  pending_after_raise: number;
+}
+
+export interface CapacityAttribution {
+  pipeline_id: string;
+  pipeline_name?: string | null;
+  executing: number;
+  running: number;
+  parked: number;
+  oldest_executing_age_seconds?: number | null;
+  stale_heartbeat_count: number;
+}
+
+export interface CapacityActiveHealth {
+  org_run_limit?: number | null;
+  gate_total: number;
+  executing_total: number;
+  running_total: number;
+  parked_total: number;
+  cancelling_total: number;
+  utilisation?: number | null;
+  cap_held: boolean;
+  completions_in_window: number;
+  zero_completion_intervals: number;
+  stall_intervals: number;
+  stall_suspected: boolean;
+  stale_heartbeat_threshold_seconds: number;
+  stale_heartbeat_count: number;
+  attribution: CapacityAttribution[];
+}
+
+export interface CapacitySeriesPipeline {
+  pipeline_id: string;
+  pipeline_name?: string | null;
+  pending_depth: number;
+  oldest_pending_age_seconds?: number | null;
+}
+
+export interface CapacitySeriesBucket {
+  interval_start: string;
+  interval_end: string;
+  created: number;
+  started: number;
+  completed: number;
+  pending_depth: number;
+  oldest_pending_age_seconds?: number | null;
+  drain_ratio?: number | null;
+  complete: boolean;
+  by_pipeline: CapacitySeriesPipeline[];
+}
+
+export interface CapacityResponse {
+  generated_at: string;
+  window_start: string;
+  window_seconds: number;
+  interval_seconds: number;
+  limits: CapacityLimits;
+  pending: CapacityPending;
+  drain: CapacityDrain;
+  binding: CapacityBinding;
+  queue_if_raised: CapacityQueueIfRaised;
+  active_health: CapacityActiveHealth;
+  series: CapacitySeriesBucket[];
+}
+
+export function formatCapacityDuration(seconds: number | null | undefined): string {
+  if (seconds == null) return "—";
+  if (seconds >= 3600) return `${(seconds / 3600).toFixed(1)}h`;
+  if (seconds >= 60) return `${Math.round(seconds / 60)}m`;
+  return `${Math.round(seconds)}s`;
+}
+
 const DEFAULT_FILTERS: AnalyticsFilters = {
   timespan: "7d",
   groupBy: "day",
@@ -669,6 +790,9 @@ export const useAnalyticsStore = defineStore("analytics", () => {
   const flagOff = ref(false);
   const earliestAvailableDate = ref<string | null>(null);
   const showCapacityOverlay = ref(false);
+  const capacity = ref<CapacityResponse | null>(null);
+  const capacityLoading = ref(false);
+  const capacityError = ref<string | null>(null);
 
   const buckets = computed(() => results.value?.buckets ?? []);
   const factsStale = computed(() => Boolean(results.value?.facts_stale));
@@ -793,6 +917,41 @@ export const useAnalyticsStore = defineStore("analytics", () => {
     }
   }
 
+  let capacityToken = 0;
+
+  async function fetchCapacity(): Promise<void> {
+    // FAR-1343: the capacity/queue panel. It has its own bounded window (a
+    // live queue is a "now" surface, not the facts series' date range) and its
+    // own request token so a rapid pipeline-filter change cannot commit an
+    // older response over a newer one.
+    capacityLoading.value = true;
+    capacityError.value = null;
+    const token = ++capacityToken;
+    try {
+      const params: Record<string, unknown> = {
+        window_minutes: 60,
+        interval_seconds: 300,
+        stall_intervals: 3,
+      };
+      if (filters.value.pipelineId) {
+        params.pipeline_id = filters.value.pipelineId;
+      }
+      const { data, error: err } = await withTimeout(
+        rawGet("/api/v1/analytics/capacity", { params: { query: params } }),
+        15000,
+        "Capacity request",
+      );
+      if (token !== capacityToken) return;
+      if (err) throw err;
+      capacity.value = data as CapacityResponse;
+    } catch (e: unknown) {
+      if (token !== capacityToken) return;
+      capacityError.value = formatApiErrorMessage(e);
+    } finally {
+      if (token === capacityToken) capacityLoading.value = false;
+    }
+  }
+
   return {
     filters,
     measure,
@@ -812,11 +971,15 @@ export const useAnalyticsStore = defineStore("analytics", () => {
     groupBy,
     showCapacityOverlay,
     capacitySummary,
+    capacity,
+    capacityLoading,
+    capacityError,
     setFilters,
     setMeasure,
     resetFilters,
     applyQueryParams,
     fetchQuery,
+    fetchCapacity,
     fetchOptions,
   };
 });

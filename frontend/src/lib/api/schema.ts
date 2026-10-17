@@ -1912,6 +1912,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/capacity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Analytics Capacity
+         * @description Capacity / queue-pressure observability (FAR-1343).
+         *
+         *     Answers "is my queue draining, and if not, which limit is holding it?" plus
+         *     "is the org's active-run resource healthy?" from one read surface:
+         *
+         *     * per-pipeline and org-wide pending depth, oldest-pending age and the
+         *       created/started/completed counts over the window (the drain rate);
+         *     * a cause breakdown for the pending queue (pipeline capacity vs org run
+         *       capacity vs org sandbox capacity, from the canonical capacity markers);
+         *     * the configured limits, the limit currently binding, and how many pending
+         *       runs would become admissible if that limit were raised;
+         *     * org ACTIVE-RUN health — cap utilisation vs completion rate and the
+         *       "cap fully held AND completions ≈ 0 for K consecutive intervals"
+         *       leak/stall signature with per-pipeline attribution.
+         *
+         *     **Observability only — signal, never a refusal.** A repeated ``pipeline_id``
+         *     narrows the scope; otherwise the report is org-wide. ``window_minutes``
+         *     bounds the scan; an oversized scan is a 422 asking the caller to narrow it,
+         *     never a silently truncated series.
+         */
+        get: operations["analytics_capacity_api_v1_analytics_capacity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analytics/guardrails": {
         parameters: {
             query?: never;
@@ -11845,6 +11883,315 @@ export interface components {
              * @description Allowlist of run_context keys the node may read. Absent = UNRESTRICTED (full run_context).
              */
             context_scope?: string[] | null;
+        };
+        /**
+         * CapacityActiveHealth
+         * @description Org ACTIVE-RUN health: cap utilisation vs completion rate (FAR-1343).
+         *
+         *     ``executing_total`` is the part of the gate total that genuinely holds a
+         *     slot (running/claimed/unknown); ``parked_total`` is human-waiting runs the
+         *     org gate counts but which are not executing. ``stall_suspected`` is the
+         *     leak/stall signature: the org cap fully held while nothing completed for
+         *     ``stall_intervals`` consecutive complete intervals.
+         */
+        CapacityActiveHealth: {
+            /** Org Run Limit */
+            org_run_limit?: number | null;
+            /**
+             * Gate Total
+             * @default 0
+             */
+            gate_total: number;
+            /**
+             * Executing Total
+             * @default 0
+             */
+            executing_total: number;
+            /**
+             * Running Total
+             * @default 0
+             */
+            running_total: number;
+            /**
+             * Parked Total
+             * @default 0
+             */
+            parked_total: number;
+            /**
+             * Cancelling Total
+             * @default 0
+             */
+            cancelling_total: number;
+            /** Utilisation */
+            utilisation?: number | null;
+            /**
+             * Cap Held
+             * @default false
+             */
+            cap_held: boolean;
+            /**
+             * Completions In Window
+             * @default 0
+             */
+            completions_in_window: number;
+            /**
+             * Zero Completion Intervals
+             * @default 0
+             */
+            zero_completion_intervals: number;
+            /**
+             * Stall Intervals
+             * @default 3
+             */
+            stall_intervals: number;
+            /**
+             * Stall Suspected
+             * @default false
+             */
+            stall_suspected: boolean;
+            /**
+             * Stale Heartbeat Threshold Seconds
+             * @default 1800
+             */
+            stale_heartbeat_threshold_seconds: number;
+            /**
+             * Stale Heartbeat Count
+             * @default 0
+             */
+            stale_heartbeat_count: number;
+            /** Attribution */
+            attribution: components["schemas"]["CapacityAttribution"][];
+        };
+        /** CapacityAttribution */
+        CapacityAttribution: {
+            /** Pipeline Id */
+            pipeline_id: string;
+            /** Pipeline Name */
+            pipeline_name?: string | null;
+            /**
+             * Executing
+             * @default 0
+             */
+            executing: number;
+            /**
+             * Running
+             * @default 0
+             */
+            running: number;
+            /**
+             * Parked
+             * @default 0
+             */
+            parked: number;
+            /** Oldest Executing Age Seconds */
+            oldest_executing_age_seconds?: number | null;
+            /**
+             * Stale Heartbeat Count
+             * @default 0
+             */
+            stale_heartbeat_count: number;
+        };
+        /**
+         * CapacityBinding
+         * @description Which limit currently binds, and what lifting it would admit.
+         */
+        CapacityBinding: {
+            /** Scope */
+            scope: string;
+            /** Limit */
+            limit?: number | null;
+            /** In Use */
+            in_use?: number | null;
+            /** Headroom */
+            headroom?: number | null;
+            /**
+             * Pending Blocked
+             * @default 0
+             */
+            pending_blocked: number;
+            /**
+             * Admissible If Raised
+             * @default 0
+             */
+            admissible_if_raised: number;
+        };
+        /** CapacityDrain */
+        CapacityDrain: {
+            /**
+             * Created
+             * @default 0
+             */
+            created: number;
+            /**
+             * Started
+             * @default 0
+             */
+            started: number;
+            /**
+             * Completed
+             * @default 0
+             */
+            completed: number;
+            /** Ratio */
+            ratio?: number | null;
+            /**
+             * Baseline Depth
+             * @default 0
+             */
+            baseline_depth: number;
+            /** Baseline Oldest Pending Age Seconds */
+            baseline_oldest_pending_age_seconds?: number | null;
+            /**
+             * Final Depth
+             * @default 0
+             */
+            final_depth: number;
+            /**
+             * Depth Change
+             * @default 0
+             */
+            depth_change: number;
+            /** Verdict */
+            verdict: string;
+        };
+        /**
+         * CapacityLimits
+         * @description The configured limits alongside the queue so a reader sees headroom.
+         */
+        CapacityLimits: {
+            /** Org Run Concurrency Limit */
+            org_run_concurrency_limit?: number | null;
+            /** Sandbox Concurrency Limit */
+            sandbox_concurrency_limit?: number | null;
+            /**
+             * Sandbox Limit Is Default
+             * @default false
+             */
+            sandbox_limit_is_default: boolean;
+        };
+        /** CapacityPending */
+        CapacityPending: {
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+            /** Oldest Pending Age Seconds */
+            oldest_pending_age_seconds?: number | null;
+            /**
+             * By Cause
+             * @default {}
+             */
+            by_cause: {
+                [key: string]: number;
+            };
+            /** By Pipeline */
+            by_pipeline: components["schemas"]["CapacityPendingByPipeline"][];
+        };
+        /** CapacityPendingByPipeline */
+        CapacityPendingByPipeline: {
+            /** Pipeline Id */
+            pipeline_id: string;
+            /** Pipeline Name */
+            pipeline_name?: string | null;
+            /**
+             * Pending Count
+             * @default 0
+             */
+            pending_count: number;
+            /** Oldest Pending Age Seconds */
+            oldest_pending_age_seconds?: number | null;
+            /** Max Concurrent Runs */
+            max_concurrent_runs?: number | null;
+        };
+        /** CapacityQueueIfRaised */
+        CapacityQueueIfRaised: {
+            /**
+             * Pending Now
+             * @default 0
+             */
+            pending_now: number;
+            /**
+             * Admissible If Binding Raised
+             * @default 0
+             */
+            admissible_if_binding_raised: number;
+            /**
+             * Pending After Raise
+             * @default 0
+             */
+            pending_after_raise: number;
+        };
+        /** CapacityResponse */
+        CapacityResponse: {
+            /** Generated At */
+            generated_at: string;
+            /** Window Start */
+            window_start: string;
+            /** Window Seconds */
+            window_seconds: number;
+            /** Interval Seconds */
+            interval_seconds: number;
+            limits: components["schemas"]["CapacityLimits"];
+            pending: components["schemas"]["CapacityPending"];
+            drain: components["schemas"]["CapacityDrain"];
+            binding: components["schemas"]["CapacityBinding"];
+            queue_if_raised: components["schemas"]["CapacityQueueIfRaised"];
+            active_health: components["schemas"]["CapacityActiveHealth"];
+            /** Series */
+            series: components["schemas"]["CapacitySeriesBucket"][];
+        };
+        /** CapacitySeriesBucket */
+        CapacitySeriesBucket: {
+            /** Interval Start */
+            interval_start: string;
+            /** Interval End */
+            interval_end: string;
+            /**
+             * Created
+             * @default 0
+             */
+            created: number;
+            /**
+             * Started
+             * @default 0
+             */
+            started: number;
+            /**
+             * Completed
+             * @default 0
+             */
+            completed: number;
+            /**
+             * Pending Depth
+             * @default 0
+             */
+            pending_depth: number;
+            /** Oldest Pending Age Seconds */
+            oldest_pending_age_seconds?: number | null;
+            /** Drain Ratio */
+            drain_ratio?: number | null;
+            /**
+             * Complete
+             * @default false
+             */
+            complete: boolean;
+            /** By Pipeline */
+            by_pipeline: components["schemas"]["CapacitySeriesPipeline"][];
+        };
+        /** CapacitySeriesPipeline */
+        CapacitySeriesPipeline: {
+            /** Pipeline Id */
+            pipeline_id: string;
+            /** Pipeline Name */
+            pipeline_name?: string | null;
+            /**
+             * Pending Depth
+             * @default 0
+             */
+            pending_depth: number;
+            /** Oldest Pending Age Seconds */
+            oldest_pending_age_seconds?: number | null;
         };
         /** ChangeMemberRoleRequest */
         ChangeMemberRoleRequest: {
@@ -25897,6 +26244,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConcurrencyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    analytics_capacity_api_v1_analytics_capacity_get: {
+        parameters: {
+            query?: {
+                pipeline_id?: string[] | null;
+                window_minutes?: number;
+                interval_seconds?: number;
+                stall_intervals?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapacityResponse"];
                 };
             };
             /** @description Validation Error */
