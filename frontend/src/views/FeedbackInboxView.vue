@@ -50,6 +50,7 @@
     <div
       v-if="loading"
       class="space-y-2"
+      role="status"
       aria-busy="true"
       :aria-label="$t('views.FeedbackInboxView.loading_feedback')"
       data-testid="feedback-inbox-loading"
