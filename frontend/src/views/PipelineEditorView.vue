@@ -1787,6 +1787,7 @@ import { Background } from '@vue-flow/background'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import { useDataFetch } from '../composables/useDataFetch'
+import { trapTabInElement } from '../composables/useFocusTrap'
 import { formatApiError, throwOnError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 
@@ -3135,11 +3136,6 @@ const isMobileSheet = computed(() => !isDesktopViewport.value)
 
 const NODE_SHEET_TITLE_ID = 'pipeline-editor-node-sheet-title'
 const EDGE_SHEET_TITLE_ID = 'pipeline-editor-edge-sheet-title'
-// The focusable descendants of a sheet, in DOM order. `[tabindex]` is broad on
-// purpose: the sheets contain native controls plus PrimeVue widgets whose inner
-// focusable element may carry an explicit tabindex.
-const SHEET_FOCUSABLE_SELECTOR =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 const nodePanelRef = ref<HTMLElement | null>(null)
 const edgePanelRef = ref<HTMLElement | null>(null)
@@ -3172,27 +3168,10 @@ function onSheetKeydown(event: KeyboardEvent) {
   if (event.key !== 'Tab') return
   const panel = activeSheetElement()
   if (!panel) return
-  const focusables = panel.querySelectorAll<HTMLElement>(SHEET_FOCUSABLE_SELECTOR)
-  // A sheet with no focusable descendants has no Tab target to wrap around —
-  // do nothing. `atStart` would otherwise be true (a container-focused empty
-  // sheet leaves `last` undefined), and the Shift+Tab branch would call
-  // `last.focus()` on undefined.
-  if (focusables.length === 0) return
-  const first = focusables[0]
-  const last = focusables[focusables.length - 1]
-  // Focus can legitimately be on the panel container itself (the element
-  // `tabindex="-1"` is placed on when the sheet opens and after a reset), so
-  // treat the container as the start edge for a backwards wrap — otherwise
-  // Shift+Tab from the freshly-opened sheet would escape behind it.
-  const atStart = document.activeElement === first || document.activeElement === panel
-  const atEnd = document.activeElement === last
-  if (event.shiftKey && atStart) {
-    event.preventDefault()
-    last.focus()
-  } else if (!event.shiftKey && atEnd) {
-    event.preventDefault()
-    first.focus()
-  }
+  // The Tab-cycle (including the freshly-opened panel-container case and the
+  // zero-focusable guard) lives in the shared helper so the algorithm and its
+  // selector have a single owner — see `src/composables/useFocusTrap.ts`.
+  trapTabInElement(event, panel)
 }
 
 // Move focus into a sheet when it opens and return it to the trigger when it

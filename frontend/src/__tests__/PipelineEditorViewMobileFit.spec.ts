@@ -58,6 +58,7 @@ vi.mock('../lib/api/client', () => {
 
 import PipelineEditorView from '../views/PipelineEditorView.vue'
 import { usePlanStore } from '../stores/planStore'
+import { FOCUSABLE_SELECTOR } from '../composables/useFocusTrap'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -67,9 +68,6 @@ const router = createRouter({
     { path: '/library', name: 'library', component: { template: '<div />' } },
   ],
 })
-
-const SHEET_FOCUSABLE_SELECTOR =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 const originalMatchMedia = window.matchMedia
 const originalInnerHeight = Object.getOwnPropertyDescriptor(window, 'innerHeight')
@@ -467,7 +465,7 @@ describe('PipelineEditorView — mobile properties-sheet dialogs (FAR-1861)', ()
     await nextTick()
 
     const nodeSheet = sheetFor(wrapper, 'pipeline-editor-node-props-close')
-    const focusable = nodeSheet.querySelectorAll<HTMLElement>(SHEET_FOCUSABLE_SELECTOR)
+    const focusable = nodeSheet.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)
     const first = focusable[0]
     const middle = focusable[1]
     const last = focusable[focusable.length - 1]
@@ -558,7 +556,7 @@ describe('PipelineEditorView — mobile properties-sheet dialogs (FAR-1861)', ()
     document.body.removeChild(trigger)
   })
 
-  it('does not throw on Shift+Tab in an open sheet with no focusable descendants', async () => {
+  it('pins focus (preventDefault) on Tab in an open sheet with no focusable descendants', async () => {
     const wrapper = mountEditor(document.body)
     await flushPromises()
     const vm = wrapper.vm as any
@@ -568,7 +566,8 @@ describe('PipelineEditorView — mobile properties-sheet dialogs (FAR-1861)', ()
 
     const nodeSheet = sheetFor(wrapper, 'pipeline-editor-node-props-close')
     // Strip every focusable descendant, leaving only the focusable container
-    // itself — the zero-focusable case the trap must treat as a no-op.
+    // itself — the zero-focusable case. The shared trap preventDefaults so
+    // focus cannot escape behind the modal sheet.
     nodeSheet
       .querySelectorAll('a[href], button, input, select, textarea, [tabindex]')
       .forEach((el) => el.remove())
@@ -579,7 +578,8 @@ describe('PipelineEditorView — mobile properties-sheet dialogs (FAR-1861)', ()
     // handler propagates to the assertion rather than being swallowed by jsdom.
     const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
     expect(() => vm.onSheetKeydown(event)).not.toThrow()
-    expect(event.defaultPrevented).toBe(false)
+    expect(event.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(nodeSheet)
     wrapper.unmount()
   })
 
