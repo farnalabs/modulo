@@ -43,7 +43,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0302_runs_run_grouping"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0301_oauth_consent_state_preauth_rls"
-_CHAIN_HEAD_MIGRATION = "0318_trigger_event_required_refs_missing"
+_CHAIN_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
 
 #: The constraint 0003/0110 put on the global thread id — dropped by the upgrade.
 _THREAD_CONSTRAINT = "runs_langgraph_thread_id_key"

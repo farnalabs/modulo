@@ -40,7 +40,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0307_runs_guardrail_override_resume_pending"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0306_trigger_secret_encryption"
-_CHAIN_HEAD_MIGRATION = "0318_trigger_event_required_refs_missing"
+_CHAIN_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
 _COLUMN_NAME = "guardrail_override_resume_pending"
 
 
