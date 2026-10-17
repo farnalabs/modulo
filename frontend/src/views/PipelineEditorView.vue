@@ -258,7 +258,8 @@
                 open
                 :id="autonomyPanelDialogId"
                 ref="autonomyPanelDialogRef"
-                class="absolute right-0 left-auto top-full z-50 mt-1 w-80 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-card p-3 shadow-lg"
+                class="fixed z-50 max-h-[calc(100vh-1rem)] w-80 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-lg border border-border bg-card p-3 shadow-lg"
+                :style="autonomyPanelStyle"
                 tabindex="-1"
                 :aria-label="$t('views.PipelineEditorView.autonomy_panel_title')"
                 data-testid="pipeline-editor-autonomy-panel-dialog"
@@ -374,7 +375,8 @@
                 open
                 :id="retryPolicyPanelId"
                 ref="retryPolicyPanelRef"
-                class="absolute right-0 left-auto top-full z-50 mt-1 w-72 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-card p-3 shadow-lg"
+                class="fixed z-50 max-h-[calc(100vh-1rem)] w-72 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-lg border border-border bg-card p-3 shadow-lg"
+                :style="retryPolicyPanelStyle"
                 tabindex="-1"
                 :aria-label="$t('views.PipelineEditorView.retry_policy')"
                 data-testid="pipeline-editor-retry-policy-panel"
@@ -533,7 +535,7 @@
                 option-label="label"
                 option-value="value"
                 class="toolbar-select w-40 text-xs"
-                append-to="self"
+                append-to="body"
                 :aria-label="$t('views.PipelineEditorView.new_node_type')"
                 :title="$t('views.PipelineEditorView.new_node_type_hint')"
                 data-testid="pipeline-editor-node-type-select"
@@ -710,7 +712,7 @@
               option-label="label"
               option-value="value"
               class="toolbar-select w-40 text-xs"
-              append-to="self"
+              append-to="body"
               :aria-label="$t('views.PipelineEditorView.new_node_type')"
             />
             <Button severity="secondary" outlined size="small" type="button" class="text-xs" @click="addNode()">{{ $t('views.PipelineEditorView.add_node') }}</Button>
@@ -2169,6 +2171,44 @@ const ownerlessGateAdvisory = computed(() => {
   return !selectedEdgeData.value.hitl_review_config?.required_team_id
 })
 
+/**
+ * Viewport-anchored positioning for the toolbar popovers (FAR-1899).
+ *
+ * FAR-1861 made the editor content column the internal scroll container
+ * (`overflow-y-auto`) and clipped the editor root (`overflow-hidden`). A
+ * popover that stays in-tree is therefore clipped to the column's box, which
+ * in the sub-fit band (a viewport shorter than the wrapped toolbar's
+ * min-content height) is only a few pixels tall — the panel is reachable by
+ * scrolling the column but can never be seen whole. A `position: fixed`
+ * popover escapes that clipping (no ancestor establishes a containing block
+ * for it — the editor root only sets height), so it is anchored to the
+ * trigger's viewport rect and its height clamped to the room actually
+ * available: the panel scrolls its own content rather than being cut off.
+ * Returns {} when the trigger ref is not bound yet (jsdom mounts), leaving the
+ * CSS class fallback in charge.
+ */
+function anchoredPopoverStyle(trigger: HTMLElement | null): Record<string, string> {
+  if (!trigger) return {}
+  const rect = trigger.getBoundingClientRect()
+  const margin = 8
+  const gap = 4
+  const spaceBelow = window.innerHeight - rect.bottom - gap - margin
+  const spaceAbove = rect.top - gap - margin
+  // Stay below unless that leaves less than a usable panel AND there is
+  // genuinely more room above (so a tall viewport keeps the familiar
+  // below-the-trigger placement).
+  const openUp = spaceBelow < 160 && spaceAbove > spaceBelow
+  const available = openUp ? spaceAbove : spaceBelow
+  const maxHeight = Math.max(120, Math.min(available, window.innerHeight - margin * 2))
+  return {
+    left: 'auto',
+    right: `${Math.max(margin, window.innerWidth - rect.right)}px`,
+    top: openUp ? 'auto' : `${rect.bottom + gap}px`,
+    bottom: openUp ? `${Math.max(margin, window.innerHeight - rect.top + gap)}px` : 'auto',
+    maxHeight: `${maxHeight}px`,
+  }
+}
+
 const retryPolicyOpen = ref(false)
 const retryPolicySaving = ref(false)
 // FAR-649: coverage mode. 'all' = All errors (the default; saves the policy
@@ -2184,8 +2224,26 @@ const retryPolicyLegacyBackoff = ref<number | undefined>(undefined)
 const retryPolicyError = ref<string | null>(null)
 const retryPolicyToggleRef = ref<HTMLButtonElement | null>(null)
 const retryPolicyPanelRef = ref<HTMLElement | null>(null)
+const retryPolicyPanelStyle = ref<Record<string, string>>({})
 const retryPolicyToggleId = 'pipeline-editor-retry-policy-toggle'
 const retryPolicyPanelId = 'pipeline-editor-retry-policy-panel'
+
+function positionRetryPolicyPanel() {
+  retryPolicyPanelStyle.value = anchoredPopoverStyle(retryPolicyToggleRef.value)
+}
+
+// Capture phase: scroll does not bubble, so this also catches the content
+// column's own scroll while the panel is open (keeping it pinned to its
+// trigger) — not just the window's.
+function bindRetryPolicyPositioning() {
+  document.addEventListener('scroll', positionRetryPolicyPanel, true)
+  window.addEventListener('resize', positionRetryPolicyPanel)
+}
+
+function unbindRetryPolicyPositioning() {
+  document.removeEventListener('scroll', positionRetryPolicyPanel, true)
+  window.removeEventListener('resize', positionRetryPolicyPanel)
+}
 const retryPolicyOptions = [
   { value: 'stall', labelKey: 'views.PipelineEditorView.retry_policy_stall' },
   { value: 'timeout', labelKey: 'views.PipelineEditorView.retry_policy_timeout' },
@@ -2325,15 +2383,19 @@ function syncRetryPolicyFromPipeline() {
 }
 
 function toggleRetryPolicy() {
-  retryPolicyOpen.value = !retryPolicyOpen.value
   if (retryPolicyOpen.value) {
-    syncRetryPolicyFromPipeline()
-    nextTick(() => {
-      retryPolicyPanelRef.value?.focus()
-    })
-  } else {
+    retryPolicyOpen.value = false
     retryPolicyToggleRef.value?.focus()
+    return
   }
+  syncRetryPolicyFromPipeline()
+  // Anchor BEFORE the panel paints so it never flashes at its static
+  // in-column position for a frame.
+  positionRetryPolicyPanel()
+  retryPolicyOpen.value = true
+  nextTick(() => {
+    retryPolicyPanelRef.value?.focus()
+  })
 }
 
 function closeRetryPolicy() {
@@ -2351,13 +2413,16 @@ function onRetryPolicyKeydown(event: KeyboardEvent) {
 watch(retryPolicyOpen, (open) => {
   if (open) {
     document.addEventListener('keydown', onRetryPolicyKeydown)
+    bindRetryPolicyPositioning()
   } else {
     document.removeEventListener('keydown', onRetryPolicyKeydown)
+    unbindRetryPolicyPositioning()
   }
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onRetryPolicyKeydown)
+  unbindRetryPolicyPositioning()
 })
 
 // FAR-1696 (ADR 043 S5): progressive-autonomy panel popover. Same
@@ -2368,16 +2433,34 @@ const autonomyPanelDialogId = 'pipeline-editor-autonomy-panel-dialog'
 const autonomyPanelOpen = ref(false)
 const autonomyPanelToggleRef = ref<HTMLButtonElement | null>(null)
 const autonomyPanelDialogRef = ref<HTMLDialogElement | null>(null)
+const autonomyPanelStyle = ref<Record<string, string>>({})
+
+function positionAutonomyPanel() {
+  autonomyPanelStyle.value = anchoredPopoverStyle(autonomyPanelToggleRef.value)
+}
+
+function bindAutonomyPanelPositioning() {
+  document.addEventListener('scroll', positionAutonomyPanel, true)
+  window.addEventListener('resize', positionAutonomyPanel)
+}
+
+function unbindAutonomyPanelPositioning() {
+  document.removeEventListener('scroll', positionAutonomyPanel, true)
+  window.removeEventListener('resize', positionAutonomyPanel)
+}
 
 function toggleAutonomyPanel() {
-  autonomyPanelOpen.value = !autonomyPanelOpen.value
   if (autonomyPanelOpen.value) {
-    nextTick(() => {
-      autonomyPanelDialogRef.value?.focus()
-    })
-  } else {
+    autonomyPanelOpen.value = false
     autonomyPanelToggleRef.value?.focus()
+    return
   }
+  // Same FAR-1899 anchor-before-paint as the retry-policy panel above.
+  positionAutonomyPanel()
+  autonomyPanelOpen.value = true
+  nextTick(() => {
+    autonomyPanelDialogRef.value?.focus()
+  })
 }
 
 function closeAutonomyPanel() {
@@ -2395,13 +2478,16 @@ function onAutonomyPanelKeydown(event: KeyboardEvent) {
 watch(autonomyPanelOpen, (open) => {
   if (open) {
     document.addEventListener('keydown', onAutonomyPanelKeydown)
+    bindAutonomyPanelPositioning()
   } else {
     document.removeEventListener('keydown', onAutonomyPanelKeydown)
+    unbindAutonomyPanelPositioning()
   }
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onAutonomyPanelKeydown)
+  unbindAutonomyPanelPositioning()
 })
 
 // A manual demote/promote writes earned_autonomy_level server-side; refetch

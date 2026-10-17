@@ -205,15 +205,19 @@ describe('PipelineEditorView toolbar & fit-on-load', () => {
     expect(wrapper.findAll('.toolbar-select').length).toBeGreaterThanOrEqual(2)
   })
 
-  it('anchors the node-type dropdown overlay to its trigger', async () => {
+  it('teleports the node-type dropdown overlay out of the clipped editor column', async () => {
     const wrapper = mountEditor()
     await flushPromises()
 
     const select = componentByTestid(wrapper, 'pipeline-editor-node-type-select')
-    // appendTo="self" renders the options overlay inside the select's own
-    // position:relative wrapper, so items can never detach to the viewport
-    // origin (the body-appended mispositioning reported on this page).
-    expect(select.props('appendTo')).toBe('self')
+    // FAR-1899: the docked toolbar lives inside the editor content column,
+    // which FAR-1861 made the internal scroll container (overflow-y-auto). An
+    // in-tree (append-to="self") overlay is clipped to that column, which in
+    // the sub-fit band is shorter than the wrapped toolbar — so the dropdown
+    // overlay is teleported to <body>. PrimeVue's absolutePosition then anchors
+    // it to the trigger's viewport rect (pinned by the 640x360 e2e case in
+    // tests/e2e/pipeline-editor.spec.ts).
+    expect(select.props('appendTo')).toBe('body')
     // PrimeVue v5 consumes aria-label as the ariaLabel prop.
     expect(select.props('ariaLabel')).toBe('New node type')
   })

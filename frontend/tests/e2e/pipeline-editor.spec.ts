@@ -298,6 +298,99 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     expect(flowBox!.y + flowBox!.height).toBeLessThanOrEqual(viewportHeight + 1)
   })
 
+  // FAR-1899: the toolbar popovers must survive the sub-fit band. FAR-1861
+  // clipped the editor root and made the content column the internal scroll
+  // container; a popover left in-tree is clipped to the column's box, which in
+  // the sub-fit band is shorter than the wrapped toolbar. The mocked e2e chrome
+  // is shorter than production's, so the viewport alone does not enter the band
+  // — chrome is added above the editor to make the column shorter than the
+  // toolbar's min-content height, exactly the condition the ticket describes.
+  async function enterSubFitBand(page: Page) {
+    await page.evaluate(() => {
+      const editorRoot = document.querySelector('[data-testid="pipeline-editor-root"]')
+      if (!editorRoot?.parentElement) throw new Error('editor root not mounted')
+      const spacer = document.createElement('div')
+      spacer.id = 'e2e-subfit-chrome-spacer'
+      spacer.style.height = '160px'
+      editorRoot.parentElement.insertBefore(spacer, editorRoot)
+    })
+    const content = page.getByTestId('pipeline-editor-content')
+    const toolbar = page.getByTestId('pipeline-editor-toolbar')
+    await expect
+      .poll(async () => content.evaluate((el) => el.clientHeight), {
+        timeout: 10_000,
+        message: 'editor content column must shrink below the toolbar min-content height',
+      })
+      .toBeLessThan(await toolbar.evaluate((el) => el.getBoundingClientRect().height))
+  }
+
+  test('the sub-fit band keeps the toolbar dropdown unclipped at the fold', { tag: '@regression' }, async ({ page, env }) => {
+    await loginAsAdmin(page, env)
+    await mockEditorWithNode(page)
+    await page.setViewportSize({ width: 640, height: 360 })
+
+    await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
+    await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+    await enterSubFitBand(page)
+
+    await page.getByTestId('pipeline-editor-node-type-select').click()
+    const overlay = page.locator('.p-select-overlay')
+    await expect(overlay).toBeVisible()
+
+    const viewport = page.viewportSize()!
+    const box = await overlay.boundingBox()
+    expect(box).not.toBeNull()
+    // Fully inside the fold on every edge — not clipped where the content
+    // column would have cut it, and not detached off-screen.
+    expect(box!.y).toBeGreaterThanOrEqual(0)
+    expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height)
+    expect(box!.x).toBeGreaterThanOrEqual(0)
+    expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width)
+
+    // A clipped box still reports a rect, so also prove the overlay is
+    // hit-testable at its own centre (i.e. actually visible, not cut off).
+    const hitAtCentre = await page.evaluate(() => {
+      const el = document.querySelector('.p-select-overlay') as HTMLElement | null
+      if (!el) return false
+      const r = el.getBoundingClientRect()
+      const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+      return top !== null && el.contains(top)
+    })
+    expect(hitAtCentre).toBe(true)
+
+    // Teleporting the overlay must not break its keyboard dismissal: Escape on
+    // the focused select still closes it.
+    await page.keyboard.press('Escape')
+    await expect(overlay).toBeHidden()
+  })
+
+  test('the sub-fit band keeps the retry-policy panel inside the fold', { tag: '@regression' }, async ({ page, env }) => {
+    await loginAsAdmin(page, env)
+    await mockEditorWithNode(page)
+    await page.setViewportSize({ width: 640, height: 360 })
+
+    await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
+    await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+    await enterSubFitBand(page)
+
+    await page.getByTestId('pipeline-editor-retry-policy-toggle').click()
+    const panel = page.getByTestId('pipeline-editor-retry-policy-panel')
+    await expect(panel).toBeVisible()
+
+    const viewport = page.viewportSize()!
+    const box = await panel.boundingBox()
+    expect(box).not.toBeNull()
+    expect(box!.y).toBeGreaterThanOrEqual(0)
+    expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height)
+
+    // The panel is bounded to the room available and scrolls its own content,
+    // instead of being cut off at the fold.
+    const scrollsInternally = await panel.evaluate(
+      (el) => getComputedStyle(el).overflowY === 'auto' && el.scrollHeight >= el.clientHeight,
+    )
+    expect(scrollsInternally).toBe(true)
+  })
+
   test('node properties panel opens as a closable overlay without crushing the canvas', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await mockEditorWithNode(page)

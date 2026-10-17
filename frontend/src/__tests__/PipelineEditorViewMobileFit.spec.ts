@@ -658,3 +658,133 @@ describe('PipelineEditorView — edge badge variants (FAR-1861 changed-lines gat
     wrapper.unmount()
   })
 })
+
+describe('PipelineEditorView — toolbar popover anchoring (FAR-1899 changed-lines gate)', () => {
+  // The popovers are `position: fixed` and anchored to their trigger's viewport
+  // rect so the editor's clipped scroll column (FAR-1861) cannot cut them off.
+  // jsdom returns an all-zero rect for every element, so the geometry branches
+  // (below vs flipped-above, the min-height clamp, the off-screen right/bottom
+  // clamps) are driven here by stubbing the toggle's rect — the Playwright
+  // specs do not feed the unit lcov report the gate reads.
+  type Rect = { top: number; right: number; bottom: number }
+
+  function fakeRect({ top, right, bottom }: Rect): DOMRect {
+    return {
+      top,
+      right,
+      bottom,
+      left: 0,
+      width: 0,
+      height: 0,
+      x: 0,
+      y: top,
+      toJSON: () => ({}),
+    } as DOMRect
+  }
+
+  function stubToggleRect(wrapper: ReturnType<typeof mount>, testid: string, rect: Rect) {
+    const el = wrapper.get(`[data-testid="${testid}"]`).element as HTMLElement
+    el.getBoundingClientRect = () => fakeRect(rect)
+    return el
+  }
+
+  it('returns no inline style when the trigger is not bound yet', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    expect(vm.anchoredPopoverStyle(null)).toEqual({})
+    // …and the panel positioner falls back to the class default.
+    vm.retryPolicyToggleRef = null
+    vm.positionRetryPolicyPanel()
+    expect(vm.retryPolicyPanelStyle).toEqual({})
+    wrapper.unmount()
+  })
+
+  it('anchors the retry panel below the trigger when there is room', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+    setViewport(800)
+    stubToggleRect(wrapper, 'pipeline-editor-retry-policy-toggle', { top: 60, right: 200, bottom: 100 })
+    await wrapper.get('[data-testid="pipeline-editor-retry-policy-toggle"]').trigger('click')
+    await nextTick()
+
+    const style = wrapper.get('[data-testid="pipeline-editor-retry-policy-panel"]').attributes('style') ?? ''
+    expect(style).toContain('top: 104px')
+    expect(style).toContain('bottom: auto')
+    expect(style).toContain(`right: ${window.innerWidth - 200}px`)
+    expect(style).toContain('max-height: 688px')
+    wrapper.unmount()
+  })
+
+  it('flips the panel above the trigger and bounds its height when below is tight', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+    setViewport(300)
+    stubToggleRect(wrapper, 'pipeline-editor-autonomy-panel-toggle', { top: 270, right: 200, bottom: 290 })
+    await wrapper.get('[data-testid="pipeline-editor-autonomy-panel-toggle"]').trigger('click')
+    await nextTick()
+
+    const style = wrapper.get('[data-testid="pipeline-editor-autonomy-panel-dialog"]').attributes('style') ?? ''
+    expect(style).toContain('top: auto')
+    expect(style).toContain('bottom: 34px')
+    expect(style).toContain('max-height: 258px')
+    wrapper.unmount()
+  })
+
+  it('clamps the panel height and keeps it on screen near an edge', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+    setViewport(100)
+    stubToggleRect(wrapper, 'pipeline-editor-retry-policy-toggle', { top: 200, right: 2000, bottom: 210 })
+    await wrapper.get('[data-testid="pipeline-editor-retry-policy-toggle"]').trigger('click')
+    await nextTick()
+
+    const style = wrapper.get('[data-testid="pipeline-editor-retry-policy-panel"]').attributes('style') ?? ''
+    // Math.max(120, …) keeps a usable minimum even with no real room.
+    expect(style).toContain('max-height: 120px')
+    // Right/bottom clamp to the margin when the trigger overflows the viewport.
+    expect(style).toContain('right: 8px')
+    expect(style).toContain('bottom: 8px')
+    wrapper.unmount()
+  })
+
+  it('keeps the panel below when above is not roomier', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+    setViewport(200)
+    stubToggleRect(wrapper, 'pipeline-editor-retry-policy-toggle', { top: 80, right: 200, bottom: 88 })
+    await wrapper.get('[data-testid="pipeline-editor-retry-policy-toggle"]').trigger('click')
+    await nextTick()
+
+    const style = wrapper.get('[data-testid="pipeline-editor-retry-policy-panel"]').attributes('style') ?? ''
+    // spaceBelow < 160 but above is smaller, so it stays below (clamped to 120).
+    expect(style).toContain('top: 92px')
+    expect(style).toContain('bottom: auto')
+    expect(style).toContain('max-height: 120px')
+    wrapper.unmount()
+  })
+
+  it('opens and closes both toolbar popovers through their toggles', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+    setViewport(800)
+
+    const retry = wrapper.get('[data-testid="pipeline-editor-retry-policy-toggle"]')
+    await retry.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-retry-policy-panel"]').exists()).toBe(true)
+    await retry.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-retry-policy-panel"]').exists()).toBe(false)
+
+    const autonomy = wrapper.get('[data-testid="pipeline-editor-autonomy-panel-toggle"]')
+    await autonomy.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-autonomy-panel-dialog"]').exists()).toBe(true)
+    await autonomy.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-autonomy-panel-dialog"]').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+})
