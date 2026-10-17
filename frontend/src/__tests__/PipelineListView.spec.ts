@@ -38,7 +38,10 @@ vi.mock('../lib/api/client', () => {
 
 vi.mock('../composables/useApi', () => ({
   useApi: () => ({
-    get: vi.fn((url: string) => Promise.resolve(mockResponses[url] ?? [])),
+    // hasOwnProperty (not ??) so a test can explicitly set an entry to
+    // undefined and have the mock return undefined — the empty-body shape the
+    // folder-list guard must reject — instead of coalescing it to [].
+    get: vi.fn((url: string) => Promise.resolve(Object.prototype.hasOwnProperty.call(mockResponses, url) ? mockResponses[url] : [])),
     patch: patchMock,
   }),
 }))
@@ -1173,5 +1176,32 @@ describe('PipelineListView', () => {
     // Dense dialog context: the shared alert renders in its compact density.
     expect(alert.props('compact')).toBe(true)
     wrapper.unmount()
+  })
+
+  it('shows the folder load error and no folder rows when the folder endpoint returns a non-array', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // useApi.get is an unchecked `get<T>()` cast and returns `undefined as T` on
+    // a 204; foldersList is dereferenced (foldersList.length / spread iteration)
+    // on every render, so a non-array must be rejected, not assigned.
+    mockResponses['/api/v1/pipeline-folders'] = undefined
+    mockResponses['/api/v1/pipelines?page_size=100'] = {
+      items: [{ id: 'p1', organisation_id: 'org1', name: 'Pipeline A', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }],
+      total: 1,
+      page: 1,
+      page_size: 100,
+    }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.exists()).toBe(true)
+    expect(wrapper.findAll('[data-testid="pipeline-tree-folder-row"]')).toHaveLength(0)
+    expect(wrapper.text()).toContain('The server returned an invalid folder list.')
+    expect(consoleError).toHaveBeenCalled()
+    delete mockResponses['/api/v1/pipeline-folders']
+    consoleError.mockRestore()
   })
 })

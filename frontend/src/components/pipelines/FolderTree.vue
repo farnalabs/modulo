@@ -181,19 +181,12 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useApi } from '@/composables/useApi'
 import { formatApiError } from '../../lib/api/formatError'
+import { isFolderList, type FolderItem } from '../../lib/api/folders'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import Select from '../shared/AppSelect.vue'
 import ErrorAlert from '../shared/ErrorAlert.vue'
-
-interface FolderItem {
-  id: string
-  organisation_id: string
-  name: string
-  parent_id: string | null
-  sort_order: number
-}
 
 interface FlatTreeItem {
   folder: FolderItem
@@ -315,13 +308,14 @@ async function loadFolders() {
     // The `get<FolderItem[]>` generic is an unchecked compile-time cast — at
     // runtime useApi returns whatever body arrived, and `undefined as T` on a
     // 204. The computeds below call .filter()/iterate this value on every
-    // render, so assigning a non-array would crash the whole view with an
-    // unhandled render error. Surface a bad shape as the error state instead of
-    // silently coercing it to [] (which would hide a real contract violation).
-    if (!Array.isArray(response)) {
+    // render (and dereference each element's parent_id/name), so a bad shape —
+    // non-array container OR a non-folder element — would crash the whole view
+    // with an unhandled render error. isFolderList validates the container and
+    // every element; surface a bad shape as the error state instead of silently
+    // coercing it to [] (which would hide a real contract violation).
+    if (!isFolderList(response)) {
       console.error(
-        `[FolderTree] Invalid folder list response from ${apiBase.value}: expected an array, received ${response === null ? 'null' : typeof response}`,
-        response,
+        `[FolderTree] Invalid folder list response from ${apiBase.value}: expected an array of folder objects, received ${response === null ? 'null' : typeof response}`,
       )
       error.value = t('components.pipelines.FolderTree.invalid_list_response')
       return

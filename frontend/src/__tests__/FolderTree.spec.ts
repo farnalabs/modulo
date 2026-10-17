@@ -182,6 +182,34 @@ describe('FolderTree list-shape guard', () => {
     expect(consoleError).toHaveBeenCalled()
     consoleError.mockRestore()
   })
+
+  it('renders the error state instead of crashing when an element is null', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // A container-only Array.isArray check passes [null]; the element is then
+    // dereferenced (f.parent_id, a.name) on every render and throws. The guard
+    // must validate elements, not just the container.
+    getMock.mockResolvedValue([null])
+    const wrapper = mountTree()
+    await flushPromises()
+    expect(wrapper.text()).toContain('The server returned an invalid folder list.')
+    expect(wrapper.text()).not.toContain('No folders yet')
+    expect(wrapper.findAll('[data-testid^="folder-tree-item-"]')).toHaveLength(0)
+    expect(consoleError).toHaveBeenCalled()
+    consoleError.mockRestore()
+  })
+
+  it('renders the error state instead of crashing when an element is missing required fields', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // [{}] is an object but has no string name/id, so rendering would call
+    // .localeCompare on undefined and throw.
+    getMock.mockResolvedValue([{}])
+    const wrapper = mountTree()
+    await flushPromises()
+    expect(wrapper.text()).toContain('The server returned an invalid folder list.')
+    expect(wrapper.findAll('[data-testid^="folder-tree-item-"]')).toHaveLength(0)
+    expect(consoleError).toHaveBeenCalled()
+    consoleError.mockRestore()
+  })
 })
 
 describe('FolderTree rendering and selection', () => {

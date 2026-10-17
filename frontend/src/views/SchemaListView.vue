@@ -253,6 +253,7 @@ import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useApi } from '../composables/useApi'
 import { formatApiError } from '../lib/api/formatError'
+import { isFolderList, type FolderItem } from '../lib/api/folders'
 import type { components } from '../lib/api/client'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
@@ -274,14 +275,6 @@ interface SchemaListResponse {
   total: number
   page: number
   page_size: number
-}
-
-interface FolderItem {
-  id: string
-  organisation_id: string
-  name: string
-  parent_id: string | null
-  sort_order: number
 }
 
 const router = useRouter()
@@ -341,7 +334,20 @@ const mobileFolderSelectValue = computed<string>({
 async function loadFolders() {
   folderError.value = null
   try {
-    foldersList.value = await get<FolderItem[]>('/api/v1/schema-folders')
+    const response = await get<FolderItem[]>('/api/v1/schema-folders')
+    // Guard before assigning: `get<FolderItem[]>` is an unchecked cast and
+    // useApi returns `undefined as T` on a 204, while foldersList is
+    // dereferenced (foldersList.length / spread iteration / f.id / f.name) on
+    // every render — a non-array would crash the view. Do NOT coerce to []:
+    // that would hide a real contract violation behind an empty list.
+    if (!isFolderList(response)) {
+      console.error(
+        `[SchemaListView] Invalid folder list response from /api/v1/schema-folders: expected an array of folder objects, received ${response === null ? 'null' : typeof response}`,
+      )
+      folderError.value = t('components.pipelines.FolderTree.invalid_list_response')
+      return
+    }
+    foldersList.value = response
   } catch (e: unknown) {
     folderError.value = formatApiError(e)
   }

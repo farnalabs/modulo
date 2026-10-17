@@ -115,6 +115,10 @@ describe('SchemaListView', () => {
     setActivePinia(createPinia())
     mockPush.mockClear()
     document.body.innerHTML = ''
+    // Each test starts from a valid folder list; individual tests override it.
+    getMock.mockResolvedValue([
+      { id: 'folder-1', organisation_id: 'org-1', name: 'Analytics', parent_id: null, sort_order: 0 },
+    ])
   })
 
   it('renders without crashing', async () => {
@@ -530,5 +534,21 @@ describe('SchemaListView', () => {
     await row.trigger('keydown', { key: ' ', code: 'Space' })
     await flushPromises()
     expect(mockPush).toHaveBeenCalledWith({ name: 'schema-editor', params: { id: '1' } })
+  })
+
+  it('shows the folder load error and no folder list when the folder endpoint returns a non-array', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // useApi.get is an unchecked `get<T>()` cast and returns `undefined as T` on
+    // a 204; foldersList is dereferenced (foldersList.length / spread iteration)
+    // on every render, so a non-array must be rejected, not assigned.
+    getMock.mockResolvedValue(undefined)
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.exists()).toBe(true)
+    expect(wrapper.findAll('[data-testid="schema-list-mobile-folder-select"]')).toHaveLength(0)
+    expect(wrapper.text()).toContain('The server returned an invalid folder list.')
+    expect(consoleError).toHaveBeenCalled()
+    consoleError.mockRestore()
   })
 })

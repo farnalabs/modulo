@@ -423,6 +423,7 @@ import { FOCUSABLE_SELECTOR, trapTabInElement } from '../composables/useFocusTra
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { ChevronRight, Folder, FolderOpen, MoreVertical, FileStack } from '@lucide/vue'
 import { formatApiError, throwOnError } from '../lib/api/formatError'
+import { isFolderList, type FolderItem } from '../lib/api/folders'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 import Menu from 'primevue/menu'
@@ -457,14 +458,6 @@ interface TriggerItem {
   pipeline_id: string
   trigger_type: string
   active: boolean
-}
-
-interface FolderItem {
-  id: string
-  organisation_id: string
-  name: string
-  parent_id: string | null
-  sort_order: number
 }
 
 interface PipelineListResponse {
@@ -597,7 +590,20 @@ async function loadTotalCount() {
 async function loadFolders() {
   folderError.value = null
   try {
-    foldersList.value = await get<FolderItem[]>('/api/v1/pipeline-folders')
+    const response = await get<FolderItem[]>('/api/v1/pipeline-folders')
+    // Guard before assigning: `get<FolderItem[]>` is an unchecked cast and
+    // useApi returns `undefined as T` on a 204, while foldersList is
+    // dereferenced (foldersList.length / spread iteration / f.id / f.name) on
+    // every render — a non-array would crash the view. Do NOT coerce to []:
+    // that would hide a real contract violation behind an empty list.
+    if (!isFolderList(response)) {
+      console.error(
+        `[PipelineListView] Invalid folder list response from /api/v1/pipeline-folders: expected an array of folder objects, received ${response === null ? 'null' : typeof response}`,
+      )
+      folderError.value = t('components.pipelines.FolderTree.invalid_list_response')
+      return
+    }
+    foldersList.value = response
   } catch (e) {
     folderError.value = formatApiError(e)
     console.warn('Failed to load folders', e)
