@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
 from modulo.core.analytics import capacity as capacity_module
 from modulo.core.analytics.capacity import (
@@ -29,6 +30,7 @@ from modulo.core.analytics.capacity import (
     _cause_of,
     _depth_at,
     _heartbeat_reference,
+    build_capacity_rows_query,
     compute_capacity_report,
     validate_capacity_params,
 )
@@ -659,3 +661,44 @@ class TestBinding:
         assert report["limits"]["org_run_concurrency_limit"] == 7
         assert report["pending"]["by_pipeline"][0]["max_concurrent_runs"] == 3
         assert report["pending"]["by_pipeline"][0]["pipeline_name"] == "alpha"
+
+
+def _compiled_scope_sql(params: CapacityParams) -> str:
+    return str(build_capacity_rows_query(_P1, params, window_start=_WINDOW_START).compile(dialect=postgresql.dialect()))
+
+
+class TestTeamScopePredicate:
+    """The team boundary is resolved from the RUN's stamped team (with the
+    pipeline owner as fallback), never the pipeline alone.
+
+    Regression (FAR-1343): the global soft-delete filter injects
+    ``pipelines.deleted_at IS NULL`` into the ON clause of the capacity query's
+    OUTER JOIN, so a SOFT-DELETED pipeline yields NULL pipeline columns. The
+    pre-fix predicate (``Pipeline.owner_team_id IS NULL OR IN (...)``) then
+    matched the ``IS NULL`` arm and reclassified a foreign pipeline as
+    org-level, leaking its surviving pending runs into a team caller's queue.
+    ``coalesce(Run.owner_team_id, Pipeline.owner_team_id)`` scopes on the run's
+    own stamped team, so the boundary no longer depends on the outer join.
+    """
+
+    def test_scoped_predicate_uses_the_run_stamped_team(self) -> None:
+        sql = _compiled_scope_sql(CapacityParams(team_ids=(_P1,)))
+        assert "coalesce(runs.owner_team_id, pipelines.owner_team_id)" in sql
+
+    def test_scoped_predicate_has_no_bare_pipeline_null_arm(self) -> None:
+        # The soft-delete-degraded `pipelines.owner_team_id IS NULL` arm is the
+        # exact clause that reclassified a deleted foreign pipeline.
+        sql = _compiled_scope_sql(CapacityParams(team_ids=(_P1,)))
+        assert "pipelines.owner_team_id IS NULL" not in sql
+        assert "coalesce(runs.owner_team_id, pipelines.owner_team_id) IS NULL" in sql
+
+    def test_empty_team_fails_closed_on_the_coalesced_owner(self) -> None:
+        sql = _compiled_scope_sql(CapacityParams(team_ids=()))
+        assert "coalesce(runs.owner_team_id, pipelines.owner_team_id) IS NULL" in sql
+        assert "pipelines.owner_team_id IS NULL" not in sql
+        assert "coalesce(runs.owner_team_id, pipelines.owner_team_id) IN (" not in sql
+
+    def test_none_team_is_unconstrained_and_does_not_join_pipelines(self) -> None:
+        sql = _compiled_scope_sql(CapacityParams(team_ids=None))
+        assert "coalesce" not in sql
+        assert "LEFT OUTER JOIN" not in sql

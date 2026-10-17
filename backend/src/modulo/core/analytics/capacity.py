@@ -169,15 +169,28 @@ def _team_scope(stmt: Any, params: CapacityParams) -> Any:
     """Apply the caller's team boundary (own teams + org-level pipelines).
 
     ``team_ids is None`` means unconstrained (an org admin). An empty tuple is a
-    FAIL-CLOSED boundary: only org-level pipelines (``owner_team_id IS NULL``)
+    FAIL-CLOSED boundary: only org-level pipelines (effective owner ``IS NULL``)
     are visible, matching the analytics facts/concurrency scope.
+
+    The boundary is resolved from the RUN's own stamped team, falling back to
+    the pipeline's current owner — ``coalesce(Run.owner_team_id,
+    Pipeline.owner_team_id)``, the sibling analytics reader's pattern
+    (``core/analytics/builder.py``; documented in ``db/crud/team_scope.py``).
+    Scoping on ``Pipeline.owner_team_id`` alone is wrong here: the global
+    soft-delete filter injects ``pipelines.deleted_at IS NULL`` into the ON
+    clause of this OUTER JOIN, so a soft-deleted pipeline yields NULL pipeline
+    columns and matched the ``owner_team_id IS NULL`` arm — reclassifying a
+    FOREIGN pipeline as org-level and leaking its (surviving, ``RESTRICT``-
+    pinned) pending runs into the caller's queue. ``Run`` is not
+    soft-deletable, so the stamped team survives the pipeline's soft delete.
     """
     if params.team_ids is None:
         return stmt
     stmt = stmt.outerjoin(Pipeline, Pipeline.id == Run.pipeline_id)
+    effective_team = sa.func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
     if not params.team_ids:
-        return stmt.where(Pipeline.owner_team_id.is_(None))
-    return stmt.where(sa.or_(Pipeline.owner_team_id.is_(None), Pipeline.owner_team_id.in_(params.team_ids)))
+        return stmt.where(effective_team.is_(None))
+    return stmt.where(sa.or_(effective_team.is_(None), effective_team.in_(params.team_ids)))
 
 
 def build_capacity_rows_query(
