@@ -31,10 +31,9 @@
     </FilterBar>
 
     <!-- States -->
-    <div
+    <output
       v-if="loading"
-      class="space-y-2"
-      role="status"
+      class="block space-y-2"
       aria-busy="true"
       :aria-label="$t('views.NotificationsPage.loading_notifications')"
       data-testid="notifications-loading"
@@ -50,7 +49,7 @@
           <SkeletonBlock height-class="h-3 w-40" />
         </div>
       </div>
-    </div>
+    </output>
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadNotifications" />
     <EmptyState v-else-if="notifications.length === 0" :title="$t('views.NotificationsPage.no_notifications')" :description="$t('views.NotificationsPage.no_notifications_matching_filters')">
       <button type="button" data-testid="notifications-clear-filters" class="text-sm text-primary hover:underline" @click="resetFilters">{{ $t('views.NotificationsPage.clear_filters') }}</button>
