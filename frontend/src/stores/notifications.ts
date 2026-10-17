@@ -12,10 +12,11 @@ import { formatApiError } from '../lib/api/formatError'
 export const DROPDOWN_LIMIT = 10
 
 /**
- * Shared notification state for the bell + dropdown (FAR-249).
+ * Shared notification state for the bell + dropdown (FAR-249), plus the
+ * shared "Dismiss all" action behind every surface that offers it (FAR-1926).
  *
  * Owns the unread badge count, the recent-notification list the dropdown
- * renders, and the `markAllRead` action. The SSE wiring (read-time category
+ * renders, and the `dismissAll` action. The SSE wiring (read-time category
  * suppression, reconnect backfill) stays in `NotificationBell.vue` — it
  * drives these actions rather than living here, so the store stays a plain
  * data/actions layer with no stream lifecycle.
@@ -24,7 +25,7 @@ export const useNotificationsStore = defineStore('notifications', () => {
   const unreadCount = ref(0)
   const recentNotifications = ref<NotificationResponse[]>([])
   const loadingRecent = ref(false)
-  const markAllReadError = ref<string | null>(null)
+  const dismissAllError = ref<string | null>(null)
   /** Set when the dropdown's recent-list fetch fails (FAR-249 QA). */
   const fetchError = ref<string | null>(null)
 
@@ -69,18 +70,24 @@ export const useNotificationsStore = defineStore('notifications', () => {
   }
 
   /**
-   * Mark every live notification in the caller's view as read, then refresh
-   * both the list and the badge so the UI reflects the server's post-state.
-   * Re-throws on failure (after recording a user-facing message) so the
-   * caller can keep the dropdown open instead of showing a cleared state that
-   * did not happen.
+   * Dismiss every live notification in the caller's view FOR THIS USER ONLY
+   * (FAR-249/FAR-1926). Modulo models read-ness as a per-user dismissal: the
+   * server files a `dismiss_scope='self'` row for each live notification, so
+   * this is strictly "for me" — never a scope-wide dismissal for everyone.
+   *
+   * This is the ONE shared action path behind every "Dismiss all" control
+   * (bell dropdown, dashboard panel, notifications page). After the write it
+   * refreshes the dropdown's list and the bell badge so the UI reflects the
+   * server's post-state. Re-throws on failure (after recording a
+   * user-facing message) so the caller can surface the error instead of
+   * showing a cleared state that did not happen.
    */
-  async function markAllRead(): Promise<void> {
-    markAllReadError.value = null
+  async function dismissAll(): Promise<void> {
+    dismissAllError.value = null
     try {
       await markAllNotificationsRead()
     } catch (e: unknown) {
-      markAllReadError.value = formatApiError(e)
+      dismissAllError.value = formatApiError(e)
       throw e
     }
     await Promise.all([fetchRecent(), refreshUnreadCount()])
@@ -90,10 +97,10 @@ export const useNotificationsStore = defineStore('notifications', () => {
     unreadCount,
     recentNotifications,
     loadingRecent,
-    markAllReadError,
+    dismissAllError,
     fetchError,
     refreshUnreadCount,
     fetchRecent,
-    markAllRead,
+    dismissAll,
   }
 })

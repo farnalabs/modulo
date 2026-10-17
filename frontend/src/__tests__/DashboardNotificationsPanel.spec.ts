@@ -1,13 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick, ref } from 'vue'
+import { createPinia, setActivePinia } from 'pinia'
 
-const { mockFetchNotifications, mockReviewLater, mockFetchUnreadCount, mockRegisterHandler, mockDismissNotification } = vi.hoisted(() => ({
+const { mockFetchNotifications, mockReviewLater, mockFetchUnreadCount, mockRegisterHandler, mockDismissNotification, mockMarkAllRead, mockFetchDashboardNotifications } = vi.hoisted(() => ({
   mockFetchNotifications: vi.fn(),
   mockReviewLater: vi.fn(),
   mockFetchUnreadCount: vi.fn(),
   mockRegisterHandler: vi.fn((_event: string, _cb: () => void) => vi.fn()),
   mockDismissNotification: vi.fn(),
+  mockMarkAllRead: vi.fn(),
+  mockFetchDashboardNotifications: vi.fn(),
 }))
 
 type DNPVm = {
@@ -30,6 +33,10 @@ vi.mock('../lib/api/notifications', () => ({
   reviewLater: mockReviewLater,
   fetchUnreadCount: mockFetchUnreadCount,
   dismissNotification: mockDismissNotification,
+  // The shared notifications store (FAR-1926 dismissAll) also imports these
+  // two — the panel now routes its "Dismiss all" through that store action.
+  markAllNotificationsRead: mockMarkAllRead,
+  fetchDashboardNotifications: mockFetchDashboardNotifications,
 }))
 
 vi.mock('../stores/syncRegistry', () => ({
@@ -91,7 +98,13 @@ async function mountAndExpand(notifications: unknown[] = [], total = 0, unreadCo
 describe('DashboardNotificationsPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    setActivePinia(createPinia())
     mockFetchUnreadCount.mockResolvedValue(0)
+    // The panel now uses the shared notifications store (FAR-1926); give the
+    // store's own two API legs sensible defaults so unrelated tests never hit
+    // an unconfigured mock.
+    mockMarkAllRead.mockResolvedValue({ status: 'marked_read', marked: 0 })
+    mockFetchDashboardNotifications.mockResolvedValue({ notifications: [], total_unread: 0 })
   })
 
   it('always renders the "View all notifications" link when expanded', async () => {
@@ -332,5 +345,60 @@ describe('DashboardNotificationsPanel', () => {
     await nextTick()
     expect(vm.page).toBe(1)
     expect(mockFetchNotifications).toHaveBeenLastCalledWith({ page: 1, page_size: 10, status: 'active' })
+  })
+
+  // FAR-1926 — Dismiss all in the expanded-content header.
+  it('renders Dismiss all in the expanded content, disabled when there is nothing to dismiss', async () => {
+    const wrapper = await mountAndExpand([], 0)
+
+    const button = wrapper.find('[data-testid="panel-dismiss-all"]')
+    expect(button.exists()).toBe(true)
+    expect(button.text()).toBe('Dismiss all')
+    expect((button.element as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('Dismiss all posts the shared per-user bulk action, then reloads list and badge from the server post-state', async () => {
+    const wrapper = await mountAndExpand(makeNotifications(3), 3, 3)
+    const button = wrapper.find('[data-testid="panel-dismiss-all"]')
+    expect((button.element as HTMLButtonElement).disabled).toBe(false)
+
+    // The server post-state after the write: nothing active, badge 0.
+    mockMarkAllRead.mockResolvedValue({ status: 'marked_read', marked: 3 })
+    mockFetchNotifications.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 10 })
+    mockFetchUnreadCount.mockResolvedValue(0)
+
+    await button.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    // The ONE shared action path — the store's dismissAll — hit the endpoint.
+    expect(mockMarkAllRead).toHaveBeenCalledTimes(1)
+    // The panel re-reads its OWN list + badge from the server (not a local clear).
+    expect(mockFetchNotifications).toHaveBeenLastCalledWith({ page: 1, page_size: 10, status: 'active' })
+    expect(mockFetchUnreadCount).toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="panel-dismiss-all-success"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="panel-dismiss-all-error"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('No notifications')
+
+    const vm = wrapper.vm as unknown as DNPVm
+    expect(vm.unreadCount).toBe(0)
+  })
+
+  it('Dismiss all failure surfaces a role=alert and never shows a falsely cleared list', async () => {
+    const wrapper = await mountAndExpand(makeNotifications(2), 2, 2)
+    mockMarkAllRead.mockRejectedValue(new Error('boom'))
+    mockFetchNotifications.mockClear()
+
+    await wrapper.find('[data-testid="panel-dismiss-all"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const alert = wrapper.find('[data-testid="panel-dismiss-all-error"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.attributes('role')).toBe('alert')
+    expect(wrapper.find('[data-testid="panel-dismiss-all-success"]').exists()).toBe(false)
+    // The list is untouched — no clear, no post-failure reload.
+    expect(wrapper.findAll('.notification-card')).toHaveLength(2)
+    expect(mockFetchNotifications).not.toHaveBeenCalled()
   })
 })

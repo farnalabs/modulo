@@ -26,9 +26,40 @@
       @update:filter="handleFilterUpdate"
     >
       <template #after>
+        <!-- FAR-1926: Dismiss all clears every live notification FOR THIS
+             USER ONLY (the shared store action posts the per-user
+             mark-all-read). Sits beside the filters, applies to the whole
+             live list — not just the current page. -->
+        <button
+          type="button"
+          data-testid="notifications-dismiss-all"
+          class="rounded-md border px-4 py-2 text-sm font-medium text-primary hover:bg-muted transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="dismissingAll || loading || total === 0"
+          @click="onDismissAll"
+        >
+          {{ dismissingAll ? $t('views.NotificationsPage.dismissing_all') : $t('views.NotificationsPage.dismiss_all') }}
+        </button>
         <button type="button" data-testid="notifications-reset-filters" class="rounded-md border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors" @click="resetFilters">{{ $t('common.reset') }}</button>
       </template>
     </FilterBar>
+
+    <p
+      v-if="store.dismissAllError"
+      data-testid="notifications-dismiss-all-error"
+      role="alert"
+      class="text-sm text-destructive"
+    >
+      {{ $t('views.NotificationsPage.failed_to_dismiss_all') }}
+    </p>
+    <output
+      v-else-if="dismissedAll"
+      data-testid="notifications-dismiss-all-success"
+      :aria-label="$t('views.NotificationsPage.dismissed_all_status')"
+      aria-live="polite"
+      class="block text-sm text-muted-foreground"
+    >
+      {{ $t('views.NotificationsPage.dismissed_all_status') }}
+    </output>
 
     <!-- States -->
     <output
@@ -101,6 +132,7 @@ import { useI18n } from "vue-i18n";
 import type { NotificationResponse } from "../lib/api/notifications";
 import { useDataFetch } from "../composables/useDataFetch";
 import { fetchNotifications, reviewLater } from "../lib/api/notifications";
+import { useNotificationsStore } from "../stores/notifications";
 import NotificationCard from "../components/NotificationCard.vue";
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
@@ -110,9 +142,12 @@ import EmptyState from "../components/shared/EmptyState.vue";
 
 const { t } = useI18n();
 
+const store = useNotificationsStore();
 const total = ref(0);
 const page = ref(1);
 const pageSize = ref(20);
+const dismissingAll = ref(false);
+const dismissedAll = ref(false);
 
 const filterLevel = ref("");
 const filterScope = ref("");
@@ -180,6 +215,25 @@ function nextPage() {
 function onDismissed(id: string) {
   notifications.value = notifications.value.filter((n) => n.id !== id);
   total.value = Math.max(0, total.value - 1);
+}
+
+async function onDismissAll(): Promise<void> {
+  dismissingAll.value = true;
+  dismissedAll.value = false;
+  try {
+    // One shared action path (FAR-1926): same store action as the bell
+    // dropdown and the dashboard panel — per-user scope only.
+    await store.dismissAll();
+    dismissedAll.value = true;
+    // Re-read THIS page's filtered list from the server's post-state so the
+    // active view empties for real, never because of a local mutation.
+    await loadNotifications();
+  } catch {
+    // store.dismissAllError holds the message rendered by the alert region.
+    // The list is deliberately left untouched: nothing was cleared.
+  } finally {
+    dismissingAll.value = false;
+  }
 }
 
 async function onReviewLater(id: string) {

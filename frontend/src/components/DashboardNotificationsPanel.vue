@@ -29,6 +29,37 @@
       </svg>
     </button>
     <div v-if="!collapsed" id="notifications-panel-content" class="border-t px-4 py-3">
+      <!-- FAR-1926: "Dismiss all" clears the whole live list (for this user
+           only), so it sits in the expanded content header, above the list it
+           applies to, with visible progress and result. -->
+      <div class="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 pb-2">
+        <button
+          type="button"
+          data-testid="panel-dismiss-all"
+          class="rounded px-2 py-1 text-xs font-medium text-primary hover:bg-muted transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="dismissingAll || total === 0"
+          @click="onDismissAll"
+        >
+          {{ dismissingAll ? $t('components.DashboardNotificationsPanel.dismissing_all') : $t('components.DashboardNotificationsPanel.dismiss_all') }}
+        </button>
+        <p
+          v-if="store.dismissAllError"
+          data-testid="panel-dismiss-all-error"
+          role="alert"
+          class="text-xs text-destructive"
+        >
+          {{ $t('components.DashboardNotificationsPanel.failed_to_dismiss_all') }}
+        </p>
+        <output
+          v-else-if="dismissedAll"
+          data-testid="panel-dismiss-all-success"
+          :aria-label="$t('components.DashboardNotificationsPanel.dismissed_all_status')"
+          aria-live="polite"
+          class="text-xs text-muted-foreground"
+        >
+          {{ $t('components.DashboardNotificationsPanel.dismissed_all_status') }}
+        </output>
+      </div>
       <LoadingSpinner v-if="loading" />
       <div v-else-if="error" class="text-sm text-destructive" role="alert">{{ error }}</div>
       <div v-else-if="notifications.length === 0" class="text-center text-sm text-muted-foreground py-4">
@@ -92,6 +123,7 @@ import { useStorage } from '@vueuse/core';
 import type { NotificationResponse } from "../lib/api/notifications";
 import { fetchNotifications, reviewLater, fetchUnreadCount } from "../lib/api/notifications";
 import { registerHandler } from "../stores/syncRegistry";
+import { useNotificationsStore } from "../stores/notifications";
 import { eventBus } from "../composables/useEventStream";
 import NotificationCard from "./NotificationCard.vue";
 import { formatApiError } from "../lib/api/formatError";
@@ -99,6 +131,7 @@ import LoadingSpinner from "./shared/LoadingSpinner.vue";
 
 const PAGE_SIZE = 10;
 const collapsed = useStorage('notif-panel-collapsed', true);
+const store = useNotificationsStore();
 const notifications = ref<NotificationResponse[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
@@ -106,6 +139,8 @@ const reviewLaterError = ref("");
 const unreadCount = ref(0);
 const page = ref(1);
 const total = ref(0);
+const dismissingAll = ref(false);
+const dismissedAll = ref(false);
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)));
 
@@ -150,6 +185,25 @@ async function onReviewLater(id: string) {
     }
   } catch (e: unknown) {
     reviewLaterError.value = e instanceof Error ? e.message : "Failed to dismiss notification";
+  }
+}
+
+async function onDismissAll(): Promise<void> {
+  dismissingAll.value = true;
+  dismissedAll.value = false;
+  try {
+    // One shared action path (FAR-1926): the store action posts the
+    // per-user mark-all-read and refreshes the bell's badge/list.
+    await store.dismissAll();
+    dismissedAll.value = true;
+    // This panel keeps its OWN list and badge, so re-read both from the
+    // server's post-state — never a locally-invented clear.
+    await loadPage();
+  } catch {
+    // store.dismissAllError holds the message rendered by the alert region.
+    // The list is deliberately left untouched: nothing was cleared.
+  } finally {
+    dismissingAll.value = false;
   }
 }
 

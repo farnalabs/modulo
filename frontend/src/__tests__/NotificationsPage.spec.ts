@@ -1,15 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
+import { createPinia, setActivePinia } from 'pinia'
 
-const { mockFetchNotifications, mockReviewLater } = vi.hoisted(() => ({
+const { mockFetchNotifications, mockReviewLater, mockMarkAllRead, mockFetchDashboardNotifications } = vi.hoisted(() => ({
   mockFetchNotifications: vi.fn(),
   mockReviewLater: vi.fn(),
+  mockMarkAllRead: vi.fn(),
+  mockFetchDashboardNotifications: vi.fn(),
 }))
 
 vi.mock('../lib/api/notifications', () => ({
   fetchNotifications: (...args: unknown[]) => mockFetchNotifications(...args),
   reviewLater: (...args: unknown[]) => mockReviewLater(...args),
+  // The page's shared notifications store (FAR-1926 dismissAll) also imports
+  // these two.
+  markAllNotificationsRead: (...args: unknown[]) => mockMarkAllRead(...args),
+  fetchDashboardNotifications: (...args: unknown[]) => mockFetchDashboardNotifications(...args),
 }))
 
 vi.mock('../composables/useDataFetch', async () => {
@@ -70,7 +77,13 @@ function makeNotification(id: string) {
 describe('NotificationsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    setActivePinia(createPinia())
     mockFetchNotifications.mockResolvedValue(pageResponse([], 0, 1))
+    // The page now uses the shared notifications store (FAR-1926); give the
+    // store's own two API legs defaults so unrelated tests never hit an
+    // unconfigured mock.
+    mockMarkAllRead.mockResolvedValue({ status: 'marked_read', marked: 0 })
+    mockFetchDashboardNotifications.mockResolvedValue({ notifications: [], total_unread: 0 })
   })
 
   it('shows a skeleton placeholder while loading, not an indeterminate spinner', async () => {
@@ -169,5 +182,64 @@ describe('NotificationsPage', () => {
     await nextTick()
 
     expect(wrapper.text()).toContain('review failed')
+  })
+
+  // FAR-1926 — Dismiss all beside the filters.
+  it('renders Dismiss all beside the filters, disabled when there is nothing to dismiss', async () => {
+    mockFetchNotifications.mockResolvedValue(pageResponse([], 0, 1))
+    const wrapper = mount(NotificationsPage)
+    await flushPromises()
+    await nextTick()
+
+    const button = wrapper.find('[data-testid="notifications-dismiss-all"]')
+    expect(button.exists()).toBe(true)
+    expect(button.text()).toBe('Dismiss all')
+    expect((button.element as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('Dismiss all posts the shared per-user bulk action and reloads the list from the server post-state', async () => {
+    mockFetchNotifications.mockResolvedValue(pageResponse([makeNotification('n-1')], 1, 1))
+    const wrapper = mount(NotificationsPage)
+    await flushPromises()
+    await nextTick()
+
+    // Server post-state after the write: the active list is empty.
+    mockMarkAllRead.mockResolvedValue({ status: 'marked_read', marked: 1 })
+    mockFetchNotifications.mockResolvedValue(pageResponse([], 0, 1))
+
+    await wrapper.find('[data-testid="notifications-dismiss-all"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    // The ONE shared action path — the store's dismissAll — hit the endpoint.
+    expect(mockMarkAllRead).toHaveBeenCalledTimes(1)
+    expect(mockFetchNotifications).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'active' }))
+    expect(wrapper.find('[data-testid="notifications-dismiss-all-success"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="notifications-dismiss-all-error"]').exists()).toBe(false)
+    // An emptied inbox renders the empty state, not a stale local list.
+    expect(wrapper.findComponent(NotificationCard).exists()).toBe(false)
+    expect(wrapper.find('[data-testid="notifications-clear-filters"]').exists()).toBe(true)
+  })
+
+  it('Dismiss all failure surfaces a role=alert and never shows a falsely cleared list', async () => {
+    mockFetchNotifications.mockResolvedValue(pageResponse([makeNotification('n-1')], 1, 1))
+    const wrapper = mount(NotificationsPage)
+    await flushPromises()
+    await nextTick()
+
+    mockMarkAllRead.mockRejectedValue(new Error('nope'))
+    mockFetchNotifications.mockClear()
+
+    await wrapper.find('[data-testid="notifications-dismiss-all"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const alert = wrapper.find('[data-testid="notifications-dismiss-all-error"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.attributes('role')).toBe('alert')
+    expect(wrapper.find('[data-testid="notifications-dismiss-all-success"]').exists()).toBe(false)
+    // The list is untouched — no clear, no post-failure reload.
+    expect(wrapper.findComponent(NotificationCard).exists()).toBe(true)
+    expect(mockFetchNotifications).not.toHaveBeenCalled()
   })
 })
