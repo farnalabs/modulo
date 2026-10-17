@@ -52,11 +52,15 @@ test.describe('Assistant-only mode at /assistant', { tag: '@smoke' }, () => {
     }, adminJwt())
 
     await page.goto('/')
-    await expect(page.locator('button[aria-controls="sidebar-group-admin"]').first()).toBeVisible({ timeout: 30000 })
+    await expect(page.locator('button[aria-controls="sidebar-group-configure"]').first()).toBeVisible({ timeout: 30000 })
 
     // Positive control: the private_preview /admin/assistant item IS in the sidebar
-    // when dev mode is on. The admin group starts collapsed — expand it.
-    await page.click('button[aria-controls="sidebar-group-admin"] >> nth=0')
+    // when dev mode is on. /admin/assistant is declared `sidebar_group: configure`
+    // in the product map, and the configure group starts collapsed — expand THAT
+    // group (clicking the admin group toggles a different section, because
+    // SidebarGroup binds both aria-expanded and the items' v-show to its own
+    // `collapsed` prop).
+    await page.click('button[aria-controls="sidebar-group-configure"] >> nth=0')
     await expect(page.locator('a[href="/admin/assistant"]').first()).toBeVisible()
 
     // Negative control: /assistant is a bare route, never listed in the sidebar.

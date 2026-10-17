@@ -28,7 +28,15 @@ test.describe('Admin Create User', { tag: ['@regression'] }, () => {
 
     await page.getByRole('button', { name: 'Create' }).click()
 
-    await expect(page.getByRole('dialog')).not.toBeVisible()
+    // FAR-460: a successful create closes the create dialog and opens the
+    // shared credential dialog so the admin can copy the hand-typed password
+    // exactly once. Assert THAT contract — the create form is gone and the
+    // credential is surfaced — rather than "no dialog is visible", which the
+    // shipped behaviour can never satisfy (a correct implementation always
+    // leaves the credential dialog on screen).
+    await expect(page.getByTestId('admin-users-create-email')).not.toBeVisible()
+    await expect(page.getByTestId('admin-users-credential-value')).toBeVisible()
+    await expect(page.getByTestId('admin-users-credential-value')).toHaveText('Password1')
   })
 
   test('shows validation error for invalid email', { tag: "@regression" }, async ({ page, env }) => {
@@ -66,6 +74,10 @@ test.describe('Admin Create User', { tag: ['@regression'] }, () => {
 
     await page.getByTestId('admin-users-create-password').press('Enter')
 
-    await expect(page.getByRole('dialog')).not.toBeVisible()
+    // Same FAR-460 post-create contract as the click-to-submit test above: the
+    // create dialog closes and the credential dialog is surfaced.
+    await expect(page.getByTestId('admin-users-create-email')).not.toBeVisible()
+    await expect(page.getByTestId('admin-users-credential-value')).toBeVisible()
+    await expect(page.getByTestId('admin-users-credential-value')).toHaveText('Password1')
   })
 })
