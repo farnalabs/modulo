@@ -33,16 +33,15 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import patch
 
-from alembic.script import ScriptDirectory
 from sqlalchemy import CheckConstraint
 
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0292_audit_events_resource_lookup"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0291_invitations_lookup_constraints"
-_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
 
 _INDEX = "ix_audit_events_org_resource"
 _TABLE = "audit_events"
@@ -106,9 +105,8 @@ class TestChain:
     def test_down_revision_is_0291_invitations_lookup_constraints(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
 
-    def test_single_head_is_0293(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_no_branch_labels_or_depends_on(self) -> None:
         module = _load_migration()

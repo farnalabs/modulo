@@ -29,15 +29,13 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-from alembic.script import ScriptDirectory
-
 from modulo.db.models.account import Account
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0315_service_accounts_lifecycle"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0314_external_agents_mcp_servers"
-_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
 
 _CHECK_NAME = "ck_accounts_decommissioned_service"
 _CHECK_PREDICATE = "decommissioned_at IS NULL OR kind = 'service'"
@@ -62,9 +60,8 @@ def _source() -> str:
 
 
 class TestChain:
-    def test_single_head_is_0317_drop_retired_pipeline_diff_rollback_flag(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_down_revision_is_0314_external_agents_mcp_servers(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION

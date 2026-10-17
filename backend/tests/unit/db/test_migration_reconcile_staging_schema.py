@@ -20,137 +20,13 @@ chain's guarded DDL, and the chain has a single linear head.
 
 from pathlib import Path
 
-from alembic.script import ScriptDirectory
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
 _MIGRATION_0006 = "0108_schema_org_identity"
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _HEAD_MIGRATION = "0120_org_fk_hardening"
-# Current chain head (tracks the latest migration; 0188_pipeline_run_context_defaults_default
-# is main's sweep head, 0189_agent_runner_bindings (main, D6) chains off it,
-# 0190_hitl_claim_context_json (main, FAR-613) re-parents onto 0189, main's
-# 0191_bundled_runner_seed_backfill re-parents onto 0190_hitl_claim_context_json,
-# and FAR-583's 0192_run_node_outputs re-parents onto 0191 with its
-# 0193_run_node_outputs_sweep_index chaining onto 0192, and 0194_uuid_pk_server_defaults
-# (FAR-718, from main) chains off 0193; improve-database's 0197/0198/0199 chain off it,
-# 0200_runs_runner_marker_sweep_index chains off 0199,
-# 0201_spend_anomaly_unique_org_date (from main) chains off 0200, 0202_runs_error_code_claimed_by_indexes
-# (from main) chains off 0201, 0195_hitl_claim_gate_config_json (FAR-634, from main) chains off 0202,
-# 0203_triggers_add_name (FAR-681 slice 2, from main) chains off 0195, FAR-681
-# slice 2 (#289/#293) added 0204_runner_probe_cache on top of 0203_triggers_add_name,
-# and FAR-760's 0205_library_collection_type chains off 0204_runner_probe_cache,
-# and FAR-644's 0206_deleted_defaults_signal_check chains off 0205,
-# and FAR-761's 0207_collection_install_tracking chains off 0206, and #337's
-# 0208_notification_indexes_and_constraint chains off 0207, 0209_collection_install_id_entity_columns
-# chains off 0208, FAR-764's 0210_community_gate chains off 0209, and FAR-775's
-# 0211_variant_batch_state chains off 0210, and 0212_variant_batch_state_updated_at chains off 0211,
-# and FAR-788's 0213_runs_rerun_trigger_type chains off 0212, and
-# 0214_connector_instance_indexes_unique chains off 0213, and
-# 0215_drop_runs_blob_columns chains off 0214, FAR-748's 0216_audit_events_sweep_detection_index
-# chains off 0215, 0217_hitl_claims_decided_by chains off 0216,
-# 0218_eval_cluster_indexes chains off 0217,
-# and 0219_eval_cluster_check_constraints chains off 0218,
-# and 0220_run_node_artifacts chains off 0219,
-# and FAR-802's 0221_workspace_inputs_env_profiles chains off 0220,
-# and FAR-794's 0222_journey_provenance chains off 0221,
-# and 0223_agents_add_foreign_keys chains off 0222,
-# and 0224_agents_add_indexes chains off 0223,
-# and 0225_agents_constraints_rls chains off 0224,
-# and 0226_agents_json_to_jsonb chains off 0225,
-# and 0227_env_profiles_initialisation_strategy_check chains off 0226_agents_json_to_jsonb,
-# and 0228_drop_scalar_agent_command chains off 0227_env_profiles_initialisation_strategy_check,
-# and FAR-802's 0229_add_workspace_inputs_count chains off 0228_drop_scalar_agent_command,
-# and 0230_token_families_refresh_grace chains off 0229_add_workspace_inputs_count,
-# and 0231_token_families_reuse_replay_count chains off 0230_token_families_refresh_grace,
-# and 0232_seed_modulo_sentinel_organisation chains off 0231_token_families_reuse_replay_count,
-# and 0233_add_updated_at_audit_to_organisations chains off 0232_seed_modulo_sentinel_organisation,
-# and 0234_add_organisations_indexes chains off 0233_add_updated_at_audit_to_organisations,
-# and 0235_promote_organisations_json_to_jsonb chains off 0234_add_organisations_indexes,
-# and 0236_add_organisations_constraints chains off 0235_promote_organisations_json_to_jsonb,
-# and 0237_fix_token_family_org_nullable chains off 0236_add_organisations_constraints,
-# and FAR-801's 0238_workspace_input_drift_and_audit chains off
-# 0237_fix_token_family_org_nullable, and 0239_revert_organisations_audit_drift
-# chains off 0238_workspace_input_drift_and_audit, and 0240_reinstate_organisations_audit_columns
-# chains off 0239_revert_organisations_audit_drift, and 0241_journey_dismissal (FAR-795)
-# chains off 0240_reinstate_organisations_audit_columns, and 0242_org_mint_budget_usage (FAR-795)
-# chains off 0241_journey_dismissal, and 0243_remove_organisations_audit_drift (FAR-811)
-# chains off 0242_org_mint_budget_usage, and 0244_pipeline_stdout_retention_config (FAR-811)
-# chains off 0243_remove_organisations_audit_drift, and 0245_drop_organisations_created_by_fk
-# (PR #559) chains off 0244_pipeline_stdout_retention_config, and 0246_sso_join_gate (FAR-855)
-# chains off 0245_drop_organisations_created_by_fk, and 0247_sso_presets (FAR-853)
-# chains off 0246_sso_join_gate, and 0248_agent_schema_profile (FAR-900)
-# chains off 0247_sso_presets, and 0249_validation_level (FAR-935)
-# chains off 0248_agent_schema_profile, and 0250_eval_policy_gate (FAR-1060)
-# chains off 0249_validation_level, and 0251_schema_enforcement_telemetry (FAR-902)
-# chains off 0250_eval_policy_gate, and 0252_enforcement_daily_facts (FAR-902) chains
-# off 0251_schema_enforcement_telemetry, and 0253_runs_enforcement_mode_outcome (FAR-902)
-# chains off 0252_enforcement_daily_facts, and 0254_eval_backfill_cutover (FAR-1100)
-# chains off 0253_runs_enforcement_mode_outcome, and
-# 0255_trigger_event_value_filter_label (FAR-1144) chains off
-# 0254_eval_backfill_cutover, and 0256_pipeline_max_autonomy_level
-# (FAR-1163) chains off 0255, and 0257_rename_remy_to_assistant
-# (FAR-1196 Tier 3) chains off 0256_pipeline_max_autonomy_level, and
-# 0258_pipeline_accountability_owners (FAR-1161) chains off
-# 0259_pipeline_snapshot_max_autonomy_check
-# (FAR-1223) chains off 0258_pipeline_accountability_owners, and
-# 0260_run_cancel_reason (FAR-1233) chains off 0259, and
-# 0261_decision_record_payload (FAR-1102) chains off 0260, and
-# 0262_hitl_gate_to_review_vocabulary (FAR-1104) chains off 0261, and
-# 0263_evidence_layer (FAR-966) chains off 0262, and
-# 0265_hitl_review_window (FAR-1257) chains off
-# 0264_pipelines_max_autonomy_ge_default, and
-# 0266_guardrail_policy_gate_sweep (FAR-1107) chains off 0265,
-# 0267_notification_hot_query_indexes chains off 0266,
-# 0268_webhook_lookup_expiry_indexes chains off 0267,
-# 0269_webhook_dedup_check_constraints chains off 0268,
-# 0270_pipeline_snapshots_max_autonomy_ge_default chains off 0269,
-# 0271_org_api_keys_revocation_sweep_indexes chains off 0270,
-# 0272_oauth_client_revoke_lookup_indexes chains off 0271,
-# 0273_runs_dispatch_phase chains off 0272,
-# 0274_policy_gate_pin_fingerprint_operator_control chains off 0273, and
-# 0275_run_cancel_reason_vocabulary chains off 0274, and
-# 0276_runs_autovacuum_enabled chains off 0275, and
-# 0277_run_daily_facts_trigger_dispatch_phase chains off 0276, and
-# 0278_runs_workspace_drift_sweep_index chains off 0277, and
-# 0279_table_autovacuum_tuning chains off 0278, and
-# 0280_runs_node_deadline_watchdog_fired_count chains off 0279_table_autovacuum_tuning, and
-# 0281_org_api_keys_grants chains off 0280_runs_node_deadline_watchdog_fired_count, and
-# 0282_env_profiles_kubernetes chains off 0281_org_api_keys_grants, and
-# 0283_runs_drop_unused_indexes chains off 0282_env_profiles_kubernetes, and
-# 0284_add_rejected_run_status chains off 0283_runs_drop_unused_indexes, and
-# 0285_system_audit_events chains off 0284_add_rejected_run_status, and
-# 0286_pipeline_run_state chains off 0285_system_audit_events,
-# 0287_team_rls_lifecycle_evals chains off 0286_pipeline_run_state, and
-# 0288_runs_execution_origin chains off 0287_team_rls_lifecycle_evals, and
-# 0289_pipelines_environment_profile chains off 0288_runs_execution_origin, and
-# 0290_scheduled_reports_due_scan chains off 0289_pipelines_environment_profile, and
-# 0291_invitations_lookup_constraints chains off 0290_scheduled_reports_due_scan, and
-# 0292_audit_events_resource_lookup chains off 0291_invitations_lookup_constraints, and
-# 0293_oauth_clients_team_id chains off 0292_audit_events_resource_lookup, and
-# 0294_eval_results_org_fk chains off 0293_oauth_clients_team_id, and
-# 0295_decision_record_event_identity chains off 0294_eval_results_org_fk, and
-# 0296_benign_run_outcomes chains off 0295_decision_record_event_identity, and
-# 0297_autonomy_gating_s1 chains off 0296_benign_run_outcomes, and
-# 0298_accounts_kind chains off 0297_autonomy_gating_s1, and
-# 0299_accounts_service_identity chains off 0298_accounts_kind, and
-# 0300_benign_facts_repair chains off 0299_accounts_service_identity,
-# 0301_oauth_consent_state_preauth_rls chains off 0300_benign_facts_repair,
-# 0302_runs_run_grouping chains off 0301_oauth_consent_state_preauth_rls, and
-# 0303_feedback_records_lookup_indexes chains off 0302_runs_run_grouping, and
-# 0305_guardrail_escalate_action chains off 0304_metrics_staging_recorded_at_index, and
-# 0306_trigger_secret_encryption chains off 0305_guardrail_escalate_action, and
-# 0307_runs_guardrail_override_resume_pending chains off 0306_trigger_secret_encryption, and
-# 0308_runs_dispatch_phase_history chains off 0307_runs_guardrail_override_resume_pending, and
-# 0309_hitl_claims_decision_sweep chains off 0308_runs_dispatch_phase_history, and
-# 0310_library_cluster_db_hardening chains off 0309_hitl_claims_decision_sweep, and
-# 0311_library_cluster_schema_hygiene chains off 0310_library_cluster_db_hardening, and
-# 0312_memberships_active_lookups chains off 0311_library_cluster_schema_hygiene, and
-# 0313_collection_install_drop_installed_entities chains off 0312_memberships_active_lookups, and
-# 0314_external_agents_mcp_servers chains off 0313_collection_install_drop_installed_entities, and
-# 0315_service_accounts_lifecycle chains off 0314_external_agents_mcp_servers, and
-# 0317_drop_retired_pipeline_diff_rollback_flag chains off 0316_policy_gate_evaluation_mode as the chain head.
-_CHAIN_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
 
 
 def _source(name: str) -> str:
@@ -159,14 +35,9 @@ def _source(name: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _script() -> ScriptDirectory:
-    return ScriptDirectory(str(_VERSIONS.parent))
-
-
 class TestReconciliationChain:
     def test_single_linear_head(self) -> None:
-        heads = _script().get_heads()
-        assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
+        assert_single_linear_head(script_directory())
 
 
 class TestMcpSetupTokensSurface:

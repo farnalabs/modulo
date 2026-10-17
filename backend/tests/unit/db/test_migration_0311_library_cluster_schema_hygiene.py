@@ -6,14 +6,10 @@ model-parity assertions against ORM metadata.
 
 Lenses:
 
-* **Chain** — 0311 revises ``0310_library_cluster_db_hardening``; the
-  migrations directory has exactly one head
-  (``0317_drop_retired_pipeline_diff_rollback_flag``, which chains onto
-  ``0316_policy_gate_evaluation_mode``, which chains onto
-  ``0315_service_accounts_lifecycle``, which chains onto
-  ``0314_external_agents_mcp_servers``, which chains onto
-  ``0313_collection_install_drop_installed_entities``, and is pinned by all sibling chain
-  tests); the revision id matches the filename; neither ``branch_labels`` nor
+* **Chain** — this migration's own parent is pinned by
+  ``_MIGRATION_DOWN_REVISION`` below; the graph's single linear head, and its
+  completeness, are asserted by ``_migration_graph.assert_single_linear_head``;
+  the revision id matches the filename; neither ``branch_labels`` nor
   ``depends_on`` is set.
 * **Upgrade** — drops the two redundant indexes, then adds the
   ``publishers.trust_tier`` CHECK and the ``library_primitives.version_group_id``
@@ -40,15 +36,13 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
-from alembic.script import ScriptDirectory
-
 from modulo.db.models.collection_install import CollectionInstallEntity
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.publisher import Publisher
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_REVISION = "0311_library_cluster_schema_hygiene"
 _MIGRATION_DOWN_REVISION = "0310_library_cluster_db_hardening"
-_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
 
 _DROP_INSTALL_ENTITY_INDEX = "ix_collection_install_entity_install_id"
 _DROP_PUBLISHER_INDEX = "ix_publishers_public_key_hex"
@@ -107,9 +101,8 @@ def _joined(rec: _Recorder) -> str:
 
 
 class TestChain:
-    def test_single_head_is_0317_drop_retired_pipeline_diff_rollback_flag(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_down_revision_is_0310_library_cluster_db_hardening(self) -> None:
         assert _load_migration().down_revision == _MIGRATION_DOWN_REVISION

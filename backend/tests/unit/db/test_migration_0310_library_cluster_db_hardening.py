@@ -29,7 +29,6 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
-from alembic.script import ScriptDirectory
 from sqlalchemy import DateTime, Index, Uuid
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import JSONB
@@ -37,10 +36,10 @@ from sqlalchemy.dialects.postgresql import JSONB
 from modulo.db.models.collection_install import CollectionInstall
 from modulo.db.models.composite_template import CompositeTemplate
 from modulo.db.models.library_primitive import LibraryPrimitive
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_REVISION = "0310_library_cluster_db_hardening"
 _MIGRATION_DOWN_REVISION = "0309_hitl_claims_decision_sweep"
-_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
 
 _INSTALL_UNIQUE_INDEX = "uq_collection_install_org_collection"
 _COMPOSITE_UNIQUE_INDEX = "uq_composite_templates_org_name"
@@ -120,9 +119,8 @@ def _joined(rec: _Recorder) -> str:
 
 
 class TestChain:
-    def test_single_head_is_0317_drop_retired_pipeline_diff_rollback_flag(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_down_revision_is_0309_hitl_claims_decision_sweep(self) -> None:
         assert _load_migration().down_revision == _MIGRATION_DOWN_REVISION

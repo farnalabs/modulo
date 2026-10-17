@@ -29,12 +29,12 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
-from alembic.script import ScriptDirectory
+
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _MIGRATION_0113 = "0113_guardrail_summary"
 _HEAD_MIGRATION = "0213_runs_rerun_trigger_type"
-_CHAIN_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
 _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
 _SPEND_PARTIAL = "trigger_type <> 'ongoing' OR (daily_spend_limit IS NOT NULL AND daily_spend_limit > 0)"
@@ -69,16 +69,9 @@ def migration_0113() -> ModuleType:
     return module
 
 
-def _script() -> ScriptDirectory:
-    return ScriptDirectory(str(_VERSIONS_DIR.parent))
-
-
 class TestReconciliationChain:
-    def test_single_head_is_0008(self) -> None:
-        script = _script()
-        assert script.get_heads() == [_CHAIN_HEAD_MIGRATION], (
-            f"expected a single head {_CHAIN_HEAD_MIGRATION}, got {script.get_heads()}"
-        )
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_0113_adds_guardrail_summary_column(self, migration_0113: ModuleType) -> None:
         source = _source(migration_0113)

@@ -26,7 +26,6 @@ from types import ModuleType
 from typing import get_args, get_type_hints
 from unittest.mock import MagicMock, patch
 
-from alembic.script import ScriptDirectory
 from sqlalchemy import CheckConstraint
 
 from modulo.core.guardrails import GuardrailAction
@@ -36,10 +35,10 @@ from modulo.db.models.policy_gate_decision import (
     RESOLVED_ACTION_VALUES,
     PolicyGateDecision,
 )
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_REVISION = "0305_guardrail_escalate_action"
 _MIGRATION_DOWN_REVISION = "0304_metrics_staging_recorded_at_index"
-_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
 _GATES_CHECK = "ck_policy_gates_action"
 _DECISIONS_CHECK = "ck_policy_gate_decisions_resolved_action"
 
@@ -88,9 +87,8 @@ def _executed_sql(op: MagicMock) -> list[str]:
 
 
 class TestChain:
-    def test_single_head_is_0317_drop_retired_pipeline_diff_rollback_flag(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_down_revision_is_0304_metrics_staging_recorded_at_index(self) -> None:
         assert _load_migration().down_revision == _MIGRATION_DOWN_REVISION

@@ -27,15 +27,14 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
-from alembic.script import ScriptDirectory
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import JSONB
 
 from modulo.db.models.collection_install import CollectionInstall, CollectionInstallEntity
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_REVISION = "0313_collection_install_drop_installed_entities"
 _MIGRATION_DOWN_REVISION = "0312_memberships_active_lookups"
-_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
 
 _DROPPED_COLUMN = "installed_entities"
 _INSTALL_TABLE = "collection_install"
@@ -86,9 +85,8 @@ def _run(what: str, *, column_exists: bool) -> _Recorder:
 
 
 class TestChain:
-    def test_single_head_is_0317_drop_retired_pipeline_diff_rollback_flag(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_down_revision_is_0312_memberships_active_lookups(self) -> None:
         assert _load_migration().down_revision == _MIGRATION_DOWN_REVISION

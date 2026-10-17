@@ -30,17 +30,16 @@ from types import ModuleType
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from alembic.script import ScriptDirectory
 from sqlalchemy import Boolean
 from sqlalchemy.sql.sqltypes import NullType
 
 from modulo.db.models.run import Run
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0307_runs_guardrail_override_resume_pending"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0306_trigger_secret_encryption"
-_CHAIN_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
 _COLUMN_NAME = "guardrail_override_resume_pending"
 
 
@@ -76,9 +75,8 @@ def _migration_calls(entry_point: str) -> list[tuple[str, tuple[Any, ...], dict[
 
 
 class TestChain:
-    def test_single_head_is_0317_drop_retired_pipeline_diff_rollback_flag(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_down_revision_is_0306_trigger_secret_encryption(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
