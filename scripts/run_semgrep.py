@@ -186,6 +186,32 @@ def _semgrep_skipped_files(output: str) -> bool:
     return any(pattern.search(output) for pattern in _SEMGREP_TIMEOUT_PATTERNS)
 
 
+def _semgrep_error_type(err: object) -> str | None:
+    """Return an ``errors`` entry's ``type`` tag normalised to a hashable string.
+
+    Semgrep does NOT encode every tag as a string. On the pinned semgrep a
+    ``Timeout`` entry's tag is the plain string ``"Timeout"``, but a
+    ``PartialParsing`` entry's tag is a **list** whose first element is the
+    type name:
+    ``["PartialParsing", [{"start": {...}, "end": {...}, ...}]]``. That list
+    is unhashable, so testing it directly against a ``frozenset`` raised
+    ``TypeError: unhashable type: 'list'`` and — because the JSON detector runs
+    FIRST in ``_semgrep_scan_incomplete`` — killed the whole detection path
+    before the anchored text net was ever consulted. This helper exists so that
+    can never happen again.
+
+    It NEVER raises: a non-dict entry, a missing/``None`` tag, an empty list,
+    or any other unexpected shape degrades to ``None``, which simply does not
+    match ``_SEMGREP_JSON_FATAL_ERROR_TYPES`` (so a non-fatal / unknown tag
+    keeps the scan's verdict with the text net, as documented on
+    ``_semgrep_json_timeout``).
+    """
+    tag = err.get("type") if isinstance(err, dict) else None
+    if isinstance(tag, list):
+        tag = tag[0] if tag else None
+    return tag if isinstance(tag, str) else None
+
+
 def _semgrep_json_timeout(json_path: str | os.PathLike[str]) -> bool:
     """Return True when the semgrep ``--json-output`` payload is incomplete.
 
@@ -195,6 +221,10 @@ def _semgrep_json_timeout(json_path: str | os.PathLike[str]) -> bool:
     whose errors are all non-fatal (e.g. ``PartialParsing``), returns ``False``
     — the anchored text net still covers the missing-payload case, and a
     genuine tool failure is handled by the fail-open branches.
+
+    Error tags are read through ``_semgrep_error_type`` because semgrep
+    serialises some of them as a list (see that helper); reading them raw
+    raised, which is the fail-open this function must never have had.
     """
     try:
         with Path(json_path).open(encoding="utf-8") as handle:
@@ -204,7 +234,7 @@ def _semgrep_json_timeout(json_path: str | os.PathLike[str]) -> bool:
     errors = payload.get("errors") if isinstance(payload, dict) else None
     if not isinstance(errors, list):
         return False
-    return any(isinstance(err, dict) and err.get("type") in _SEMGREP_JSON_FATAL_ERROR_TYPES for err in errors)
+    return any(_semgrep_error_type(err) in _SEMGREP_JSON_FATAL_ERROR_TYPES for err in errors)
 
 
 def _semgrep_scan_incomplete(output: str, json_path: str | os.PathLike[str] | None = None) -> bool:
