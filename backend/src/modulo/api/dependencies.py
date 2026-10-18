@@ -434,7 +434,7 @@ def require_target_org_role(
     )
 
 
-async def resolve_audit_principal(
+def resolve_audit_principal(
     request: Request,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> TenantPrincipal:
