@@ -1,6 +1,6 @@
 # Duplicated-logic baseline (FAR-1965).
 #
-# Three shrink-only families, all defined in
+# Four shrink-only families, all defined in
 # test_duplicate_validation_predicates.py:
 #
 #   {"detail": "<message>", "modules": ["<relpath>", ...]}
@@ -14,6 +14,10 @@
 #   {"block": ["<module>:<function>", ...]}
 #     A statement block that is an exact copy of a function's complete body
 #     in another module: a helper inlined or copied instead of called.
+#   {"near_body": ["<module>:<function>", ...]}
+#     Two near-identical (not identical) function bodies in different modules
+#     that are not per-entity scaffolding: one rule copied and then edited, so
+#     the copies have already drifted. Exact copies belong to the block family.
 #
 # The pluggable provider trees (connectors/**, model_backends/**,
 # core/error_tracking/forwarders/**) are out of scope by design.
@@ -76,3 +80,15 @@
 {"detail": "expires_at must be in the future", "modules": ["api/mcp_server.py", "api/routes/api_keys.py", "api/routes/service_accounts.py"]}
 {"detail": "owner_team_id is required when visibility is 'team'", "modules": ["api/routes/pipelines.py", "api/team_scope.py"]}
 {"detail": "role must be 'operator' or 'runner'. admin keys are prohibited.", "modules": ["api/mcp_server.py", "api/routes/api_keys.py"]}
+{"near_body": ["api/middleware/rate_limiter.py:_client_ip", "api/routes/auth.py:_client_ip"]}
+{"near_body": ["api/routes/admin.py:_list_org_accounts", "api/routes/service_accounts.py:_list_service_accounts"]}
+{"near_body": ["api/routes/analytics.py:_csv_stream_line", "api/routes/audit.py:_csv_stream_line"]}
+{"near_body": ["api/routes/composite_templates.py:_mask_sub_pipeline_graph", "api/routes/pipelines.py:_masked_snapshot_graph"]}
+{"near_body": ["cli/backup.py:_decredential_url", "launcher/upgrade.py:_decredential_url"]}
+{"near_body": ["core/cleanup_jobs/trigger_events_cleanup.py:cleanup_old_trigger_events", "core/cleanup_jobs/webhook_dedup_cleanup.py:cleanup_old_webhook_events"]}
+{"near_body": ["core/cron_helpers.py:compute_next_send", "core/reports/scheduler.py:compute_next_send"]}
+{"near_body": ["core/guardrails/policy_pack.py:_safe_input_path", "core/guardrails/sandbox_bridge.py:_safe_config_path"]}
+{"near_body": ["core/rollback_thresholds.py:_graph_has_script_mode_node", "db/crud/run.py:_graph_contains_sandbox_agent"]}
+{"near_body": ["db/crud/pipeline_snapshot.py:_pipeline_lock_keys", "db/repositories/locks.py:_str_to_lock_keys"]}
+{"near_body": ["launcher/doctor.py:_probe_bundle_pg_version", "launcher/supervisor.py:_resolve_bundled_postgres_version"]}
+{"near_body": ["launcher/entry.py:resolve_bin_dir", "launcher/upgrade.py:_resolve_pg_bin_dir"]}
