@@ -150,7 +150,7 @@ test.describe('Pipeline editor Select overlays escape their clipping ancestors (
     await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
   }
 
-  test('toolbar node-type Select (site 1) portals its overlay out of the clipped editor column', async ({ page }) => {
+  test('toolbar node-type Select (site 1) portals its overlay out of the clipped editor column', { tag: '@regression' }, async ({ page }) => {
     await mockEditor(page, NODES, [])
     await openEditor(page)
 
@@ -161,7 +161,7 @@ test.describe('Pipeline editor Select overlays escape their clipping ancestors (
     )
   })
 
-  test('empty-state node-type Select (site 2) portals its overlay out of the clipped column', async ({ page }) => {
+  test('empty-state node-type Select (site 2) portals its overlay out of the clipped column', { tag: '@regression' }, async ({ page }) => {
     await mockEditor(page, [], [])
     await openEditor(page)
 
@@ -173,7 +173,7 @@ test.describe('Pipeline editor Select overlays escape their clipping ancestors (
     )
   })
 
-  test('edge-properties Selects (sites 3-5) portal their overlays out of the clipped panel', async ({ page }) => {
+  test('edge-properties Selects (sites 3-5) portal their overlays out of the clipped panel', { tag: '@regression' }, async ({ page }) => {
     await mockEditor(page, NODES, [EDGE])
     await openEditor(page)
 
