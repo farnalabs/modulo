@@ -487,9 +487,11 @@ class TestOidcLoginPublicUrlBridge:
             redirect_uri: str,
             system_session: AsyncMock,
             session: AsyncMock,
-        ) -> tuple[str, None]:
+        ) -> tuple[str, str]:
             captured["redirect_uri"] = redirect_uri
-            return "https://idp.example.com/authorize", None
+            # Real contract: (authorize_url, raw_state) — the raw_state is a str
+            # (FAR-1979 uses it to seed the browser-binding cookie).
+            return "https://idp.example.com/authorize", "raw-state-abc"
 
         RuntimeConfigStore.reset()
         store = get_runtime_config_store()
