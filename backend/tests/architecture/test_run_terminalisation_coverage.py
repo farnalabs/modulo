@@ -54,11 +54,16 @@ Documented limitations
 * The evidence is a SUBSTRING check on the named module: it proves the marker
   text still exists, not that the predicate admits every intra-status shape.
   This gate proves the *coverage surface* is complete and wired; it cannot
-  prove that an existing terminaliser's SQL admits every row shape inside a
+  prove that an existing terminaliser's SQL admits EVERY row shape inside a
   status (the FAR-1803 class lived one level below this gate — a phase the
-  generic legs excluded). That level genuinely resists a false-positive-free
-  mechanical predicate, and the phase axis below is the closest honest proxy:
-  it ratchets a NEW durable phase, which is how the FAR-1803 shape entered.
+  generic legs excluded). That general level resists a false-positive-free
+  mechanical predicate, and the phase axis below is its closest honest proxy:
+  it ratchets a NEW durable phase. For the one observed intra-status carrier
+  the gate now goes a level deeper: ``_node_started_shield_is_liveness_gated``
+  re-derives from the registered running terminaliser's own SQL that its
+  node-started shield lifts for a dead executor (FAR-1803), so an
+  unconditional shield fails here instead of surviving until the 25h marker
+  sweep.
 * Wiring is a forward call-graph reachability check over module-level function
   names. Name collisions can only make a function look reachable when it is
   not (a false PASS), never the reverse, so the gate does not produce false
@@ -109,6 +114,18 @@ EXEMPT_REASONS: dict[str, str] = {
         "no production code path creates this state (it survives from a historical "
         "migration/repair); it cannot strand a live run, and reclassification is "
         "required the moment a writer is introduced"
+    ),
+    "operator_decision_recovery": (
+        "the park sweep moves a gate-expired run out of awaiting_human into a "
+        "NON-terminal parked state so it stops occupying review state; the gate stays "
+        "open and claimable, and the run is recovered ONLY by a human decision "
+        "(HITLManager._decide un-parks it at decision time) or by the F6a gated "
+        "recovery when a decision committed while the sweep was parking it. Parked "
+        "runs hold no PIPELINE execution slot but ARE counted by the org-level "
+        "run_concurrency_limit gate, so they cannot accumulate unboundedly, and they "
+        "remain cancellable through the normal cancel path; reclassification is "
+        "required the moment an automatic terminaliser (or any state that escapes the "
+        "org gate) is introduced"
     ),
 }
 
@@ -254,18 +271,25 @@ _STATUS_COVERAGE: dict[str, StatusCoverage] = {
         reason="operator_driven_recovery",
     ),
     "hitl_parked": StatusCoverage(
-        _GAP,
+        _EXEMPT,
+        reason="operator_decision_recovery",
         note=(
-            "no terminaliser selects this status: the FAR-648 and FAR-721 HITL sweeps bind "
-            "status=awaiting_human only, and resume_run's F6a recovery requires a committed "
-            "decision (a park carries none). Under healthy reconcile ticks the FAR-648 sweep "
-            "collects the run at terminalize_at, strictly before the park sweep can match at "
-            "terminalize_at + park_margin, so a run is cancelled before it can park; but if "
-            "the terminaliser is deferred on a tick (dispatcher_reconcile's per-org budget or "
-            "the FAR-746 max_rows cap), the park can win and the run is then unreachable by "
-            "the terminaliser. Remainder: decide whether an abandoned hitl_parked run should "
-            "be collected automatically or unpark-on-decision is the intended full recovery; "
-            "the remedy is a design call, not a silent test edit."
+            "FAR-604 D2/D3. Design anchor: db/models/run.py:66-71 documents the park "
+            "sweep moving a gate-expired run out of awaiting_human so it stops "
+            "occupying review state, deliberately kept NON-terminal so every in-flight "
+            "consumer treats it identically; db/models/run.py:165-177 shows it is "
+            "org-bounded (excluded from PIPELINE_CAPACITY_STATUSES, but the org gate "
+            "counts ACTIVE_RUN_STATUSES - {'pending'}). Recovery paths: a decision "
+            "un-parks at decision time (hitl_manager/__init__.py:1216-1230, via "
+            "db/crud/run.py:unpark_parked_run) and the F6a gated recovery collects a "
+            "parked run whose decision committed while the sweep was parking it "
+            "(cron_helpers.py:5464-5475). Safety properties pinned by: "
+            "tests/unit/test_run_admission.py::TestPipelineCapacityExcludesAwaitingHuman "
+            "(org gate counts it), tests/unit/api/test_far1967_hitl_parked_safety.py "
+            "(cancellable through the normal path), and "
+            "tests/unit/cron_helpers/test_dispatcher_reconcile.py"
+            "::TestHitlResumeOrSkipPredicateMatrix::test_parked_with_committed_decision_resumes "
+            "and ::TestReDispatchPredicateMatchesParked (F6a recovery)."
         ),
     ),
 }
@@ -460,6 +484,87 @@ def _evidence_present(rel_path: str, marker: str) -> bool:
     if not path.is_file():
         return False
     return marker in path.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Intra-status row-shape predicate — the FAR-1803 carrier
+# ---------------------------------------------------------------------------
+#
+# The coverage surface above proves a terminalising path EXISTS for every
+# in-flight status. It cannot, in general, prove that an existing
+# terminaliser's SQL ADMITS every row shape inside that status — the FAR-1803
+# class was exactly that: a ``running`` row (``dispatcher='saq'``,
+# ``dispatch_phase='first_node_dispatched'``) carrying a LIVE dispatch marker
+# whose executor heartbeat was STALE, which every running selector excluded.
+# The generic age gate excluded it behind the FAR-1740 (3) live-marker shield
+# with NO heartbeat condition; the nodeless router and the stale leg both
+# excluded the phase; the claim cap was unreached. Only the 25h marker sweep
+# could ever collect it (fix: 894e03783, PR #1840).
+#
+# The narrow, honest predicate below re-derives the ONE invariant the fix
+# established, straight from the registered terminaliser's own SQL: a shield
+# that excludes a node-started row must require a FRESH heartbeat, so a DEAD
+# executor's row is admitted. It deliberately does not attempt arbitrary
+# row-shape reasoning (which resists a false-positive-free predicate); it pins
+# the specific intra-status carrier that escaped. Its stated boundary: the
+# liveness signal it recognises is ``heartbeat_at`` versus ``now()``. A future
+# refactor that shields on a DIFFERENT liveness column would trip this check,
+# and the honest response is to widen the predicate deliberately (a fresh
+# deadline column is a new invariant worth naming), never to delete the check.
+
+#: The node-started shield the generic running terminaliser applies, and the
+#: token that terminates it in the (static) SQL template.
+_NODE_STARTED_SHIELD_ANCHOR = "NOT (dispatch_phase = :first_node_phase"
+_NODE_STARTED_SHIELD_END = "AND NOT (__ZERO_PROGRESS_SHAPE__)"
+
+
+def _node_started_shield_is_liveness_gated(sql: str) -> bool:
+    """Would this terminaliser's node-started shield lift for a DEAD executor?
+
+    ``True`` when the SQL carries no node-started shield (the phase is not
+    excluded) OR when every shield it carries requires a fresh heartbeat — the
+    heartbeat-vs-``now()`` bound that the FAR-1803 fix added. ``False`` is the
+    pre-fix shape: an unconditional shield that admits the dead-executor row
+    to no terminaliser.
+    """
+    start = sql.find(_NODE_STARTED_SHIELD_ANCHOR)
+    if start == -1:
+        return True
+    end = sql.find(_NODE_STARTED_SHIELD_END, start)
+    shield = sql[start:] if end == -1 else sql[start:end]
+    return "heartbeat_at >=" in shield and "now()" in shield
+
+
+def _registered_running_terminalizer_sql() -> list[str]:
+    """The SQL each REGISTERED terminaliser runs, filtered to running selectors.
+
+    The registry (``_TERMINALIZERS``) carries no SQL — a terminaliser's
+    selection predicate lives in its coroutine body. Resolving the module-level
+    string constants each registered coroutine names (rather than hand-listing
+    constants) keeps this mechanical: a relocated or renamed SQL constant still
+    resolves, so the check cannot rot silently into a no-op.
+    """
+    from modulo.core import cron_helpers as ch
+
+    tree = ast.parse(Path(ch.__file__).read_text(encoding="utf-8"))
+    constants = {
+        node.targets[0].id: node.value.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    }
+    registered = {spec.coroutine_name for spec in _terminalizer_specs() if spec.coroutine_name}
+    sqls: list[str] = []
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name not in registered:
+            continue
+        names = {load.id for load in ast.walk(node) if isinstance(load, ast.Name) and isinstance(load.ctx, ast.Load)}
+        sqls.extend(constants[name] for name in names if name in constants)
+    return [sql for sql in sqls if "status='running'" in sql]
 
 
 # ---------------------------------------------------------------------------
@@ -747,3 +852,55 @@ def test_covered_record_without_paths_is_rejected_at_construction() -> None:
     """The construction contract itself blocks the vacuous ``covered`` claim."""
     with pytest.raises(ValueError, match="terminalising path"):
         StatusCoverage(_COVERED)
+
+
+# ---------------------------------------------------------------------------
+# Gates — intra-status row shape (the FAR-1803 carrier)
+# ---------------------------------------------------------------------------
+
+
+def test_running_terminalizer_sql_resolution_is_non_vacuous() -> None:
+    """An AST walk that resolved nothing would pass the row-shape gate vacuously."""
+    sqls = _registered_running_terminalizer_sql()
+    assert len(sqls) >= 1
+    shield_bearing = [sql for sql in sqls if _NODE_STARTED_SHIELD_ANCHOR in sql]
+    assert len(shield_bearing) >= 1
+
+
+def test_a_dead_executor_node_started_row_is_admitted_by_a_running_terminaliser() -> None:
+    """FAR-1803: every node-started shield must lift for a STALE heartbeat.
+
+    A shield that excludes ``dispatch_phase = 'first_node_dispatched'`` rows
+    carrying a live marker WITHOUT a heartbeat condition admits the dead-executor
+    row to no terminaliser — the observed wedge (runs sitting ``running`` for
+    hours, collected only by the 25h marker sweep).
+    """
+    sqls = _registered_running_terminalizer_sql()
+    shields = [sql for sql in sqls if _NODE_STARTED_SHIELD_ANCHOR in sql]
+    violations = [sql for sql in shields if not _node_started_shield_is_liveness_gated(sql)]
+    assert not violations, (
+        "a registered running terminaliser excludes a node-started row behind an "
+        "unconditional shield (no heartbeat-vs-now() liveness bound): a run whose "
+        "executor died would be selected by no terminaliser (FAR-1803).\n  " + "\n  ".join(violations)
+    )
+
+
+def test_synthetic_pre_far1803_shield_is_flagged_by_the_predicate() -> None:
+    """The predicate must fail on the exact pre-FAR-1803 selection predicate.
+
+    Pre-fix (894e03783, PR #1840), the shield excluded a node-started row with a
+    live dispatch marker and NO heartbeat condition, so the dead-executor row was
+    not selected. Rebuild that SQL from the live template and assert the
+    predicate reports it — while the live template itself passes.
+    """
+    sql = next(sql for sql in _registered_running_terminalizer_sql() if _NODE_STARTED_SHIELD_ANCHOR in sql)
+    assert _node_started_shield_is_liveness_gated(sql) is True
+    start = sql.index(_NODE_STARTED_SHIELD_ANCHOR)
+    end = sql.index(_NODE_STARTED_SHIELD_END, start)
+    pre_fix_shield = (
+        "NOT (dispatch_phase = :first_node_phase "
+        "AND runs.sandbox_dispatch_state IS NOT NULL "
+        "AND runs.sandbox_dispatch_state NOT LIKE :live_marker_tombstone) "
+    )
+    synthetic = sql[:start] + pre_fix_shield + sql[end:]
+    assert _node_started_shield_is_liveness_gated(synthetic) is False
