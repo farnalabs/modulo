@@ -280,12 +280,14 @@ describe('AdminRunRetentionView', () => {
     clickSpy.mockRestore()
   })
 
-  it('warns when the export body lacks the completeness sentinel (FAR-1924)', async () => {
+  it('warns when the export stream closes cleanly but short without the completeness sentinel (FAR-1924)', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       statusText: 'OK',
-      // A truncated export: records but NO terminating {"_complete":true} line.
+      // A clean 200 whose body is shorter than expected — a proxy, a
+      // regenerated export, a future producer — so the records arrive but the
+      // terminating {"_complete":true} line is missing.
       blob: async () => new Blob(['{"id":"run-1"}\n']),
       json: async () => ({}),
     })
@@ -296,7 +298,7 @@ describe('AdminRunRetentionView', () => {
     if (typeof URL.revokeObjectURL !== 'function') {
       ;(URL as unknown as { revokeObjectURL: unknown }).revokeObjectURL = vi.fn()
     }
-    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock')
+    const createObjectURLSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock')
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
 
@@ -309,7 +311,9 @@ describe('AdminRunRetentionView', () => {
     expect(warning.exists()).toBe(true)
     expect(warning.attributes('role')).toBe('status')
     expect(warning.text()).toContain('may be incomplete')
-    // Non-blocking: the file was still downloaded and the success banner shows.
+    // Non-blocking: the file was still downloaded and the success banner shows,
+    // but the incompleteness warning is visible alongside it.
+    expect(createObjectURLSpy).toHaveBeenCalled()
     expect(wrapper.find('[data-testid="admin-run-retention-export-result"]').exists()).toBe(true)
 
     vi.unstubAllGlobals()
@@ -331,7 +335,7 @@ describe('AdminRunRetentionView', () => {
     if (typeof URL.revokeObjectURL !== 'function') {
       ;(URL as unknown as { revokeObjectURL: unknown }).revokeObjectURL = vi.fn()
     }
-    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock')
+    const createObjectURLSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock')
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
 
@@ -340,8 +344,54 @@ describe('AdminRunRetentionView', () => {
     await flushPromises()
     await flushPromises()
 
+    expect(createObjectURLSpy).toHaveBeenCalled()
     expect(wrapper.find('[data-testid="admin-run-retention-export-warning"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="admin-run-retention-export-incomplete"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="admin-run-retention-export-result"]').exists()).toBe(true)
+
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('reports a truncated transfer when the export body read fails mid-stream (FAR-1924)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      // A mid-stream failure closes the chunked response without the
+      // terminating chunk, so the browser rejects the body read (the real
+      // shape of ERR_INCOMPLETE_CHUNKED_ENCODING). HTTP 200 was already sent,
+      // so this never reaches the non-2xx error path.
+      blob: async () => { throw new TypeError('terminated') },
+      json: async () => ({}),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    if (typeof URL.createObjectURL !== 'function') {
+      ;(URL as unknown as { createObjectURL: unknown }).createObjectURL = vi.fn()
+    }
+    if (typeof URL.revokeObjectURL !== 'function') {
+      ;(URL as unknown as { revokeObjectURL: unknown }).revokeObjectURL = vi.fn()
+    }
+    const createObjectURLSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    const wrapper = await mountView()
+    await wrapper.find('[data-testid="admin-run-retention-export"]').trigger('click')
+    await flushPromises()
+    await flushPromises()
+
+    const incomplete = wrapper.find('[data-testid="admin-run-retention-export-incomplete"]')
+    expect(incomplete.exists()).toBe(true)
+    expect(incomplete.attributes('role')).toBe('alert')
+    expect(incomplete.text()).toContain('did not complete')
+    expect(incomplete.text()).toContain('incomplete')
+    // No file was produced: no download, no success banner, no generic error,
+    // and no sentinel "may be incomplete" warning.
+    expect(createObjectURLSpy).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="admin-run-retention-export-result"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="admin-run-retention-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="admin-run-retention-export-warning"]').exists()).toBe(false)
 
     vi.unstubAllGlobals()
     vi.restoreAllMocks()

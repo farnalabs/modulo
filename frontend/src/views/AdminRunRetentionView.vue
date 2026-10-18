@@ -42,6 +42,20 @@
         :message="actionError"
         :retryable="false"
       />
+      <!-- FAR-1924: a mid-stream backend failure closes the chunked response
+           without the terminating chunk, so the browser rejects the body read
+           (res.blob() throws) and no file is produced. The response was already
+           HTTP 200, so it never reaches the non-2xx error region above — report
+           the truncated transfer explicitly rather than as a generic failure.
+           Inline and non-blocking: the export control re-enables immediately. -->
+      <div
+        v-if="exportIncomplete"
+        class="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
+        data-testid="admin-run-retention-export-incomplete"
+        role="alert"
+      >
+        {{ exportIncomplete }}
+      </div>
       <div
         v-if="exportSuccess"
         class="mb-4 rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success"
@@ -322,6 +336,9 @@ const exporting = ref(false)
 const exportError = ref<string | null>(null)
 const exportSuccess = ref<string | null>(null)
 const exportWarning = ref<string | null>(null)
+// Set only when the export body read itself fails (a truncated transfer): a
+// distinct, explicit message rather than the generic export-error text.
+const exportIncomplete = ref<string | null>(null)
 
 // The terminating record the backend appends ONLY when the export stream ran
 // to exhaustion (see ``_COMPLETE_SENTINEL`` in admin_run_retention.py and the
@@ -483,6 +500,7 @@ async function exportFile() {
   exportError.value = null
   exportSuccess.value = null
   exportWarning.value = null
+  exportIncomplete.value = null
   try {
     const res = await fetch('/api/v1/admin/run-retention/export', {
       method: 'POST',
@@ -493,10 +511,22 @@ async function exportFile() {
       const detail = await res.json().catch(() => ({ detail: res.statusText }))
       throw new Error(formatApiError(detail) || t('views.AdminRunRetentionView.export_failed_status', { status: res.status }))
     }
-    const blob = await res.blob()
+    let blob: Blob
+    try {
+      blob = await res.blob()
+    } catch {
+      // FAR-1924: a mid-stream failure closes the chunked response without the
+      // terminating chunk, so the body read rejects (e.g. TypeError
+      // "terminated") and no file is produced. HTTP 200 was already sent, so
+      // this cannot surface as a non-2xx: report the truncated transfer
+      // explicitly instead of falling through to the generic error text.
+      exportIncomplete.value = t('views.AdminRunRetentionView.export_incomplete_transfer')
+      return
+    }
     // FAR-1924: inspect the wire contract before handing the file to the user.
-    // The sentinel is present only on a complete stream — a truncated export
-    // still arrives as an HTTP 200, so this is the only truncation signal.
+    // The sentinel is present only on a complete stream — a stream that closes
+    // cleanly but short (a proxy, a regenerated export, a future producer)
+    // still arrives as an HTTP 200, so this is the remaining truncation signal.
     const complete = lastNonEmptyLine(await blob.text()) === EXPORT_COMPLETE_SENTINEL
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
