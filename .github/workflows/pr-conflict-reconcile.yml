@@ -255,11 +255,25 @@ jobs:
               # merge-queue.yml's undelivered-notification fallback (FAR-1939). The
               # retry count and backoff above are deliberately unchanged.
               echo "::error::Branch Fixer dispatch failed for PR #$PR_NUM (HTTP ${LAST_HTTP}: ${DETAIL}) after retries — this PR was never handed to the fixer."
-              UNDELIVERED_BODY="The PR Conflict Reconciler could NOT dispatch the Branch Fixer for this PR: all 5 webhook attempts failed (last HTTP ${LAST_HTTP}: ${DETAIL}). Until the conflict is reconciled this PR stays conflicted against \`origin/main\` (mergeable=CONFLICTING), so no pull_request workflow will run to hand it to the fixer. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-              if gh pr comment "$PR_NUM" --repo farnalabs/modulo --body "$UNDELIVERED_BODY" > /dev/null 2>&1; then
-                echo "::notice::PR #$PR_NUM: posted a comment recording that the Branch Fixer was never dispatched."
+              # Idempotent: this reconciler runs every 15 minutes, so a persistently
+              # failing webhook (e.g. a sustained 429) would otherwise post a fresh
+              # comment on every cycle. Mirror the manual-delivery note below: key
+              # the note on an HTML marker and skip when it already exists.
+              UNDELIVERED_MARKER="<!-- pr-conflict-reconciler:undelivered-dispatch -->"
+              EXISTING=$(gh pr view "$PR_NUM" --repo farnalabs/modulo --json comments --jq "[.comments[] | select(.body | contains(\"$UNDELIVERED_MARKER\"))] | length" 2>/dev/null || echo "0")
+              if [ "$EXISTING" != "0" ]; then
+                echo "::notice::PR #$PR_NUM already carries an undelivered-dispatch note — not reposting."
               else
-                echo "::error::PR #$PR_NUM: could not post the undelivered-notification comment either — this PR has NO durable signal that the Branch Fixer was never asked to reconcile it (webhook HTTP ${LAST_HTTP}: ${DETAIL})."
+                UNDELIVERED_BODY="The PR Conflict Reconciler could NOT dispatch the Branch Fixer for this PR: all 5 webhook attempts failed (last HTTP ${LAST_HTTP}: ${DETAIL}). Until the conflict is reconciled this PR stays conflicted against \`origin/main\` (mergeable=CONFLICTING), so no pull_request workflow will run to hand it to the fixer. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} ${UNDELIVERED_MARKER}"
+                if gh pr comment "$PR_NUM" --repo farnalabs/modulo --body "$UNDELIVERED_BODY" > /dev/null 2>/tmp/undelivered_comment_stderr.txt; then
+                  echo "::notice::PR #$PR_NUM: posted a comment recording that the Branch Fixer was never dispatched."
+                else
+                  # Name the COMMENT failure separately from the webhook failure: the
+                  # reader must not misattribute the comment's stderr/HTTP status as
+                  # the reason the dispatch failed.
+                  COMMENT_ERR=$(head -c 300 /tmp/undelivered_comment_stderr.txt 2>/dev/null | tr '\n' ' ' || true)
+                  echo "::error::PR #$PR_NUM: could not post the undelivered-notification comment either (comment post failed${COMMENT_ERR:+: $COMMENT_ERR}; the dispatch failure was webhook HTTP ${LAST_HTTP}: ${DETAIL}) — this PR has NO durable signal that the Branch Fixer was never asked to reconcile it."
+                fi
               fi
               FAILED=$((FAILED + 1))
             fi

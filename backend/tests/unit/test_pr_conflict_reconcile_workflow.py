@@ -258,3 +258,34 @@ def test_dispatch_failure_keeps_the_loud_failure_and_can_comment() -> None:
     assert "exit 1" in block, "Dispatch-failure arm must still exit 1 (FAR-1949)"
     assert "GH_TOKEN" in block, "Dispatch step env must keep GH_TOKEN for the comment (FAR-1949)"
     assert "pull-requests: write" in _raw(), "pull-requests: write permission missing (FAR-1949)"
+
+
+def test_dispatch_failure_comment_is_idempotent_via_marker() -> None:
+    """FAR-1949 review: this reconciler fires every 15 minutes, so a
+    persistently failing webhook (e.g. a sustained 429) must not post a fresh
+    undelivered-dispatch comment on every cycle. The note must carry an HTML
+    marker and be skipped when that marker already exists — the same
+    idempotency the manual-delivery note in this workflow uses."""
+    block = _dispatch_step_block()
+    assert "<!-- pr-conflict-reconciler:undelivered-dispatch -->" in block, (
+        "Undelivered-dispatch comment must carry a dedup marker (FAR-1949 review)"
+    )
+    assert 'gh pr view "$PR_NUM" --repo farnalabs/modulo --json comments' in block, (
+        "Undelivered-dispatch arm must check for an existing marker comment (FAR-1949 review)"
+    )
+    assert "UNDELIVERED_MARKER" in block, "Marker must be used in the jq existence check (FAR-1949 review)"
+    assert "already carries an undelivered-dispatch note" in block, (
+        "Undelivered-dispatch arm must skip reposting when the marker exists (FAR-1949 review)"
+    )
+
+
+def test_dispatch_failure_escalation_names_the_comment_failure_separately() -> None:
+    """FAR-1949 review: the escalated ::error:: must distinguish the COMMENT
+    failure from the webhook failure. Appending the webhook's HTTP status next
+    to the comment failure made a reader misattribute it as the reason the
+    comment could not be posted."""
+    block = _dispatch_step_block()
+    assert "comment post failed" in block, "Escalated ::error:: must name the comment failure (FAR-1949 review)"
+    assert "the dispatch failure was webhook HTTP" in block, (
+        "Escalated ::error:: must label the webhook status as the dispatch failure (FAR-1949 review)"
+    )
