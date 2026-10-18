@@ -4,8 +4,12 @@ FAR-880 follow-up: the endpoint stays UNAUTHENTICATED — the CI/CD deploy
 pipelines (deploy.yml, rc-validate.yml, deploy-watchdog.yml,
 deploy-staleness-check.yml) call it without a principal to verify which build
 is live. Sensitive local fields (hostname, ci_job_url) are removed from the
-response instead; the git metadata is already world-readable because the repo
-is public.
+response instead.
+
+FAR-1975: ``git_branch`` and ``git_commit_message`` are also removed. They are
+free text from the *deployment's* source repository (which a self-hosted
+operator may keep private, so the "the repo is public" premise does not
+generalise) and no deploy workflow reads them.
 """
 
 from collections.abc import Generator
@@ -51,16 +55,29 @@ class TestDeploymentInfo:
         assert "python_version" in body
         assert "environment" in body
         assert "git_sha" in body
-        assert "git_branch" in body
         assert "git_commit_timestamp" in body
-        assert "git_commit_message" in body
         assert "build_timestamp" in body
+
+    def test_source_repo_free_text_absent(self, client: TestClient) -> None:
+        """FAR-1975: no free text from the deployment's source repo is exposed."""
+        resp = client.get("/api/v1/deployment")
+        body = resp.json()
+        assert "git_branch" not in body
+        assert "git_commit_message" not in body
 
     def test_sensitive_fields_absent(self, client: TestClient) -> None:
         resp = client.get("/api/v1/deployment")
         body = resp.json()
         assert "hostname" not in body
         assert "ci_job_url" not in body
+
+    def test_no_tenant_or_credential_fields(self, client: TestClient) -> None:
+        """The unauthenticated response carries no org/tenant/user/credential key."""
+        resp = client.get("/api/v1/deployment")
+        body = resp.json()
+        forbidden_terms = ("org", "tenant", "user", "secret", "token", "password", "credential", "key")
+        matched = [key for key in body if any(term in key.lower() for term in forbidden_terms)]
+        assert not matched
 
     def test_version_is_non_empty_string(self, client: TestClient) -> None:
         resp = client.get("/api/v1/deployment")
@@ -92,9 +109,7 @@ class TestDeploymentInfo:
         body = resp.json()
         for field in (
             "git_sha",
-            "git_branch",
             "git_commit_timestamp",
-            "git_commit_message",
             "build_timestamp",
         ):
             assert isinstance(body[field], str), f"{field} should be a string"

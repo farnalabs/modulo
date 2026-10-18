@@ -28,6 +28,14 @@ async def deployment_info() -> dict[str, object]:
     are omitted. If values are absent they fall back to empty strings so the
     endpoint is always safe to call.
     """
+    # The deploy pipelines consume only ``git_sha`` / ``build_timestamp`` /
+    # ``version`` (deploy.yml, rc-validate.yml, deploy-watchdog.yml,
+    # deploy-staleness-check.yml). ``git_branch`` and ``git_commit_message``
+    # are deliberately NOT returned: they are free text from the DEPLOYMENT's
+    # source repository, which is not necessarily public (a self-hosted
+    # customer may build from a private fork), and no consumer reads them
+    # (FAR-1975). Keep the response to build identifiers that are useless
+    # without the repo itself.
     return {
         "version": get_version(),
         "uptime_seconds": int(time.time() - _start_time),
@@ -35,8 +43,6 @@ async def deployment_info() -> dict[str, object]:
         "python_version": os.environ.get("PYTHON_VERSION", ""),
         "environment": os.environ.get("MODULO_ENV", "development"),
         "git_sha": os.environ.get("GIT_SHA", ""),
-        "git_branch": os.environ.get("GIT_BRANCH", ""),
         "git_commit_timestamp": os.environ.get("GIT_COMMIT_TIMESTAMP", ""),
-        "git_commit_message": os.environ.get("GIT_COMMIT_MESSAGE", ""),
         "build_timestamp": os.environ.get("BUILD_TIMESTAMP", ""),
     }
