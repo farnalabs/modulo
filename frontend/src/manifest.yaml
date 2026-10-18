@@ -1952,6 +1952,15 @@ elements:
       - testid: settings-trigger-event-log-next
         type: button
         dynamic_testid: false
+      - testid: capacity-outcomes-summary
+        type: element
+        dynamic_testid: false
+      - testid: capacity-outcomes-total
+        type: element
+        dynamic_testid: false
+      - testid: capacity-outcomes-trend
+        type: element
+        dynamic_testid: false
     /admin/org:
       - testid: feature-gate
         type: element
@@ -6248,9 +6257,14 @@ features:
             - "[x] In-app notification creation runs ALONGSIDE webhook dispatch as an independent always-executed step: an org with zero webhook endpoints still receives its in-app notification, an in-app failure never aborts webhook delivery, and webhook dispatch never silently skips in-app creation (guards the historical early-return silent-loss bug)"
 
             # Event surface
-            - "[x] 21 named event types drive the pipeline: hitl_awaiting, run_failed, run_stalled, budget_exceeded, circuit_breaker_tripped, claim_expired, hitl_overdue, hitl_deadline_warning, hitl_approve_sweep_suspected, hitl_review_removed, hitl_review_removal_denied, eval_regression, eval_blocked, feedback_pending, system_announcement, trigger_deactivated, trigger_streak_alert, org_triggers_auto_paused, guardrail_enforcement_gap, guardrail_kill_switch and guardrail_unexpected_skip (every AVAILABLE_EVENTS entry has a NotificationEventMapper config — enforced by tests/unit/notifier/test_event_registry_consistency.py)"
+            - "[x] 27 named event types drive the pipeline: hitl_awaiting, run_failed, run_stalled, budget_exceeded, circuit_breaker_tripped, claim_expired, hitl_overdue, hitl_deadline_warning, hitl_approve_sweep_suspected, hitl_review_removed, hitl_review_removal_denied, eval_regression, eval_blocked, feedback_pending, system_announcement, trigger_deactivated, trigger_streak_alert, org_triggers_auto_paused, guardrail_enforcement_gap, guardrail_kill_switch, guardrail_unexpected_skip, queue_pressure_notice, queue_pressure_warning, queue_pressure_critical, capacity_backpressure, capacity_saturation and capacity_recovered (every AVAILABLE_EVENTS entry has a NotificationEventMapper config — enforced by tests/unit/notifier/test_event_registry_consistency.py)"
             - "[x] The NotificationEventMapper turns each dispatched event into a typed in-app notification with per-event config (level, scope, category, dismiss strategy, TTL) rendered from sanitised payload fields, and GET /api/v1/admin/notifications/available-events drives the endpoint editor's event picker"
             - "[x] The approaching-deadline HITL sweep (hitl_deadline_warning cron) dispatches hitl_deadline_warning through the Notifier under the SAME once-only fire-once claim as its email leg: one Redis SET NX EX claim gates both channels so they can never double-fire, an org with email recipients and/or a subscribed endpoint is warned exactly once per gate, and an org with neither channel leaves the marker unset so a later opt-in or subscription can still warn while the band is open (tests/unit/hitl_manager/test_deadline_warning.py)"
+
+            # FAR-1344 — capacity alerting (escalating queue pressure + saturation)
+            - "[x] Capacity alerting fires BEFORE work starts failing (FAR-1344): the dispatcher_reconcile sweep (core/capacity_alerts.py, 60s, wall-clock bounded) reads FAR-1343's capacity report and dispatches an ESCALATING ladder per pipeline — queue_pressure_notice (a queue building), queue_pressure_warning (oldest pending run over 10 min), queue_pressure_critical (still climbing at >=3 with nothing draining, or the reader's org stall signature) — plus capacity_backpressure (the pipeline is currently refused by the canonical evaluate_backpressure gate) and capacity_saturation (an ORG run/sandbox limit held with work queued for over 5 min); the alert fires whether or not queue_timeout is configured, and the org layer is signal + alert only, never a refusal (tests/unit/core/test_capacity_alerts.py)"
+            - "[x] Capacity alerts never storm the notifier: one open alert per subject, re-notified ONLY on escalation, with the high-water rung held in Redis (state key modulo:capacity_alert:<org>:<subject> plus a per-org open-subject SET so a subject that disappears from the report is cleared rather than left open) and auto-cleared with capacity_recovered when draining resumes — a cleared notice is retired silently, a cleared warning-or-worse closes the loop; with no Redis the sweep skips dispatch (dedup is the noise guard) and reports state_unavailable instead of storming (tests/unit/core/test_capacity_alerts.py)"
+            - "[x] Every capacity payload names the pipeline (or the org limit), the binding limit and its current value (both rendered n/a when no limit binds, e.g. the normal scope-none state while a queue builds), the pending depth/oldest age, and a suggested action; core/analytics/capacity.py exposes read_capacity_report (the rate-limit-free body of GET /api/v1/analytics/capacity) so the sweep and the endpoint serve the SAME numbers (tests/unit/core/test_capacity_alerts.py, tests/unit/api/test_analytics_capacity_route.py)"
 
             # In-app notifications — /api/v1/notifications/in-app
             - "[x] GET /dashboard returns the dashboard feed, GET /unread-count the badge count, GET '' the paginated inbox, GET/PUT /preferences the per-user notification preferences, GET /{id} the detail, and POST /{id}/review-later + POST /{id}/dismiss action the record"
@@ -6560,6 +6574,7 @@ features:
             - "[x] A valid delivery returns 202 {'run_id', status: 'accepted'}; the run is dispatched in the background via fail-fast SAQ enqueue, and dispatch failures are ingested as error events without blocking the 202 (capacity-deferred runs are left to dispatcher_reconcile)"
             - "[x] Duplicate payloads are rejected 400 'Duplicate webhook payload'; concurrent-run-limit and pipeline rate-limit rejections are 429; a busy pipeline snapshot lock retries acquisition briefly, then surfaces an honest 503 'snapshot lock unavailable — retry the delivery' (never a fabricated 'queued' ack with no run behind it)"
             - "[x] Every webhook delivery outcome is recorded as a TriggerEvent row (accepted, paused, guardrail_blocked, ...), and the stored raw payload supports replay"
+            - "[x] Capacity outcomes are legible in the trigger event log (FAR-1344): the /admin/trigger-events result filter offers backpressure_skipped, coalesced and spend_limit_reached alongside concurrency_limit_reached, each renders with a DISTINCT badge (backpressure rose, concurrency orange, coalesced cyan, spend purple) rather than the shared throttle colour, and GET /api/v1/admin/trigger-events returns result_counts — a grouped count of the capacity vocabulary for the last 24h against the previous 24h with an up/down/flat direction — rendered as a capacity-outcome count/trend strip above the log (tests/unit/api/test_admin_triggers.py)"
             - "[x] Replay (POST /triggers/{id}/webhook/replay/{event_id}) re-fires a stored payload, reusing the original hash and preserving dedup + flood protection; an authenticated principal needs the 'run.trigger' runner permission, and an unauthenticated replay must present a valid HMAC over the stored payload"
             - "[x] Guardrail-blocked webhook deliveries are ack'd with a non-success 422 (never a false 'accepted'); the run + TriggerEvent rows stay committed for visibility"
             - "[x] cleanup-expired sweeps stale dedup hashes and expired WebhookPayload rows under a Postgres advisory lock (safe to call from cron with a runner credential)"

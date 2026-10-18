@@ -21343,6 +21343,32 @@ export interface components {
             prev_cursor?: string | null;
             /** Total */
             total: number;
+            result_counts?: components["schemas"]["TriggerEventResultCounts"] | null;
+        };
+        /**
+         * TriggerEventResultCounts
+         * @description Capacity-outcome counts for the last two 24h windows (FAR-1344).
+         *
+         *     ``recent``/``previous`` are keyed by ``validation_result`` for the capacity
+         *     vocabulary only — an org-wide summary, not a filtered page count.
+         */
+        TriggerEventResultCounts: {
+            /** Window Hours */
+            window_hours: number;
+            /** Recent */
+            recent: {
+                [key: string]: number;
+            };
+            /** Previous */
+            previous: {
+                [key: string]: number;
+            };
+            /** Total Recent */
+            total_recent: number;
+            /** Total Previous */
+            total_previous: number;
+            /** Direction */
+            direction: string;
         };
         /** TriggerRunRequest */
         TriggerRunRequest: {
