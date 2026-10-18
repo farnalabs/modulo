@@ -1,9 +1,11 @@
 """Intended-public read surface (FAR-1975).
 
-These are the endpoints the route-introspection guard's ``READ_EXEMPT``
-allowlist records as intentionally unauthenticated. The tests pin the
-NEGATIVE properties a future change must not quietly widen: reachable with
-no credentials at all, and carrying only tenant-free public catalogue data.
+These are endpoints the application deliberately serves without
+authentication: their handlers declare no auth dependency, so the route
+definitions themselves are the record of the intended-public read surface.
+The tests pin the NEGATIVE properties a future change must not quietly widen:
+reachable with no credentials at all, and carrying only tenant-free public
+catalogue data.
 
 ``/api/v1/deployment``, ``/api/v1/license``, ``/api/v1/auth/sso/providers``
 and ``/healthz/ready`` have their own anonymous-contract tests; this module
