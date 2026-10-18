@@ -36,6 +36,11 @@ Two structural invariants are enforced:
    is ``JSONB``. Three pairs point at tables that a later migration renamed or
    dropped; each is named explicitly below, and ANY other absent table is a hard
    failure — there is no blanket skip, so a renamed table cannot hide its column.
+   The two exception maps are cross-checked against reality, not merely
+   declared: a pair recorded as RENAMED is checked at its destination (and the
+   destination must be mapped), and a pair recorded as DROPPED must be shown,
+   from its named migration's OWN source, to actually ``DROP TABLE`` it — so a
+   rename recorded as a drop fails rather than passing the absence check.
 2. **One shared definition** — the ``JSON().with_variant(JSONB(), "postgresql")``
    expression is constructed exactly once (``modulo.db.models.base.JSONB_COL``).
    Enforced over the whole backend source tree (migrations excluded) by AST, so
@@ -44,7 +49,7 @@ Two structural invariants are enforced:
    which the dialect-parity check alone would accept while silently breaking
    SQLite/MariaDB parity.
 
-All three checks are static (no database): they read the migration, the ORM
+All four checks are static (no database): they read the migration, the ORM
 metadata and the source tree.
 """
 
@@ -52,6 +57,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import re
 from pathlib import Path
 from types import ModuleType
 
@@ -86,8 +92,12 @@ _RENAMED_0147_PAIRS: dict[tuple[str, str], tuple[str, str]] = {
 }
 
 #: A DROP is expressed per pair with the migration that removed it. The parity
-#: test additionally asserts the table stays absent, so a re-introduction (or a
-#: rename that a reader mistakes for a drop) fails loudly instead of passing.
+#: test asserts the table stays absent; the dedicated "actually dropped" check
+#: additionally reads that migration's OWN source and requires a real
+#: ``DROP TABLE`` of the named table. The absence check alone cannot tell a drop
+#: from a rename — both remove the old name from ``Base.metadata`` — so without
+#: that second check a rename recorded here would pass while the renamed column
+#: was never verified.
 _DROPPED_0147_PAIRS: dict[tuple[str, str], str] = {
     # 0179_drop_workspace_leases
     ("workspace_leases", "resource_usage_json"): "0179_drop_workspace_leases",
@@ -108,6 +118,90 @@ def _load_migration() -> ModuleType:
 def _resolved_pair(pair: tuple[str, str]) -> tuple[str, str]:
     """Return the pair's current ``(table, column)`` after the 0257 rename."""
     return _RENAMED_0147_PAIRS.get(pair, pair)
+
+
+def _migration_source(migration_name: str) -> str:
+    """Read the named migration's source, failing loudly on a bad reference."""
+    path = _MIGRATION_PATH.parent / f"{migration_name}.py"
+    assert path.exists(), (
+        f"_DROPPED_0147_PAIRS names migration {migration_name!r}, but {path} does not exist — "
+        "the migration reference is wrong"
+    )
+    return path.read_text(encoding="utf-8")
+
+
+def _module_string_constants(tree: ast.Module) -> dict[str, str]:
+    """Module-level ``NAME = "literal"`` bindings, so ``op.drop_table(_T)`` resolves."""
+    constants: dict[str, str] = {}
+    for node in tree.body:
+        target: ast.expr | None
+        value: ast.expr | None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+        elif isinstance(node, ast.AnnAssign):
+            target, value = node.target, node.value
+        else:
+            continue
+        if isinstance(target, ast.Name) and isinstance(value, ast.Constant) and isinstance(value.value, str):
+            constants[target.id] = value.value
+    return constants
+
+
+def _execute_sql_literals(tree: ast.Module) -> list[str]:
+    """Every string constant passed to an ``execute(...)`` call (raw-SQL path)."""
+    literals: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
+        if name != "execute":
+            continue
+        for arg in node.args:
+            literals.extend(
+                sub.value for sub in ast.walk(arg) if isinstance(sub, ast.Constant) and isinstance(sub.value, str)
+            )
+    return literals
+
+
+def _migration_drops_table(migration_name: str, table: str) -> bool:
+    """True iff *migration_name*'s OWN source issues ``DROP TABLE <table>``.
+
+    Recognises both idioms: ``op.drop_table("t")`` (or a module-level string
+    constant ``op.drop_table(_T)``) and a raw ``DROP TABLE ... t`` inside an
+    ``execute(...)`` string. The name recorded in the map is never trusted.
+    """
+    source = _migration_source(migration_name)
+    tree = ast.parse(source, filename=migration_name)
+    constants = _module_string_constants(tree)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
+        if name != "drop_table":
+            continue
+        arg = node.args[0]
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+            value = arg.value
+        elif isinstance(arg, ast.Name):
+            value = constants.get(arg.id)
+        else:
+            value = None
+        if value == table:
+            return True
+
+    drop_re = re.compile(rf"\bDROP\s+TABLE\b[^;]*\b{re.escape(table)}\b", re.IGNORECASE)
+    return any(drop_re.search(sql) for sql in _execute_sql_literals(tree))
+
+
+def _migration_renames_table(migration_name: str, table: str) -> bool:
+    """True iff *migration_name*'s source appears to RENAME *table* (diagnosis only)."""
+    source = _migration_source(migration_name)
+    if re.search(r"\bRENAME\s+TO\b", source, re.IGNORECASE) is None:
+        return False
+    return re.search(rf"['\"]{re.escape(table)}['\"]", source) is not None
 
 
 def test_0147_pairs_that_still_resolve_are_jsonb_on_postgres() -> None:
@@ -183,6 +277,37 @@ def test_0147_pair_resolution_is_complete_and_justified() -> None:
             f"_RENAMED_0147_PAIRS maps {renamed_from} to {destination}, but {destination[0]!r} "
             "is not mapped in Base.metadata"
         )
+
+
+def test_dropped_0147_pairs_are_actually_dropped() -> None:
+    """Each pair recorded as dropped IS dropped by the migration it names.
+
+    Reading the named migration's own source is what closes the residual hole:
+    the parity test's absence check cannot tell a drop from a rename (both remove
+    the old table name from ``Base.metadata``), so a rename recorded in
+    ``_DROPPED_0147_PAIRS`` would pass both it and the justification check while
+    the destination column was never verified — the FAR-1856 defect class this
+    guard exists to prevent.
+    """
+    failures: list[str] = []
+    for (table_name, column_name), migration_name in sorted(_DROPPED_0147_PAIRS.items()):
+        if _migration_drops_table(migration_name, table_name):
+            continue
+        if _migration_renames_table(migration_name, table_name):
+            failures.append(
+                f"{table_name}.{column_name}: recorded in _DROPPED_0147_PAIRS with migration "
+                f"{migration_name}, but that migration RENAMES {table_name!r} rather than dropping "
+                "it — a rename belongs in _RENAMED_0147_PAIRS so the destination column is checked"
+            )
+        else:
+            failures.append(
+                f"{table_name}.{column_name}: recorded in _DROPPED_0147_PAIRS with migration "
+                f"{migration_name}, but that migration contains no DROP TABLE for {table_name!r} — "
+                "either the map entry or its migration reference is wrong"
+            )
+    assert not failures, "_DROPPED_0147_PAIRS entries whose named migration does not drop the table:\n  " + "\n  ".join(
+        failures
+    )
 
 
 def _jsonb_construction_lines(path: Path) -> list[int]:
