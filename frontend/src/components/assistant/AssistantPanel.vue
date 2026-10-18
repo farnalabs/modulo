@@ -200,7 +200,7 @@
       <span>{{ store.error }}</span>
       <button type="button"
         class="shrink-0 ml-2 hover:opacity-80"
-        :class="isRateLimitError ? 'text-orange-600' : 'text-destructive'"
+        :class="isRateLimitError ? 'text-orange-600' : 'text-destructive-text'"
         @click="store.error = null"
         :aria-label="$t('components.assistant.dismiss_error')"
       >

@@ -185,8 +185,8 @@
       </div>
 
       <div v-if="deleteConfirmId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-        <p class="text-sm font-medium text-destructive">{{ $t('views.RunnersProfilesTab.delete_confirm', { name: deleteConfirmName }) }}</p>
-        <p class="mt-1 text-sm text-destructive/80">{{ $t('views.RunnersProfilesTab.soft_delete_warning') }}</p>
+        <p class="text-sm font-medium text-destructive-text">{{ $t('views.RunnersProfilesTab.delete_confirm', { name: deleteConfirmName }) }}</p>
+        <p class="mt-1 text-sm text-destructive-text">{{ $t('views.RunnersProfilesTab.soft_delete_warning') }}</p>
         <div class="mt-3 flex items-center gap-2">
           <Button :disabled="deleting" severity="danger" size="small" data-testid="envprofile-list-delete-confirm" @click="doDelete">
             {{ deleting ? $t('views.RunnersProfilesTab.deleting') : $t('views.RunnersProfilesTab.delete') }}
@@ -200,7 +200,7 @@
             {{ $t('views.RunnersProfilesTab.cancel') }}
           </button>
         </div>
-        <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
+        <div v-if="deleteError" class="mt-2 text-sm text-destructive-text">{{ deleteError }}</div>
       </div>
     </template>
   </div>

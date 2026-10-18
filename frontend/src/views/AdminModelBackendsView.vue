@@ -454,8 +454,8 @@
         </div>
 
         <div v-if="deleteConfirmBackendId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-          <p class="text-sm font-medium text-destructive">{{ $t('views.AdminModelBackendsView.delete_confirm', { name: deleteConfirmName }) }}</p>
-          <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminModelBackendsView.this_action_cannot_be_undone') }}</p>
+          <p class="text-sm font-medium text-destructive-text">{{ $t('views.AdminModelBackendsView.delete_confirm', { name: deleteConfirmName }) }}</p>
+          <p class="mt-1 text-sm text-destructive-text">{{ $t('views.AdminModelBackendsView.this_action_cannot_be_undone') }}</p>
           <div class="mt-3 flex items-center gap-2">
           <Button :disabled="deleting" severity="danger" data-testid="admin-model-backends-delete-confirm" @click="deleteBackend">
             {{ deleting ? $t('views.AdminModelBackendsView.deleting') : $t('views.AdminModelBackendsView.delete') }}
@@ -469,7 +469,7 @@
               {{ $t('views.AdminModelBackendsView.cancel') }}
             </button>
           </div>
-          <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
+          <div v-if="deleteError" class="mt-2 text-sm text-destructive-text">{{ deleteError }}</div>
         </div>
       </template>
     </div>

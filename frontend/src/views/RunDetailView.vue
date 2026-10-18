@@ -359,14 +359,14 @@
       <!-- Failed Run Diagnostics -->
       <div v-if="run.status === 'failed' && run.error_detail" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 mb-4">
         <div class="flex flex-wrap items-center gap-2 mb-1">
-          <h3 class="text-sm font-semibold text-destructive">{{ $t('views.RunDetailView.run_error') }}</h3>
+          <h3 class="text-sm font-semibold text-destructive-text">{{ $t('views.RunDetailView.run_error') }}</h3>
           <RunErrorTag
             v-if="run.error_code"
             :code="run.error_code"
             :detail="(run.error_detail as string | null | undefined)?.slice(0, 200)"
           />
         </div>
-        <pre class="text-xs whitespace-pre-wrap font-mono text-destructive/80">{{ run.error_detail }}</pre>
+        <pre class="text-xs whitespace-pre-wrap font-mono text-destructive-text">{{ run.error_detail }}</pre>
       </div>
 
       <!-- FAR-704: deadline-kill / cancellation triage evidence retained from
@@ -675,7 +675,7 @@
                 </div>
                 <div v-if="getNodeLog(node.name, 'agent_stderr')" class="rounded-lg border bg-destructive/10 p-4">
                   <div class="mb-2 flex flex-wrap items-center gap-2">
-                    <h4 class="text-xs font-semibold text-destructive">{{ $t('views.RunDetailView.agent_stderr') }}</h4>
+                    <h4 class="text-xs font-semibold text-destructive-text">{{ $t('views.RunDetailView.agent_stderr') }}</h4>
                     <label class="inline-flex items-center gap-1 text-xs text-muted-foreground cursor-pointer">
                       <input
                         type="checkbox"

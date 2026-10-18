@@ -123,10 +123,10 @@
           v-if="deleteConfirmId === ep.id"
           class="mt-3 rounded-lg border border-destructive/50 bg-destructive/10 p-3"
         >
-          <p class="text-sm font-medium text-destructive">
+          <p class="text-sm font-medium text-destructive-text">
             Delete this webhook endpoint?
           </p>
-          <p class="mt-1 text-sm text-destructive/80">
+          <p class="mt-1 text-sm text-destructive-text">
             This will stop all notifications to this URL.
           </p>
           <div class="mt-3 flex items-center gap-2">

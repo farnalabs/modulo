@@ -347,7 +347,7 @@
             @change="onModeChange('unrestricted')"
           />
           <div class="min-w-0">
-            <span class="text-sm font-medium text-destructive">{{ $t('components.SsoProviderForm.mode_unrestricted') }}</span>
+            <span class="text-sm font-medium text-destructive-text">{{ $t('components.SsoProviderForm.mode_unrestricted') }}</span>
             <p class="mt-0.5 text-xs text-muted-foreground">{{ $t('components.SsoProviderForm.mode_unrestricted_help') }}</p>
             <div
               v-if="provisioningMode === 'unrestricted'"

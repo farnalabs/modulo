@@ -44,8 +44,8 @@
           </header>
 
           <div v-if="validationErrors.length > 0" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-            <p class="mb-2 text-sm font-medium text-destructive">{{ $t('views.SchemaEditorView.validation_errors') }}</p>
-            <ul class="list-inside list-disc space-y-1 text-sm text-destructive/90">
+            <p class="mb-2 text-sm font-medium text-destructive-text">{{ $t('views.SchemaEditorView.validation_errors') }}</p>
+            <ul class="list-inside list-disc space-y-1 text-sm text-destructive-text">
               <li v-for="err in validationErrors" :key="err">{{ err }}</li>
             </ul>
           </div>

@@ -286,8 +286,8 @@
       </div>
 
       <div v-if="deleteConfirmConnectorId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-        <p class="text-sm font-medium text-destructive">{{ $t('views.AdminConnectorsView.delete_confirm', { name: deleteConfirmName }) }}</p>
-        <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminConnectorsView.this_action_cannot_be_undone') }}</p>
+        <p class="text-sm font-medium text-destructive-text">{{ $t('views.AdminConnectorsView.delete_confirm', { name: deleteConfirmName }) }}</p>
+        <p class="mt-1 text-sm text-destructive-text">{{ $t('views.AdminConnectorsView.this_action_cannot_be_undone') }}</p>
         <div class="mt-3 flex items-center gap-2">
           <Button :disabled="deleting" severity="danger" data-testid="admin-connectors-delete-confirm" @click="deleteConnector">
             {{ deleting ? $t('views.AdminConnectorsView.deleting') : $t('views.AdminConnectorsView.delete') }}
@@ -300,7 +300,7 @@
             {{ $t('views.AdminConnectorsView.cancel') }}
           </button>
         </div>
-        <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
+        <div v-if="deleteError" class="mt-2 text-sm text-destructive-text">{{ deleteError }}</div>
       </div>
     </template>
   </div>
