@@ -60,6 +60,32 @@ function registerNormalSdkMocks(): void {
   vi.doMock('@grafana/faro-web-sdk', () => ({ initializeFaro: faroInit, api: faroApi }))
 }
 
+/**
+ * Register the never-settling FARO mock for THIS test and prove the module
+ * graph will resolve it before the backend imports it.
+ *
+ * `registerNormalSdkMocks` (in beforeEach) has already registered a working
+ * FARO mock, and the `grafana_faro`-alias test above imports it — so a stale,
+ * cached registration can win the backend's runtime dynamic import, load a
+ * working SDK stub and defeat the stalled-init simulation (observed
+ * intermittently on main: `loadBackends drops a backend whose init never
+ * settles` returning `['builtin', 'grafana-faro']`). Re-registering after
+ * `vi.resetModules()` pins the intended mock, and the bounded race fails
+ * loudly at the mock (rather than mysteriously at the backend list) if a future
+ * change reintroduces the leak.
+ */
+async function installNeverSettlingFaroMock(): Promise<void> {
+  vi.doUnmock('@grafana/faro-web-sdk')
+  vi.resetModules()
+  vi.doMock('@grafana/faro-web-sdk', () => new Promise(() => {}))
+
+  const resolved = await Promise.race([
+    import('@grafana/faro-web-sdk').then(() => 'RESOLVED' as const),
+    new Promise<'NEVER_SETTLES'>((resolve) => setTimeout(() => resolve('NEVER_SETTLES'), 100)),
+  ])
+  expect(resolved).toBe('NEVER_SETTLES')
+}
+
 function baseConfig(overrides: Partial<MonitorConfig> = {}): MonitorConfig {
   return { monitorBackends: [], ...overrides }
 }
@@ -599,7 +625,7 @@ describe('monitor/index', () => {
     // SDK chunk fetch: init() awaits forever. Backends initialise concurrently,
     // so without a per-backend bound Promise.all never settles and the whole
     // list hangs (FAR-1892).
-    vi.doMock('@grafana/faro-web-sdk', () => new Promise(() => {}))
+    await installNeverSettlingFaroMock()
 
     const backends = await loadBackends(
       baseConfig({
