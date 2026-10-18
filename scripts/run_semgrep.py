@@ -187,7 +187,14 @@ def _semgrep_json_timeout(json_path: str | os.PathLike[str]) -> bool:
     errors = payload.get("errors") if isinstance(payload, dict) else None
     if not isinstance(errors, list):
         return False
-    return any(isinstance(err, dict) and err.get("type") in _SEMGREP_JSON_FATAL_ERROR_TYPES for err in errors)
+    # A non-string ``type`` (e.g. semgrep's list-typed ``PartialParsing``
+    # pseudo-error) is non-fatal by definition and must not raise here.
+    return any(
+        isinstance(err, dict)
+        and isinstance(err.get("type"), str)
+        and err.get("type") in _SEMGREP_JSON_FATAL_ERROR_TYPES
+        for err in errors
+    )
 
 
 def _semgrep_scan_incomplete(output: str, json_path: str | os.PathLike[str] | None = None) -> bool:

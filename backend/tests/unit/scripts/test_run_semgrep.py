@@ -129,6 +129,43 @@ def test_json_detector_false_for_partial_parsing_only(tmp_path: Path) -> None:
     assert not mod._semgrep_json_timeout(path)
 
 
+def test_json_detector_false_for_list_typed_partial_parsing(tmp_path: Path) -> None:
+    """The pinned semgrep emits PartialParsing's ``type`` as ``[name, spans]``.
+
+    Unlike the sibling string-shaped case, semgrep 1.175.0 serialises the
+    non-fatal PEP 695 parse skip on ``mcp_server.py`` with a LIST-typed
+    ``type``. The detector must treat it as non-fatal rather than raising
+    ``TypeError: unhashable type: 'list'``, which aborted the pre-commit hook
+    before it could report a result.
+    """
+    path = tmp_path / "partial-list.json"
+    _write_json(
+        path,
+        {
+            "errors": [
+                {
+                    "type": [
+                        "PartialParsing",
+                        [
+                            {
+                                "path": "backend/src/modulo/api/mcp_server.py",
+                                "start": {"line": 2111, "col": 24, "offset": 0},
+                                "end": {"line": 2111, "col": 40, "offset": 16},
+                            }
+                        ],
+                    ],
+                    "message": (
+                        "Syntax error at line backend/src/modulo/api/mcp_server.py:2111: "
+                        "`[**TOOL_SHELL_P]` was unexpected"
+                    ),
+                }
+            ],
+            "results": [],
+        },
+    )
+    assert not mod._semgrep_json_timeout(path)
+
+
 def test_json_detector_false_when_file_missing(tmp_path: Path) -> None:
     assert not mod._semgrep_json_timeout(tmp_path / "does-not-exist.json")
 
