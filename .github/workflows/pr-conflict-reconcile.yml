@@ -202,7 +202,7 @@ jobs:
             BODY=$(jq -n \
               --arg branchName "$BRANCH" \
               --argjson prNumber "$PR_NUM" \
-              --arg failureDescription "PR conflicts with origin/main (mergeable=CONFLICTING). merge origin/main into the branch (a MERGE commit — do NOT rebase or force-push a shared/reviewed branch). Resolve conflicts by reading all three versions (base/ours/theirs) and satisfying both intents. Re-run the stages/tests for touched modules. Push — which re-arms the pull_request pipeline (CI + sonarcloud-scan)." \
+              --arg failureDescription "PR conflicts with origin/main (mergeable=CONFLICTING). merge origin/main into the branch (a MERGE commit — do NOT rebase or force-push a shared/reviewed branch). Resolve conflicts by reading all three versions (base/ours/theirs) and satisfying both intents. Do NOT re-run the test suites in the sandbox — resolve, commit, and push. The node budget is too small for a full conflict resolution plus a suite run, and the push re-arms the pull_request pipeline, which is the authoritative gate. Push — which re-arms the pull_request pipeline (CI + sonarcloud-scan)." \
               --arg repo "farnalabs/modulo" \
               --arg fingerprint "${FINGERPRINT}" \
               --arg taskKind "conflict" \
