@@ -179,6 +179,17 @@ routes:
         <<: *community
         deprecated: false
 
+    /evidence:
+        name: evidence
+        breadcrumb: Evidence
+        parent: /
+        product_map: [feat-evidence]
+        sidebar_group: monitor
+        sidebar_order: 8
+        type: page
+        <<: *community
+        deprecated: false
+
     /runs/diff:
         name: runs-diff
         breadcrumb: Output Diff
@@ -3322,6 +3333,9 @@ elements:
       - testid: pipeline-list-move-error
         type: element
         dynamic_testid: false
+      - testid: pipeline-list-folder-error
+        type: element
+        dynamic_testid: false
       - testid: pipeline-list-new-pipeline
         type: button
         dynamic_testid: false
@@ -3345,6 +3359,9 @@ elements:
         dynamic_testid: false
       - testid: folder-tree-all-pipelines
         type: button
+        dynamic_testid: false
+      - testid: folder-tree-error
+        type: element
         dynamic_testid: false
       - testid: pipeline-list-action-menu
         type: button
@@ -3417,6 +3434,9 @@ elements:
         type: button
         dynamic_testid: false
     /pipelines/:id/editor:
+      - testid: pipeline-editor-folder-error
+        type: element
+        dynamic_testid: false
       - testid: pipeline-editor-save
         type: button
         dynamic_testid: false
@@ -3663,6 +3683,9 @@ elements:
       - testid: pipeline-editor-save-as-template
         type: button
         dynamic_testid: false
+      - testid: pipeline-editor-save-as-dropdown
+        type: element
+        dynamic_testid: false
       - testid: pipeline-editor-toolbar-group-run
         type: element
         dynamic_testid: false
@@ -3691,6 +3714,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: pipeline-editor-node-type-select
+        type: select
+        dynamic_testid: false
+      - testid: pipeline-editor-empty-node-type-select
         type: select
         dynamic_testid: false
       - testid: pipeline-editor-add-node
@@ -4390,6 +4416,9 @@ elements:
         type: button
         dynamic_testid: false
     /schemas:
+      - testid: schema-list-folder-error
+        type: element
+        dynamic_testid: false
       - testid: schema-list-move-error
         type: element
         dynamic_testid: false
@@ -4437,6 +4466,9 @@ elements:
         dynamic_testid: false
       - testid: folder-tree-all-pipelines
         type: button
+        dynamic_testid: false
+      - testid: folder-tree-error
+        type: element
         dynamic_testid: false
     /schemas/editor/:id:
       - testid: feature-gate
@@ -5960,6 +5992,19 @@ features:
             - "[x] Saved Views ship end to end as the admin CRUD surface: `/admin/views` renders AdminViewsView.vue with create/edit/delete over GET/POST/PATCH/DELETE /api/v1/views (gated by the `view_modes` feature flag), covering custom filters (JSON), column layouts, view type, and sort configuration — locked by views.feature BDD + test_view_endpoint.py"
         deferrals:
             - "Saved Views are a private_preview surface (FAR-546): the /admin/views route is hidden from the sidebar nav and the `saved_views` plan toggle is default-off per org; the ViewToggle 'apply to list' frontend component ships but is not yet wired into the runs/pipelines list pages, so a saved view is created/edited from /admin/views rather than applied in-context"
+    feat-evidence:
+        description: Evidence dashboard with a server-side field-level redaction boundary
+        status: partial
+        behaviours:
+            - "[x] GET /api/v1/evidence lists a run's evidence rows (required run_id UUID; optional node_id and key filters) scoped to the caller's organisation through RLS, with the field-level redaction boundary applied SERVER-SIDE before the response is serialised; the caller's role resolves a rule from evidence_redaction_rules (most-specific-wins by key_pattern, else the '*' catch-all for that role, else the built-in viewer default) and the covered evidence-value keys are replaced with the \"[REDACTED]\" sentinel while permitted fields (key, subject_type/subject_id, observed_at, timestamps, pass/fail outcomes) survive unredacted (backend/src/modulo/api/routes/evidence.py, backend/src/modulo/core/evidence_redaction.py)"
+            - "[x] GET /api/v1/evidence/{evidence_id} returns a single org-scoped evidence row with the same server-side redaction applied and 404s an id absent for the org"
+            - "[x] Redaction rules are readable and editable by org admins only: GET /api/v1/evidence/redaction-rules lists the org's rules and PUT /api/v1/evidence/redaction-rules upserts one by (key_pattern, role, redacted_fields) — gated by evidence.redaction.manage (admin) via require_system_or_org_admin, with unknown redaction classes rejected 422 so a rule can never be a silent no-op; writes are audited (evidence_redaction_rule_upserted) (modulo.auth.permissions evidence.read=viewer / evidence.redaction.manage=admin)"
+            - "[x] Migration 0320_evidence_redaction_rules creates evidence_redaction_rules (OrgScoped + soft-delete, UNIQUE (organisation_id, key_pattern, role), role CHECK in admin/operator/viewer), applies the four-step RLS pattern, and seeds the mandatory catch-all row key_pattern='*' / role='viewer' / redacted_fields='{sensitive_output, internal_metadata}' for every existing organisation"
+            - "[x] The /evidence route renders under the MONITOR sidebar group; EvidenceView.vue fetches the already-redacted payload and renders it as-is with NO client-side redaction or conditional field hiding, with i18n-backed strings and role=status/aria-live status regions (frontend/src/views/EvidenceView.vue, frontend/src/manifest.yaml)"
+            - "[ ] An in-product admin rule-editor UI is not shipped (chunk 9b §2.5): the redaction-rules GET/PUT surface is an admin API only, so the /evidence view is a read-only dashboard and the catch-all seed plus the service's built-in viewer default keep viewers redacted without any rule authored"
+        deferrals:
+            - "The redaction-rules GET/PUT surface ships as an admin API only (chunk 9b §2.5); there is no in-product admin rule-editor UI yet — the /evidence view is a read-only dashboard, and the catch-all seed plus the service's built-in viewer default keep viewers redacted without any rule authored"
+            - "Risk/Assessment (sub-scope B, FAR-941) is a separate ticket and is not part of this entry; the decision-record NULL-duplicate grouping (acceptance criteria 12-14) belongs to the decision-record read path and is not implemented here"
     feat-governance-stack:
         description: Read-only governance-hierarchy taxonomy readout (/governance)
         status: covered

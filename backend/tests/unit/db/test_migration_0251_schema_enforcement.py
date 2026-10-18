@@ -28,7 +28,8 @@ def _load_migration() -> ModuleType:
 
 
 def test_revision_chain_position() -> None:
-    """The migration extends the current head (0250_eval_policy_gate)."""
+    """The migration's parent is pinned to 0250_eval_policy_gate; the chain
+    position is asserted, never a named head value."""
     module = _load_migration()
     assert module.revision == "0251_schema_enforcement_telemetry"
     assert module.down_revision == "0250_eval_policy_gate"

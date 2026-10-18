@@ -342,85 +342,30 @@ class TestMigrationBackfillGrace:
         CURRENT_TIMESTAMP (backfill = now()) — pre-existing no-delivery history
         can never deactivate on tick 1 because the boundary is
         GREATEST(last_delivery_at, streak_epoch) and every old run predates the
-        anchored epoch. The chain has a single linear head."""
+        anchored epoch. The chain's shape is asserted head-agnostically: the
+        shared ``_migration_graph.assert_single_linear_head`` helper asserts
+        exactly one head AND strict linearity (a diamond reconciled by a merge
+        migration has one head but is NOT linear), plus no dangling
+        down_revision, duplicate revision id, orphan or ghost."""
         from pathlib import Path
 
         from alembic.script import ScriptDirectory
+
+        from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
         versions_dir = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
         source = (versions_dir / "0110_schema_pipeline_runtime.py").read_text(encoding="utf-8")
         # The reconciliation DDL adds the column with a server default (backfill).
         assert 'ADD COLUMN IF NOT EXISTS "streak_epoch" timestamp with time zone DEFAULT CURRENT_TIMESTAMP' in source
         assert "ix_runs_unclassified_terminal" in source
+        # The shared helper owns the whole chain-shape invariant: exactly one
+        # head AND strict linearity (a diamond reconciled by a merge migration
+        # has one head but is NOT linear), plus no dangling down_revision,
+        # duplicate revision id, orphan or ghost.
+        assert_single_linear_head(script_directory())
+        # Head-agnostic single-head check, retained explicitly: it never names
+        # the tip; strict linearity is the helper's concern, not this one's.
         heads = ScriptDirectory(str(versions_dir.parent)).get_heads()
-        # FAR-634 added 0195_hitl_claim_gate_config_json as the child of the
-        # current head (0202_runs_error_code_claimed_by_indexes after re-merge
-        # with main); FAR-681 slice 2 added 0203_triggers_add_name on top of
-        # 0195, FAR-681 slice 2 (#289/#293) added 0204_runner_probe_cache on top
-        # of 0203_triggers_add_name, FAR-760's 0205_library_collection_type
-        # chains on top of 0204_runner_probe_cache, and FAR-644's
-        # 0206_deleted_defaults_signal_check chains on top of 0205, and FAR-761's
-        # 0207_collection_install_tracking chains on top of 0206, and #337's
-        # 0208_notification_indexes_and_constraint chains on top of 0207, and
-        # 0209_collection_install_id_entity_columns chains on top of 0208,
-        # FAR-764's 0210_community_gate chains on top of 0209, and FAR-775's
-        # 0211_variant_batch_state chains on top of 0210, and FAR-775's
-        # follow-up 0212_variant_batch_state_updated_at chains on top of 0211,
-        # and FAR-788's 0213_runs_rerun_trigger_type chains on top of 0212,
-        # and FAR-748's 0216_audit_events_sweep_detection_index chains on top of 0215,
-        # and 0217_hitl_claims_decided_by chains on top of 0216,
-        # and 0219_eval_cluster_check_constraints chains on top of 0218,
-        # and 0220_run_node_artifacts chains on top of 0219,
-        # and FAR-802's 0221_workspace_inputs_env_profiles chains on top of 0220,
-        # and FAR-794's 0222_journey_provenance chains on top of 0221,
-        # and 0223_agents_add_foreign_keys chains on top of 0222,
-        # and 0224_agents_add_indexes chains on top of 0223,
-        # and 0225_agents_constraints_rls chains on top of 0224,
-        # and 0226_agents_json_to_jsonb chains on top of 0225,
-        # and 0227_env_profiles_initialisation_strategy_check chains on top of 0226,
-        # and 0228_drop_scalar_agent_command (FAR-828) chains on top of 0227,
-        # and FAR-802's 0229_add_workspace_inputs_count chains on top of 0228_drop_scalar_agent_command,
-        # and 0230_token_families_refresh_grace chains on top of 0229_add_workspace_inputs_count,
-        # and 0231_token_families_reuse_replay_count chains on top of 0230_token_families_refresh_grace,
-        # and 0232_seed_modulo_sentinel_organisation chains on top of 0231_token_families_reuse_replay_count,
-        # and 0233_add_updated_at_audit_to_organisations chains on top of 0232_seed_modulo_sentinel_organisation,
-        # and 0234_add_organisations_indexes chains on top of 0233_add_updated_at_audit_to_organisations,
-        # and 0235_promote_organisations_json_to_jsonb chains on top of 0234_add_organisations_indexes,
-        # and 0236_add_organisations_constraints chains on top of 0235_promote_organisations_json_to_jsonb,
-        # and 0237_fix_token_family_org_nullable chains on top of 0236_add_organisations_constraints,
-        # and FAR-801's 0238_workspace_input_drift_and_audit chains on top of 0237_fix_token_family_org_nullable,
-        # and 0239_revert_organisations_audit_drift chains on top of 0238_workspace_input_drift_and_audit,
-        # and 0240_reinstate_organisations_audit_columns chains on top of 0239_revert_organisations_audit_drift,
-        # and 0241_journey_dismissal (FAR-795) chains on top of 0240_reinstate_organisations_audit_columns,
-        # and 0242_org_mint_budget_usage (FAR-795) chains on top of 0241_journey_dismissal,
-        # and 0243_remove_organisations_audit_drift (FAR-811) chains on top of 0242_org_mint_budget_usage,
-        # and 0244_pipeline_stdout_retention_config (FAR-811) chains on top of
-        # 0243_remove_organisations_audit_drift, and 0245_drop_organisations_created_by_fk (PR #559)
-        # chains on top of 0244_pipeline_stdout_retention_config, and 0246_sso_join_gate (FAR-855)
-        # chains on top of 0245_drop_organisations_created_by_fk, and 0247_sso_presets (FAR-853)
-        # chains on top of 0246_sso_join_gate, and 0248_agent_schema_profile (FAR-900)
-        # chains on top of 0247_sso_presets, and 0249_validation_level (FAR-935)
-        # chains on top of 0248_agent_schema_profile, and 0250_eval_policy_gate (FAR-1060)
-        # chains on top of 0249_validation_level, and 0251_schema_enforcement_telemetry
-        # (FAR-902) chains on top of 0250_eval_policy_gate, and
-        # 0252_enforcement_daily_facts (FAR-902) chains on top of
-        # 0251_schema_enforcement_telemetry, and 0253_runs_enforcement_mode_outcome
-        # (FAR-902) chains on top of 0252_enforcement_daily_facts, and
-        # 0254_eval_backfill_cutover (FAR-1100) chains on top of
-        # 0253_runs_enforcement_mode_outcome, and
-        # 0255_trigger_event_value_filter_label (FAR-1144) chains on top of
-        # 0254_eval_backfill_cutover, and 0256_pipeline_max_autonomy_level
-        # (FAR-1163) chains on top of 0255_trigger_event_value_filter_label, and
-        # 0257_rename_remy_to_assistant (FAR-1196 Tier 3) chains on top of
-        # 0256_pipeline_max_autonomy_level, and
-        # 0258_pipeline_accountability_owners (FAR-1161) chains on top of
-        # 0257_rename_remy_to_assistant, and
-        # 0259_pipeline_snapshot_max_autonomy_check (FAR-1223) chains on top of
-        # 0258_pipeline_accountability_owners, and so on for subsequent
-        # migrations (0260_run_cancel_reason, then 0261_decision_record_payload).
-        # The assertion is intentionally head-agnostic: the real invariant is
-        # that the migration chain has exactly ONE head (i.e. is linear),
-        # regardless of which migration is newest.
         assert len(heads) == 1, f"expected a single linear head, got {heads}"
 
 

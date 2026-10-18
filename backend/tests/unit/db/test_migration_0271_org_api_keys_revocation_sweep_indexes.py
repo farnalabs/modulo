@@ -4,46 +4,11 @@ Structural - load the migration module and assert its contract without a
 database, and pin model/migration parity for the two new ``org_api_keys``
 lookup indexes:
 
-* the chain is pinned (0271 -> ``0270_pipeline_snapshots_max_autonomy_ge_default``,
-  with ``0272_oauth_client_revoke_lookup_indexes`` then
-  ``0273_runs_dispatch_phase`` then
-  ``0274_policy_gate_pin_fingerprint_operator_control`` then
-  ``0275_run_cancel_reason_vocabulary`` then
-  ``0276_runs_autovacuum_enabled`` then
-  ``0277_run_daily_facts_trigger_dispatch_phase`` then
-  ``0278_runs_workspace_drift_sweep_index`` then
-  ``0279_table_autovacuum_tuning`` then
-  ``0280_runs_node_deadline_watchdog_fired_count`` then
-  ``0281_org_api_keys_grants`` then
-  ``0282_env_profiles_kubernetes`` then
-  ``0283_runs_drop_unused_indexes`` then
-  ``0284_add_rejected_run_status`` then
-  ``0285_system_audit_events`` then
-  ``0286_pipeline_run_state`` then
-  ``0287_team_rls_lifecycle_evals`` then
-  ``0288_runs_execution_origin`` then
-  ``0289_pipelines_environment_profile`` then
-  ``0290_scheduled_reports_due_scan`` then
-  ``0291_invitations_lookup_constraints`` then
-  ``0292_audit_events_resource_lookup`` then
-  ``0293_oauth_clients_team_id`` then
-  ``0294_eval_results_org_fk`` then
-  ``0295_decision_record_event_identity`` then
-  ``0296_benign_run_outcomes`` then
-  ``0297_autonomy_gating_s1`` then
-  ``0298_accounts_kind`` then
-  ``0299_accounts_service_identity`` then
-  ``0300_benign_facts_repair`` then
-  ``0301_oauth_consent_state_preauth_rls`` then
-  ``0302_runs_run_grouping`` then
-  ``0303_feedback_records_lookup_indexes`` then
-  ``0305_guardrail_escalate_action`` then ``0306_trigger_secret_encryption`` then
-  ``0307_runs_guardrail_override_resume_pending`` then
-  ``0314_external_agents_mcp_servers`` then
-  ``0315_service_accounts_lifecycle`` then
-  ``0317_drop_retired_pipeline_diff_rollback_flag`` now the single linear head)
-  so the pre-commit check-migration-heads hook and every ``test_single_head_*``
-  pin cannot be ambushed by a renumber;
+* the chain: this migration's own parent is pinned by ``_DOWN_REVISION``
+  below; the graph's single linear head, and its completeness, are asserted by
+  ``_migration_graph.assert_single_linear_head``, so the pre-commit
+  check-migration-heads hook and every head assertion cannot be ambushed by a
+  renumber;
 * the upgrade emits exactly the two ``CREATE INDEX IF NOT EXISTS`` statements
   the revocation and stale-sweep read paths rely on (``auth/api_key.py::
   revoke_run_api_key`` / ``revoke_run_api_key_sweep`` and
@@ -66,16 +31,15 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
-from alembic.script import ScriptDirectory
 from sqlalchemy import Index
 
 from modulo.db.models.api_key import OrgApiKey
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0271_org_api_keys_revocation_sweep_indexes"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0270_pipeline_snapshots_max_autonomy_ge_default"
-_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
 _TABLE = 'public."org_api_keys"'
 
 #: Index name -> (ordered key columns, partial WHERE predicate). This is the
@@ -140,9 +104,8 @@ def _model_indexes() -> dict[str, Index]:
 
 
 class TestChain:
-    def test_single_head_is_0271(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_down_revision_is_0270_pipeline_snapshots_max_autonomy_ge_default(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION

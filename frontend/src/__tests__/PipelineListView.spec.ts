@@ -8,7 +8,11 @@ const mockResponses: Record<string, unknown> = {
   default: { items: [], total: 0, page: 1, page_size: 100 },
 }
 
-const { patchMock } = vi.hoisted(() => ({ patchMock: vi.fn() }))
+const { patchMock, useApiGetMock } = vi.hoisted(() => ({
+  patchMock: vi.fn(),
+  // Shared so a test can count folder-endpoint fetch calls (retry re-fetches).
+  useApiGetMock: vi.fn(),
+}))
 
 vi.mock('../lib/api/client', () => {
   const mockGet = vi.fn((url: string, options?: { params?: { query?: { page_size?: number } } }) => {
@@ -38,10 +42,21 @@ vi.mock('../lib/api/client', () => {
 
 vi.mock('../composables/useApi', () => ({
   useApi: () => ({
-    get: vi.fn((url: string) => Promise.resolve(mockResponses[url] ?? [])),
+    // hasOwnProperty (not ??) so a test can explicitly set an entry to
+    // undefined and have the mock return undefined — the empty-body shape the
+    // folder-list guard must reject — instead of coalescing it to [].
+    get: useApiGetMock,
     patch: patchMock,
   }),
 }))
+
+// The implementation is set here rather than inline in the factory so the
+// hoisted mock stays addressable from tests while keeping the mockResponses
+// lookup identical to the previous inline vi.fn (clearAllMocks in beforeEach
+// clears calls but not this implementation).
+useApiGetMock.mockImplementation((url: string) =>
+  Promise.resolve(Object.prototype.hasOwnProperty.call(mockResponses, url) ? mockResponses[url] : []),
+)
 
 import PipelineListView from '../views/PipelineListView.vue'
 import { api } from '../lib/api/client'
@@ -1173,5 +1188,170 @@ describe('PipelineListView', () => {
     // Dense dialog context: the shared alert renders in its compact density.
     expect(alert.props('compact')).toBe(true)
     wrapper.unmount()
+  })
+
+  it('shows the folder load error and no folder rows when the folder endpoint returns a non-array', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      // useApi.get is an unchecked `get<T>()` cast and returns `undefined as T` on
+      // a 204; foldersList is dereferenced (foldersList.length / spread iteration)
+      // on every render, so a non-array must be rejected, not assigned.
+      mockResponses['/api/v1/pipeline-folders'] = undefined
+      mockResponses['/api/v1/pipelines?page_size=100'] = {
+        items: [{ id: 'p1', organisation_id: 'org1', name: 'Pipeline A', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }],
+        total: 1,
+        page: 1,
+        page_size: 100,
+      }
+      await router.push('/pipelines')
+      await router.isReady()
+      const wrapper = mount(PipelineListView, {
+        // ErrorAlert NOT stubbed: the folder-list failure now renders through
+        // the shared alert (message prop), so the text assertion below requires
+        // the real component rather than a stub with no text content.
+        global: { plugins: [router], stubs: { FolderTree: true } },
+      })
+      await flushPromises()
+      await nextTick()
+      expect(wrapper.exists()).toBe(true)
+      expect(wrapper.findAll('[data-testid="pipeline-tree-folder-row"]')).toHaveLength(0)
+      expect(wrapper.text()).toContain('The server returned an invalid folder list.')
+      expect(consoleError).toHaveBeenCalled()
+    } finally {
+      delete mockResponses['/api/v1/pipeline-folders']
+      consoleError.mockRestore()
+    }
+  })
+
+  it('renders the folder-list failure alert inside <main>, never as a flex sibling of the sidebar', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      mockResponses['/api/v1/pipeline-folders'] = undefined
+      await router.push('/pipelines')
+      await router.isReady()
+      const wrapper = mount(PipelineListView, {
+        global: { plugins: [router], stubs: { FolderTree: true } },
+      })
+      await flushPromises()
+      await nextTick()
+
+      const alert = wrapper.find('[data-testid="pipeline-list-folder-error"]')
+      expect(alert.exists()).toBe(true)
+      // It lives INSIDE <main> ...
+      expect(wrapper.find('main').find('[data-testid="pipeline-list-folder-error"]').exists()).toBe(true)
+      // ... and never as a direct flex child of the sidebar/table row. The old
+      // mis-placed <p> was a sibling there, squeezing a vertical column between
+      // the tree and the table instead of alerting above the content.
+      expect(
+        wrapper.find('div.flex.flex-1.min-h-0 > [data-testid="pipeline-list-folder-error"]').exists(),
+      ).toBe(false)
+      expect(wrapper.find('main + [data-testid="pipeline-list-folder-error"]').exists()).toBe(false)
+      wrapper.unmount()
+    } finally {
+      delete mockResponses['/api/v1/pipeline-folders']
+      consoleError.mockRestore()
+    }
+  })
+
+  it('shows the invalid-list text in the folder-list failure alert', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      mockResponses['/api/v1/pipeline-folders'] = undefined
+      await router.push('/pipelines')
+      await router.isReady()
+      const wrapper = mount(PipelineListView, {
+        global: { plugins: [router], stubs: { FolderTree: true } },
+      })
+      await flushPromises()
+      await nextTick()
+
+      const alert = wrapper.find('[data-testid="pipeline-list-folder-error"]')
+      expect(alert.exists()).toBe(true)
+      expect(alert.text()).toContain('Failed to load folders:')
+      expect(alert.text()).toContain('The server returned an invalid folder list.')
+      // The mobile folder-error surface: a live region that is hidden at >=md
+      // (the sidebar's FolderTree alert owns desktop) and is NOT dismissible.
+      expect(alert.attributes('role')).toBe('alert')
+      expect(alert.classes()).toContain('md:hidden')
+      expect(alert.find('[data-testid="error-alert-dismiss"]').exists()).toBe(false)
+      wrapper.unmount()
+    } finally {
+      delete mockResponses['/api/v1/pipeline-folders']
+      consoleError.mockRestore()
+    }
+  })
+
+  it('re-fetches the folder list when the folder-list failure alert retry is clicked', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      mockResponses['/api/v1/pipeline-folders'] = undefined
+      await router.push('/pipelines')
+      await router.isReady()
+      const wrapper = mount(PipelineListView, {
+        global: { plugins: [router], stubs: { FolderTree: true } },
+      })
+      await flushPromises()
+      await nextTick()
+
+      const folderCalls = () =>
+        useApiGetMock.mock.calls.filter(c => c[0] === '/api/v1/pipeline-folders').length
+      const before = folderCalls()
+      expect(wrapper.find('[data-testid="pipeline-list-folder-error"]').exists()).toBe(true)
+
+      // Retry now succeeds — the fetch is re-invoked and the alert clears.
+      mockResponses['/api/v1/pipeline-folders'] = [
+        { id: 'f1', organisation_id: 'org1', name: 'Folder One', parent_id: null, sort_order: 0 },
+      ]
+      await wrapper
+        .find('[data-testid="pipeline-list-folder-error"] [data-testid="error-alert-retry"]')
+        .trigger('click')
+      await flushPromises()
+      await nextTick()
+
+      expect(folderCalls()).toBe(before + 1)
+      expect(wrapper.find('[data-testid="pipeline-list-folder-error"]').exists()).toBe(false)
+      wrapper.unmount()
+    } finally {
+      delete mockResponses['/api/v1/pipeline-folders']
+      consoleError.mockRestore()
+    }
+  })
+
+  it('splits the folder-error live region by breakpoint: main-panel alert is md:hidden, the sidebar alert is not', async () => {
+    // jsdom applies no CSS, so class presence is the testable proxy for the
+    // breakpoint contract. The main-panel alert is the complement of
+    // FolderTree's `hidden md:flex`: below md the sidebar is out of the a11y
+    // tree and this is the only folder-error surface; at >=md the sidebar owns
+    // it. Exactly one is ever visible/announced — never both, never neither.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      mockResponses['/api/v1/pipeline-folders'] = undefined
+      await router.push('/pipelines')
+      await router.isReady()
+      const wrapper = mount(PipelineListView, {
+        global: { plugins: [router] },
+      })
+      await flushPromises()
+      await nextTick()
+
+      const mainAlert = wrapper.find('[data-testid="pipeline-list-folder-error"]')
+      expect(mainAlert.exists()).toBe(true)
+      expect(mainAlert.attributes('role')).toBe('alert')
+      expect(mainAlert.classes()).toContain('md:hidden')
+      // Not dismissible — dismissing the first load failure would strand the
+      // folder list with no retry until reload.
+      expect(mainAlert.find('[data-testid="error-alert-dismiss"]').exists()).toBe(false)
+
+      const sidebarAlert = wrapper.find('[data-testid="folder-tree-error"]')
+      expect(sidebarAlert.exists()).toBe(true)
+      expect(sidebarAlert.attributes('role')).toBe('alert')
+      // The complement: the sidebar owns >=md, so it must NOT be md:hidden.
+      // If both gained md:hidden the pair would collapse to "both hidden".
+      expect(sidebarAlert.classes()).not.toContain('md:hidden')
+      wrapper.unmount()
+    } finally {
+      delete mockResponses['/api/v1/pipeline-folders']
+      consoleError.mockRestore()
+    }
   })
 })

@@ -164,8 +164,9 @@ class TestMigrationMetadata:
     def test_revision_id(self) -> None:
         assert _load_migration().revision == _MIGRATION_REVISION
 
-    def test_down_revision_is_current_head(self) -> None:
-        """Chains onto the head `uv run alembic heads` resolved at delivery."""
+    def test_down_revision_is_0256_pipeline_max_autonomy_level(self) -> None:
+        """Chains onto its immutable parent 0256; 0256 was the head when this
+        migration was authored, but later migrations have since landed on top."""
         assert _load_migration().down_revision == "0256_pipeline_max_autonomy_level"
 
 
