@@ -3485,6 +3485,9 @@ elements:
       - testid: pipeline-editor-hitl-review-window
         type: input
         dynamic_testid: false
+      - testid: pipeline-editor-queue-timeout
+        type: input
+        dynamic_testid: false
       - testid: pipeline-editor-ownerless-gate-advisory
         type: element
         dynamic_testid: false
@@ -6323,6 +6326,7 @@ features:
             - "[x] The pipeline editor creates, edits, and saves pipeline graphs with nodes and edges"
             - "[x] Composite editor supports expand-only composite nodes"
             - "[x] Node categories are configurable for pipeline organization"
+            - "[x] The pipeline editor exposes the per-pipeline capacity-queue timeout (far-1883): create/update carry `queue_timeout_seconds` (1..604800, null/empty = never) and the editor renders an editable field next to the HITL review window; on expiry a capacity-queued run ends as the `queue.expired` supersession (status `rejected`, not a failure), anchored on the run's created_at"
             - "[x] Pipeline save creates an immutable snapshot tagged version_kind='edit'"
             - "[x] release_channel support allows triggers to bind to stable/canary channels"
             - "[x] diff_snapshots surfaces port-signature deltas with impact oracle"
@@ -6547,6 +6551,7 @@ features:
         behaviours:
             # Trigger types + CRUD surface
             - "[x] A trigger is creatable on a pipeline (POST /api/v1/pipelines/{id}/triggers, 201) for each supported type — manual / webhook / cron / polling / agent_signal / ongoing / slack_app_mention — with a validated cron expression/timezone, max_concurrent_runs, a daily spend limit, and an org-scoped config_json"
+            - "[x] Per-funnel queueing is bounded ONLY by the type's own limits: a capacity-queued run waits indefinitely by default (no instance queued TTL); a cron pipeline may set the pipeline's `queue_timeout_seconds` to its period (a 1h cron to 3600) so a stale fire self-drops, while webhook (delivery coalescing folds repeats), manual and MCP pipelines leave it null; expiry ends the run as the `queue.expired` supersession, never a failure (far-1883)"
             - "[x] Triggers are listed (GET /api/v1/triggers, paginated, created_at desc) filterable by pipeline_id and trigger_type; the response surfaces the org-wide triggers_paused state and paused_at, plus per-trigger daily_spend_limit, in_flight (ongoing), and the uniform 6-key streak_status"
             - "[x] Trigger list/streak state is serialized INSIDE the RLS transaction so the transaction-scoped SET LOCAL org context is never lost to a post-commit read"
             - "[x] A pipeline-scoped listing exists (GET /api/v1/pipelines/{id}/triggers) with optional trigger_type filter"

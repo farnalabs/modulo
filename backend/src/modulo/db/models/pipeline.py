@@ -40,6 +40,15 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
             "hitl_review_window_seconds IS NULL OR hitl_review_window_seconds BETWEEN 60 AND 604800",
             name="ck_pipelines_hitl_review_window",
         ),
+        # FAR-1883: per-pipeline capacity-queue timeout (seconds). NULL = NEVER
+        # (the default - a capacity-queued run waits indefinitely). When set, a
+        # pending run carrying a capacity marker older than this window is
+        # ended as a SUPERSESSION (status 'rejected', code 'queue.expired').
+        # Envelope 1..604800 (7 days) mirrors the API.
+        CheckConstraint(
+            "queue_timeout_seconds IS NULL OR queue_timeout_seconds BETWEEN 1 AND 604800",
+            name="ck_pipelines_queue_timeout",
+        ),
         CheckConstraint(
             "default_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
             name="ck_pipelines_autonomy_level",
@@ -146,6 +155,14 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     # chain resolves ONCE at gate fire time and is stamped as an absolute
     # ``hitl_claims.terminalize_at``. CHECK ck_pipelines_hitl_review_window.
     hitl_review_window_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # FAR-1883: per-pipeline capacity-queue timeout (seconds), anchored on the
+    # run's created_at ("time queued"). NULL = NEVER, the default: a
+    # capacity-queued run waits indefinitely and the queue-state alert is the
+    # escalation path. Applies ONLY to capacity-queued rows - never to
+    # never-dispatched or enqueue-failed runs, which keep their own TTLs.
+    # A cron pipeline should set this to its period so a fire that can no
+    # longer be useful self-drops; webhook/manual/MCP pipelines leave it NULL.
+    queue_timeout_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=3600, server_default="3600")
     max_steps: Mapped[int | None] = mapped_column(Integer, nullable=True)
     token_budget: Mapped[int | None] = mapped_column(Integer, nullable=True)

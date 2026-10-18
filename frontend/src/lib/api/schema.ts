@@ -17359,6 +17359,11 @@ export interface components {
              * @description Per-pipeline HITL review window override (60-604800s = 1 min..7 days). How long a fired review may sit unclaimed/undecided before the run is cancelled to release its concurrency slot. Precedence: this value > the org default (settings) > the instance/env default. null = no override (inherit). Resolved once at gate fire time.
              */
             hitl_review_window_seconds?: number | null;
+            /**
+             * Queue Timeout Seconds
+             * @description Per-pipeline capacity-queue timeout in seconds (1..604800 = 7 days). null (default) = NEVER expire: a capacity-queued run waits indefinitely and the queue-state alert is the escalation path. When set, a pending run carrying a capacity marker older than this window (anchored on created_at, the time it was queued) is ended as a SUPERSESSION (status rejected, error_code queue.expired) - never a failure, never paged. Applies ONLY to capacity-queued runs; never-dispatched and enqueue-failed runs keep their own timeouts. Cron pipelines should set this to their period (e.g. 3600 for an hourly cron) so a stale fire self-drops; webhook/manual/MCP pipelines should leave it null.
+             */
+            queue_timeout_seconds?: number | null;
             /** Run Context Defaults */
             run_context_defaults?: {
                 [key: string]: unknown;
@@ -17987,6 +17992,8 @@ export interface components {
             node_timeout_seconds: number;
             /** Hitl Review Window Seconds */
             hitl_review_window_seconds?: number | null;
+            /** Queue Timeout Seconds */
+            queue_timeout_seconds?: number | null;
             /** Run Context Defaults */
             run_context_defaults: {
                 [key: string]: unknown;
@@ -18127,6 +18134,11 @@ export interface components {
              * @description Per-pipeline HITL review window override (60-604800s). Omit to leave unchanged; null clears the override (inherit the org/instance default).
              */
             hitl_review_window_seconds?: number | null;
+            /**
+             * Queue Timeout Seconds
+             * @description Per-pipeline capacity-queue timeout (1..604800s). Omit to leave unchanged; null clears it (never expire - the default). On expiry a capacity-queued run is ended as a supersession (queue.expired), not a failure. Cron pipelines should set it to their period; webhook/manual/MCP pipelines should leave it null.
+             */
+            queue_timeout_seconds?: number | null;
             /** Run Context Defaults */
             run_context_defaults?: {
                 [key: string]: unknown;

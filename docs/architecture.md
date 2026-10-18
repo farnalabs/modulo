@@ -438,9 +438,13 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   loud: a `backpressure_skipped` TriggerEvent carries the depths, and the
   webhook path answers 429 so the sender retries.
 - **Legacy stale-run sweep:** pending runs past the never-dispatched window
-  (`SAQ_NEVER_DISPATCHED_WINDOW`), capacity-marked runs past the TTL
-  (`capacity_timeout`), and legacy non-SAQ `running` rows with 5+ claims
-  (`worker_lost`) are terminalised or re-dispatched as before.
+  (`SAQ_NEVER_DISPATCHED_WINDOW`) and legacy non-SAQ `running` rows with 5+
+  claims (`worker_lost`) are terminalised or re-dispatched as before.
+  Capacity-marked runs **wait indefinitely by default**; a pipeline may opt
+  into a bounded wait with `queue_timeout_seconds` (anchored on `created_at`),
+  whose expiry ENDS the run as a supersession (`rejected` / `queue.expired`) -
+  never a failure. One TTL per state class: never-dispatched and
+  enqueue-failed rows keep their own windows.
 
 #### Runner capacity gate (FAR-594 D8)
 

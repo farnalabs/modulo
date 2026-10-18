@@ -811,25 +811,14 @@ class Settings(BaseSettings):
     dispatcher_reconcile_org_budget_seconds: int = Field(
         default=30, alias="DISPATCHER_RECONCILE_ORG_BUDGET_SECONDS", ge=1, le=119
     )
-    # FAR-705: per-run capacity-retry budget for the stale-run sweep's
-    # capacity_timeout TTL terminalisation. capacity.* is a RETRYABLE registry
-    # class (all four capacity codes carry retryable=True), so a capacity-
-    # blocked run that exhausted its TTL is re-dispatched (kept pending; the
-    # 60s dispatcher_reconcile capacity branch re-dispatches it when capacity
-    # frees) instead of being dropped, while within budget. claim_count
-    # counts ALL claims (not just capacity cycles). REAL semantics of the
-    # terminalisation past the TTL: a NEVER-CLAIMED run (claim_count = 0 -
-    # the dominant capacity path is dispatch-time deferral WITHOUT a claim)
-    # terminal-fails AT the TTL exactly as it did before this budget existed
-    # (the stranded-refresh loop restamps its heartbeat while inside the TTL
-    # window, so a heartbeat-age test alone would double the wait to ~2xTTL);
-    # a CLAIMED run terminal-fails when claim_count exceeds this budget, or
-    # (backstop) when its last claim heartbeat is itself older than the TTL.
-    # The budget grace therefore only keeps a CLAIMED row pending while it
-    # shows a claim heartbeat within the TTL window - which also covers a
-    # budget set at/above SAQ_RUN_CLAIM_CAP (claims are refused at
-    # claim_count >= the cap, making the budget gate unsatisfiable; the
-    # heartbeat backstop restores termination). No schema change.
+    # RETIRED NO-OP (FAR-1883): this was the FAR-705 per-run capacity-retry
+    # budget for the stale-run sweep's ``capacity_timeout`` TTL
+    # terminalisation. The instance-wide queued TTL was removed - a
+    # capacity-queued run now waits indefinitely unless the pipeline sets
+    # ``queue_timeout_seconds`` (whose expiry is a supersession, not a fail) -
+    # so nothing reads this value any more. The field is retained only so an
+    # existing deployment's ``SAQ_CAPACITY_RETRY_BUDGET`` setting is accepted
+    # rather than ignored with a validation error; it has NO effect.
     saq_capacity_retry_budget: int = Field(default=3, alias="SAQ_CAPACITY_RETRY_BUDGET", ge=0, le=20)
     # SAQ worker DB pool size (per worker; Postgres budget — F4).
     # Default 30. The pool MUST stay >= SAQ_WORKER_CONCURRENCY + reserve (5):
