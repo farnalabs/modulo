@@ -9161,6 +9161,12 @@ async def _reconcile_nodeless_repair(
     A nodeless zombie executed ZERO nodes (no checkpoint, no
     ``node_token_usage``, no finalised store row), so re-dispatch is SAFE (no
     double-execution; these pipelines only create PRs after a node runs).
+    ``None`` is returned ONLY when the row is not this branch's class (the
+    snapshot was pre-node and still is): the caller then continues with the
+    normal repairs. Every other terminal (including the FAR-1914 fresh-premise
+    deferral below, which DISPROVES the zero-node premise) returns the handled
+    counter so the caller can never fall through to a ``execute_run``
+    re-dispatch of a row a node already started (FAR-1649).
     Four-way outcome (FAR-509):
 
       * TERMINAL-FAIL — the retry budget is exhausted
@@ -9213,7 +9219,16 @@ async def _reconcile_nodeless_repair(
             org_id,
             getattr(row, "dispatch_phase", None),
         )
-        return None
+        # FAR-1914 (review): the fresh row DISPROVES the zero-node premise, so
+        # the branch must STATE it handled the row — the same contract the
+        # FAR-873 early-detect guard above follows. Returning ``None`` told the
+        # caller "proceed with the normal repairs", and the snapshot row (still
+        # pre-node ``claimed``) then sailed past the node-started belt (which
+        # keys on the STALE phase) into the final re-dispatch as ``execute_run``
+        # — re-executing a run whose node had started (the FAR-1649 hazard the
+        # guard exists to prevent). Returning handled defers the row (it stays
+        # running, held back this tick) to the watchdogs / age gate.
+        return enqueue_failed_redispatched
     if not _should_redispatch_nodeless(row):
         # Budget exhausted (retry budget exhausted / policy excludes 'stall'):
         # terminal-fail exactly as before — even when throttled, since waiting

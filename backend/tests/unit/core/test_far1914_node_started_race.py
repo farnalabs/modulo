@@ -87,6 +87,7 @@ async def test_fresh_node_started_row_is_not_terminalized() -> None:
 
     The repair must NOT terminal-fail (nor re-dispatch) — the row is deferred to
     the node-started belt / age gate. This is the e6131612 defect."""
+
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(ch, "get_settings", _settings)
     try:
@@ -102,7 +103,11 @@ async def test_fresh_node_started_row_is_not_terminalized() -> None:
     finally:
         monkeypatch.undo()
 
-    assert handled is None
+    # The guard must state the row handled (matching the early-detect guard):
+    # ``None`` told the caller to proceed with "normal repairs", and the stale
+    # pre-node snapshot then fell through to an ``execute_run`` re-dispatch of
+    # a run whose node had started (FAR-1649).
+    assert handled == 0
     fail.assert_not_awaited()
     redispatch.assert_not_awaited()
     assert summary["nodeless_fresh_premise_deferred"] == 1
@@ -153,7 +158,7 @@ async def test_control_fresh_left_running_row_is_deferred() -> None:
     finally:
         monkeypatch.undo()
 
-    assert handled is None
+    assert handled == 0
     fail.assert_not_awaited()
     assert summary["nodeless_fresh_premise_deferred"] == 1
 
@@ -174,7 +179,7 @@ async def test_unreadable_fresh_state_fails_closed() -> None:
     finally:
         monkeypatch.undo()
 
-    assert handled is None
+    assert handled == 0
     fail.assert_not_awaited()
     assert summary["nodeless_fresh_premise_deferred"] == 1
 
@@ -200,7 +205,7 @@ async def test_fresh_row_vanished_is_deferred() -> None:
     finally:
         monkeypatch.undo()
 
-    assert handled is None
+    assert handled == 0
     fail.assert_not_awaited()
     assert summary["nodeless_fresh_premise_deferred"] == 1
 
@@ -242,6 +247,69 @@ async def test_early_detect_path_defers_a_started_node() -> None:
     fail.assert_not_awaited()
     assert summary["nodeless_fresh_premise_deferred"] == 1
     assert summary["node_started_deferred"] == 0
+
+
+@pytest.mark.asyncio
+async def test_full_window_repair_returns_handled_with_no_early_detect() -> None:
+    """Regression (the widened-window window, review 2026-10-18): with
+    ``early_detect_minutes=None`` (early-detect DISABLED) the full-window
+    repair is the only line of defence — its fresh-premise guard must return
+    the row HANDLED so the caller can never fall through to the generic
+    recovery path, which re-dispatches a job-gone RUNNING row as
+    ``execute_run`` (FAR-1649: a node had started after the scan — the stale
+    pre-node snapshot sails past the node-started belt because the belt keys
+    on the snapshot's phase).
+
+    Pinned: the deferred row carries its OWN counter, the widened-window tail
+    guard (whose ``skipped`` count is not a fresh-premise signal) is never
+    reached, and no re-dispatch / terminal-fail fires.
+    """
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(ch, "get_settings", _settings)
+    try:
+        snapshot = _nodeless_snapshot(phase="claimed", claim_count=5)
+        fresh = SimpleNamespace(status="running", dispatch_phase=PHASE_FIRST_NODE_DISPATCHED, node_token_usage=None)
+        q = AsyncMock()
+        q.job = AsyncMock(return_value=None)  # SAQ job gone (the zombie shape)
+        summary = _summary()
+        fail = AsyncMock()
+        redispatch = AsyncMock()
+        generic_redispatch = AsyncMock()
+        ingest_error = AsyncMock()
+        with (
+            patch.object(ch, "_fail_nodeless_run", fail),
+            patch.object(ch, "_redispatch_nodeless", redispatch),
+            patch.object(ch, "_re_dispatch_reconciled_run", generic_redispatch),
+            patch.object(ch, "_ingest_saq_error", ingest_error),
+        ):
+            got = await ch._reconcile_one_row(
+                _FreshSession(fresh),
+                q,
+                MagicMock(),
+                uuid.uuid4(),
+                snapshot,
+                40,
+                0,
+                summary,
+                [],
+                floor_nodeless_window=20,
+                stale_window=600,
+            )
+    finally:
+        monkeypatch.undo()
+
+    assert got == 0
+    # The row was deferred, NOT pursued by the generic recovery path.
+    generic_redispatch.assert_not_awaited()
+    redispatch.assert_not_awaited()
+    fail.assert_not_awaited()
+    assert summary["nodeless_fresh_premise_deferred"] == 1
+    # The row-level belt's regression alarm must stay untouched (counter
+    # docstrings document belt hits only).
+    assert summary["node_started_deferred"] == 0
+    # Not a tail-guard ``skipped`` either — the widened-window guard was never
+    # reached (the fresh-premise guard returned first).
+    assert summary["skipped"] == 0
 
 
 def test_zero_progress_shape_excludes_a_started_node() -> None:
