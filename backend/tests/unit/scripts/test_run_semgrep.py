@@ -132,11 +132,24 @@ def test_json_detector_false_for_partial_parsing_only(tmp_path: Path) -> None:
 def test_json_detector_false_for_list_typed_partial_parsing(tmp_path: Path) -> None:
     """The pinned semgrep emits PartialParsing's ``type`` as ``[name, spans]``.
 
-    Unlike the sibling string-shaped case, semgrep 1.175.0 serialises the
-    non-fatal PEP 695 parse skip on ``mcp_server.py`` with a LIST-typed
-    ``type``. The detector must treat it as non-fatal rather than raising
-    ``TypeError: unhashable type: 'list'``, which aborted the pre-commit hook
-    before it could report a result.
+    Unlike the sibling string-shaped case, semgrep **1.79.0** — the version
+    pinned in ``backend/uv.lock``, and the one
+    ``uv run --project backend --no-sync semgrep`` actually resolves to —
+    serialises the non-fatal PEP 695 parse skip with a LIST-typed ``type``.
+    (The PATH uv-tool semgrep 1.175.0 emits no error at all for the same file,
+    so it is the lockfile version this test pins.)
+
+    The trigger is file-conditional, not timeout-conditional: the list-typed
+    entry is emitted on EVERY scan of a source file carrying PEP 695 generics
+    (at least nine modules, including ``api/mcp_server.py``,
+    ``api/routes/runs.py``, ``auth/dependencies.py``, ``core/team_visibility.py``,
+    ``db/soft_delete.py`` and ``db/crud/base.py``), whether or not any rule
+    timed out. Only files changed since the baseline are scanned
+    (``--baseline-commit=HEAD`` on Linux; the explicitly passed changed files on
+    Windows), so a commit touching no such file does not crash — but any commit
+    touching one does. The detector must treat it as non-fatal rather than
+    raising ``TypeError: unhashable type: 'list'``, which aborted the
+    pre-commit hook before it could report a result.
     """
     path = tmp_path / "partial-list.json"
     _write_json(
