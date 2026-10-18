@@ -20,6 +20,7 @@ from modulo.api.hitl_answer_validation import AnswerValidationError
 from modulo.api.main import app
 from modulo.api.routes.hitl import HumanOnlyDenied, _emit_human_only_denial_audit, _run_hitl_manager
 from modulo.auth.dependencies import get_current_user
+from modulo.auth.human_linkage import LINKAGE_NONE, HumanLinkage
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.hitl_manager import NotTeamMemberError, RunNotAwaitingError
 from modulo.db.crud.hitl_review_config import EVENT_HUMAN_ONLY_DENIED, MSG_HUMAN_ONLY_DENY, MSG_HUMAN_ONLY_UNRESOLVED
@@ -888,6 +889,55 @@ class TestHumanOnlyRestEnforcement:
 
         assert resp.status_code == 200
         approve.assert_awaited_once()
+
+    def test_browser_principal_never_consults_the_linkage_resolver(self, client: TestClient) -> None:
+        """ADR 063 item 5: the REST browser path is unchanged — the
+        ``CLIENT_KIND_BROWSER`` short-circuit returns BEFORE the shared resolver."""
+        approve = AsyncMock()
+        resolver = AsyncMock()
+        with (
+            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+            patch("modulo.api.routes.hitl.resolve_human_linkage", resolver),
+        ):
+            mgr_cls.return_value.approve = approve
+            _override_principal(via_api_key=False)
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/approve",
+                json={"claim_token": "tok"},
+            )
+
+        assert resp.status_code == 200
+        approve.assert_awaited_once()
+        resolver.assert_not_awaited()
+
+    def test_non_browser_principal_is_not_human_linked(self, client: TestClient) -> None:
+        """ADR 063 item 5: a non-browser REST credential is resolved through the
+        SAME shared resolver and stays denied (REST has no consent-derived OAuth
+        token, so the resolver reports not-human-linked)."""
+        resolver = AsyncMock(
+            return_value=HumanLinkage(
+                linked=False,
+                auth_type="api_key",
+                account_id=_USER_ID,
+                token_family=None,
+                principal_kind=None,
+                linkage=LINKAGE_NONE,
+            )
+        )
+        with patch("modulo.api.routes.hitl.resolve_human_linkage", resolver):
+            _override_principal(via_api_key=True)
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/approve",
+                json={"claim_token": "tok"},
+            )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == _HUMAN_ONLY_DETAIL
+        assert resolver.await_args.kwargs["auth_type"] == "api_key"
+        assert resolver.await_args.kwargs["token_family"] is None
 
     def test_approve_unresolvable_fired_gate_api_key_returns_403(self, client: TestClient) -> None:
         """Fail closed (FAR-610 review): the gate FIRED (claim row exists) but
