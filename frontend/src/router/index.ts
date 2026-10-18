@@ -752,7 +752,7 @@ function metaCarriesGate(meta: RouteLocationTarget['meta'] | undefined): boolean
  * hydrated `to.meta` — this is the manifest-side half of the FAR-1950
  * fail-closed check.
  */
-function entryCarriesGate(entry: ManifestEntry | undefined): boolean {
+export function entryCarriesGate(entry: ManifestEntry | undefined): boolean {
   if (!entry) return false
   const groupId = entry.sidebar_group
   return Boolean(
