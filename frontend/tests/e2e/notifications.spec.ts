@@ -266,7 +266,15 @@ test.describe('Notification bell dropdown viewport anchoring (FAR-1926)', { tag:
         depends_on: null,
       },
     ],
-    license: { tier: 'enterprise' },
+    // Must be a tier the TARGET's catalog actually lists. On staging the
+    // catalog carries only community/team (no enterprise), so an unknown tier
+    // leaves `tierRanks[currentTier]` undefined: the dashboard route's
+    // required_tier (community) then fails `isAtMinimumTier`, the guard
+    // self-redirects '/' → 'dashboard', and the SPA never mounts — the tests
+    // below starve on the bootstrap splash. The local fixture catalog invents
+    // an 'enterprise' rank, which is why an enterprise tier passes locally but
+    // hangs against staging.
+    license: { tier: 'team' },
     dev_mode: true,
   })
 
