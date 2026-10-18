@@ -1,0 +1,25 @@
+# Duplicate-validation-predicate baseline (FAR-1965).
+#
+# A validation-named function (see _VALIDATION_NAME in
+# test_duplicate_validation_predicates.py) that carries a non-empty
+# validation-error `detail` string which a validation-named function in a
+# DIFFERENT module carries too: the same predicate written independently in
+# more than one caller, so a widening in one copy silently leaves the other
+# stale. The pluggable provider trees (connectors/**, model_backends/**) are
+# out of scope by design.
+#
+# Entry format (one JSON object per line, sorted):
+#   {"detail": "<message>", "modules": ["<relpath>", ...]}
+#
+# This list can only SHRINK:
+#   * test_no_duplicate_validation_predicates fails on any group NOT listed
+#     here (a NEW duplicate), and
+#   * test_duplicate_validation_predicate_baseline_has_no_stale_entries fails
+#     when a listed group is untangled but not removed from the baseline.
+#
+# Regenerate after untangling a group:
+#   cd backend && uv run python scripts/update_duplicate_validation_predicate_baseline.py
+{"detail": "Cron expression is required", "modules": ["api/mcp_server.py", "api/routes/triggers.py"]}
+{"detail": "expires_at must be in the future", "modules": ["api/mcp_server.py", "api/routes/api_keys.py", "api/routes/service_accounts.py"]}
+{"detail": "owner_team_id is required when visibility is 'team'", "modules": ["api/routes/pipelines.py", "api/team_scope.py"]}
+{"detail": "role must be 'operator' or 'runner'. admin keys are prohibited.", "modules": ["api/mcp_server.py", "api/routes/api_keys.py"]}
