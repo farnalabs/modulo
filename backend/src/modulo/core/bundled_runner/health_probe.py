@@ -281,6 +281,141 @@ async def _emit_unreachable_transition(
         _log.exception("runner_probe.transition_notification_failed org=%s", org_id)
 
 
+async def _read_org_refs(session_factory: Any) -> dict[Any, list[str]]:
+    """Phase 1 (read): the orgs holding runner profiles + their pinned refs.
+
+    Short read, no engine calls. qa (bundled-runner-probe): an explicit
+    ``begin()`` is REQUIRED here, not only on the write phase — the system
+    session factory is built with ``autobegin=False``
+    (saq_worker._make_system_session_factory), so ``session.execute()`` without
+    a transaction raises ``InvalidRequestError`` and the whole tick dies in
+    Phase 1 every 60s (observed on app.modulo.run: stats error=probe_failed,
+    orgs_probed=0, zero probe-cache rows despite a live profile).
+    """
+    from modulo.db.crud.runner_probe import list_org_image_refs, list_orgs_with_runner_profiles
+
+    async with session_factory() as read_session, read_session.begin():
+        org_ids = await list_orgs_with_runner_profiles(read_session)
+        org_refs: dict[Any, list[str]] = {}
+        for org_id in org_ids:
+            org_refs[org_id] = await list_org_image_refs(read_session, org_id)
+    return org_refs
+
+
+async def _inspect_distinct_images(
+    boundary: _EngineBoundary,
+    org_refs: dict[Any, list[str]],
+) -> dict[str, bool | None]:
+    """Phase 2 (engine, NO transaction open): deduped inspects across orgs.
+
+    Every distinct non-placeholder image ref is inspected once — placeholder
+    digest refs are skipped (they are never a real pinned image).
+    """
+    checked_images: dict[str, bool | None] = {}
+    for ref in sorted({r for refs in org_refs.values() for r in refs}):
+        if not is_placeholder_bundled_runner_image_ref(ref):
+            checked_images[ref] = await boundary.image_present(ref)
+    return checked_images
+
+
+async def _upsert_org_probe(
+    session: Any,
+    *,
+    org_id: Any,
+    image_refs: list[str],
+    identity: str,
+    outcome: EngineProbeOutcome,
+    checked_images: dict[str, bool | None],
+) -> bool:
+    """Write ONE org's probe row inside the caller's SAVEPOINT.
+
+    Returns ``True`` when a healthy→unreachable transition was emitted so the
+    caller can count it. qa F4: aggregate over NON-placeholder refs only; a
+    placeholder-only org has no inspectable image and must read unknown
+    (``None``), never a permanent false "image not pulled".
+    """
+    from modulo.db.crud.runner_probe import get_runner_probe_cache, upsert_runner_probe_cache
+
+    real_refs = [r for r in image_refs if not is_placeholder_bundled_runner_image_ref(r)]
+    images_present: bool | None = (
+        aggregate_image_presence([checked_images.get(r) for r in real_refs]) if outcome.reachable else None
+    )
+
+    previous = await get_runner_probe_cache(session, org_id=org_id, machine_id=identity)
+    was_reachable = previous.engine_reachable if previous is not None else True
+
+    await upsert_runner_probe_cache(
+        session,
+        org_id=org_id,
+        machine_id=identity,
+        engine_reachable=outcome.reachable,
+        images_present=images_present,
+        image_checks={ref: checked_images.get(ref) for ref in real_refs},
+        engine_info=outcome.engine_info,
+        probe_error=outcome.error,
+    )
+    if was_reachable and not outcome.reachable:
+        await _emit_unreachable_transition(session, org_id, identity, outcome.error)
+        return True
+    return False
+
+
+async def _write_probe_rows(
+    session: Any,
+    *,
+    org_refs: dict[Any, list[str]],
+    identity: str,
+    outcome: EngineProbeOutcome,
+    checked_images: dict[str, bool | None],
+) -> tuple[int, int, int, SQLAlchemyError | None]:
+    """Phase 3 (one tx): per-org SAVEPOINT upsert + failure accounting.
+
+    Returns ``(orgs_probed, orgs_failed, transitions, first_infra_error)``.
+    qa F2: the SAVEPOINT confines one org's failure — a poisoned statement
+    rolls back to the savepoint and the outer transaction (other orgs'
+    upserts) stays usable. An infra error for one org is recorded and the
+    caller re-raises it (qa F3) so SAQ's retries engage; non-infra per-org
+    errors stay fail-open (logged, org skipped, tick continues) — the 60s
+    cadence is itself the retry for those.
+    """
+    from modulo.core.cron_helpers import _bound_org
+
+    orgs_probed = 0
+    orgs_failed = 0
+    transitions = 0
+    first_infra_error: SQLAlchemyError | None = None
+    for org_id, image_refs in org_refs.items():
+        # FAR-1501: bind this org so the per-org failures below
+        # (org_infra_failed / org_failed / transition emissions) are
+        # attributed by ErrorTrackingLogHandler instead of dropped.
+        async with _bound_org(org_id):
+            try:
+                async with session.begin_nested():
+                    transitioned = await _upsert_org_probe(
+                        session,
+                        org_id=org_id,
+                        image_refs=image_refs,
+                        identity=identity,
+                        outcome=outcome,
+                        checked_images=checked_images,
+                    )
+                    orgs_probed += 1
+                    if transitioned:
+                        transitions += 1
+            except SQLAlchemyError as exc:
+                # Infra error for THIS org only: the savepoint rolled it back,
+                # the outer tx is still usable. Record and continue; re-raised
+                # at the end (qa F3) so SAQ retries engage.
+                orgs_failed += 1
+                if first_infra_error is None:
+                    first_infra_error = exc
+                _log.exception("runner_probe.org_infra_failed org=%s", org_id)
+            except Exception:
+                # Non-infra per-org error: fail-open (logged, skipped).
+                _log.exception("runner_probe.org_failed org=%s", org_id)
+    return orgs_probed, orgs_failed, transitions, first_infra_error
+
+
 async def run_runner_health_probe(
     session_factory: Any,
     *,
@@ -293,64 +428,29 @@ async def run_runner_health_probe(
     "transitions"}`` (qa F18: documented return shape).
 
     Three phases (qa F15 — the engine is slow/unreliable, the DB is not):
-
-    1. READ (no engine calls inside): the orgs holding runner profiles and
-       each org's pinned image refs.
-    2. ENGINE (no DB transaction open): probe ``/info`` + inspect every
-       distinct non-placeholder image ref once, deduped across orgs.
-    3. WRITE (one transaction): prune orphaned machine rows (qa F8), then
-       per-org upsert inside a SAVEPOINT (qa F2 — a poisoned org rolls back
-       only itself). Per-org infrastructure errors (SQLAlchemyError) mark
-       the org failed and are re-raised at the end so SAQ's ``retries=2``
-       engages; non-infra per-org errors stay fail-open.
+    :func:`_read_org_refs` (read), :func:`_inspect_distinct_images` (engine,
+    no transaction open), then :func:`_write_probe_rows` (one transaction,
+    per-org SAVEPOINT). Per-org infrastructure errors mark the org failed and
+    are re-raised at the end so SAQ's ``retries=2`` engages; non-infra per-org
+    errors stay fail-open.
 
     A healthy→unreachable transition is emitted on the FIRST down probe
     (no previous row defaults to "was reachable") — a deployment that boots
     with a dead engine alerts once instead of sitting silently green.
     """
     from modulo.core.bundled_runner.runner_reconciler import deployment_identity
-    from modulo.core.cron_helpers import _bound_org
-    from modulo.db.crud.runner_probe import (
-        PROBE_RETENTION_SECONDS,
-        get_runner_probe_cache,
-        list_org_image_refs,
-        list_orgs_with_runner_profiles,
-        prune_stale_runner_probe_rows,
-        upsert_runner_probe_cache,
-    )
+    from modulo.db.crud.runner_probe import PROBE_RETENTION_SECONDS, prune_stale_runner_probe_rows
 
     identity = machine_id or deployment_identity()
     boundary = engine_boundary or _EngineBoundary(_resolve_docker_host())
-    transitions = 0
-    orgs_probed = 0
-    orgs_failed = 0
     first_infra_error: SQLAlchemyError | None = None
     try:
         started = time.monotonic()
 
-        # Phase 1 (read): orgs + pinned refs. Short read, no engine calls.
-        # qa (bundled-runner-probe): an explicit ``begin()`` is REQUIRED here,
-        # not only on the write phase — the system session factory is built
-        # with ``autobegin=False`` (saq_worker._make_system_session_factory),
-        # so ``session.execute()`` without a transaction raises
-        # ``InvalidRequestError`` and the whole tick dies in Phase 1 every
-        # 60s (observed on app.modulo.run: stats error=probe_failed,
-        # orgs_probed=0, zero probe-cache rows despite a live profile).
-        async with session_factory() as read_session, read_session.begin():
-            org_ids = await list_orgs_with_runner_profiles(read_session)
-            org_refs: dict[Any, list[str]] = {}
-            for org_id in org_ids:
-                org_refs[org_id] = await list_org_image_refs(read_session, org_id)
-
-        # Phase 2 (engine, NO transaction open): probe + deduped inspects.
+        org_refs = await _read_org_refs(session_factory)
         outcome = await boundary.probe_engine()
-        checked_images: dict[str, bool | None] = {}
-        if outcome.reachable:
-            for ref in sorted({r for refs in org_refs.values() for r in refs}):
-                if not is_placeholder_bundled_runner_image_ref(ref):
-                    checked_images[ref] = await boundary.image_present(ref)
+        checked_images = await _inspect_distinct_images(boundary, org_refs) if outcome.reachable else {}
 
-        # Phase 3 (write): one tx; per-org SAVEPOINT.
         async with session_factory() as session, session.begin():
             # qa F8: prune (org, machine) rows the probe has not refreshed
             # within the retention window — a decommissioned machine's corpse
@@ -360,56 +460,13 @@ async def run_runner_health_probe(
                 session,
                 retention_seconds=PROBE_RETENTION_SECONDS,
             )
-            for org_id, image_refs in org_refs.items():
-                # FAR-1501: bind this org so the per-org failures below
-                # (org_infra_failed / org_failed / transition emissions) are
-                # attributed by ErrorTrackingLogHandler instead of dropped.
-                async with _bound_org(org_id):
-                    try:
-                        # qa F2: the SAVEPOINT confines one org's failure — a
-                        # poisoned statement rolls back to the savepoint and the
-                        # outer transaction (other orgs' upserts) stays usable.
-                        async with session.begin_nested():
-                            real_refs = [r for r in image_refs if not is_placeholder_bundled_runner_image_ref(r)]
-                            # qa F4: aggregate over NON-placeholder refs only; a
-                            # placeholder-only org has no inspectable image and
-                            # must read unknown (None), never a permanent false
-                            # "image not pulled".
-                            images_present: bool | None = (
-                                aggregate_image_presence([checked_images.get(r) for r in real_refs])
-                                if outcome.reachable
-                                else None
-                            )
-
-                            previous = await get_runner_probe_cache(session, org_id=org_id, machine_id=identity)
-                            was_reachable = previous.engine_reachable if previous is not None else True
-
-                            await upsert_runner_probe_cache(
-                                session,
-                                org_id=org_id,
-                                machine_id=identity,
-                                engine_reachable=outcome.reachable,
-                                images_present=images_present,
-                                image_checks={ref: checked_images.get(ref) for ref in real_refs},
-                                engine_info=outcome.engine_info,
-                                probe_error=outcome.error,
-                            )
-                            orgs_probed += 1
-
-                            if was_reachable and not outcome.reachable:
-                                transitions += 1
-                                await _emit_unreachable_transition(session, org_id, identity, outcome.error)
-                    except SQLAlchemyError as exc:
-                        # Infra error for THIS org only: the savepoint rolled it
-                        # back, the outer tx is still usable. Record and continue;
-                        # re-raised at the end (qa F3) so SAQ retries engage.
-                        orgs_failed += 1
-                        if first_infra_error is None:
-                            first_infra_error = exc
-                        _log.exception("runner_probe.org_infra_failed org=%s", org_id)
-                    except Exception:
-                        # Non-infra per-org error: fail-open (logged, skipped).
-                        _log.exception("runner_probe.org_failed org=%s", org_id)
+            orgs_probed, orgs_failed, transitions, first_infra_error = await _write_probe_rows(
+                session,
+                org_refs=org_refs,
+                identity=identity,
+                outcome=outcome,
+                checked_images=checked_images,
+            )
         _log.info(
             "runner_probe.tick_completed machine=%s reachable=%s orgs=%d failed=%d duration_ms=%d",
             identity,
