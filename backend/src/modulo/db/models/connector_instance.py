@@ -2,11 +2,10 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, LargeBinary, String, Uuid
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, LargeBinary, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped, SoftDeleteMixin
+from modulo.db.models.base import JSONB_COL, OrgScoped, SoftDeleteMixin
 
 # Repeated FK reference (S1192).
 _FK_ACCOUNTS_ID = "accounts.id"
@@ -41,12 +40,8 @@ class ConnectorInstance(SoftDeleteMixin, OrgScoped):
     )
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     credentials_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    config_json: Mapped[dict[str, Any]] = mapped_column(
-        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=dict
-    )
-    allowed_operations: Mapped[list[str]] = mapped_column(
-        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=list
-    )
+    config_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
+    allowed_operations: Mapped[list[str]] = mapped_column(JSONB_COL, nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="active")
     last_health_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_health_check_error: Mapped[str | None] = mapped_column(String(2000))

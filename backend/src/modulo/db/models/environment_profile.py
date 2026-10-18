@@ -4,7 +4,7 @@ from typing import Any, Final
 from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, String, Text, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped, SoftDeleteMixin
+from modulo.db.models.base import JSONB_COL, OrgScoped, SoftDeleteMixin
 
 # Single source of truth for the provider_type vocabulary (FAR-595). The
 # model CHECK below, the API request-validation pattern
@@ -72,11 +72,11 @@ class EnvironmentProfile(SoftDeleteMixin, OrgScoped):
     # provider_type explicitly post-D2 (FAR-587 writer inventory).
     provider_type: Mapped[str] = mapped_column(String(50), nullable=False)
     image_ref: Mapped[str | None] = mapped_column(String(500))
-    capabilities_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
-    config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    capabilities_json: Mapped[list[str]] = mapped_column(JSONB_COL, nullable=False, default=list)
+    config_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
     network_policy: Mapped[str] = mapped_column(String(20), nullable=False, server_default="outbound")
     initialisation_strategy: Mapped[str] = mapped_column(String(30), nullable=False, server_default="git_clone")
-    secret_refs_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    secret_refs_json: Mapped[list[str]] = mapped_column(JSONB_COL, nullable=False, default=list)
     # ADR 033 — managed workspace inputs: list of input descriptors declared
     # on the profile.  Server default is '[]' (set in migration 0221_workspace_inputs_env_profiles); the
     # Python-level default applies to new ORM instances only.

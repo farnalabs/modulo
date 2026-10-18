@@ -1,11 +1,10 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import JSON, ForeignKey, Index, String, Text, Uuid, text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import ForeignKey, Index, String, Text, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import Base, OrgScoped
+from modulo.db.models.base import JSONB_COL, Base, OrgScoped
 
 
 class AuditEvent(OrgScoped):
@@ -44,11 +43,9 @@ class AuditEvent(OrgScoped):
     )
     resource_type: Mapped[str | None] = mapped_column(String(100))
     resource_id: Mapped[uuid.UUID | None] = mapped_column(Uuid())
-    # DB stores JSONB (0147_json_to_jsonb_standardize); the PG variant keeps
+    # DB stores JSONB (0147_json_to_jsonb_standardize); JSONB_COL keeps
     # SQLite/MariaDB parity via generic JSON (the run.py cost_breakdown precedent).
-    payload_json: Mapped[dict[str, Any]] = mapped_column(
-        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=dict
-    )
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
     request_id: Mapped[str | None] = mapped_column(String(255))
     previous_hash: Mapped[str | None] = mapped_column(Text)
 

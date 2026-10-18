@@ -337,4 +337,58 @@ describe('main bootstrap', () => {
       expect.any(Error),
     )
   })
+
+  it('falls back to the literal when the catalogue returns the key verbatim', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // The pinned vue-i18n (11.4.14) returns the KEY ITSELF when the catalogue
+    // has no entry for it — observed against a real createI18n instance:
+    // `t('common.failed_to_load') === 'common.failed_to_load'` (alongside an
+    // `[intlify] Not found ...` warning). A key-shaped string must never reach
+    // the fatal surface, so this composer reproduces that verbatim return.
+    await installI18nMock({ t: (key: string) => key })
+    initLocaleMock.mockImplementation(() => {
+      throw new Error('locale store exploded')
+    })
+
+    await import('../main')
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('#modulo-bootstrap-surface [role="alert"]')).not.toBeNull()
+    })
+
+    const surface = document.querySelector('#modulo-bootstrap-surface [role="alert"]')
+    expect(surface?.textContent).toBe('The application failed to load. Please reload the page.')
+    expect(consoleWarn).toHaveBeenCalledWith(
+      '[bootstrap] catalogue returned no usable message; using a literal',
+      expect.objectContaining({ key: 'common.failed_to_load', translated: 'common.failed_to_load' }),
+    )
+    expect(consoleError).toHaveBeenCalledWith(
+      'Fatal: application bootstrap failed',
+      expect.any(Error),
+    )
+  })
+
+  it('falls back to the literal when the catalogue resolves only whitespace', async () => {
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // vue-i18n can return a whitespace-only catalogue value verbatim (observed:
+    // `'   '`). Rendered, it is an invisible surface — not a usable message.
+    await installI18nMock({ t: () => '   ' })
+    initLocaleMock.mockImplementation(() => {
+      throw new Error('locale store exploded')
+    })
+
+    await import('../main')
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('#modulo-bootstrap-surface [role="alert"]')).not.toBeNull()
+    })
+
+    const surface = document.querySelector('#modulo-bootstrap-surface [role="alert"]')
+    expect(surface?.textContent).toBe('The application failed to load. Please reload the page.')
+    expect(consoleWarn).toHaveBeenCalledWith(
+      '[bootstrap] catalogue returned no usable message; using a literal',
+      expect.objectContaining({ key: 'common.failed_to_load', translated: '   ' }),
+    )
+  })
 })

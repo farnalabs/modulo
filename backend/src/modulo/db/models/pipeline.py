@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, String, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from modulo.db.models.base import OrgScoped, SoftDeleteMixin
+from modulo.db.models.base import JSONB_COL, OrgScoped, SoftDeleteMixin
 
 if TYPE_CHECKING:
     from modulo.db.models.account import Account
@@ -173,7 +173,7 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     run_disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     run_context_defaults: Mapped[dict[str, Any]] = mapped_column(
-        JSON, nullable=False, default=dict, server_default=text("'{}'")
+        JSONB_COL, nullable=False, default=dict, server_default=text("'{}'")
     )
     default_autonomy_level: Mapped[str | None] = mapped_column(String(30), server_default="manual_approval")
     # FAR-1163 S0: hard ceiling on the autonomy level any HITL-gate resolution
@@ -198,7 +198,7 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
         server_default=text("'[]'"),
     )
     default_feedback_handler: Mapped[str | None] = mapped_column(String(50))
-    rate_limit_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    rate_limit_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL, nullable=True)
     # FAR-811: pipeline-level default for sandbox stdout retention.
     # Shape: {"mode": "tail"|"full", "max_bytes": <positive int>} or None
     # (no pipeline override — inherit from org ceiling only).

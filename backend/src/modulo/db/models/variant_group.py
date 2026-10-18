@@ -1,10 +1,10 @@
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, Integer, String, Uuid, text
+from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, String, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from modulo.db.models.base import OrgScoped, SoftDeleteMixin
+from modulo.db.models.base import JSONB_COL, OrgScoped, SoftDeleteMixin
 
 if TYPE_CHECKING:
     from modulo.db.models.organisation import Organisation
@@ -42,7 +42,7 @@ class VariantGroup(SoftDeleteMixin, OrgScoped):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
-    variants: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    variants: Mapped[list[dict[str, Any]]] = mapped_column(JSONB_COL, nullable=False, default=list)
     selection_strategy: Mapped[str] = mapped_column(String(20), nullable=False, server_default="weighted")
     run_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     max_concurrent_runs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="5")

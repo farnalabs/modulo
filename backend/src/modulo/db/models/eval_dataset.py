@@ -29,10 +29,10 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, String, Uuid, text
+from sqlalchemy import CheckConstraint, ForeignKey, Index, String, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped, SoftDeleteMixin
+from modulo.db.models.base import JSONB_COL, OrgScoped, SoftDeleteMixin
 
 
 class EvalDataset(SoftDeleteMixin, OrgScoped):
@@ -100,8 +100,8 @@ class EvalCase(SoftDeleteMixin, OrgScoped):
         nullable=False,
         index=True,
     )
-    input_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    expected_output: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    input_payload: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False)
+    expected_output: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL, nullable=True)
     input_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
 
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)

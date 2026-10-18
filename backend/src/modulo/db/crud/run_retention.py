@@ -52,7 +52,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import (
-    JSON,
     Column,
     LargeBinary,
     MetaData,
@@ -67,7 +66,6 @@ from sqlalchemy import (
     select,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -80,6 +78,7 @@ from modulo.db.crud.run_node_outputs import (
     read_node_output_blob_bytes,
     read_run_blobs,
 )
+from modulo.db.models.base import JSONB_COL
 from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 
@@ -93,9 +92,6 @@ from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.sqlstates import sqlstate_of
 
 _log = logging.getLogger(__name__)
-
-# Repeated column type (S1192): JSON with PostgreSQL JSONB variant.
-_JSONB_COL = JSON().with_variant(JSONB(), "postgresql")
 
 # Default batch size for the purge loop (runs per SAVEPOINT) and the export page
 # size (runs fetched per page). Matches crud.run's 500 default.
@@ -218,8 +214,8 @@ _CHECKPOINTS_AGG = Table(
     _CHECKPOINT_AGG_METADATA,
     Column("organisation_id", Uuid()),
     Column("thread_id", String(512)),
-    Column("checkpoint", _JSONB_COL),
-    Column("metadata", _JSONB_COL),
+    Column("checkpoint", JSONB_COL),
+    Column("metadata", JSONB_COL),
 )
 
 _CHECKPOINT_BLOBS_AGG = Table(
@@ -243,9 +239,9 @@ _RUN_NODE_OUTPUTS_AGG = Table(
     _CHECKPOINT_AGG_METADATA,
     Column("run_id", Uuid()),
     Column("node_id", String()),
-    Column("outputs_json", _JSONB_COL),
-    Column("node_telemetry_json", _JSONB_COL),
-    Column("raw_output_markers", _JSONB_COL),
+    Column("outputs_json", JSONB_COL),
+    Column("node_telemetry_json", JSONB_COL),
+    Column("raw_output_markers", JSONB_COL),
 )
 
 

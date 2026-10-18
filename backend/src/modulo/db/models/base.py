@@ -2,13 +2,36 @@ import uuid
 from datetime import datetime
 from typing import Final
 
-from sqlalchemy import DateTime, ForeignKey, Uuid, func, text
+from sqlalchemy import JSON, DateTime, ForeignKey, Uuid, func, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # SQL referential action shared by every nullable FK across the model layer:
 # when the referenced row is deleted, the column is nulled rather than cascading.
 # Single home so model modules import it instead of re-declaring the literal.
 ONDELETE_SET_NULL: Final[str] = "SET NULL"
+
+# Column type for a JSON column whose physical Postgres type is ``jsonb``: use
+# it for the columns migration ``0147_json_to_jsonb_standardize`` promoted and
+# for every column a migration created ``jsonb`` directly. Generic ``JSON``
+# keeps SQLite and MariaDB working; the ``postgresql`` variant makes the ORM
+# declare what the database actually holds.
+#
+# This matters beyond cosmetics: a column declared bare ``JSON`` over a physical
+# ``jsonb`` column binds equality/containment predicates as ``$1::JSON`` and
+# Postgres raises ``operator does not exist: jsonb = json``. FAR-1856 was
+# exactly that failure on ``lifecycle_maps.content_json`` — a scanner swallowed
+# the per-scanner exception and silently returned nothing in production.
+#
+# ONE definition (FAR-1878): import this alias rather than writing the
+# ``JSON().with_variant(JSONB(), "postgresql")`` expression inline. The
+# architecture gate ``tests/architecture/test_model_jsonb_column_parity.py``
+# enforces this single-definition rule across the whole source tree (migrations
+# excluded) and dialect parity for the columns migration
+# ``0147_json_to_jsonb_standardize`` converted **only**. It is NOT a general
+# jsonb-vs-JSON gate: columns made jsonb by any other migration are outside its
+# scope — see the gate's docstring for the tracked residual.
+JSONB_COL: Final[JSON] = JSON().with_variant(JSONB(), "postgresql")
 
 
 class Base(DeclarativeBase):

@@ -1,10 +1,10 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, ForeignKey, String, Text, Uuid, func, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, String, Text, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import Base
+from modulo.db.models.base import JSONB_COL, Base
 
 
 class AssistantSkill(Base):
@@ -34,7 +34,9 @@ class AssistantSkill(Base):
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
-    triggers: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    # Renamed from remy_skills.triggers (0257), which migration 0147 promoted
+    # to jsonb — hence JSONB_COL rather than generic JSON.
+    triggers: Mapped[list[str] | None] = mapped_column(JSONB_COL, nullable=True)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     source_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)

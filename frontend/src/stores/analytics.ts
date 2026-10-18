@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { parseISO, isValid } from "date-fns";
 import { api } from "../lib/api/client";
+import type { components } from "../lib/api/client";
 import { withTimeout } from "../lib/asyncUtils";
 import { toProblemDetail, type ProblemDetail } from "../lib/api/formatError";
 import { formatDateShortWithTime } from "../lib/formatDate";
@@ -96,6 +97,36 @@ export interface AnalyticsQueryParams {
 export interface OptionItem {
   id: string;
   name: string;
+}
+
+// ---------------------------------------------------------------------------
+// FAR-1343: capacity / queue-pressure observability (GET /api/v1/analytics/capacity)
+//
+// These are aliases to the generated OpenAPI schema types (regenerated in the
+// change that added the endpoint), so the typed `api.GET` response drops
+// straight into the store with no cast and can never silently drift from the
+// wire shape.
+// ---------------------------------------------------------------------------
+
+type CapacitySchemas = components["schemas"];
+
+export type CapacityLimits = CapacitySchemas["CapacityLimits"];
+export type CapacityPendingByPipeline = CapacitySchemas["CapacityPendingByPipeline"];
+export type CapacityPending = CapacitySchemas["CapacityPending"];
+export type CapacityDrain = CapacitySchemas["CapacityDrain"];
+export type CapacityBinding = CapacitySchemas["CapacityBinding"];
+export type CapacityQueueIfRaised = CapacitySchemas["CapacityQueueIfRaised"];
+export type CapacityAttribution = CapacitySchemas["CapacityAttribution"];
+export type CapacityActiveHealth = CapacitySchemas["CapacityActiveHealth"];
+export type CapacitySeriesPipeline = CapacitySchemas["CapacitySeriesPipeline"];
+export type CapacitySeriesBucket = CapacitySchemas["CapacitySeriesBucket"];
+export type CapacityResponse = CapacitySchemas["CapacityResponse"];
+
+export function formatCapacityDuration(seconds: number | null | undefined): string {
+  if (seconds == null) return "—";
+  if (seconds >= 3600) return `${(seconds / 3600).toFixed(1)}h`;
+  if (seconds >= 60) return `${Math.round(seconds / 60)}m`;
+  return `${Math.round(seconds)}s`;
 }
 
 const DEFAULT_FILTERS: AnalyticsFilters = {
@@ -644,11 +675,13 @@ function validateResponse(data: unknown): data is AnalyticsResponse {
   return typeof d.group_by === "string" && Array.isArray(d.buckets);
 }
 
-// The analytics endpoint lands in the generated OpenAPI client only after the
-// schema is regenerated; until then call it through an untyped alias so the
-// typed client's path-union never sees an unknown route. The client is resolved
-// lazily at call time (not module scope) so importing the store never touches
-// `api` — specs that mock the client without an `api` object still import fine.
+// The analytics *query* window is called through an untyped alias: its params
+// come from the store's own `AnalyticsQueryParams` (plain-string `dimension` /
+// `pipeline_id` for deep-link round-tripping), which do not satisfy the typed
+// client's query union without a conversion this call deliberately avoids. The
+// client is resolved lazily at call time (not module scope) so importing the
+// store never touches `api` — specs that mock the client without an `api`
+// object still import fine.
 type RawGet = (
   url: string,
   options?: unknown,
@@ -670,6 +703,9 @@ export const useAnalyticsStore = defineStore("analytics", () => {
   const flagOff = ref(false);
   const earliestAvailableDate = ref<string | null>(null);
   const showCapacityOverlay = ref(false);
+  const capacity = ref<CapacityResponse | null>(null);
+  const capacityLoading = ref(false);
+  const capacityError = ref<string | null>(null);
 
   const buckets = computed(() => results.value?.buckets ?? []);
   const factsStale = computed(() => Boolean(results.value?.facts_stale));
@@ -804,6 +840,44 @@ export const useAnalyticsStore = defineStore("analytics", () => {
     }
   }
 
+  let capacityToken = 0;
+
+  async function fetchCapacity(): Promise<void> {
+    // FAR-1343: the capacity/queue panel. It has its own bounded window (a
+    // live queue is a "now" surface, not the facts series' date range) and its
+    // own request token so a rapid pipeline-filter change cannot commit an
+    // older response over a newer one.
+    capacityLoading.value = true;
+    capacityError.value = null;
+    const token = ++capacityToken;
+    try {
+      const { data, error: err } = await withTimeout(
+        api.GET("/api/v1/analytics/capacity", {
+          params: {
+            query: {
+              window_minutes: 60,
+              interval_seconds: 300,
+              stall_intervals: 3,
+              ...(filters.value.pipelineId
+                ? { pipeline_id: [filters.value.pipelineId] }
+                : {}),
+            },
+          },
+        }),
+        15000,
+        "Capacity request",
+      );
+      if (token !== capacityToken) return;
+      if (err) throw err;
+      capacity.value = data;
+    } catch (e: unknown) {
+      if (token !== capacityToken) return;
+      capacityError.value = formatApiErrorMessage(e);
+    } finally {
+      if (token === capacityToken) capacityLoading.value = false;
+    }
+  }
+
   return {
     filters,
     measure,
@@ -823,11 +897,15 @@ export const useAnalyticsStore = defineStore("analytics", () => {
     groupBy,
     showCapacityOverlay,
     capacitySummary,
+    capacity,
+    capacityLoading,
+    capacityError,
     setFilters,
     setMeasure,
     resetFilters,
     applyQueryParams,
     fetchQuery,
+    fetchCapacity,
     fetchOptions,
   };
 });
