@@ -173,6 +173,70 @@ async def test_unreadable_fresh_state_fails_closed() -> None:
     assert summary["node_started_deferred"] == 1
 
 
+@pytest.mark.asyncio
+async def test_fresh_row_vanished_is_deferred() -> None:
+    """A fresh read that returns ``None`` is deferred (nothing safe to repair).
+
+    The row can vanish between the scan and the per-row action (deleted, or not
+    visible under the org's RLS). The guard fails CLOSED by returning True, so
+    the repair neither re-dispatches nor terminal-fails it.
+    """
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(ch, "get_settings", _settings)
+    try:
+        snapshot = _nodeless_snapshot(phase="claimed", claim_count=5)
+        summary = _summary()
+        fail = AsyncMock()
+        with patch.object(ch, "_fail_nodeless_run", fail):
+            handled = await ch._reconcile_nodeless_repair(
+                _FreshSession(None), MagicMock(), uuid.uuid4(), snapshot, 35, 0, summary, []
+            )
+    finally:
+        monkeypatch.undo()
+
+    assert handled is None
+    fail.assert_not_awaited()
+    assert summary["node_started_deferred"] == 1
+
+
+@pytest.mark.asyncio
+async def test_early_detect_path_defers_a_started_node() -> None:
+    """The FAR-873 early-detect branch re-verifies the FRESH row too.
+
+    A row the early-detect window selects as a nodeless zombie must NOT be
+    re-dispatched / terminal-failed when the fresh row has since started a
+    node: the early path defers and returns the unchanged enqueue-failed
+    counter.
+    """
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(ch, "get_settings", _settings)
+    try:
+        snapshot = _nodeless_snapshot(phase="claimed", claim_count=5)
+        fresh = SimpleNamespace(status="running", dispatch_phase=PHASE_FIRST_NODE_DISPATCHED, node_token_usage=None)
+        summary = _summary()
+        fail = AsyncMock()
+        with patch.object(ch, "_fail_nodeless_run", fail):
+            got = await ch._reconcile_one_row(
+                _FreshSession(fresh),
+                MagicMock(),
+                MagicMock(),
+                uuid.uuid4(),
+                snapshot,
+                35,
+                0,
+                summary,
+                [],
+                early_detect_minutes=20,
+                stale_window=600,
+            )
+    finally:
+        monkeypatch.undo()
+
+    assert got == 0
+    fail.assert_not_awaited()
+    assert summary["node_started_deferred"] == 1
+
+
 def test_zero_progress_shape_excludes_a_started_node() -> None:
     """FAR-1914 parity: the row-level mirror carries the phase leg.
 
