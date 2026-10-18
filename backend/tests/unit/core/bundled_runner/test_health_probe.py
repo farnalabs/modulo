@@ -157,9 +157,9 @@ class TestScrubUrlCredentials:
         assert scrub_url_credentials(text) == text
 
     def test_userinfo_after_a_long_credential_free_run_is_still_found(self) -> None:
-        """Pins the exact shape the super-linear finding was about: a long run
-        of class characters before the real userinfo. Possessive matching must
-        still locate the userinfo later in the same string."""
+        """Pins the shape the S8786 finding targeted: a long run of class
+        characters before the real userinfo. Possessive matching must still
+        locate the userinfo later in the same string."""
         filler = "a" * 500
         text = f"tcp://proxy.internal:2375/{filler} //alice:s3cret@proxy.internal:2375"
         scrubbed = scrub_url_credentials(text)
