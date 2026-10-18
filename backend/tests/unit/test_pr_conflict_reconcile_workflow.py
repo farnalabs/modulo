@@ -181,6 +181,23 @@ def test_resolves_main_sha_for_the_fingerprint() -> None:
     assert "MAIN_SHA=" in raw, "Workflow never assigns MAIN_SHA (FAR-1935)"
 
 
+# --- FAR-1956: conflict dispatches carry a structural taskKind marker so the
+# --- Branch Fixer can select the conflict task profile (a single long attempt)
+# --- rather than the CI-failure retry ladder. The distinction must be
+# --- structural — never a prose match on failureDescription.
+
+
+def test_dispatch_payload_includes_task_kind() -> None:
+    """FAR-1956: the dispatch payload MUST carry ``taskKind: conflict``. The
+    Branch Fixer reads it to branch its retry loop — a conflict task gets ONE
+    long attempt (the observed conflicts need ~2800s, which the CI-failure
+    ladder cannot give attempt 1), while a missing marker keeps the existing
+    budget-aware ladder so older dispatches still work."""
+    raw = _raw()
+    assert '--arg taskKind "conflict"' in raw, "Dispatch payload omits --arg taskKind (FAR-1956)"
+    assert "taskKind: $taskKind" in raw, "Dispatch jq object omits the taskKind key (FAR-1956)"
+
+
 # --- FAR-1949: an undelivered Branch Fixer dispatch must leave a durable,
 # --- PR-attributable signal on the PR. The "never SILENT" requirement is
 # --- FAR-1939, but its merge-queue.yml fallback only emits ::error:: + exit 1;
