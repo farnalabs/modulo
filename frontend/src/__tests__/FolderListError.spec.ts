@@ -5,15 +5,13 @@ import FolderListError from '../components/pipelines/FolderListError.vue'
 
 // The shared folder-list failure surface. The four call-site specs pin the
 // rendered behaviour; this spec pins the component's OWN contract, which the
-// refactor depends on: attrs fall through to the single alert root (no
+// refactor depends on: attrs are forwarded to the single alert root (no
 // wrapper), the breakpoint gate is opt-in, retry is wired, and the surface is
 // not dismissible by default.
 //
-// Accessor note: FolderListError's template opens with a contract comment, so
-// Vue Test Utils resolves `wrapper.element` to the mount container rather than
-// the alert root. The root is therefore located by its role/testid - which is
-// also what makes the "no wrapper" assertion meaningful: the caller's testid
-// must sit on the role="alert" element itself.
+// Accessor note: the component has a true single element root - the contract
+// comment lives in the script, not the template - so `wrapper.element` IS the
+// alert root, and direct-root assertions on it are possible.
 
 function mountError(attrs: Record<string, unknown> = {}, gated = false) {
   return mount(FolderListError, {
@@ -24,18 +22,26 @@ function mountError(attrs: Record<string, unknown> = {}, gated = false) {
 
 describe('FolderListError', () => {
   it('renders the caller testid on the alert root, with no wrapper element', () => {
-    const wrapper = mountError({ 'data-testid': 'probe-folder-error' })
+    const wrapper = mountError({ 'data-testid': 'probe-folder-error', class: 'mb-4' })
     const root = wrapper.find('[data-testid="probe-folder-error"]')
     expect(root.exists()).toBe(true)
     // Exactly one node carries the testid - a wrapper would duplicate the surface.
     expect(wrapper.findAll('[data-testid="probe-folder-error"]').length).toBe(1)
     // The testid sits on the role="alert" element itself, not a wrapper around it.
     expect(root.attributes('role')).toBe('alert')
+    // True single element root: `wrapper.element` IS the alert root.
+    expect(wrapper.element.getAttribute('data-testid')).toBe('probe-folder-error')
+    expect(wrapper.element.getAttribute('role')).toBe('alert')
+    expect(wrapper.element.classList.contains('mb-4')).toBe(true)
   })
 
-  it('merges the parent class onto the alert root', () => {
-    const wrapper = mountError({ class: 'mb-4' })
-    expect(wrapper.find('[role="alert"]').classes()).toContain('mb-4')
+  it('merges the parent class onto the alert root alongside the gated class', () => {
+    const wrapper = mountError({ class: 'mb-4' }, true)
+    const root = wrapper.find('[role="alert"]')
+    expect(root.classes()).toContain('mb-4')
+    // The forwarded parent class and the component's own `md:hidden` must
+    // coexist on the same root - neither may clobber the other.
+    expect(root.classes()).toContain('md:hidden')
   })
 
   it('adds md:hidden to the alert root when gated is true', () => {
@@ -61,6 +67,26 @@ describe('FolderListError', () => {
 
   it('renders no dismiss affordance by default', () => {
     const wrapper = mountError()
+    expect(wrapper.find('[data-testid="error-alert-dismiss"]').exists()).toBe(false)
+  })
+
+  it('cannot be made dismissible from a call site', () => {
+    // Pins the structural refusal: before automatic fallthrough was disabled,
+    // ErrorAlert declared onDismiss/dismissLabel, so these attrs fell through
+    // and rendered a dismiss button.
+    const wrapper = mountError({ 'on-dismiss': vi.fn(), 'dismiss-label': 'Close' })
+    expect(wrapper.find('[data-testid="error-alert-dismiss"]').exists()).toBe(false)
+  })
+
+  it('filters the camelCase dismiss attr spellings as well as the kebab forms', () => {
+    // Vue camelises prop lookup, so a caller may write onDismiss/dismissLabel/
+    // dismissIcon as well as on-dismiss/dismiss-label/dismiss-icon; all six
+    // spellings must be refused.
+    const wrapper = mountError({
+      onDismiss: vi.fn(),
+      dismissLabel: 'Close',
+      dismissIcon: true,
+    })
     expect(wrapper.find('[data-testid="error-alert-dismiss"]').exists()).toBe(false)
   })
 })
