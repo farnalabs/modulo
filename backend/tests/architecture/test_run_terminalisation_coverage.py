@@ -896,7 +896,8 @@ def test_every_status_gap_is_visible_and_actionable() -> None:
     """Every real gap is actionable — and the predicate is never vacuous.
 
     FAR-1966b: ``_STATUS_COVERAGE`` currently carries NO ``gap`` entry (the last
-    one, ``hitl_parked``, was exempted with its reasoning in 5f80aa918), so the
+    one, ``hitl_parked``, was exempted with its reasoning in PR #1985,
+    squash-merged onto ``main`` as commit ``02ddc8ddd``), so the
     loop below iterates an empty set and would otherwise pass without asserting
     anything. The synthetic self-check drives the SAME predicate over a
     deliberately thin note and asserts it is flagged, so the branch that
