@@ -18,10 +18,12 @@ check — the migration that removed them owns that decision.
 
 This is **not** a "no hand-maintained inventory, so any migration is covered"
 gate, and an earlier revision of this docstring wrongly said it was. Parsing
-cannot see every interpolation: a declaration whose table, column or TYPE comes
-from a runtime variable (0147's ``_add_temp_column`` builds ``... ADD COLUMN
-"{tmp}" {cast}``) yields no pair. A parsed-pairs inventory alone would then miss
-it SILENTLY — the exact defect class this file has now shipped three times.
+cannot see every interpolation: a declaration whose table, column or TYPE is an
+interpolation the loop resolver cannot bind — a function parameter, a call
+result, an attribute (0147's ``_add_temp_column`` builds ``... ADD COLUMN
+"{tmp}" {cast}`` from parameters) — yields no pair. A parsed-pairs inventory
+alone would then miss it SILENTLY — the exact defect class this file has now
+shipped three times.
 ``test_every_executed_jsonb_declaration_is_parsed_or_justified`` therefore closes
 the class: every executed SQL string that declares a jsonb column — a literal
 ``jsonb`` type token, or a column TYPE that is an interpolation (which COULD be
