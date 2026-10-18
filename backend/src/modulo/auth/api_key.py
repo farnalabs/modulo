@@ -4,10 +4,19 @@ Key format:  mk_<8-char-prefix>_<32-char-secret>
 Storage:     lookup_prefix = first 8 chars after "mk_"
              hashed_secret = SHA-256 hex of full key (constant-time compare)
 
-Alpha scopes:
-  operator — read + trigger + HITL
-  runner   — trigger/list runs, plus run.cancel, run.evals,
-             api_key.create/update/revoke, hitl.claim/list and library.copy
+Alpha scopes (roles are cumulative — the hierarchy is viewer < runner <
+operator < admin and a principal is admitted when its level is >= the
+permission's required level, so operator and runner each also hold the whole
+viewer floor of reads: audit.list, dashboard.*, analytics.query, ...):
+  operator — everything runner can do, plus the management bundle: pipeline,
+             connector, secret, model-backend and agent create/update/delete,
+             trigger create/update/delete, library.write, eval.run and the HITL
+             decisions (approve/reject/deliver_manual).
+  runner   — the viewer floor, plus run trigger/list/cancel/evals,
+             api_key.create/update/revoke, hitl.claim/list and library.copy.
+
+The registry in ``modulo.auth.permissions`` (``PERMISSIONS``) is the source of
+truth; this block is a terse mnemonic, not an exhaustive scope list.
 
 Team-scoped enforcement:
   When an API key has a non-null ``team_id``, all operations performed

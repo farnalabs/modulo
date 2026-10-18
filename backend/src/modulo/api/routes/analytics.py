@@ -27,7 +27,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -44,6 +44,7 @@ from modulo.core.analytics.builder import (
     AnalyticsStatus,
     AnalyticsTriggerType,
 )
+from modulo.core.analytics.capacity import CapacityParams, run_capacity_query
 from modulo.core.analytics.guardrails import run_guardrail_scorecard
 from modulo.core.analytics.service import (
     EXPORT_COLUMN_NAMES,
@@ -147,6 +148,129 @@ class ConcurrencyResponse(BaseModel):
     date_to: str | None = None
     pool_reference: int | None = None
     buckets: list[ConcurrencyBucket]
+
+
+class CapacityLimits(BaseModel):
+    """The configured limits alongside the queue so a reader sees headroom."""
+
+    org_run_concurrency_limit: int | None = None
+    sandbox_concurrency_limit: int | None = None
+    sandbox_limit_is_default: bool = False
+
+
+class CapacityPendingByPipeline(BaseModel):
+    pipeline_id: str
+    pipeline_name: str | None = None
+    pending_count: int = 0
+    oldest_pending_age_seconds: float | None = None
+    max_concurrent_runs: int | None = None
+
+
+class CapacityPending(BaseModel):
+    total: int = 0
+    oldest_pending_age_seconds: float | None = None
+    by_cause: dict[str, int] = Field(default_factory=dict)
+    by_pipeline: list[CapacityPendingByPipeline]
+
+
+class CapacityDrain(BaseModel):
+    created: int = 0
+    started: int = 0
+    completed: int = 0
+    ratio: float | None = None
+    baseline_depth: int = 0
+    baseline_oldest_pending_age_seconds: float | None = None
+    final_depth: int = 0
+    depth_change: int = 0
+    verdict: str
+
+
+class CapacityBinding(BaseModel):
+    """Which limit currently binds, and what lifting it would admit."""
+
+    scope: str
+    limit: int | None = None
+    in_use: int | None = None
+    headroom: int | None = None
+    pending_blocked: int = 0
+    admissible_if_raised: int = 0
+
+
+class CapacityQueueIfRaised(BaseModel):
+    pending_now: int = 0
+    admissible_if_binding_raised: int = 0
+    pending_after_raise: int = 0
+
+
+class CapacityAttribution(BaseModel):
+    pipeline_id: str
+    pipeline_name: str | None = None
+    executing: int = 0
+    running: int = 0
+    parked: int = 0
+    oldest_executing_age_seconds: float | None = None
+    stale_heartbeat_count: int = 0
+
+
+class CapacityActiveHealth(BaseModel):
+    """Org ACTIVE-RUN health: cap utilisation vs completion rate (FAR-1343).
+
+    ``executing_total`` is the part of the gate total that genuinely holds a
+    slot (running/claimed/unknown); ``parked_total`` is human-waiting runs the
+    org gate counts but which are not executing. ``stall_suspected`` is the
+    leak/stall signature: the org cap fully held while nothing completed for
+    ``stall_intervals`` consecutive complete intervals.
+    """
+
+    org_run_limit: int | None = None
+    gate_total: int = 0
+    executing_total: int = 0
+    running_total: int = 0
+    parked_total: int = 0
+    cancelling_total: int = 0
+    utilisation: float | None = None
+    cap_held: bool = False
+    completions_in_window: int = 0
+    zero_completion_intervals: int = 0
+    stall_intervals: int = 3
+    stall_suspected: bool = False
+    stale_heartbeat_threshold_seconds: int = 1800
+    stale_heartbeat_count: int = 0
+    attribution: list[CapacityAttribution]
+
+
+class CapacitySeriesPipeline(BaseModel):
+    pipeline_id: str
+    pipeline_name: str | None = None
+    pending_depth: int = 0
+    oldest_pending_age_seconds: float | None = None
+
+
+class CapacitySeriesBucket(BaseModel):
+    interval_start: str
+    interval_end: str
+    created: int = 0
+    started: int = 0
+    completed: int = 0
+    pending_depth: int = 0
+    oldest_pending_age_seconds: float | None = None
+    drain_ratio: float | None = None
+    complete: bool = False
+    by_pipeline: list[CapacitySeriesPipeline]
+
+
+class CapacityResponse(BaseModel):
+    generated_at: str
+    window_start: str
+    window_seconds: int
+    interval_seconds: int
+    limits: CapacityLimits
+    pending: CapacityPending
+    drain: CapacityDrain
+    binding: CapacityBinding
+    queue_if_raised: CapacityQueueIfRaised
+    active_health: CapacityActiveHealth
+    series: list[CapacitySeriesBucket]
 
 
 class GuardrailScorecardScope(BaseModel):
@@ -612,6 +736,65 @@ async def analytics_concurrency(
             raise
         raise _map_service_error(exc) from None
     return ConcurrencyResponse(**result)
+
+
+@router.get("/capacity")
+async def analytics_capacity(
+    pipeline_id: list[uuid.UUID] | None = Query(None),
+    window_minutes: int = Query(60, ge=5, le=1440),
+    interval_seconds: int = Query(300, ge=60, le=3600),
+    stall_intervals: int = Query(3, ge=1, le=12),
+    settings: Settings = Depends(get_settings),
+    principal: TenantPrincipal = require_permission(_CODE_ANALYTICS_QUERY),
+    _: object = require_feature("analytics_page"),
+) -> CapacityResponse:
+    """Capacity / queue-pressure observability (FAR-1343).
+
+    Answers "is my queue draining, and if not, which limit is holding it?" plus
+    "is the org's active-run resource healthy?" from one read surface:
+
+    * per-pipeline and org-wide pending depth, oldest-pending age and the
+      created/started/completed counts over the window (the drain rate);
+    * a cause breakdown for the pending queue (pipeline capacity vs org run
+      capacity vs org sandbox capacity, from the canonical capacity markers);
+    * the configured limits, the limit currently binding, and how many pending
+      runs would become admissible if that limit were raised;
+    * org ACTIVE-RUN health — cap utilisation vs completion rate and the
+      "cap fully held AND completions ≈ 0 for K consecutive intervals"
+      leak/stall signature with per-pipeline attribution.
+
+    **Observability only — signal, never a refusal.** A repeated ``pipeline_id``
+    narrows the queue, drain and series sections; the ACTIVE-RUN health totals
+    are always org-wide (their denominator is the org cap), and its
+    per-pipeline attribution lists only the pipelines visible to the caller's
+    team scope. ``window_minutes`` bounds the scan; an oversized scan is a 422
+    asking the caller to narrow it, never a silently truncated series.
+    """
+    org_id = _require_org(principal)
+    try:
+        team_ids = await _resolve_scoped_team_ids(
+            _analytics_session_factory(settings), org_id=org_id, principal=principal
+        )
+        params = CapacityParams(
+            window_minutes=window_minutes,
+            interval_seconds=interval_seconds,
+            stall_intervals=stall_intervals,
+            pipeline_ids=tuple(pipeline_id or ()),
+            team_ids=team_ids,
+        )
+        result = await run_capacity_query(
+            org_id=org_id,
+            params=params,
+            factory=_analytics_session_factory(settings),
+            settings=settings,
+            account_id=principal.account_id,
+            org_role=principal.org_role,
+        )
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
+        raise _map_service_error(exc) from None
+    return CapacityResponse(**result)
 
 
 @router.get("/guardrails")
