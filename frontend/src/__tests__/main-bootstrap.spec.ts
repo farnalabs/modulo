@@ -17,11 +17,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // are the behaviour under test. The real-router path (hook wiring + lazy route
 // chunks) is covered by app-bootstrap.spec.ts, which runs after this one.
 
-const { loadBackendsMock, isReadyMock, initLocaleMock, captureErrorMock } = vi.hoisted(() => ({
+const { loadBackendsMock, isReadyMock, initLocaleMock, captureErrorMock, i18nTranslateMock } = vi.hoisted(() => ({
   loadBackendsMock: vi.fn(),
   isReadyMock: vi.fn(),
   initLocaleMock: vi.fn(),
   captureErrorMock: vi.fn(),
+  // The mocked i18n plugin's `global.t`. Tests change what it resolves to via
+  // `i18nTranslateMock.mockImplementation(...)`. They MUST NOT re-register the
+  // module with a second `vi.doMock('../i18n', …)`: mock registrations are
+  // queued and completed over an async RPC, so two registrations for the same
+  // path can land out of order — the beforeEach mock then clobbers the
+  // per-test override and the real `t:<key>` string leaks into the assertion.
+  // That race is what intermittently failed this spec in CI (FAR-1913).
+  i18nTranslateMock: vi.fn((key: string) => `t:${key}`),
 }))
 
 const APP_MARKER = '[data-testid="app-mounted"]'
@@ -66,10 +74,14 @@ describe('main bootstrap', () => {
     // The locale/i18n instance needs message catalogs to version-hash ≥60
     // locale files at eval time. `global.t` mirrors the real composer's shape
     // so the bootstrap message path is exercisable without the catalogue.
+    // Registered exactly once per test (never unmocked below) so no second
+    // registration can race this one.
+    i18nTranslateMock.mockReset()
+    i18nTranslateMock.mockImplementation((key: string) => `t:${key}`)
     vi.doMock('../i18n', () => ({
       default: {
         install: vi.fn(),
-        global: { t: (key: string) => `t:${key}` },
+        global: { t: i18nTranslateMock },
       },
     }))
 
@@ -132,7 +144,6 @@ describe('main bootstrap', () => {
     document.body.innerHTML = ''
     vi.doUnmock('../router')
     vi.doUnmock('../App.vue')
-    vi.doUnmock('../i18n')
     vi.doUnmock('../monitor')
     vi.doUnmock('../lib/error-tracking')
     vi.doUnmock('../lib/api/client')
@@ -260,9 +271,10 @@ describe('main bootstrap', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     // An i18n plugin with no usable composer: resolving either message throws.
-    vi.doMock('../i18n', () => ({
-      default: { install: vi.fn() },
-    }))
+    // Mutate the shared translate mock rather than re-registering `../i18n`.
+    i18nTranslateMock.mockImplementation(() => {
+      throw new Error('no usable composer')
+    })
     initLocaleMock.mockImplementation(() => {
       throw new Error('locale store exploded')
     })
@@ -289,9 +301,7 @@ describe('main bootstrap', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     // A key can resolve to an empty string (missing/blank catalogue entry);
     // an empty message would render an invisible surface, so the literal wins.
-    vi.doMock('../i18n', () => ({
-      default: { install: vi.fn(), global: { t: () => '' } },
-    }))
+    i18nTranslateMock.mockImplementation(() => '')
     initLocaleMock.mockImplementation(() => {
       throw new Error('locale store exploded')
     })
