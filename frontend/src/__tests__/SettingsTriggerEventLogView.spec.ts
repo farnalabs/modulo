@@ -486,4 +486,86 @@ describe('SettingsTriggerEventLogView', () => {
       expect(wrapper.text()).toContain('webhook')
     }
   })
+
+  // FAR-1344 — capacity outcomes: dropdown entries, distinct badges, and the
+  // count/trend strip.
+  describe('capacity outcomes', () => {
+    function withCounts(overrides: Record<string, unknown> = {}) {
+      return {
+        data: {
+          items: [],
+          total: 0,
+          next_cursor: null,
+          result_counts: {
+            window_hours: 24,
+            recent: { backpressure_skipped: 3, concurrency_limit_reached: 0, coalesced: 1 },
+            previous: { backpressure_skipped: 1, concurrency_limit_reached: 0, coalesced: 0 },
+            total_recent: 4,
+            total_previous: 1,
+            direction: 'up',
+            ...overrides,
+          },
+        },
+        error: undefined,
+      }
+    }
+
+    it('renders the capacity-outcome count and trend when result_counts is present', async () => {
+      getMock.mockResolvedValue(withCounts())
+      const wrapper = mount(SettingsTriggerEventLogView)
+      await flushPromises()
+      expect(wrapper.find('[data-testid="capacity-outcomes-summary"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="capacity-outcomes-total"]').text()).toContain('4 capacity refusals')
+      expect(wrapper.find('[data-testid="capacity-outcomes-trend"]').text()).toContain('up from the previous 24h')
+    })
+
+    it('renders per-outcome badges only for non-zero outcomes', async () => {
+      getMock.mockResolvedValue(withCounts())
+      const wrapper = mount(SettingsTriggerEventLogView)
+      await flushPromises()
+      expect(wrapper.find('[data-testid="capacity-outcome-backpressure_skipped"]').text()).toContain('3')
+      expect(wrapper.find('[data-testid="capacity-outcome-coalesced"]').text()).toContain('1')
+      expect(wrapper.find('[data-testid="capacity-outcome-concurrency_limit_reached"]').exists()).toBe(false)
+    })
+
+    it('hides the capacity summary when the response omits result_counts', async () => {
+      getMock.mockResolvedValue({
+        data: { items: [makeEvent()], total: 1, next_cursor: null },
+        error: undefined,
+      })
+      const wrapper = mount(SettingsTriggerEventLogView)
+      await flushPromises()
+      expect(wrapper.find('[data-testid="capacity-outcomes-summary"]').exists()).toBe(false)
+    })
+
+    it('reports a flat trend when both windows are empty', async () => {
+      getMock.mockResolvedValue(
+        withCounts({
+          recent: { backpressure_skipped: 0, concurrency_limit_reached: 0, coalesced: 0 },
+          previous: { backpressure_skipped: 0, concurrency_limit_reached: 0, coalesced: 0 },
+          total_recent: 0,
+          total_previous: 0,
+          direction: 'flat',
+        }),
+      )
+      const wrapper = mount(SettingsTriggerEventLogView)
+      await flushPromises()
+      expect(wrapper.text()).toContain('No capacity refusals in the last 24h')
+    })
+
+    it('renders a distinct badge for a backpressure_skipped row', async () => {
+      getMock.mockResolvedValue({
+        data: {
+          items: [makeEvent({ validation_result: 'backpressure_skipped' })],
+          total: 1,
+          next_cursor: null,
+        },
+        error: undefined,
+      })
+      const wrapper = mount(SettingsTriggerEventLogView)
+      await flushPromises()
+      expect(wrapper.text()).toContain('backpressure_skipped')
+      expect(wrapper.find('.badge-context-rose').exists()).toBe(true)
+    })
+  })
 })

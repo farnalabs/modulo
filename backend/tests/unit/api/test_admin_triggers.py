@@ -45,6 +45,13 @@ def _authz_result() -> MagicMock:
     return result
 
 
+def _counts_result(rows: list[tuple[str, int, int]] | None = None) -> MagicMock:
+    """The FAR-1344 capacity-outcome grouped-count result."""
+    result = MagicMock()
+    result.all = MagicMock(return_value=rows if rows is not None else [])
+    return result
+
+
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
     begin_cm = AsyncMock()
@@ -136,7 +143,9 @@ class TestListTriggerEvents:
             count_result.scalar = MagicMock(return_value=1)
             authz_result = MagicMock()
             authz_result.scalar_one_or_none = MagicMock(return_value=True)
-            session.execute = AsyncMock(side_effect=[authz_result, event_result, count_result])
+            session.execute = AsyncMock(
+                side_effect=[authz_result, event_result, count_result, _counts_result([("backpressure_skipped", 2, 1)])]
+            )
 
             async def override_session() -> AsyncGenerator[AsyncMock, None]:
                 yield session
@@ -150,6 +159,11 @@ class TestListTriggerEvents:
         assert body["total"] == 1
         assert body["items"][0]["trigger_type"] == "manual"
         assert body["items"][0]["validation_result"] == "accepted"
+        assert body["result_counts"]["recent"]["backpressure_skipped"] == 2
+        assert body["result_counts"]["previous"]["backpressure_skipped"] == 1
+        assert body["result_counts"]["total_recent"] == 2
+        assert body["result_counts"]["total_previous"] == 1
+        assert body["result_counts"]["direction"] == "up"
 
     def test_returns_200_with_filters(self, client: TestClient) -> None:
         event = _make_mock_event(trigger_type="webhook", validation_result="hmac_failed")
@@ -160,7 +174,7 @@ class TestListTriggerEvents:
             count_result.scalar = MagicMock(return_value=1)
             authz_result = MagicMock()
             authz_result.scalar_one_or_none = MagicMock(return_value=True)
-            session.execute = AsyncMock(side_effect=[authz_result, event_result, count_result])
+            session.execute = AsyncMock(side_effect=[authz_result, event_result, count_result, _counts_result()])
 
             async def override_session() -> AsyncGenerator[AsyncMock, None]:
                 yield session
@@ -176,6 +190,11 @@ class TestListTriggerEvents:
         assert len(body["items"]) == 1
         assert body["items"][0]["trigger_type"] == "webhook"
         assert body["items"][0]["validation_result"] == "hmac_failed"
+        # An empty grouped-count result still yields the full zeroed vocabulary
+        # and a flat trend (never a missing field).
+        assert body["result_counts"]["recent"]["coalesced"] == 0
+        assert body["result_counts"]["total_recent"] == 0
+        assert body["result_counts"]["direction"] == "flat"
 
     def test_returns_empty_when_no_events(self, client: TestClient) -> None:
         with patch("modulo.api.routes.admin_triggers.set_rls_org"):
@@ -185,7 +204,7 @@ class TestListTriggerEvents:
             count_result.scalar = MagicMock(return_value=0)
             authz_result = MagicMock()
             authz_result.scalar_one_or_none = MagicMock(return_value=True)
-            session.execute = AsyncMock(side_effect=[authz_result, event_result, count_result])
+            session.execute = AsyncMock(side_effect=[authz_result, event_result, count_result, _counts_result()])
 
             async def override_session() -> AsyncGenerator[AsyncMock, None]:
                 yield session

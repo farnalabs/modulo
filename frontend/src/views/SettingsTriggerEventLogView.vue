@@ -31,7 +31,7 @@
   data-testid="settings-trigger-event-log-result"
   id="settingstriggereventlogview-result"
   class="w-full"
-  :options="[{ value: '__all__', label: $t('views.SettingsTriggerEventLogView.all_results') }, { value: 'accepted', label: $t('views.SettingsTriggerEventLogView.accepted') }, { value: 'passed', label: $t('views.SettingsTriggerEventLogView.passed') }, { value: 'condition_met', label: $t('views.SettingsTriggerEventLogView.condition_met') }, { value: 'signal_fired', label: $t('views.SettingsTriggerEventLogView.signal_fired') }, { value: 'no_match', label: $t('views.SettingsTriggerEventLogView.no_match') }, { value: 'hmac_failed', label: $t('views.SettingsTriggerEventLogView.hmac_failed') }, { value: 'schema_validation_failed', label: $t('views.SettingsTriggerEventLogView.schema_validation_failed') }, { value: 'deduplicated', label: $t('views.SettingsTriggerEventLogView.deduplicated') }, { value: 'concurrency_limit_reached', label: $t('views.SettingsTriggerEventLogView.concurrency_limit_reached') }, { value: 'flood_rejected', label: $t('views.SettingsTriggerEventLogView.flood_rejected') }, { value: 'timestamp_expired', label: $t('views.SettingsTriggerEventLogView.timestamp_expired') }, { value: 'validation_failed', label: $t('views.SettingsTriggerEventLogView.validation_failed') }, { value: 'rate_limited', label: $t('views.SettingsTriggerEventLogView.rate_limited') }, { value: 'poll_error', label: $t('views.SettingsTriggerEventLogView.poll_error') }]"
+  :options="[{ value: '__all__', label: $t('views.SettingsTriggerEventLogView.all_results') }, { value: 'accepted', label: $t('views.SettingsTriggerEventLogView.accepted') }, { value: 'passed', label: $t('views.SettingsTriggerEventLogView.passed') }, { value: 'condition_met', label: $t('views.SettingsTriggerEventLogView.condition_met') }, { value: 'signal_fired', label: $t('views.SettingsTriggerEventLogView.signal_fired') }, { value: 'no_match', label: $t('views.SettingsTriggerEventLogView.no_match') }, { value: 'hmac_failed', label: $t('views.SettingsTriggerEventLogView.hmac_failed') }, { value: 'schema_validation_failed', label: $t('views.SettingsTriggerEventLogView.schema_validation_failed') }, { value: 'deduplicated', label: $t('views.SettingsTriggerEventLogView.deduplicated') }, { value: 'concurrency_limit_reached', label: $t('views.SettingsTriggerEventLogView.concurrency_limit_reached') }, { value: 'backpressure_skipped', label: $t('views.SettingsTriggerEventLogView.backpressure_skipped') }, { value: 'coalesced', label: $t('views.SettingsTriggerEventLogView.coalesced') }, { value: 'spend_limit_reached', label: $t('views.SettingsTriggerEventLogView.spend_limit_reached') }, { value: 'flood_rejected', label: $t('views.SettingsTriggerEventLogView.flood_rejected') }, { value: 'timestamp_expired', label: $t('views.SettingsTriggerEventLogView.timestamp_expired') }, { value: 'validation_failed', label: $t('views.SettingsTriggerEventLogView.validation_failed') }, { value: 'rate_limited', label: $t('views.SettingsTriggerEventLogView.rate_limited') }, { value: 'poll_error', label: $t('views.SettingsTriggerEventLogView.poll_error') }]"
   option-label="label"
   option-value="value"
 >
@@ -56,6 +56,50 @@
       <div v-if="total > 0" class="mt-3 text-sm text-muted-foreground">
         {{ $t('views.SettingsTriggerEventLogView.events_count', { count: total }, total) }}
       </div>
+    </div>
+
+    <!-- FAR-1344 — capacity outcomes at a glance. A count + trend for the
+         deliveries capacity refused/coalesced in the last 24h, so an operator
+         sees pressure building without drilling into an individual event. -->
+    <div
+      v-if="resultCounts"
+      data-testid="capacity-outcomes-summary"
+      class="rounded-lg border bg-card p-4 shadow-sm"
+    >
+      <div class="flex flex-wrap items-center gap-3">
+        <span class="text-sm font-medium text-foreground">
+          {{ $t('views.SettingsTriggerEventLogView.capacity_outcomes') }}
+        </span>
+        <span class="text-xs text-muted-foreground">
+          {{ $t('views.SettingsTriggerEventLogView.capacity_outcomes_window', { hours: resultCounts.window_hours }) }}
+        </span>
+        <span
+          data-testid="capacity-outcomes-total"
+          :class="capacityTotalBadgeClass"
+        >
+          {{ capacityTotalLabel }}
+        </span>
+        <span
+          v-if="resultCounts.total_recent > 0 || resultCounts.total_previous > 0"
+          data-testid="capacity-outcomes-trend"
+          class="text-xs text-muted-foreground"
+        >
+          {{ capacityTrendLabel }}
+        </span>
+      </div>
+      <div v-if="capacityOutcomeRows.length > 0" class="mt-3 flex flex-wrap gap-2">
+        <span
+          v-for="row in capacityOutcomeRows"
+          :key="row.key"
+          :data-testid="`capacity-outcome-${row.key}`"
+          :class="resultBadge(row.key)"
+        >
+          {{ $t(`views.SettingsTriggerEventLogView.${row.key}`) }}: {{ row.value }}
+        </span>
+      </div>
+      <p v-else class="mt-3 text-xs text-muted-foreground">
+        {{ $t('views.SettingsTriggerEventLogView.capacity_outcome_none', { hours: resultCounts.window_hours }) }}
+      </p>
     </div>
 
     <LoadingSpinner v-if="loading" />
@@ -145,6 +189,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -177,6 +222,50 @@ const { loading, error, data: responseData, load: loadEvents } = useDataFetch(
 const items = computed(() => responseData.value?.items ?? [])
 const total = computed(() => responseData.value?.total ?? 0)
 
+// FAR-1344 — the capacity-outcome summary. `result_counts` is optional on the
+// response (older backends), so the whole block is hidden when absent.
+type ResultCounts = {
+  window_hours: number
+  recent: Record<string, number>
+  previous: Record<string, number>
+  total_recent: number
+  total_previous: number
+  direction: string
+}
+const resultCounts = computed<ResultCounts | null>(
+  () => (responseData.value?.result_counts as ResultCounts | undefined) ?? null,
+)
+
+const CAPACITY_OUTCOME_KEYS = ['backpressure_skipped', 'concurrency_limit_reached', 'coalesced'] as const
+
+const { t } = useI18n()
+
+const capacityOutcomeRows = computed(() => {
+  const counts = resultCounts.value?.recent ?? {}
+  return CAPACITY_OUTCOME_KEYS.filter((key) => (counts[key] ?? 0) > 0).map((key) => ({
+    key,
+    value: counts[key] ?? 0,
+  }))
+})
+
+const capacityTotalLabel = computed(() =>
+  t('views.SettingsTriggerEventLogView.capacity_outcome_total', { count: resultCounts.value?.total_recent ?? 0 }),
+)
+
+const capacityTotalBadgeClass = computed(() => {
+  const totalRecent = resultCounts.value?.total_recent ?? 0
+  if (totalRecent === 0) return 'badge badge-context-slate'
+  return 'badge badge-context-orange'
+})
+
+const capacityTrendLabel = computed(() => {
+  const hours = resultCounts.value?.window_hours ?? 24
+  const direction = resultCounts.value?.direction ?? 'flat'
+  if (direction === 'up') return t('views.SettingsTriggerEventLogView.capacity_outcome_trend_up', { hours })
+  if (direction === 'down') return t('views.SettingsTriggerEventLogView.capacity_outcome_trend_down', { hours })
+  return t('views.SettingsTriggerEventLogView.capacity_outcome_trend_flat', { hours })
+})
+
 const filterTriggerType = ref('__all__')
 const filterResult = ref('__all__')
 
@@ -205,7 +294,15 @@ function resultBadge(result: string): string {
   if (result === 'accepted' || result === 'passed' || result === 'condition_met' || result === 'signal_fired') return 'badge badge-status-success'
   if (result === 'no_match') return 'badge badge-context-slate'
   if (result === 'hmac_failed' || result === 'schema_validation_failed' || result === 'validation_failed') return 'badge badge-status-destructive'
-  if (result === 'deduplicated' || result === 'concurrency_limit_reached' || result === 'flood_rejected' || result === 'rate_limited') return 'badge badge-context-orange'
+  // FAR-1344 — distinct badges for the capacity outcomes, so a refusal is
+  // legible at a glance rather than sharing the generic throttle colour:
+  // backpressure is an overload refusal (rose), the concurrency limit is a cap
+  // (orange), and coalescing is benign (cyan).
+  if (result === 'backpressure_skipped') return 'badge badge-context-rose'
+  if (result === 'concurrency_limit_reached') return 'badge badge-context-orange'
+  if (result === 'coalesced') return 'badge badge-context-cyan'
+  if (result === 'spend_limit_reached') return 'badge badge-context-purple'
+  if (result === 'deduplicated' || result === 'flood_rejected' || result === 'rate_limited') return 'badge badge-context-orange'
   if (result === 'paused') return 'badge badge-context-amber'
   if (result === 'timestamp_expired') return 'badge badge-context-slate'
   if (result === 'poll_error') return 'badge badge-context-rose'
