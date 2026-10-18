@@ -3872,6 +3872,11 @@ elements:
       - testid: snapshot-timeline-load-more-error
         type: element
         dynamic_testid: false
+      # FAR-1895: explicit "no version in the loaded window" state — shown
+      # instead of fabricating an `initial` anchor from a run snapshot.
+      - testid: snapshot-timeline-no-version-in-window
+        type: element
+        dynamic_testid: false
       - testid: pipeline-editor-snapshot-lock
         type: element
         dynamic_testid: false
@@ -3904,6 +3909,11 @@ elements:
         type: element
         dynamic_testid: false
       - testid: pipeline-editor-version-chip-open-timeline
+        type: button
+        dynamic_testid: false
+      # FAR-1895: the chip's filtered request is auxiliary; when it fails the
+      # chip falls back and this surfaces the degradation with a retry.
+      - testid: pipeline-editor-version-chip-error
         type: button
         dynamic_testid: false
       - testid: pipeline-editor-historic-banner

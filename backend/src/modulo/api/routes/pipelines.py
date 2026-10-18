@@ -5591,6 +5591,7 @@ async def list_snapshot_endpoint(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     exclude_created_kind: Annotated[list[SnapshotCreatedKind] | None, Query()] = None,
+    exclude_drafts: Annotated[bool, Query()] = False,
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_LIST),
     _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> SnapshotListResponse:
@@ -5601,7 +5602,10 @@ async def list_snapshot_endpoint(
     the newest substantive version with ``page_size=1`` and
     ``exclude_created_kind=run`` — a query that cannot be starved by an
     arbitrarily long streak of run-start snapshots, unlike reading the head of
-    an unfiltered page. Optional, so the unfiltered history every existing
+    an unfiltered page. ``exclude_drafts=true`` drops in-progress editor
+    auto-saves too: a draft is ``created_kind='edit'`` with a real
+    ``snapshot_version``, so it would otherwise outrank the last COMMITTED
+    version. Both are optional, so the unfiltered history every existing
     caller reads is unchanged.
     """
     try:
@@ -5616,6 +5620,7 @@ async def list_snapshot_endpoint(
                 page=page,
                 page_size=page_size,
                 exclude_created_kinds=exclude_created_kind,
+                exclude_drafts=exclude_drafts,
             )
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)

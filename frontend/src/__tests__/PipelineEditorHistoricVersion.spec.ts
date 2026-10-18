@@ -151,22 +151,25 @@ type TestGraph = { nodes: Array<Record<string, unknown>>; edges: unknown[] }
 
 /**
  * Serve a snapshot-list request the way the REAL endpoint does: apply the
- * optional `exclude_created_kind` filter BEFORE paginating, and report the
- * filtered `total`.
+ * optional `exclude_created_kind` and `exclude_drafts` filters BEFORE
+ * paginating, and report the filtered `total`.
  *
- * FAR-1895: the version chip asks for the newest substantive version with
- * `page_size=1&exclude_created_kind=['run']`. A mock that ignored the filter
- * would answer a different question and would keep passing after the chip
- * regressed to an unfiltered first page, so the filter is honoured here.
+ * FAR-1895: the version chip asks for the newest version with
+ * `page_size=2&exclude_created_kind=['run']&exclude_drafts=true` and the
+ * timeline adds `exclude_drafts=true`. A mock that ignored the filters would
+ * answer a different question and would keep passing after the chip regressed
+ * to an unfiltered first page, so both filters are honoured here.
  */
 function serveSnapshotPage(rows: Array<Record<string, any>>, init?: any) {
   const query = (init?.params?.query ?? {}) as {
     page?: number
     page_size?: number
     exclude_created_kind?: string[]
+    exclude_drafts?: boolean
   }
   const excluded = new Set(query.exclude_created_kind ?? [])
-  const matching = Array.from(excluded).length === 0 ? rows : rows.filter((row) => !excluded.has(row.created_kind))
+  let matching = Array.from(excluded).length === 0 ? rows : rows.filter((row) => !excluded.has(row.created_kind))
+  if (query.exclude_drafts === true) matching = matching.filter((row) => row.draft !== true)
   const page = query.page ?? 1
   const pageSize = query.page_size ?? 20
   return {
@@ -176,6 +179,11 @@ function serveSnapshotPage(rows: Array<Record<string, any>>, init?: any) {
     },
     error: undefined,
   }
+}
+
+/** True when `init` is the chip's server-filtered version query. */
+function isVersionChipQuery(init?: any): boolean {
+  return Array.isArray(init?.params?.query?.exclude_created_kind)
 }
 
 // Every payload is CLONED: the editor holds the response objects by
@@ -631,26 +639,227 @@ describe('PipelineEditorView — historic version view (FAR-1812)', () => {
     // snapshots, so currentSubstantiveVersion over the catalog page is null
     // and the chip vanishes while the timeline still shows v1.
     //
-    // The chip now asks the server for the newest substantive version
-    // directly (`page_size=1&exclude_created_kind=['run']`), which no length
-    // of run streak can starve. The mock honours the filter exactly like the
+    // The chip now asks the server for the newest version directly
+    // (`exclude_created_kind=['run']&exclude_drafts=true`), which no length of
+    // run streak can starve. The mock honours the filter exactly like the
     // endpoint, so this test fails if the chip regresses to page 1.
     const wrapper = await mountEditor({}, () => seedRunHeavySnapshots(500))
     const chip = wrapper.find('[data-testid="pipeline-editor-version-chip"]')
     expect(chip.exists()).toBe(true)
     expect(chip.text()).toBe('v1')
+    // A failure of the auxiliary filtered request was NOT recorded — the chip
+    // resolved through it, not the fallback.
+    expect(wrapper.find('[data-testid="pipeline-editor-version-chip-error"]').exists()).toBe(false)
 
     // Prove the chip resolved through the FILTERED query, not a lucky page.
     const chipQuery = apiGetMock.mock.calls.find((call: any[]) => {
       const [url, init] = call as [string, any]
-      return (
-        String(url).endsWith('/snapshots') &&
-        Array.isArray(init?.params?.query?.exclude_created_kind) &&
-        init.params.query.exclude_created_kind.includes('run')
-      )
+      return String(url).endsWith('/snapshots') && isVersionChipQuery(init)
     })
     expect(chipQuery).toBeDefined()
-    expect(chipQuery?.[1]?.params?.query?.page_size).toBe(1)
+    expect(chipQuery?.[1]?.params?.query?.exclude_created_kind).toEqual(['run'])
+    expect(chipQuery?.[1]?.params?.query?.exclude_drafts).toBe(true)
+    // At least 2 rows, so the version-0 post-filter can never consume the only
+    // candidate (F).
+    expect(chipQuery?.[1]?.params?.query?.page_size).toBeGreaterThanOrEqual(2)
+    wrapper.unmount()
+  })
+
+  it('timeline agrees with the chip on a run-heavy history longer than a page (FAR-1895, finding B)', async () => {
+    // 500 runs (> SNAPSHOT_PAGE_SIZE) above the substantive v1: the timeline's
+    // own page is 100% run rows. It must NOT promote the oldest run in the page
+    // to an `initial` anchor (which would read "v1 Initial" for the wrong
+    // snapshot / disagree with the chip). It anchors on the SAME resolved
+    // current version the chip shows.
+    const wrapper = await mountEditor({}, () => seedRunHeavySnapshots(500))
+    await wrapper.find('[data-testid="pipeline-editor-version-timeline"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="pipeline-editor-version-chip"]').text()).toBe('v1')
+    // Exactly one primary row — the real substantive version.
+    const rows = wrapper.findAll('[data-testid^="snapshot-timeline-row-"]')
+    expect(rows).toHaveLength(1)
+    const anchor = wrapper.find('[data-testid="snapshot-timeline-row-snap-substantive-v1"]')
+    expect(anchor.exists()).toBe(true)
+    expect(anchor.text()).toContain('v1')
+    // No fabricated `initial` row taken from a run snapshot.
+    expect(anchor.text()).not.toContain('Initial')
+    expect(wrapper.find('[data-testid="snapshot-timeline-no-version-in-window"]').exists()).toBe(false)
+    // The runs are attributed to the real version, not to a fabricated anchor.
+    expect(wrapper.find('[data-testid="snapshot-timeline-runs-toggle-snap-substantive-v1"]').text()).toBe('ran 100x')
+    wrapper.unmount()
+  })
+
+  it('does not vanish when the auxiliary version query fails — it falls back to the loaded catalog and surfaces the failure (FAR-1895, finding A)', async () => {
+    // The typed client returns { error } WITHOUT throwing on 4xx/5xx, so a
+    // failed filtered query used to collapse to [] and hide the chip. Here the
+    // filtered request fails outright while the unfiltered catalog still loads
+    // the substantive version — the chip must still show it.
+    seedRoute({})
+    seedApi()
+    apiGetMock.mockImplementation((url: string, init?: any) => {
+      if (url.endsWith('/snapshots')) {
+        if (isVersionChipQuery(init)) {
+          return Promise.resolve({ data: undefined, error: { detail: 'version query unavailable' } })
+        }
+        return Promise.resolve(serveSnapshotPage(SNAPSHOT_LIST, init))
+      }
+      if (url.includes('/pipelines/{pipeline_id}/graph')) {
+        return Promise.resolve({ data: structuredClone(LIVE_GRAPH), error: undefined })
+      }
+      if (url.includes('/pipelines/{pipeline_id}')) {
+        return Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline' }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.currentTier = 'team'
+    const wrapper = mount(PipelineEditorView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: { VueFlow: { template: '<div><slot /></div>' }, Background: true, Controls: true },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    // NOT vanished: the chip falls back to the unfiltered catalog (v9).
+    const chip = wrapper.find('[data-testid="pipeline-editor-version-chip"]')
+    expect(chip.exists()).toBe(true)
+    expect(chip.text()).toBe('v9')
+    // The degradation is surfaced, not silent.
+    const error = wrapper.find('[data-testid="pipeline-editor-version-chip-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.attributes('title')).toContain('version query unavailable')
+
+    // The retry re-issues the filtered request (and can recover).
+    apiGetMock.mockImplementation((url: string, init?: any) => {
+      if (url.endsWith('/snapshots')) return Promise.resolve(serveSnapshotPage(SNAPSHOT_LIST, init))
+      if (url.includes('/pipelines/{pipeline_id}/graph')) {
+        return Promise.resolve({ data: structuredClone(LIVE_GRAPH), error: undefined })
+      }
+      if (url.includes('/pipelines/{pipeline_id}')) {
+        return Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline' }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+    await error.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="pipeline-editor-version-chip-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="pipeline-editor-version-chip"]').text()).toBe('v9')
+    wrapper.unmount()
+  })
+
+  it('ignores a stale in-flight version-chip response (FAR-1895, finding E)', async () => {
+    const wrapper = await mountEditor()
+    const vm = wrapper.vm as any
+    // The mount load already resolved the chip once (v9). Now a slow first
+    // filtered request and a fast second one race: the stale (older) result
+    // must NOT overwrite the newer one.
+    let resolveStale: (value: unknown) => void = () => {}
+    let filteredCalls = 0
+    apiGetMock.mockImplementation((url: string, init?: any) => {
+      if (url.endsWith('/snapshots')) {
+        if (isVersionChipQuery(init)) {
+          filteredCalls += 1
+          if (filteredCalls === 1) {
+            return new Promise((resolve) => { resolveStale = resolve })
+          }
+          return Promise.resolve({
+            data: {
+              items: [{ id: 'snap-newer', snapshot_version: 12, created_kind: 'edit', draft: false, tag: null }],
+            },
+            error: undefined,
+          })
+        }
+        return Promise.resolve(serveSnapshotPage(SNAPSHOT_LIST, init))
+      }
+      if (url.includes('/pipelines/{pipeline_id}/graph')) {
+        return Promise.resolve({ data: structuredClone(LIVE_GRAPH), error: undefined })
+      }
+      if (url.includes('/pipelines/{pipeline_id}')) {
+        return Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline' }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+
+    const first = vm.loadCurrentVersionSnapshot()
+    const second = vm.loadCurrentVersionSnapshot()
+    await flushPromises()
+    // The stale (first) request resolves LAST with an OLDER version.
+    resolveStale({
+      data: { items: [{ id: 'snap-stale', snapshot_version: 4, created_kind: 'rollback', draft: false, tag: null }] },
+      error: undefined,
+    })
+    await first
+    await second
+    await flushPromises()
+
+    // The newer response wins; the stale one never overwrote it.
+    expect(wrapper.find('[data-testid="pipeline-editor-version-chip"]').text()).toBe('v12')
+    wrapper.unmount()
+  })
+
+  it('survives a version-0 placeholder without collapsing the chip (FAR-1895, finding F)', async () => {
+    // The client post-filters `snapshot_version > 0`, so a single-row page
+    // whose only row is the v0 placeholder would consume the candidate and
+    // hide the chip. The filtered request asks for >= 2 rows, so the real
+    // version below the placeholder still resolves.
+    //
+    // The unfiltered catalog deliberately carries NO version (only runs): the
+    // fallback therefore cannot rescue the chip, so this test FAILS if the
+    // filtered request asks for one row and the v0 placeholder consumes it.
+    seedRoute({})
+    seedApi()
+    const placeholder = {
+      id: 'snap-v0', snapshot_version: 0, tag: null, draft: false,
+      created_kind: 'edit', version_kind: 'edit', channel: 'none',
+    }
+    const real = {
+      id: 'snap-v5', snapshot_version: 5, tag: null, draft: false,
+      created_kind: 'rollback', version_kind: 'edit', channel: 'none',
+    }
+    const onlyRuns = [
+      { id: 'snap-run-2', snapshot_version: 2, tag: null, draft: false, created_kind: 'run', version_kind: 'run', channel: 'none' },
+      { id: 'snap-run-1', snapshot_version: 1, tag: null, draft: false, created_kind: 'run', version_kind: 'run', channel: 'none' },
+    ]
+    apiGetMock.mockImplementation((url: string, init?: any) => {
+      if (url.endsWith('/snapshots')) {
+        if (isVersionChipQuery(init)) {
+          const pageSize = init?.params?.query?.page_size ?? 20
+          return Promise.resolve({ data: { items: [placeholder, real].slice(0, pageSize) }, error: undefined })
+        }
+        return Promise.resolve({ data: { items: onlyRuns }, error: undefined })
+      }
+      if (url.includes('/pipelines/{pipeline_id}/graph')) {
+        return Promise.resolve({ data: structuredClone(LIVE_GRAPH), error: undefined })
+      }
+      if (url.includes('/pipelines/{pipeline_id}')) {
+        return Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline' }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.currentTier = 'team'
+    const wrapper = mount(PipelineEditorView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: { VueFlow: { template: '<div><slot /></div>' }, Background: true, Controls: true },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    // Resolved through the FILTERED query: the run-only catalog cannot
+    // supply a version, so the >= 2-row request is what survives the v0
+    // placeholder's post-filter.
+    const chip = wrapper.find('[data-testid="pipeline-editor-version-chip"]')
+    expect(chip.exists()).toBe(true)
+    expect(chip.text()).toBe('v5')
     wrapper.unmount()
   })
 

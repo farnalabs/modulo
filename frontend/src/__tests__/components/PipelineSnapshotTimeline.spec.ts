@@ -79,20 +79,28 @@ function twoSubstantive(): TimelineSnapshot[] {
   ]
 }
 
-function mountTimeline(items: TimelineSnapshot[] | null, rejects = false) {
+function mountTimeline(
+  items: TimelineSnapshot[] | null,
+  rejects = false,
+  currentVersion: TimelineSnapshot | null = null,
+) {
   if (rejects) {
     apiGet.mockRejectedValue(new Error('network down'))
   } else {
     apiGet.mockResolvedValue({ data: { items }, error: undefined })
   }
   return mount(PipelineSnapshotTimeline, {
-    props: { pipelineId: 'pipe-1' },
+    props: { pipelineId: 'pipe-1', currentVersion },
     global: { stubs: { Select: SelectStub } },
   })
 }
 
-async function flushMount(items: TimelineSnapshot[] | null, rejects = false) {
-  const wrapper = mountTimeline(items, rejects)
+async function flushMount(
+  items: TimelineSnapshot[] | null,
+  rejects = false,
+  currentVersion: TimelineSnapshot | null = null,
+) {
+  const wrapper = mountTimeline(items, rejects, currentVersion)
   await flushPromises()
   return wrapper
 }
@@ -199,21 +207,64 @@ describe('PipelineSnapshotTimeline', () => {
     expect(wrapper.emitted('view')).toEqual([['snap-3']])
   })
 
-  it('renders a legacy pipeline under a single initial anchor with no synthetic versions (FAR-1817)', async () => {
-    // Every snapshot is a run snapshot: no edit boundary exists to reconstruct.
+  it('renders a load all-run window as an explicit no-version state, never a fabricated initial anchor (FAR-1895)', async () => {
+    // Every snapshot in the loaded window is a run snapshot. FAR-1895: the
+    // panel must NOT promote the oldest run to an `initial` version — that is
+    // exactly how it could show "v1 Initial" for a run while the chip shows the
+    // real version. With no resolved current version to anchor on, it states
+    // the gap and surfaces the runs unattributed.
     const legacy = [
       makeSnapshot({ id: 'snap-3', snapshot_version: 3, created_kind: 'run', version_kind: 'run', tag: null }),
       makeSnapshot({ id: 'snap-2', snapshot_version: 2, created_kind: 'run', version_kind: 'run', tag: null }),
       makeSnapshot({ id: 'snap-1', snapshot_version: 1, created_kind: 'run', version_kind: 'run', tag: null }),
     ]
     const wrapper = await flushMount(legacy)
-    // Exactly one primary row — the oldest snapshot promoted to the initial anchor.
+    expect(wrapper.find('[data-testid="snapshot-timeline-no-version-in-window"]').exists()).toBe(true)
+    // No fabricated version row at all.
+    expect(wrapper.findAll('[data-testid^="snapshot-timeline-row-"]')).toHaveLength(0)
+    expect(rowFor(wrapper, 'snap-1').exists()).toBe(false)
+    // ...but the runs are still reachable, unattributed.
+    expect(wrapper.find('[data-testid="snapshot-timeline-earlier-toggle"]').text()).toBe('ran 3x on earlier versions')
+  })
+
+  it('anchors on the resolved current version when the loaded window has no substantive row (FAR-1895)', async () => {
+    // The window is all runs (a run streak longer than the page). The host
+    // hands down the version it resolved with its starvation-proof query; the
+    // panel uses THAT as the anchor and attributes the runs to it, so its
+    // current version matches the chip's.
+    const runs = [
+      makeSnapshot({ id: 'snap-3', snapshot_version: 3, created_kind: 'run', version_kind: 'run', tag: null }),
+      makeSnapshot({ id: 'snap-2', snapshot_version: 2, created_kind: 'run', version_kind: 'run', tag: null }),
+      makeSnapshot({ id: 'snap-1', snapshot_version: 1, created_kind: 'run', version_kind: 'run', tag: null }),
+    ]
+    const current = makeSnapshot({ id: 'snap-v2', snapshot_version: 2, created_kind: 'edit', version_kind: 'edit', tag: null })
+    const wrapper = await flushMount(runs, false, current)
+    expect(wrapper.find('[data-testid="snapshot-timeline-no-version-in-window"]').exists()).toBe(false)
+    const rows = wrapper.findAll('[data-testid^="snapshot-timeline-row-"]')
+    expect(rows).toHaveLength(1)
+    // The anchor is the RESOLVED version, with its real kind (not `initial`).
+    expect(rowFor(wrapper, 'snap-v2').exists()).toBe(true)
+    expect(rowFor(wrapper, 'snap-v2').text()).toContain('edit')
+    // Every run in the window executed it, so all three are attributed.
+    expect(toggleFor(wrapper, 'snap-v2').text()).toBe('ran 3x')
+  })
+
+  it('never renders a draft auto-save as a version row (FAR-1895)', async () => {
+    // A draft (`draft: true`, created_kind='edit') is an in-progress autosave,
+    // not a version. The request excludes drafts server-side; the component
+    // drops any that still arrive so it can never be a row (nor be mistaken
+    // for a run annotation and attributed to a version it did not execute).
+    const withDraft = [
+      makeSnapshot({ id: 'snap-draft', snapshot_version: 10, created_kind: 'edit', draft: true, tag: null }),
+      makeSnapshot({ id: 'snap-run', snapshot_version: 7, created_kind: 'run', version_kind: 'run', draft: false, tag: null }),
+      makeSnapshot({ id: 'snap-edit', snapshot_version: 6, created_kind: 'edit', draft: false, tag: null }),
+    ]
+    const wrapper = await flushMount(withDraft)
+    expect(rowFor(wrapper, 'snap-draft').exists()).toBe(false)
+    expect(rowFor(wrapper, 'snap-edit').exists()).toBe(true)
+    // The run is attributed to the committed edit, not to the draft.
+    expect(toggleFor(wrapper, 'snap-edit').text()).toBe('ran 1x')
     expect(wrapper.findAll('[data-testid^="snapshot-timeline-row-"]')).toHaveLength(1)
-    expect(rowFor(wrapper, 'snap-1').exists()).toBe(true)
-    expect(rowFor(wrapper, 'snap-2').exists()).toBe(false)
-    expect(rowFor(wrapper, 'snap-3').exists()).toBe(false)
-    expect(rowFor(wrapper, 'snap-1').text()).toContain('initial')
-    expect(toggleFor(wrapper, 'snap-1').text()).toBe('ran 2x')
   })
 
   it('buckets runs older than every substantive version as "earlier versions", never attributing them to the oldest row (M2)', async () => {

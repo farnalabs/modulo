@@ -1592,6 +1592,52 @@ def test_list_snapshots_rejects_an_unknown_created_kind(client: tuple[TestClient
     assert resp.status_code == 422, resp.text
 
 
+def test_list_snapshots_forwards_exclude_drafts(client: tuple[TestClient, AsyncMock]) -> None:
+    """FAR-1895: the optional draft exclusion reaches the CRUD query.
+
+    A draft auto-save carries ``created_kind='edit'`` and a real version, so
+    the version filter alone would label it the current version. The chip sends
+    ``exclude_drafts=true``; if the route dropped the parameter the chip could
+    show an uncommitted autosave.
+    """
+    http, _session = client
+    list_mock = AsyncMock(return_value=([_make_snapshot()], 1))
+    with (
+        patch(f"{_PREFIX}get_pipeline", new=AsyncMock(return_value=_make_pipeline())),
+        patch(f"{_PREFIX}list_snapshots", new=list_mock),
+    ):
+        _rls_started = _start_rls()
+        try:
+            resp = http.get(
+                f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots",
+                params=[("page_size", "2"), ("exclude_created_kind", "run"), ("exclude_drafts", "true")],
+            )
+        finally:
+            _stop_all(_rls_started)
+
+    assert resp.status_code == 200, resp.text
+    assert list_mock.await_args.kwargs["exclude_drafts"] is True
+    assert list_mock.await_args.kwargs["exclude_created_kinds"] == ["run"]
+
+
+def test_list_snapshots_defaults_exclude_drafts_off(client: tuple[TestClient, AsyncMock]) -> None:
+    """Existing callers are unaffected: the draft filter defaults to False."""
+    http, _session = client
+    list_mock = AsyncMock(return_value=([_make_snapshot()], 1))
+    with (
+        patch(f"{_PREFIX}get_pipeline", new=AsyncMock(return_value=_make_pipeline())),
+        patch(f"{_PREFIX}list_snapshots", new=list_mock),
+    ):
+        _rls_started = _start_rls()
+        try:
+            resp = http.get(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots")
+        finally:
+            _stop_all(_rls_started)
+
+    assert resp.status_code == 200, resp.text
+    assert list_mock.await_args.kwargs["exclude_drafts"] is False
+
+
 def test_list_snapshots_exposes_environment_profile_id(client: tuple[TestClient, AsyncMock]) -> None:
     """FAR-1599: a snapshot's frozen environment-profile binding is readable
     through the list route (the field was settable but never surfaced)."""

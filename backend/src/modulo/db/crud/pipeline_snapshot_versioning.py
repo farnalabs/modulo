@@ -129,6 +129,7 @@ async def list_snapshots(
     page_size: int = 20,
     *,
     exclude_created_kinds: Iterable[str] | None = None,
+    exclude_drafts: bool = False,
 ) -> tuple[list[PipelineSnapshot], int]:
     """List snapshots for a pipeline ordered by version descending.
 
@@ -146,6 +147,13 @@ async def list_snapshots(
     substantive (including any future kind), so an inclusion list would be a
     second copy of the vocabulary that could silently hide a real version.
     Pass ``None``/empty for the unfiltered behaviour existing callers rely on.
+
+    ``exclude_drafts`` additionally drops in-progress editor auto-saves
+    (``draft IS true``). A draft carries ``created_kind='edit'`` and a real
+    ``snapshot_version``, so without this predicate the newest "substantive"
+    row can be an autosave that was never committed — the same class of false
+    "current version" the created-kind filter removes. Mirrors the sibling
+    ``resolve_snapshot_for_channel`` predicate (``draft.is_(False)``).
     """
     offset = (page - 1) * page_size
     excluded = tuple(exclude_created_kinds or ())
@@ -155,6 +163,8 @@ async def list_snapshots(
     ]
     if excluded:
         filters.append(PipelineSnapshot.created_kind.not_in(excluded))
+    if exclude_drafts:
+        filters.append(PipelineSnapshot.draft.is_(False))
     result = await session.execute(
         select(PipelineSnapshot)
         .join(Pipeline, PipelineSnapshot.pipeline_id == Pipeline.id)

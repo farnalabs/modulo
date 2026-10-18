@@ -196,3 +196,103 @@ async def test_empty_exclusion_keeps_the_unfiltered_history(
 
     assert total == 4
     assert [row.created_kind for row in snapshots] == ["run", "run", "run", "edit"]
+
+
+async def test_explicit_empty_exclusion_is_identical_to_omitted(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """`exclude_created_kinds=[]` and `None` must be the same query (H).
+
+    Both mean "exclude nothing" — the route omits the parameter for every
+    existing caller, but the CRUD is also callable with an explicit empty list
+    and must not silently become a filter (an empty `not_in(())` would be a
+    no-op in SQLAlchemy, but the branch is explicit here for the same reason).
+    """
+    pipeline_id = await _seed(session_maker, run_count=3, substantive_versions=[1])
+
+    async with session_maker() as session:
+        omitted, omitted_total = await list_snapshots(session, pipeline_id, page=1, page_size=100)
+        explicit, explicit_total = await list_snapshots(
+            session, pipeline_id, page=1, page_size=100, exclude_created_kinds=[]
+        )
+
+    assert explicit_total == omitted_total
+    assert [(row.id, row.created_kind) for row in explicit] == [(row.id, row.created_kind) for row in omitted]
+
+
+async def test_exclude_drafts_keeps_an_autosave_from_becoming_the_current_version(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A newer DRAFT edit must not outrank the last COMMITTED version (D).
+
+    Drafts are written with ``created_kind='edit'`` and a real version, so the
+    version filter alone returns the autosave. ``exclude_drafts`` drops it and
+    resolves the committed version below it — the same predicate the sibling
+    ``resolve_snapshot_for_channel`` applies (``draft.is_(False)``).
+    """
+    pipeline_id = await _seed(session_maker, run_count=2, substantive_versions=[1, 2])
+    draft_id = uuid.uuid4()
+    # _seed places 2 runs at v4/v3 and the edits at v2/v1; the draft is newest.
+    async with session_maker() as session, session.begin():
+        session.add(
+            PipelineSnapshot(
+                id=draft_id,
+                organisation_id=await _pipeline_org(session, pipeline_id),
+                pipeline_id=pipeline_id,
+                snapshot_version=5,
+                graph_json={"nodes": [], "edges": []},
+                connector_bindings_json=[],
+                schema_pins_json=[],
+                prompt_pins_json=[],
+                model_backend_pins_json=[],
+                config_json={},
+                run_context_defaults={},
+                version_kind="edit",
+                created_kind="edit",
+                draft=True,
+                channel="none",
+                created_at=datetime(2026, 2, 1, tzinfo=UTC),
+            )
+        )
+
+    async with session_maker() as session:
+        with_draft, _ = await list_snapshots(
+            session, pipeline_id, page=1, page_size=2, exclude_created_kinds=_EXCLUDE_RUN
+        )
+        without_draft, _ = await list_snapshots(
+            session, pipeline_id, page=1, page_size=2, exclude_created_kinds=_EXCLUDE_RUN, exclude_drafts=True
+        )
+
+    # The draft IS the newest non-run row when drafts are not excluded.
+    assert with_draft[0].id == draft_id
+    assert with_draft[0].draft is True
+    # With drafts excluded, the newest committed version resolves instead.
+    assert without_draft[0].snapshot_version == 2
+    assert without_draft[0].draft is False
+
+
+async def _pipeline_org(session: AsyncSession, pipeline_id: uuid.UUID) -> uuid.UUID:
+    from sqlalchemy import select as _select
+
+    result = await session.execute(_select(Pipeline.organisation_id).where(Pipeline.id == pipeline_id))
+    return result.scalar_one()
+
+
+def test_created_kind_is_non_nullable_so_the_filter_never_sees_null() -> None:
+    """H: the NULL-``created_kind`` case is unreachable, pinned to the model.
+
+    Under three-valued logic ``created_kind <> 'run'`` evaluates to NULL for a
+    NULL value, so a NULL row would be EXCLUDED from the page rather than
+    treated as a version. The CHECK vocabulary only closes the value set — it is
+    the NOT NULL column that makes the predicate's NULL arm unreachable. This
+    test pins that: if the column were ever made nullable, the filter's meaning
+    would change silently, and this assertion fails instead.
+    """
+    from sqlalchemy import CheckConstraint
+
+    column = PipelineSnapshot.__table__.c.created_kind
+    assert column.nullable is False
+    assert column.server_default is not None
+    assert str(column.server_default.arg) == "run"
+    check_names = {c.name for c in PipelineSnapshot.__table__.constraints if isinstance(c, CheckConstraint)}
+    assert "ck_pipeline_snapshots_created_kind" in check_names
