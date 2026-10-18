@@ -981,7 +981,7 @@ def test_build_candidates_skips_an_invalid_pipeline_id() -> None:
         pending_by_pipeline=[{"pipeline_id": "not-a-uuid", "pending_count": 5, "oldest_pending_age_seconds": 0.0}],
         pending_total=5,
     )
-    assert ca.build_candidates(report, bound_since=None, now=_NOW) == {}
+    assert not ca.build_candidates(report, bound_since=None, now=_NOW)
 
 
 def test_org_from_open_key_parses_and_rejects_invalid_keys() -> None:
