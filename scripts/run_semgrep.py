@@ -287,6 +287,31 @@ def _get_changed_py_files() -> tuple[list[str], str | None]:
     return sorted(files), git_error
 
 
+def _report_scan_result(result: subprocess.CompletedProcess[str], json_path: str) -> int:
+    """Print semgrep's captured output and return its exit code, failing closed on an incomplete scan.
+
+    Semgrep exits 0 when a per-rule match times out on a file, silently skipping
+    it, so the raw exit code is not evidence of a complete scan. The captured
+    stdout/stderr is printed for the developer, then the incomplete-scan detector
+    runs over both streams (JSON primary, anchored text net) and returns non-zero
+    when it fires — the silent-decay hole FAR-1859 exists to close. Shared by the
+    completed-scan paths of ``_run_windows`` and ``main``.
+    """
+    if result.stdout:
+        print(result.stdout, end="")
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
+    if _semgrep_scan_incomplete((result.stdout or "") + (result.stderr or ""), json_path):
+        print(
+            _SEMGREP_INCOMPLETE.format(
+                reason="semgrep reported a per-rule timeout and skipped one or more files (FAR-1859)"
+            ),
+            file=sys.stderr,
+        )
+        return 1
+    return result.returncode
+
+
 def _run_windows() -> int:
     """Run semgrep on changed files only (scoped, no baseline)."""
     changed, git_error = _get_changed_py_files()
@@ -359,22 +384,9 @@ def _run_windows() -> int:
                     file=sys.stderr,
                 )
                 return 0
-            # Semgrep ran successfully — print its output and propagate its exit code.
-            if result.stdout:
-                print(result.stdout, end="")
-            if result.stderr:
-                print(result.stderr, end="", file=sys.stderr)
-            # A per-rule timeout silently skips a file but exits 0. Treat that as
-            # a FAILURE (incomplete scan), never a pass.
-            if _semgrep_scan_incomplete((result.stdout or "") + (result.stderr or ""), json_path):
-                print(
-                    _SEMGREP_INCOMPLETE.format(
-                        reason="semgrep reported a per-rule timeout and skipped one or more files (FAR-1859)"
-                    ),
-                    file=sys.stderr,
-                )
-                return 1
-            return result.returncode
+            # Semgrep ran successfully — print its output, fail closed on an
+            # incomplete scan, and propagate its exit code.
+            return _report_scan_result(result, json_path)
     except subprocess.TimeoutExpired as exc:
         # The wall-clock kill fired. ``subprocess.run`` captures whatever the
         # killed process emitted before the kill into ``exc.stdout``/``exc.stderr``
@@ -468,22 +480,10 @@ def main() -> int:
             _BACKEND_SRC,
         ]
         result = subprocess.run(cmd, env=env, check=False, capture_output=True, text=True)
-        if result.stdout:
-            print(result.stdout, end="")
-        if result.stderr:
-            print(result.stderr, end="", file=sys.stderr)
-        # A per-rule timeout silently skips a file but exits 0. Treat that as a
-        # FAILURE (incomplete scan), never a pass. This is not a tool error, so
-        # it is deliberately not covered by any fail-open branch.
-        if _semgrep_scan_incomplete((result.stdout or "") + (result.stderr or ""), json_path):
-            print(
-                _SEMGREP_INCOMPLETE.format(
-                    reason="semgrep reported a per-rule timeout and skipped one or more files (FAR-1859)"
-                ),
-                file=sys.stderr,
-            )
-            return 1
-        return result.returncode
+        # Print the output, fail closed on an incomplete scan (never a pass — not
+        # a tool error, so deliberately not covered by any fail-open branch), and
+        # propagate semgrep's exit code.
+        return _report_scan_result(result, json_path)
 
 
 if __name__ == "__main__":
