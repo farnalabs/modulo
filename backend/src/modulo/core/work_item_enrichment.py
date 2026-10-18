@@ -129,22 +129,10 @@ def derive_pr_targets(
     seen: set[str] = set()
     targets: list[tuple[str, str, int]] = []
     for entry in work_item_refs:
-        if not isinstance(entry, dict):
+        resolved = _resolve_entry_target(entry, full_name, payload_number_str)
+        if resolved is None:
             continue
-        if _normalize_kind(entry.get("kind")) not in _GITHUB_PR_KINDS:
-            continue
-        ref = str(entry.get("ref") or "").strip()
-        match = _PR_REF_RE.match(ref)
-        if match:
-            repo, number_str = match.group(1), match.group(2)
-        elif ref.isdigit() and full_name:
-            if payload_number_str and payload_number_str != ref:
-                continue  # mismatched payload PR — the view links nothing either
-            repo, number_str = full_name, ref
-        elif full_name and payload_number_str:
-            repo, number_str = full_name, payload_number_str
-        else:
-            continue
+        repo, number_str = resolved
         key = f"{repo}#{number_str}"
         if key in seen:
             continue
@@ -153,6 +141,36 @@ def derive_pr_targets(
         if len(targets) >= _MAX_PR_TARGETS:
             break
     return targets
+
+
+def _resolve_entry_target(entry: Any, full_name: str, payload_number_str: str) -> tuple[str, str] | None:
+    """Canonical ``(repo, number_str)`` for one work-item ref, or ``None``."""
+    if not isinstance(entry, dict):
+        return None
+    if _normalize_kind(entry.get("kind")) not in _GITHUB_PR_KINDS:
+        return None
+    return _resolve_pr_ref(str(entry.get("ref") or "").strip(), full_name, payload_number_str)
+
+
+def _resolve_pr_ref(ref: str, full_name: str, payload_number_str: str) -> tuple[str, str] | None:
+    """Resolve one ref string to ``(repo, number_str)``, or ``None``.
+
+    * ``owner/repo#N`` ref → that PR, payload-independent;
+    * bare-digit ref → the payload repo, but only when the payload number is
+      absent or EQUALS the ref (a mismatch fabricates nothing — same rule as
+      the view's link/title guard);
+    * otherwise → the payload's PR (covers non-numeric/empty refs).
+    """
+    match = _PR_REF_RE.match(ref)
+    if match:
+        return match.group(1), match.group(2)
+    if ref.isdigit() and full_name:
+        if payload_number_str and payload_number_str != ref:
+            return None  # mismatched payload PR — the view links nothing either
+        return full_name, ref
+    if full_name and payload_number_str:
+        return full_name, payload_number_str
+    return None
 
 
 def _remember(org_key: str, key: str, item: dict[str, Any] | None) -> None:
@@ -196,56 +214,83 @@ async def _fetch_pending(
         github_instances = [ci for ci in page.items if ci.connector_type_id == ConnectorType.GITHUB.value]
     except Exception:
         _log.warning("work_item_enrichment.connector_list_failed", exc_info=True)
-        for key, _repo, _number in pending:
-            _remember(org_key, key, None)
+        _remember_all(org_key, pending)
         return
     if not github_instances:
         # No GitHub connector for this org — negative-cache so a hot view
         # does not re-query the DB row set on every page view either.
-        for key, _repo, _number in pending:
-            _remember(org_key, key, None)
+        _remember_all(org_key, pending)
         return
 
     secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
     try:
         async with ConnectorHub(secrets_backend=secrets_backend, org_id=str(org_id)) as hub:
-            try:
-                async with session.begin():
-                    await set_rls_org(session, org_id)
-                    await hub.initialise(github_instances)
-            except ConnectorDecryptError:
-                _log.warning("work_item_enrichment.decrypt_failed", exc_info=True)
-                for key, _repo, _number in pending:
-                    _remember(org_key, key, None)
+            if not await _initialise_hub(hub, session, org_id, github_instances):
+                _remember_all(org_key, pending)
                 return
 
             for key, repo, number in pending:
-                item: dict[str, Any] | None = None
-                for ci in github_instances:
-                    try:
-                        records = await hub.sample(ci.id, "pull", {"repo": repo, "pull_number": str(number)})
-                        if records and isinstance(records[0], dict):
-                            item = _to_item(key, repo, number, records[0])
-                            break
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception:
-                        _log.warning(
-                            "work_item_enrichment.pull_lookup_failed repo=%s number=%s connector=%s",
-                            repo,
-                            number,
-                            ci.id,
-                            exc_info=True,
-                        )
-                _remember(org_key, key, item)
+                _remember(org_key, key, await _probe_pull(hub, github_instances, key, repo, number))
     except asyncio.CancelledError:
         raise
     except Exception:
         # Hub construction / teardown / shared-budget failures: degrade the
         # whole batch to "not enrichable" — never raise into the route.
         _log.warning("work_item_enrichment.hub_failed", exc_info=True)
-        for key, _repo, _number in pending:
-            _remember(org_key, key, None)
+        _remember_all(org_key, pending)
+
+
+def _remember_all(org_key: str, pending: list[tuple[str, str, int]]) -> None:
+    """Negative-cache every pending key (the ``None`` sentinel) for one TTL."""
+    for key, _repo, _number in pending:
+        _remember(org_key, key, None)
+
+
+async def _initialise_hub(
+    hub: ConnectorHub,
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    github_instances: list[Any],
+) -> bool:
+    """Set RLS + initialise the hub; ``False`` on a decrypt failure.
+
+    A ``ConnectorDecryptError`` degrades the whole batch to not-enrichable
+    (negative-cached by the caller) rather than raising into the route.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            await hub.initialise(github_instances)
+    except ConnectorDecryptError:
+        _log.warning("work_item_enrichment.decrypt_failed", exc_info=True)
+        return False
+    return True
+
+
+async def _probe_pull(
+    hub: ConnectorHub,
+    github_instances: list[Any],
+    key: str,
+    repo: str,
+    number: int,
+) -> dict[str, Any] | None:
+    """The first connector that returns a PR record for the target, else ``None``."""
+    for ci in github_instances:
+        try:
+            records = await hub.sample(ci.id, "pull", {"repo": repo, "pull_number": str(number)})
+            if records and isinstance(records[0], dict):
+                return _to_item(key, repo, number, records[0])
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "work_item_enrichment.pull_lookup_failed repo=%s number=%s connector=%s",
+                repo,
+                number,
+                ci.id,
+                exc_info=True,
+            )
+    return None
 
 
 async def enrich_pr_targets(
