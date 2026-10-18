@@ -409,6 +409,12 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
     expect(help.exists()).toBe(true)
     expect(help.text()).toContain('Bring your own agent image')
     expect(help.text()).toContain('agent commands')
+    // FAR-1779 F2: E2B template selection lives on the pipeline node, NOT on
+    // the profile — the helper must not tell an operator their profile's
+    // image_ref is an E2B template ID.
+    expect(help.text()).toContain('E2B template selection is set on each sandbox_agent node')
+    expect(help.text()).toContain('not on this profile')
+    expect(help.text()).not.toContain('use it as the template ID')
   })
 
   it('acknowledges a digest-pinned ref and shows no mutable-tag warning', async () => {
@@ -419,6 +425,7 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
     const pinned = wrapper.find('[data-testid="envprofile-form-image-pinned"]')
     expect(pinned.exists()).toBe(true)
     expect(pinned.attributes('role')).toBe('status')
+    expect(pinned.text()).toContain('Pinned by digest')
     expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(false)
   })
 
@@ -438,15 +445,54 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
     ['uppercase repository', `GHCR.io/acme/agent@sha256:${'a'.repeat(64)}`],
     ['uppercase namespace segment', `ghcr.io/ACME/agent@sha256:${'a'.repeat(64)}`],
     ['embedded space', `ghcr.io/acme/agent @sha256:${'a'.repeat(64)}`],
-  ])('does not report a ref with a %s as pinned', async (_label, ref) => {
-    // FAR-1779 F1: Docker/containerd reject these, so classifying them as
-    // pinned would assert immutability the runtime would refuse to honour.
+  ])('reports a ref with a %s as invalid, never pinned or mutable', async (_label, ref) => {
+    // FAR-1779 F1/F3: Docker/containerd reject these, so classifying them as
+    // pinned would assert immutability the runtime would refuse to honour — and
+    // calling them a mutable tag would advise "pin it by digest", which is
+    // exactly what the operator already tried. They get the invalid state and
+    // its accurate copy.
     const wrapper = await mountWithProvider('runner_docker')
     await wrapper.find('[data-testid="envprofile-form-image"]').setValue(ref)
     await nextTick()
 
     expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(false)
+    const invalid = wrapper.find('[data-testid="envprofile-form-image-invalid"]')
+    expect(invalid.exists()).toBe(true)
+    expect(invalid.attributes('role')).toBe('status')
+    expect(invalid.text()).toContain('not a valid image reference')
+  })
+
+  it.each([
+    ['double-hyphen repository', `ghcr.io/acme/my--repo@sha256:${'a'.repeat(64)}`],
+    ['double-underscore repository', `ghcr.io/acme/my__repo@sha256:${'a'.repeat(64)}`],
+    ['registry host containing a double hyphen', `my--registry.io/acme/agent@sha256:${'a'.repeat(64)}`],
+  ])('acknowledges a valid ref with a %s as pinned', async (_label, ref) => {
+    // FAR-1779 F3: Docker's path grammar allows one-or-two [._-] separators
+    // inside a component, so these are valid names and must not be mislabelled
+    // invalid (or mutable).
+    const wrapper = await mountWithProvider('runner_docker')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(ref)
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="envprofile-form-image-invalid"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(false)
+  })
+
+  it('reports the release placeholder digest as unresolvable, never pinned', async () => {
+    // FAR-1779 C1: the release placeholder is syntactically a valid digest but
+    // no registry image exists behind it, so the green "pinned / immutable"
+    // assurance would be a lie. It gets its own unresolvable state.
+    const wrapper = await mountWithProvider('runner_docker')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(`modulo-runner:opencode@sha256:${'0'.repeat(64)}`)
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(false)
+    const placeholder = wrapper.find('[data-testid="envprofile-form-image-placeholder"]')
+    expect(placeholder.exists()).toBe(true)
+    expect(placeholder.attributes('role')).toBe('status')
+    expect(placeholder.text()).toContain('cannot be pulled')
   })
 
   it('does not digest-classify a local_docker profile because dispatch refuses the provider', async () => {
@@ -471,7 +517,9 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
     const warning = wrapper.find('[data-testid="envprofile-form-image-tag-warning"]')
     expect(warning.exists()).toBe(true)
     expect(warning.attributes('role')).toBe('status')
+    expect(warning.text()).toContain('pin the image by digest')
     expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="envprofile-form-image-invalid"]').exists()).toBe(false)
 
     await wrapper.find('form').trigger('submit')
     await flush()

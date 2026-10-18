@@ -48,9 +48,9 @@ def template_drift_status(profile_row: Any) -> dict[str, Any]:
     the drift logic has ONE implementation shared with the crud apply
     helper — the core module owns the LIVE profile-row access.
     """
+    # image_ref is operator-owned (ADR 059), so it is not a drift input.
     return template_drift_fields(
         provider_type=getattr(profile_row, "provider_type", None),
-        image_ref=getattr(profile_row, "image_ref", None),
         network_policy=getattr(profile_row, "network_policy", None),
         persistence_policy=getattr(profile_row, "persistence_policy", None),
         config_json=getattr(profile_row, "config_json", None),

@@ -85,7 +85,16 @@
           {{ $t('views.EnvironmentProfileForm.image_reference_help') }}
         </p>
         <!-- Digest pinning is advice, never enforcement (ADR 059 §4): a pinned
-             ref is visibly acknowledged, a mutable tag warns without blocking. -->
+             ref is visibly acknowledged, a mutable tag warns without blocking.
+             The digest state is a single mutually-exclusive region. The release
+             placeholder digest is syntactically a valid digest but no registry
+             image exists behind it, so it must NEVER render the green pinned
+             assurance (`placeholder`). A non-empty ref that is not a valid
+             Docker reference (uppercase repository/hex, embedded whitespace, a
+             malformed digest) is NOT a mutable tag — telling the operator to
+             "pin it by digest" would tell them to do what they already tried —
+             so it gets its own `invalid` copy. Only a valid, non-digest ref
+             reaches the mutable-tag warning. -->
         <p
           v-if="imageRefState === 'pinned'"
           id="envprofile-form-image-state"
@@ -95,6 +104,26 @@
         >
           <ShieldCheck :size="14" aria-hidden="true" />
           {{ $t('views.EnvironmentProfileForm.image_digest_pinned') }}
+        </p>
+        <p
+          v-else-if="imageRefState === 'placeholder'"
+          id="envprofile-form-image-state"
+          role="status"
+          class="mt-1 flex items-center gap-1 text-xs text-warning-text"
+          data-testid="envprofile-form-image-placeholder"
+        >
+          <AlertTriangle :size="14" aria-hidden="true" />
+          {{ $t('views.EnvironmentProfileForm.image_placeholder_unresolvable') }}
+        </p>
+        <p
+          v-else-if="imageRefState === 'invalid'"
+          id="envprofile-form-image-state"
+          role="status"
+          class="mt-1 flex items-center gap-1 text-xs text-destructive"
+          data-testid="envprofile-form-image-invalid"
+        >
+          <AlertTriangle :size="14" aria-hidden="true" />
+          {{ $t('views.EnvironmentProfileForm.image_invalid_reference') }}
         </p>
         <p
           v-else-if="imageRefState === 'mutable'"
@@ -276,29 +305,56 @@ const providerTypeOptions = computed(() => [
 
 // FAR-1779 / ADR 059 §4: digest pinning is docs-advised, never enforced. A
 // `name[@tag]@sha256:<64 lowercase hex>` ref is immutable and visibly
-// acknowledged; any other ref (a mutable tag, or no tag at all — an implicit
-// `:latest`) warns without blocking the save. The whole reference is
-// validated, not just its digest suffix: Docker/containerd reject an uppercase
-// repository, uppercase digest hex and an embedded space, so a ref that merely
-// ENDS in `@sha256:<hex>` must never be announced as pinned. An invalid ref is
-// reported as mutable (the warning) rather than pinned. The tag stays
-// mixed-case (Docker allows it), and an optional registry port and a
-// multi-level namespace are supported.
+// acknowledged; a valid ref that is not digest-pinned (a mutable tag, or no
+// tag at all — an implicit `:latest`) warns without blocking the save; and a
+// ref that is NOT a valid Docker reference is reported as `invalid` with its
+// own accurate copy — never as a mutable tag, which would tell the operator to
+// "pin it" when their ref cannot even be pulled.
+//
+// The reference grammar is Docker's real rule: each path component is
+// `[a-z0-9]+` with single-or-double `[._-]` separators inside it (so
+// `my--repo` and `my__repo` are valid, not mislabelled invalid), plus an
+// optional registry port on the first component, an optional mixed-case tag,
+// and an optional `@sha256:<64 lowercase hex>` digest. No whitespace anywhere.
+// The whole reference is validated, not just its digest suffix: Docker /
+// containerd reject an uppercase repository, uppercase digest hex and an
+// embedded space, so a ref that merely ENDS in `@sha256:<hex>` must never be
+// announced as pinned.
 //
 // The classification applies only where image_ref is dispatched as a container
 // image — the Runner (runner_docker) and Kubernetes providers. E2B is excluded
-// (its image_ref is a template ID) and so is local_docker, which dispatch
+// (its image_ref is not dispatched) and so is local_docker, which dispatch
 // refuses outright (`runner_dispatch.py` raises SandboxDispatchUnboundError),
-// so claiming it runs a container image would be false.
-const DIGEST_REF_RE =
-  /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?@sha256:[0-9a-f]{64}$/
+// so claiming it runs a container image would be false. Those providers get the
+// unclassified `null` state.
+const IMAGE_COMPONENT = '[a-z0-9]+(?:[._-]{1,2}[a-z0-9]+)*'
+const IMAGE_TAG = '[A-Za-z0-9_][A-Za-z0-9._-]{0,127}'
+const IMAGE_REF_RE = new RegExp(
+  `^${IMAGE_COMPONENT}(?::[0-9]+)?(?:/${IMAGE_COMPONENT})*(?::${IMAGE_TAG})?$`,
+)
+const DIGEST_REF_RE = new RegExp(
+  `^${IMAGE_COMPONENT}(?::[0-9]+)?(?:/${IMAGE_COMPONENT})*(?::${IMAGE_TAG})?@sha256:[0-9a-f]{64}$`,
+)
 const DIGEST_PINNABLE_PROVIDERS = ['runner_docker', 'kubernetes']
 
-const imageRefState = computed<'pinned' | 'mutable' | null>(() => {
+// The release-advanced placeholder digest: an all-zero sha256 that the seeded
+// Bundled Runner carries until the GHCR publish job lands the real pinned
+// digest. Mirrors the backend sentinel
+// (`modulo.db.bundled_runner_template.BUNDLED_RUNNER_PLACEHOLDER_DIGEST`) —
+// duplicated rather than imported because the frontend cannot import backend
+// Python. It is deliberately checked BEFORE the digest match: the placeholder
+// is syntactically a valid digest, so without this it would render the green
+// "pinned / immutable" assurance for an image that cannot be pulled at all.
+const PLACEHOLDER_DIGEST = `sha256:${'0'.repeat(64)}`
+
+const imageRefState = computed<'pinned' | 'mutable' | 'invalid' | 'placeholder' | null>(() => {
   if (!DIGEST_PINNABLE_PROVIDERS.includes(form.provider_type)) return null
   const ref = form.image_ref.trim()
   if (!ref) return null
-  return DIGEST_REF_RE.test(ref) ? 'pinned' : 'mutable'
+  if (ref.endsWith(PLACEHOLDER_DIGEST)) return 'placeholder'
+  if (DIGEST_REF_RE.test(ref)) return 'pinned'
+  if (IMAGE_REF_RE.test(ref)) return 'mutable'
+  return 'invalid'
 })
 
 // The image field always describes itself with the persistent helper; the

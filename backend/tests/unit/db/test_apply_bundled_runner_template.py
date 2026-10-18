@@ -2,7 +2,10 @@
 
 The apply refreshes ONLY the drifted template-owned fields; operator-owned
 fields (name, description, capabilities, secret refs, untouched config
-keys) must survive. Non-template rows are rejected (None).
+keys) must survive. Per ADR 059 the image reference is operator-owned on a
+BYO profile, so it is neither a drift key nor an apply target — an
+operator-set image_ref must survive the apply unchanged. Non-template rows
+are rejected (None).
 """
 
 import uuid
@@ -56,10 +59,14 @@ async def _apply(profile: Any) -> Any:
 
 class TestApplyBundledRunnerTemplate:
     @pytest.mark.asyncio
-    async def test_refreshes_drifted_template_fields(self) -> None:
+    async def test_refreshes_drifted_template_fields_preserving_operator_image(self) -> None:
+        # ADR 059: image_ref is operator-owned, so apply refreshes the shipped
+        # template WITHOUT resetting the operator's chosen image.
         profile = _make_profile()
+        operator_image_ref = profile.image_ref
+        assert operator_image_ref != BUNDLED_RUNNER_IMAGE_REF
         applied = await _apply(profile)
-        assert applied.image_ref == BUNDLED_RUNNER_IMAGE_REF
+        assert applied.image_ref == operator_image_ref
         assert applied.network_policy == TEMPLATE_OWNED_FIELDS["network_policy"]
         assert applied.persistence_policy == "ephemeral"
 

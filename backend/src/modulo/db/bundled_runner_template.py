@@ -21,6 +21,12 @@ Digest contract (ADR 029 / plan D4):
   lifecycle): a divergent row surfaces "shipped template updated - apply"
   on the Runners page. Operator-owned fields are surfaced, never silently
   re-applied.
+- ``image_ref`` is OPERATOR-owned on a BYO profile (ADR 059): a customer who
+  points a ``runner_docker`` profile at their own image must never be told the
+  shipped template has "drifted", and the apply action must never reset their
+  image back to the bundled placeholder. The template supplies the initial
+  ``image_ref`` at seed time only (via ``build_bundled_runner_profile_values``);
+  from then on the operator owns it.
 """
 
 from __future__ import annotations
@@ -78,9 +84,14 @@ TEMPLATE_CONFIG_JSON: dict[str, Any] = {
 }
 
 #: The complete shipped template of template-owned fields (drift source).
+#:
+#: ``image_ref`` is deliberately ABSENT: ADR 059 makes the image reference
+#: operator-owned on a BYO profile, so it is neither a drift key nor an
+#: apply target. The seed path supplies the initial value from
+#: ``build_bundled_runner_profile_values`` below; ``apply`` leaves whatever
+#: the operator set untouched.
 TEMPLATE_OWNED_FIELDS: dict[str, Any] = {
     "provider_type": BUNDLED_RUNNER_PROVIDER_TYPE,
-    "image_ref": BUNDLED_RUNNER_IMAGE_REF,
     "network_policy": "outbound",
     "persistence_policy": "ephemeral",
     "config_json": TEMPLATE_CONFIG_JSON,
@@ -110,7 +121,6 @@ def build_bundled_runner_profile_values() -> dict[str, Any]:
 def template_drift_fields(
     *,
     provider_type: str | None,
-    image_ref: str | None,
     network_policy: str | None,
     persistence_policy: str | None,
     config_json: Any,
@@ -121,13 +131,15 @@ def template_drift_fields(
     Lives in the DB layer so the crud apply helper (FAR-591 D5) and the
     core-side live drift helper share ONE implementation — the core
     ``template_drift_status`` delegates here.
+
+    ``image_ref`` is NOT an input: ADR 059 makes it operator-owned, so an
+    operator's own image on a seeded row is not drift and is never reported
+    as a "shipped template updated" state.
     """
     if provider_type != BUNDLED_RUNNER_PROVIDER_TYPE:
         # Only template-shaped runner_docker rows participate in drift.
         return {"is_seeded": False, "drifted": False, "drifted_fields": []}
     drifted_fields: list[str] = []
-    if (image_ref or "") != BUNDLED_RUNNER_IMAGE_REF:
-        drifted_fields.append("image_ref")
     if network_policy != TEMPLATE_OWNED_FIELDS["network_policy"]:
         drifted_fields.append("network_policy")
     if persistence_policy != "ephemeral":

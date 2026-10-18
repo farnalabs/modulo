@@ -56,11 +56,21 @@ def test_drift_none_for_fresh_template_row() -> None:
     assert status == {"is_seeded": True, "drifted": False, "drifted_fields": []}
 
 
-def test_drift_detects_operator_pinned_older_digest() -> None:
-    row = _row(image_ref="modulo-runner:opencode@sha256:" + "1" * 64)
+def test_drift_ignores_operator_owned_image_ref() -> None:
+    """ADR 059: image_ref is operator-owned, so a customer image is not drift.
+
+    A BYO image on a seeded runner_docker row must not be reported as a
+    "shipped template updated" state — the operator owns the reference.
+    """
+    row = _row(image_ref="ghcr.io/acme/agent@sha256:" + "1" * 64)
     status = template_drift_status(row)
-    assert status["drifted"] is True
-    assert status["drifted_fields"] == ["image_ref"]
+    assert status == {"is_seeded": True, "drifted": False, "drifted_fields": []}
+
+
+def test_seeded_profile_still_receives_template_image_ref() -> None:
+    """The template supplies image_ref at SEED time only (ADR 059)."""
+    values = build_bundled_runner_profile_values()
+    assert values["image_ref"] == BUNDLED_RUNNER_IMAGE_REF
 
 
 def test_drift_detects_config_change() -> None:
