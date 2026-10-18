@@ -783,7 +783,7 @@ class TestHelperEdges:
         assert sum(len(items) for items in intervals.values()) == 1
 
     def test_depth_series_with_no_instants_is_empty(self) -> None:
-        assert _depth_series([(_WINDOW_START, None)], []) == []
+        assert not _depth_series([(_WINDOW_START, None)], [])
 
     def test_heartbeat_reference_for_missing_row_is_none(self) -> None:
         assert _heartbeat_reference(None, _NOW) is None
@@ -881,7 +881,7 @@ class TestRunCapacityQuery:
         rows = [_row(created_at=_minutes_before(_NOW, 20))]
         session = _capacity_session([rows, rows, [{"id": _P1, "name": "alpha", "max_concurrent_runs": 5}]])
         report = await self._run(session, team_ids=(_P2,))
-        assert report["active_health"]["attribution"] == []
+        assert not report["active_health"]["attribution"]
 
     async def test_rate_limited_before_opening_a_session(self) -> None:
         with pytest.raises(AnalyticsRateLimitedError):
