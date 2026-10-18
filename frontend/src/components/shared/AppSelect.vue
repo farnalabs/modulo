@@ -130,10 +130,11 @@ function clipsOverflow(style: CSSStyleDeclaration): boolean {
  * content-box class shape is the fallback for a stylesheet-less environment.
  */
 function isClippingContainer(node: HTMLElement): boolean {
+  if (clipsOverflow(getComputedStyle(node))) return true
   for (const token of Array.from(node.classList)) {
     if (PRIMEVUE_CONTENT_BOX.test(token)) return true
   }
-  return clipsOverflow(getComputedStyle(node))
+  return false
 }
 
 /**

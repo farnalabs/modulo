@@ -162,16 +162,23 @@ describe('AppSelect overlay append target — any clipping ancestor (FAR-1920)',
     expect(wrapper.findComponent(innerSelect).props('appendTo')).toBe('body')
   })
 
-  it('keeps self when every ancestor is unclipped, whatever their classes', () => {
-    // A recognised "dialog-ish" class on an ancestor that does NOT clip must
-    // not force body: the decision is the computed overflow, not the class.
+  it('portals to body for a p-*-content ancestor whose computed overflow is inconclusive', async () => {
+    // The computed overflow is the primary signal, but this unit environment
+    // loads no PrimeVue stylesheet, so a `.p-dialog-content` box computes
+    // `overflow: visible` here and the class-shape fallback is the only signal
+    // left. In a browser the same box reports `overflow-y: auto` from the
+    // stylesheet and computed overflow decides — but the class fallback still
+    // marks any remaining `p-*-content` box clipping, so the target is `body`.
+    // `await nextTick()` is required: `onMounted` sets the decision a tick after
+    // mount, and without it the assertion would read the pre-mount `'self'`.
     const Unclipped = defineComponent({
       components: { AppSelect },
       template:
         '<div class="p-dialog-content page-shell"><div class="drawer-surface"><AppSelect :model-value="\'\'" /></div></div>',
     })
     const wrapper = mount(Unclipped)
-    expect(wrapper.findComponent(innerSelect).props('appendTo')).toBe('self')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.findComponent(innerSelect).props('appendTo')).toBe('body')
   })
 
   it('portals to body for a clipping ancestor even without a recognised class', async () => {

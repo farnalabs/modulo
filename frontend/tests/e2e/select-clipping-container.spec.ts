@@ -19,31 +19,48 @@ import type { Page } from '@playwright/test'
  * applied to a container that is not a dialog.
  */
 
-/** True when the open overlay sits inside an ancestor that clips its overflow. */
-const OVERLAY_INSIDE_CLIPPING_ANCESTOR = () => {
+/**
+ * Browser-side predicate, kept as a source string so it can be inlined into
+ * more than one `page.evaluate` call (Playwright serialises only the callback
+ * it is given, so a module-level function reference would not exist in the
+ * page). Returns the nearest ancestor of `node` — excluding `<body>`/`<html>` —
+ * whose computed overflow clips, or `null`.
+ */
+const FIND_CLIPPING_ANCESTOR = `(function findClippingAncestor(node) {
   const CLIPPING = new Set(['hidden', 'clip', 'auto', 'scroll'])
-  const overlay = document.querySelector('.p-select-overlay')
-  if (!overlay) return { found: false, clipped: false, container: '' }
-  let node: Element | null = overlay.parentElement
   while (node && node !== document.body && node !== document.documentElement) {
     const style = getComputedStyle(node)
-    const clips =
+    if (
       CLIPPING.has(style.overflowX) ||
       CLIPPING.has(style.overflowY) ||
-      (style.overflow || '')
-        .split(/\s+/)
-        .some((value) => CLIPPING.has(value))
-    if (clips) {
-      return {
-        found: true,
-        clipped: true,
-        container: `${node.tagName.toLowerCase()}.${typeof node.className === 'string' ? node.className.split(/\s+/).slice(0, 2).join('.') : ''}`,
-      }
+      (style.overflow || '').split(/\\s+/).some((value) => CLIPPING.has(value))
+    ) {
+      return node
     }
     node = node.parentElement
   }
-  return { found: true, clipped: false, container: '' }
-}
+  return null
+})`
+
+type ClippingProbe = { found: boolean; clipped: boolean; container: string }
+
+/** True when the open overlay sits inside an ancestor that clips its overflow. */
+const OVERLAY_INSIDE_CLIPPING_ANCESTOR = `(() => {
+  const overlay = document.querySelector('.p-select-overlay')
+  if (!overlay) return { found: false, clipped: false, container: '' }
+  const container = ${FIND_CLIPPING_ANCESTOR}(overlay.parentElement)
+  return {
+    found: true,
+    clipped: container !== null,
+    container: container
+      ? container.tagName.toLowerCase() +
+        '.' +
+        (typeof container.className === 'string'
+          ? container.className.split(/\\s+/).slice(0, 2).join('.')
+          : '')
+      : '',
+  }
+})()`
 
 async function openLevelSelect(page: Page) {
   const select = page.getByRole('combobox', { name: 'Level' })
@@ -58,11 +75,6 @@ test.describe('Select overlay escapes any clipping ancestor (FAR-1920)', { tag: 
     await loginAsAdmin(page, env)
     // Keep /notifications rendering fast and deterministic.
     await page.route('**/api/v1/notifications/in-app*', (route) => {
-      const url = new URL(route.request().url())
-      if (url.pathname.includes('/dashboard')) {
-        route.fallback()
-        return
-      }
       route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -79,28 +91,12 @@ test.describe('Select overlay escapes any clipping ancestor (FAR-1920)', { tag: 
 
     // Non-vacuity: the reproduction is only meaningful if the Select really is
     // hosted inside a clipping ancestor before the overlay is considered.
-    const hostIsClipped = await page.evaluate(() => {
-      const host = document.querySelector('[data-testid="filter-bar-level"]')
-      const CLIPPING = new Set(['hidden', 'clip', 'auto', 'scroll'])
-      let node: Element | null = host?.parentElement ?? null
-      while (node && node !== document.body && node !== document.documentElement) {
-        const style = getComputedStyle(node)
-        if (
-          CLIPPING.has(style.overflowX) ||
-          CLIPPING.has(style.overflowY) ||
-          (style.overflow || '')
-            .split(/\s+/)
-            .some((value) => CLIPPING.has(value))
-        ) {
-          return true
-        }
-        node = node.parentElement
-      }
-      return false
-    })
+    const hostIsClipped = await page.evaluate<boolean>(
+      `${FIND_CLIPPING_ANCESTOR}(document.querySelector('[data-testid="filter-bar-level"]')?.parentElement ?? null) !== null`,
+    )
     expect(hostIsClipped).toBe(true)
 
-    const result = await page.evaluate(OVERLAY_INSIDE_CLIPPING_ANCESTOR)
+    const result = await page.evaluate<ClippingProbe>(OVERLAY_INSIDE_CLIPPING_ANCESTOR)
     expect(result.found).toBe(true)
     expect(result.clipped, `overlay is inside clipping ancestor ${result.container}`).toBe(false)
   })
