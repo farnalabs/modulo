@@ -577,6 +577,7 @@ OWNED_PAGES = {
         "frontend/src/components/pipeline/PipelineSnapshotTimeline.vue",
         "frontend/src/components/pipeline/SandboxCommandsEditor.vue",
         "frontend/src/components/pipeline/SnapshotLockCard.vue",
+        "frontend/src/components/pipelines/FolderListError.vue",
     ),
     "/runs": (
         "frontend/src/views/RunsListView.vue",
@@ -686,6 +687,7 @@ OWNED_PAGES = {
         "frontend/src/components/shared/PageHeader.vue",
         "frontend/src/components/shared/FilterBar.vue",
         "frontend/src/components/pipelines/FolderTree.vue",
+        "frontend/src/components/pipelines/FolderListError.vue",
     ),
     "/assistant": (
         "frontend/src/views/AssistantOnlyView.vue",
@@ -695,6 +697,7 @@ OWNED_PAGES = {
     "/schemas": (
         "frontend/src/views/SchemaListView.vue",
         "frontend/src/components/pipelines/FolderTree.vue",
+        "frontend/src/components/pipelines/FolderListError.vue",
     ),
     "/analytics": "frontend/src/views/AnalyticsView.vue",
     "/evals/editor": (
