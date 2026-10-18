@@ -7,7 +7,7 @@ import { loadMonitorConfig, loadBackends } from '../monitor/index'
 import { isModuleNotFound as realIsModuleNotFound } from '../monitor/backends/sdk-utils'
 import * as sdkUtils from '../monitor/backends/sdk-utils'
 
-const { ddRum, ddLogs, sentry, faroInit, faroApi, logsSdkMode } = vi.hoisted(() => {
+const { ddRum, ddLogs, sentry, faroInit, faroApi, logsSdkMode, faroMode, faroHang } = vi.hoisted(() => {
   const ddRum = {
     init: vi.fn(),
     addError: vi.fn(),
@@ -34,14 +34,23 @@ const { ddRum, ddLogs, sentry, faroInit, faroApi, logsSdkMode } = vi.hoisted(() 
     setSessionProperty: vi.fn(),
   }
   const logsSdkMode = { value: 'normal' as 'normal' | 'missing' }
-  return { ddRum, ddLogs, sentry, faroInit, faroApi, logsSdkMode }
+  const faroMode = { value: 'normal' as 'normal' | 'hang' }
+  // In "hang" mode the faro mock factory returns a promise the test resolves
+  // AFTER its assertions. This models a stalled chunk fetch for the duration of
+  // the init timeout, then lets the import settle so a never-pending module
+  // evaluation cannot leak into later faro tests (FAR-1944).
+  const faroHang: { release: (() => void) | null } = { release: null }
+  return { ddRum, ddLogs, sentry, faroInit, faroApi, logsSdkMode, faroMode, faroHang }
 })
 
 /**
  * The backends load their SDKs through runtime dynamic imports, so the SDK
- * mock must be (re-)registered non-hoisted: a test that needs a module to
- * FAIL to load overrides the registration with a throwing vi.doMock, and the
- * next beforeEach restores the normal mock for everyone else.
+ * mock must be (re-)registered non-hoisted. A test's "module does not load"
+ * case is expressed by flipping a hoisted mode flag rather than by overriding
+ * the mock with a second vi.doMock: the two registrations are asynchronous and
+ * unordered, so an in-test override races the beforeEach registration and
+ * intermittently loses (FAR-1944). Deferring the decision to import time via a
+ * single registration removes the race.
  */
 function registerNormalSdkMocks(): void {
   vi.doMock('@datadog/browser-rum', () => ({ datadogRum: ddRum }))
@@ -57,33 +66,19 @@ function registerNormalSdkMocks(): void {
     },
   }))
   vi.doMock('@sentry/vue', () => sentry)
-  vi.doMock('@grafana/faro-web-sdk', () => ({ initializeFaro: faroInit, api: faroApi }))
-}
-
-/**
- * Register the never-settling FARO mock for THIS test and prove the module
- * graph will resolve it before the backend imports it.
- *
- * `registerNormalSdkMocks` (in beforeEach) has already registered a working
- * FARO mock, and the `grafana_faro`-alias test above imports it — so a stale,
- * cached registration can win the backend's runtime dynamic import, load a
- * working SDK stub and defeat the stalled-init simulation (observed
- * intermittently on main: `loadBackends drops a backend whose init never
- * settles` returning `['builtin', 'grafana-faro']`). Re-registering after
- * `vi.resetModules()` pins the intended mock, and the bounded race fails
- * loudly at the mock (rather than mysteriously at the backend list) if a future
- * change reintroduces the leak.
- */
-async function installNeverSettlingFaroMock(): Promise<void> {
-  vi.doUnmock('@grafana/faro-web-sdk')
-  vi.resetModules()
-  vi.doMock('@grafana/faro-web-sdk', () => new Promise(() => {}))
-
-  const resolved = await Promise.race([
-    import('@grafana/faro-web-sdk').then(() => 'RESOLVED' as const),
-    new Promise<'NEVER_SETTLES'>((resolve) => setTimeout(() => resolve('NEVER_SETTLES'), 100)),
-  ])
-  expect(resolved).toBe('NEVER_SETTLES')
+  // The faro factory consults faroMode at import time (inside the backend's
+  // try/catch). In "hang" mode the returned promise is held open until the test
+  // releases it, modelling a stalled SDK chunk fetch for the init timeout
+  // without leaving a permanently-pending import behind. A single registration
+  // means there is no mock-registry race between "normal" and "hang" (FAR-1944).
+  vi.doMock('@grafana/faro-web-sdk', () => {
+    if (faroMode.value === 'hang') {
+      return new Promise((resolve) => {
+        faroHang.release = () => resolve({ initializeFaro: () => {}, api: {} })
+      })
+    }
+    return { initializeFaro: faroInit, api: faroApi }
+  })
 }
 
 function baseConfig(overrides: Partial<MonitorConfig> = {}): MonitorConfig {
@@ -93,6 +88,8 @@ function baseConfig(overrides: Partial<MonitorConfig> = {}): MonitorConfig {
 beforeEach(() => {
   vi.clearAllMocks()
   logsSdkMode.value = 'normal'
+  faroMode.value = 'normal'
+  faroHang.release = null
   registerNormalSdkMocks()
   vi.spyOn(console, 'warn').mockImplementation(() => undefined)
   vi.spyOn(console, 'error').mockImplementation(() => undefined)
@@ -625,22 +622,38 @@ describe('monitor/index', () => {
     // SDK chunk fetch: init() awaits forever. Backends initialise concurrently,
     // so without a per-backend bound Promise.all never settles and the whole
     // list hangs (FAR-1892).
-    await installNeverSettlingFaroMock()
+    //
+    // Flip the shared faro mock to "hang" rather than overriding it with a
+    // second vi.doMock: the beforeEach registration and an in-test override are
+    // asynchronous and unordered, so the override intermittently lost and the
+    // normal mock resolved, letting grafana-faro initialise (FAR-1944).
+    faroMode.value = 'hang'
 
-    const backends = await loadBackends(
-      baseConfig({
-        monitorBackends: ['builtin', 'grafana-faro'],
-        grafanaFaro: { url: 'https://collector.example' },
-      }),
-      { initTimeoutMs: 50 },
-    )
+    try {
+      const backends = await loadBackends(
+        baseConfig({
+          monitorBackends: ['builtin', 'grafana-faro'],
+          grafanaFaro: { url: 'https://collector.example' },
+        }),
+        { initTimeoutMs: 50 },
+      )
 
-    // The stuck backend is dropped; the healthy one still loads.
-    expect(backends.map((b) => b.key)).toEqual(['builtin'])
-    expect(console.warn).toHaveBeenCalledWith(
-      '[monitor] Backend grafana-faro init failed; continuing without it',
-      expect.any(Error),
-    )
+      // Fail at the mock, not mysteriously at the backend set: if the hang mock
+      // did not apply, faro's normal init ran and initialised the SDK.
+      expect(faroInit).not.toHaveBeenCalled()
+      // The stuck backend is dropped; the healthy one still loads.
+      expect(backends.map((b) => b.key)).toEqual(['builtin'])
+      expect(console.warn).toHaveBeenCalledWith(
+        '[monitor] Backend grafana-faro init failed; continuing without it',
+        expect.any(Error),
+      )
+    } finally {
+      // Release the stalled import once the assertion is done: a permanently
+      // pending module evaluation poisons later faro tests in this file (only
+      // order-dependent under shuffle). The stuck backend is already dropped,
+      // so the late continuation is inert.
+      faroHang.release?.()
+    }
   })
 })
 
