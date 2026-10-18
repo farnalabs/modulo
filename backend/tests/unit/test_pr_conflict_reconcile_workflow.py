@@ -182,8 +182,10 @@ def test_resolves_main_sha_for_the_fingerprint() -> None:
 
 
 # --- FAR-1949: an undelivered Branch Fixer dispatch must leave a durable,
-# --- PR-attributable signal on the PR (mirrors merge-queue.yml's FAR-1939
-# --- undelivered-notification fallback).
+# --- PR-attributable signal on the PR. The "never SILENT" requirement is
+# --- FAR-1939, but its merge-queue.yml fallback only emits ::error:: + exit 1;
+# --- the durable-comment + marker pattern mirrors this workflow's own
+# --- manual-delivery note ("Surface manual-delivery conflicts").
 
 
 def _dispatch_step_block() -> str:

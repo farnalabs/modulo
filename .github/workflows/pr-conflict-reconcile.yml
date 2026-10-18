@@ -251,9 +251,13 @@ jobs:
               # refused with HTTP 429 ("Concurrent run limit of 5 reached") and the
               # conflicted PR was left with nothing durable saying the Branch Fixer
               # had never been asked to reconcile it. So: name the PR in the
-              # annotation AND leave a durable comment on that PR, mirroring
-              # merge-queue.yml's undelivered-notification fallback (FAR-1939). The
-              # retry count and backoff above are deliberately unchanged.
+              # annotation AND leave a durable comment on that PR. FAR-1939 set the
+              # "never SILENT on an undelivered dispatch" requirement, but its
+              # merge-queue.yml fallback emits only ::error:: + exit 1 (it posts no
+              # PR comment); the durable-comment + HTML-marker pattern is mirrored
+              # from this workflow's own manual-delivery note in the "Surface
+              # manual-delivery conflicts" step below. The retry count and backoff
+              # above are deliberately unchanged.
               echo "::error::Branch Fixer dispatch failed for PR #$PR_NUM (HTTP ${LAST_HTTP}: ${DETAIL}) after retries — this PR was never handed to the fixer."
               # Idempotent: this reconciler runs every 15 minutes, so a persistently
               # failing webhook (e.g. a sustained 429) would otherwise post a fresh
