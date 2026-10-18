@@ -58,11 +58,13 @@ Error tracking (ingestion, grouping, dashboard, alerting) plus infrastructure
 observability exports (OTLP metrics/traces). Surfaces: `/admin/errors`,
 `/admin/errors/:id`, `/settings/observability` (`feat-observability`).
 
-_Error Forwarders (`/settings/error-forwarders`) and Browser Monitoring config
-(`/settings/monitoring`) are deferred from the MVP nav (hidden via
-`visibility: private_preview`). Behaviour detail removed for the MVP cut - restore
-from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
-(browser monitoring)._
+_All three settings pages are hidden from the MVP nav via `visibility:
+private_preview` (the router redirects them to the dashboard unless dev mode is
+on). `/settings/observability` ships with its behaviour detail below; Error
+Forwarders (`/settings/error-forwarders`) and Browser Monitoring config
+(`/settings/monitoring`) are deferred entirely - their behaviour detail is removed
+for the MVP cut, so restore it from git history when re-enabling. See FAR-547
+(error forwarders) and FAR-543 (browser monitoring)._
 
 ## Behaviours
 
@@ -97,7 +99,9 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
 - [x] Alerting + notification rules: a critical error fires an alert, a cooldown
       prevents alert storms, a condition window counts only recent events (with a
       lifetime-count fallback at window 0), and notification rules are
-      configurable up to 10 per org (`error_notifications.feature`,
+      configurable up to 10 per org on the Team tier (3 on Community, where
+      webhook rules are also refused 402) (`error_notifications.feature`,
+      `api/routes/error_notification_rules.py`,
       `core/error_tracking/alerting.py`)
 - _Error forwarders behaviour detail removed for the MVP cut (see the pointer above)._
 - [x] OTLP observability export: `GET/PUT /api/v1/settings/observability`
@@ -117,7 +121,8 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
 - [x] OTel *trace* span capture is BDD-exercised against the REAL
       `LangGraphOtelBridge` seams network-free and DB-free
       (`otel_traces.feature`): chain spans carry the org/pipeline
-      `set_run_context` attribute stamps and appear for each node execution,
+      `set_run_context` attribute stamps (truncated SHA-256 hashes, never the raw
+      ids, matching the consent copy) and appear for each node execution,
       tool callbacks become child spans under their parent node span (real
       parent/child wiring), connector callbacks stamp no credential fields in
       span attributes, and a telemetry-disabled provider (no span processor)
