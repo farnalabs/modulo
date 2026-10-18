@@ -363,8 +363,9 @@ describe('SettingsTriggerEventLogView', () => {
           makeEvent({ id: '13', validation_result: 'rate_limited' }),
           makeEvent({ id: '14', validation_result: 'poll_error' }),
           makeEvent({ id: '15', validation_result: 'unknown_result' }),
+          makeEvent({ id: '16', validation_result: 'paused' }),
         ],
-        total: 15,
+        total: 16,
         next_cursor: null,
       },
       error: undefined,
@@ -386,6 +387,7 @@ describe('SettingsTriggerEventLogView', () => {
     expect(wrapper.text()).toContain('rate_limited')
     expect(wrapper.text()).toContain('poll_error')
     expect(wrapper.text()).toContain('unknown_result')
+    expect(wrapper.text()).toContain('paused')
   })
 
   it('formatTimestamp returns dash for null/undefined', async () => {
@@ -566,6 +568,60 @@ describe('SettingsTriggerEventLogView', () => {
       await flushPromises()
       expect(wrapper.text()).toContain('backpressure_skipped')
       expect(wrapper.find('.badge-context-rose').exists()).toBe(true)
+    })
+
+    it('renders a down trend when the recent window has fewer refusals', async () => {
+      getMock.mockResolvedValue(withCounts({ direction: 'down', total_recent: 2, total_previous: 5 }))
+      const wrapper = mount(SettingsTriggerEventLogView)
+      await flushPromises()
+      expect(wrapper.find('[data-testid="capacity-outcomes-trend"]').text()).toContain('down from the previous 24h')
+    })
+
+    it('renders a flat trend when the two windows are level', async () => {
+      getMock.mockResolvedValue(withCounts({ direction: 'flat', total_recent: 3, total_previous: 3 }))
+      const wrapper = mount(SettingsTriggerEventLogView)
+      await flushPromises()
+      expect(wrapper.find('[data-testid="capacity-outcomes-trend"]').text()).toContain(
+        'unchanged from the previous 24h',
+      )
+    })
+
+    it('defaults window, direction, total and recent when the response omits them', async () => {
+      // Older/partial backends may send only a subset of result_counts. The
+      // summary must render with safe defaults rather than crash or print
+      // "undefined".
+      getMock.mockResolvedValue({
+        data: {
+          items: [],
+          total: 0,
+          next_cursor: null,
+          result_counts: { previous: {}, total_previous: 2 },
+        },
+        error: undefined,
+      })
+      const wrapper = mount(SettingsTriggerEventLogView)
+      await flushPromises()
+      expect(wrapper.find('[data-testid="capacity-outcomes-total"]').text()).toContain('0 capacity refusals')
+      expect(wrapper.find('[data-testid="capacity-outcomes-trend"]').text()).toContain(
+        'unchanged from the previous 24h',
+      )
+      expect(wrapper.text()).toContain('No capacity refusals in the last 24h')
+      expect(wrapper.text()).not.toContain('undefined')
+    })
+
+    it('renders a distinct badge for a spend_limit_reached row', async () => {
+      getMock.mockResolvedValue({
+        data: {
+          items: [makeEvent({ validation_result: 'spend_limit_reached' })],
+          total: 1,
+          next_cursor: null,
+        },
+        error: undefined,
+      })
+      const wrapper = mount(SettingsTriggerEventLogView)
+      await flushPromises()
+      expect(wrapper.text()).toContain('spend_limit_reached')
+      expect(wrapper.find('.badge-context-purple').exists()).toBe(true)
     })
   })
 })

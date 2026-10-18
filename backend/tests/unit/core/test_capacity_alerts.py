@@ -14,7 +14,7 @@ import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Self
 from unittest.mock import AsyncMock
 
 import pytest
@@ -817,3 +817,383 @@ async def test_backpressure_hits_reports_pipelines_beyond_the_cap_as_unevaluated
     assert not hits
     assert len(checked) == ca.MAX_BACKPRESSURE_CHECKS_PER_ORG
     assert unevaluated == {ca._subject_for(ca._SUBJECT_BACKPRESSURE, pipeline_id=pids[-1])}
+
+
+# ---------------------------------------------------------------------------
+# Helper-level coverage: state decoding, payload rendering, error arms
+# ---------------------------------------------------------------------------
+
+
+def test_org_limit_fully_held_returns_none_when_headroom_remains() -> None:
+    binding = {"scope": "org_run", "limit": 5, "in_use": 2, "headroom": 3, "pending_blocked": 1}
+    assert ca._org_limit_fully_held(_report(binding=binding, pending_total=1)) is None
+
+
+def test_subject_for_saturation_has_no_pipeline_suffix() -> None:
+    assert ca._subject_for(ca._SUBJECT_SATURATION) == ca._SUBJECT_SATURATION
+
+
+def test_pipeline_trend_ignores_rows_for_other_pipelines() -> None:
+    """A bucket that carries only OTHER pipelines counts as depth 0 for ours."""
+    pid = uuid.uuid4()
+    other = uuid.uuid4()
+    series = [
+        {"by_pipeline": [{"pipeline_id": str(other), "pending_depth": 9, "oldest_pending_age_seconds": 99.0}]},
+        {"by_pipeline": [{"pipeline_id": str(pid), "pending_depth": 3, "oldest_pending_age_seconds": 30.0}]},
+    ]
+    depth_change, age_change = ca.pipeline_trend(_report(series=series), pid)
+    assert depth_change == 3
+    assert age_change == 30.0
+
+
+async def test_read_state_treats_corrupt_json_as_absent() -> None:
+    redis = FakeRedis()
+    redis.kv["k"] = "{not json"
+    assert await ca._read_state(redis, "k") is None
+
+
+async def test_read_state_treats_non_dict_json_as_absent() -> None:
+    redis = FakeRedis()
+    redis.kv["k"] = "[1, 2, 3]"
+    assert await ca._read_state(redis, "k") is None
+
+
+def test_state_rung_non_numeric_is_none() -> None:
+    assert ca._state_rung({"rung": "not-a-number"}) is None
+
+
+def test_state_at_rejects_non_string_and_bad_iso() -> None:
+    assert ca._state_at({"at": 123}) is None
+    assert ca._state_at({"at": "not-a-date"}) is None
+
+
+def test_state_at_normalises_a_naive_datetime_to_utc() -> None:
+    parsed = ca._state_at({"at": "2026-10-18T12:00:00"})
+    assert parsed is not None
+    assert parsed.tzinfo is UTC
+
+
+def test_state_label_falls_back_for_absent_or_unusable_labels() -> None:
+    assert ca._state_label(None, "fallback") == "fallback"
+    assert ca._state_label({"label": ""}, "fallback") == "fallback"
+    assert ca._state_label({"label": 123}, "fallback") == "fallback"
+    assert ca._state_label({"label": "nightly"}, "fallback") == "nightly"
+
+
+def test_oldest_minutes_renders_na_for_absent_and_unparseable() -> None:
+    assert ca._oldest_minutes(None) == "n/a"
+    assert ca._oldest_minutes("not-a-number") == "n/a"
+    assert ca._oldest_minutes(125.0) == "2"
+
+
+def test_backpressure_reason_labels_cover_both_tokens_and_fallback() -> None:
+    assert "queue depth" in ca._backpressure_reason_label("queue_depth=8 limit=5")
+    assert "waited too long" in ca._backpressure_reason_label("oldest_age=900s limit=3600s")
+    assert ca._backpressure_reason_label("") == "backpressure"
+    assert ca._backpressure_reason_label("custom_reason") == "custom_reason"
+
+
+class _RaisingNotifier:
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    async def dispatch_event(self, *_: Any, **__: Any) -> list[Any]:
+        raise self._exc
+
+
+def _empty_summary() -> dict[str, Any]:
+    return {"dispatched": 0, "notify_failed": 0}
+
+
+async def test_dispatch_counts_a_timeout_and_a_generic_failure() -> None:
+    summary = _empty_summary()
+    await ca._dispatch(
+        _RaisingNotifier(TimeoutError()),
+        org_id=uuid.uuid4(),
+        event_type="queue_pressure_warning",
+        payload={},
+        summary=summary,
+    )
+    await ca._dispatch(
+        _RaisingNotifier(RuntimeError("webhook down")),
+        org_id=uuid.uuid4(),
+        event_type="queue_pressure_warning",
+        payload={},
+        summary=summary,
+    )
+    assert summary["notify_failed"] == 2
+    assert summary["dispatched"] == 0
+
+
+async def test_dispatch_reraises_cancelled() -> None:
+    with pytest.raises(asyncio.CancelledError):
+        await ca._dispatch(
+            _RaisingNotifier(asyncio.CancelledError()),
+            org_id=uuid.uuid4(),
+            event_type="queue_pressure_warning",
+            payload={},
+            summary=_empty_summary(),
+        )
+
+
+async def test_apply_org_candidates_retires_an_absent_notice_silently() -> None:
+    """A cleared NOTICE is dropped from Redis with no recovery event."""
+    redis = FakeRedis()
+    notifier = FakeNotifier()
+    org_id = uuid.uuid4()
+    subject = ca._subject_for(ca._SUBJECT_QUEUE, pipeline_id=uuid.uuid4())
+    open_key = ca._open_key(org_id)
+    await redis.sadd(open_key, subject)
+    await ca._write_state(redis, ca._state_key(org_id, subject), rung=ca.NOTICE_RUNG, label="nightly", now=_NOW)
+
+    await ca._apply_org_candidates(redis, notifier, org_id=org_id, candidates={}, summary=_empty_summary(), now=_NOW)
+
+    assert not notifier.events
+    assert await ca._read_state(redis, ca._state_key(org_id, subject)) is None
+    assert subject not in (redis.sets.get(open_key) or set())
+
+
+async def test_apply_org_candidates_recovers_a_present_clear_candidate() -> None:
+    """A rung-0 candidate still in the map is a recovery, and clears the open set."""
+    redis = FakeRedis()
+    notifier = FakeNotifier()
+    org_id = uuid.uuid4()
+    subject = ca._subject_for(ca._SUBJECT_QUEUE, pipeline_id=uuid.uuid4())
+    open_key = ca._open_key(org_id)
+    await redis.sadd(open_key, subject)
+    await ca._write_state(redis, ca._state_key(org_id, subject), rung=ca.WARNING_RUNG, label="nightly", now=_NOW)
+
+    await ca._apply_org_candidates(
+        redis,
+        notifier,
+        org_id=org_id,
+        candidates={subject: ca.Candidate(subject=subject, rung=ca.CLEAR_RUNG, event_type=None)},
+        summary=_empty_summary(),
+        now=_NOW,
+    )
+
+    assert [event[1] for event in notifier.events] == ["capacity_recovered"]
+    assert subject not in (redis.sets.get(open_key) or set())
+
+
+def test_build_candidates_skips_an_invalid_pipeline_id() -> None:
+    report = _report(
+        pending_by_pipeline=[{"pipeline_id": "not-a-uuid", "pending_count": 5, "oldest_pending_age_seconds": 0.0}],
+        pending_total=5,
+    )
+    assert ca.build_candidates(report, bound_since=None, now=_NOW) == {}
+
+
+def test_org_from_open_key_parses_and_rejects_invalid_keys() -> None:
+    org_id = uuid.uuid4()
+    assert ca._org_from_open_key(f"{ca._STATE_KEY_PREFIX}:{org_id}:open") == org_id
+    assert ca._org_from_open_key("not-a-key") is None
+    assert ca._org_from_open_key(f"{ca._STATE_KEY_PREFIX}:not-a-uuid:open") is None
+
+
+async def test_org_ids_with_open_alerts_dedupes_and_skips_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
+    org_id = uuid.uuid4()
+    redis = FakeRedis()
+    keys = [
+        f"{ca._STATE_KEY_PREFIX}:{org_id}:open",
+        "garbage",
+        f"{ca._STATE_KEY_PREFIX}:{org_id}:open",
+    ]
+
+    async def _scan(match: str = "*") -> AsyncIterator[str]:
+        for key in keys:
+            yield key
+
+    monkeypatch.setattr(redis, "scan_iter", _scan)
+    assert await ca._org_ids_with_open_alerts(redis) == [org_id]
+
+
+# ---------------------------------------------------------------------------
+# Fake session plumbing for the backpressure + org-discovery DB paths
+# ---------------------------------------------------------------------------
+
+
+class _FakeCM:
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_: object) -> bool:
+        return False
+
+
+class _FakeResult:
+    def __init__(self, values: list[Any]) -> None:
+        self._values = values
+
+    def scalars(self) -> list[Any]:
+        return self._values
+
+    def all(self) -> list[Any]:
+        return self._values
+
+
+class _FakeSession(_FakeCM):
+    def __init__(self, result: _FakeResult) -> None:
+        self._result = result
+
+    def begin(self) -> _FakeCM:
+        return _FakeCM()
+
+    async def execute(self, *_: Any, **__: Any) -> _FakeResult:
+        return self._result
+
+
+class _FakeFactory:
+    def __init__(self, session: _FakeSession) -> None:
+        self._session = session
+
+    def __call__(self) -> _FakeSession:
+        return self._session
+
+
+async def test_add_backpressure_candidates_builds_hits_and_reports_unevaluated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pid = uuid.uuid4()
+    org_id = uuid.uuid4()
+    report = _report(pending_by_pipeline=[_pipeline(pid, count=3)], pending_total=3)
+    unverified = {ca._subject_for(ca._SUBJECT_BACKPRESSURE, pipeline_id=uuid.uuid4())}
+
+    async def _hits(_session: Any, _report: dict[str, Any]) -> tuple[list[tuple[dict[str, Any], str]], set[str]]:
+        return (
+            [
+                ({"pipeline_id": str(pid), "pending_count": 3}, "queue_depth=3 limit=1"),
+                ({"pipeline_id": "not-a-uuid", "pending_count": 1}, "queue_depth=1 limit=0"),
+            ],
+            unverified,
+        )
+
+    monkeypatch.setattr(ca, "set_rls_org", AsyncMock())
+    monkeypatch.setattr(ca, "_backpressure_hits", _hits)
+
+    candidates: dict[str, ca.Candidate] = {}
+    result = await ca._add_backpressure_candidates(
+        _FakeFactory(_FakeSession(_FakeResult([]))),  # type: ignore[arg-type]
+        report,
+        org_id=org_id,
+        candidates=candidates,
+    )
+
+    assert result == unverified
+    subject = ca._subject_for(ca._SUBJECT_BACKPRESSURE, pipeline_id=pid)
+    assert candidates[subject].rung == ca.BACKPRESSURE_RUNG
+    assert candidates[subject].event_type == ca.EVENT_CAPACITY_BACKPRESSURE
+    # The invalid pipeline id was skipped, not turned into a bogus subject.
+    assert len(candidates) == 1
+
+
+async def test_backpressure_hits_skips_invalid_ids_and_records_a_hit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    good = uuid.uuid4()
+    # 25 checked pipelines (MAX) + 1 beyond the cap with an invalid id.
+    pipelines: list[dict[str, Any]] = [{"pipeline_id": "bad", "pending_count": 2, "oldest_pending_age_seconds": 0.0}]
+    pipelines.append(_pipeline(good, count=2))
+    pipelines.extend(_pipeline(uuid.uuid4(), count=1) for _ in range(ca.MAX_BACKPRESSURE_CHECKS_PER_ORG - 2))
+    pipelines.append({"pipeline_id": "bad2", "pending_count": 2, "oldest_pending_age_seconds": 0.0})
+    report = _report(pending_by_pipeline=pipelines, pending_total=99)
+
+    async def _evaluate(_session: Any, *, pipeline_id: uuid.UUID) -> tuple[bool, str]:
+        if pipeline_id == good:
+            return True, "queue_depth=2 limit=1"
+        return False, ""
+
+    monkeypatch.setattr("modulo.core.run_admission.evaluate_backpressure", _evaluate)
+
+    hits, unevaluated = await ca._backpressure_hits(AsyncMock(), report)
+
+    assert [pipeline["pipeline_id"] for pipeline, _ in hits] == [str(good)]
+    assert hits[0][1] == "queue_depth=2 limit=1"
+    # The beyond-cap pipeline has an invalid id, so it cannot be named as
+    # unverified either; it is simply not a usable subject.
+    assert unevaluated == set()
+
+
+async def test_org_ids_with_pending_returns_the_session_rows() -> None:
+    org_id = uuid.uuid4()
+    session = _FakeSession(_FakeResult([org_id]))
+    assert await ca._org_ids_with_pending(_FakeFactory(session)) == [org_id]  # type: ignore[arg-type]
+
+
+async def test_sweep_org_counts_a_report_read_failure(
+    sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis, notifier, _state = sweep_env
+    monkeypatch.setattr(ca, "read_capacity_report", AsyncMock(side_effect=RuntimeError("db down")))
+    summary = {"orgs_evaluated": 0, "org_errors": 0, "dispatched": 0, "notify_failed": 0}
+
+    await ca._sweep_org(
+        factory=AsyncMock(),
+        org_id=uuid.uuid4(),
+        settings=AsyncMock(),
+        redis_client=redis,  # type: ignore[arg-type]
+        notifier=notifier,
+        now=_NOW,
+        summary=summary,
+    )
+
+    assert summary["org_errors"] == 1
+    assert summary["orgs_evaluated"] == 0
+    assert not notifier.events
+
+
+async def test_sweep_org_reraises_cancelled_from_backpressure(
+    sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis, notifier, _state = sweep_env
+    monkeypatch.setattr(ca, "_add_backpressure_candidates", AsyncMock(side_effect=asyncio.CancelledError()))
+    summary = {"orgs_evaluated": 0, "org_errors": 0, "dispatched": 0, "notify_failed": 0}
+
+    with pytest.raises(asyncio.CancelledError):
+        await ca._sweep_org(
+            factory=AsyncMock(),
+            org_id=uuid.uuid4(),
+            settings=AsyncMock(),
+            redis_client=redis,  # type: ignore[arg-type]
+            notifier=notifier,
+            now=_NOW,
+            summary=summary,
+        )
+
+
+async def test_run_orgs_swallows_an_unexpected_sweep_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _boom(**_: Any) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(ca, "_sweep_org", _boom)
+    summary = {"orgs_evaluated": 0, "org_errors": 0, "dispatched": 0, "notify_failed": 0}
+
+    await ca._run_orgs(
+        factory=AsyncMock(),
+        org_ids=[uuid.uuid4()],
+        settings=AsyncMock(),
+        redis_client=FakeRedis(),  # type: ignore[arg-type]
+        notifier=FakeNotifier(),
+        now=_NOW,
+        summary=summary,
+        budget_seconds=100.0,
+    )
+
+    assert summary["org_errors"] == 1
+
+
+async def test_evaluate_reraises_cancelled_during_org_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _cancel(*_: Any, **__: Any) -> list[uuid.UUID]:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(ca, "_org_ids_with_open_alerts", _cancel)
+
+    with pytest.raises(asyncio.CancelledError):
+        await ca.evaluate_capacity_alerts(
+            factory=AsyncMock(),
+            redis_client=FakeRedis(),  # type: ignore[arg-type]
+            notifier=FakeNotifier(),
+            now=_NOW,
+        )

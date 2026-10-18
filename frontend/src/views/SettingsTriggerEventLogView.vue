@@ -71,7 +71,7 @@
           {{ $t('views.SettingsTriggerEventLogView.capacity_outcomes') }}
         </span>
         <span class="text-xs text-muted-foreground">
-          {{ $t('views.SettingsTriggerEventLogView.capacity_outcomes_window', { hours: resultCounts.window_hours }) }}
+          {{ $t('views.SettingsTriggerEventLogView.capacity_outcomes_window', { hours: capacityWindowHours }) }}
         </span>
         <span
           data-testid="capacity-outcomes-total"
@@ -98,7 +98,7 @@
         </span>
       </div>
       <p v-else class="mt-3 text-xs text-muted-foreground">
-        {{ $t('views.SettingsTriggerEventLogView.capacity_outcome_none', { hours: resultCounts.window_hours }) }}
+        {{ $t('views.SettingsTriggerEventLogView.capacity_outcome_none', { hours: capacityWindowHours }) }}
       </p>
     </div>
 
@@ -236,16 +236,15 @@ const resultCounts = computed<ResultCounts | null>(
   () => (responseData.value?.result_counts as ResultCounts | undefined) ?? null,
 )
 
+const capacityWindowHours = computed(() => resultCounts.value?.window_hours ?? 24)
+
 const CAPACITY_OUTCOME_KEYS = ['backpressure_skipped', 'concurrency_limit_reached', 'coalesced'] as const
 
 const { t } = useI18n()
 
 const capacityOutcomeRows = computed(() => {
   const counts = resultCounts.value?.recent ?? {}
-  return CAPACITY_OUTCOME_KEYS.filter((key) => (counts[key] ?? 0) > 0).map((key) => ({
-    key,
-    value: counts[key] ?? 0,
-  }))
+  return CAPACITY_OUTCOME_KEYS.map((key) => ({ key, value: counts[key] ?? 0 })).filter((row) => row.value > 0)
 })
 
 const capacityTotalLabel = computed(() =>

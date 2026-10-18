@@ -848,6 +848,22 @@ async def _org_ids_with_open_alerts(redis_client: AsyncRedis) -> list[uuid.UUID]
     return found
 
 
+def _merge_org_sources(open_alert_orgs: list[uuid.UUID], pending_orgs: list[uuid.UUID]) -> list[uuid.UUID]:
+    """Deduplicate the two org sources, open-alert orgs ordered first.
+
+    The union is required for closure: a fully-drained org has no pending runs
+    but may still hold an open alert that must be re-evaluated. Open-alert orgs
+    go first so the per-tick cap cannot starve a closure.
+    """
+    merged: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
+    for org_id in [*open_alert_orgs, *pending_orgs]:
+        if org_id not in seen:
+            seen.add(org_id)
+            merged.append(org_id)
+    return merged
+
+
 async def _sweep_org(
     *,
     factory: async_sessionmaker[AsyncSession],
@@ -999,17 +1015,11 @@ async def evaluate_capacity_alerts(
             candidates = list(org_ids)
         else:
             # Union two sets: orgs with queued work AND orgs holding an open
-            # alert. The second is required for closure — a fully-drained org
-            # has no pending runs but may still hold an open alert that must be
-            # re-evaluated so the auto-clear path can fire. Open-alert orgs are
-            # ordered first so the per-tick cap cannot starve a closure.
-            merged: list[uuid.UUID] = []
-            seen: set[uuid.UUID] = set()
-            for org_id in [*await _org_ids_with_open_alerts(redis_client), *await _org_ids_with_pending(factory)]:
-                if org_id not in seen:
-                    seen.add(org_id)
-                    merged.append(org_id)
-            candidates = merged[:MAX_ORGS_PER_TICK]
+            # alert (see :func:`_merge_org_sources` for why both are needed).
+            candidates = _merge_org_sources(
+                await _org_ids_with_open_alerts(redis_client),
+                await _org_ids_with_pending(factory),
+            )[:MAX_ORGS_PER_TICK]
     except asyncio.CancelledError:
         raise
     except Exception:

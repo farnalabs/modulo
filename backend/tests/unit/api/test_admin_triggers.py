@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes import admin_triggers
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
@@ -256,3 +257,39 @@ class TestListTriggerEvents:
             self._client_with_execute_error(client, RuntimeError("boom"))
             resp = client.get(self.URL)
         assert resp.status_code == 500
+
+
+class TestFetchResultCounts:
+    """Direct coverage for the FAR-1344 capacity-outcome helpers."""
+
+    def test_trend_direction_up_down_flat(self) -> None:
+        assert admin_triggers._trend_direction(5, 1) == "up"
+        assert admin_triggers._trend_direction(1, 5) == "down"
+        assert admin_triggers._trend_direction(3, 3) == "flat"
+
+    async def test_unknown_validation_result_is_ignored(self) -> None:
+        """A row outside the capacity vocabulary is skipped, not counted."""
+        session = _make_mock_session()
+        session.execute = AsyncMock(
+            return_value=_counts_result(
+                [
+                    ("backpressure_skipped", 2, 1),
+                    ("some_future_result", 9, 9),
+                ]
+            )
+        )
+        principal = MagicMock()
+        principal.organisation_id = _ORG_ID
+
+        with patch("modulo.api.routes.admin_triggers.set_rls_org"):
+            counts = await admin_triggers._fetch_result_counts(session, principal, now=_NOW)
+
+        assert counts.recent == {
+            "backpressure_skipped": 2,
+            "concurrency_limit_reached": 0,
+            "coalesced": 0,
+        }
+        assert counts.previous["backpressure_skipped"] == 1
+        assert counts.total_recent == 2
+        assert counts.total_previous == 1
+        assert counts.direction == "up"
