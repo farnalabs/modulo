@@ -1926,10 +1926,19 @@ jobs:
     # FAR-1947/FAR-1429: the `!contains(needs.*.result, 'failure')` guard reads
     # ONLY the jobs named in `needs`, so a failure of a job omitted here still
     # satisfies the guard and self-reports the "ci" stage as done — a false-green
-    # observability report while the PR's run is red. Every job that can fail on
-    # a PR must be listed: the FAR-1947 `frontend-unit-parity` job, plus the
-    # pre-existing `tier1b-light`, `runner-ci-harness` and `changes` (5-min
-    # timeout) omissions swept here. This list now equals notify-pr-failure's.
+    # observability report while the PR's run is red. The rule is precise: every
+    # PRODUCT job that can fail on a PR is listed — the 15 below, including the
+    # FAR-1947 `frontend-unit-parity` job plus the pre-existing `tier1b-light`,
+    # `runner-ci-harness` and `changes` (5-min timeout) omissions swept here
+    # (this list equals notify-pr-failure's). Notifier jobs are deliberately
+    # excluded from a notifier's `needs` (the convention notify-main-failure
+    # documents for its own list), and the exclusion cannot false-green:
+    # `notify-main-failure` never runs on a PR (its `if:` requires a
+    # push/workflow_dispatch to main), and `notify-pr-failure` cannot fail
+    # unless one of the 15 product jobs above already failed or the run was
+    # cancelled — every step of it that can fail is gated on
+    # `failure() || cancelled()` — and both of those conditions already make
+    # this job's guard false. `self-report-ci` cannot list itself.
     if: github.event_name == 'pull_request' && !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
