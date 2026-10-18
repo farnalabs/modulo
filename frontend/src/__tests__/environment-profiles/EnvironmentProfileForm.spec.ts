@@ -445,11 +445,15 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
     ['mixed-case registry host', `GHCR.io/library/alpine@sha256:${'a'.repeat(64)}`],
     ['mixed-case registry host with a port', `MyRegistry.local:5000/team/agent@sha256:${'a'.repeat(64)}`],
     ['IPv6 registry host with a port', `[::1]:5000/team/agent@sha256:${'a'.repeat(64)}`],
-  ])('accepts a mixed-case or IPv6 registry host (%s) as pinned', async (_label, ref) => {
-    // FAR-1779 F3: Docker's grammar permits a mixed-case domain (and an IPv6
-    // literal) for the REGISTRY host — only the repository path is
-    // case-sensitive — so these are valid references and must not be
-    // mislabelled invalid.
+    ['uppercase first component with no registry dot', `GHCR/acme/agent@sha256:${'a'.repeat(64)}`],
+  ])('accepts a mixed-case registry host (%s) as pinned', async (_label, ref) => {
+    // FAR-1779 F3 (corrected): Docker's `splitDockerDomain` treats the first
+    // component as a registry host when it contains `.`/`:`, is `localhost`,
+    // OR is not all-lowercase — "Uppercase namespaces are not allowed, so if
+    // the first element is not lowercase, we assume it to be a domain-name".
+    // So `GHCR/acme/agent` is a valid reference (host `GHCR`, lowercase path
+    // `acme/agent`) and is classified pinned/mutable, never invalid — measured
+    // against the daemon it parses. Only the repository PATH is case-sensitive.
     const wrapper = await mountWithProvider('runner_docker')
     await wrapper.find('[data-testid="envprofile-form-image"]').setValue(ref)
     await nextTick()
@@ -462,7 +466,6 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
   it.each([
     ['uppercase digest hex', `ghcr.io/acme/agent@sha256:${'A'.repeat(64)}`],
     ['uppercase repository path component', `ghcr.io/ACME/agent@sha256:${'a'.repeat(64)}`],
-    ['uppercase first component with no registry dot', `GHCR/acme/agent@sha256:${'a'.repeat(64)}`],
     ['embedded space', `ghcr.io/acme/agent @sha256:${'a'.repeat(64)}`],
     // Docker's separator is a single `.`/`_`, a double `__`, or hyphens — not
     // an arbitrary one-or-two of [._-]. These are NOT valid references and
@@ -507,6 +510,31 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
     expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="envprofile-form-image-invalid"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(false)
+  })
+
+  it('caps the repository path at Docker\u2019s 255-character limit', async () => {
+    // distribution/reference caps the repository path — the name once the
+    // registry host is split off — at 255 characters; the daemon reports
+    // "repository name must not be more than 255 characters". Measured against
+    // the daemon: a 255-character path parses (`No such image`), 256 is
+    // rejected. An over-length ref cannot be pulled, so it must be `invalid`,
+    // never the green pinned assurance.
+    const digest = `sha256:${'a'.repeat(64)}`
+    const wrapper = await mountWithProvider('runner_docker')
+
+    // `acme/` (5) + 250 = a 255-character path is valid.
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(`ghcr.io/acme/${'a'.repeat(250)}@${digest}`)
+    await nextTick()
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="envprofile-form-image-invalid"]').exists()).toBe(false)
+
+    // `acme/` (5) + 251 = a 256-character path is rejected.
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(`ghcr.io/acme/${'a'.repeat(251)}@${digest}`)
+    await nextTick()
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(false)
+    const invalid = wrapper.find('[data-testid="envprofile-form-image-invalid"]')
+    expect(invalid.exists()).toBe(true)
+    expect(invalid.text()).toContain('not a valid image reference')
   })
 
   it('reports the release placeholder digest as unresolvable, never pinned', async () => {

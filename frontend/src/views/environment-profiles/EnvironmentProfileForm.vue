@@ -326,7 +326,9 @@ const providerTypeOptions = computed(() => [
 // grammars. The whole reference is validated, not just its digest suffix:
 // Docker / containerd reject an uppercase repository path, uppercase digest hex
 // and an embedded space, so a ref that merely ENDS in `@sha256:<hex>` must
-// never be announced as pinned.
+// never be announced as pinned. The repository path is also length-capped at
+// 255 characters (the daemon rejects a longer name outright), so an over-length
+// ref is likewise `invalid` rather than pinned.
 //
 // The classification applies only where image_ref is dispatched as a container
 // image — the Runner (runner_docker) and Kubernetes providers. E2B is excluded
@@ -347,21 +349,43 @@ const IMAGE_TAG_RE = new RegExp(`^${IMAGE_TAG}$`)
 const IMAGE_DIGEST_RE = /^sha256:[0-9a-f]{64}$/
 const DIGEST_PINNABLE_PROVIDERS = ['runner_docker', 'kubernetes']
 
-// Docker treats the first component as a registry host only where it contains
-// a `.` or `:`, or is `localhost`; otherwise it is a Docker Hub namespace, so
-// it must satisfy the lowercase path grammar (an uppercase first component
-// with no dot is a repository Docker rejects, not a host).
+// Docker's own rule (distribution/reference `splitDockerDomain`): with a `/`
+// present, the first component is a registry host when it contains a `.` or
+// `:`, is `localhost`, OR is NOT all-lowercase — "Uppercase namespaces are not
+// allowed, so if the first element is not lowercase, we assume it to be a
+// domain-name". Only otherwise is it a Docker Hub namespace subject to the
+// lowercase path grammar. So `GHCR/acme/agent` is a valid reference (host
+// `GHCR`, lowercase path `acme/agent`) while `ghcr.io/ACME/agent` is not (its
+// repository path has an uppercase component). Measured against the daemon:
+// the former parses (`No such image`), the latter is `invalid reference
+// format`. A ref is `invalid` only when Docker would reject it.
 function isDockerRegistryHost(component: string): boolean {
   return component.includes('.') || component.includes(':') ||
-    component.toLowerCase() === 'localhost'
+    component.toLowerCase() === 'localhost' ||
+    component !== component.toLowerCase()
 }
+
+// distribution/reference caps the REPOSITORY PATH — the name once the registry
+// host is split off — at 255 characters; the daemon reports "repository name
+// must not be more than 255 characters". Measured against the daemon: a
+// 255-character path parses (`No such image`), a 256-character path is
+// rejected. An over-length path cannot be pulled, so it must never render the
+// green pinned assurance.
+const REPOSITORY_PATH_MAX = 255
 
 function isValidDockerImageName(name: string): boolean {
   const slash = name.indexOf('/')
-  if (slash === -1) return IMAGE_PATH_RE.test(name)
+  if (slash === -1) return name.length <= REPOSITORY_PATH_MAX && IMAGE_PATH_RE.test(name)
   const first = name.slice(0, slash)
-  if (!isDockerRegistryHost(first)) return IMAGE_PATH_RE.test(name)
-  return REGISTRY_HOST_RE.test(first) && IMAGE_PATH_RE.test(name.slice(slash + 1))
+  const path = name.slice(slash + 1)
+  // A non-host first component is a Docker Hub namespace, so Docker measures
+  // the WHOLE name against the repository-path cap; only when a registry host
+  // is split off is the cap applied to the remaining path alone.
+  if (!isDockerRegistryHost(first)) {
+    return name.length <= REPOSITORY_PATH_MAX && IMAGE_PATH_RE.test(name)
+  }
+  return path.length <= REPOSITORY_PATH_MAX &&
+    REGISTRY_HOST_RE.test(first) && IMAGE_PATH_RE.test(path)
 }
 
 // Split Docker's `name[:tag][@digest]` shape apart before validating each
