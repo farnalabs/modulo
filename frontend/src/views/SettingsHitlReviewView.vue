@@ -1,6 +1,9 @@
 <template>
   <div class="page-wide">
     <PageHeader :title="$t('views.SettingsHitlReviewView.title')" :subtitle="$t('views.SettingsHitlReviewView.subtitle')" />
+    <p class="mb-4 text-sm text-muted-foreground" data-testid="hitl-review-decider-note">
+      {{ $t('views.SettingsHitlReviewView.human_only_decider_note') }}
+    </p>
     <FilterBar
       :search="{ placeholder: $t('views.SettingsHitlReviewView.search_placeholder') }"
       :search-value="searchQuery"

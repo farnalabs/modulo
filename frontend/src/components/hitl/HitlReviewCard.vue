@@ -203,6 +203,9 @@
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         :placeholder="$t('hitl.gate.review_notes')"
       />
+      <p class="text-xs text-muted-foreground" data-testid="hitl-gate-decision-attribution">
+        {{ $t('hitl.gate.decision_recorded_as_yours_note') }}
+      </p>
       <div class="flex gap-2">
         <button
           type="button"

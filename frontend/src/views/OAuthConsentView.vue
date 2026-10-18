@@ -110,6 +110,13 @@
           {{ $t('views.OAuthConsentView.no_scopes_selected') }}
         </output>
 
+        <p
+          class="rounded-lg border bg-muted/50 p-3 text-sm text-muted-foreground"
+          data-testid="oauth-consent-authority-note"
+        >
+          {{ $t('views.OAuthConsentView.approve_grants_your_authority_note') }}
+        </p>
+
         <div class="space-y-2">
           <Button
             :disabled="approving || grantedScopes.length === 0"
