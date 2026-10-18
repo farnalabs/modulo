@@ -211,15 +211,15 @@
           <span class="text-muted-foreground">{{ impactedLabel ? impactedLabel : $t('components.PipelineSnapshotTimeline.none') }}</span>
         </div>
 
-        <div v-if="diffResult.semantic?.breaking_changes?.length" class="space-y-1">
+        <div v-if="breakingChanges.length > 0" class="space-y-1">
           <div class="text-xs font-medium text-destructive">{{ $t('components.PipelineSnapshotTimeline.breaking_changes') }}</div>
           <div
-            v-for="(b, i) in diffResult.semantic.breaking_changes"
+            v-for="(b, i) in breakingChanges"
             :key="i"
             class="rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1 text-[10px]"
           >
-            <span :class="b.severity === 'block' ? 'font-medium text-destructive' : 'text-warning-text'">
-              {{ b.severity }}
+            <span :class="isBlockingSeverity(b.severity) ? 'font-medium text-destructive' : 'text-warning-text'">
+              {{ severityText(b.severity) }}
             </span>
             — {{ b.reason }}
           </div>
@@ -261,6 +261,14 @@ import { api } from '../../lib/api/client'
 import { formatApiError } from '../../lib/api/formatError'
 import { withTimeout } from '../../lib/requestTimeout'
 import { isSubstantiveKind, createdKindLabel, SNAPSHOT_PAGE_SIZE } from '../../lib/pipelineVersion'
+import {
+  isBlockingSeverity,
+  readBreakingChanges,
+  readImpactedNodes,
+  severityLabel as resolveSeverityLabel,
+  shortId,
+  type SnapshotDiffResponse,
+} from '../../lib/pipelineSnapshotDiff'
 
 interface TimelineSnapshot {
   id: string
@@ -303,7 +311,7 @@ const snapshots = ref<TimelineSnapshot[]>([])
 const snapshotsTotal = ref(0)
 const snapshotsPage = ref(1)
 const compareB = ref<string | null>(null)
-const diffResult = ref<Record<string, any> | null>(null)
+const diffResult = ref<SnapshotDiffResponse | null>(null)
 const selectedSnapshotId = ref<string | null>(null)
 const actionError = ref<string | null>(null)
 const expandedGroups = ref<Set<string>>(new Set())
@@ -394,11 +402,16 @@ const compareOptions = computed(() =>
 
 const canDiff = computed(() => compareB.value != null && selectedSnapshotId.value != null && compareB.value !== selectedSnapshotId.value)
 
-const impactedLabel = computed(() => {
-  const ids = diffResult.value?.semantic?.impacted_nodes ?? []
-  if (!Array.isArray(ids) || ids.length === 0) return ''
-  return ids.map((id: unknown) => String(id).slice(0, 8)).join(', ')
-})
+// FAR-1893: the semantic layer and the id-shortening rule come from the shared
+// diff interpretation module, so this compact summary and the compare view
+// present the same facts the same way.
+const breakingChanges = computed(() => readBreakingChanges(diffResult.value))
+
+const impactedLabel = computed(() => readImpactedNodes(diffResult.value).map((id) => shortId(id)).join(', '))
+
+function severityText(severity?: string): string {
+  return resolveSeverityLabel(severity, t)
+}
 
 // FAR-1817: one shared created_kind→label mapping (lib/pipelineVersion), used
 // here and by the version chip. An unknown/future kind renders its raw value
@@ -537,7 +550,7 @@ async function runDiff(): Promise<void> {
       actionError.value = formatApiError(error)
       return
     }
-    diffResult.value = (data as Record<string, any>) ?? null
+    diffResult.value = (data as SnapshotDiffResponse) ?? null
   } catch (e: unknown) {
     if (seq !== diffRequestSeq) return
     actionError.value = formatApiError(e)
