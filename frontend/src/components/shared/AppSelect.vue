@@ -242,13 +242,13 @@ function withFocusableListContainer(existing: unknown): PtSection {
     const existingFn = existing as (opts: unknown) => Record<string, unknown>
     return (opts) => ({ ...existingFn(opts), tabindex: '0' })
   }
-  return { ...((existing as Record<string, unknown> | undefined) ?? {}), tabindex: '0' }
+  return { ...(existing as Record<string, unknown> | undefined), tabindex: '0' }
 }
 
 const mergedPt = computed(() => {
   const consumerPt = attrs.pt as Record<string, unknown> | undefined
   return {
-    ...(consumerPt ?? {}),
+    ...consumerPt,
     listContainer: withFocusableListContainer(consumerPt?.listContainer),
   }
 })

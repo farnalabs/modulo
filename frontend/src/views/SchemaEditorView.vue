@@ -15,14 +15,19 @@
       @update:search-query="searchQuery = $event"
     />
 
-    <!-- FAR-1913: axe `scrollable-region-focusable` flags this scroll container
-         when its content has no focusable child (e.g. the empty/`:id`-not-found
-         state). tabindex="0" makes the scroll region reachable and scrollable by
-         keyboard, the same remediation AppSelect applies to PrimeVue's
-         `.p-select-list-container`. -->
-    <main class="flex-1 overflow-y-auto" tabindex="0">
+    <!-- FAR-1913: axe `scrollable-region-focusable` requires this scroll region
+         to be reachable by keyboard. The editing form already contains focusable
+         controls; the empty/`:id`-not-found state did not, so it now offers a
+         real CTA button. That is the focusable child the rule wants — putting
+         `tabindex` on `<main>` itself trips SonarCloud Web:S6845 (tabindex
+         belongs on interactive elements). -->
+    <main class="flex-1 overflow-y-auto">
       <div v-if="!editingSchema" class="p-6">
-        <EmptyState :title="$t('views.SchemaEditorView.select_or_create')" />
+        <EmptyState :title="$t('views.SchemaEditorView.select_or_create')">
+          <Button data-testid="schema-editor-empty-new" @click="createNewSchema">
+            {{ $t('views.SchemaEditorView.new_schema') }}
+          </Button>
+        </EmptyState>
       </div>
 
       <template v-else>
