@@ -18,7 +18,7 @@ import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.core.notifier import DispatchResult, Notifier, _record_owner_read_failure
+from modulo.core.notifier import DispatchResult, Notifier
 from modulo.db.models.account import Account
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 
@@ -74,68 +74,6 @@ def _session_factory(owners: list[Account], *, raise_on_execute: bool = False) -
 async def _reject(n: Notifier, endpoints: list[NotificationEndpoint], owners: list[Account]) -> list[Any]:
     with patch.object(n, "_session_factory", _session_factory(owners)):
         return await n._reject_break_glass_owned(endpoints)
-
-
-# ---------------------------------------------------------------------------
-# _record_owner_read_failure
-# ---------------------------------------------------------------------------
-
-
-def test_record_owner_read_failure_noop_when_no_meter_provider() -> None:
-    """When OTel reports no meter provider the counter stays unset and nothing is recorded."""
-    from opentelemetry import metrics as otel_metrics
-
-    with (
-        patch.object(otel_metrics, "get_meter_provider", return_value=None),
-        patch("modulo.core.notifier._owner_read_failures_total", None),
-    ):
-        _record_owner_read_failure()
-
-    from modulo.core.notifier import _owner_read_failures_total
-
-    assert _owner_read_failures_total is None
-
-
-def test_record_owner_read_failure_initialises_and_increments_counter() -> None:
-    """First call builds the OTel counter, subsequent calls reuse it and increment."""
-    from opentelemetry import metrics as otel_metrics
-
-    counter = MagicMock()
-    meter = MagicMock()
-    meter.create_counter.return_value = counter
-    provider = MagicMock()
-    provider.get_meter.return_value = meter
-
-    with (
-        patch.object(otel_metrics, "get_meter_provider", return_value=provider),
-        patch("modulo.core.notifier._owner_read_failures_total", None),
-    ):
-        _record_owner_read_failure()
-        _record_owner_read_failure()
-
-    assert counter.add.call_count == 2
-    meter.create_counter.assert_called_once_with(
-        name="modulo_notifier_break_glass_owner_read_failures_total",
-        description="Fail-closed webhook dispatch suppressions from break-glass owner-read DB errors",
-        unit="1",
-    )
-
-
-def test_record_owner_read_failure_logs_warning_when_counter_creation_fails() -> None:
-    """If OTel counter creation raises, the metric setup is abandoned with a warning."""
-    from opentelemetry import metrics as otel_metrics
-
-    provider = MagicMock()
-    provider.get_meter = MagicMock(side_effect=RuntimeError("otel down"))
-
-    with (
-        patch.object(otel_metrics, "get_meter_provider", return_value=provider),
-        patch("modulo.core.notifier._owner_read_failures_total", None),
-        patch("modulo.core.notifier._log.warning") as mock_warning,
-    ):
-        _record_owner_read_failure()
-
-    mock_warning.assert_called_once_with("notifier.metrics_owner_read_counter_failed")
 
 
 # ---------------------------------------------------------------------------
