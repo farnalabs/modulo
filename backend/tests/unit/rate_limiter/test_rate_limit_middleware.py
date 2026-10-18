@@ -113,10 +113,10 @@ class TestDispatch:
         with TestClient(app) as client:
             resp = client.post("/api/v1/runs")
         assert resp.status_code == 200
-        args, kwargs = registry.check.await_args
+        args, _kwargs = registry.check.await_args
         assert args[0] == "ip:testclient:/api/v1/runs"
-        assert kwargs["max_requests"] == 60
-        assert kwargs["window_s"] == 60
+        assert args[1] == 60
+        assert args[2] == 60
 
     def test_get_not_rate_limited(self):
         registry = _registry(allowed=False)

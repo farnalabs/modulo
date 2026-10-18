@@ -896,6 +896,27 @@ _NODE_TOKEN_USAGE_MAX_NODES = 200
 _UNION_DISPLAY_CLAMP = Decimal("1000000.0")
 
 
+def _clamped_union_node_cost(node: dict[str, Any]) -> dict[str, Any]:
+    """Copy *node*, magnitude-clamping its ``model_cost_raw_usd`` for display.
+
+    An absent (``None``) or unparseable raw value is preserved verbatim; a
+    parseable value is clamped to ``_UNION_DISPLAY_CLAMP`` unless it is finite
+    and already within the bound. The input ``node`` is never mutated.
+    """
+    entry = dict(node)
+    raw = entry.get("model_cost_raw_usd")
+    if raw is None:
+        return entry
+    try:
+        d = Decimal(str(raw))
+    except (TypeError, ValueError, ArithmeticError):
+        return entry
+    entry["model_cost_raw_usd"] = (
+        float(d) if d.is_finite() and abs(d) <= _UNION_DISPLAY_CLAMP else float(_UNION_DISPLAY_CLAMP)
+    )
+    return entry
+
+
 def _clamp_node_token_usage_union(ntu: dict[str, Any]) -> dict[str, Any]:
     """Union display clamp for serialization surfaces (RunResponse + MCP).
 
@@ -903,24 +924,7 @@ def _clamp_node_token_usage_union(ntu: dict[str, Any]) -> dict[str, Any]:
     for display; every other value is preserved verbatim. The stored union is
     never mutated.
     """
-    out: dict[str, Any] = {}
-    for nid, node in ntu.items():
-        if not isinstance(node, dict):
-            out[nid] = node
-            continue
-        entry = dict(node)
-        raw = entry.get("model_cost_raw_usd")
-        if raw is not None:
-            try:
-                d = Decimal(str(raw))
-            except (TypeError, ValueError, ArithmeticError):
-                d = None
-            if d is not None:
-                entry["model_cost_raw_usd"] = (
-                    float(d) if d.is_finite() and abs(d) <= _UNION_DISPLAY_CLAMP else float(_UNION_DISPLAY_CLAMP)
-                )
-        out[nid] = entry
-    return out
+    return {nid: _clamped_union_node_cost(node) if isinstance(node, dict) else node for nid, node in ntu.items()}
 
 
 def _serialize_node_token_usage(ntu: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -2227,6 +2231,42 @@ class FixtureExportResponse(BaseModel):
     fixture_map: dict[str, str]
 
 
+def _telemetry_log_lengths(tele: dict[str, Any]) -> tuple[int, int]:
+    """``(stdout, stderr)`` character lengths from one node's telemetry dict.
+
+    Prefers the stored ``stdout_length`` / ``stderr_length`` (always the
+    pre-truncation count) and falls back to ``len(str(...))`` of the inline
+    content when the length key is absent but the inline key is present.
+    """
+    stdout_len = tele.get("stdout_length")
+    stderr_len = tele.get("stderr_length")
+    stdout_total = 0
+    stderr_total = 0
+    if stdout_len is not None:
+        stdout_total += int(stdout_len or 0)
+    elif "agent_stdout" in tele:
+        stdout_total += len(str(tele["agent_stdout"] or ""))
+    if stderr_len is not None:
+        stderr_total += int(stderr_len or 0)
+    elif "agent_stderr" in tele:
+        stderr_total += len(str(tele["agent_stderr"] or ""))
+    return stdout_total, stderr_total
+
+
+def _inline_log_lengths(out: Any) -> tuple[int, int]:
+    """``(stdout, stderr)`` lengths derived from a node's inline output blob.
+
+    A dict envelope contributes the length of its inline ``agent_stdout`` /
+    ``agent_stderr``; a bare string counts as stdout only (its inline length);
+    anything else contributes nothing.
+    """
+    if isinstance(out, dict):
+        return len(str(out.get("agent_stdout") or "")), len(str(out.get("agent_stderr") or ""))
+    if isinstance(out, str):
+        return len(out), 0
+    return 0, 0
+
+
 def _compute_log_totals(
     normalized_telemetry: dict[str, Any] | None,
     normalized_outputs: dict[str, Any] | None,
@@ -2250,24 +2290,11 @@ def _compute_log_totals(
     for node_id in all_node_ids:
         tele = (normalized_telemetry or {}).get(node_id)
         if isinstance(tele, dict):
-            stdout_len = tele.get("stdout_length")
-            stderr_len = tele.get("stderr_length")
-            if stdout_len is not None:
-                stdout_total += int(stdout_len or 0)
-            elif "agent_stdout" in tele:
-                stdout_total += len(str(tele["agent_stdout"] or ""))
-            if stderr_len is not None:
-                stderr_total += int(stderr_len or 0)
-            elif "agent_stderr" in tele:
-                stderr_total += len(str(tele["agent_stderr"] or ""))
+            stdout_len, stderr_len = _telemetry_log_lengths(tele)
         else:
-            # No telemetry: derive from inline content length.
-            out = (normalized_outputs or {}).get(node_id)
-            if isinstance(out, dict):
-                stdout_total += len(str(out.get("agent_stdout") or ""))
-                stderr_total += len(str(out.get("agent_stderr") or ""))
-            elif isinstance(out, str):
-                stdout_total += len(out)
+            stdout_len, stderr_len = _inline_log_lengths((normalized_outputs or {}).get(node_id))
+        stdout_total += stdout_len
+        stderr_total += stderr_len
     return stdout_total, stderr_total
 
 
@@ -3104,6 +3131,92 @@ class NodeRecoverResponse(BaseModel):
     status: str
 
 
+async def _resolve_recovery_stamp(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    node_id: str,
+) -> str | None:
+    """Resolve the gate id to stamp on a node-recovery resume payload (FAR-541).
+
+    The run's UNDECIDED claim row(s) mark where the run is interrupted —
+    regardless of the target node's name. A row keyed ``hitl_review_*`` is a
+    real HITL gate whose decision must go through approve/reject -> explicit
+    422. Manual-node rows (keyed by the node id — the interrupt payload stamps
+    ``review_id: node_id``) and conformance-block rows (keyed by the guardrail
+    gate id) are stamped into the recovery payload, which the manual-node and
+    conformance consumers accept. A legacy ""-keyed row (pre-stamping
+    interrupt) never wins the stamp.
+
+    FAR-541 iteration 4 (FIX B): the query is deterministic — a row matching
+    the node being recovered wins, otherwise newest-first (``claimed_at DESC
+    NULLS LAST, id DESC``, mirroring ``_latest_committed_decision_row``) —
+    stale undecided rows (normal: recover_node never marks bypassed rows
+    decided) can no longer hijack the stamp pick with a foreign identity, and
+    the pick is stable when rows share a claim timestamp. The matching-node
+    row wins when present (the query orders it first); the explicit Python-side
+    preference keeps the pick correct and auditable even if the SQL ordering
+    drifts.
+    """
+    undecided_review_ids: list[str] = list(
+        (
+            await session.execute(
+                select(HitlClaim.review_id)
+                .where(
+                    HitlClaim.run_id == run_id,
+                    HitlClaim.organisation_id == principal.organisation_id,
+                    HitlClaim.decision.is_(None),
+                )
+                .order_by(
+                    (HitlClaim.review_id == node_id).desc(),
+                    HitlClaim.claimed_at.desc().nullslast(),
+                    HitlClaim.id.desc(),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if any(gate.startswith("hitl_review_") for gate in undecided_review_ids):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Node is a pending HITL gate; use the HITL approve/reject endpoints for gate nodes.",
+        )
+    return next(
+        (gate for gate in undecided_review_ids if gate == node_id),
+        next((gate for gate in undecided_review_ids if gate), None),
+    )
+
+
+async def _recover_node_or_http_error(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    node_id: str,
+    input_data: dict[str, Any] | None,
+) -> Run:
+    """Run ``recover_node``, mapping each domain failure to its HTTP contract."""
+    try:
+        return await recover_node(
+            session,
+            org_id=principal.organisation_id,
+            run_id=run_id,
+            node_id=node_id,
+            input_data=input_data,
+            actor_id=principal.account_id,
+        )
+    except RecoveryNotAllowedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)[:200]) from exc
+    except GuardrailOverrideRequiredError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)[:200]) from exc
+    except NodeNotFoundInGraphError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except NodeAlreadyCompletedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ConcurrentRecoveryError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
 @router.post(
     "/{run_id}/nodes/{node_id}/recover",
     status_code=status.HTTP_200_OK,
@@ -3160,72 +3273,8 @@ async def recover_run_node(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            # FAR-541 (iteration 3, FIX 3): the run's UNDECIDED claim row(s)
-            # mark where the run is interrupted — regardless of the target
-            # node's name. A row keyed ``hitl_review_*`` is a real HITL gate
-            # whose decision must go through approve/reject -> explicit 422.
-            # Manual-node rows (keyed by the node id — the interrupt payload
-            # stamps ``review_id: node_id``) and conformance-block rows (keyed
-            # by the guardrail gate id) are stamped into the recovery payload,
-            # which the manual-node and conformance consumers accept. A legacy
-            # ""-keyed row (pre-stamping interrupt) never wins the stamp.
-            # FAR-541 iteration 4 (FIX B): the query is deterministic — a row
-            # matching the node being recovered wins, otherwise newest-first
-            # (``claimed_at DESC NULLS LAST, id DESC``, mirroring
-            # ``_latest_committed_decision_row``) — stale undecided rows
-            # (normal: recover_node never marks bypassed rows decided) can no
-            # longer hijack the stamp pick with a foreign identity, and the
-            # pick is stable when rows share a claim timestamp.
-            undecided_review_ids: list[str] = list(
-                (
-                    await session.execute(
-                        select(HitlClaim.review_id)
-                        .where(
-                            HitlClaim.run_id == run_id,
-                            HitlClaim.organisation_id == principal.organisation_id,
-                            HitlClaim.decision.is_(None),
-                        )
-                        .order_by(
-                            (HitlClaim.review_id == node_id).desc(),
-                            HitlClaim.claimed_at.desc().nullslast(),
-                            HitlClaim.id.desc(),
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            if any(gate.startswith("hitl_review_") for gate in undecided_review_ids):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail="Node is a pending HITL gate; use the HITL approve/reject endpoints for gate nodes.",
-                )
-            # The matching-node row wins when present (the query orders it
-            # first); the explicit Python-side preference keeps the pick
-            # correct and auditable even if the SQL ordering drifts.
-            stamp_review_id = next(
-                (gate for gate in undecided_review_ids if gate == node_id),
-                next((gate for gate in undecided_review_ids if gate), None),
-            )
-            try:
-                run = await recover_node(
-                    session,
-                    org_id=principal.organisation_id,
-                    run_id=run_id,
-                    node_id=node_id,
-                    input_data=req.input_data,
-                    actor_id=principal.account_id,
-                )
-            except RecoveryNotAllowedError as exc:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)[:200]) from exc
-            except GuardrailOverrideRequiredError as exc:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)[:200]) from exc
-            except NodeNotFoundInGraphError as exc:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-            except NodeAlreadyCompletedError as exc:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-            except ConcurrentRecoveryError as exc:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+            stamp_review_id = await _resolve_recovery_stamp(session, principal, run_id, node_id)
+            run = await _recover_node_or_http_error(session, principal, run_id, node_id, req.input_data)
     except IntegrityError:
         _log.exception(_CODE_RUNS_RECOVER_RUN_NODE)
         raise HTTPException(
@@ -4278,6 +4327,69 @@ async def _stderr_pointer_from_telemetry(
     return node_stderr_artifact(blobs.telemetry or {}, blobs.outputs or {}, node_id)
 
 
+async def _load_attempt_row(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    node_id: str,
+    attempt_key: str,
+) -> RunNodeOutput | None:
+    """Load the ``RunNodeOutput`` row for one node attempt, scoped to the org.
+
+    Applies the tenant RLS scope before the exact-key lookup. A DB error is
+    converted to the standard 503 contract rather than propagating raw.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            return (
+                await session.execute(
+                    select(RunNodeOutput).where(
+                        RunNodeOutput.run_id == run_id,
+                        RunNodeOutput.node_id == node_id,
+                        RunNodeOutput.attempt_key == attempt_key,
+                    )
+                )
+            ).scalar_one_or_none()
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.get_run_artifact")
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+
+def _artifact_pointer_from_row(row: RunNodeOutput | None, stream: str) -> dict[str, Any] | None:
+    """Return the stored side-car pointer for *stream* from a node attempt row."""
+    if row is None or not row.artifacts_json:
+        return None
+    for ptr in row.artifacts_json:
+        if ptr.get("stream") == stream:
+            return ptr
+    return None
+
+
+async def _telemetry_artifact_pointer(
+    stream: str,
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    node_id: str,
+) -> dict[str, Any] | None:
+    """Resolve a synthetic full-transcript pointer for ``stdout``/``stderr``.
+
+    The ``<base>:full:<cap>`` (FAR-811) and ``<base>:full:stderr:<cap>``
+    (FAR-879) synthetic keys have no row, so their pointer lives in the node's
+    telemetry instead.
+    """
+    if stream == "stdout":
+        return await _stdout_pointer_from_telemetry(session, principal, run_id, node_id)
+    if stream == "stderr":
+        return await _stderr_pointer_from_telemetry(session, principal, run_id, node_id)
+    return None
+
+
 @router.get("/{run_id}/nodes/{node_id}/attempts/{attempt_key}/artifacts/{stream}")
 @handle_db_errors("runs.get_run_artifact")
 async def get_run_artifact(
@@ -4316,26 +4428,7 @@ async def get_run_artifact(
             detail=_MSG_ARTIFACT_NOT_CONFIGURED,
         ) from None
 
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            row = (
-                await session.execute(
-                    select(RunNodeOutput).where(
-                        RunNodeOutput.run_id == run_id,
-                        RunNodeOutput.node_id == node_id,
-                        RunNodeOutput.attempt_key == attempt_key,
-                    )
-                )
-            ).scalar_one_or_none()
-    except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.get_run_artifact")
-        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
-        ) from None
-
+    row = await _load_attempt_row(session, principal, run_id, node_id, attempt_key)
     base_attempt_key = _strip_full_attempt_suffix(attempt_key)
 
     # A synthetic ":full:" attempt key legitimately has no row (the transcript
@@ -4346,23 +4439,14 @@ async def get_run_artifact(
             detail=_MSG_ARTIFACT_STREAM_NOT_FOUND,
         )
 
-    # Find the pointer for the requested stream
-    pointer = None
-    if row is not None and row.artifacts_json:
-        for ptr in row.artifacts_json:
-            if ptr.get("stream") == stream:
-                pointer = ptr
-                break
+    pointer = _artifact_pointer_from_row(row, stream)
 
     # FAR-811 fallback: a synthetic ":full:" attempt key has no row at all
     # (the transcript exists only in the artifact store) — the pointer lives
     # in the node's telemetry instead.  FAR-879: same pattern for stderr's
     # ":full:stderr:" synthetic key.
     if pointer is None and base_attempt_key is not None:
-        if stream == "stdout":
-            pointer = await _stdout_pointer_from_telemetry(session, principal, run_id, node_id)
-        elif stream == "stderr":
-            pointer = await _stderr_pointer_from_telemetry(session, principal, run_id, node_id)
+        pointer = await _telemetry_artifact_pointer(stream, session, principal, run_id, node_id)
 
     if pointer is None:
         raise HTTPException(
