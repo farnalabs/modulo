@@ -305,13 +305,19 @@ class TestRunnersStatusProfiles:
             resp = client.get(self.URL)
         drift = resp.json()["profiles"][0]["drift"]
         assert drift["drifted"] is True
-        # ADR 059: the operator's image_ref is not template drift, so it must
-        # not surface as a "shipped template updated" field.
+        # Placeholder-scoped ownership (FAR-1924/FAR-1779, not an ADR rule):
+        # the operator's image_ref is not template drift, so it must not
+        # surface as a "shipped template updated" field.
         assert "image_ref" not in drift["drifted_fields"]
         assert "config_json.memory_mb" in drift["drifted_fields"]
 
     def test_operator_set_image_ref_does_not_report_drift(self, client: TestClient) -> None:
-        """A BYO image on an otherwise-clean seeded row is not drift (ADR 059)."""
+        """A BYO image on an otherwise-clean seeded row is not drift.
+
+        Ownership is placeholder-scoped (the FAR-1924/FAR-1779 delivery
+        decision, not an ADR rule): an operator-set image_ref is
+        operator-owned.
+        """
         profile = _profile_row(image_ref="ghcr.io/acme/agent@sha256:" + "a" * 64)
         with _enter_patchers(_patch_status(rows=[_probe_row()], profiles=[profile])):
             resp = client.get(self.URL)

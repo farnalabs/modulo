@@ -2,8 +2,9 @@
 
 The apply refreshes ONLY the drifted template-owned fields; operator-owned
 fields (name, description, capabilities, secret refs, untouched config
-keys) must survive. Per ADR 059 the image reference is placeholder-scoped:
-while the row still carries the release placeholder digest (or no image) the
+keys) must survive. Ownership of the image reference is placeholder-scoped
+(the FAR-1924/FAR-1779 delivery decision, not an ADR rule): while the row
+still carries the release placeholder digest (or no image) the
 template owns it and an apply writes ``BUNDLED_RUNNER_IMAGE_REF``; once the
 operator sets their own image it is neither a drift key nor an apply target,
 so an operator-set image_ref survives the apply unchanged. Non-template rows
@@ -62,8 +63,9 @@ async def _apply(profile: Any) -> Any:
 class TestApplyBundledRunnerTemplate:
     @pytest.mark.asyncio
     async def test_refreshes_drifted_template_fields_preserving_operator_image(self) -> None:
-        # ADR 059: image_ref is operator-owned, so apply refreshes the shipped
-        # template WITHOUT resetting the operator's chosen image.
+        # Placeholder-scoped ownership (FAR-1924/FAR-1779, not an ADR rule):
+        # image_ref is operator-owned, so apply refreshes the shipped template
+        # WITHOUT resetting the operator's chosen image.
         profile = _make_profile()
         operator_image_ref = profile.image_ref
         assert operator_image_ref != BUNDLED_RUNNER_IMAGE_REF
