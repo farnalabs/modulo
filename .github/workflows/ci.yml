@@ -285,6 +285,7 @@ jobs:
           .semgrep/hitl-review-mcp-caller-type.yml:.semgrep/tests/hitl-review-mcp-caller-type-literal.py
           .semgrep/missing-is-privileged.yml:.semgrep/tests/graph-write-missing-is-privileged.py
           .semgrep/missing_session_begin.yml:.semgrep/missing_session_begin.py
+          .semgrep/no-op-except-reraise.yml:.semgrep/tests/no-op-except-reraise.py
           .semgrep/no-raw-httpx-client.yml:.semgrep/tests/no-raw-httpx-client.py
           .semgrep/non_serializable_in_langgraph_state.yml:.semgrep/tests/non-serializable-in-langgraph-state.py
           .semgrep/retry-loop-last-exc.yml:.semgrep/tests/retry-loop-last-exc.py
