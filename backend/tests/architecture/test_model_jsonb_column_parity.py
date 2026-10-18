@@ -1,19 +1,34 @@
 """Architecture gate: the 0147-converted JSON columns that still resolve are JSONB.
 
-SCOPE — this gate covers **every** ``(table, column)`` pair a migration declares
-as ``jsonb``, not merely the 66 ``0147_json_to_jsonb_standardize`` promoted. The
+SCOPE — the gate checks every ``(table, column)`` pair it can PARSE out of the
+migrations, not merely the 66 ``0147_json_to_jsonb_standardize`` promoted. The
 pair set is derived mechanically from the migrations (FAR-1941 extended it beyond
 0147): each migration's own source is parsed for the jsonb declaration idioms —
 ``op.add_column`` / ``op.create_table`` with a JSONB-typed ``sa.Column``,
 ``op.alter_column`` with a JSONB ``type_``, the raw-SQL forms ``ALTER TABLE ...
-ADD/ALTER COLUMN ... jsonb`` and ``CREATE TABLE ... (col jsonb ...)``, and
+ADD/ALTER COLUMN ... jsonb`` and ``CREATE TABLE ... (col jsonb ...)``,
 declarative module-level pair/column lists such as 0147's ``_JSON_TO_JSONB`` and
-0129's ``_JSON_COLUMNS``. Every declared pair whose table and column still
-resolve against ``Base.metadata`` must map to a JSONB dialect impl. Pairs whose
-table or column no longer exists (a later migration dropped or renamed them)
-carry no check — the migration that removed them owns that decision. There is no
-hand-maintained pair inventory: adding a jsonb column to any migration
-automatically extends the gate's scope.
+0129's ``_JSON_COLUMNS``, and the SIMPLE interpolated case: an
+``op.execute(f "...")`` inside a ``for <col> in <CONSTANT>`` loop over a
+module-level sequence of column names (0226's ``_columns``, 0235's ``COLUMNS``),
+rendered once per element. Every parsed pair whose table and column still resolve
+against ``Base.metadata`` must map to a JSONB dialect impl. Pairs whose table or
+column no longer exists (a later migration dropped or renamed them) carry no
+check — the migration that removed them owns that decision.
+
+This is **not** a "no hand-maintained inventory, so any migration is covered"
+gate, and an earlier revision of this docstring wrongly said it was. Parsing
+cannot see every interpolation: a declaration whose table, column or TYPE comes
+from a runtime variable (0147's ``_add_temp_column`` builds ``... ADD COLUMN
+"{tmp}" {cast}``) yields no pair. A parsed-pairs inventory alone would then miss
+it SILENTLY — the exact defect class this file has now shipped three times.
+``test_every_executed_jsonb_declaration_is_parsed_or_justified`` therefore closes
+the class: every executed SQL string that declares a jsonb column — a literal
+``jsonb`` type token, or a column TYPE that is an interpolation (which COULD be
+jsonb) — must EITHER yield at least one pair OR be named in
+``_UNPARSED_JSONB_DDL`` with the reason it is out of the extractor's reach. A new
+declaration that parses to nothing and is not justified FAILS the gate with a
+message naming it, so it can never be silently ignored.
 
 The FAR-1878 residual was CLOSED by FAR-1941: the 16 columns that were declared
 bare generic ``JSON`` over a physical ``jsonb`` column are aligned, and their
@@ -97,6 +112,12 @@ _JSONB_ALIAS_PATH = _SRC / "db" / "models" / "base.py"
 #: is fully typed for mypy strict.
 _POSTGRES_DIALECT = create_engine("postgresql+psycopg://").dialect
 
+#: The token an UNRESOLVED interpolation renders to in a declaration SHAPE.
+#: Deliberately not identifier-shaped for the parser's purposes, so a
+#: ``TYPE {variable}`` interpolation is never mistaken for a literal ``jsonb`` —
+#: the declaration net treats it as a possible-jsonb declaration instead.
+_INTERP = "__INTERP__"
+
 #: 0147 predates two migrations that removed three of its target pairs from
 #: ``Base.metadata``. EVERY such pair must be named here — the parity test
 #: hard-fails on any other absent 0147 table, so these exceptions cannot grow
@@ -165,26 +186,157 @@ def _module_string_constants(tree: ast.Module) -> dict[str, str]:
     return constants
 
 
-def _execute_sql_literals(tree: ast.Module) -> list[str]:
-    """Every string constant passed to an ``execute(...)``-family call.
+def _is_execute_call(node: ast.Call) -> bool:
+    """True for ``op.execute`` / ``<bind>.execute`` / a ``_execute`` wrapper."""
+    func = node.func
+    name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
+    return name is not None and name.strip("_") == "execute"
 
-    Covers ``op.execute(...)`` / ``<bind>.execute(...)`` and a migration-local
-    wrapper such as 0254's ``_execute(sql)`` (whose whole body is
-    ``op.execute(text(sql))``). Only strings actually handed to the executor are
-    yielded — prose in a module/function docstring is never a declaration.
+
+def _module_string_expressions(tree: ast.Module) -> dict[str, ast.expr]:
+    """Module-level bindings whose value is a SQL string expression.
+
+    ``NAME = "..."``, ``NAME = f"..."`` and ``NAME = "..." + "..."``. A migration
+    that assigns DDL to a module-level name and passes the NAME to ``execute`` is
+    still a real declaration, so the name resolves to its expression rather than
+    dropping out of the gate.
     """
+    expressions: dict[str, ast.expr] = {}
+    for node in tree.body:
+        target: ast.expr | None
+        value: ast.expr | None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+        elif isinstance(node, ast.AnnAssign):
+            target, value = node.target, node.value
+        else:
+            continue
+        if isinstance(target, ast.Name) and isinstance(value, (ast.Constant, ast.JoinedStr, ast.BinOp)):
+            expressions[target.id] = value
+    return expressions
+
+
+def _loop_sequence_bindings(
+    tree: ast.Module, sequences: dict[str, tuple[str | tuple[str, ...], ...]]
+) -> dict[int, dict[str, tuple[str, ...]]]:
+    """Loop variables in scope at each execute call, when they iterate a constant.
+
+    Deliberately shallow: ONLY ``for <name> in <CONSTANT>`` whose iterable is a
+    module-level list/tuple of strings is resolved (0226's ``_columns``, 0235's
+    ``COLUMNS``). A loop over a call, an attribute or any computed iterable is
+    left unresolved — the declaration net then demands the DDL be justified.
+    """
+    string_sequences = {
+        name: tuple(element for element in value if isinstance(element, str))
+        for name, value in sequences.items()
+        if value and all(isinstance(element, str) for element in value)
+    }
+    bindings: dict[int, dict[str, tuple[str, ...]]] = {}
+
+    def visit(current: ast.AST, env: dict[str, tuple[str, ...]]) -> None:
+        if isinstance(current, ast.For):
+            inner = dict(env)
+            if isinstance(current.target, ast.Name) and isinstance(current.iter, ast.Name):
+                values = string_sequences.get(current.iter.id)
+                if values is not None:
+                    inner[current.target.id] = values
+            for child in (*current.body, *current.orelse):
+                visit(child, inner)
+            return
+        if isinstance(current, ast.Call) and _is_execute_call(current):
+            bindings[id(current)] = dict(env)
+        for child in ast.iter_child_nodes(current):
+            visit(child, env)
+
+    visit(tree, {})
+    return bindings
+
+
+def _render_sql_renderings(
+    node: ast.expr, module_values: dict[str, ast.expr], env: dict[str, tuple[str, ...]]
+) -> list[tuple[str, tuple[str, ...]]]:
+    """``(shape, concrete renderings)`` for every string *node* produces.
+
+    *shape* replaces each interpolation with ``__INTERP__`` so a declaration
+    whose names come from an f-string still presents a declaration shape;
+    *concrete* holds the fully-rendered strings, and is empty when some
+    interpolation is not a bound loop variable. Descends through wrappers
+    (``sa.text(...)``), tuples/lists and ``+`` concatenations.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [(node.value, (node.value,))]
+    if isinstance(node, ast.JoinedStr):
+        shape_parts: list[str] = []
+        concretes: tuple[str, ...] = ("",)
+        resolvable = True
+        for part in node.values:
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                shape_parts.append(part.value)
+                concretes = tuple(concrete + part.value for concrete in concretes)
+            elif (
+                isinstance(part, ast.FormattedValue)
+                and part.conversion == -1
+                and part.format_spec is None
+                and isinstance(part.value, ast.Name)
+                and part.value.id in env
+            ):
+                shape_parts.append(_INTERP)
+                concretes = tuple(concrete + value for concrete in concretes for value in env[part.value.id])
+            else:
+                shape_parts.append(_INTERP)
+                resolvable = False
+        return [("".join(shape_parts), concretes if resolvable else ())]
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        combined: list[tuple[str, tuple[str, ...]]] = []
+        for left_shape, left_concretes in _render_sql_renderings(node.left, module_values, env):
+            for right_shape, right_concretes in _render_sql_renderings(node.right, module_values, env):
+                combined.append(
+                    (left_shape + right_shape, tuple(a + b for a in left_concretes for b in right_concretes))
+                )
+        return combined
+    if isinstance(node, ast.Name):
+        if node.id in env:
+            return [(value, (value,)) for value in env[node.id]]
+        if node.id in module_values:
+            return _render_sql_renderings(module_values[node.id], module_values, env)
+        return []
+    if isinstance(node, ast.Call):
+        renderings: list[tuple[str, tuple[str, ...]]] = []
+        for argument in node.args:
+            renderings.extend(_render_sql_renderings(argument, module_values, env))
+        for keyword in node.keywords:
+            renderings.extend(_render_sql_renderings(keyword.value, module_values, env))
+        return renderings
+    if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+        element_renderings: list[tuple[str, tuple[str, ...]]] = []
+        for element in node.elts:
+            element_renderings.extend(_render_sql_renderings(element, module_values, env))
+        return element_renderings
+    return []
+
+
+def _execute_sql_literals(tree: ast.Module) -> list[str]:
+    """Every SQL string handed to an ``execute(...)``-family call.
+
+    Covers ``op.execute(...)`` / ``<bind>.execute(...)`` / a migration-local
+    ``_execute`` wrapper, nested wrappers (``op.execute(sa.text(...))``),
+    module-level string constants referenced by name, ``+`` concatenations, and
+    the SIMPLE interpolated case — a ``for <col> in <CONSTANT>`` loop, rendered
+    once per element (0226/0235). A string whose interpolation the loop resolver
+    cannot bind yields nothing here; ``_executed_sql_jsonb_declarations`` is what
+    guarantees such a case cannot pass unchecked. Only strings actually handed to
+    the executor are yielded — docstring prose is never a declaration.
+    """
+    module_values = _module_string_expressions(tree)
+    bindings = _loop_sequence_bindings(tree, _module_string_sequence_constants(tree))
     literals: list[str] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
+        if not isinstance(node, ast.Call) or not _is_execute_call(node):
             continue
-        func = node.func
-        name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
-        if name is None or name.strip("_") != "execute":
-            continue
-        for arg in node.args:
-            literals.extend(
-                sub.value for sub in ast.walk(arg) if isinstance(sub, ast.Constant) and isinstance(sub.value, str)
-            )
+        env = bindings.get(id(node), {})
+        for argument in node.args:
+            for _shape, concretes in _render_sql_renderings(argument, module_values, env):
+                literals.extend(concretes)
     return literals
 
 
@@ -391,9 +543,9 @@ def test_jsonb_is_only_constructed_in_the_shared_alias() -> None:
 # Migration-derived jsonb pair extraction (FAR-1941).
 #
 # The gate above hard-codes 0147's pair list by loading that migration module.
-# FAR-1941 extends the dialect-parity check to EVERY migration that declares a
-# jsonb column, without a hand-maintained pair inventory: the pair set is read
-# from the migrations' own source. Supported declaration idioms:
+# FAR-1941 extends the dialect-parity check beyond 0147 to every migration whose
+# jsonb declaration the extractor can PARSE, with the pair set read from the
+# migrations' own source. Supported declaration idioms:
 #
 #   * ``op.add_column(<table>, sa.Column(<col>, <jsonb-type>, ...))``
 #   * ``op.create_table(<table>, sa.Column(<col>, <jsonb-type>, ...), ...)``
@@ -411,6 +563,10 @@ def test_jsonb_is_only_constructed_in_the_shared_alias() -> None:
 #     only when the module itself constructs a JSONB type and the constant's
 #     NAME signals JSON, so an unrelated per-table tuple such as 0166's
 #     ``_PREFLIGHT_COLUMNS`` is never misread as a jsonb declaration.
+#   * an ``op.execute(f "...")`` inside a ``for <col> in <CONSTANT>`` loop whose
+#     iterable is a module-level list/tuple of strings — rendered once per
+#     element (0226's ``_columns``, 0235's ``COLUMNS``). Any OTHER interpolation
+#     (a function parameter, a call, an attribute) is left unresolved.
 #
 # A jsonb type expression is any ``JSONB(...)`` call (bare or qualified) or a
 # ``...with_variant(<JSONB>, "postgresql")`` call, including the conditional
@@ -425,6 +581,18 @@ def test_jsonb_is_only_constructed_in_the_shared_alias() -> None:
 # (``op.execute`` / ``<bind>.execute`` / a migration-local ``_execute``
 # wrapper); prose in a docstring or comment is never a declaration, however
 # jsonb-shaped it looks (0129's docstring shows an ``ALTER ... TYPE jsonb``).
+#
+# NOT parsed, and no longer claimed to be: an interpolation the loop resolver
+# cannot bind. 0147's ``_add_temp_column`` builds ``... ADD COLUMN "{tmp}"
+# {cast}`` from a runtime variable, and its table/column also arrive by
+# parameter; 0129 has the identical helper. The declaration net
+# (``_executed_sql_jsonb_declarations`` + ``_UNPARSED_JSONB_DDL`` below) is what
+# keeps such a case from passing SILENTLY: every executed SQL string that
+# declares a jsonb column — a literal ``jsonb`` type token, or a column TYPE
+# that is an interpolation (which could be jsonb) — must parse to at least one
+# pair OR be named there with a reason, or
+# ``test_every_executed_jsonb_declaration_is_parsed_or_justified`` fails naming
+# it.
 # ---------------------------------------------------------------------------
 
 _ALTER_ADD_JSONB_RE = re.compile(
@@ -446,6 +614,52 @@ _CREATE_TABLE_RE = re.compile(
 #: first identifier is not followed by the ``jsonb`` type token (``CONSTRAINT``
 #: → ``<name>``, ``PRIMARY`` → ``KEY``, ``CHECK`` → ``(``).
 _COLUMN_JSONB_RE = re.compile(r'^\s*"?([A-Za-z0-9_]+)"?\s+jsonb\b', re.IGNORECASE)
+
+# --- declaration SHAPES (the net's detection vocabulary) ---------------------
+# A shape replaces every interpolation with ``_INTERP``. Detection is
+# deliberately BROADER than parsing: a column whose TYPE is the literal
+# ``jsonb`` token OR an unresolved interpolation is a possible jsonb
+# declaration, because the interpolation could be jsonb at runtime. Detecting
+# the runtime-variable form is what makes 0147's ``ADD COLUMN "{tmp}" {cast}``
+# loud rather than a silent gap; the cost is that a non-jsonb dynamic column
+# would need one explicit justification, which is the intended trade.
+_SHAPE_IDENTIFIER = rf'(?:{_INTERP}|"[A-Za-z0-9_]+"|[A-Za-z0-9_]+)'
+_ADD_COLUMN_JSONB_SHAPE_RE = re.compile(
+    rf"\bADD\s+COLUMN(?:\s+IF\s+NOT\s+EXISTS)?\s+{_SHAPE_IDENTIFIER}\s+(?:jsonb|{_INTERP})\b",
+    re.IGNORECASE,
+)
+_ALTER_COLUMN_TYPE_JSONB_SHAPE_RE = re.compile(
+    rf"\bALTER\s+COLUMN\s+{_SHAPE_IDENTIFIER}\s+TYPE\s+(?:jsonb|{_INTERP})\b",
+    re.IGNORECASE,
+)
+_ANY_CREATE_TABLE_RE = re.compile(r"\bCREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\b", re.IGNORECASE)
+_COLUMN_JSONB_SHAPE_RE = re.compile(rf"^\s*{_SHAPE_IDENTIFIER}\s+(?:jsonb|{_INTERP})\b", re.IGNORECASE)
+
+#: Executed-SQL jsonb declarations the extractor CANNOT parse, keyed by
+#: ``(migration_stem, declaration_shape)`` and justified per entry — the direct
+#: analogue of ``_RENAMED_0147_PAIRS`` / ``_DROPPED_0147_PAIRS`` above. The
+#: declaration net requires every detected declaration to parse to a pair OR to
+#: appear here with its reason, so a NEW unparsed declaration FAILS the gate
+#: instead of slipping through. Staleness is enforced too: an entry whose shape
+#: no longer appears (or that now parses) fails
+#: ``test_unparsed_jsonb_ddl_exceptions_are_live``, so the map cannot rot into a
+#: blanket skip.
+_UNPARSED_JSONB_DDL: dict[tuple[str, str], str] = {
+    # Both migrations share the same ``_add_temp_column`` helper: the temp
+    # column's TYPE is the runtime ``cast`` argument ("jsonb" on upgrade,
+    # "json" on downgrade), so the string alone cannot declare a pair. The jsonb
+    # pairs are enumerated declaratively — 0129's ``_JSON_COLUMNS`` and 0147's
+    # ``_JSON_TO_JSONB`` — and parsed from THERE, which is why the extractor's
+    # pair set already contains them.
+    ("0129_runs_json_to_jsonb", 'ALTER TABLE public."__INTERP__" ADD COLUMN "__INTERP__" __INTERP__'): (
+        "type is the runtime `cast` argument (jsonb on upgrade / json on downgrade); the "
+        "pairs are declared in `_JSON_COLUMNS` and parsed from there"
+    ),
+    ("0147_json_to_jsonb_standardize", 'ALTER TABLE public."__INTERP__" ADD COLUMN "__INTERP__" __INTERP__'): (
+        "same `_add_temp_column` shape as 0129 — type is the runtime `cast`; the pairs are "
+        "declared in `_JSON_TO_JSONB` and parsed from there"
+    ),
+}
 
 
 def _create_table_body(sql: str, open_index: int) -> str | None:
@@ -609,6 +823,68 @@ def _raw_sql_jsonb_pairs(sql: str) -> set[tuple[str, str]]:
     return pairs
 
 
+def _shape_declares_jsonb(shape: str) -> bool:
+    """True iff a declaration SHAPE declares a jsonb (or possible-jsonb) column.
+
+    Broader than ``_raw_sql_jsonb_pairs``: the TYPE may be an unresolved
+    interpolation, which could be ``jsonb`` at runtime. Shares the body/quote
+    parsing with the parser so a single-line ``CREATE TABLE`` and a table-level
+    constraint are handled identically.
+    """
+    if _ADD_COLUMN_JSONB_SHAPE_RE.search(shape):
+        return True
+    if _ALTER_COLUMN_TYPE_JSONB_SHAPE_RE.search(shape):
+        return True
+    for match in _ANY_CREATE_TABLE_RE.finditer(shape):
+        open_index = shape.find("(", match.end())
+        if open_index == -1:
+            continue
+        body = _create_table_body(shape, open_index)
+        if body is None:
+            continue
+        if any(_COLUMN_JSONB_SHAPE_RE.match(definition) for definition in _split_top_level_commas(body)):
+            return True
+    return False
+
+
+def _executed_sql_jsonb_declarations(source: str) -> list[tuple[str, set[tuple[str, str]]]]:
+    """Every jsonb column declaration inside an executed SQL string in *source*.
+
+    Each item is ``(shape, pairs)``: the declaration's SQL shape (interpolations
+    rendered as ``_INTERP``) and the ``(table, column)`` pairs parsed from that
+    SAME declaration. An EMPTY *pairs* set means the extractor could not resolve
+    it — exactly the declaration the net requires be made parseable or recorded
+    in ``_UNPARSED_JSONB_DDL``.
+    """
+    tree = ast.parse(source)
+    module_values = _module_string_expressions(tree)
+    bindings = _loop_sequence_bindings(tree, _module_string_sequence_constants(tree))
+
+    declarations: list[tuple[str, set[tuple[str, str]]]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not _is_execute_call(node):
+            continue
+        env = bindings.get(id(node), {})
+        for argument in node.args:
+            for shape, concretes in _render_sql_renderings(argument, module_values, env):
+                if not _shape_declares_jsonb(shape):
+                    continue
+                pairs: set[tuple[str, str]] = set()
+                for concrete in concretes:
+                    pairs |= _raw_sql_jsonb_pairs(concrete)
+                declarations.append((shape, pairs))
+    return declarations
+
+
+def _unexplained_executed_jsonb_declarations(stem: str, source: str) -> list[str]:
+    """Declarations in *source* that parse to no pair and are not justified."""
+    return [
+        f"{stem}: {shape}"
+        for shape, pairs in _executed_sql_jsonb_declarations(source)
+        if not pairs and (stem, shape) not in _UNPARSED_JSONB_DDL
+    ]
+
+
 def _declared_jsonb_pairs(source: str) -> set[tuple[str, str]]:
     """Every ``(table, column)`` pair *source* declares as jsonb (see above)."""
     tree = ast.parse(source)
@@ -700,7 +976,11 @@ def test_every_migration_declared_jsonb_column_is_jsonb_on_postgres() -> None:
     """Every mapped column a migration declares jsonb resolves to a JSONB impl.
 
     The pair set is read from the migrations themselves (no hand-maintained
-    inventory). A declared pair whose table or column no longer exists in
+    inventory), and covers every declaration the extractor can PARSE — see the
+    module docstring and the FAR-1941 extractor header for the exact idioms.
+    ``test_every_executed_jsonb_declaration_is_parsed_or_justified`` is what
+    guarantees a declaration the extractor CANNOT parse is not silently outside
+    this set. A declared pair whose table or column no longer exists in
     ``Base.metadata`` is skipped — a later migration dropped or renamed it, and
     that owner decides the type — but every pair that still resolves MUST be
     JSONB, or a SQL predicate against it binds as ``$1::JSON`` and raises
@@ -815,6 +1095,124 @@ def test_executed_ddl_through_a_local_execute_wrapper_is_harvested() -> None:
     recognise it — otherwise the pair silently drops out of the gate's scope.
     """
     assert ("evals", "config_json") in _migration_declared_jsonb_pairs()
+
+
+def test_interpolated_loop_ddl_is_resolved_not_excused() -> None:
+    """0226/0235's ``op.execute(f "...")`` loop DDL is genuinely PARSED.
+
+    The extractor used to skip f-string-interpolated DDL entirely, so these ten
+    columns were covered only by accident (0147 happens to declare each of them
+    too). The simple ``for <col> in <CONSTANT>`` case is now rendered once per
+    element, so the pair is attributed to the migration that declares it — and
+    neither migration needs an ``_UNPARSED_JSONB_DDL`` exception.
+    """
+    declared = _migration_declared_jsonb_pairs()
+    expected = {
+        "0226_agents_json_to_jsonb": (
+            "agents",
+            (
+                "agent_commands",
+                "prompt_version_history",
+                "connector_type_refs",
+                "required_environment_capabilities",
+                "evals",
+                "retry_policy",
+            ),
+        ),
+        "0235_promote_organisations_json_to_jsonb": (
+            "organisations",
+            ("settings_json", "otel_config_json", "export_bundle_json", "guardrail_pins_json"),
+        ),
+    }
+    for migration, (table, columns) in expected.items():
+        for column in columns:
+            assert migration in declared[(table, column)]
+        assert not any(stem == migration for stem, _shape in _UNPARSED_JSONB_DDL), (
+            f"{migration}'s interpolated DDL must be PARSED, not excused in _UNPARSED_JSONB_DDL"
+        )
+
+
+def test_every_executed_jsonb_declaration_is_parsed_or_justified() -> None:
+    """No executed SQL jsonb declaration may be SILENTLY outside the gate.
+
+    Parsing cannot resolve every interpolation. This net closes the class: every
+    executed SQL string that declares a jsonb column — literally, or with a TYPE
+    that is an interpolation which could be jsonb — must parse to at least one
+    pair OR be named in ``_UNPARSED_JSONB_DDL`` with a reason. A new declaration
+    that does neither fails HERE, naming it, instead of sitting unchecked while
+    ``test_every_migration_declared_jsonb_column_is_jsonb_on_postgres`` reads as
+    green.
+    """
+    unexplained: list[str] = []
+    for path in sorted(_MIGRATION_VERSIONS_DIR.glob("*.py")):
+        if path.name.startswith("__"):
+            continue
+        unexplained.extend(_unexplained_executed_jsonb_declarations(path.stem, path.read_text(encoding="utf-8")))
+    assert not unexplained, (
+        "executed-SQL jsonb declaration(s) that neither parse to a (table, column) pair nor are "
+        "justified in _UNPARSED_JSONB_DDL — make them parseable or record the reason:\n  " + "\n  ".join(unexplained)
+    )
+
+
+def test_unparsed_jsonb_ddl_exceptions_are_live() -> None:
+    """Every ``_UNPARSED_JSONB_DDL`` entry still corresponds to a real gap.
+
+    Mirrors ``test_0147_pair_resolution_is_complete_and_justified``: an exception
+    whose declaration no longer appears (or that now parses) is stale and would
+    hide whatever it still claims, so it fails rather than lingering.
+    """
+    detected: set[tuple[str, str]] = set()
+    for path in sorted(_MIGRATION_VERSIONS_DIR.glob("*.py")):
+        if path.name.startswith("__"):
+            continue
+        for shape, pairs in _executed_sql_jsonb_declarations(path.read_text(encoding="utf-8")):
+            if not pairs:
+                detected.add((path.stem, shape))
+    stale = sorted(set(_UNPARSED_JSONB_DDL) - detected)
+    assert not stale, (
+        "_UNPARSED_JSONB_DDL justifies declarations that no longer need it (a stale exception "
+        f"would hide whatever it still claims): {stale}"
+    )
+
+
+def test_unparsed_interpolated_jsonb_declaration_is_never_silently_skipped() -> None:
+    """An unresolvable interpolation is DETECTED and fails, not skipped.
+
+    The loop resolver binds only ``for <col> in <CONSTANT>``. An iterable it
+    cannot bind (here a call) leaves the DDL unparsed — exactly the shape the
+    reported gap shipped. The net must therefore SEE the declaration and report
+    it as unexplained; otherwise a future migration could add a jsonb column the
+    PR-time gate ignores.
+    """
+    source = """
+from alembic import op
+
+
+def upgrade() -> None:
+    for column in columns_for("agents"):
+        op.execute(f"ALTER TABLE agents ALTER COLUMN {column} TYPE jsonb USING {column}::jsonb")
+"""
+    assert not _declared_jsonb_pairs(source), "the extractor must NOT be able to parse this"
+    declarations = _executed_sql_jsonb_declarations(source)
+    unexplained = [shape for shape, pairs in declarations if not pairs]
+    assert "ALTER TABLE agents ALTER COLUMN __INTERP__ TYPE jsonb USING __INTERP__::jsonb" in unexplained
+    assert _unexplained_executed_jsonb_declarations("synthetic", source), "the net must fail loudly"
+
+
+def test_dynamic_type_declaration_is_detected_and_its_exception_suppresses_it() -> None:
+    """0129's runtime-variable ADD COLUMN is DETECTED, then justified — not skipped.
+
+    Its ``_add_temp_column`` helper adds a temp column whose TYPE is the
+    ``cast`` argument, so the string alone parses to no pair. The net flags it;
+    the ``_UNPARSED_JSONB_DDL`` entry (with its reason) is what turns that into a
+    justified gap instead of a silent one.
+    """
+    source = (_MIGRATION_VERSIONS_DIR / "0129_runs_json_to_jsonb.py").read_text(encoding="utf-8")
+    unparsed = [shape for shape, pairs in _executed_sql_jsonb_declarations(source) if not pairs]
+    expected_shape = 'ALTER TABLE public."__INTERP__" ADD COLUMN "__INTERP__" __INTERP__'
+    assert expected_shape in unparsed, "the runtime-type declaration must be DETECTED"
+    assert ("0129_runs_json_to_jsonb", expected_shape) in _UNPARSED_JSONB_DDL
+    assert not _unexplained_executed_jsonb_declarations("0129_runs_json_to_jsonb", source)
 
 
 _SCHEMA_ENFORCEMENT_MIGRATION = _MIGRATION_VERSIONS_DIR / "0251_schema_enforcement_telemetry.py"
