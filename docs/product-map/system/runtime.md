@@ -104,9 +104,15 @@ purging old run data.
       consumer must check for the final sentinel before treating the file as a
       complete record, and a schema-mapping consumer must skip it rather than
       read it as a run record. The in-product download
-      (`AdminRunRetentionView.vue`) honours it: when the sentinel is absent it
-      shows a non-blocking `role="status"` warning that the export may be
-      incomplete (`AdminRunRetentionView.spec.ts`,
+      (`AdminRunRetentionView.vue`) honours it, and the sentinel resolves all
+      three shapes its fetch can see: a complete body downloads cleanly; a
+      clean-but-short body still downloads, with a non-blocking
+      `role="status"` warning that the export may be incomplete (this is the
+      only shape for which "sentinel absent" reaches the check); an interrupted
+      transfer rejects the body read before any blob exists, so no file is
+      produced and the view reports it explicitly as did-not-complete/incomplete
+      in a `role="alert"` region, never as the generic export error nor as the
+      status warning (`AdminRunRetentionView.spec.ts`,
       `tests/unit/api/test_admin_run_data_retention.py`)
 - [x] All three streaming exports (run-retention export, audit `/scan`,
       analytics `/scan`) prime their body generator through the shared

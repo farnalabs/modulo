@@ -136,13 +136,20 @@ ran to completion.
 
 - If `{"_complete":true}` is **absent**, the export was **truncated**. A
   failure after the stream has started still returns HTTP 200 (the first
-  record has already primed a successful response), so the terminating line is
-  the only truncation signal. Verify it before treating the file as a complete
+  record has already primed a successful response). For a consumer that holds
+  only the saved file, the terminating line is the only truncation signal -
+  a partial file simply ends without it. For a live download there is a second
+  observable signal: an interrupted transfer rejects the body read outright.
+  Verify the terminating line before treating a saved file as a complete
   compliance record.
 - A consumer that maps each line to a schema must **skip** the
   `{"_complete":true}` line rather than read it as a run record.
-- The in-product download performs this check and shows a non-blocking warning
-  when the terminating line is missing.
+- The in-product download (`AdminRunRetentionView.vue`) handles all of this:
+  it performs the terminating-line check and, when it is missing, still saves
+  the file but shows a non-blocking warning that it may be incomplete; when
+  the transfer is interrupted outright, no file is produced at all and the
+  page reports the export explicitly as did-not-complete
+  (`role="alert"`).
 
 See the feature's contract line in `docs/product-map/system/runtime.md`.
 
