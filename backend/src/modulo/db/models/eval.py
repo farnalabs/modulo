@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import JSON, CheckConstraint, ForeignKey, Integer, Numeric, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped, SoftDeleteMixin
+from modulo.db.models.base import JSONB_COL, OrgScoped, SoftDeleteMixin
 
 # Centralised eval_type vocabulary — MUST match EvalDefinition's CHECK constraint
 # vocabulary AND order exactly.  A test asserts consistency across both tables.
@@ -63,7 +63,10 @@ class Eval(SoftDeleteMixin, OrgScoped):
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     eval_type: Mapped[str] = mapped_column(Text, nullable=False)
-    config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    # Physical jsonb: 0250 created it ``json``; 0254 promoted it to match the
+    # 0147 standard. JSONB_COL keeps the ORM declaration honest while
+    # preserving SQLite/MariaDB parity.
+    config_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
     pass_threshold: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     # deleted_by exists but SoftDeleteMixin supplies deleted_at.
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
