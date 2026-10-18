@@ -41,11 +41,13 @@ def _make_housekeeping_session() -> AsyncMock:
 
 
 class _SystemAdminContext(AuthContext):
-    """Auth context that reaches the destructive housekeeping body (FAR-1879).
+    """Auth context that reaches a system-admin-gated tool body.
 
-    The MCP tool now mirrors the REST cleanup route: an admin org-role floor
-    (``housekeeping.manage``) plus a strict ``is_system_admin`` in-body gate.
-    Tests that exercise the delete body run as a system admin.
+    FAR-1879: the housekeeping tools mirror their REST twins — an admin
+    org-role floor (``housekeeping.manage``) plus a strict ``is_system_admin``
+    gate. FAR-1942: ``get_org_config`` mirrors its REST twin's strict
+    ``is_system_admin`` gate (read-only at the role leg). Tests that exercise
+    these bodies run as a system admin.
     """
 
     def setup_method(self) -> None:
@@ -67,7 +69,7 @@ class _SystemAdminContext(AuthContext):
 # ---------------------------------------------------------------------------
 
 
-class TestGetOrgConfigErrors(AuthContext):
+class TestGetOrgConfigErrors(_SystemAdminContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await get_org_config()
@@ -103,7 +105,7 @@ class TestGetOrgConfigErrors(AuthContext):
         assert result["error"] == "migration_required"
 
 
-class TestGetOrgConfigSuccess(AuthContext):
+class TestGetOrgConfigSuccess(_SystemAdminContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.db.crud.system_config.list_config")

@@ -12,9 +12,13 @@ request path.
 template-owned fields of a drifted seeded Bundled Runner row (D4's live
 drift helper decides; this route only applies).
 
-Authz: the page carries the admin-scoped concurrency setting — the status
-read requires ``environment_profile.list`` (profiles are readable by
-operators); apply-template requires ``environment_profile.update``.
+Authz: the page is an admin surface — the status read requires
+``runners.status`` (admin), covering the per-machine strip, the per-profile
+health, AND the org sandbox-concurrency contract. It deliberately does NOT
+reuse the viewer-granted ``environment_profile.list`` key: the pipeline
+editor (member-readable) reads ``GET /api/v1/environment-profiles`` on mount,
+so the profile list stays broadly readable while this capacity read does not
+(FAR-1955). Apply-template requires ``environment_profile.update``.
 """
 
 import logging
@@ -236,7 +240,7 @@ def _profile_health(
 @handle_db_errors(_CODE_RUNNERS_STATUS)
 async def get_runners_status(
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    principal: Annotated[TenantPrincipal, require_permission("environment_profile.list")],
+    principal: Annotated[TenantPrincipal, require_permission("runners.status")],
 ) -> RunnersStatusResponse:
     now = datetime.now(UTC)
     try:

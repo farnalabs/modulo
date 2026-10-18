@@ -10741,6 +10741,12 @@ async def get_org_config(section: str | None = None) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1942: mirror the REST twin ``GET /api/v1/system-admin/config``,
+        # gated by ``require_system_permission`` (a strict is_system_admin claim
+        # with no org-role fall-through). The requirement is declared once in
+        # ``SYSTEM_ADMIN_TOOLS``; this chokepoint call is what makes it LIVE
+        # rather than merely declared (the FAR-1930 wired-chain requirement).
+        _check_agent_tool_scope("get_org_config")
         if section is not None and section not in _VALID_CONFIG_SECTIONS:
             return {
                 "error": "invalid_section",
@@ -10760,6 +10766,11 @@ async def get_org_config(section: str | None = None) -> dict[str, Any]:
             return {"results": f"No configuration found for section '{section_label}'.", "count": 0}
 
         return {"results": _config_table(filtered), "count": len(filtered)}
+    except MCPAuthorizationError as exc:
+        # FAR-1942: same refusal envelope as every other system-admin-gated
+        # MCP tool (e.g. ``list_housekeeping``), so the two surfaces cannot
+        # diverge on the caller-facing shape.
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("get_org_config failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}

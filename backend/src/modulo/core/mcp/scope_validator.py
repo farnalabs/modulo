@@ -254,14 +254,16 @@ _TOOL_REQUIREMENTS: dict[str, ToolRequirement] = {
     "search_library": ToolRequirement(),
     "search_documentation": ToolRequirement(),
     "get_integration_status": ToolRequirement(),
-    # FAR-1879 follow-up: ``get_org_config`` mirrors the SYSTEM-ADMIN-ONLY REST
-    # route ``GET /api/v1/system-admin/config`` but is today neither declared
-    # with the system-admin claim nor routed through the shared chokepoint — a
-    # known, pre-existing authz gap tracked SEPARATELY (changing a shipped
-    # tool's authorisation model has its own caller check). It is pinned
-    # read-only here so the wired-chain guard below reports it as a deliberate,
-    # reviewed exception rather than silently normalising it.
-    "get_org_config": ToolRequirement(),
+    # FAR-1942: ``get_org_config`` mirrors the SYSTEM-ADMIN-ONLY REST route
+    # ``GET /api/v1/system-admin/config``, gated by
+    # ``require_system_permission("system.config.manage")`` — a strict
+    # ``is_system_admin`` claim with NO org-role fall-through. Pinning it
+    # read-only at the role leg (like ``list_feature_flags``, which mirrors the
+    # same permission) preserves that parity: adding the permission key would
+    # impose an org-role floor REST does not have. The claim is enforced by the
+    # resolver's system-admin leg; the handler routes through
+    # ``_check_agent_tool_scope`` so the declaration is LIVE (FAR-1930).
+    "get_org_config": ToolRequirement(system_admin=True),
     "get_available_features": ToolRequirement(),
     "list_schemas": ToolRequirement(),
     "validate_payload": ToolRequirement(),
