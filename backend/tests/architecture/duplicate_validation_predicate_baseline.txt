@@ -1,0 +1,78 @@
+# Duplicated-logic baseline (FAR-1965).
+#
+# Three shrink-only families, all defined in
+# test_duplicate_validation_predicates.py:
+#
+#   {"detail": "<message>", "modules": ["<relpath>", ...]}
+#     A validation-named function carrying a non-empty validation-error
+#     `detail` string that a validation-named function in a DIFFERENT module
+#     carries too: the same predicate written independently in more than one
+#     caller, so a widening in one copy silently leaves the other stale.
+#   {"constant": "<NAME>", "value": "<literal>", "modules": [...]}
+#     A private module-level string constant re-declared with the same name
+#     and value in a second module: the same contract written twice.
+#   {"block": ["<module>:<function>", ...]}
+#     A statement block that is an exact copy of a function's complete body
+#     in another module: a helper inlined or copied instead of called.
+#
+# The pluggable provider trees (connectors/**, model_backends/**,
+# core/error_tracking/forwarders/**) are out of scope by design.
+#
+# This list can only SHRINK:
+#   * test_no_duplicate_validation_predicates,
+#     test_no_duplicated_private_string_constants and
+#     test_no_duplicated_block_bodies each fail on a group NOT listed here
+#     (a NEW duplicate), and
+#   * test_duplicate_validation_predicate_baseline_has_no_stale_entries fails
+#     when a listed group is untangled but not removed from the baseline.
+#
+# Regenerate after untangling a group:
+#   cd backend && uv run python scripts/update_duplicate_validation_predicate_baseline.py
+{"block": ["api/mcp_server.py:_parse_api_key_expires_at", "api/routes/api_keys.py:_parse_expires_at"]}
+{"block": ["api/routes/analytics.py:_scan_body", "api/routes/audit.py:_scan_body"]}
+{"block": ["api/routes/health.py:_configured_queues", "core/watchdog/worker_liveness.py:_configured_queues"]}
+{"block": ["cli/backup.py:_pg_child_env", "launcher/upgrade.py:_pg_child_env"]}
+{"block": ["core/feedback_manager/__init__.py:_dispatch_reject_correction_in_session", "core/guardrails/conformance.py:_set_rls", "db/crud/organisation.py:delete_organisation"]}
+{"block": ["core/library_sync/client.py:close", "core/notifier/__init__.py:close"]}
+{"block": ["core/pipeline_execution.py:_utc_or_none", "db/crud/token_family.py:_as_utc_aware"]}
+{"block": ["core/trigger_engine/__init__.py:_store_raw_payload", "core/trigger_engine/slack_app_mention.py:_store_raw_payload"]}
+{"block": ["db/crud/run.py:_get_dialect_name", "db/rls.py:_ensure_active_transaction"]}
+{"constant": "_AGENT_SOURCE", "modules": ["core/lifecycle_map/reconcile.py", "db/crud/run.py"], "value": "agent"}
+{"constant": "_ALGORITHM", "modules": ["auth/jwt.py", "auth/oauth.py"], "value": "HS256"}
+{"constant": "_CODE_AUDIT_MANAGE", "modules": ["api/routes/admin_system_audit.py", "api/routes/audit.py"], "value": "audit.manage"}
+{"constant": "_CODE_COST_MANAGE", "modules": ["api/mcp_server.py", "api/routes/cost_components.py", "api/routes/costs.py", "api/routes/pipelines.py"], "value": "cost.manage"}
+{"constant": "_CODE_EVAL_DEFINITION_CREATE", "modules": ["api/routes/evals.py", "api/routes/guardrail_config.py"], "value": "eval.definition.create"}
+{"constant": "_CODE_GUARDRAIL_MANAGE", "modules": ["api/routes/guardrail_config.py", "api/routes/pipelines.py"], "value": "guardrail.manage"}
+{"constant": "_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING", "modules": ["api/routes/admin_notifications.py", "api/routes/notifications.py"], "value": "notifications.endpoint_table_missing"}
+{"constant": "_CODE_SYSTEM_CONFIG_MANAGE", "modules": ["api/routes/admin_feature_flags.py", "api/routes/admin_system_config.py"], "value": "system.config.manage"}
+{"constant": "_DEFAULT_IMAGE", "modules": ["core/runtime_provider/docker.py", "core/runtime_provider/k8s.py"], "value": "python:3.13-slim"}
+{"constant": "_DEPLOYMENT_IDENTITY_ENV", "modules": ["core/runtime_provider/docker.py", "core/runtime_provider/e2b.py", "core/runtime_provider/k8s.py"], "value": "MODULO_RUNNER_MACHINE_ID"}
+{"constant": "_ERR_DATABASE_UNAVAILABLE", "modules": ["core/analytics/guardrails.py", "core/analytics/service.py"], "value": "Database temporarily unavailable."}
+{"constant": "_ERR_RATE_LIMIT_EXCEEDED", "modules": ["core/analytics/guardrails.py", "core/analytics/service.py"], "value": "Rate limit exceeded"}
+{"constant": "_FK_ACCOUNTS_ID", "modules": ["db/models/connector_instance.py", "db/models/mcp_server.py", "db/models/notification.py", "db/models/schema.py"], "value": "accounts.id"}
+{"constant": "_FLAG_USER_SCOPED_MCP_KEYS", "modules": ["api/mcp_server.py", "api/routes/api_keys.py"], "value": "user_scoped_mcp_keys"}
+{"constant": "_MSG_ACTIVE_MEMBERSHIP_REQUIRED", "modules": ["api/routes/api_keys.py", "api/routes/service_accounts.py"], "value": "Active organisation membership required to manage API keys"}
+{"constant": "_MSG_DATABASE_CONNECTION_FAILED_PLEASE", "modules": ["api/routes/admin_system_audit.py", "api/routes/audit.py"], "value": "Database connection failed. Please try again."}
+{"constant": "_MSG_DATABASE_ERROR_OCCURRED_PLEASE", "modules": ["api/routes/admin.py", "api/routes/admin_system_config.py"], "value": "A database error occurred. Please try again later."}
+{"constant": "_MSG_DATABASE_ERROR_PLEASE_TRY", "modules": ["api/routes/admin.py", "api/routes/assistant.py"], "value": "Database error. Please try again later."}
+{"constant": "_MSG_DATABASE_NOT_AVAILABLE_RUN", "modules": ["api/routes/admin_system_audit.py", "api/routes/admin_system_config.py"], "value": "Database not available. Run migrations."}
+{"constant": "_MSG_MIGRATION_REQUIRED", "modules": ["core/analytics/guardrails.py", "core/analytics/service.py"], "value": "Feature is not available. Run database migrations to enable it."}
+{"constant": "_MSG_NOT_TEAM_MEMBER", "modules": ["api/routes/pipelines.py", "api/team_scope.py"], "value": "Not a member of the team that owns this resource"}
+{"constant": "_ONDELETE_SET_NULL", "modules": ["db/models/agent.py", "db/models/connector_instance.py", "db/models/pipeline.py"], "value": "SET NULL"}
+{"constant": "_PAUSE_ENV_VAR", "modules": ["launcher/initdb.py", "launcher/supervisor.py"], "value": "MODULO_TEST_PAUSE_AT"}
+{"constant": "_POSTGRES_ASYNC_PREFIX", "modules": ["db/url_utils.py", "settings.py"], "value": "postgresql+asyncpg://"}
+{"constant": "_RATE_LIMIT_REFUSAL_ERROR_DETAIL", "modules": ["api/routes/slack.py", "api/routes/webhooks.py"], "value": "Pipeline rate limit reached \u2014 delivery not executed"}
+{"constant": "_RATE_LIMIT_REFUSAL_VALIDATION_RESULT", "modules": ["api/routes/slack.py", "api/routes/webhooks.py"], "value": "rate_limited"}
+{"constant": "_REFS_EVENT_CAP_DROPPED", "modules": ["core/cost_controller/finalize.py", "core/lifecycle_map/reconcile.py"], "value": "refs_cap_dropped"}
+{"constant": "_SANDBOX_LOG_PATH", "modules": ["core/pipeline_engine/node_runner.py", "core/runtime_provider/k8s.py"], "value": "/home/user/agent.log"}
+{"constant": "_SCAN_NDJSON_MEDIA_TYPE", "modules": ["api/routes/analytics.py", "api/routes/audit.py"], "value": "application/x-ndjson"}
+{"constant": "_SECRETS_FILENAME", "modules": ["launcher/doctor.py", "launcher/upgrade.py"], "value": "secrets.json"}
+{"constant": "_SQL_SET_ORG_ID", "modules": ["core/pipeline_execution.py", "core/run_admission.py", "core/worker_handoff.py"], "value": "SELECT set_config('app.organisation_id', :val, true)"}
+{"constant": "_SQL_SET_STATEMENT_TIMEOUT", "modules": ["core/analytics/guardrails.py", "core/analytics/service.py", "db/crud/run_retention.py"], "value": "SELECT set_config('statement_timeout', :ms, true)"}
+{"constant": "_SQL_SET_TIMEZONE_UTC", "modules": ["core/analytics/guardrails.py", "core/analytics/maintenance.py", "core/analytics/service.py"], "value": "SELECT set_config('timezone', 'UTC', true)"}
+{"constant": "_TENANT_COLUMN", "modules": ["db/repositories/generic.py", "db/rls.py"], "value": "organisation_id"}
+{"constant": "_VISIBILITY_PATTERN", "modules": ["api/routes/evals.py", "api/routes/library.py"], "value": "^(org|team)$"}
+{"detail": "Cron expression is required", "modules": ["api/mcp_server.py", "api/routes/triggers.py"]}
+{"detail": "expires_at must be in the future", "modules": ["api/mcp_server.py", "api/routes/api_keys.py", "api/routes/service_accounts.py"]}
+{"detail": "owner_team_id is required when visibility is 'team'", "modules": ["api/routes/pipelines.py", "api/team_scope.py"]}
+{"detail": "role must be 'operator' or 'runner'. admin keys are prohibited.", "modules": ["api/mcp_server.py", "api/routes/api_keys.py"]}
