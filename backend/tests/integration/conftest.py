@@ -184,15 +184,14 @@ def _with_credentials(database_url: str, user: str, password: str) -> str:
 
 
 @dataclass(frozen=True)
-class EvalMirrorDefinition:
-    """The ``evals``-superset fields of a legacy ``eval_definitions`` fixture row.
+class EvalFixture:
+    """The field set for one ``evals`` fixture row.
 
-    FAR-1100 chunk 3 (migration 0254) repointed ``eval_results.eval_id`` to
-    ``evals`` and recreated the tenant trigger against ``evals``: an
-    ``eval_results`` row can only reference an eval present in ``evals``. Every
-    legacy ``eval_definitions`` fixture row therefore needs its same-UUID
-    ``evals`` mirror — the data shape 0254's backfill produces for every
-    existing row.
+    ``evals`` is the live eval-definition store (FAR-1060 chunk 1; read/write
+    cut over from the legacy ``eval_definitions`` table by migration 0254):
+    ``eval_results.eval_id`` references ``evals`` and every production loader
+    reads it. Integration fixtures seed directly into ``evals`` — the legacy
+    table is a frozen pre-cutover snapshot and is not written by tests.
     """
 
     id: uuid.UUID
@@ -205,13 +204,13 @@ class EvalMirrorDefinition:
     config: dict[str, object] | None = None
 
 
-async def insert_evals_mirror(conn: AsyncConnection, definition: EvalMirrorDefinition) -> None:
-    """Insert the same-UUID ``evals`` mirror for a legacy ``eval_definitions`` row.
+async def insert_eval(conn: AsyncConnection, fixture: EvalFixture) -> None:
+    """Insert one ``evals`` row on *conn*.
 
-    Single source of truth for the mirror insert so a future ``evals`` schema
-    change is single-touch. Callers pass an already-open connection inside the
-    surrounding transaction so the mirror commits atomically with the
-    ``eval_definitions`` row it mirrors.
+    Single source of truth for the eval-fixture insert so a future ``evals``
+    schema change is single-touch. Callers pass an already-open connection
+    inside the surrounding transaction so the eval row commits atomically with
+    the objects it belongs to.
     """
     await conn.execute(
         text(
@@ -220,14 +219,14 @@ async def insert_evals_mirror(conn: AsyncConnection, definition: EvalMirrorDefin
             "VALUES (:id, :oid, :pid, :nid, :name, :eval_type, CAST(:cfg AS jsonb), :aid)"
         ),
         {
-            "id": str(definition.id),
-            "oid": str(definition.organisation_id),
-            "pid": str(definition.pipeline_id),
-            "nid": str(definition.node_id) if definition.node_id else None,
-            "name": definition.name,
-            "eval_type": definition.eval_type,
-            "cfg": json.dumps(definition.config or {}),
-            "aid": str(definition.account_id),
+            "id": str(fixture.id),
+            "oid": str(fixture.organisation_id),
+            "pid": str(fixture.pipeline_id),
+            "nid": str(fixture.node_id) if fixture.node_id else None,
+            "name": fixture.name,
+            "eval_type": fixture.eval_type,
+            "cfg": json.dumps(fixture.config or {}),
+            "aid": str(fixture.account_id),
         },
     )
 

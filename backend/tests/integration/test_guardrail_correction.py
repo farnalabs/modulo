@@ -134,9 +134,9 @@ async def correction_rig(
             ),
             {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(test_org), "graph": json.dumps(graph)},
         )
-        # Materialise the graph node so the eval_definitions.node_id FK (which
-        # the graph JSON alone does not satisfy) resolves. ON CONFLICT keeps
-        # this safe if a trigger has already created the row.
+        # Materialise the graph node referenced by the guardrail's ``node_id``
+        # (a JSON-graph id with no enforced FK). ON CONFLICT keeps this safe if
+        # a trigger has already created the row.
         await conn.execute(
             text(
                 "INSERT INTO nodes (id, organisation_id, pipeline_id, name, account_id, timeout_seconds) "
@@ -146,11 +146,13 @@ async def correction_rig(
             {"nid": node_id, "oid": str(test_org), "pid": str(pipeline_id), "aid": str(test_user)},
         )
         guardrail_id = uuid.uuid4()
+        # Seed the guardrail in ``evals`` — the live store both the loader and
+        # the read-back below use.
         await conn.execute(
             text(
-                "INSERT INTO eval_definitions (id, organisation_id, pipeline_id, node_id, name, "
-                "eval_type, config_json, failure_behaviour, account_id) "
-                "VALUES (:id, :oid, :pid, :nid, 'gr_no_secrets', 'guardrail', (:cfg)::json, 'warn', :aid)"
+                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, "
+                "eval_type, config_json, account_id) "
+                "VALUES (:id, :oid, :pid, :nid, 'gr_no_secrets', 'guardrail', (:cfg)::json, :aid)"
             ),
             {
                 "id": str(guardrail_id),
@@ -250,12 +252,10 @@ class TestSingleNodeCorrectionPersistsResolved:
             await set_rls_org(session, test_org)
             from sqlalchemy import select
 
-            from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionRow
+            from modulo.db.models.eval import Eval
 
             guardrail_row = (
-                await session.execute(
-                    select(EvalDefinitionRow).where(EvalDefinitionRow.id == correction_rig["guardrail_id"])
-                )
+                await session.execute(select(Eval).where(Eval.id == correction_rig["guardrail_id"]))
             ).scalar_one()
 
         from modulo.core.eval_engine import EvalDefinition as EvalDefDTO
@@ -269,7 +269,7 @@ class TestSingleNodeCorrectionPersistsResolved:
             name=guardrail_row.name,
             eval_type="guardrail",
             config=guardrail_row.config_json,
-            failure_behaviour=guardrail_row.failure_behaviour,
+            failure_behaviour="warn",  # Eval rows carry no failure_behaviour; guardrails default to warn
         )
         correction = CorrDef.from_eval_config(guardrail_row.config_json)
         correction.validate_guardrail_binding(guardrail_dto)
@@ -313,12 +313,10 @@ class TestSingleNodeCorrectionPersistsResolved:
             await set_rls_org(session, test_org)
             from sqlalchemy import select
 
-            from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionRow
+            from modulo.db.models.eval import Eval
 
             guardrail_row = (
-                await session.execute(
-                    select(EvalDefinitionRow).where(EvalDefinitionRow.id == correction_rig["guardrail_id"])
-                )
+                await session.execute(select(Eval).where(Eval.id == correction_rig["guardrail_id"]))
             ).scalar_one()
 
         from modulo.core.eval_engine import EvalDefinition as EvalDefDTO
@@ -332,7 +330,7 @@ class TestSingleNodeCorrectionPersistsResolved:
             name=guardrail_row.name,
             eval_type="guardrail",
             config=guardrail_row.config_json,
-            failure_behaviour=guardrail_row.failure_behaviour,
+            failure_behaviour="warn",  # Eval rows carry no failure_behaviour; guardrails default to warn
         )
         correction = CorrDef.from_eval_config(guardrail_row.config_json)
         correction.validate_guardrail_binding(guardrail_dto)
