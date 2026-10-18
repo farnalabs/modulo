@@ -825,6 +825,68 @@ jobs:
           echo "::error::E2E route coverage gate failed (rc=2: malformed router or missing e2e directory). See the 'E2E route coverage gate' step output." >&2
           exit 1
 
+  frontend-unit-parity:
+    # FAR-1947: the "Frontend and WCAG" job runs the unit suite with
+    # `--maxWorkers=2` (a deliberate 2-vCPU cap — see the vitest step there),
+    # but the merge queue runs `pnpm run test:unit`, which is `vitest run src
+    # --pool=threads --maxWorkers=4`, against the MERGED state. Worker count
+    # changes file -> worker assignment, so an order-dependent spec can pass at
+    # 2 workers and fail at 4. On 2026-10-17 exactly that happened
+    # (main-bootstrap.spec.ts, since made order-independent by FAR-1943): the
+    # queue's frontend step failed, main CI stayed green, PR CI reported
+    # "Frontend and WCAG" green, and NOTHING merged for ~2.5 h — the only
+    # external symptom was an opaque queue stall.
+    #
+    # This job runs the merge queue's EXACT command (`pnpm run test:unit` — same
+    # script, no flags added or dropped) so a queue-only failure surfaces as a
+    # red PR/main check instead of a silent stall. It does NOT replace the
+    # queue's run: validating the merged state remains the queue's job, and the
+    # queue's step is deliberately left untouched.
+    #
+    # Gate: STEP-level `needs.changes.outputs.frontend`, the established
+    # convention in this workflow (the `changes` detector publishes it, the
+    # "Frontend and WCAG" job consumes it). Step-level, never job-level, so a
+    # skipped run still reports the check as "success" rather than a non-green
+    # "skipped" (same reasoning as the `changes` job comment). On any
+    # non-pull_request event the detector sets every output true, so this job
+    # runs on every push to main and on workflow_dispatch.
+    #
+    # Cost (measured in the merge queue: 470 s for 271 files / 5380 tests, plus
+    # a cached `pnpm install`): a frontend-touching PR and a push to main each
+    # add ~8-9 runner-minutes on their own runner — parallel with backend-test
+    # (~25 min), so no added PR critical-path wall-clock; a backend-only PR
+    # skips every step (a few seconds of runner allocation).
+    name: Frontend unit suite (merge-queue parity)
+    needs: [changes]
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.frontend == 'true'
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        if: needs.changes.outputs.frontend == 'true'
+        with:
+          version: 11.28.5
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        if: needs.changes.outputs.frontend == 'true'
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+        if: needs.changes.outputs.frontend == 'true'
+      # The queue's exact invocation. Do NOT add flags here: `--coverage` or a
+      # worker-count override would diverge from what the queue runs and defeat
+      # the point of this job (see the header comment).
+      - name: Run unit tests (exact merge-queue invocation)
+        if: needs.changes.outputs.frontend == 'true'
+        run: pnpm run test:unit
+
   sonarcloud-scan:
     name: SonarCloud scan (coverage import)
     # SonarCloud automatic analysis (the GitHub App) cannot import coverage
@@ -1421,7 +1483,7 @@ jobs:
     # gate. A job that is merely SKIPPED is neither failure() nor cancelled();
     # every job here either always runs (path gates are step-level) or is only
     # skipped because an ancestor already failed, which is itself a failure.
-    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
+    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
