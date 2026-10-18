@@ -109,7 +109,10 @@
               </button>
               <div
                 v-if="showSaveAsDropdown"
-                class="fixed z-30 max-h-[calc(100vh-1rem)] w-48 overflow-y-auto overscroll-contain rounded-lg border bg-card py-1 shadow-lg"
+                :class="[
+                  'fixed z-30 max-h-[calc(100vh-1rem)] overflow-y-auto overscroll-contain rounded-lg border bg-card py-1 shadow-lg',
+                  SAVE_AS_DROPDOWN_METRICS.className,
+                ]"
                 :style="saveAsDropdownStyle"
                 data-testid="pipeline-editor-save-as-dropdown"
               >
@@ -261,7 +264,10 @@
                 open
                 :id="autonomyPanelDialogId"
                 ref="autonomyPanelDialogRef"
-                class="fixed z-50 max-h-[calc(100vh-1rem)] w-80 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-lg border border-border bg-card p-3 shadow-lg"
+                :class="[
+                  'fixed z-50 max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-lg border border-border bg-card p-3 shadow-lg',
+                  AUTONOMY_PANEL_METRICS.className,
+                ]"
                 :style="autonomyPanelStyle"
                 tabindex="-1"
                 :aria-label="$t('views.PipelineEditorView.autonomy_panel_title')"
@@ -378,7 +384,10 @@
                 open
                 :id="retryPolicyPanelId"
                 ref="retryPolicyPanelRef"
-                class="fixed z-50 max-h-[calc(100vh-1rem)] w-72 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-lg border border-border bg-card p-3 shadow-lg"
+                :class="[
+                  'fixed z-50 max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-lg border border-border bg-card p-3 shadow-lg',
+                  RETRY_POLICY_PANEL_METRICS.className,
+                ]"
                 :style="retryPolicyPanelStyle"
                 tabindex="-1"
                 :aria-label="$t('views.PipelineEditorView.retry_policy')"
@@ -2190,6 +2199,36 @@ const ownerlessGateAdvisory = computed(() => {
   return !selectedEdgeData.value.hitl_review_config?.required_team_id
 })
 
+// Viewport margin kept clear on every clamped edge, in px — the class cap
+// `max-w-[calc(100vw-1rem)]` reserves the same 1rem (16px) across both edges.
+const OVERLAY_VIEWPORT_MARGIN_PX = 8
+// Offset between the trigger's near edge and the panel, in px.
+const OVERLAY_TRIGGER_GAP_PX = 4
+// The panel's minimum comfortable height, in px: below this much room under
+// the trigger — and only when the space above is genuinely roomier — the panel
+// flips to sit above it.
+const OVERLAY_MIN_COMFORTABLE_HEIGHT_PX = 160
+// Hard floor for the clamped panel height, in px — a panel is never collapsed
+// below this even when there is no real room.
+const OVERLAY_MIN_HEIGHT_PX = 120
+
+/**
+ * A panel's Tailwind width class paired with the same width in px — the single
+ * source of truth for both. The class sets the panel's real width; the px value
+ * feeds the horizontal clamp in `anchoredPopoverStyle`. They MUST agree: if
+ * they drift, only the left-edge fallback clamp degrades (the default
+ * right-anchored case is unaffected). Reference `.className` on the panel and
+ * `.widthPx` at its positioner — never repeat either literal.
+ */
+interface OverlayPanelMetrics {
+  readonly className: string
+  readonly widthPx: number
+}
+
+const SAVE_AS_DROPDOWN_METRICS: OverlayPanelMetrics = { widthPx: 192, className: 'w-48' }
+const RETRY_POLICY_PANEL_METRICS: OverlayPanelMetrics = { widthPx: 288, className: 'w-72' }
+const AUTONOMY_PANEL_METRICS: OverlayPanelMetrics = { widthPx: 320, className: 'w-80' }
+
 /**
  * Viewport-anchored positioning for the toolbar popovers (FAR-1899).
  *
@@ -2206,9 +2245,10 @@ const ownerlessGateAdvisory = computed(() => {
  * Returns {} when the trigger ref is not bound yet (jsdom mounts), leaving the
  * CSS class fallback in charge.
  *
- * `preferredWidth` is the panel's CSS width in px (w-80 = 320, w-72 = 288,
- * w-48 = 192), clamped here by the same `max-w-[calc(100vw-1rem)]` the class
- * applies. With the default `align: 'right'` the panel is RIGHT-aligned to the
+ * `preferredWidth` is the panel's CSS width in px, taken from that panel's
+ * `OverlayPanelMetrics.widthPx` so it can never drift from its class, clamped
+ * here by the same `max-w-[calc(100vw-1rem)]` the class applies. With the
+ * default `align: 'right'` the panel is RIGHT-aligned to the
  * trigger's right edge; when that would push its LEFT edge off-screen (a
  * trigger near the left edge — the w-80/w-72 panels are wider than the room
  * left of a left-edge trigger), it falls back to LEFT-anchoring with the left
@@ -2224,16 +2264,19 @@ function anchoredPopoverStyle(
 ): Record<string, string> {
   if (!trigger) return {}
   const rect = trigger.getBoundingClientRect()
-  const margin = 8
-  const gap = 4
+  const margin = OVERLAY_VIEWPORT_MARGIN_PX
+  const gap = OVERLAY_TRIGGER_GAP_PX
   const spaceBelow = window.innerHeight - rect.bottom - gap - margin
   const spaceAbove = rect.top - gap - margin
   // Stay below unless that leaves less than a usable panel AND there is
   // genuinely more room above (so a tall viewport keeps the familiar
   // below-the-trigger placement).
-  const openUp = spaceBelow < 160 && spaceAbove > spaceBelow
+  const openUp = spaceBelow < OVERLAY_MIN_COMFORTABLE_HEIGHT_PX && spaceAbove > spaceBelow
   const available = openUp ? spaceAbove : spaceBelow
-  const maxHeight = Math.max(120, Math.min(available, window.innerHeight - margin * 2))
+  const maxHeight = Math.max(
+    OVERLAY_MIN_HEIGHT_PX,
+    Math.min(available, window.innerHeight - margin * 2),
+  )
   // Effective panel width: the class width, capped by the viewport cap.
   const width = Math.min(preferredWidth, window.innerWidth - margin * 2)
   let left: string
@@ -2279,24 +2322,24 @@ const retryPolicyPanelStyle = ref<Record<string, string>>({})
 const retryPolicyToggleId = 'pipeline-editor-retry-policy-toggle'
 const retryPolicyPanelId = 'pipeline-editor-retry-policy-panel'
 
-// Panel widths in px for the horizontal clamp: `w-72` = 18rem, `w-80` = 20rem
-// (16px root). Keep in sync with the class on each panel.
-const RETRY_POLICY_PANEL_WIDTH = 288
-const AUTONOMY_PANEL_WIDTH = 320
-
 function positionRetryPolicyPanel() {
-  retryPolicyPanelStyle.value = anchoredPopoverStyle(retryPolicyToggleRef.value, RETRY_POLICY_PANEL_WIDTH)
+  retryPolicyPanelStyle.value = anchoredPopoverStyle(
+    retryPolicyToggleRef.value,
+    RETRY_POLICY_PANEL_METRICS.widthPx,
+  )
 }
 
 // Capture phase: scroll does not bubble, so this also catches the content
 // column's own scroll while the panel is open (keeping it pinned to its
-// trigger) — not just the window's.
+// trigger) — not just the window's. Passive: the handler only reads geometry
+// and never calls preventDefault, so it must not block the scroll it observes.
 function bindRetryPolicyPositioning() {
-  document.addEventListener('scroll', positionRetryPolicyPanel, true)
-  window.addEventListener('resize', positionRetryPolicyPanel)
+  document.addEventListener('scroll', positionRetryPolicyPanel, { capture: true, passive: true })
+  window.addEventListener('resize', positionRetryPolicyPanel, { passive: true })
 }
 
 function unbindRetryPolicyPositioning() {
+  // Only `capture` participates in listener matching; `passive` is add-only.
   document.removeEventListener('scroll', positionRetryPolicyPanel, true)
   window.removeEventListener('resize', positionRetryPolicyPanel)
 }
@@ -2492,15 +2535,21 @@ const autonomyPanelDialogRef = ref<HTMLDialogElement | null>(null)
 const autonomyPanelStyle = ref<Record<string, string>>({})
 
 function positionAutonomyPanel() {
-  autonomyPanelStyle.value = anchoredPopoverStyle(autonomyPanelToggleRef.value, AUTONOMY_PANEL_WIDTH)
+  autonomyPanelStyle.value = anchoredPopoverStyle(
+    autonomyPanelToggleRef.value,
+    AUTONOMY_PANEL_METRICS.widthPx,
+  )
 }
 
+// Passive for the same reason as the retry-policy panel: the handler only
+// reads geometry and never calls preventDefault.
 function bindAutonomyPanelPositioning() {
-  document.addEventListener('scroll', positionAutonomyPanel, true)
-  window.addEventListener('resize', positionAutonomyPanel)
+  document.addEventListener('scroll', positionAutonomyPanel, { capture: true, passive: true })
+  window.addEventListener('resize', positionAutonomyPanel, { passive: true })
 }
 
 function unbindAutonomyPanelPositioning() {
+  // Only `capture` participates in listener matching; `passive` is add-only.
   document.removeEventListener('scroll', positionAutonomyPanel, true)
   window.removeEventListener('resize', positionAutonomyPanel)
 }
@@ -2551,20 +2600,24 @@ onBeforeUnmount(() => {
 // it carries the same sub-fit clipping (FAR-1861). It gets the same
 // `position: fixed` viewport anchoring, but LEFT-anchored (the menu hangs off
 // the left edge of its trigger) rather than right-aligned like the panels —
-// hence the explicit `align`. `w-48` = 12rem = 192px (16px root); keep in sync
-// with the class on the menu.
-const SAVE_AS_DROPDOWN_WIDTH = 192
-
+// hence the explicit `align`.
 function positionSaveAsDropdown() {
-  saveAsDropdownStyle.value = anchoredPopoverStyle(saveAsDropdownTriggerRef.value, SAVE_AS_DROPDOWN_WIDTH, 'left')
+  saveAsDropdownStyle.value = anchoredPopoverStyle(
+    saveAsDropdownTriggerRef.value,
+    SAVE_AS_DROPDOWN_METRICS.widthPx,
+    'left',
+  )
 }
 
+// Passive for the same reason as the panels: the handler only reads geometry
+// and never calls preventDefault.
 function bindSaveAsDropdownPositioning() {
-  document.addEventListener('scroll', positionSaveAsDropdown, true)
-  window.addEventListener('resize', positionSaveAsDropdown)
+  document.addEventListener('scroll', positionSaveAsDropdown, { capture: true, passive: true })
+  window.addEventListener('resize', positionSaveAsDropdown, { passive: true })
 }
 
 function unbindSaveAsDropdownPositioning() {
+  // Only `capture` participates in listener matching; `passive` is add-only.
   document.removeEventListener('scroll', positionSaveAsDropdown, true)
   window.removeEventListener('resize', positionSaveAsDropdown)
 }
