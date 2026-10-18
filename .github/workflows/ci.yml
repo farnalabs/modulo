@@ -186,11 +186,20 @@ jobs:
         # and are ANCHORED to semgrep's own line prefixes, so a finding that
         # merely quotes the phrase (pipelines.py contains the literal
         # "dispatch.wait_timeout error") cannot false-trigger. We deliberately
-        # do NOT fail on "Partially analyzed": mcp_server.py reports that on
-        # every run because of a pre-existing PEP 695 parse skip (FAR-1933
-        # section 3), so matching it would make CI permanently red. `--error`
-        # semantics are unchanged: the step still propagates semgrep's own exit
-        # code for real findings.
+        # do NOT fail on "Partially analyzed". On THIS step's invocation
+        # (uv run --project backend --no-sync semgrep) the one reproducible
+        # per-file instance is backend/src/modulo/api/mcp_server.py:2111 (the
+        # PEP 695 generic `async def _run_db_shell[**TOOL_SHELL_P]`, a genuine
+        # 1-line skip), so matching it would make CI permanently red. Semgrep's
+        # aggregate partial-analysis summary is not stable across invocations /
+        # entry points — an earlier scan through a different semgrep binary
+        # named node_runner.py and several frontend .spec.ts files, which
+        # per-file scans with this invocation did not reproduce. The per-file
+        # scan is the authoritative signal. The HITL graph-write guard's region
+        # at mcp_server.py:4014 is nonetheless analyzed despite the line-2111
+        # skip (mutation-verified, FAR-1933).
+        # `--error` semantics are unchanged: the step still propagates semgrep's
+        # own exit code for real findings.
         working-directory: .
         shell: bash
         run: |
@@ -254,12 +263,31 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Every fixture in the repo carrying a semgrep test annotation
+          # (`# ruleid:` / `# ok:`) is exercised here (FAR-1933), paired to the
+          # rule FILE that contains its rule id. Pairing is by RULE ID, not by
+          # rule-file stem (see the step comment above): a stem-derived loop is
+          # how a dead rule can ship green for months. Most fixtures live under
+          # .semgrep/tests/, but two sit BESIDE their rule files
+          # (credential_in_state.py, missing_session_begin.py) — a sweep scoped
+          # to .semgrep/tests/*.py is exactly what missed them, so enumerate by
+          # annotation, not by directory:
+          #   grep -rl '# ruleid:' --include='*.py' --include='*.ts' \
+          #     --include='*.vue' --include='*.js' .
           pairs="
-          .semgrep/no-raw-httpx-client.yml:.semgrep/tests/no-raw-httpx-client.py
-          .semgrep/connector-egress-verify-required.yml:.semgrep/tests/connector-egress-verify-required.py
+          .semgrep/all-empty-iterable.yml:.semgrep/tests/all-empty-iterable.py
+          .semgrep/asyncio_waitfor_wait_unshielded.yml:.semgrep/tests/asyncio-waitfor-wait-unshielded.py
           .semgrep/callable-dunder-name.yml:.semgrep/tests/callable-dunder-name.py
-          .semgrep/missing-is-privileged.yml:.semgrep/tests/graph-write-missing-is-privileged.py
+          .semgrep/connector-egress-verify-required.yml:.semgrep/tests/connector-egress-verify-required.py
+          .semgrep/credential_in_state.yml:.semgrep/credential_in_state.py
+          .semgrep/exception-mro-ordering.yml:.semgrep/tests/test_exception_mro_ordering.py
+          .semgrep/hitl-review-edge-mutation-outside-guard.yml:.semgrep/tests/hitl-review-edge-mutation-outside-guard.py
           .semgrep/hitl-review-mcp-caller-type.yml:.semgrep/tests/hitl-review-mcp-caller-type-literal.py
+          .semgrep/missing-is-privileged.yml:.semgrep/tests/graph-write-missing-is-privileged.py
+          .semgrep/missing_session_begin.yml:.semgrep/missing_session_begin.py
+          .semgrep/no-raw-httpx-client.yml:.semgrep/tests/no-raw-httpx-client.py
+          .semgrep/non_serializable_in_langgraph_state.yml:.semgrep/tests/non-serializable-in-langgraph-state.py
+          .semgrep/retry-loop-last-exc.yml:.semgrep/tests/retry-loop-last-exc.py
           "
           for pair in $pairs; do
             rule="${pair%%:*}"
@@ -274,12 +302,6 @@ jobs:
             fi
             uv run --no-build --project backend --no-sync semgrep --config="$rule" --test "$fixture"
           done
-          # NOT wired in (pre-existing failure — do NOT add it here; tracked in
-          # FAR-1933):
-          #   .semgrep/hitl-review-edge-mutation-outside-guard.yml ->
-          #     .semgrep/tests/hitl-review-edge-mutation-outside-guard.py
-          # currently fails 0/1 (missed lines [23], incorrect lines [25]).
-          # Repairing that fixture/rule is out of scope for FAR-1859.
       - name: pip-audit (bounded retry on transient PyPI service errors)
         # pip-audit's PyPI vulnerability service raises ServiceError on any
         # non-404 HTTP error (pip_audit/_service/pypi.py: `raise ServiceError
