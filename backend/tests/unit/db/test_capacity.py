@@ -592,7 +592,7 @@ async def test_create_run_propagates_storage_exhausted() -> None:
         )
 
 
-async def test_storage_exhausted_handler_returns_503() -> None:
+def test_storage_exhausted_handler_returns_503() -> None:
     # The API-layer handler maps StorageExhaustedError → 503
     # urn:problem:modulo:storage_exhausted (FAR-426 "specific exception → 503").
     from modulo.api.exception_handlers import storage_exhausted_exception_handler
@@ -601,7 +601,7 @@ async def test_storage_exhausted_handler_returns_503() -> None:
     request.state.request_id = "req-1"
     request.url.path = "/api/v1/runs"
 
-    response = await storage_exhausted_exception_handler(request, StorageExhaustedError("full"))
+    response = storage_exhausted_exception_handler(request, StorageExhaustedError("full"))
     assert response.status_code == 503
     assert response.body.decode().startswith("{")
     assert "storage_exhausted" in response.body.decode()
