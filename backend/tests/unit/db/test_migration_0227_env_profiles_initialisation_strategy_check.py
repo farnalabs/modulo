@@ -2,8 +2,7 @@
 
 Structural + SQLite round-trip (no Postgres/Testcontainers needed):
 
-* the chain is pinned (revision -> 0226_agents_json_to_jsonb, the main-chain head
-  this revision extends);
+* the chain is pinned (revision -> 0226_agents_json_to_jsonb, its parent);
 * the migration's hardcoded ``_VOCABULARY`` stays in sync with the model's
   ``INITIALISATION_STRATEGIES`` single source of truth — the model header
   declares it the source of truth and forbids hardcoding elsewhere, yet the

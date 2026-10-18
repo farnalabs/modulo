@@ -115,6 +115,10 @@ describe('SchemaListView', () => {
     setActivePinia(createPinia())
     mockPush.mockClear()
     document.body.innerHTML = ''
+    // Each test starts from a valid folder list; individual tests override it.
+    getMock.mockResolvedValue([
+      { id: 'folder-1', organisation_id: 'org-1', name: 'Analytics', parent_id: null, sort_order: 0 },
+    ])
   })
 
   it('renders without crashing', async () => {
@@ -335,10 +339,15 @@ describe('SchemaListView', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    const alert = wrapper.find('[data-testid="error-alert"]')
+    const alert = wrapper.find('[data-testid="schema-list-folder-error"]')
     expect(alert.exists()).toBe(true)
     expect(alert.text()).toContain('Failed to load folders')
     expect(alert.text()).toContain('boom')
+    // The mobile folder-error surface: a live region hidden at >=md (the
+    // sidebar's FolderTree alert owns desktop) and NOT dismissible.
+    expect(alert.attributes('role')).toBe('alert')
+    expect(alert.classes()).toContain('md:hidden')
+    expect(alert.find('[data-testid="error-alert-dismiss"]').exists()).toBe(false)
 
     // Retry re-invokes loadFolders — the folder fetch succeeds this time.
     getMock.mockResolvedValue([
@@ -349,10 +358,34 @@ describe('SchemaListView', () => {
     await flushPromises()
     expect(getMock.mock.calls.length).toBeGreaterThan(getCallCountBefore)
     // loadFolders clears folderError on entry, so the alert unmounts.
-    expect(wrapper.find('[data-testid="error-alert"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="schema-list-folder-error"]').exists()).toBe(false)
   })
 
-  it('dismisses the folder-load failure via the shared ErrorAlert dismiss control (FAR-1655)', async () => {
+  it('does not offer a dismiss control on the folder-load failure alert (FAR-1655, revised)', async () => {
+    // The folder-load failure is no longer dismissible: dismissing it left the
+    // folder list empty with no retry until a full reload. The alert must
+    // survive any attempt to dismiss it, exposing only Retry.
+    // First get() call is the FolderTree's own fetch; the second is loadFolders.
+    getMock.mockResolvedValueOnce([
+      { id: 'folder-1', organisation_id: 'org-1', name: 'Analytics', parent_id: null, sort_order: 0 },
+    ])
+    getMock.mockRejectedValueOnce(new Error('boom'))
+    const wrapper = mountView()
+    await flushPromises()
+
+    const alert = wrapper.find('[data-testid="schema-list-folder-error"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.find('[data-testid="error-alert-dismiss"]').exists()).toBe(false)
+    // Retry is the only recovery affordance, and it is present.
+    expect(alert.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+
+    // The alert stays put — the failure cannot be dismissed away.
+    await nextTick()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="schema-list-folder-error"]').exists()).toBe(true)
+  })
+
+  it('updates the folder-error message when a retry fails differently', async () => {
     // First get() is the FolderTree's own fetch; the second is loadFolders.
     getMock.mockResolvedValueOnce([
       { id: 'folder-1', organisation_id: 'org-1', name: 'Analytics', parent_id: null, sort_order: 0 },
@@ -361,12 +394,46 @@ describe('SchemaListView', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    expect(wrapper.find('[data-testid="error-alert"]').exists()).toBe(true)
+    const alert = wrapper.find('[data-testid="schema-list-folder-error"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('Failed to load folders: boom')
 
-    // Dismiss clears folderError, so the alert unmounts.
-    await wrapper.find('[data-testid="error-alert-dismiss"]').trigger('click')
+    // The retry fails DIFFERENTLY — the message must track the latest failure,
+    // not stay frozen at the first one.
+    getMock.mockRejectedValueOnce(new Error('second boom'))
+    const getCallCountBefore = getMock.mock.calls.length
+    await alert.find('[data-testid="error-alert-retry"]').trigger('click')
     await flushPromises()
-    expect(wrapper.find('[data-testid="error-alert"]').exists()).toBe(false)
+    await nextTick()
+
+    expect(getMock.mock.calls.length).toBeGreaterThan(getCallCountBefore)
+    const alertAfter = wrapper.find('[data-testid="schema-list-folder-error"]')
+    expect(alertAfter.exists()).toBe(true)
+    expect(alertAfter.text()).toContain('second boom')
+    expect(alertAfter.text()).not.toContain('Failed to load folders: boom')
+  })
+
+  it('splits the folder-error live region by breakpoint: main-panel alert is md:hidden, the sidebar alert is not', async () => {
+    // jsdom applies no CSS, so class presence is the testable proxy for the
+    // breakpoint contract. The main-panel alert is the complement of
+    // FolderTree's `hidden md:flex`: exactly one is visible/announced, never
+    // both and never neither. Both fetches fail here so both surfaces render.
+    getMock.mockRejectedValue(new Error('boom'))
+    const wrapper = mountView()
+    await flushPromises()
+
+    const mainAlert = wrapper.find('[data-testid="schema-list-folder-error"]')
+    expect(mainAlert.exists()).toBe(true)
+    expect(mainAlert.attributes('role')).toBe('alert')
+    expect(mainAlert.classes()).toContain('md:hidden')
+    expect(mainAlert.find('[data-testid="error-alert-dismiss"]').exists()).toBe(false)
+
+    const sidebarAlert = wrapper.find('[data-testid="folder-tree-error"]')
+    expect(sidebarAlert.exists()).toBe(true)
+    expect(sidebarAlert.attributes('role')).toBe('alert')
+    // The complement: the sidebar owns >=md, so it must NOT be md:hidden. If
+    // both gained md:hidden the pair would collapse to "both hidden".
+    expect(sidebarAlert.classes()).not.toContain('md:hidden')
   })
 
   it('surfaces a schemas-load failure as the shared ErrorAlert and Retry re-fetches (FAR-1655)', async () => {
@@ -530,5 +597,24 @@ describe('SchemaListView', () => {
     await row.trigger('keydown', { key: ' ', code: 'Space' })
     await flushPromises()
     expect(mockPush).toHaveBeenCalledWith({ name: 'schema-editor', params: { id: '1' } })
+  })
+
+  it('shows the folder load error and no folder list when the folder endpoint returns a non-array', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      // useApi.get is an unchecked `get<T>()` cast and returns `undefined as T` on
+      // a 204; foldersList is dereferenced (foldersList.length / spread iteration)
+      // on every render, so a non-array must be rejected, not assigned.
+      getMock.mockResolvedValue(undefined)
+      const wrapper = mountView()
+      await flushPromises()
+      await nextTick()
+      expect(wrapper.exists()).toBe(true)
+      expect(wrapper.findAll('[data-testid="schema-list-mobile-folder-select"]')).toHaveLength(0)
+      expect(wrapper.text()).toContain('The server returned an invalid folder list.')
+      expect(consoleError).toHaveBeenCalled()
+    } finally {
+      consoleError.mockRestore()
+    }
   })
 })

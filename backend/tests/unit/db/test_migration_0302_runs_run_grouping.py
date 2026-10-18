@@ -4,9 +4,10 @@ Structural — load the migration module and pin its contract without a
 database, plus ORM parity for the two new columns and the two partial
 unique indexes that replace the global thread unique:
 
-1. the chain: 0302 revises 0301_oauth_consent_state_preauth_rls, the
-   migrations directory has exactly one head (0317_drop_retired_pipeline_diff_rollback_flag), the
-   revision id matches the filename, and there are no branch labels;
+1. the chain: this migration's own parent is pinned by ``_DOWN_REVISION``
+   below; the graph's single linear head, and its completeness, are asserted
+   by ``_migration_graph.assert_single_linear_head``; the revision id matches
+   the filename, and there are no branch labels;
 2. the upgrade adds EXACTLY two nullable columns with NO server default
    (metadata-only on the hot ``runs`` table), creates the ``run_group_id``
    index, DROPS ``runs_langgraph_thread_id_key``, and creates the two
@@ -34,16 +35,15 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from alembic.script import ScriptDirectory
 from sqlalchemy import String, UniqueConstraint, Uuid
 
 from modulo.db.models.run import RUN_GROUP_KIND_RESUME, RUN_GROUP_KIND_RETRY, RUN_GROUP_KIND_VALUES, Run
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0302_runs_run_grouping"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0301_oauth_consent_state_preauth_rls"
-_CHAIN_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
 
 #: The constraint 0003/0110 put on the global thread id — dropped by the upgrade.
 _THREAD_CONSTRAINT = "runs_langgraph_thread_id_key"
@@ -105,9 +105,8 @@ def _where_text(clause: Any) -> str:
 
 
 class TestChain:
-    def test_single_head_is_0302_runs_run_grouping(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_down_revision_is_0301_oauth_consent_state_preauth_rls(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION

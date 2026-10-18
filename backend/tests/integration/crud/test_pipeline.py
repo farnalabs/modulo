@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.pipeline import (
+    GraphWriteActor,
     clone_pipeline,
     create_pipeline,
     get_pipeline,
@@ -158,8 +159,7 @@ async def test_replace_pipeline_graph_persists_nodes_and_first_class_edges(
                 "hitl_review_config": None,
             },
         ],
-        is_privileged=True,
-        caller_type="rest",
+        actor=GraphWriteActor(is_privileged=True, caller_type="rest"),
     )
 
     assert saved is not None
@@ -229,8 +229,7 @@ async def test_replace_pipeline_graph_multi_edge_round_trip(
         org_id=test_org,
         nodes=nodes,
         edges=edges,
-        is_privileged=True,
-        caller_type="rest",
+        actor=GraphWriteActor(is_privileged=True, caller_type="rest"),
     )
 
     assert saved is not None
@@ -276,8 +275,7 @@ async def test_clone_pipeline_returns_new_id_and_name_prefix(
                 "hitl_review_config": None,
             },
         ],
-        is_privileged=True,
-        caller_type="rest",
+        actor=GraphWriteActor(is_privileged=True, caller_type="rest"),
     )
 
     # The clone's step-(a) read session is a separate connection (its own pool
@@ -332,8 +330,7 @@ async def test_clone_pipeline_independent_from_original(
         org_id=test_org,
         nodes=nodes,
         edges=[],
-        is_privileged=True,
-        caller_type="rest",
+        actor=GraphWriteActor(is_privileged=True, caller_type="rest"),
     )
 
     # Commit the source so the clone's separate step-(a) read connection can
@@ -361,8 +358,7 @@ async def test_clone_pipeline_independent_from_original(
             org_id=test_org,
             nodes=[],
             edges=[],
-            is_privileged=True,
-            caller_type="rest",
+            actor=GraphWriteActor(is_privileged=True, caller_type="rest"),
         )
 
         # Check clone is unchanged
@@ -414,8 +410,7 @@ async def test_replace_pipeline_graph_removes_stale_edges(
                 "hitl_review_config": None,
             },
         ],
-        is_privileged=True,
-        caller_type="rest",
+        actor=GraphWriteActor(is_privileged=True, caller_type="rest"),
     )
     await replace_pipeline_graph(
         rls_session,
@@ -423,8 +418,7 @@ async def test_replace_pipeline_graph_removes_stale_edges(
         org_id=test_org,
         nodes=[],
         edges=[],
-        is_privileged=True,
-        caller_type="rest",
+        actor=GraphWriteActor(is_privileged=True, caller_type="rest"),
     )
 
     loaded = await get_pipeline_graph(rls_session, pipeline.id)

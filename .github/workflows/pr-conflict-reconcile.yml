@@ -147,6 +147,19 @@ jobs:
           SKIPPED=0
           FAILED=0
 
+          # Tip of main, the volatile half of the dispatch fingerprint below.
+          # This job has no actions/checkout step, so there is no git remote to
+          # `git ls-remote` against; the explicit REST path through the existing
+          # GH_TOKEN is the cheap equivalent (mirrors the /repos/... paths
+          # already used in this step). Fail-open: if the lookup fails we fall
+          # back to a per-run nonce, so the fingerprint can never freeze on a
+          # stale value and silently suppress every future dispatch.
+          MAIN_SHA=$(gh api repos/farnalabs/modulo/commits/main --jq '.sha' 2>/dev/null || echo "")
+          if [ -z "$MAIN_SHA" ]; then
+            echo "::warning::Could not resolve the tip of main; falling back to a per-run nonce so the conflict fingerprint still allows dispatch."
+            MAIN_SHA="unknown-$(date +%s)"
+          fi
+
           for i in $(seq 0 $((DISPATCH_COUNT - 1))); do
             PR_NUM=$(jq -r ".[$i].number" /tmp/dispatch_prs.json)
             BRANCH=$(jq -r ".[$i].headRefName" /tmp/dispatch_prs.json)
@@ -173,13 +186,22 @@ jobs:
               fi
             fi
 
-            # Dispatch via webhook (mirrors ci.yml notify-pr-failure pattern)
+            # Deterministic dedupe key for this conflict (mirrors ci.yml's
+            # notify-pr-failure payload shape). An unchanged tip of main means
+            # the SAME merge to reconcile, so an identical repeat collapses to
+            # one Branch Fixer run (the fixer dedupes on
+            # `{{ input.fingerprint }}`). Once main advances the merge is
+            # genuinely different, the fingerprint changes, and a fresh
+            # dispatch is allowed through. This is distinct from the
+            # 30-minute fixer-recency guard above, which remains the retry gate.
+            FINGERPRINT="conflict|pr:${PR_NUM}|main:${MAIN_SHA}"
             BODY=$(jq -n \
               --arg branchName "$BRANCH" \
               --argjson prNumber "$PR_NUM" \
               --arg failureDescription "PR conflicts with origin/main (mergeable=CONFLICTING). merge origin/main into the branch (a MERGE commit — do NOT rebase or force-push a shared/reviewed branch). Resolve conflicts by reading all three versions (base/ours/theirs) and satisfying both intents. Re-run the stages/tests for touched modules. Push — which re-arms the pull_request pipeline (CI + sonarcloud-scan)." \
               --arg repo "farnalabs/modulo" \
-              '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}')
+              --arg fingerprint "${FINGERPRINT}" \
+              '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo, fingerprint: $fingerprint}')
 
             # Retry with exponential backoff on network failures (curl HTTP 000) and 429/5xx (max 5 attempts).
             # TIMESTAMP and HMAC are recomputed per attempt: the server

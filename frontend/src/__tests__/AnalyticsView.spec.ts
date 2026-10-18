@@ -32,6 +32,7 @@ import {
   type AnalyticsBucket,
   type AnalyticsDimension,
 } from '../stores/analytics'
+import { invalidFolderListMessage } from '../lib/api/folders'
 import type { components } from '../lib/api/schema'
 
 // Fixed UTC instant for deterministic assertions — the ISO literal is always valid.
@@ -759,6 +760,114 @@ describe('analytics store', () => {
     expect(queryCalls).toBe(4)
     expect(store.results).toEqual(newer)
     expect(store.loading).toBe(false)
+  })
+
+  it('skips a folder list containing a null element without aborting the pipeline options, and logs the shared message', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // A `[null]` element passes `Array.isArray` but throws on `f.id`; the
+    // folder-shape failure must be handled locally (best-effort options) rather
+    // than thrown, and must NOT abort the sibling pipeline-options load.
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/pipeline-folders') {
+        return Promise.resolve({ data: [null], error: undefined })
+      }
+      if (url === '/api/v1/pipelines') {
+        return Promise.resolve({
+          data: { items: [{ id: 'p-1', name: 'Pipeline One' }], total: 1, page: 1, page_size: 100, next_cursor: null, has_more: false },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const store = useAnalyticsStore()
+    await expect(store.fetchOptions()).resolves.toBeUndefined()
+    expect(store.folders).toEqual([])
+    expect(store.pipelines).toEqual([{ id: 'p-1', name: 'Pipeline One' }])
+    expect(errorSpy).toHaveBeenCalledWith(
+      invalidFolderListMessage('/api/v1/pipeline-folders', [null]),
+    )
+    errorSpy.mockRestore()
+  })
+
+  it('skips folder options when the folder response is not an array, and logs the shared message', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const badShape = { items: [] }
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/pipeline-folders') {
+        return Promise.resolve({ data: badShape, error: undefined })
+      }
+      if (url === '/api/v1/pipelines') {
+        return Promise.resolve({
+          data: { items: [], total: 0, page: 1, page_size: 100, next_cursor: null, has_more: false },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const store = useAnalyticsStore()
+    await expect(store.fetchOptions()).resolves.toBeUndefined()
+    expect(store.folders).toEqual([])
+    expect(errorSpy).toHaveBeenCalledWith(
+      invalidFolderListMessage('/api/v1/pipeline-folders', badShape),
+    )
+    errorSpy.mockRestore()
+  })
+
+  it('skips folder options when the folder request errors, without aborting the pipeline options', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // Folders are best-effort options: a rejected folder request must leave
+    // `folders` empty and must NOT be logged as a shape failure (there is no
+    // response to classify) or abort the sibling pipeline-options load.
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/pipeline-folders') {
+        return Promise.resolve({
+          data: undefined,
+          error: {
+            type: 'urn:problem:modulo:internal_error',
+            title: 'Internal Server Error',
+            status: 500,
+            detail: 'folders unavailable',
+          },
+        })
+      }
+      if (url === '/api/v1/pipelines') {
+        return Promise.resolve({
+          data: { items: [{ id: 'p-1', name: 'Pipeline One' }], total: 1, page: 1, page_size: 100, next_cursor: null, has_more: false },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const store = useAnalyticsStore()
+    await expect(store.fetchOptions()).resolves.toBeUndefined()
+    expect(store.folders).toEqual([])
+    expect(store.pipelines).toEqual([{ id: 'p-1', name: 'Pipeline One' }])
+    expect(errorSpy).not.toHaveBeenCalled()
+    errorSpy.mockRestore()
+  })
+
+  it('still populates folder options for a valid folder list (best-effort path unchanged)', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/pipeline-folders') {
+        return Promise.resolve({
+          data: [{ id: 'f-1', name: 'Folder One', parent_id: null }],
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/pipelines') {
+        return Promise.resolve({
+          data: { items: [], total: 0, page: 1, page_size: 100, next_cursor: null, has_more: false },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const store = useAnalyticsStore()
+    await store.fetchOptions()
+    expect(store.folders).toEqual([{ id: 'f-1', name: 'Folder One' }])
+    expect(errorSpy).not.toHaveBeenCalled()
+    errorSpy.mockRestore()
   })
 })
 

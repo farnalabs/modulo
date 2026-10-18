@@ -6,8 +6,10 @@ def guarded(session, pid, org_id, nodes, edges, is_privileged):
         org_id=org_id,
         nodes=nodes,
         edges=edges,
-        is_privileged=is_privileged,
-        caller_type="rest",
+        actor=GraphWriteActor(
+            is_privileged=is_privileged,
+            caller_type="rest",
+        ),
     )
 
 
@@ -24,11 +26,13 @@ def missing_is_privileged(session, pid, org_id, nodes, edges):
         org_id=org_id,
         nodes=nodes,
         edges=edges,
-        caller_type="rest",
+        actor=GraphWriteActor(
+            caller_type="rest",
+        ),
     )
 
 
-def missing_caller_type(session, pid, org_id, nodes, edges):
+def missing_caller_type(session, pid, org_id, nodes, edges, is_privileged):
     # ruleid: graph-write-missing-is-privileged
     return replace_pipeline_graph(
         session,
@@ -36,7 +40,20 @@ def missing_caller_type(session, pid, org_id, nodes, edges):
         org_id=org_id,
         nodes=nodes,
         edges=edges,
-        is_privileged=True,
+        actor=GraphWriteActor(
+            is_privileged=is_privileged,
+        ),
+    )
+
+
+def missing_actor_entirely(session, pid, org_id, nodes, edges):
+    # ruleid: graph-write-missing-is-privileged
+    return replace_pipeline_graph(
+        session,
+        pipeline_id=pid,
+        org_id=org_id,
+        nodes=nodes,
+        edges=edges,
     )
 
 

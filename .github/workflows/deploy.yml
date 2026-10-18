@@ -606,7 +606,47 @@ jobs:
             echo "::error::pip-audit failed with a non-transient error or found vulnerabilities; not retrying."
             exit "$RC"
           done
-          if git rev-parse --verify --quiet HEAD^ >/dev/null 2>&1; then uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit HEAD^ --error .; else uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --error .; fi
+          # Semgrep — this runs in the REQUIRED pre-deploy gate (security-audit
+          # feeds pre-deploy-gate), so an incomplete scan must not pass. A
+          # per-rule timeout SILENTLY SKIPS the file and still exits 0
+          # (Findings: 0), so we capture the scan and fail CLOSED on a skip.
+          # --timeout 120 is measured (28/32 runs skipped at the 5s default vs
+          # 0/48 at 120s under contention); --timeout-threshold 1 drops a file
+          # on its FIRST per-rule timeout, bounding the worst case at 1 x 120s.
+          # PRIMARY detection is the structured --json-output errors stream
+          # (type "Timeout"); the anchored text signatures are a secondary net.
+          # PartialParsing is NOT a failure (mcp_server.py has a pre-existing
+          # PEP 695 parse skip, FAR-1933).
+          SEMGREP_JSON="$(mktemp)"
+          trap 'rm -f "$LOG" "$SEMGREP_JSON"' EXIT
+          set +e
+          if git rev-parse --verify --quiet HEAD^ >/dev/null 2>&1; then
+            uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit HEAD^ --error --timeout 120 --timeout-threshold 1 --json-output="$SEMGREP_JSON" . 2>&1 | tee "$LOG"
+          else
+            uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --error --timeout 120 --timeout-threshold 1 --json-output="$SEMGREP_JSON" . 2>&1 | tee "$LOG"
+          fi
+          SEMGREP_RC=${PIPESTATUS[0]}
+          SEMGREP_INCOMPLETE=0
+          if uv run --no-build --project backend --no-sync python - "$SEMGREP_JSON" <<'PY'
+          import json, sys
+          try:
+              payload = json.load(open(sys.argv[1], encoding="utf-8"))
+          except (OSError, ValueError):
+              sys.exit(1)
+          errors = payload.get("errors") if isinstance(payload, dict) else None
+          sys.exit(0 if isinstance(errors, list) and any(isinstance(e, dict) and e.get("type") == "Timeout" for e in errors) else 1)
+          PY
+          then
+            SEMGREP_INCOMPLETE=1
+          fi
+          if grep -Eq '^Warning: [0-9]+ timeout error|^Semgrep stopped running rules' "$LOG"; then
+            SEMGREP_INCOMPLETE=1
+          fi
+          if [ "$SEMGREP_INCOMPLETE" -ne 0 ]; then
+            echo "::error::semgrep skipped one or more files after a per-rule timeout; the pre-deploy scan is incomplete and must not pass (FAR-1859)."
+            exit 1
+          fi
+          exit "$SEMGREP_RC"
 
   pre-deploy-gate:
     name: Pre-deploy gate

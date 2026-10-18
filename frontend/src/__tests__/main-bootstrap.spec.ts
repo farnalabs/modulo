@@ -17,17 +17,46 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // are the behaviour under test. The real-router path (hook wiring + lazy route
 // chunks) is covered by app-bootstrap.spec.ts, which runs after this one.
 
-const { loadBackendsMock, isReadyMock, initLocaleMock, captureErrorMock, i18nTMock } = vi.hoisted(
-  () => ({
-    loadBackendsMock: vi.fn(),
-    isReadyMock: vi.fn(),
-    initLocaleMock: vi.fn(),
-    captureErrorMock: vi.fn(),
-    i18nTMock: vi.fn(),
-  }),
-)
+const { loadBackendsMock, isReadyMock, initLocaleMock, captureErrorMock } = vi.hoisted(() => ({
+  loadBackendsMock: vi.fn(),
+  isReadyMock: vi.fn(),
+  initLocaleMock: vi.fn(),
+  captureErrorMock: vi.fn(),
+}))
 
 const APP_MARKER = '[data-testid="app-mounted"]'
+
+// The default composer shape: `global.t` mirrors the real composer's shape so
+// the bootstrap message path is exercisable without the catalogue.
+const CATALOGUE_COMPOSER = { t: (key: string) => `t:${key}` }
+
+// Register the i18n mock for THIS test and prove the module graph will resolve
+// it. `main.ts` imports `../i18n` transitively, and a previously-registered mock
+// (from the shared `beforeEach`, or a prior test in the file) can otherwise win
+// that transitive import — so the literal-fallback cases silently received the
+// catalogue mock's `t:common.failed_to_load` instead of exercising their own
+// composer (FAR-1943). Re-resolving `../i18n` here after re-registering pins the
+// intended mock, and the assertion fails at the mock rather than mysteriously at
+// the rendered message if a future change reintroduces the leak.
+async function installI18nMock(composer?: { t: (key: string) => string }): Promise<void> {
+  vi.doUnmock('../i18n')
+  vi.resetModules()
+  vi.doMock('../i18n', () => ({
+    default: {
+      install: vi.fn(),
+      ...(composer ? { global: composer } : {}),
+    },
+  }))
+
+  const resolved = (await import('../i18n')).default as {
+    global?: { t: (key: string) => string }
+  }
+  if (composer) {
+    expect(resolved.global?.t('probe')).toBe(composer.t('probe'))
+  } else {
+    expect(resolved.global).toBeUndefined()
+  }
+}
 
 describe('main bootstrap', () => {
   beforeEach(() => {
@@ -42,14 +71,6 @@ describe('main bootstrap', () => {
     isReadyMock.mockResolvedValue(undefined)
     initLocaleMock.mockReset()
     captureErrorMock.mockReset()
-    // `t` behaviour is driven by ONE hoisted spy, never by re-registering the
-    // '../i18n' mock inside a test. Re-doing `vi.doMock` for the same path
-    // raced the module registry under concurrent worker load (the second
-    // factory was intermittently ignored, so the default `t:${key}` won the
-    // assertion). A single registration + per-test spy behaviour is
-    // deterministic.
-    i18nTMock.mockReset()
-    i18nTMock.mockImplementation((key: string) => `t:${key}`)
 
     // The router resolves the initial navigation in every test except the one
     // that pins a rejected navigation.
@@ -74,15 +95,9 @@ describe('main bootstrap', () => {
       }
     })
 
-    // The locale/i18n instance needs message catalogs to version-hash ≥60
-    // locale files at eval time. `global.t` mirrors the real composer's shape
-    // so the bootstrap message path is exercisable without the catalogue.
-    vi.doMock('../i18n', () => ({
-      default: {
-        install: vi.fn(),
-        global: { t: i18nTMock },
-      },
-    }))
+    // The locale/i18n instance (see installI18nMock) needs message catalogs to
+    // version-hash ≥60 locale files at eval time; each test installs its own
+    // composer mock so the module graph never inherits a previous test's.
 
     // Monitor backends are external SDKs (Datadog RUM, Grafana FARO, Sentry).
     // Stubbing loadBackends keeps the whole backend package set out of the
@@ -161,6 +176,7 @@ describe('main bootstrap', () => {
   })
 
   it('mounts even when a monitor backend init never settles', async () => {
+    await installI18nMock(CATALOGUE_COMPOSER)
     // A backend SDK whose chunk fetch never settles: loadBackends() never
     // resolves. Nothing on the mount path may await it (FAR-1892).
     loadBackendsMock.mockReturnValue(new Promise(() => {}))
@@ -177,6 +193,7 @@ describe('main bootstrap', () => {
   })
 
   it('mounts and reports it when monitor backend initialisation rejects', async () => {
+    await installI18nMock(CATALOGUE_COMPOSER)
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     loadBackendsMock.mockRejectedValue(new Error('sdk blew up'))
 
@@ -193,6 +210,7 @@ describe('main bootstrap', () => {
   })
 
   it('mounts when the initial navigation rejects', async () => {
+    await installI18nMock(CATALOGUE_COMPOSER)
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     isReadyMock.mockRejectedValue(new Error('router not ready'))
 
@@ -209,6 +227,7 @@ describe('main bootstrap', () => {
   })
 
   it('wraps a non-Error navigation rejection into an Error for the tracker', async () => {
+    await installI18nMock(CATALOGUE_COMPOSER)
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     // A guard can reject with a non-Error (a string, an API error body). The
     // tracker's contract takes an Error, so toError must convert it.
@@ -230,6 +249,7 @@ describe('main bootstrap', () => {
   })
 
   it('logs a fatal error when the application bootstrap rejects', async () => {
+    await installI18nMock(CATALOGUE_COMPOSER)
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     initLocaleMock.mockImplementation(() => {
       throw new Error('locale store exploded')
@@ -246,6 +266,7 @@ describe('main bootstrap', () => {
   })
 
   it('draws a fatal bootstrap failure into the DOM instead of leaving a blank page', async () => {
+    await installI18nMock(CATALOGUE_COMPOSER)
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     initLocaleMock.mockImplementation(() => {
       throw new Error('locale store exploded')
@@ -271,9 +292,7 @@ describe('main bootstrap', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     // An i18n plugin with no usable composer: resolving either message throws.
-    i18nTMock.mockImplementation(() => {
-      throw new Error('i18n unavailable')
-    })
+    await installI18nMock()
     initLocaleMock.mockImplementation(() => {
       throw new Error('locale store exploded')
     })
@@ -300,7 +319,7 @@ describe('main bootstrap', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     // A key can resolve to an empty string (missing/blank catalogue entry);
     // an empty message would render an invisible surface, so the literal wins.
-    i18nTMock.mockReturnValue('')
+    await installI18nMock({ t: () => '' })
     initLocaleMock.mockImplementation(() => {
       throw new Error('locale store exploded')
     })

@@ -985,9 +985,11 @@ def _lifecycle_map_has_no_stages(session: AsyncSession) -> ColumnElement[bool]:
     else:
         # Fail loud on any other dialect rather than falling through to the
         # SQLite branch: ``json_type``/``json_array_length`` are invalid on e.g.
-        # MySQL/MariaDB, where they would raise and ``scan_all`` would swallow
-        # the per-scanner exception into an empty category — the exact
-        # silent-failure class FAR-1856 fixed. Mirrors ``dialect_insert``.
+        # MySQL/MariaDB, where they would raise. ``scan_all`` catches the raise
+        # and still reports the category empty, but logs it at ERROR with the
+        # scanner's category, the exception class and the traceback — so the
+        # empty category is attributable to a scanner FAILURE, never silently
+        # indistinguishable from a clean scan. Mirrors ``dialect_insert``.
         raise NotImplementedError(
             f"_lifecycle_map_has_no_stages is not implemented for the {dialect!r} backend (postgres/sqlite only)"
         )

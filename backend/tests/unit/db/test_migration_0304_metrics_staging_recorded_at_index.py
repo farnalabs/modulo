@@ -3,11 +3,11 @@
 Structural contract (no Postgres needed):
 
 * **Revision chain** — 0304 revises ``0303_feedback_records_lookup_indexes``; the
-  migrations directory has exactly one head (``0317_drop_retired_pipeline_diff_rollback_flag``,
-  pinned by all sibling chain tests), the revision id matches the filename, and
-  neither ``branch_labels`` nor ``depends_on`` is set (the pre-commit
-  check-migration-heads hook and every ``test_single_head_*`` pin depend on
-  that shape).
+  graph's single, linear head is asserted by the shared
+  ``_migration_graph.assert_single_linear_head`` helper (never a hard-coded head
+  value), the revision id matches the filename, and neither ``branch_labels``
+  nor ``depends_on`` is set (the pre-commit check-migration-heads hook and this
+  file's ``test_no_branch_labels_or_depends_on`` depend on that shape).
 * **Index shape (mocked ``op``)** — the upgrade emits exactly one
   ``CREATE INDEX`` for ``ix_metrics_staging_recorded_at`` on
   ``metrics_staging(recorded_at)``, and the downgrade drops it.
@@ -33,15 +33,13 @@ from types import ModuleType
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from alembic.script import ScriptDirectory
-
 from modulo.db.models.metrics_staging import MetricsStaging
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0304_metrics_staging_recorded_at_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0303_feedback_records_lookup_indexes"
-_CHAIN_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
 _INDEX_NAME = "ix_metrics_staging_recorded_at"
 
 
@@ -77,9 +75,8 @@ def _migration_calls(entry_point: str) -> list[tuple[str, tuple[Any, ...], dict[
 
 
 class TestChain:
-    def test_single_head_is_0317_drop_retired_pipeline_diff_rollback_flag(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_down_revision_is_0303_feedback_records_lookup_indexes(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
