@@ -335,7 +335,7 @@ const CAUSES = [
 const causes = computed(() =>
   CAUSES.map((cause) => ({
     ...cause,
-    count: capacity.value.pending.by_cause[cause.key] ?? 0,
+    count: capacity.value.pending.by_cause?.[cause.key] ?? 0,
   })),
 );
 

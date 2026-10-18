@@ -163,7 +163,7 @@ describe('CapacityQueuePanel', () => {
     await flushPromises()
 
     const lastCall = mockGet.mock.calls[mockGet.mock.calls.length - 1]
-    expect(lastCall[1].params.query.pipeline_id).toBe('aaaaaaaa-1111-4111-8111-111111111111')
+    expect(lastCall[1].params.query.pipeline_id).toEqual(['aaaaaaaa-1111-4111-8111-111111111111'])
     wrapper.unmount()
   })
 

@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { parseISO, isValid } from "date-fns";
 import { api } from "../lib/api/client";
+import type { components } from "../lib/api/client";
 import { withTimeout } from "../lib/asyncUtils";
 import { toProblemDetail, type ProblemDetail } from "../lib/api/formatError";
 import { formatDateShortWithTime } from "../lib/formatDate";
@@ -99,117 +100,26 @@ export interface OptionItem {
 
 // ---------------------------------------------------------------------------
 // FAR-1343: capacity / queue-pressure observability (GET /api/v1/analytics/capacity)
+//
+// These are aliases to the generated OpenAPI schema types (regenerated in the
+// change that added the endpoint), so the typed `api.GET` response drops
+// straight into the store with no cast and can never silently drift from the
+// wire shape.
 // ---------------------------------------------------------------------------
 
-export interface CapacityLimits {
-  org_run_concurrency_limit: number | null;
-  sandbox_concurrency_limit: number | null;
-  sandbox_limit_is_default: boolean;
-}
+type CapacitySchemas = components["schemas"];
 
-export interface CapacityPendingByPipeline {
-  pipeline_id: string;
-  pipeline_name?: string | null;
-  pending_count: number;
-  oldest_pending_age_seconds?: number | null;
-  max_concurrent_runs?: number | null;
-}
-
-export interface CapacityPending {
-  total: number;
-  oldest_pending_age_seconds?: number | null;
-  by_cause: Record<string, number>;
-  by_pipeline: CapacityPendingByPipeline[];
-}
-
-export interface CapacityDrain {
-  created: number;
-  started: number;
-  completed: number;
-  ratio?: number | null;
-  baseline_depth: number;
-  baseline_oldest_pending_age_seconds?: number | null;
-  final_depth: number;
-  depth_change: number;
-  verdict: string;
-}
-
-export interface CapacityBinding {
-  scope: string;
-  limit?: number | null;
-  in_use?: number | null;
-  headroom?: number | null;
-  pending_blocked: number;
-  admissible_if_raised: number;
-}
-
-export interface CapacityQueueIfRaised {
-  pending_now: number;
-  admissible_if_binding_raised: number;
-  pending_after_raise: number;
-}
-
-export interface CapacityAttribution {
-  pipeline_id: string;
-  pipeline_name?: string | null;
-  executing: number;
-  running: number;
-  parked: number;
-  oldest_executing_age_seconds?: number | null;
-  stale_heartbeat_count: number;
-}
-
-export interface CapacityActiveHealth {
-  org_run_limit?: number | null;
-  gate_total: number;
-  executing_total: number;
-  running_total: number;
-  parked_total: number;
-  cancelling_total: number;
-  utilisation?: number | null;
-  cap_held: boolean;
-  completions_in_window: number;
-  zero_completion_intervals: number;
-  stall_intervals: number;
-  stall_suspected: boolean;
-  stale_heartbeat_threshold_seconds: number;
-  stale_heartbeat_count: number;
-  attribution: CapacityAttribution[];
-}
-
-export interface CapacitySeriesPipeline {
-  pipeline_id: string;
-  pipeline_name?: string | null;
-  pending_depth: number;
-  oldest_pending_age_seconds?: number | null;
-}
-
-export interface CapacitySeriesBucket {
-  interval_start: string;
-  interval_end: string;
-  created: number;
-  started: number;
-  completed: number;
-  pending_depth: number;
-  oldest_pending_age_seconds?: number | null;
-  drain_ratio?: number | null;
-  complete: boolean;
-  by_pipeline: CapacitySeriesPipeline[];
-}
-
-export interface CapacityResponse {
-  generated_at: string;
-  window_start: string;
-  window_seconds: number;
-  interval_seconds: number;
-  limits: CapacityLimits;
-  pending: CapacityPending;
-  drain: CapacityDrain;
-  binding: CapacityBinding;
-  queue_if_raised: CapacityQueueIfRaised;
-  active_health: CapacityActiveHealth;
-  series: CapacitySeriesBucket[];
-}
+export type CapacityLimits = CapacitySchemas["CapacityLimits"];
+export type CapacityPendingByPipeline = CapacitySchemas["CapacityPendingByPipeline"];
+export type CapacityPending = CapacitySchemas["CapacityPending"];
+export type CapacityDrain = CapacitySchemas["CapacityDrain"];
+export type CapacityBinding = CapacitySchemas["CapacityBinding"];
+export type CapacityQueueIfRaised = CapacitySchemas["CapacityQueueIfRaised"];
+export type CapacityAttribution = CapacitySchemas["CapacityAttribution"];
+export type CapacityActiveHealth = CapacitySchemas["CapacityActiveHealth"];
+export type CapacitySeriesPipeline = CapacitySchemas["CapacitySeriesPipeline"];
+export type CapacitySeriesBucket = CapacitySchemas["CapacitySeriesBucket"];
+export type CapacityResponse = CapacitySchemas["CapacityResponse"];
 
 export function formatCapacityDuration(seconds: number | null | undefined): string {
   if (seconds == null) return "—";
@@ -764,11 +674,13 @@ function validateResponse(data: unknown): data is AnalyticsResponse {
   return typeof d.group_by === "string" && Array.isArray(d.buckets);
 }
 
-// The analytics endpoint lands in the generated OpenAPI client only after the
-// schema is regenerated; until then call it through an untyped alias so the
-// typed client's path-union never sees an unknown route. The client is resolved
-// lazily at call time (not module scope) so importing the store never touches
-// `api` — specs that mock the client without an `api` object still import fine.
+// The analytics *query* window is called through an untyped alias: its params
+// come from the store's own `AnalyticsQueryParams` (plain-string `dimension` /
+// `pipeline_id` for deep-link round-tripping), which do not satisfy the typed
+// client's query union without a conversion this call deliberately avoids. The
+// client is resolved lazily at call time (not module scope) so importing the
+// store never touches `api` — specs that mock the client without an `api`
+// object still import fine.
 type RawGet = (
   url: string,
   options?: unknown,
@@ -928,22 +840,25 @@ export const useAnalyticsStore = defineStore("analytics", () => {
     capacityError.value = null;
     const token = ++capacityToken;
     try {
-      const params: Record<string, unknown> = {
-        window_minutes: 60,
-        interval_seconds: 300,
-        stall_intervals: 3,
-      };
-      if (filters.value.pipelineId) {
-        params.pipeline_id = filters.value.pipelineId;
-      }
       const { data, error: err } = await withTimeout(
-        rawGet("/api/v1/analytics/capacity", { params: { query: params } }),
+        api.GET("/api/v1/analytics/capacity", {
+          params: {
+            query: {
+              window_minutes: 60,
+              interval_seconds: 300,
+              stall_intervals: 3,
+              ...(filters.value.pipelineId
+                ? { pipeline_id: [filters.value.pipelineId] }
+                : {}),
+            },
+          },
+        }),
         15000,
         "Capacity request",
       );
       if (token !== capacityToken) return;
       if (err) throw err;
-      capacity.value = data as CapacityResponse;
+      capacity.value = data;
     } catch (e: unknown) {
       if (token !== capacityToken) return;
       capacityError.value = formatApiErrorMessage(e);

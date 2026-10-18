@@ -771,12 +771,6 @@ async def analytics_capacity(
     asking the caller to narrow it, never a silently truncated series.
     """
     org_id = _require_org(principal)
-    params = CapacityParams(
-        window_minutes=window_minutes,
-        interval_seconds=interval_seconds,
-        stall_intervals=stall_intervals,
-        pipeline_ids=tuple(pipeline_id or ()),
-    )
     try:
         team_ids = await _resolve_scoped_team_ids(
             _analytics_session_factory(settings), org_id=org_id, principal=principal

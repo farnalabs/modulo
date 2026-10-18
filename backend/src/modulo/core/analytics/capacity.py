@@ -1071,7 +1071,7 @@ async def run_capacity_query(
 
     now = datetime.now(UTC)
     window_start = now - timedelta(minutes=params.window_minutes)
-    stale_heartbeat_seconds = getattr(settings, "slot_reconcile_stale_seconds", 1800)
+    stale_heartbeat_seconds = settings.slot_reconcile_stale_seconds
 
     try:
         async with _guarded_session(
