@@ -4869,6 +4869,7 @@ export default {
       "cancelled": "Node cancelled"
     },
     "run": { "superseded": "Run superseded", "no_progress": "Run made no progress" },
+    "queue": { "expired": "Queue wait expired" },
     "connector": {
       "invalid_key": "Invalid connector key",
       "permission": "Connector permission denied",
@@ -4949,6 +4950,7 @@ export default {
       "cancelled": "The node was cancelled before completion."
     },
     "run": { "superseded": "This run was superseded by a newer run." },
+    "queue": { "expired": "The run waited in the capacity queue past this pipeline's queue timeout and was dropped before it started. It was superseded, not failed." },
     "connector": {
       "invalid_key": "The connector key is invalid or missing.",
       "permission": "The connector does not have permission to access the resource.",
@@ -4988,6 +4990,7 @@ export default {
     "compensation_failed": "A watched node and its compensation path both failed.",
     "rejected": "A reviewer rejected the run at a human review gate with no reject route, so the run ended.",
     "superseded": "A newer version of the work item replaced this run's waiting review, so the run ended. No reviewer rejected it.",
+    "queue_expired": "The run waited in the capacity queue past this pipeline's queue timeout and was dropped before it started. It was superseded, not rejected by a reviewer.",
     "pending": "The run is queued and waiting to start.",
     "running": "The run is currently executing.",
     "awaiting_human": "The run is waiting for a human decision at a HITL gate.",

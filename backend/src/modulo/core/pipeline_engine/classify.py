@@ -38,7 +38,9 @@ Decision table (spec, keyed on status — never prose):
 | budget_exceeded | ``excluded`` (and breaks the FAR-190 walk)      |
 | router_no_match | ``excluded`` (FAR-415 — its own reason, never budget_exceeded) |
 | rejected        | ``excluded`` (FAR-1487 — a HITL reject ended the run; reason ``hitl_rejected``, or |
-|                 | ``hitl_superseded`` for a coalesced supersede — never a human "no") |
+|                 | ``hitl_superseded`` for a coalesced supersede — never a human "no"). FAR-1883: |
+|                 | ``queue_expired`` for a capacity-queue timeout (``queue.expired``) — a supersession, |
+|                 | never a reviewer's "no" |
 | failed / eval_failed / stalled | ``no_delivery`` (COUNTABLE — infra/sandbox crash elevated to failed counts, PO) |
 |                 | UNLESS a per-pipeline benign signature matches (error_code, error_detail) → ``benign`` |
 |                 | (FAR-707 — business-expected, excluded from failure rates)                           |
@@ -140,6 +142,14 @@ REASON_ROUTER_NO_MATCH = "router_no_match"
 REASON_HITL_REJECTED = "hitl_rejected"
 _HITL_SUPERSEDED_ERROR_CODE = "hitl.superseded"
 REASON_HITL_SUPERSEDED = "hitl_superseded"
+# FAR-1883: a capacity-queued run whose pipeline set a ``queue_timeout`` and
+# whose time-in-queue passed it ends ``rejected`` with ``error_code =
+# queue.expired``. This is a portal SUPERSESSION (the run was dropped before it
+# ever started), NOT a reviewer's "no" - so it keeps its OWN excluded reason and
+# must never be labelled ``hitl_rejected`` (the documented meaning of that
+# reason is "Rejected by a reviewer at a HITL gate").
+_QUEUE_EXPIRED_ERROR_CODE = "queue.expired"
+REASON_QUEUE_EXPIRED = "queue_expired"
 REASON_DELIVERED = "pr_delivered"
 REASON_DELIVERED_EMAIL = "email_delivered"
 REASON_UNCLASSIFIED = "classifier_error"
@@ -830,7 +840,13 @@ def classify_run(
         elif status == "router_no_match":
             reason = REASON_ROUTER_NO_MATCH
         elif status == "rejected":
-            reason = REASON_HITL_SUPERSEDED if error_code == _HITL_SUPERSEDED_ERROR_CODE else REASON_HITL_REJECTED
+            if error_code == _QUEUE_EXPIRED_ERROR_CODE:
+                # FAR-1883: a queue expiry is a supersession, not a reviewer "no".
+                reason = REASON_QUEUE_EXPIRED
+            elif error_code == _HITL_SUPERSEDED_ERROR_CODE:
+                reason = REASON_HITL_SUPERSEDED
+            else:
+                reason = REASON_HITL_REJECTED
         else:
             reason = REASON_BUDGET_EXCEEDED
         return ClassificationResult(
