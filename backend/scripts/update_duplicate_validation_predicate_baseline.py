@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regenerate the duplicated-logic baseline.
 
-Three whole-tree lenses in ``test_duplicate_validation_predicates.py`` report
+Four whole-tree lenses in ``test_duplicate_validation_predicates.py`` report
 pre-existing duplication, each frozen in
 ``backend/tests/architecture/duplicate_validation_predicate_baseline.txt``:
 
@@ -10,7 +10,9 @@ pre-existing duplication, each frozen in
 * a private module-level string constant re-declared with the same name and
   value in another module;
 * a statement block that is an exact copy of a function's complete body in
-  another module.
+  another module;
+* two near-identical (not identical) function bodies in different modules that
+  are not per-entity scaffolding (see the module's measurement history).
 
 Freezing the PRE-EXISTING offenders lets each gate block NEW duplication
 immediately while the backlog is untangled.
