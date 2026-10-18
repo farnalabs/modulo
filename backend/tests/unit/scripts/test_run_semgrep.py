@@ -79,9 +79,11 @@ _FINDING_QUOTING_PHRASE = (
 #: parse-skip attribution for that file is reproducible here. A line like this
 #: must never be read as a per-rule timeout skip.
 _PARTIAL_PARSING = (
-    "WARN Syntax error at line backend/src/modulo/api/mcp_server.py:2111: "
-    "`[**TOOL_SHELL_P]` was unexpected\n"
+    "[WARN] Syntax error at line backend/src/modulo/api/mcp_server.py:2111:\n"
+    " `[**TOOL_SHELL_P]` was unexpected\n"
+    "\n"
     "  Partially analyzed due to parsing or internal Semgrep errors\n"
+    "\n"
     "   • backend/src/modulo/api/mcp_server.py (1 lines skipped)\n"
 )
 
