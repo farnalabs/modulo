@@ -311,15 +311,21 @@ const providerTypeOptions = computed(() => [
 // own accurate copy — never as a mutable tag, which would tell the operator to
 // "pin it" when their ref cannot even be pulled.
 //
-// The reference grammar is Docker's real rule (distribution/reference): each
-// path component is `[a-z0-9]+` joined by a separator that is a single `.` or
-// `_`, a double `__`, or a run of one-or-more `-` (so `my--repo`, `my---repo`
-// and `my__repo` are valid, while `my..repo`, `my._repo` and `my-_repo` are
-// not), plus an optional registry port on the first component, an optional
-// mixed-case tag, and an optional `@sha256:<64 lowercase hex>` digest. No
-// whitespace anywhere. The whole reference is validated, not just its digest
-// suffix: Docker / containerd reject an uppercase repository, uppercase digest
-// hex and an embedded space, so a ref that merely ENDS in `@sha256:<hex>` must
+// The reference grammar is Docker's real rule (distribution/reference), and it
+// has TWO case rules: the registry host is a mixed-case domain
+// (`domainComponent = [a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?`) or an IPv6
+// address in brackets, with an optional port, while the repository path is
+// lowercase — each component is `[a-z0-9]+` joined by a separator that is a
+// single `.` or `_`, a double `__`, or a run of one-or-more `-` (so `my--repo`,
+// `my---repo` and `my__repo` are valid, while `my..repo`, `my._repo` and
+// `my-_repo` are not), plus an optional mixed-case tag and an optional
+// `@sha256:<64 lowercase hex>` digest. No whitespace anywhere. Docker accepts a
+// mixed-case REGISTRY host (`GHCR.io/library/alpine`,
+// `MyRegistry.local/team/agent:tag`, `[::1]:5000/repo`) — only the repository
+// path is case-sensitive — so the two parts are validated with different
+// grammars. The whole reference is validated, not just its digest suffix:
+// Docker / containerd reject an uppercase repository path, uppercase digest hex
+// and an embedded space, so a ref that merely ENDS in `@sha256:<hex>` must
 // never be announced as pinned.
 //
 // The classification applies only where image_ref is dispatched as a container
@@ -331,13 +337,51 @@ const providerTypeOptions = computed(() => [
 const IMAGE_SEPARATOR = '(?:[._]|__|[-]+)'
 const IMAGE_COMPONENT = `[a-z0-9]+(?:${IMAGE_SEPARATOR}[a-z0-9]+)*`
 const IMAGE_TAG = '[A-Za-z0-9_][A-Za-z0-9._-]{0,127}'
-const IMAGE_REF_RE = new RegExp(
-  `^${IMAGE_COMPONENT}(?::[0-9]+)?(?:/${IMAGE_COMPONENT})*(?::${IMAGE_TAG})?$`,
-)
-const DIGEST_REF_RE = new RegExp(
-  `^${IMAGE_COMPONENT}(?::[0-9]+)?(?:/${IMAGE_COMPONENT})*(?::${IMAGE_TAG})?@sha256:[0-9a-f]{64}$`,
-)
+// distribution/reference: domainNameComponent, domainName and ipv6address.
+const DOMAIN_COMPONENT = '[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?'
+const DOMAIN_NAME = `${DOMAIN_COMPONENT}(?:\\.${DOMAIN_COMPONENT})*`
+const IPV6_ADDRESS = '\\[[a-fA-F0-9:]+\\]'
+const REGISTRY_HOST_RE = new RegExp(`^(?:${DOMAIN_NAME}|${IPV6_ADDRESS})(?::[0-9]+)?$`)
+const IMAGE_PATH_RE = new RegExp(`^${IMAGE_COMPONENT}(?:/${IMAGE_COMPONENT})*$`)
+const IMAGE_TAG_RE = new RegExp(`^${IMAGE_TAG}$`)
+const IMAGE_DIGEST_RE = /^sha256:[0-9a-f]{64}$/
 const DIGEST_PINNABLE_PROVIDERS = ['runner_docker', 'kubernetes']
+
+// Docker treats the first component as a registry host only where it contains
+// a `.` or `:`, or is `localhost`; otherwise it is a Docker Hub namespace, so
+// it must satisfy the lowercase path grammar (an uppercase first component
+// with no dot is a repository Docker rejects, not a host).
+function isDockerRegistryHost(component: string): boolean {
+  return component.includes('.') || component.includes(':') ||
+    component.toLowerCase() === 'localhost'
+}
+
+function isValidDockerImageName(name: string): boolean {
+  const slash = name.indexOf('/')
+  if (slash === -1) return IMAGE_PATH_RE.test(name)
+  const first = name.slice(0, slash)
+  if (!isDockerRegistryHost(first)) return IMAGE_PATH_RE.test(name)
+  return REGISTRY_HOST_RE.test(first) && IMAGE_PATH_RE.test(name.slice(slash + 1))
+}
+
+// Split Docker's `name[:tag][@digest]` shape apart before validating each
+// part: the tag separator is the last `:` AFTER the last `/`, so a registry
+// port (`ghcr.io:5000/repo`) is never mistaken for a tag.
+function isValidDockerImageRef(ref: string): boolean {
+  let name = ref
+  const at = ref.lastIndexOf('@')
+  if (at !== -1) {
+    if (!IMAGE_DIGEST_RE.test(ref.slice(at + 1))) return false
+    name = ref.slice(0, at)
+  }
+  const lastSlash = name.lastIndexOf('/')
+  const lastColon = name.lastIndexOf(':')
+  if (lastColon > lastSlash) {
+    if (!IMAGE_TAG_RE.test(name.slice(lastColon + 1))) return false
+    name = name.slice(0, lastColon)
+  }
+  return isValidDockerImageName(name)
+}
 
 // The release-advanced placeholder digest: an all-zero sha256 that the seeded
 // Bundled Runner carries until the GHCR publish job lands the real pinned
@@ -354,9 +398,8 @@ const imageRefState = computed<'pinned' | 'mutable' | 'invalid' | 'placeholder' 
   const ref = form.image_ref.trim()
   if (!ref) return null
   if (ref.endsWith(PLACEHOLDER_DIGEST)) return 'placeholder'
-  if (DIGEST_REF_RE.test(ref)) return 'pinned'
-  if (IMAGE_REF_RE.test(ref)) return 'mutable'
-  return 'invalid'
+  if (!isValidDockerImageRef(ref)) return 'invalid'
+  return ref.includes('@') ? 'pinned' : 'mutable'
 })
 
 // The image field always describes itself with the persistent helper; the

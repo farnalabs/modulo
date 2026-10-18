@@ -442,9 +442,27 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
   })
 
   it.each([
+    ['mixed-case registry host', `GHCR.io/library/alpine@sha256:${'a'.repeat(64)}`],
+    ['mixed-case registry host with a port', `MyRegistry.local:5000/team/agent@sha256:${'a'.repeat(64)}`],
+    ['IPv6 registry host with a port', `[::1]:5000/team/agent@sha256:${'a'.repeat(64)}`],
+  ])('accepts a mixed-case or IPv6 registry host (%s) as pinned', async (_label, ref) => {
+    // FAR-1779 F3: Docker's grammar permits a mixed-case domain (and an IPv6
+    // literal) for the REGISTRY host — only the repository path is
+    // case-sensitive — so these are valid references and must not be
+    // mislabelled invalid.
+    const wrapper = await mountWithProvider('runner_docker')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(ref)
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="envprofile-form-image-invalid"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(false)
+  })
+
+  it.each([
     ['uppercase digest hex', `ghcr.io/acme/agent@sha256:${'A'.repeat(64)}`],
-    ['uppercase repository', `GHCR.io/acme/agent@sha256:${'a'.repeat(64)}`],
-    ['uppercase namespace segment', `ghcr.io/ACME/agent@sha256:${'a'.repeat(64)}`],
+    ['uppercase repository path component', `ghcr.io/ACME/agent@sha256:${'a'.repeat(64)}`],
+    ['uppercase first component with no registry dot', `GHCR/acme/agent@sha256:${'a'.repeat(64)}`],
     ['embedded space', `ghcr.io/acme/agent @sha256:${'a'.repeat(64)}`],
     // Docker's separator is a single `.`/`_`, a double `__`, or hyphens — not
     // an arbitrary one-or-two of [._-]. These are NOT valid references and
