@@ -318,6 +318,31 @@ class TestCheckDispatcherReconcile:
         assert "node_started_deferred=0" in result.detail
 
     @pytest.mark.asyncio
+    async def test_fresh_run_detail_surfaces_fresh_premise_deferred_separately(self) -> None:
+        """FAR-1914: fresh-premise deferrals get their OWN counter, distinct
+        from the belt-hit alarm ``node_started_deferred``.
+
+        The fresh-premise deferral is routine (the scan snapshot races the
+        executor's first-node dispatch), so conflating it into the belt-hit
+        alarm would destroy that counter's documented "non-zero = regression
+        alarm" meaning. This asserts the two are rendered independently."""
+        fake = _FakeStatsRedis(
+            blob=_fresh_payload(
+                node_started_deferred=0,
+                nodeless_fresh_premise_deferred=4,
+            ).encode()
+        )
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "nodeless_fresh_premise_deferred=4" in result.detail
+        assert "node_started_deferred=0" in result.detail
+
+    @pytest.mark.asyncio
     async def test_fresh_run_detail_surfaces_node_started_executor_lost_counter(self) -> None:
         """FAR-1803: the readiness detail must surface
         ``node_started_executor_lost`` (the node-started / dead-executor

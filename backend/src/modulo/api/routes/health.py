@@ -1051,6 +1051,12 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
     read as ``claimed_but_never_dispatched``. FAR-1803 adds
     ``node_started_executor_lost`` (node-started rows whose executor heartbeat
     is stale - the zero-node class that used to be invisible to every counter).
+    FAR-1914 adds ``nodeless_fresh_premise_deferred`` - the nodeless repair /
+    early-detect deferrals after a FRESH re-verify proved a node had started.
+    This is a ROUTINE signal (the scan snapshot legitimately races the
+    executor's first-node dispatch), NOT a regression alarm; it is kept
+    separate from ``node_started_deferred`` so that counter keeps its
+    belt-hit-only alarm meaning.
     Every counter defaults to 0 so a
     pre-D worker's payload renders without error.
 
@@ -1074,6 +1080,10 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
         f"claimed_but_never_dispatched={stats.get('claimed_but_never_dispatched', 0)}, "
         f"node_started_terminalized={stats.get('node_started_terminalized', 0)}, "
         f"node_started_deferred={stats.get('node_started_deferred', 0)}, "
+        # FAR-1914: fresh-premise deferrals — a ROUTINE signal (the scan
+        # snapshot racing the executor's first-node dispatch), kept separate
+        # from the belt-hit alarm above.
+        f"nodeless_fresh_premise_deferred={stats.get('nodeless_fresh_premise_deferred', 0)}, "
         # FAR-1803: the node-started / executor-lost gauge — a running row with
         # a durable first-node-start phase whose executor heartbeat is stale.
         # Rendered unconditionally so the readiness detail can NEVER report 0

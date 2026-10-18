@@ -74,6 +74,9 @@ def _summary() -> dict[str, Any]:
         "nodeless_redispatched": 0,
         "nodeless_capped": 0,
         "skipped": 0,
+        "nodeless_fresh_premise_deferred": 0,
+        # The row-level belt's regression alarm — FAR-1914 deferrals must NOT
+        # inflate it (it is documented as belt hits only).
         "node_started_deferred": 0,
     }
 
@@ -102,7 +105,10 @@ async def test_fresh_node_started_row_is_not_terminalized() -> None:
     assert handled is None
     fail.assert_not_awaited()
     redispatch.assert_not_awaited()
-    assert summary["node_started_deferred"] == 1
+    assert summary["nodeless_fresh_premise_deferred"] == 1
+    # The belt's regression alarm must stay untouched: a routine fresh-premise
+    # deferral is NOT a belt hit (the blocking review finding).
+    assert summary["node_started_deferred"] == 0
     assert summary["nodeless_failed"] == 0
 
 
@@ -127,7 +133,7 @@ async def test_control_fresh_still_nodeless_row_is_terminalized() -> None:
 
     assert handled is not None
     fail.assert_awaited_once()
-    assert summary["node_started_deferred"] == 0
+    assert summary["nodeless_fresh_premise_deferred"] == 0
 
 
 @pytest.mark.asyncio
@@ -149,7 +155,7 @@ async def test_control_fresh_left_running_row_is_deferred() -> None:
 
     assert handled is None
     fail.assert_not_awaited()
-    assert summary["node_started_deferred"] == 1
+    assert summary["nodeless_fresh_premise_deferred"] == 1
 
 
 @pytest.mark.asyncio
@@ -170,7 +176,7 @@ async def test_unreadable_fresh_state_fails_closed() -> None:
 
     assert handled is None
     fail.assert_not_awaited()
-    assert summary["node_started_deferred"] == 1
+    assert summary["nodeless_fresh_premise_deferred"] == 1
 
 
 @pytest.mark.asyncio
@@ -196,7 +202,7 @@ async def test_fresh_row_vanished_is_deferred() -> None:
 
     assert handled is None
     fail.assert_not_awaited()
-    assert summary["node_started_deferred"] == 1
+    assert summary["nodeless_fresh_premise_deferred"] == 1
 
 
 @pytest.mark.asyncio
@@ -234,7 +240,8 @@ async def test_early_detect_path_defers_a_started_node() -> None:
 
     assert got == 0
     fail.assert_not_awaited()
-    assert summary["node_started_deferred"] == 1
+    assert summary["nodeless_fresh_premise_deferred"] == 1
+    assert summary["node_started_deferred"] == 0
 
 
 def test_zero_progress_shape_excludes_a_started_node() -> None:

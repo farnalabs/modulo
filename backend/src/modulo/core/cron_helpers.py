@@ -581,9 +581,21 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     # FAR-1649: node-started rows held back from re-dispatch by the
     # row-level belt in _reconcile_one_row (defence-in-depth — the SQL legs
     # exclude the class, so production should see 0; a non-zero value is a
-    # race/regression alarm). Read through .get() like every other additive
-    # counter here.
+    # race/regression alarm). This counter is BELT HITS ONLY — the FAR-1914
+    # fresh-premise deferrals use their own counter below, precisely so this
+    # one keeps its regression-alarm meaning. Read through .get() like every
+    # other additive counter here.
     "node_started_deferred": 0,
+    # FAR-1914: rows the nodeless repair / early-detect re-verified as having
+    # STARTED a node (or left ``running``, or become unreadable -> fail
+    # closed) on a FRESH read after the scan selected them. This is a ROUTINE
+    # production signal, NOT a regression alarm: the scan row is a snapshot
+    # and the run's own executor legitimately dispatches its first node in the
+    # SELECT→loop window (run e6131612 proves the race is real), so a non-zero
+    # value here is expected and healthy — it is exactly what keeps the
+    # belt's ``node_started_deferred`` at 0 and thus still a usable alarm.
+    # Additive .get() contract like the rest.
+    "nodeless_fresh_premise_deferred": 0,
     # FAR-1803: node-started rows whose EXECUTOR heartbeat is stale (the
     # observed zero-node class — live dispatch marker, dead executor, zero
     # node outputs). Counted EVERY tick the population exists (its own scan
@@ -656,6 +668,9 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["capacity_deferred"] = stats.get("capacity_deferred", 0)
     # FAR-1649: held-back node-started rows (additive .get() contract).
     _dispatcher_reconcile_stats["node_started_deferred"] = stats.get("node_started_deferred", 0)
+    # FAR-1914: fresh-premise deferrals — a ROUTINE signal, kept separate from
+    # the belt-hit alarm above (additive .get() contract).
+    _dispatcher_reconcile_stats["nodeless_fresh_premise_deferred"] = stats.get("nodeless_fresh_premise_deferred", 0)
     # FAR-1803: the node-started / executor-lost gauge (additive .get()).
     _dispatcher_reconcile_stats["node_started_executor_lost"] = stats.get("node_started_executor_lost", 0)
     # Terminalizer counters (and their healthz aliases) derive from the
@@ -8123,8 +8138,18 @@ def _dispatcher_summary() -> dict[str, Any]:
         # the class, so the scan never returns such a row; a non-zero value
         # means the belt caught a SELECT→loop phase race or a future leg that
         # forgot the exclusion (defence-in-depth alarm, not a routine
-        # per-tick signal).
+        # per-tick signal). FAR-1914 keeps this meaning intact by routing the
+        # fresh-premise deferrals to their OWN counter below, so a non-zero
+        # value here is still the regression alarm it is documented to be.
         "node_started_deferred": 0,
+        # FAR-1914: rows the nodeless repair / early-detect deferred after a
+        # FRESH re-verify proved a node had started (or the row left running /
+        # became unreadable). A ROUTINE per-tick signal — the scan snapshot
+        # legitimately races the executor's first-node dispatch (run
+        # e6131612), so this is expected to be non-zero in production and must
+        # NOT be read as the belt's regression alarm. Additive .get()
+        # contract.
+        "nodeless_fresh_premise_deferred": 0,
         # FAR-1803: node-started rows whose executor heartbeat is stale — the
         # zero-node class that used to be invisible to EVERY counter (its own
         # scan leg admits it; the row loop counts it and never re-dispatches
@@ -9177,7 +9202,9 @@ async def _reconcile_nodeless_repair(
     # re-dispatch — FAR-1649 — and no "dispatched no node" terminal-fail) and
     # left to the caller's node-started belt / the age gate.
     if await _fresh_row_is_node_started_or_gone(session, row.id):
-        summary["node_started_deferred"] += 1
+        # FAR-1914: its OWN counter — a routine fresh-premise race, NOT the
+        # row-level belt's regression alarm (``node_started_deferred``).
+        summary["nodeless_fresh_premise_deferred"] += 1
         _log.warning(
             "dispatcher_reconcile.nodeless_fresh_premise_blocked run=%s org=%s "
             "phase_snapshot=%s — a node started after the scan (or the row left running); "
@@ -9489,7 +9516,8 @@ async def _reconcile_one_row(
     # before a stale-snapshot action). A node-started row is deferred here too,
     # so the early path can never re-dispatch / terminal-fail a started node.
     if early_detect_candidate and await _fresh_row_is_node_started_or_gone(session, row.id):
-        summary["node_started_deferred"] += 1
+        # FAR-1914: its OWN counter (routine race, not the belt's alarm).
+        summary["nodeless_fresh_premise_deferred"] += 1
         _log.warning(
             "dispatcher_reconcile.nodeless_early_detect_fresh_premise_blocked run=%s org=%s "
             "phase_snapshot=%s — a node started after the scan; held back (FAR-1914)",
