@@ -99,7 +99,7 @@ async def test_render_agent_template_uses_shared_sandbox_jinja_environment(
 
     monkeypatch.setattr(sandbox_mode, "sandbox_jinja_environment", _spy)
 
-    result = await rd._render_agent_template(
+    result = rd._render_agent_template(
         sandbox_mode="llm",
         agent_command="echo hi",
         agent_prompt_template="hello",
@@ -122,7 +122,7 @@ async def test_render_agent_template_uses_shared_sandbox_jinja_environment(
 async def test_render_agent_template_injects_baked_model_value() -> None:
     """The Bundled Runner path interpolates `{{ model }}` from the SNAPSHOT's
     baked `_resolved_model` — parity with the E2B node-runner render."""
-    result = await rd._render_agent_template(
+    result = rd._render_agent_template(
         sandbox_mode="llm",
         agent_command="opencode run --model {{ model }} --auto",
         agent_prompt_template="hello",
@@ -141,7 +141,7 @@ async def test_render_agent_template_injects_baked_model_value() -> None:
 async def test_render_agent_template_run_override_beats_baked_value() -> None:
     """Rung 1 folds in pre-dispatch: the run's frozen `_run_overrides.model`
     overrides the baked value for that run."""
-    result = await rd._render_agent_template(
+    result = rd._render_agent_template(
         sandbox_mode="llm",
         agent_command="opencode run --model {{ model }} --auto",
         agent_prompt_template="hello",
@@ -161,7 +161,7 @@ async def test_render_agent_template_model_class_without_value_fails_closed() ->
     """An opted-in node with no baked model and no run override refuses before
     any workspace provisioning (ADR 037 D3) — no blank --model dispatch."""
     with pytest.raises(ValueError, match="no model was resolved at snapshot mint"):
-        await rd._render_agent_template(
+        rd._render_agent_template(
             sandbox_mode="llm",
             agent_command="opencode run --model {{ model }} --auto",
             agent_prompt_template="hello",
