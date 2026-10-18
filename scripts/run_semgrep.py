@@ -48,13 +48,14 @@ DIFFERENT shape, and the two paths treat it differently:
    keep the fail-open-with-warning behaviour above.
 
 ``PartialParsing`` is deliberately NOT treated as incomplete (FAR-1933): the
-pinned semgrep 1.79.0 does not fully parse a handful of tree files —
-``backend/src/modulo/core/pipeline_engine/node_runner.py`` (its ``match``
-statement at line 3567) and six ``frontend/src/__tests__/**.spec.ts`` files — so
-failing on it would make the gate permanently red for an unrelated reason.
-``mcp_server.py`` is NOT one of those files: it parses fully on the pinned
-semgrep, and the HITL graph-write guard's region at ``mcp_server.py:4014`` is
-analyzed (see ``docs/hitl-review-removal-guard-plan.md``).
+pinned semgrep 1.79.0 does not fully parse real tree files —
+``backend/src/modulo/api/mcp_server.py`` (the PEP 695 generic at line 2111, a
+genuine 1-line skip), ``backend/src/modulo/core/pipeline_engine/node_runner.py``
+(its ``match`` statement at line 3567) and several
+``frontend/src/__tests__/**.spec.ts`` files — so failing on it would make the
+gate permanently red for an unrelated reason. The HITL graph-write guard's
+region at ``mcp_server.py:4014`` is nonetheless analyzed despite the line-2111
+skip (mutation-verified; see ``docs/hitl-review-removal-guard-plan.md``).
 """
 
 from __future__ import annotations
