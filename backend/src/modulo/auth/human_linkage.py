@@ -38,7 +38,7 @@ the auth boundary), inactive accounts and absent/deactivated memberships.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,21 +56,25 @@ AUTH_TYPE_OAUTH = "oauth"
 LINKAGE_NONE = "none"
 LINKAGE_OAUTH_CONSENT = "oauth_consent"
 
+#: Registry permission key for approval decisions. Both ``approve`` and
+#: ``approve_with_modification`` map to it, and an unmapped action defaults to
+#: it (approval is the strictest common HITL decision, so an unknown action
+#: fails to the highest decision bar rather than an unverified scope).
+HITL_APPROVE_PERMISSION = "hitl.approve"
+
 #: The consented scope the ``review_hitl`` / REST actions require. The values are
 #: the registry permission keys (``auth.permissions``); ``hitl.*`` is delegable
 #: (FAR-1476), so a consenting human's grant set can carry them.
 HITL_ACTION_PERMISSIONS: dict[str, str] = {
     "claim": "hitl.claim",
-    "approve": "hitl.approve",
-    "approve_with_modification": "hitl.approve",
+    "approve": HITL_APPROVE_PERMISSION,
+    "approve_with_modification": HITL_APPROVE_PERMISSION,
     "deliver_manual": "hitl.deliver_manual",
     "submit_manual": "hitl.deliver_manual",
     "reject": "hitl.reject",
 }
-#: Permission required when the action is not in the map above. Approval is the
-#: strictest common HITL decision, so an unmapped action fails to the highest
-#: decision bar rather than an unverified scope.
-HITL_ACTION_DEFAULT_PERMISSION = "hitl.approve"
+#: Permission required when the action is not in the map above.
+HITL_ACTION_DEFAULT_PERMISSION = HITL_APPROVE_PERMISSION
 
 
 @dataclass(frozen=True)
@@ -134,13 +138,27 @@ async def resolve_human_linkage(
     if membership is None:
         return base
     _live_role, kind = membership
-    base = replace(base, principal_kind=kind)
+    base = HumanLinkage(
+        linked=base.linked,
+        auth_type=base.auth_type,
+        account_id=base.account_id,
+        token_family=base.token_family,
+        principal_kind=kind,
+        linkage=base.linkage,
+    )
     if kind != KIND_HUMAN:
         return base
     # (d) The consented grant set must cover the action.
     if grants is None or required_permission not in grants:
         return base
-    return replace(base, linked=True, linkage=LINKAGE_OAUTH_CONSENT)
+    return HumanLinkage(
+        linked=True,
+        auth_type=base.auth_type,
+        account_id=base.account_id,
+        token_family=base.token_family,
+        principal_kind=base.principal_kind,
+        linkage=LINKAGE_OAUTH_CONSENT,
+    )
 
 
 def required_permission_for_action(action: str) -> str:
