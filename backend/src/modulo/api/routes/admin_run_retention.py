@@ -53,6 +53,13 @@ router = APIRouter(prefix="/api/v1/admin/run-retention", tags=["admin-run-retent
 
 _PERMISSION = "run_retention.manage"
 
+# FAR-1924: the terminating record that marks a run-retention export as
+# COMPLETE. NDJSON has no length prefix or total, so a stream that died after
+# the first item is otherwise indistinguishable from a short-but-complete one.
+# A consumer treating the downloaded file as a compliance artefact requires
+# this final line; its absence means the export was truncated. See ``export``.
+_COMPLETE_SENTINEL = '{"_complete":true}\n'
+
 
 class RetentionCandidate(BaseModel):
     id: str
@@ -235,12 +242,14 @@ async def candidates(
     return CandidatesResponse(**result)
 
 
-# NOTE (FAR-1905): deliberately NOT wrapped in @handle_db_errors, unlike its
-# /candidates and /purge siblings. This route's only DB work runs inside the
-# ``_stream()`` async generator, which is consumed by the StreamingResponse
-# AFTER this handler has already returned — a route-level decorator wraps the
-# handler call and cannot catch an error raised while the body is being
-# streamed. Do not "fix" this by adding the decorator: it would be inert.
+# NOTE (FAR-1905 / FAR-1924): deliberately NOT wrapped in @handle_db_errors,
+# unlike its /candidates and /purge siblings. This route's only DB work runs
+# inside the ``_stream()`` async generator, which is consumed by the
+# StreamingResponse AFTER this handler has already returned — a route-level
+# decorator wraps the handler call and cannot catch an error raised while the
+# body is being streamed. Do not "fix" this by adding the decorator: it would
+# be inert. Instead the generator is PRIMED below (FAR-1924) so a start-up
+# failure surfaces as a real HTTP status before the response starts.
 @router.post("/export", dependencies=[require_feature("admin_run_retention")])
 async def export(
     req: ExportRequest,
@@ -270,8 +279,58 @@ async def export(
             ):
                 yield line
 
+    # FAR-1924: await the FIRST item BEFORE returning the StreamingResponse.
+    # The generator's DB work (RLS context + the first keyset page) would
+    # otherwise run after HTTP 200 has already been sent, so any start-up
+    # failure — a tenant/validation error, a missing migration
+    # (ProgrammingError) or a database error — produced a truncated 200 body
+    # with no error status and no completeness signal. Priming maps that error
+    # to a real HTTP status here, where the handler can still set the status
+    # code. Mirrors the primitive in analytics.py ``analytics_scan`` and
+    # audit.py ``scan_chain_endpoint``.
+    stream = _stream()
+    try:
+        first = await stream.__anext__()
+    except StopAsyncIteration:
+        first = None
+    except ProgrammingError:
+        _log.exception("run_retention.export.programming_error")
+        raise HTTPException(
+            status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_run_retention.export")
+        _log.exception("run_retention.export.db_error")
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("run_retention.export.unexpected_error")
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    async def _body() -> AsyncIterator[str]:
+        # Re-emit the primed first item (it was pulled out of the generator to
+        # surface pre-stream errors) so no row is lost.
+        if first is not None:
+            yield first
+        async for line in stream:
+            yield line
+        # FAR-1924 completeness signal, emitted ONLY when the DB iteration ran
+        # to exhaustion. Its absence means the export was truncated. Priming
+        # only covers failures at or before the first item; an error after the
+        # stream begins still truncates, so this sentinel is what lets a
+        # consumer detect that and refuse to treat a partial file as complete.
+        yield _COMPLETE_SENTINEL
+
     return StreamingResponse(
-        _stream(),
+        _body(),
         media_type="application/x-ndjson",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
