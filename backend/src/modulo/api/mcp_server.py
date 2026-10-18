@@ -106,6 +106,11 @@ from modulo.auth.api_key import (
     revoke_api_key as auth_revoke_api_key,
 )
 from modulo.auth.dependencies import resolve_role_from_membership
+from modulo.auth.human_linkage import (
+    HumanLinkage,
+    required_permission_for_action,
+    resolve_human_linkage,
+)
 from modulo.auth.oauth import (
     check_oauth_token_family_valid,
     clamp_oauth_role,
@@ -152,7 +157,11 @@ from modulo.core.documentation_indexer import DocumentationIndex
 # under concurrent multi-tenant load a global would resolve to whichever org
 # authenticated last, leaking cross-tenant data.
 from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, SnapshotLockNotAvailableError
-from modulo.core.feature_flags import get_registry, resolve_plan_context
+from modulo.core.feature_flags import (
+    get_registry,
+    resolve_mcp_human_linked_hitl_authority,
+    resolve_plan_context,
+)
 from modulo.core.hitl_email_alerts import normalize_hitl_email_prefs
 from modulo.core.hitl_manager import (
     AlreadyClaimedError,
@@ -425,6 +434,11 @@ _ctx_key_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_key
 _ctx_auth_token: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_auth_token")
 _ctx_user_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_user_id")
 _ctx_auth_type: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_auth_type")
+# ADR 063 step 1 (FAR-1957): the OAuth access token's signed ``token_family``
+# claim, set only on the OAuth dispatch path. ``None`` for API keys / regular
+# JWTs (no signed family to observe). Read by the human-linkage resolver; never
+# populated from a client-supplied field.
+_ctx_token_family: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_token_family", default=None)
 _ctx_team_id: contextvars.ContextVar[uuid.UUID | None] = contextvars.ContextVar("mcp_team_id")
 # FAR-620: the credential's caller scope — 'org' (org-wide/team/run keys),
 # 'user' (a user-scoped API key, a regular JWT session, or an OAuth token),
@@ -1549,6 +1563,9 @@ async def _authenticate_api_key(
         _ctx_user_id.set(key.account_id)
         _ctx_auth_token.set(token)
         _ctx_auth_type.set("api_key")
+        # ADR 063 step 1: an API key carries no signed token family — fail
+        # closed for human-linkage (linkage is always "none" for an mk_ key).
+        _ctx_token_family.set(None)
         # FAR-620: the credential's caller scope drives the tool-scope
         # caller-scope leg. The isinstance guard keeps test doubles (MagicMock
         # rows) on the fail-closed None; real rows always carry a string.
@@ -1705,6 +1722,9 @@ async def _authenticate_oauth_jwt(
         # auth_type 'jwt' (distinct from OAuth tokens) and caller scope
         # 'user' (identity-bound, eligible for caller-scoped tools).
         _ctx_auth_type.set("jwt")
+        # ADR 063 step 1: a non-OAuth JWT is structurally excluded from
+        # human-linkage (including a browser-class password JWT — FAR-634).
+        _ctx_token_family.set(None)
         _ctx_key_scope.set("user")
         _ctx_key_grants.set(None)
         _ctx_team_id.set(None)  # user tokens carry no team boundary
@@ -1845,6 +1865,9 @@ async def _finalize_oauth_principal(
     _ctx_user_id.set(claims.account_id)
     _ctx_auth_token.set(token)
     _ctx_auth_type.set("oauth")
+    # ADR 063 step 1: the signed token family is the observed half of the
+    # human-linkage check (condition 1). Cleared on every other auth path.
+    _ctx_token_family.set(claims.token_family)
     # FAR-620: an OAuth token is the user's own identity — caller scope
     # 'user' (identity-bound, eligible for caller-scoped tools).
     _ctx_key_scope.set("user")
@@ -6177,15 +6200,39 @@ def _hitl_human_only_denial_payload(
     review_id: str,
     action: str,
     verdict: str,
+    linkage: HumanLinkage,
 ) -> dict[str, Any]:
-    """The shared ``hitl.human_only_denied`` audit payload for MCP denials (FAR-634)."""
+    """The ``hitl.human_only_denied`` audit payload for MCP denials (FAR-634, ADR 063).
+
+    Records HOW linkage was established, with per-field provenance, never a
+    collapsed boolean:
+
+    * ``auth_type`` — **observed** credential class (``api_key``/``oauth``/``jwt``);
+    * ``account_id`` / ``token_family`` — **observed** (the credential's account
+      and the signed token-family claim, both ``None`` when the credential
+      carries no such value);
+    * ``principal_kind`` — **derived** from ``Account.kind`` + live membership
+      (``None`` when not evaluated because the credential is not an OAuth
+      candidate — the only class that can be human-linked);
+    * ``linkage`` — **derived** step-1 conditions (``none``/``oauth_consent``);
+    * ``verdict`` — **derived** from ``human_only_denial``.
+
+    The pre-ADR-063 payload named its auth-type field ``principal_kind``
+    (an auth type, not a principal kind) and hard-coded ``client_kind: None``.
+    ``client_kind`` is REMOVED: MCP has no server-derived value for it, and a
+    field that is always ``None`` is indistinguishable from one never
+    evaluated. No client-supplied field is written.
+    """
     return {
         "run_id": str(run_id),
         "review_id": review_id,
         "action": action,
         "surface": "mcp",
-        "principal_kind": _ctx_auth_type.get(None) or "api_key",
-        "client_kind": None,
+        "auth_type": linkage.auth_type,
+        "account_id": str(linkage.account_id) if linkage.account_id is not None else None,
+        "token_family": linkage.token_family,
+        "principal_kind": linkage.principal_kind,
+        "linkage": linkage.linkage,
         "reason": verdict,
     }
 
@@ -6198,6 +6245,7 @@ async def _append_hitl_human_only_denied_audit(
     review_id: str,
     action: str,
     verdict: str,
+    linkage: HumanLinkage,
 ) -> None:
     """Append the ``hitl.human_only_denied`` audit event for an MCP denial (FAR-634).
 
@@ -6228,6 +6276,7 @@ async def _append_hitl_human_only_denied_audit(
                 review_id=review_id,
                 action=action,
                 verdict=verdict,
+                linkage=linkage,
             ),
         )
     except asyncio.CancelledError:
@@ -6250,10 +6299,7 @@ async def _check_human_only_gate(
     """Return an error dict when the gate is human_only, else ``None``.
 
     Called for the ``claim``, ``approve`` and ``deliver_manual`` actions
-    (FAR-609: claim is human_only too — MCP clients authenticate with API
-    keys, so a human_only gate can be neither CLAIMED nor decided through
-    MCP): a ``human_only`` gate can only be decided by a browser-authenticated
-    human, never by an API-key/MCP client. ``reject`` is not mechanically
+    (FAR-609: claim is human_only too). ``reject`` is not mechanically
     intercepted but it is NOT an agent escape hatch: reject requires a
     claim_token, and the claim action is denied for MCP callers on a
     human_only (now the default) gate, so an agent can neither claim, decide,
@@ -6263,45 +6309,73 @@ async def _check_human_only_gate(
 
     FAR-610: the gate's config is resolved from the RUN's snapshot graph
     (falling back to the live pipeline edges, then the live HITL-node config)
-    via the shared resolver (``db.crud.hitl_review_config``). The previous
-    implementation selected the pipeline's edges with NO source/target filter
-    and read ``.scalars().first()`` — the first edge in arbitrary order — and
-    checked THAT edge's config, so on the PR Reviewer pipeline (first edge
-    carried no ``hitl_review_config``) MCP approvals were ALLOWED on a
-    ``human_only`` gate elsewhere in the graph.
+    via the shared resolver (``db.crud.hitl_review_config``).
 
     Fail closed (FAR-610 review): when the config is UNRESOLVABLE but the
     gate actually fired (a claim row exists —
     ``hitl_review_exists_but_unresolved``), the human_only policy cannot be
     verified, so the decision is denied rather than silently allowed. The
-    error reuses the ``human_only_gate`` code (clients already handle it)
-    with a detail naming the actual reason. The verdict itself lives in the
-    shared pure function ``hitl_review_config.human_only_denial`` so REST and
-    MCP enforce one policy with one wording (FAR-610 review); the claim
-    lookup runs only when the config is unresolvable.
+    verdict itself lives in the shared pure function
+    ``hitl_review_config.human_only_denial`` so REST and MCP enforce one policy
+    with one wording (FAR-610 review).
 
-    MCP stays deny-BY-DEFAULT regardless of credential class (FAR-634): even
-    a browser-class JWT through the MCP surface is denied — the browser UI is
-    the human path, and agent sessions hold the admin password (a
-    password-minted JWT is indistinguishable from a browser login at
-    issuance), so relaxing the MCP denial would reopen the exact attack path
-    FAR-610 closed. Every denial emits a warning log + the
-    ``hitl.human_only_denied`` audit event (FAR-634) before the error dict is
-    returned.
+    ADR 063 step 1 (FAR-1957): ``non_browser_credential`` is COMPUTED from the
+    single shared authority resolver (``auth.human_linkage.resolve_human_linkage``)
+    over the verified credential — no longer a hard-coded ``True``. A
+    consent-derived OAuth credential belonging to a live human principal whose
+    grant set covers the action is *human-linked*; when the org-wide
+    ``mcp_human_linked_hitl_authority`` flag is ON (the default), such a
+    credential is treated as a browser-class decision and may decide the gate.
+    Every other credential — ``mk_`` API key, non-OAuth JWT (including a
+    browser-class password JWT, FAR-634), service account, blacklisted family,
+    inactive account/membership, missing scope — and every verification failure
+    resolves to deny. ``deliver_manual`` stays browser-only in step 1 (ADR 035).
+    Every denial emits a warning log + the ``hitl.human_only_denied`` audit
+    event (FAR-634) before the error dict is returned.
     """
     from modulo.db.crud.hitl_review_config import (
         EVENT_HUMAN_ONLY_DENIED,
         hitl_review_exists_but_unresolved,
         human_only_denial,
+        human_only_effective,
         resolve_hitl_review_config,
     )
 
     config = await resolve_hitl_review_config(s, run_id=run.id, review_id=review_id, org_id=org_id, run=run)
+    if config is not None and not human_only_effective(config):
+        # An explicitly non-human_only gate cannot deny ANY credential, so the
+        # linkage + org-flag reads below would be wasted work (and a needless
+        # second DB session for an OAuth caller). Equivalent to letting
+        # ``human_only_denial`` return None.
+        return None
     gate_fired = False
     if config is None:
         gate_fired = await hitl_review_exists_but_unresolved(s, run_id=run.id, review_id=review_id, org_id=org_id)
-    # MCP callers authenticate with API keys — always a non-browser credential.
-    verdict = human_only_denial(config, non_browser_credential=True, gate_fired=gate_fired)
+
+    # ADR 063 step 1: compute the denial input from the verified linkage.
+    auth_type = _ctx_auth_type.get(None) or "unknown"
+    linkage = await resolve_human_linkage(
+        s,
+        org_id=org_id,
+        auth_type=auth_type,
+        account_id=_ctx_user_id.get(None),
+        token_family=_ctx_token_family.get(None),
+        grants=_ctx_key_grants.get(None),
+        required_permission=required_permission_for_action(action),
+    )
+    # The org-wide escape hatch (default ON). Read only when the credential IS
+    # human-linked: for a not-linked credential the verdict is already deny and
+    # the flag is irrelevant.
+    human_linked_authority = linkage.linked and await resolve_mcp_human_linked_hitl_authority(
+        org_id=org_id,
+        flag_name="mcp_human_linked_hitl_authority",
+    )
+    # deliver_manual injects the run's output directly (ADR 035) and stays
+    # browser-only in step 1 — never honoured over MCP, even for a human-linked
+    # credential.
+    allow_via_linkage = human_linked_authority and action != "deliver_manual"
+    non_browser_credential = not allow_via_linkage
+    verdict = human_only_denial(config, non_browser_credential=non_browser_credential, gate_fired=gate_fired)
     if verdict is not None:
         _log.warning(
             EVENT_HUMAN_ONLY_DENIED,
@@ -6310,7 +6384,8 @@ async def _check_human_only_gate(
                 "review_id": review_id,
                 "action": action,
                 "surface": "mcp",
-                "principal_kind": _ctx_auth_type.get(None) or "api_key",
+                "auth_type": linkage.auth_type,
+                "linkage": linkage.linkage,
             },
         )
         await _append_hitl_human_only_denied_audit(
@@ -6320,6 +6395,7 @@ async def _check_human_only_gate(
             review_id=review_id,
             action=action,
             verdict=verdict,
+            linkage=linkage,
         )
         return {"error": "human_only_gate", "detail": verdict}
     return None

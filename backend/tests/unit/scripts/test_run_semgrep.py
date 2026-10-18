@@ -247,6 +247,16 @@ def test_json_detector_false_for_list_typed_partial_parsing(tmp_path: Path) -> N
     assert not mod._semgrep_json_timeout(path)
 
 
+def test_json_detector_true_for_list_typed_timeout(tmp_path: Path) -> None:
+    """A fatal class inside a list-typed ``type`` is still fatal."""
+    path = tmp_path / "timeout-list.json"
+    _write_json(
+        path,
+        {"errors": [{"type": ["PartialParsing", "Timeout"], "message": "timeout"}], "results": []},
+    )
+    assert mod._semgrep_json_timeout(path)
+
+
 def test_json_detector_never_raises_on_unexpected_error_shapes(tmp_path: Path) -> None:
     """T1: the detector must NEVER raise, whatever an ``errors[]`` entry holds."""
     unexpected: list[object] = [
