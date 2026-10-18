@@ -1585,6 +1585,9 @@ elements:
       - testid: hk-refresh
         type: button
         dynamic_testid: false
+      - testid: hk-loading
+        type: element
+        dynamic_testid: false
       - testid: hk-error
         type: element
         dynamic_testid: false
