@@ -2916,7 +2916,18 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Snapshot Endpoint */
+        /**
+         * List Snapshot Endpoint
+         * @description List a pipeline's snapshots, newest version first.
+         *
+         *     ``exclude_created_kind`` optionally drops rows of the given ``created_kind``
+         *     values from both the page and ``total``. It lets a consumer resolve e.g.
+         *     the newest substantive version with ``page_size=1`` and
+         *     ``exclude_created_kind=run`` — a query that cannot be starved by an
+         *     arbitrarily long streak of run-start snapshots, unlike reading the head of
+         *     an unfiltered page. Optional, so the unfiltered history every existing
+         *     caller reads is unchanged.
+         */
         get: operations["list_snapshot_endpoint_api_v1_pipelines__pipeline_id__snapshots_get"];
         put?: never;
         /**
@@ -28590,6 +28601,7 @@ export interface operations {
             query?: {
                 page?: number;
                 page_size?: number;
+                exclude_created_kind?: ("initial" | "edit" | "rollback" | "run")[] | null;
                 _fresh?: boolean;
             };
             header?: never;

@@ -149,13 +149,42 @@ function seedRoute(query: Record<string, string>) {
 /** Any graph fixture shape (LIVE/FROZEN/SANDBOX graphs all satisfy it). */
 type TestGraph = { nodes: Array<Record<string, unknown>>; edges: unknown[] }
 
+/**
+ * Serve a snapshot-list request the way the REAL endpoint does: apply the
+ * optional `exclude_created_kind` filter BEFORE paginating, and report the
+ * filtered `total`.
+ *
+ * FAR-1895: the version chip asks for the newest substantive version with
+ * `page_size=1&exclude_created_kind=['run']`. A mock that ignored the filter
+ * would answer a different question and would keep passing after the chip
+ * regressed to an unfiltered first page, so the filter is honoured here.
+ */
+function serveSnapshotPage(rows: Array<Record<string, any>>, init?: any) {
+  const query = (init?.params?.query ?? {}) as {
+    page?: number
+    page_size?: number
+    exclude_created_kind?: string[]
+  }
+  const excluded = new Set(query.exclude_created_kind ?? [])
+  const matching = Array.from(excluded).length === 0 ? rows : rows.filter((row) => !excluded.has(row.created_kind))
+  const page = query.page ?? 1
+  const pageSize = query.page_size ?? 20
+  return {
+    data: {
+      items: structuredClone(matching.slice((page - 1) * pageSize, page * pageSize)),
+      total: matching.length,
+    },
+    error: undefined,
+  }
+}
+
 // Every payload is CLONED: the editor holds the response objects by
 // reference (rawNodes IS result.nodes), so a test that mutates the editable
 // state must never poison the shared fixture for the next mount.
 function seedApi(opts: { liveGraph?: TestGraph; frozenGraph?: TestGraph } = {}) {
   const liveGraph = opts.liveGraph ?? LIVE_GRAPH
   const frozenGraph = opts.frozenGraph ?? FROZEN_GRAPH
-  apiGetMock.mockImplementation((url: string) => {
+  apiGetMock.mockImplementation((url: string, init?: any) => {
     if (url.includes('/snapshots/{snapshot_id}')) {
       return Promise.resolve({
         data: { ...structuredClone(SNAPSHOT_DETAIL), graph_json: structuredClone(frozenGraph) },
@@ -164,7 +193,7 @@ function seedApi(opts: { liveGraph?: TestGraph; frozenGraph?: TestGraph } = {}) 
       })
     }
     if (url.endsWith('/snapshots')) {
-      return Promise.resolve({ data: { items: structuredClone(SNAPSHOT_LIST) }, error: undefined })
+      return Promise.resolve(serveSnapshotPage(SNAPSHOT_LIST, init))
     }
     if (url.includes('/pipelines/{pipeline_id}/graph')) {
       return Promise.resolve({ data: structuredClone(liveGraph), error: undefined })
@@ -226,11 +255,7 @@ function seedPagedSnapshots(versions: number[], opts: { drop?: number[] } = {}) 
       })
     }
     if (url.endsWith('/snapshots')) {
-      const query = (init?.params?.query ?? {}) as { page?: number; page_size?: number }
-      const page = query.page ?? 1
-      const pageSize = query.page_size ?? 20
-      const items = structuredClone(rows.slice((page - 1) * pageSize, page * pageSize))
-      return Promise.resolve({ data: { items, total: rows.length }, error: undefined })
+      return Promise.resolve(serveSnapshotPage(rows, init))
     }
     if (url.includes('/pipelines/{pipeline_id}/graph')) {
       return Promise.resolve({ data: structuredClone(LIVE_GRAPH), error: undefined })
@@ -245,13 +270,15 @@ function seedPagedSnapshots(versions: number[], opts: { drop?: number[] } = {}) 
 }
 
 /**
- * A run-heavy recent history served WITH the real endpoint's pagination
- * (default page_size=20). `runCount` `run` snapshots (version-DESC) sit ABOVE
- * one substantive `edit` version. Under the endpoint default the editor's
- * catalog page holds only run snapshots, so `currentSubstantiveVersion`
- * returns null and the version chip vanishes; the shared 100-row window
- * (lib/pipelineVersion SNAPSHOT_PAGE_SIZE) keeps the substantive version on
- * the page. (FAR-1816/FAR-1817)
+ * A run-heavy recent history served WITH the real endpoint's pagination AND
+ * its `exclude_created_kind` filter. `runCount` `run` snapshots (version-DESC)
+ * sit ABOVE one substantive `edit` version.
+ *
+ * With a run count larger than any snapshot page, an unfiltered first page is
+ * entirely run snapshots, so `currentSubstantiveVersion` over the catalog page
+ * is null and the chip vanishes. The chip's filtered query
+ * (`page_size=1&exclude_created_kind=['run']`) still resolves the edit version,
+ * whatever the run count. (FAR-1816/1817 narrowed this; FAR-1895 closes it.)
  */
 function seedRunHeavySnapshots(runCount: number) {
   const rows: Array<Record<string, unknown>> = []
@@ -285,11 +312,7 @@ function seedRunHeavySnapshots(runCount: number) {
   })
   apiGetMock.mockImplementation((url: string, init?: any) => {
     if (url.endsWith('/snapshots')) {
-      const query = (init?.params?.query ?? {}) as { page?: number; page_size?: number }
-      const page = query.page ?? 1
-      const pageSize = query.page_size ?? 20
-      const items = structuredClone(rows.slice((page - 1) * pageSize, page * pageSize))
-      return Promise.resolve({ data: { items, total: rows.length }, error: undefined })
+      return Promise.resolve(serveSnapshotPage(rows, init))
     }
     if (url.includes('/pipelines/{pipeline_id}/graph')) {
       return Promise.resolve({ data: structuredClone(LIVE_GRAPH), error: undefined })
@@ -507,7 +530,7 @@ describe('PipelineEditorView — historic version view (FAR-1812)', () => {
   it('shows the graceful miss for an unknown snapshot (404) with a link to the latest editor', async () => {
     seedRoute({ snapshot: 'snap-deleted' })
     seedApi()
-    apiGetMock.mockImplementation((url: string) => {
+    apiGetMock.mockImplementation((url: string, init?: any) => {
       if (url.includes('/snapshots/{snapshot_id}')) {
         return Promise.resolve({
           data: undefined,
@@ -516,7 +539,7 @@ describe('PipelineEditorView — historic version view (FAR-1812)', () => {
         })
       }
       if (url.endsWith('/snapshots')) {
-        return Promise.resolve({ data: { items: SNAPSHOT_LIST }, error: undefined })
+        return Promise.resolve(serveSnapshotPage(SNAPSHOT_LIST, init))
       }
       if (url.includes('/pipelines/{pipeline_id}/graph')) {
         return Promise.resolve({ data: structuredClone(LIVE_GRAPH), error: undefined })
@@ -601,15 +624,33 @@ describe('PipelineEditorView — historic version view (FAR-1812)', () => {
     wrapper.unmount()
   })
 
-  it('keeps the version chip when a run-heavy history fills more than one default page (FAR-1816/FAR-1817)', async () => {
-    // 30 run snapshots above the substantive v1. The endpoint default (20)
-    // returns only run snapshots, so currentSubstantiveVersion is null and the
-    // chip silently vanishes — while the timeline's 100-row window still shows
-    // v1. The shared SNAPSHOT_PAGE_SIZE keeps the two surfaces on one window.
-    const wrapper = await mountEditor({}, () => seedRunHeavySnapshots(30))
+  it('keeps the version chip when run snapshots exceed a whole page (FAR-1895)', async () => {
+    // 500 run snapshots above the single substantive v1 — five full
+    // SNAPSHOT_PAGE_SIZE windows of run rows. Any first-page read (the old 20
+    // default OR the 100 shared window FAR-1817 introduced) is 100% `run`
+    // snapshots, so currentSubstantiveVersion over the catalog page is null
+    // and the chip vanishes while the timeline still shows v1.
+    //
+    // The chip now asks the server for the newest substantive version
+    // directly (`page_size=1&exclude_created_kind=['run']`), which no length
+    // of run streak can starve. The mock honours the filter exactly like the
+    // endpoint, so this test fails if the chip regresses to page 1.
+    const wrapper = await mountEditor({}, () => seedRunHeavySnapshots(500))
     const chip = wrapper.find('[data-testid="pipeline-editor-version-chip"]')
     expect(chip.exists()).toBe(true)
     expect(chip.text()).toBe('v1')
+
+    // Prove the chip resolved through the FILTERED query, not a lucky page.
+    const chipQuery = apiGetMock.mock.calls.find((call: any[]) => {
+      const [url, init] = call as [string, any]
+      return (
+        String(url).endsWith('/snapshots') &&
+        Array.isArray(init?.params?.query?.exclude_created_kind) &&
+        init.params.query.exclude_created_kind.includes('run')
+      )
+    })
+    expect(chipQuery).toBeDefined()
+    expect(chipQuery?.[1]?.params?.query?.page_size).toBe(1)
     wrapper.unmount()
   })
 
@@ -1043,7 +1084,7 @@ function seedApiWith(overrides: {
     }
     if (url.endsWith('/snapshots')) {
       if (overrides.snapshots) return overrides.snapshots(init)
-      return Promise.resolve({ data: { items: structuredClone(SNAPSHOT_LIST) }, error: undefined })
+      return Promise.resolve(serveSnapshotPage(SNAPSHOT_LIST, init))
     }
     if (url.includes('/pipelines/{pipeline_id}/graph')) {
       return Promise.resolve({ data: structuredClone(overrides.graph ?? LIVE_GRAPH), error: undefined })

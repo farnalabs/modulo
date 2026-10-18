@@ -17,19 +17,31 @@
  */
 
 /**
- * The page size BOTH version surfaces fetch when reading
- * `GET /pipelines/{id}/snapshots` (the endpoint caps at 100, defaults to 20).
+ * The page size the version TIMELINE (and the `?version=` alias lookup) fetch
+ * when reading `GET /pipelines/{id}/snapshots` (the endpoint caps at 100,
+ * defaults to 20).
  *
- * It is ONE shared constant on purpose. The toolbar chip resolves the current
- * version from the editor's snapshot list and the timeline renders that same
- * history, so if the two fetched different windows they could disagree about a
- * version that genuinely exists: with the editor on the 20-row default, once
- * the newest 20 snapshots are all `run` kind (a scheduled pipeline creates one
- * per run) `currentSubstantiveVersion` returns null and the chip silently
- * vanishes while the 100-row timeline still shows the substantive version.
- * A single number cannot drift; two independent numbers can. (FAR-1816/1817)
+ * The toolbar chip does NOT read this window. Far-1895: it resolves the
+ * newest substantive version from a SERVER-FILTERED query
+ * (`page_size=1` + `exclude_created_kind=<NON_VERSION_CREATED_KINDS>`) so a
+ * run-heavy history can never starve it, however long the run streak grows.
+ * The timeline still pages this window (and "Load more"), so the two surfaces
+ * cannot disagree about a substantive version: the chip asks the server for
+ * that version directly rather than hoping it fits in a page.
  */
 export const SNAPSHOT_PAGE_SIZE = 100
+
+/**
+ * The `created_kind` values that are NOT pipeline versions.
+ *
+ * This is the ONE definition of "not a version". `isSubstantiveKind` derives
+ * the client-side predicate from it, and the chip passes it as the server
+ * filter (`exclude_created_kind`) — so the two can never drift. It is an
+ * EXCLUSION list on purpose: the timeline surfaces any other non-empty kind
+ * (including an unknown/future one), so an inclusion list would be a second
+ * copy of the vocabulary that could silently hide a real version.
+ */
+export const NON_VERSION_CREATED_KINDS = ['run'] as const
 
 /** created_kind → i18n label key, shared by the timeline and the chip. */
 export const CREATED_KIND_LABEL_KEYS: Readonly<Record<string, string>> = {
@@ -47,7 +59,7 @@ export const CREATED_KIND_LABEL_KEYS: Readonly<Record<string, string>> = {
  */
 export function isSubstantiveKind(createdKind: string | null | undefined): boolean {
   if (!createdKind) return false
-  return createdKind !== 'run'
+  return !(NON_VERSION_CREATED_KINDS as readonly string[]).includes(createdKind)
 }
 
 /** A minimal structural shape both the timeline and the chip can satisfy. */
@@ -58,8 +70,12 @@ export interface CreatedKindLike {
 /**
  * The newest substantive version in a version-DESCENDING snapshot list, or
  * null when the pipeline has no substantive version yet. This is the ONE
- * definition of "the pipeline's current version" shared by the toolbar chip
- * and the timeline.
+ * client-side definition of "the pipeline's current version", shared by the
+ * toolbar chip and the timeline.
+ *
+ * The chip applies it to the SERVER-FILTERED newest-version page (page_size 1,
+ * `exclude_created_kind=run`), so the definition holds without the chip
+ * needing the substantive version to fall inside a fixed-size window.
  */
 export function currentSubstantiveVersion<T extends CreatedKindLike>(snapshots: readonly T[]): T | null {
   return snapshots.find((s) => isSubstantiveKind(s.created_kind)) ?? null

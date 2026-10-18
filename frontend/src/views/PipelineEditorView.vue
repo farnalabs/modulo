@@ -1994,7 +1994,7 @@ import { useProductAnalytics } from '../composables/useProductAnalytics'
 import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
 import { useEnvironmentProfilesStore } from '../stores/environmentProfiles'
 import { runnerTierLabelKeyForProvider } from '../lib/runnerTiers'
-import { currentSubstantiveVersion, SNAPSHOT_PAGE_SIZE } from '../lib/pipelineVersion'
+import { currentSubstantiveVersion, NON_VERSION_CREATED_KINDS, SNAPSHOT_PAGE_SIZE } from '../lib/pipelineVersion'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 import { Pencil as PencilIcon, LoaderCircle as LoaderCircleIcon, Download as DownloadIcon, Play as PlayIcon, Plus as PlusIcon, Maximize2 as Maximize2Icon, X as XIcon, ExternalLink as ExternalLinkIcon } from '@lucide/vue'
@@ -2102,6 +2102,12 @@ const connectors = ref<any[]>([])
 const modelBackends = ref<any[]>([])
 const schemas = ref<any[]>([])
 const snapshots = ref<any[]>([])
+// FAR-1895: the newest SUBSTANTIVE version, resolved by a server-filtered
+// query (page_size 1, `exclude_created_kind=<NON_VERSION_CREATED_KINDS>`).
+// Deliberately separate from `snapshots` (the unfiltered catalog page the
+// compare pickers use): the chip must not depend on a substantive version
+// happening to fall inside a fixed-size page of run-streaked history.
+const currentVersionSnapshots = ref<any[]>([])
 
 const showAgentPicker = ref(false)
 const showRevertDialog = ref(false)
@@ -3216,23 +3222,32 @@ async function loadGraph() {
 // at page_size=100 + a binary search), so a partial or failed catalog load
 // can never make an existing deep version read as missing.
 //
-// FAR-1816/1817 parity: fetch the SAME widened window the timeline fetches
-// (lib/pipelineVersion SNAPSHOT_PAGE_SIZE), never the endpoint's 20-row
-// default. With the default, a run-heavy recent history (one `run` snapshot
-// per run) pushes the newest substantive version off page 1 and
-// currentSubstantiveVersion returns null, so the chip silently disappears
-// while the 100-row timeline still shows that version. One shared constant
-// keeps the two surfaces reading the same history.
+// FAR-1816/1817: the catalog fetches the same widened window the timeline
+// fetches (lib/pipelineVersion SNAPSHOT_PAGE_SIZE) for the compare pickers.
+//
+// FAR-1895: the CHIP does not read that window. Run-start snapshots are
+// created unconditionally per run and never pruned, so any fixed page can be
+// entirely `run` rows on a long-lived scheduled pipeline. The chip therefore
+// asks the server for the newest substantive version directly — page_size 1
+// plus an `exclude_created_kind` filter — a query that cannot be starved by
+// history size and cannot drift from the timeline.
 async function loadCatalog() {
   pageError.value = null
   try {
-    const [a, c, mb, s, snaps, ps] = await Promise.all([
+    const [a, c, mb, s, snaps, versionSnaps, ps] = await Promise.all([
       withTimeout((signal) => api.GET('/api/v1/agents', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
       withTimeout((signal) => api.GET('/api/v1/connectors', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
       withTimeout((signal) => api.GET('/api/v1/model-backends', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
       withTimeout((signal) => api.GET('/api/v1/schemas', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
       withTimeout((signal) => api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
         params: { path: { pipeline_id: pipelineId }, query: { page_size: SNAPSHOT_PAGE_SIZE } },
+        signal,
+      }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
+      withTimeout((signal) => api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
+        params: {
+          path: { pipeline_id: pipelineId },
+          query: { page_size: 1, exclude_created_kind: [...NON_VERSION_CREATED_KINDS] },
+        },
         signal,
       }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
       withTimeout((signal) => api.GET('/api/v1/parameter-schemas', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
@@ -3242,6 +3257,7 @@ async function loadCatalog() {
     modelBackends.value = mb
     schemas.value = s
     snapshots.value = (snaps as any[]).filter((sn: any) => sn.snapshot_version > 0)
+    currentVersionSnapshots.value = (versionSnaps as any[]).filter((sn: any) => sn.snapshot_version > 0)
     paramSchemas.value = ps
   } catch (e) {
     console.warn('Failed to load pipeline data', e)
@@ -4591,12 +4607,18 @@ const historicResolving = computed(
 // current SUBSTANTIVE version. FAR-1817: a version is a substantive snapshot
 // (created_kind initial/edit/rollback) — run snapshots are NOT versions, so
 // the chip must NOT label the newest snapshot (which after any run is a run
-// snapshot) as the current version. The predicate is shared with the timeline
-// (lib/pipelineVersion) so the two surfaces can never disagree. loadCatalog
-// filters version 0. Hidden only when there is no substantive version yet.
+// snapshot) as the current version.
+//
+// FAR-1895: the candidate list comes from a SERVER-FILTERED query
+// (`exclude_created_kind`), not from the head of the unfiltered catalog page.
+// Run snapshots accumulate without bound and are never pruned, so any fixed
+// page can be 100% run rows; the filtered query always returns the newest
+// substantive version regardless of history size. The shared client predicate
+// (lib/pipelineVersion) still validates the row, so the chip can never label
+// a run as a version even if the server filter were wrong.
 const versionChipSnapshot = computed(() => {
   if (isViewing.value) return viewSnapshot.value
-  return currentSubstantiveVersion(snapshots.value)
+  return currentSubstantiveVersion(currentVersionSnapshots.value)
 })
 
 const viewedVersionDate = computed(() => formatDateShort(viewSnapshot.value?.created_at ?? null))

@@ -5409,6 +5409,15 @@ async def trigger_quality_report(
 # ---------------------------------------------------------------------------
 
 
+# ``created_kind`` is a CLOSED server vocabulary (the DB CHECK constraint
+# ``ck_pipeline_snapshots_created_kind``). Spelling it here makes an unknown
+# filter value a loud 422 instead of a silently-ignored predicate — a typo'd
+# exclusion would otherwise return an unfiltered page, which is exactly the
+# starvation this filter exists to remove (FAR-1895). A new kind added to the
+# constraint must be added here at the same time.
+SnapshotCreatedKind = Literal["initial", "edit", "rollback", "run"]
+
+
 class SnapshotResponse(BaseModel):
     id: uuid.UUID
     pipeline_id: uuid.UUID
@@ -5581,16 +5590,33 @@ async def list_snapshot_endpoint(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    exclude_created_kind: Annotated[list[SnapshotCreatedKind] | None, Query()] = None,
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_LIST),
     _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> SnapshotListResponse:
+    """List a pipeline's snapshots, newest version first.
+
+    ``exclude_created_kind`` optionally drops rows of the given ``created_kind``
+    values from both the page and ``total``. It lets a consumer resolve e.g.
+    the newest substantive version with ``page_size=1`` and
+    ``exclude_created_kind=run`` — a query that cannot be starved by an
+    arbitrarily long streak of run-start snapshots, unlike reading the head of
+    an unfiltered page. Optional, so the unfiltered history every existing
+    caller reads is unchanged.
+    """
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
             pipeline = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
             if pipeline is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
-            snapshots, total = await list_snapshots(session, pipeline_id, page=page, page_size=page_size)
+            snapshots, total = await list_snapshots(
+                session,
+                pipeline_id,
+                page=page,
+                page_size=page_size,
+                exclude_created_kinds=exclude_created_kind,
+            )
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
