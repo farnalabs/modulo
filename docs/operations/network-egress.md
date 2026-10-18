@@ -137,7 +137,7 @@ No third-party CDNs, analytics scripts, or tracking pixels are loaded.
 | Connectors | None | Yes – per-connector API config |
 | Webhooks | None | Yes – per-webhook URL config |
 | SSO/OIDC | None | Yes – IdP discovery URL |
-| Library registry | None | None (TBD v2) |
+| Library registry | None | Yes – when `MODULO_LIBRARY_ENDPOINT` is set |
 | License check | None | None |
 | Frontend | None | None |
 
