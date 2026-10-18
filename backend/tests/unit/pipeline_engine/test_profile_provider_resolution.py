@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -93,9 +93,9 @@ class _RecordingProvider(RuntimeProvider):
         self.write_calls.append((provider_ref, path))
 
 
-def _patch_profile_provider(monkeypatch: pytest.MonkeyPatch, provider: Any) -> AsyncMock:
+def _patch_profile_provider(monkeypatch: pytest.MonkeyPatch, provider: Any) -> MagicMock:
     """Route the hub-resolved seam (``_build_profile_provider``) to a fake."""
-    builder = AsyncMock(return_value=provider)
+    builder = MagicMock(return_value=provider)
     monkeypatch.setattr(nr, "_build_profile_provider", builder)
     return builder
 
@@ -215,7 +215,7 @@ async def test_isolation_routes_to_the_profile_provider(monkeypatch: pytest.Monk
         **_isolation_kwargs(single_pr_per_run=True, guard_owner="n1"),
     )
 
-    builder.assert_awaited_once_with("kubernetes")
+    builder.assert_called_once_with("kubernetes")
     assert status == "installed"
     assert provider.isolation_calls
     ref, policy = provider.isolation_calls[0]
@@ -294,7 +294,7 @@ async def test_file_io_routes_to_the_profile_provider(monkeypatch: pytest.Monkey
     resolved, ref = await _file_io_provider_for("modulo-ws-1", provider_type="kubernetes")
     await _write_file_via_provider("modulo-ws-1", "/home/user/prompt.md", "hello", provider_type="kubernetes")
 
-    builder.assert_awaited_with("kubernetes")
+    builder.assert_called_with("kubernetes")
     assert resolved is provider
     assert ref == "modulo-ws-1"
     assert provider.write_calls
@@ -387,7 +387,7 @@ async def test_seams_borrow_the_dispatch_provider_and_never_close_it(
     """FAR-1051: when the dispatch's own already-resolved provider is threaded
     in, the seam REUSES it — no hub build — and leaves disposal to the
     dispatch's finally (closing it here would kill the live workspace)."""
-    builder = AsyncMock(side_effect=AssertionError("a borrowed provider must not trigger a hub build"))
+    builder = MagicMock(side_effect=AssertionError("a borrowed provider must not trigger a hub build"))
     monkeypatch.setattr(nr, "_build_profile_provider", builder)
     borrowed = _CloseTrackingProvider()
     borrowed.read_log_tail = AsyncMock(return_value=b"pod tail")  # type: ignore[method-assign]
@@ -416,7 +416,7 @@ async def test_seams_borrow_the_dispatch_provider_and_never_close_it(
         **_isolation_kwargs(),
     )
 
-    builder.assert_not_awaited()
+    builder.assert_not_called()
     assert resolved is borrowed
     assert ref == "modulo-ws-1"
     assert tail == "pod tail"

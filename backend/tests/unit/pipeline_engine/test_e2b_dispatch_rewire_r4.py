@@ -493,9 +493,9 @@ def test_provider_errors_translate_onto_the_existing_taxonomy_without_reparentin
     translated = _translate_provider_dispatch_error(ProvisionTimeoutError("never ready"))
     assert isinstance(translated, SandboxQueueTimeoutError)
 
-    # Non-provider failures translate to themselves (identity, not a copy).
-    original = ValueError("nope")
-    assert _translate_provider_dispatch_error(original) is original
+    # Non-provider failures do NOT translate: the helper returns None so the
+    # caller re-raises/classifies the original exception untouched.
+    assert _translate_provider_dispatch_error(ValueError("nope")) is None
 
     # No re-parenting in EITHER direction (ADR 040: additive only).
     assert not issubclass(RateLimitedError, SandboxNodeFailedError)

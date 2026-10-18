@@ -1177,9 +1177,7 @@ async def _read_log_tail_via_provider(
         profile_provider: RuntimeProvider | None = None
         try:
             profile_provider = (
-                borrowed_provider
-                if borrowed_provider is not None
-                else await _build_profile_provider(str(provider_type))
+                borrowed_provider if borrowed_provider is not None else _build_profile_provider(str(provider_type))
             )
             profile_raw = await profile_provider.read_log_tail(sandbox_id, max_bytes=max_bytes)
         except asyncio.CancelledError:
@@ -1316,7 +1314,7 @@ async def _apply_isolation_via_provider(
         # FAR-1051: hub-resolved for the profile's own provider type. The
         # typed ProviderNotConfiguredError from the hub propagates unchanged;
         # the resolved provider (when the build succeeds) is closed below.
-        _seam_built_provider = await _build_profile_provider(str(provider_type))
+        _seam_built_provider = _build_profile_provider(str(provider_type))
         provider = _seam_built_provider
     # WorkspaceSpec requires profile/org UUIDs; a session-factory-less
     # dispatch has no bound profile (unit tests / direct dispatch), so the
@@ -1406,7 +1404,7 @@ async def _file_io_provider_for(
     if not _is_legacy_e2b_route(provider_type):
         if borrowed_provider is not None:
             return borrowed_provider, sandbox_id
-        return await _build_profile_provider(str(provider_type)), sandbox_id
+        return _build_profile_provider(str(provider_type)), sandbox_id
     api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
     provider = await _build_file_io_provider(api_key) if api_key else None
     if provider is None:
@@ -1609,7 +1607,7 @@ class _ProfileTypeRef:
     provider_hint: str | None = None
 
 
-async def _build_profile_provider(provider_type: str) -> "RuntimeProvider":
+def _build_profile_provider(provider_type: str) -> "RuntimeProvider":
     """Resolve a profile-declared ``provider_type`` through the hub (FAR-1051).
 
     No silent fallback: registration is decided by :func:`build_hub`'s
@@ -1686,7 +1684,7 @@ async def _build_dispatch_provider(provider_type: str | None = None) -> "Runtime
     returned provider is the only handle the dispatch needs to dispose.
     """
     if not _is_legacy_e2b_route(provider_type):
-        return await _build_profile_provider(str(provider_type))
+        return _build_profile_provider(str(provider_type))
     from modulo.core.runtime_provider import build_hub
 
     try:
@@ -1753,7 +1751,9 @@ def _is_rate_limited_error(exc: BaseException) -> bool:
     return False
 
 
-def _translate_provider_dispatch_error(exc: BaseException) -> BaseException:
+def _translate_provider_dispatch_error(
+    exc: BaseException,
+) -> SandboxRateLimitedError | SandboxQueueTimeoutError | None:
     """FAR-1050 R4 T8/T9: map typed provider failures onto the EXISTING taxonomy.
 
     Additive translation ONLY — no re-parenting (ADR 040): the provider's
@@ -1763,7 +1763,9 @@ def _translate_provider_dispatch_error(exc: BaseException) -> BaseException:
     retryable classes, so the executor's classifier publishes exactly the
     codes it always did (``sandbox.rate_limited`` /
     ``sandbox.queue_timeout``) and a rate limit can never surface as
-    ``harness.unknown``. Returns *exc* itself when nothing translates.
+    ``harness.unknown``. Returns ``None`` when nothing translates, so the
+    caller only ever ``raise``\\ s a concrete sandbox-taxonomy class (never a
+    generic ``BaseException``).
     """
     from modulo.core.runtime_provider import ProvisionTimeoutError, RateLimitedError
 
@@ -1771,7 +1773,7 @@ def _translate_provider_dispatch_error(exc: BaseException) -> BaseException:
         return SandboxRateLimitedError(str(exc)[:_MAX_ERROR_MSG])
     if isinstance(exc, ProvisionTimeoutError):
         return SandboxQueueTimeoutError(str(exc)[:_MAX_ERROR_MSG])
-    return exc
+    return None
 
 
 def _dispatch_marker_json(attempt_key: str, provider: str, *, via_provider: bool) -> str:
@@ -3672,7 +3674,7 @@ async def _resolve_schema_validator_mode(
     except Exception:
         _org_key = str(_org_uuid)
         cached = _SCHEMA_MODE_CACHE.get(_org_key)
-        _log.error(
+        _log.exception(
             "schema_validator_mode.resolve_failed",
             extra={
                 "node_id": node_id,
@@ -3680,7 +3682,6 @@ async def _resolve_schema_validator_mode(
                 "last_known_good": cached,
                 "fallback": "lenient",
             },
-            exc_info=True,
         )
         # Return cached value if available, else env/default
         return cached or os.environ.get("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
@@ -6877,7 +6878,7 @@ def _guard_connector_secret_output(result: Any, node_id: str) -> dict[str, Any] 
         assert_no_secret_objects(result, node_id=node_id)
     except ScopeViolationError as scope_err:
         record_scope_violation(node_id=node_id, target=scope_err.target, kind="secret")
-        _log.error("scope.violation node=%s secret=%s", node_id, scope_err.target)
+        _log.exception("scope.violation node=%s secret=%s", node_id, scope_err.target)
         return {"artifacts": [{"node_id": node_id, "status": "failed", "error": str(scope_err)}]}
     return None
 
@@ -7373,8 +7374,8 @@ async def _wait_command_with_exec_process(
     last_activity: Callable[[], float],
     on_tick: Callable[[], Awaitable[None]] | None = None,
     tick_interval: float | None = None,
-    on_stdout: Callable[[str], Awaitable[None]] | None = None,
-    on_stderr: Callable[[str], Awaitable[None]] | None = None,
+    on_stdout: Callable[[str], Awaitable[None] | None] | None = None,
+    on_stderr: Callable[[str], Awaitable[None] | None] | None = None,
 ) -> tuple[Any, str | None]:
     """FAR-1050 R4: the idle watchdog re-expressed over ``ExecProcess``.
 
@@ -7409,17 +7410,26 @@ async def _wait_command_with_exec_process(
     stdout_parts: list[str] = []
     stderr_parts: list[str] = []
 
+    async def _invoke(callback: Callable[[str], Awaitable[None] | None], data: str) -> None:
+        # The callback contract accepts EITHER a coroutine-returning
+        # (``async def``) callback or a plain synchronous one; only await when
+        # the call actually returned an awaitable (the watchdog's stream
+        # callbacks are synchronous).
+        result = callback(data)
+        if result is not None:
+            await result
+
     async def _pump() -> None:
         async for chunk in process.chunks:
             data = getattr(chunk, "data", "")
             if getattr(chunk, "stream", "stdout") == "stderr":
                 stderr_parts.append(data)
                 if on_stderr is not None:
-                    await on_stderr(data)
+                    await _invoke(on_stderr, data)
             else:
                 stdout_parts.append(data)
                 if on_stdout is not None:
-                    await on_stdout(data)
+                    await _invoke(on_stdout, data)
 
     # nosemgrep: create-task-without-guard — this helper is an async def, so a
     # running event loop always exists (same exclusion as the other in-module
@@ -8440,7 +8450,7 @@ class _SandboxWatchdog:
         if prev is None or _delta_ratio(prev, chunk) > self._stdout_ratio:
             self._stall.touch("stdout")
 
-    async def on_stdout(self, chunk: str) -> None:
+    def on_stdout(self, chunk: str) -> None:
         self._stall.touch("heartbeat")
         self.touch_stdout(chunk)
         self.stream_chunk(chunk, "stdout")
@@ -8448,7 +8458,7 @@ class _SandboxWatchdog:
         if self._artifact_writer is not None:
             self._artifact_writer.append(chunk, "stdout")
 
-    async def on_stderr(self, chunk: str) -> None:
+    def on_stderr(self, chunk: str) -> None:
         self._stall.touch("heartbeat")
         self.stream_chunk(chunk, "stderr")
         # FAR-582: append to the side-car artifact writer (uncapped).
@@ -8665,12 +8675,10 @@ class _SandboxWatchdog:
 
     def _prune_missing_paths(self, seen: set[str]) -> bool:
         """Drop previously-seen paths that no longer match; True when any were pruned."""
-        changed = False
-        for prev_path in list(self._fs_state):
-            if prev_path not in seen:
-                del self._fs_state[prev_path]
-                changed = True
-        return changed
+        missing = set(self._fs_state) - seen
+        for prev_path in missing:
+            del self._fs_state[prev_path]
+        return bool(missing)
 
     def _log_resource_caps_gap_once(self, reason: str) -> None:
         """Explicit, once-per-dispatch warning that resource caps are NOT enforced.
@@ -9671,7 +9679,13 @@ async def _resolve_sandbox_git_content_config(config: _SandboxNodeConfig) -> _Sa
         node_id=config.node_id,
         field="agent_command",
     )
-    return _dc_replace(config, agent_prompt_template=resolved_prompt, agent_command=resolved_command)
+    # ``dataclasses.replace`` is typed as returning ``_DataclassInstance``; pin
+    # the concrete config type via an annotated local so the declared return
+    # type is honoured on every analyser, not just mypy (S5886).
+    resolved: _SandboxNodeConfig = _dc_replace(
+        config, agent_prompt_template=resolved_prompt, agent_command=resolved_command
+    )
+    return resolved
 
 
 async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegates to extracted helpers (FAR-310)
@@ -10924,6 +10938,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     exc_info=True,
                 )
 
+        # Bound to None up front so the post-provisioning guard below is a real
+        # check on a possibly-unset watchdog (the watchdog is only constructed
+        # once provisioning succeeds inside the try), never an identity test on
+        # an unbound local.
+        watchdog: _SandboxWatchdog | None = None
         try:
             # FAR-306 / FAR-1088: per-channel stall detector. The `heartbeat`
             # channel is refreshed only by REAL output callbacks (stream
@@ -12212,7 +12231,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         raise
     except Exception as _exc:
         _translated = _translate_provider_dispatch_error(_exc)
-        if _translated is not _exc:
+        if _translated is not None:
             raise _translated from _exc
         elapsed = time.monotonic() - start_time
         _exc_type = type(_exc).__name__
