@@ -33,7 +33,7 @@
 
     <p
       v-if="store.capacityError"
-      class="rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-sm text-destructive"
+      class="rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-sm text-destructive-text"
       role="alert"
       data-testid="capacity-error"
     >
@@ -47,7 +47,7 @@
     <div v-else-if="store.capacity" class="space-y-4">
       <div
         v-if="health.stall_suspected"
-        class="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+        class="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive-text"
         role="alert"
         data-testid="capacity-stall-alert"
       >
@@ -286,7 +286,7 @@ const verdictLabel = computed(() => {
 const verdictClass = computed(() => {
   const verdict = capacity.value.drain.verdict;
   if (verdict === "stalled" || verdict === "backing_up") {
-    return "bg-destructive/10 text-destructive";
+    return "bg-destructive/10 text-destructive-text";
   }
   if (verdict === "draining") {
     return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
