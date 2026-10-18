@@ -188,6 +188,23 @@ describe('AdminUsersView', () => {
     expect(wrapper.text()).toContain('alice@example.com')
   })
 
+  // STATE-3 (ux-conformance): list loading states render determinate table
+  // skeletons, not indeterminate spinners.
+  it('renders table skeletons (not spinners) while loading', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path.startsWith('/api/v1/admin/users')) return new Promise(() => {})
+      throw new Error(`unexpected GET ${path}`)
+    })
+    const wrapper = mountView()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="admin-users-loading"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="admin-invitations-loading"]').exists()).toBe(true)
+    expect(wrapper.find('.animate-pulse').exists()).toBe(true)
+    expect(wrapper.find('.animate-spin').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('shows "Never logged in" when last_login is null and relative time otherwise', async () => {
     const wrapper = mountView()
     await flushPromises()

@@ -2440,6 +2440,15 @@ elements:
       - testid: admin-users-next
         type: button
         dynamic_testid: false
+      - testid: admin-users-loading
+        type: element
+        dynamic_testid: false
+      - testid: admin-invitations-loading
+        type: element
+        dynamic_testid: false
+      - testid: admin-invitations-cancel-revoke
+        type: button
+        dynamic_testid: false
       - testid: admin-invitations-section
         type: element
         dynamic_testid: false
