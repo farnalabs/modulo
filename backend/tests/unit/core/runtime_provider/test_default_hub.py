@@ -293,7 +293,7 @@ class TestUnknownProviderType:
         assert exc_info.value.provider_type == "e2b"
         assert exc_info.value.env_var == "MODULO_E2B_API_KEY"
 
-    async def test_initialise_raises_unknown_type_for_bogus_type(self) -> None:
+    def test_initialise_raises_unknown_type_for_bogus_type(self) -> None:
         hub = RuntimeProviderHub()
 
         with pytest.raises(UnknownProviderTypeError) as exc_info:

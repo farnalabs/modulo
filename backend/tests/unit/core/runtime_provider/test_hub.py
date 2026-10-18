@@ -255,70 +255,70 @@ def test_register_and_list_after_unregister() -> None:
 
 
 class TestInitialise:
-    async def test_registers_local_docker(self) -> None:
+    def test_registers_local_docker(self) -> None:
         hub = RuntimeProviderHub()
         hub.initialise({"container-runtime": {"type": "local_docker", "docker_host": "unix:///var/run/docker.sock"}})
         provider = hub.get("container-runtime")
         assert isinstance(provider, DockerRuntimeProvider)
         assert provider._docker_host == "unix:///var/run/docker.sock"
 
-    async def test_registers_local_docker_with_default_image(self) -> None:
+    def test_registers_local_docker_with_default_image(self) -> None:
         hub = RuntimeProviderHub()
         hub.initialise({"container-runtime": {"type": "local_docker"}})
         provider = hub.get("container-runtime")
         assert isinstance(provider, DockerRuntimeProvider)
         assert provider._default_image == "python:3.12-slim"
 
-    async def test_infers_type_from_provider_name(self) -> None:
+    def test_infers_type_from_provider_name(self) -> None:
         hub = RuntimeProviderHub()
         hub.initialise({"local_docker": {}})
         assert isinstance(hub.get("local_docker"), DockerRuntimeProvider)
 
-    async def test_registers_runner_docker_type(self) -> None:
+    def test_registers_runner_docker_type(self) -> None:
         hub = RuntimeProviderHub()
         hub.initialise({"container-runtime": {"type": "runner_docker"}})
         provider = hub.get("container-runtime")
         assert isinstance(provider, DockerRuntimeProvider)
 
-    async def test_registers_docker_alias_type(self) -> None:
+    def test_registers_docker_alias_type(self) -> None:
         """FIX 2: the 'docker' alias must be handled, not silently skipped."""
         hub = RuntimeProviderHub()
         hub.initialise({"container-runtime": {"type": "docker"}})
         provider = hub.get("container-runtime")
         assert isinstance(provider, DockerRuntimeProvider)
 
-    async def test_registers_e2b_with_api_key(self) -> None:
+    def test_registers_e2b_with_api_key(self) -> None:
         hub = RuntimeProviderHub()
         hub.initialise({"sandbox": {"type": "e2b", "api_key": "test-key"}})
         provider = hub.get("sandbox")
         assert isinstance(provider, E2BRuntimeProvider)
         assert provider._api_key == "test-key"
 
-    async def test_skips_e2b_without_api_key(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_skips_e2b_without_api_key(self, caplog: pytest.LogCaptureFixture) -> None:
         hub = RuntimeProviderHub()
         hub.initialise({"sandbox": {"type": "e2b"}})
         assert hub.get("sandbox") is None
         assert "has no api_key" in caplog.text
 
-    async def test_raises_unknown_provider_type(self) -> None:
+    def test_raises_unknown_provider_type(self) -> None:
         """Unknown provider types raise UnknownProviderTypeError (FAR-997)."""
         hub = RuntimeProviderHub()
         with pytest.raises(UnknownProviderTypeError, match="not-a-provider"):
             hub.initialise({"mystery": {"type": "not-a-provider"}})
 
-    async def test_skips_already_registered_provider(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_skips_already_registered_provider(self, caplog: pytest.LogCaptureFixture) -> None:
         hub = RuntimeProviderHub()
         hub.register("sandbox", _StubProvider("sandbox"))
         hub.initialise({"sandbox": {"type": "e2b", "api_key": "test-key"}})
         assert "already registered, skipping factory init" in caplog.text
         assert isinstance(hub.get("sandbox"), _StubProvider)
 
-    async def test_empty_config_is_noop(self) -> None:
+    def test_empty_config_is_noop(self) -> None:
         hub = RuntimeProviderHub()
         hub.initialise({})
         assert not hub.list_providers()
 
-    async def test_local_docker_register_race_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_local_docker_register_race_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         """If a concurrent task registers the name first, log instead of crashing."""
         hub = RuntimeProviderHub()
 
@@ -331,7 +331,7 @@ class TestInitialise:
         assert "already registered, skipping" in caplog.text
         assert hub.get("container-runtime") is None
 
-    async def test_e2b_register_race_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_e2b_register_race_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         hub = RuntimeProviderHub()
 
         def _raise_duplicate(name: str, provider: Any) -> None:
@@ -343,7 +343,7 @@ class TestInitialise:
         assert "already registered, skipping" in caplog.text
         assert hub.get("sandbox") is None
 
-    async def test_registers_kubernetes_type(self) -> None:
+    def test_registers_kubernetes_type(self) -> None:
         """FAR-1051: the SECOND hub entry point accepts the Kubernetes provider.
 
         ``initialise`` previously warned-and-skipped ``kubernetes``, so the
@@ -356,7 +356,7 @@ class TestInitialise:
         assert isinstance(provider, KubernetesRuntimeProvider)
         assert provider.provider_id == "kubernetes"
 
-    async def test_registers_kubernetes_with_config_values(self) -> None:
+    def test_registers_kubernetes_with_config_values(self) -> None:
         """FAR-1051 review: ``initialise`` honours the kubernetes provider's
         per-provider config keys (namespace / default_image / kubeconfig /
         provision_timeout_s), matching the docker and e2b arms instead of
@@ -380,14 +380,14 @@ class TestInitialise:
         assert provider._kubeconfig == "/etc/kube/config"
         assert provider._provision_timeout_s == 321
 
-    async def test_registers_kubernetes_alias_type(self) -> None:
+    def test_registers_kubernetes_alias_type(self) -> None:
         """The ``k8s`` alias registers too — a name that is in the vocabulary
         must never warn-and-skip (the pre-FAR-1051 behaviour)."""
         hub = RuntimeProviderHub()
         hub.initialise({"pod-runtime": {"type": "k8s"}})
         assert isinstance(hub.get("pod-runtime"), KubernetesRuntimeProvider)
 
-    async def test_kubernetes_register_race_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_kubernetes_register_race_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         """A concurrent registration of the same name logs instead of crashing."""
         hub = RuntimeProviderHub()
 
@@ -400,7 +400,7 @@ class TestInitialise:
         assert "already registered, skipping" in caplog.text
         assert hub.get("pod-runtime") is None
 
-    async def test_kubernetes_missing_sdk_skips_with_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_kubernetes_missing_sdk_skips_with_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         """A missing kubernetes-asyncio SDK is warn-and-skip, never a boot crash.
 
         The factory ``initialise`` path mirrors ``build_hub``: importing the
