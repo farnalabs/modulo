@@ -59,6 +59,19 @@ vi.mock('@/manifest.yaml', () => ({
         required_permissions: null,
         feature_flag: null,
       },
+      // Permissions-only gate (no tier / role / admin): the shape the
+      // FAR-1950 reviewer flagged. Hydration copies `required_permissions`
+      // onto meta, so the fail-closed backstop must treat the route as
+      // hydrated and NOT redirect a permission-holding user to the dashboard.
+      '/perms-only': {
+        name: 'perms-only',
+        breadcrumb: 'Perms Only',
+        type: 'list_page',
+        required_tier: null,
+        required_roles: null,
+        required_permissions: ['run:read'],
+        feature_flag: null,
+      },
     },
   },
 }))
@@ -93,6 +106,30 @@ describe('FAR-1950: entryCarriesGate signals (every OR operand)', () => {
       entryCarriesGate({ system_admin_only: false, sidebar_group: 'sg_plain' } as never),
     ).toBe(false)
     expect(entryCarriesGate(undefined)).toBe(false)
+  })
+})
+
+describe('FAR-1950: a permissions-only gate stays symmetric between the two halves', () => {
+  it('does not fail-closed when hydration carried only the declared permissions gate', () => {
+    const to = {
+      name: undefined,
+      matched: [{ path: '/perms-only' }],
+      path: '/perms-only',
+      meta: { requiredPermissions: ['run:read'] } as Record<string, unknown>,
+    }
+    expect(findUnhydratedGatedManifestPath(to as never)).toBeUndefined()
+  })
+
+  it('hydrates requiredPermissions onto meta and the backstop does not fire', () => {
+    const route = {
+      name: undefined,
+      matched: [{ name: undefined, path: '/perms-only' }],
+      path: '/perms-only',
+      meta: {} as Record<string, unknown>,
+    }
+    hydrateManifestMeta(route as never)
+    expect(route.meta.requiredPermissions).toEqual(['run:read'])
+    expect(findUnhydratedGatedManifestPath(route as never)).toBeUndefined()
   })
 })
 

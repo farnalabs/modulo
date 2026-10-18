@@ -740,9 +740,27 @@ function resolveManifestEntry(to: RouteLocationTarget): (ManifestEntry & { path:
   return undefined
 }
 
-/** The route's own meta carries an enforced gate (role / tier / system admin). */
+/**
+ * The hydrated route meta carries a manifest-declared gate signal (role /
+ * tier / system admin / permissions).
+ *
+ * This is the hydration-success half of the FAR-1950 fail-closed check: a
+ * signal present on `to.meta` proves `hydrateManifestMeta` reached this route,
+ * so the backstop must NOT fire. It deliberately mirrors
+ * `entryCarriesGate`'s declared signals — including `required_permissions`,
+ * which `enforceRoleTierVisibility` does not itself enforce (permissions are a
+ * sidebar concern) but which `hydrateManifestMeta` copies onto `to.meta`.
+ * Without it the two halves disagree: a permissions-only gate would look
+ * "declared but unhydrated" and fail-closed redirect even a user holding the
+ * permission.
+ */
 function metaCarriesGate(meta: RouteLocationTarget['meta'] | undefined): boolean {
-  return Boolean(meta?.requiresSystemAdmin || meta?.requiredRoles?.length || meta?.requiredTier)
+  return Boolean(
+    meta?.requiresSystemAdmin ||
+      meta?.requiredRoles?.length ||
+      meta?.requiredTier ||
+      meta?.requiredPermissions?.length,
+  )
 }
 
 /**
