@@ -7,65 +7,9 @@ unguarded since 0110. 0259 closes both gaps.
 
 Lenses:
 
-* **Chain** - 0259 chains onto 0258; 0260_run_cancel_reason (FAR-1233) chains
-  onto 0259, 0261_decision_record_payload (FAR-1102) chains onto 0260,
-  0262_hitl_gate_to_review_vocabulary (FAR-1104) chains onto 0261,
-  0263_evidence_layer (FAR-966) chains onto 0262,
-  0264_pipelines_max_autonomy_ge_default chains onto 0263,
-  0265_hitl_review_window (FAR-1257) chains onto 0264,
-  0266_guardrail_policy_gate_sweep (FAR-1107) chains onto 0265,
-  0267_notification_hot_query_indexes chains onto 0266,
-  0268_webhook_lookup_expiry_indexes chains onto 0267,
-  0269_webhook_dedup_check_constraints chains onto 0268,
-  0270_pipeline_snapshots_max_autonomy_ge_default chains onto 0269,
-  0271_org_api_keys_revocation_sweep_indexes chains onto 0270,
-  0272_oauth_client_revoke_lookup_indexes chains onto 0271,
-  0273_runs_dispatch_phase chains onto 0272,
-  0274_policy_gate_pin_fingerprint_operator_control chains onto 0273, and
-  0275_run_cancel_reason_vocabulary chains onto 0274, and
-  0276_runs_autovacuum_enabled chains onto 0275, and
-  0277_run_daily_facts_trigger_dispatch_phase chains onto 0276, and
-  0278_runs_workspace_drift_sweep_index chains onto 0277, and
-   0279_table_autovacuum_tuning chains onto 0278, and
-   0280_runs_node_deadline_watchdog_fired_count chains onto 0279_table_autovacuum_tuning, and
-   0281_org_api_keys_grants chains onto 0280_runs_node_deadline_watchdog_fired_count, and
-   0282_env_profiles_kubernetes chains onto 0281_org_api_keys_grants, and
-   0283_runs_drop_unused_indexes chains onto 0282_env_profiles_kubernetes, and
-   0284_add_rejected_run_status chains onto 0283_runs_drop_unused_indexes, and
-   0285_system_audit_events chains onto 0284_add_rejected_run_status, and
-   0286_pipeline_run_state chains onto 0285_system_audit_events, and
-   0287_team_rls_lifecycle_evals chains onto 0286_pipeline_run_state, and
-   0288_runs_execution_origin chains onto 0287_team_rls_lifecycle_evals, and
-   0289_pipelines_environment_profile chains onto 0288_runs_execution_origin, and
-   0290_scheduled_reports_due_scan chains onto 0289_pipelines_environment_profile, and
-    0291_invitations_lookup_constraints chains onto 0290_scheduled_reports_due_scan, and
-    0292_audit_events_resource_lookup chains onto 0291_invitations_lookup_constraints, and
-    0293_oauth_clients_team_id chains onto 0292_audit_events_resource_lookup, and
-    0294_eval_results_org_fk chains onto 0293_oauth_clients_team_id, and
-    0295_decision_record_event_identity chains onto 0294_eval_results_org_fk, and
-    0296_benign_run_outcomes chains onto 0295_decision_record_event_identity, and
-    0297_autonomy_gating_s1 chains onto 0296_benign_run_outcomes, and
-    0298_accounts_kind chains onto 0297_autonomy_gating_s1, and
-    0299_accounts_service_identity chains onto 0298_accounts_kind, and
-    0300_benign_facts_repair chains onto 0299_accounts_service_identity,
-    0301_oauth_consent_state_preauth_rls chains onto 0300_benign_facts_repair,
-    0302_runs_run_grouping chains onto 0301_oauth_consent_state_preauth_rls, and
-    0303_feedback_records_lookup_indexes chains onto 0302_runs_run_grouping, and
-    0305_guardrail_escalate_action chains onto 0304_metrics_staging_recorded_at_index, and
-    0306_trigger_secret_encryption chains onto 0305_guardrail_escalate_action, and
-    0307_runs_guardrail_override_resume_pending chains onto 0306_trigger_secret_encryption, and
-    0308_runs_dispatch_phase_history chains onto 0307_runs_guardrail_override_resume_pending, and
-    0313_collection_install_drop_installed_entities chains onto
-    0312_memberships_active_lookups, and
-    0314_external_agents_mcp_servers chains onto
-    0313_collection_install_drop_installed_entities, and
-    0315_service_accounts_lifecycle chains onto
-    0314_external_agents_mcp_servers, and
-    0316_policy_gate_evaluation_mode chains onto
-    0315_service_accounts_lifecycle, and
-    0317_drop_retired_pipeline_diff_rollback_flag chains onto
-    0316_policy_gate_evaluation_mode as the
-    single linear head.
+* **Chain** - this migration's own parent is pinned by
+  ``_MIGRATION_DOWN_REVISION`` below; the graph's single linear head, and its
+  completeness, are asserted by ``_migration_graph.assert_single_linear_head``.
 * **Structure (mocked ``op``)** - upgrade emits FOUR existence-gated DO blocks
   (add NOT VALID, then VALIDATE, for each of the two columns) carrying the full
   vocabulary and a TABLE-QUALIFIED ``conrelid`` gate; downgrade is the
@@ -83,14 +27,13 @@ from types import ModuleType
 from unittest.mock import patch
 
 import pytest
-from alembic.script import ScriptDirectory
 from sqlalchemy import CheckConstraint
 
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_REVISION = "0259_pipeline_snapshot_max_autonomy_check"
 _MIGRATION_DOWN_REVISION = "0258_pipeline_accountability_owners"
-_HEAD_MIGRATION = "0320_evidence_redaction_rules"
 _MAX_CEILING_CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_level"
 _DEFAULT_LEVEL_CONSTRAINT = "ck_pipeline_snapshots_default_autonomy_level"
 _CONSTRAINTS = (_MAX_CEILING_CONSTRAINT, _DEFAULT_LEVEL_CONSTRAINT)
@@ -125,9 +68,8 @@ def _executed() -> list[str]:
 
 
 class TestChain:
-    def test_single_head_is_0261(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_down_revision_is_0258(self) -> None:
         module = _load_migration()

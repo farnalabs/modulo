@@ -11,13 +11,15 @@ Unlike the schema-reconciliation migrations (0108/0109/0110, which are not
 reversible in general), 0116 is a plain additive migration chained directly
 onto ``0115_notification_preferences`` and IS fully reversible — the downgrade
 drops exactly the columns the upgrade added. These tests assert the chain edge
-(down_revision), the upgrade DDL, the downgrade DDL, and that 0116 is the
-single linear chain head.
+(down_revision), the upgrade DDL, the downgrade DDL, and that the migration
+graph has a single, complete head (asserted by the shared
+``_migration_graph.assert_single_linear_head`` helper, never a hard-coded head
+value).
 """
 
 from pathlib import Path
 
-from alembic.script import ScriptDirectory
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
@@ -31,14 +33,9 @@ def _source() -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _script() -> ScriptDirectory:
-    return ScriptDirectory(str(_VERSIONS.parent))
-
-
 class TestGuardrailTrustMigration:
-    def test_head_is_single_chain(self) -> None:
-        heads = _script().get_heads()
-        assert heads == ["0320_evidence_redaction_rules"], f"expected a single head, got {heads}"
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_0116_down_revision_is_0115_notification_preferences(self) -> None:
         source = _source()

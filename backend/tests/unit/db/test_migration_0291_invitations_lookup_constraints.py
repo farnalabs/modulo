@@ -3,10 +3,11 @@
 Structural + SQLite-model contract (no Postgres / Testcontainers needed):
 
 * **Revision chain** — the revision/down_revision pin this migration onto the
-  0290_scheduled_reports_due_scan parent; the migrations directory has exactly
-  one head (0317_drop_retired_pipeline_diff_rollback_flag, pinned by all sibling chain
-  tests) so the pre-commit check-migration-heads hook can never be ambushed by
-  a renumber.
+  0290_scheduled_reports_due_scan parent; the graph's single, linear head and
+  its completeness are asserted by the shared
+  ``_migration_graph.assert_single_linear_head`` helper (never a hard-coded
+  head value), so the pre-commit check-migration-heads hook can never be
+  ambushed by a renumber.
 * **Index shape (mocked ``op``)** — the upgrade emits exactly the two
   idempotent ``CREATE INDEX IF NOT EXISTS`` statements the live-invite read
   paths (``crud.invitations._live_conditions``) are written against:
@@ -39,18 +40,17 @@ from types import ModuleType
 from unittest.mock import patch
 
 import pytest
-from alembic.script import ScriptDirectory
 from sqlalchemy import CheckConstraint, create_engine, text
 from sqlalchemy.exc import IntegrityError
 
 from modulo.db.crud.invitations import _live_conditions
 from modulo.db.models.invitation import Invitation
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0291_invitations_lookup_constraints"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0290_scheduled_reports_due_scan"
-_HEAD_MIGRATION = "0320_evidence_redaction_rules"
 
 #: Index name -> ordered key columns. The single source of truth asserted
 #: against BOTH the migration DDL and the ORM declaration.
@@ -128,9 +128,8 @@ class TestChain:
     def test_down_revision_is_0290_scheduled_reports_due_scan(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
 
-    def test_single_head_is_0293(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_no_branch_labels_or_depends_on(self) -> None:
         module = _load_migration()

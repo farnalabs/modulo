@@ -3,9 +3,12 @@
 Structural + model-parity contract (no Postgres / Testcontainers needed):
 
 * **Revision chain** — the revision/down_revision pin this migration onto the
-  0293_oauth_clients_team_id parent, and the migrations directory has
-  exactly one head (this migration), so the pre-commit ``check-migration-heads``
-  hook can never be ambushed by a renumber.
+  0293_oauth_clients_team_id parent, and the tree has exactly one head of which
+  this migration is a member; the head value is never named (0294 is
+  mid-chain). The single-linear-head shape is asserted by the shared
+  ``_migration_graph.assert_single_linear_head`` helper, and 0294's own
+  membership of that graph is asserted directly, so the pre-commit
+  ``check-migration-heads`` hook can never be ambushed by a renumber.
 * **Composite FK emission (mocked ``op``)** — on Postgres the upgrade swaps the
   single-column ``eval_results_eval_id_fkey`` for the composite
   ``fk_eval_results_eval_org`` over ``(eval_id, organisation_id)``; the
@@ -26,11 +29,11 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import patch
 
-from alembic.script import ScriptDirectory
 from sqlalchemy import UniqueConstraint
 
 from modulo.db.models.eval import Eval
 from modulo.db.models.eval_result import EvalResult
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0294_eval_results_org_fk"
@@ -79,13 +82,14 @@ class TestChain:
 
     def test_single_head_and_this_migration_is_an_ancestor(self) -> None:
         # 0294 is no longer the tip once a later migration lands on top (0295,
-        # FAR-1108 chunk 8b). The invariant this test owns is that the chain
-        # still has exactly ONE head and that this migration is on it.
-        script = ScriptDirectory(str(_VERSIONS.parent))
-        heads = script.get_heads()
-        assert len(heads) == 1, f"expected a single head, got {heads}"
+        # FAR-1108 chunk 8b). The shape invariant (exactly one head; strictly
+        # linear; no dangling down_revision, duplicate revision id, orphan or
+        # ghost) is asserted by the shared helper; the membership assertion
+        # additionally pins that 0294 itself is wired into that graph.
+        script = script_directory()
+        assert_single_linear_head(script)
         revisions = {rev.revision for rev in script.walk_revisions()}
-        assert _MIGRATION_NAME in revisions
+        assert _MIGRATION_NAME in revisions, f"{_MIGRATION_NAME} is not on the migration chain"
 
     def test_no_branch_labels_or_depends_on(self) -> None:
         module = _load_migration()

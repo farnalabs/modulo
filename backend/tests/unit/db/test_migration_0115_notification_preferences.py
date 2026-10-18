@@ -4,9 +4,10 @@ Structural contract (no Postgres needed):
 
 * **Revision chain** — 0115 revises ``0114_org_api_keys_run_id``; the tree has
   exactly one head and 0115 is on that chain. 0115 is mid-chain, so the tip
-  legitimately moves as later migrations land on top; the exact head is pinned
-  by the sibling chain tests, not here. The revision id matches the filename;
-  no branch labels.
+  legitimately moves as later migrations land on top; the shared
+  ``_migration_graph.assert_single_linear_head`` helper asserts the graph shape
+  and this module asserts 0115's membership of it, never the head's value. The
+  revision id matches the filename; no branch labels.
 * **Upgrade (mocked ``op``)** — creates ``notification_preferences`` with the
   org/account/category unique constraint and a ``String(100)`` category (NO
   CHECK — the vocabulary is code-driven), then — on Postgres — runs the 0066
@@ -28,10 +29,10 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-from alembic.script import ScriptDirectory
 from sqlalchemy import CheckConstraint, Column, String, UniqueConstraint
 
 from modulo.db.models.notification import NotificationPreference
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_REVISION = "0115_notification_preferences"
 _MIGRATION_DOWN_REVISION = "0114_org_api_keys_run_id"
@@ -129,12 +130,13 @@ def _table_args(rec: _Recorder) -> tuple[object, ...]:
 class TestChain:
     def test_single_head_and_this_migration_is_an_ancestor(self) -> None:
         # 0115 is mid-chain: the tip moves as later migrations land on top (a
-        # sibling migration may become the head at any time). The invariant
-        # this test owns is that the chain still has exactly ONE head and that
-        # 0115 is on it — not the identity of the tip.
-        script = ScriptDirectory(str(_VERSIONS.parent))
-        heads = script.get_heads()
-        assert len(heads) == 1, f"expected a single head, got {heads}"
+        # sibling migration may become the head at any time). The shape
+        # invariant (exactly one head; strictly linear; no dangling
+        # down_revision, duplicate revision id, orphan or ghost) is asserted by
+        # the shared helper; the membership assertion additionally pins that
+        # 0115 itself is wired into that graph.
+        script = script_directory()
+        assert_single_linear_head(script)
         revisions = {rev.revision for rev in script.walk_revisions()}
         assert _MIGRATION_REVISION in revisions, f"{_MIGRATION_REVISION} is not on the migration chain"
 

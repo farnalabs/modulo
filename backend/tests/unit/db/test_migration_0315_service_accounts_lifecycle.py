@@ -5,10 +5,11 @@ the real trigger + DDL are exercised against real Postgres in
 ``tests/integration/db/test_migration_0315_service_accounts_lifecycle.py``):
 
 * **Revision chain** — 0315 revises ``0314_external_agents_mcp_servers``
-  (which revises ``0312_memberships_active_lookups``); the
-  migrations directory has exactly one head (``0315_service_accounts_lifecycle``,
-  pinned by all sibling chain tests), the revision id matches the filename, and
-  neither ``branch_labels`` nor ``depends_on`` is set.
+  (which revises ``0312_memberships_active_lookups``); the graph's single,
+  linear head is asserted by the shared
+  ``_migration_graph.assert_single_linear_head`` helper (never a hard-coded head
+  value), the revision id matches the filename, and neither ``branch_labels``
+  nor ``depends_on`` is set.
 * **Source shape** — the upgrade adds ``accounts.decommissioned_at`` + the
   ``ck_accounts_decommissioned_service`` CHECK, creates the
   ``enforce_service_role_ceiling`` trigger function (plpgsql, SECURITY INVOKER,
@@ -29,15 +30,13 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-from alembic.script import ScriptDirectory
-
 from modulo.db.models.account import Account
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0315_service_accounts_lifecycle"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0314_external_agents_mcp_servers"
-_HEAD_MIGRATION = "0320_evidence_redaction_rules"
 
 _CHECK_NAME = "ck_accounts_decommissioned_service"
 _CHECK_PREDICATE = "decommissioned_at IS NULL OR kind = 'service'"
@@ -62,9 +61,8 @@ def _source() -> str:
 
 
 class TestChain:
-    def test_single_head_is_0317_drop_retired_pipeline_diff_rollback_flag(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_down_revision_is_0314_external_agents_mcp_servers(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
