@@ -48,6 +48,14 @@ How this gate stays honest (the ``test_background_audit_coverage.py`` idiom):
   dispatch phase is ``generic`` (collected by the generic ``running``
   terminalisers) or ``dedicated`` (needs a leg of its own). A classification is
   a decision someone can read; a gap is visible.
+* **An exemption carries its reasoning, and a gap is never vacuous (FAR-1966b).**
+  ``EXEMPT_REASONS`` is a closed vocabulary, and every exempt entry must
+  additionally cite resolving ``*.py`` source anchors — so a status cannot be
+  parked out of the gate as a bare marked-string
+  (``test_exempt_statuses_carry_a_source_anchored_justification``). The
+  gap-actionability predicate is driven by a synthetic thin note even when the
+  inventory carries no real ``gap``, so the branch that adjudicates a FUTURE gap
+  can still fail today (``test_every_status_gap_is_visible_and_actionable``).
 
 Documented limitations
 ----------------------
@@ -269,6 +277,17 @@ _STATUS_COVERAGE: dict[str, StatusCoverage] = {
     "unknown": StatusCoverage(
         _EXEMPT,
         reason="operator_driven_recovery",
+        note=(
+            "FAR-410. Design anchor: db/models/run.py:62-65 documents ``unknown`` as a "
+            "NON-TERMINAL recovery status whose outcome is indeterminate (e.g. a lost "
+            "sandbox), reconciled to a terminal outcome ONLY by an operator re-running "
+            "with the SAME persisted run-level ``idempotency_key``; db/models/run.py:213-214 "
+            "excludes it from ONGOING_ACTIVE_STATUSES so a stuck UNKNOWN cannot trigger an "
+            "ongoing top-up, and dispatcher_reconcile's drain note (cron_helpers.py:7038-7046) "
+            "records the same contract at the detection site. Reclassification is required "
+            "the moment an automatic terminaliser (rather than an operator re-run) is "
+            "introduced."
+        ),
     ),
     "hitl_parked": StatusCoverage(
         _EXEMPT,
@@ -484,6 +503,91 @@ def _evidence_present(rel_path: str, marker: str) -> bool:
     if not path.is_file():
         return False
     return marker in path.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Exempt-justification anchors — a claim of recovery must cite where it lives
+# ---------------------------------------------------------------------------
+#
+# An exemption is a DECISION that a status needs no automatic terminaliser. The
+# reason must come from the closed ``EXEMPT_REASONS`` vocabulary (validated at
+# construction and by ``test_exempt_statuses_use_only_documented_reasons``) AND
+# the entry must carry a justification anchored to specific source evidence — a
+# bare restatement of the reason is not reviewable, and an exemption that cannot
+# be checked by reading the source is a gap wearing an exempt label. The anchor
+# is a ``*.py`` path (optionally ``:line`` or ``:start-end``) that must resolve
+# under ``backend/``; a rotted anchor (the cited file removed, or a line past
+# its end) fails the gate.
+
+#: Trees an exempt justification's ``*.py`` anchors must resolve within: the
+#: product source and the test tree the safety properties live in.
+_ANCHOR_ROOTS: tuple[Path, ...] = (SRC_DIR, BACKEND_DIR / "tests")
+
+#: A cited source anchor: a ``*.py`` path with an optional ``:line`` or
+#: ``:start-end`` suffix. A ``path:symbol`` citation simply matches the path.
+_PY_ANCHOR_RE = re.compile(r"([A-Za-z0-9_./-]+\.py)(?::(\d+)(?:-(\d+))?)?")
+
+#: Shorter than this and an exempt justification reads as a bare string rather
+#: than a reviewable decision.
+_MIN_EXEMPT_JUSTIFICATION = 80
+
+
+def _anchor_source_files() -> list[Path]:
+    """The ``*.py`` files an exempt justification's anchors may resolve against."""
+    return sorted(path for root in _ANCHOR_ROOTS for path in root.rglob("*.py"))
+
+
+def _resolve_py_anchor(fragment: str, files: Iterable[Path]) -> list[Path]:
+    """Files whose path ends with the cited fragment (``db/models/run.py`` …).
+
+    Notes cite the shortest distinctive path, not a backend-relative one (both
+    ``db/models/run.py`` and bare ``cron_helpers.py`` appear), so resolution is
+    by path SUFFIX over the anchor trees.
+    """
+    suffix = "/" + fragment.lstrip("./")
+    return [path for path in files if str(path).endswith(suffix)]
+
+
+def _exempt_justification_violations(
+    status: str,
+    record: StatusCoverage,
+    *,
+    anchor_files: Iterable[Path],
+) -> list[str]:
+    """An exemption's note must be substantial and cite resolving source anchors.
+
+    ``record.reason`` is validated against ``EXEMPT_REASONS`` at construction;
+    this is the complementary half — the note must be long enough to review and
+    name at least one ``*.py`` anchor that resolves today. An anchor pointing
+    past the end of every matching file is also a violation: that is a citation
+    that has rotted.
+    """
+    files = list(anchor_files)
+    note = record.note.strip()
+    violations: list[str] = []
+    if len(note) < _MIN_EXEMPT_JUSTIFICATION:
+        violations.append(
+            f"status:{status} exempt justification too thin to review "
+            f"({len(note)} < {_MIN_EXEMPT_JUSTIFICATION}): {record.note!r}"
+        )
+    anchors = list(_PY_ANCHOR_RE.finditer(note))
+    if not anchors:
+        violations.append(f"status:{status} exempt justification cites no source anchor (*.py path): {record.note!r}")
+        return violations
+    for anchor in anchors:
+        fragment, start, end = anchor.group(1), anchor.group(2), anchor.group(3)
+        resolved = _resolve_py_anchor(fragment, files)
+        if not resolved:
+            violations.append(f"status:{status} exempt anchor {fragment!r} resolves to no file under backend/")
+            continue
+        if start is not None:
+            bound = int(end) if end is not None else int(start)
+            if not any(len(path.read_text(encoding="utf-8").splitlines()) >= bound for path in resolved):
+                violations.append(
+                    f"status:{status} exempt anchor {fragment!r} points past the end of every "
+                    f"matching file (needs line {bound})"
+                )
+    return violations
 
 
 # ---------------------------------------------------------------------------
@@ -728,13 +832,86 @@ def test_exempt_statuses_use_only_documented_reasons() -> None:
             assert record.reason in EXEMPT_REASONS, f"status:{status} undocumented exempt reason {record.reason!r}"
 
 
+def test_exempt_statuses_carry_a_source_anchored_justification() -> None:
+    """An exemption is a reviewed decision down to WHERE its recovery lives.
+
+    The reason vocabulary is a closed set (``EXEMPT_REASONS``, plus
+    ``test_exempt_statuses_use_only_documented_reasons``); this gate is the
+    other half — every exempt entry must carry a justification anchored to
+    specific ``*.py`` source evidence that still resolves. An entry whose note
+    is a bare restatement, or cites a file/line that has since rotted, fails
+    here: such an entry is a gap wearing an exempt label.
+    """
+    files = _anchor_source_files()
+    violations: list[str] = []
+    for status, record in sorted(_STATUS_COVERAGE.items()):
+        if record.classification != _EXEMPT:
+            continue
+        violations.extend(_exempt_justification_violations(status, record, anchor_files=files))
+    assert not violations, "exempt status(es) without a source-anchored justification:\n  " + "\n  ".join(violations)
+
+
+def test_synthetic_bare_exempt_justification_is_flagged() -> None:
+    """The anchor predicate must fire on a no-note and an unanchored exemption.
+
+    Without this the gate could pass because the predicate silently stopped
+    flagging anything — the exact rot the gate exists to catch.
+    """
+    files = _anchor_source_files()
+    bare = StatusCoverage(_EXEMPT, reason="operator_driven_recovery")
+    assert _exempt_justification_violations("synthetic", bare, anchor_files=files), (
+        "an exemption with no justification passed the anchor gate"
+    )
+    unanchored = StatusCoverage(
+        _EXEMPT,
+        reason="operator_driven_recovery",
+        note="a long enough justification that nevertheless names no source file anywhere at all",
+    )
+    assert _exempt_justification_violations("synthetic", unanchored, anchor_files=files), (
+        "an exemption whose justification cites no source anchor passed the anchor gate"
+    )
+    anchored = StatusCoverage(
+        _EXEMPT,
+        reason="operator_driven_recovery",
+        note=(
+            "db/models/run.py:62-65 documents the operator-recovery contract this synthetic "
+            "status relies on for its exemption decision"
+        ),
+    )
+    assert not _exempt_justification_violations("synthetic", anchored, anchor_files=files)
+
+
+def _gap_note_violations(status: str, note: str) -> list[str]:
+    """A gap note must be long enough to act on and name the remaining work."""
+    lowered = note.lower()
+    violations: list[str] = []
+    if len(lowered) <= 80:
+        violations.append(f"status:{status} gap note too thin to act on: {note!r}")
+    if "remainder" not in lowered:
+        violations.append(f"status:{status} gap note must name the remaining work: {note!r}")
+    return violations
+
+
 def test_every_status_gap_is_visible_and_actionable() -> None:
+    """Every real gap is actionable — and the predicate is never vacuous.
+
+    FAR-1966b: ``_STATUS_COVERAGE`` currently carries NO ``gap`` entry (the last
+    one, ``hitl_parked``, was exempted with its reasoning in 5f80aa918), so the
+    loop below iterates an empty set and would otherwise pass without asserting
+    anything. The synthetic self-check drives the SAME predicate over a
+    deliberately thin note and asserts it is flagged, so the branch that
+    adjudicates a FUTURE gap can still fail here today.
+    """
+    assert _gap_note_violations("synthetic", "a remainder"), (
+        "the gap-actionability predicate failed to flag a thin synthetic note — the gate "
+        "would pass vacuously over an empty gap set"
+    )
+    violations: list[str] = []
     for status, record in sorted(_STATUS_COVERAGE.items()):
         if record.classification != _GAP:
             continue
-        note = record.note.lower()
-        assert len(note) > 80, f"status:{status} gap note too thin to act on: {record.note!r}"
-        assert "remainder" in note, f"status:{status} gap note must name the remaining work: {record.note!r}"
+        violations.extend(_gap_note_violations(status, record.note))
+    assert not violations, "gap status(es) that are not visible/actionable:\n  " + "\n  ".join(violations)
 
 
 # ---------------------------------------------------------------------------
