@@ -343,6 +343,7 @@ def test_create_api_key_classified_org_only() -> None:
 
 _EXPECTED_SYSTEM_ADMIN_TOOLS = frozenset(
     {
+        "get_org_config",
         "list_feature_flags",
         "list_housekeeping",
         "perform_housekeeping",
@@ -527,17 +528,14 @@ _CHOKEPOINT = "_check_agent_tool_scope"
 # chokepoint (verified by ``_tools_not_reaching_chokepoint``). Adding a tool
 # here needs a deliberate reason; a SYSTEM-ADMIN tool must NEVER be here.
 #
-# ``get_org_config`` is the known, deliberate, TICKETED exception: it mirrors
-# the system-admin-only REST ``GET /api/v1/system-admin/config`` but today
-# authorises only ``validate_current_auth()`` — a pre-existing authz gap on a
-# shipped tool, tracked separately (changing its authorisation model has its
-# own caller check). It is pinned here so the guard REPORTS it rather than
-# silently normalising it; do not "fix" it as part of this change.
+# ``get_org_config`` was the FAR-1942 authz gap — it mirrored the
+# system-admin-only REST ``GET /api/v1/system-admin/config`` but authorised
+# only ``validate_current_auth()``. It is now WIRED through the chokepoint and
+# declares the system-admin claim, so it is no longer in this exception set.
 _TOOLS_NOT_ROUTED_THROUGH_CHOKEPOINT = frozenset(
     {
         "get_available_features",
         "get_integration_status",
-        "get_org_config",  # ticketed authz gap — deliberate exception
         "get_pipeline_graph",
         "get_run_status",
         "list_pipelines",
