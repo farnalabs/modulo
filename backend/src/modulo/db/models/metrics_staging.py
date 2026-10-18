@@ -5,10 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Index, String, UniqueConstraint, func
+from sqlalchemy import DateTime, Index, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import JSONB_COL, OrgScoped
 
 
 class MetricsStaging(OrgScoped):
@@ -37,7 +37,9 @@ class MetricsStaging(OrgScoped):
 
     event_id: Mapped[str] = mapped_column(String(128), nullable=False)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    # Physical jsonb (0121); JSONB_COL keeps the ORM declaration honest while
+    # preserving SQLite/MariaDB parity.
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.current_timestamp(),

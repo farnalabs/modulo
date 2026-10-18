@@ -1,15 +1,24 @@
 """Architecture gate: the 0147-converted JSON columns that still resolve are JSONB.
 
-SCOPE — read this before trusting the gate. This is **not** a general
-"jsonb vs generic JSON" gate for the whole schema. It covers exactly the 66
-``(table, column)`` pairs ``0147_json_to_jsonb_standardize`` promoted, minus the
-three whose tables no longer answer to their 0147 names. A column whose physical
-Postgres type is ``jsonb`` because of some **other** migration (or because it was
-created ``jsonb`` from the start) is NOT checked here. At the time of writing 16
-such columns are still declared bare generic ``JSON`` over a physical ``jsonb``
-column; they are tracked separately (FAR-1941) and remain listed in
-``tests/integration/test_initial_migration.py::_JSONB_DB_TO_JSON_ORM``. This gate
-makes no claim about them and must not be read as one.
+SCOPE — this gate covers **every** ``(table, column)`` pair a migration declares
+as ``jsonb``, not merely the 66 ``0147_json_to_jsonb_standardize`` promoted. The
+pair set is derived mechanically from the migrations (FAR-1941 extended it beyond
+0147): each migration's own source is parsed for the jsonb declaration idioms —
+``op.add_column`` / ``op.create_table`` with a JSONB-typed ``sa.Column``,
+``op.alter_column`` with a JSONB ``type_``, the raw-SQL forms ``ALTER TABLE ...
+ADD/ALTER COLUMN ... jsonb`` and ``CREATE TABLE ... (col jsonb ...)``, and
+declarative module-level pair/column lists such as 0147's ``_JSON_TO_JSONB`` and
+0129's ``_JSON_COLUMNS``. Every declared pair whose table and column still
+resolve against ``Base.metadata`` must map to a JSONB dialect impl. Pairs whose
+table or column no longer exists (a later migration dropped or renamed them)
+carry no check — the migration that removed them owns that decision. There is no
+hand-maintained pair inventory: adding a jsonb column to any migration
+automatically extends the gate's scope.
+
+The FAR-1878 residual was CLOSED by FAR-1941: the 16 columns that were declared
+bare generic ``JSON`` over a physical ``jsonb`` column are aligned, and their
+entries were removed from
+``tests/integration/test_initial_migration.py::_JSONB_DB_TO_JSON_ORM``.
 
 Why the 0147 columns still matter: a mapped column whose Postgres type renders
 as plain ``json`` while the physical column is ``jsonb`` makes every SQL-level
@@ -31,26 +40,34 @@ list.
 
 Two structural invariants are enforced:
 
-1. **Dialect parity (0147 scope only)** — every 0147 pair that still resolves
+1. **Dialect parity** — every migration-declared jsonb pair that still resolves
    against ``Base.metadata`` maps to a column whose ``postgresql`` dialect impl
-   is ``JSONB``. Three pairs point at tables that a later migration renamed or
-   dropped; each is named explicitly below, and ANY other absent table is a hard
-   failure — there is no blanket skip, so a renamed table cannot hide its column.
-   The two exception maps are cross-checked against reality, not merely
-   declared: a pair recorded as RENAMED is checked at its destination (and the
-   destination must be mapped), and a pair recorded as DROPPED must be shown,
-   from its named migration's OWN source, to actually ``DROP TABLE`` it — so a
-   rename recorded as a drop fails rather than passing the absence check.
+   is ``JSONB``. The 0147 sub-set additionally carries explicit rename/drop
+   bookkeeping: three of its pairs point at tables a later migration renamed or
+   dropped, each is named explicitly below, and ANY other absent 0147 table is a
+   hard failure — there is no blanket skip, so a renamed 0147 table cannot hide
+   its column. The two exception maps are cross-checked against reality, not
+   merely declared: a pair recorded as RENAMED is checked at its destination
+   (and the destination must be mapped), and a pair recorded as DROPPED must be
+   shown, from its named migration's OWN source, to actually ``DROP TABLE`` it —
+   so a rename recorded as a drop fails rather than passing the absence check.
 2. **One shared definition** — the ``JSON().with_variant(JSONB(), "postgresql")``
-   expression is constructed exactly once (``modulo.db.models.base.JSONB_COL``).
+   expression is constructed exactly once (``modulo.db.models.base.JSONB_COL``,
+   plus its ``none_as_null=True`` sibling ``JSONB_COL_NONE_AS_NULL``).
    Enforced over the whole backend source tree (migrations excluded) by AST, so
    a direct ``mapped_column(JSONB())`` or a qualified
    ``with_variant(postgresql.JSONB(), "postgresql")`` is caught too — both of
    which the dialect-parity check alone would accept while silently breaking
    SQLite/MariaDB parity.
+3. **The ``schema_enforcement_json`` prose trap stays closed** — migration
+   ``0251``'s comment claims the column is "JSONB on Postgres" while its DDL
+   creates generic ``sa.JSON()``, and the ORM agrees (generic ``JSON``). The
+   column is pinned as generic ``JSON`` on BOTH sides, so acting on the false
+   comment and aligning it to JSONB fails a test instead of silently creating
+   the reverse mismatch.
 
-All four checks are static (no database): they read the migration, the ORM
-metadata and the source tree.
+All checks are static (no database): they read the migrations, the ORM metadata
+and the source tree.
 """
 
 from __future__ import annotations
@@ -61,7 +78,7 @@ import re
 from pathlib import Path
 from types import ModuleType
 
-from sqlalchemy import create_engine
+from sqlalchemy import JSON, create_engine
 from sqlalchemy.dialects.postgresql import JSONB
 
 import modulo.db.models  # noqa: F401  (registers every mapper on Base.metadata)
@@ -71,6 +88,7 @@ _BACKEND = Path(__file__).resolve().parent.parent.parent
 _SRC = _BACKEND / "src" / "modulo"
 _MIGRATION_PATH = _SRC / "db" / "migrations" / "versions" / "0147_json_to_jsonb_standardize.py"
 _MIGRATIONS_DIR = _SRC / "db" / "migrations"
+_MIGRATION_VERSIONS_DIR = _MIGRATIONS_DIR / "versions"
 #: The ONLY module allowed to construct a ``JSONB`` type.
 _JSONB_ALIAS_PATH = _SRC / "db" / "models" / "base.py"
 
@@ -360,4 +378,338 @@ def test_jsonb_is_only_constructed_in_the_shared_alias() -> None:
     assert not extra, (
         "A JSONB() call outside the shared alias (modulo.db.models.base.JSONB_COL). "
         f"Import JSONB_COL instead of constructing JSONB locally: {extra}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Migration-derived jsonb pair extraction (FAR-1941).
+#
+# The gate above hard-codes 0147's pair list by loading that migration module.
+# FAR-1941 extends the dialect-parity check to EVERY migration that declares a
+# jsonb column, without a hand-maintained pair inventory: the pair set is read
+# from the migrations' own source. Supported declaration idioms:
+#
+#   * ``op.add_column(<table>, sa.Column(<col>, <jsonb-type>, ...))``
+#   * ``op.create_table(<table>, sa.Column(<col>, <jsonb-type>, ...), ...)``
+#   * ``op.alter_column(<table>, <col>, type_=<jsonb-type>, ...)``
+#   * raw SQL ``ALTER TABLE <t> ADD COLUMN [IF NOT EXISTS] <c> ... jsonb``
+#   * raw SQL ``ALTER TABLE <t> ALTER COLUMN <c> TYPE jsonb``
+#   * raw SQL ``CREATE TABLE <t> ( ... <c> jsonb ... )``
+#   * a declarative module-level list — a tuple of ``(table, column)`` pairs
+#     (0147's ``_JSON_TO_JSONB``) or a table-name constant plus a JSON-named
+#     tuple of column names (0129's ``_TABLE`` / ``_JSON_COLUMNS``) — harvested
+#     only when the module itself constructs a JSONB type and the constant's
+#     NAME signals JSON, so an unrelated per-table tuple such as 0166's
+#     ``_PREFLIGHT_COLUMNS`` is never misread as a jsonb declaration.
+#
+# A jsonb type expression is any ``JSONB(...)`` call (bare or qualified) or a
+# ``...with_variant(<JSONB>, "postgresql")`` call, including the conditional
+# ``<jsonb> if is_postgres else <json>`` form (0192) and assignment to a local
+# variable later passed to ``sa.Column`` (0192's ``blob_type`` / 0220's
+# ``col_type``).
+# ---------------------------------------------------------------------------
+
+_ALTER_ADD_JSONB_RE = re.compile(
+    r'ALTER\s+TABLE\s+(?:public\.)?"?([A-Za-z0-9_]+)"?\s+ADD\s+COLUMN(?:\s+IF\s+NOT\s+EXISTS)?\s+"?([A-Za-z0-9_]+)"?\s+jsonb\b',
+    re.IGNORECASE,
+)
+_ALTER_TYPE_JSONB_RE = re.compile(
+    r'ALTER\s+TABLE\s+(?:public\.)?"?([A-Za-z0-9_]+)"?\s+ALTER\s+COLUMN\s+"?([A-Za-z0-9_]+)"?\s+TYPE\s+jsonb\b',
+    re.IGNORECASE,
+)
+_CREATE_TABLE_RE = re.compile(
+    r'CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(?:public\.)?"?([A-Za-z0-9_]+)"?\s*\(',
+    re.IGNORECASE,
+)
+_CREATE_COLUMN_JSONB_RE = re.compile(r'^\s*"?([A-Za-z0-9_]+)"?\s+jsonb\b', re.IGNORECASE | re.MULTILINE)
+
+
+def _string_constant(node: ast.expr, constants: dict[str, str]) -> str | None:
+    """A string literal, or a module-level string constant it names."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name) and node.id in constants:
+        return constants[node.id]
+    return None
+
+
+def _module_string_sequence_constants(tree: ast.Module) -> dict[str, tuple[str | tuple[str, ...], ...]]:
+    """Module-level sequence bindings of string / string-tuple literals."""
+    sequences: dict[str, tuple[str | tuple[str, ...], ...]] = {}
+    for node in tree.body:
+        target: ast.expr | None
+        value: ast.expr | None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+        elif isinstance(node, ast.AnnAssign):
+            target, value = node.target, node.value
+        else:
+            continue
+        if not isinstance(target, ast.Name) or not isinstance(value, (ast.Tuple, ast.List)):
+            continue
+        elements: list[str | tuple[str, ...]] = []
+        for element in value.elts:
+            if isinstance(element, ast.Constant) and isinstance(element.value, str):
+                elements.append(element.value)
+            elif (
+                isinstance(element, ast.Tuple)
+                and element.elts
+                and all(isinstance(inner, ast.Constant) and isinstance(inner.value, str) for inner in element.elts)
+            ):
+                elements.append(tuple(inner.value for inner in element.elts))
+            else:
+                elements = []
+                break
+        if elements:
+            sequences[target.id] = tuple(elements)
+    return sequences
+
+
+def _is_jsonb_type_expression(node: ast.expr, jsonb_names: frozenset[str]) -> bool:
+    """True iff *node* constructs (or is a name bound to) a Postgres JSONB type."""
+    if isinstance(node, ast.IfExp):
+        return _is_jsonb_type_expression(node.body, jsonb_names) or _is_jsonb_type_expression(node.orelse, jsonb_names)
+    if isinstance(node, ast.Name):
+        return node.id in jsonb_names
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Name) and func.id == "JSONB":
+        return True
+    if isinstance(func, ast.Attribute) and func.attr == "JSONB":
+        return True
+    if isinstance(func, (ast.Name, ast.Attribute)):
+        name = func.id if isinstance(func, ast.Name) else func.attr
+        if name == "with_variant":
+            return any(_is_jsonb_type_expression(arg, jsonb_names) for arg in node.args) or any(
+                _is_jsonb_type_expression(keyword.value, jsonb_names) for keyword in node.keywords
+            )
+    return False
+
+
+def _jsonb_bound_names(tree: ast.Module) -> frozenset[str]:
+    """Names bound to a jsonb type expression anywhere in the module."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and _is_jsonb_type_expression(node.value, frozenset()):
+            names.update(target.id for target in node.targets if isinstance(target, ast.Name))
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and node.value is not None
+            and isinstance(node.target, ast.Name)
+            and _is_jsonb_type_expression(node.value, frozenset())
+        ):
+            names.add(node.target.id)
+    return frozenset(names)
+
+
+def _raw_sql_jsonb_pairs(sql: str) -> set[tuple[str, str]]:
+    """jsonb ``(table, column)`` pairs declared by raw SQL in *sql*."""
+    pairs: set[tuple[str, str]] = set()
+    for match in _ALTER_ADD_JSONB_RE.finditer(sql):
+        pairs.add((match.group(1).lower(), match.group(2).lower()))
+    for match in _ALTER_TYPE_JSONB_RE.finditer(sql):
+        pairs.add((match.group(1).lower(), match.group(2).lower()))
+    for match in _CREATE_TABLE_RE.finditer(sql):
+        depth = 1
+        index = match.end()
+        while index < len(sql) and depth:
+            if sql[index] == "(":
+                depth += 1
+            elif sql[index] == ")":
+                depth -= 1
+            index += 1
+        body = sql[match.end() : index - 1]
+        table = match.group(1).lower()
+        for column_match in _CREATE_COLUMN_JSONB_RE.finditer(body):
+            pairs.add((table, column_match.group(1).lower()))
+    return pairs
+
+
+def _declared_jsonb_pairs(source: str) -> set[tuple[str, str]]:
+    """Every ``(table, column)`` pair *source* declares as jsonb (see above)."""
+    tree = ast.parse(source)
+    constants = _module_string_constants(tree)
+    sequences = _module_string_sequence_constants(tree)
+    jsonb_names = _jsonb_bound_names(tree)
+    pairs: set[tuple[str, str]] = set()
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
+        if name == "add_column" and len(node.args) >= 2:
+            table = _string_constant(node.args[0], constants)
+            column = node.args[1]
+            if isinstance(column, ast.Call) and column.args:
+                column_name = _string_constant(column.args[0], constants)
+                column_type = column.args[1] if len(column.args) > 1 else None
+                if (
+                    table
+                    and column_name
+                    and column_type is not None
+                    and _is_jsonb_type_expression(column_type, jsonb_names)
+                ):
+                    pairs.add((table, column_name))
+        elif name == "create_table" and node.args:
+            table = _string_constant(node.args[0], constants)
+            if table:
+                for argument in node.args[1:]:
+                    if not isinstance(argument, ast.Call) or len(argument.args) < 2:
+                        continue
+                    column_name = _string_constant(argument.args[0], constants)
+                    if column_name and _is_jsonb_type_expression(argument.args[1], jsonb_names):
+                        pairs.add((table, column_name))
+        elif name == "alter_column" and len(node.args) >= 2:
+            table = _string_constant(node.args[0], constants)
+            column_name = _string_constant(node.args[1], constants)
+            column_type = next((keyword.value for keyword in node.keywords if keyword.arg == "type_"), None)
+            if (
+                table
+                and column_name
+                and column_type is not None
+                and _is_jsonb_type_expression(column_type, jsonb_names)
+            ):
+                pairs.add((table, column_name))
+
+    for literal in (n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)):
+        pairs |= _raw_sql_jsonb_pairs(literal)
+
+    # Declarative module-level lists (0147's ``_JSON_TO_JSONB``, 0129's
+    # ``_JSON_COLUMNS``): harvested only when the module constructs a JSONB type
+    # AND the constant's own NAME signals JSON — an unrelated pair tuple
+    # (0166's ``_PREFLIGHT_COLUMNS``) is thereby never misread.
+    if any(isinstance(n, ast.Call) and _is_jsonb_type_expression(n, frozenset()) for n in ast.walk(tree)):
+        for constant_name, value in sequences.items():
+            if "JSON" not in constant_name.upper():
+                continue
+            if all(isinstance(element, tuple) and len(element) == 2 for element in value):
+                for element in value:
+                    if isinstance(element, tuple) and len(element) == 2:
+                        pairs.add((element[0].lower(), element[1].lower()))
+            else:
+                table = next((v for k, v in constants.items() if k in ("_TABLE", "TABLE")), None)
+                if table:
+                    for element in value:
+                        if isinstance(element, str):
+                            pairs.add((table.lower(), element.lower()))
+    return pairs
+
+
+def _migration_declared_jsonb_pairs() -> dict[tuple[str, str], list[str]]:
+    """Pair -> the migration stems that declare it jsonb, across all migrations."""
+    declared: dict[tuple[str, str], list[str]] = {}
+    for path in sorted(_MIGRATION_VERSIONS_DIR.glob("*.py")):
+        if path.name.startswith("__"):
+            continue
+        for pair in _declared_jsonb_pairs(path.read_text(encoding="utf-8")):
+            declared.setdefault(pair, []).append(path.stem)
+    return declared
+
+
+def test_every_migration_declared_jsonb_column_is_jsonb_on_postgres() -> None:
+    """Every mapped column a migration declares jsonb resolves to a JSONB impl.
+
+    The pair set is read from the migrations themselves (no hand-maintained
+    inventory). A declared pair whose table or column no longer exists in
+    ``Base.metadata`` is skipped — a later migration dropped or renamed it, and
+    that owner decides the type — but every pair that still resolves MUST be
+    JSONB, or a SQL predicate against it binds as ``$1::JSON`` and raises
+    ``operator does not exist: jsonb = json``.
+    """
+    declared = _migration_declared_jsonb_pairs()
+    assert declared, "no migration declares a jsonb column — the extractor is broken"
+
+    dialect = _POSTGRES_DIALECT
+    violations: list[str] = []
+
+    for (table_name, column_name), migrations in sorted(declared.items()):
+        table = Base.metadata.tables.get(table_name)
+        if table is None:
+            continue
+        column = table.columns.get(column_name)
+        if column is None:
+            continue
+        if not isinstance(column.type.dialect_impl(dialect), JSONB):
+            violations.append(
+                f"{table_name}.{column_name}: declared {type(column.type).__name__} on the ORM, but "
+                f"migration(s) {', '.join(sorted(migrations))} declare it jsonb — a SQL predicate "
+                "against this column binds as ::JSON and raises 'operator does not exist: jsonb = json'"
+            )
+
+    assert not violations, (
+        "ORM columns declared jsonb by a migration but mapped to generic JSON (each binds as ::JSON "
+        "on a predicate and raises 'operator does not exist: jsonb = json'):\n  " + "\n  ".join(violations)
+    )
+
+
+_SCHEMA_ENFORCEMENT_MIGRATION = _MIGRATION_VERSIONS_DIR / "0251_schema_enforcement_telemetry.py"
+_SCHEMA_ENFORCEMENT_TABLE = "run_node_outputs"
+_SCHEMA_ENFORCEMENT_COLUMN = "schema_enforcement_json"
+
+
+def _add_column_type_name(source: str, table: str, column: str) -> str | None:
+    """The type NAME in an ``op.add_column(<table>, sa.Column(<column>, <type>))``.
+
+    Returns ``"JSON"`` / ``"JSONB"`` / the bare call name, or None when no such
+    declaration exists in *source*.
+    """
+    tree = ast.parse(source)
+    constants = _module_string_constants(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
+        if name != "add_column" or len(node.args) < 2:
+            continue
+        if _string_constant(node.args[0], constants) != table:
+            continue
+        column_call = node.args[1]
+        if not isinstance(column_call, ast.Call) or len(column_call.args) < 2:
+            continue
+        if _string_constant(column_call.args[0], constants) != column:
+            continue
+        type_node = column_call.args[1]
+        if isinstance(type_node, ast.Call):
+            type_func = type_node.func
+            if isinstance(type_func, ast.Name):
+                return type_func.id
+            if isinstance(type_func, ast.Attribute):
+                return type_func.attr
+        return None
+    return None
+
+
+def test_schema_enforcement_json_is_generic_json_on_both_sides() -> None:
+    """Pin ``run_node_outputs.schema_enforcement_json`` as generic ``JSON``.
+
+    Migration 0251's comment claims the column is "JSONB on Postgres", but its
+    DDL creates generic ``sa.JSON()`` and the ORM maps generic ``JSON`` — the
+    two agree on ``json``. This test pins BOTH sides: anyone who acts on the
+    false comment and aligns the column to JSONB fails here (and, once 0251 is
+    edited, the extractor's general jsonb check fires too), instead of silently
+    creating the reverse ORM-JSONB-over-DB-json mismatch.
+    """
+    orm_column = Base.metadata.tables[_SCHEMA_ENFORCEMENT_TABLE].columns[_SCHEMA_ENFORCEMENT_COLUMN]
+    assert type(orm_column.type) is JSON, (
+        f"{_SCHEMA_ENFORCEMENT_TABLE}.{_SCHEMA_ENFORCEMENT_COLUMN} must stay generic JSON "
+        f"(0251 created it as sa.JSON()); found {type(orm_column.type).__name__}"
+    )
+    assert not isinstance(orm_column.type.dialect_impl(_POSTGRES_DIALECT), JSONB), (
+        f"{_SCHEMA_ENFORCEMENT_TABLE}.{_SCHEMA_ENFORCEMENT_COLUMN} renders as JSONB on postgres — "
+        "0251's comment is wrong and the column is genuinely json on both sides"
+    )
+    declared_migration_type = _add_column_type_name(
+        _SCHEMA_ENFORCEMENT_MIGRATION.read_text(encoding="utf-8"),
+        _SCHEMA_ENFORCEMENT_TABLE,
+        _SCHEMA_ENFORCEMENT_COLUMN,
+    )
+    assert declared_migration_type == "JSON", (
+        "0251 must declare schema_enforcement_json with generic sa.JSON() (its comment's "
+        f"'JSONB on Postgres' claim is false); found {declared_migration_type!r}"
+    )
+    assert (_SCHEMA_ENFORCEMENT_TABLE, _SCHEMA_ENFORCEMENT_COLUMN) not in _migration_declared_jsonb_pairs(), (
+        "no migration may declare schema_enforcement_json as jsonb — it is generic JSON on both sides"
     )
