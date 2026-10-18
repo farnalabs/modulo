@@ -4206,6 +4206,21 @@ export default {
       "main_navigation": "Main navigation",
       "loading_navigation": "Loading navigation"
     },
+    "CommandPalette": {
+      "aria_label": "Command palette",
+      "placeholder": "Search pages, pipelines, runs, schemas, connectors...",
+      "results_list_label": "Search results",
+      "searching": "Searching...",
+      "search_error": "Search is unavailable right now.",
+      "no_results": "No results found",
+      "results_count": "No results | 1 result | {count} results",
+      "footer_hint": "\u2191\u2193 navigate \u00b7 \u21b5 open \u00b7 Esc close",
+      "section_recent": "Recently visited",
+      "section_pipelines": "Pipelines",
+      "section_runs": "Runs",
+      "section_schemas": "Schemas",
+      "section_connectors": "Connectors"
+    },
     "SidebarFooter": {
       "plan_expires_on": "Plan expires on",
       "expires": "Expires:"
