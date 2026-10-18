@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from modulo.core.bundled_runner import (
     BUNDLED_RUNNER_IMAGE_REF,
     BUNDLED_RUNNER_PROVIDER_TYPE,
@@ -10,6 +12,7 @@ from modulo.core.bundled_runner import (
     build_bundled_runner_profile_values,
     template_drift_status,
 )
+from modulo.db.bundled_runner_template import BUNDLED_RUNNER_PLACEHOLDER_DIGEST
 
 
 def test_template_constants_shape() -> None:
@@ -57,14 +60,44 @@ def test_drift_none_for_fresh_template_row() -> None:
 
 
 def test_drift_ignores_operator_owned_image_ref() -> None:
-    """ADR 059: image_ref is operator-owned, so a customer image is not drift.
+    """ADR 059: an operator-set image_ref is not drift.
 
-    A BYO image on a seeded runner_docker row must not be reported as a
-    "shipped template updated" state — the operator owns the reference.
+    Once the operator owns the reference (any non-placeholder image), it must
+    not be reported as a "shipped template updated" state.
     """
     row = _row(image_ref="ghcr.io/acme/agent@sha256:" + "1" * 64)
     status = template_drift_status(row)
     assert status == {"is_seeded": True, "drifted": False, "drifted_fields": []}
+
+
+def test_drift_detects_placeholder_image_ref_when_constant_advances(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A placeholder-seeded row reports image_ref drift once the constant advances.
+
+    Ownership is placeholder-scoped: while the row still carries the release
+    placeholder digest the template owns the reference, so an advanced
+    ``BUNDLED_RUNNER_IMAGE_REF`` surfaces as drift (and apply writes it).
+    """
+    advanced = "modulo-runner:opencode@sha256:" + "9" * 64
+    monkeypatch.setattr(
+        "modulo.db.bundled_runner_template.BUNDLED_RUNNER_IMAGE_REF",
+        advanced,
+    )
+    row = _row(image_ref=BUNDLED_RUNNER_PLACEHOLDER_DIGEST)
+    status = template_drift_status(row)
+    assert status["is_seeded"] is True
+    assert status["drifted"] is True
+    assert "image_ref" in status["drifted_fields"]
+
+
+def test_drift_treats_missing_image_ref_as_template_owned(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row with no image at all is template-owned, so it reports drift."""
+    advanced = "modulo-runner:opencode@sha256:" + "9" * 64
+    monkeypatch.setattr(
+        "modulo.db.bundled_runner_template.BUNDLED_RUNNER_IMAGE_REF",
+        advanced,
+    )
+    status = template_drift_status(_row(image_ref=None))
+    assert "image_ref" in status["drifted_fields"]
 
 
 def test_seeded_profile_still_receives_template_image_ref() -> None:

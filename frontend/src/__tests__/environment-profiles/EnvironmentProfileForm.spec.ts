@@ -403,18 +403,19 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
     return wrapper
   }
 
-  it('renders the persistent BYO helper copy that names the agent-commands path', async () => {
+  it('renders persistent BYO helper copy truthful for run dispatch and Test Connection', async () => {
     const wrapper = await mountWithProvider('runner_docker')
     const help = wrapper.find('#envprofile-form-image-help')
     expect(help.exists()).toBe(true)
     expect(help.text()).toContain('Bring your own agent image')
     expect(help.text()).toContain('agent commands')
-    // FAR-1779 F2: E2B template selection lives on the pipeline node, NOT on
-    // the profile — the helper must not tell an operator their profile's
-    // image_ref is an E2B template ID.
-    expect(help.text()).toContain('E2B template selection is set on each sandbox_agent node')
-    expect(help.text()).toContain('not on this profile')
-    expect(help.text()).not.toContain('use it as the template ID')
+    // FAR-1779 F2 (corrected): real pipeline runs take the E2B template from
+    // the sandbox_agent node, but the Runners-page Test Connection provisions
+    // from this profile's image reference — the copy must state both.
+    expect(help.text()).toContain('Test Connection')
+    expect(help.text()).toContain('provisions a sandbox from this image reference')
+    expect(help.text()).toContain('real pipeline runs take the E2B template from each sandbox_agent node')
+    expect(help.text()).not.toContain('not on this profile')
   })
 
   it('acknowledges a digest-pinned ref and shows no mutable-tag warning', async () => {
@@ -445,6 +446,14 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
     ['uppercase repository', `GHCR.io/acme/agent@sha256:${'a'.repeat(64)}`],
     ['uppercase namespace segment', `ghcr.io/ACME/agent@sha256:${'a'.repeat(64)}`],
     ['embedded space', `ghcr.io/acme/agent @sha256:${'a'.repeat(64)}`],
+    // Docker's separator is a single `.`/`_`, a double `__`, or hyphens — not
+    // an arbitrary one-or-two of [._-]. These are NOT valid references and
+    // must never render the green immutability assurance.
+    ['double-dot repository', `ghcr.io/acme/my..repo@sha256:${'a'.repeat(64)}`],
+    ['dot-underscore repository', `ghcr.io/acme/my._repo@sha256:${'a'.repeat(64)}`],
+    ['underscore-dot repository', `ghcr.io/acme/my_.repo@sha256:${'a'.repeat(64)}`],
+    ['underscore-hyphen repository', `ghcr.io/acme/my-_repo@sha256:${'a'.repeat(64)}`],
+    ['dot-hyphen repository', `ghcr.io/acme/my.-repo@sha256:${'a'.repeat(64)}`],
   ])('reports a ref with a %s as invalid, never pinned or mutable', async (_label, ref) => {
     // FAR-1779 F1/F3: Docker/containerd reject these, so classifying them as
     // pinned would assert immutability the runtime would refuse to honour — and
@@ -466,11 +475,13 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
   it.each([
     ['double-hyphen repository', `ghcr.io/acme/my--repo@sha256:${'a'.repeat(64)}`],
     ['double-underscore repository', `ghcr.io/acme/my__repo@sha256:${'a'.repeat(64)}`],
+    ['triple-hyphen repository', `ghcr.io/acme/my---repo@sha256:${'a'.repeat(64)}`],
     ['registry host containing a double hyphen', `my--registry.io/acme/agent@sha256:${'a'.repeat(64)}`],
+    ['registry host containing a triple hyphen', `my---registry.io/acme/agent@sha256:${'a'.repeat(64)}`],
   ])('acknowledges a valid ref with a %s as pinned', async (_label, ref) => {
-    // FAR-1779 F3: Docker's path grammar allows one-or-two [._-] separators
-    // inside a component, so these are valid names and must not be mislabelled
-    // invalid (or mutable).
+    // FAR-1779 F3 (corrected): Docker's separator is a single `.`/`_`, a double
+    // `__`, or a run of one-or-more `-`, so these are valid names and must not
+    // be mislabelled invalid (or mutable).
     const wrapper = await mountWithProvider('runner_docker')
     await wrapper.find('[data-testid="envprofile-form-image"]').setValue(ref)
     await nextTick()

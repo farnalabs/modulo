@@ -113,8 +113,11 @@ async def seed_bundled_runner_profile(session: AsyncSession, org_id: uuid.UUID, 
 
     Shipped-template seeding at org-creation (owned by the org's account) —
     idempotent: an org that already carries a live Bundled Runner profile row
-    keeps it (operator-pinned older digests survive; template updates are
-    surfaced live by the drift helper, never silently applied).
+    keeps it (template updates are surfaced live by the drift helper, never
+    silently applied). The image reference is template-owned only while the row
+    still carries the release placeholder digest (or none): that state reports
+    drift against ``BUNDLED_RUNNER_IMAGE_REF`` and an apply writes the release
+    constant, while an operator-set image survives untouched.
     """
     from sqlalchemy import text
 

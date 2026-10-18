@@ -677,7 +677,7 @@ export default {
       "provider_type_is_required": "Provider type is required",
       "image_reference": "Image Reference",
       "image_reference_placeholder": "e.g. python:3.12-slim, node:20-bookworm",
-      "image_reference_help": "Bring your own agent image. Profiles on the runner_docker and Kubernetes providers run this container image. E2B template selection is set on each sandbox_agent node in the pipeline editor, not on this profile. The command the agent runs is set on each sandbox_agent node too (its agent commands list).",
+      "image_reference_help": "Bring your own agent image. Profiles on the runner_docker and Kubernetes providers run this container image. On an E2B profile, Test Connection on the Runners page provisions a sandbox from this image reference, while real pipeline runs take the E2B template from each sandbox_agent node in the pipeline editor. The command the agent runs is set on each sandbox_agent node too (its agent commands list).",
       "image_digest_pinned": "Pinned by digest \u2014 this image cannot change under you.",
       "image_placeholder_unresolvable": "Release placeholder image \u2014 this is the shipped placeholder and cannot be pulled. Set your own agent image to use this profile.",
       "image_invalid_reference": "This is not a valid image reference \u2014 check the registry host, repository name and digest.",

@@ -2,9 +2,11 @@
 
 The apply refreshes ONLY the drifted template-owned fields; operator-owned
 fields (name, description, capabilities, secret refs, untouched config
-keys) must survive. Per ADR 059 the image reference is operator-owned on a
-BYO profile, so it is neither a drift key nor an apply target — an
-operator-set image_ref must survive the apply unchanged. Non-template rows
+keys) must survive. Per ADR 059 the image reference is placeholder-scoped:
+while the row still carries the release placeholder digest (or no image) the
+template owns it and an apply writes ``BUNDLED_RUNNER_IMAGE_REF``; once the
+operator sets their own image it is neither a drift key nor an apply target,
+so an operator-set image_ref survives the apply unchanged. Non-template rows
 are rejected (None).
 """
 
@@ -69,6 +71,30 @@ class TestApplyBundledRunnerTemplate:
         assert applied.image_ref == operator_image_ref
         assert applied.network_policy == TEMPLATE_OWNED_FIELDS["network_policy"]
         assert applied.persistence_policy == "ephemeral"
+
+    @pytest.mark.asyncio
+    async def test_apply_advances_placeholder_image_to_template_constant(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A placeholder-seeded row is refreshed to the advanced release constant.
+
+        Ownership is placeholder-scoped, so an advanced ``BUNDLED_RUNNER_IMAGE_REF``
+        must reach a row that still carries the placeholder digest (the
+        documented remediation path).
+        """
+        advanced = "modulo-runner:opencode@sha256:" + "9" * 64
+        monkeypatch.setattr(
+            "modulo.db.bundled_runner_template.BUNDLED_RUNNER_IMAGE_REF",
+            advanced,
+        )
+        profile = _make_profile(image_ref="modulo-runner:opencode@sha256:" + "0" * 64)
+        await _apply(profile)
+        assert profile.image_ref == advanced
+
+    @pytest.mark.asyncio
+    async def test_apply_writes_template_image_when_row_has_none(self) -> None:
+        """A row with no image is template-owned, so apply supplies the constant."""
+        profile = _make_profile(image_ref=None)
+        await _apply(profile)
+        assert profile.image_ref == BUNDLED_RUNNER_IMAGE_REF
 
     @pytest.mark.asyncio
     async def test_config_drifted_keys_reset_operator_keys_survive(self) -> None:

@@ -311,15 +311,16 @@ const providerTypeOptions = computed(() => [
 // own accurate copy — never as a mutable tag, which would tell the operator to
 // "pin it" when their ref cannot even be pulled.
 //
-// The reference grammar is Docker's real rule: each path component is
-// `[a-z0-9]+` with single-or-double `[._-]` separators inside it (so
-// `my--repo` and `my__repo` are valid, not mislabelled invalid), plus an
-// optional registry port on the first component, an optional mixed-case tag,
-// and an optional `@sha256:<64 lowercase hex>` digest. No whitespace anywhere.
-// The whole reference is validated, not just its digest suffix: Docker /
-// containerd reject an uppercase repository, uppercase digest hex and an
-// embedded space, so a ref that merely ENDS in `@sha256:<hex>` must never be
-// announced as pinned.
+// The reference grammar is Docker's real rule (distribution/reference): each
+// path component is `[a-z0-9]+` joined by a separator that is a single `.` or
+// `_`, a double `__`, or a run of one-or-more `-` (so `my--repo`, `my---repo`
+// and `my__repo` are valid, while `my..repo`, `my._repo` and `my-_repo` are
+// not), plus an optional registry port on the first component, an optional
+// mixed-case tag, and an optional `@sha256:<64 lowercase hex>` digest. No
+// whitespace anywhere. The whole reference is validated, not just its digest
+// suffix: Docker / containerd reject an uppercase repository, uppercase digest
+// hex and an embedded space, so a ref that merely ENDS in `@sha256:<hex>` must
+// never be announced as pinned.
 //
 // The classification applies only where image_ref is dispatched as a container
 // image — the Runner (runner_docker) and Kubernetes providers. E2B is excluded
@@ -327,7 +328,8 @@ const providerTypeOptions = computed(() => [
 // refuses outright (`runner_dispatch.py` raises SandboxDispatchUnboundError),
 // so claiming it runs a container image would be false. Those providers get the
 // unclassified `null` state.
-const IMAGE_COMPONENT = '[a-z0-9]+(?:[._-]{1,2}[a-z0-9]+)*'
+const IMAGE_SEPARATOR = '(?:[._]|__|[-]+)'
+const IMAGE_COMPONENT = `[a-z0-9]+(?:${IMAGE_SEPARATOR}[a-z0-9]+)*`
 const IMAGE_TAG = '[A-Za-z0-9_][A-Za-z0-9._-]{0,127}'
 const IMAGE_REF_RE = new RegExp(
   `^${IMAGE_COMPONENT}(?::[0-9]+)?(?:/${IMAGE_COMPONENT})*(?::${IMAGE_TAG})?$`,
