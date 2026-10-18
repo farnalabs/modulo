@@ -55,6 +55,7 @@ from modulo.api.routes.admin_housekeeping import router as admin_housekeeping_ro
 from modulo.api.routes.admin_license import router as admin_license_router
 from modulo.api.routes.admin_monitor_config import router as admin_monitor_config_router
 from modulo.api.routes.admin_notifications import router as admin_notifications_router
+from modulo.api.routes.admin_org_mcp_authority import router as admin_org_mcp_authority_router
 from modulo.api.routes.admin_orgs import router as admin_orgs_router
 from modulo.api.routes.admin_rate_limits import router as admin_rate_limits_router
 from modulo.api.routes.admin_rotation import router as admin_rotation_router
@@ -1268,6 +1269,7 @@ app.include_router(admin_tiers_router)
 app.include_router(admin_triggers_router)
 app.include_router(admin_housekeeping_router)
 app.include_router(admin_capacity_router)
+app.include_router(admin_org_mcp_authority_router)
 app.include_router(auth_router)
 app.include_router(sso_router)
 app.include_router(org_login_router)

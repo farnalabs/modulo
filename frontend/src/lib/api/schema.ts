@@ -1357,6 +1357,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/org/mcp-human-linked-hitl-authority": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Org Mcp Authority
+         * @description Read the caller's OWN org human-linked MCP HITL authority setting.
+         */
+        get: operations["get_org_mcp_authority_api_v1_admin_org_mcp_human_linked_hitl_authority_get"];
+        /**
+         * Set Org Mcp Authority
+         * @description Set the caller's OWN org override for the human-linked MCP HITL authority.
+         *
+         *     Writes ``feature_overrides[mcp_human_linked_hitl_authority]`` through the
+         *     atomic nested patch (a single statement merging just this sub-field), so a
+         *     concurrent writer of a DIFFERENT flag override is not dropped. ``enabled``
+         *     False is the tightening direction: it refuses every MCP credential on a
+         *     ``human_only`` gate, restoring the pre-ADR-063 behaviour.
+         */
+        put: operations["set_org_mcp_authority_api_v1_admin_org_mcp_human_linked_hitl_authority_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/login": {
         parameters: {
             query?: never;
@@ -16230,6 +16260,26 @@ export interface components {
             /** Marked */
             marked: number;
         };
+        /**
+         * McpAuthorityResponse
+         * @description The org's human-linked MCP HITL authority setting.
+         *
+         *     ``enabled`` is the effective intent: the org override when one is set, else
+         *     the flag's documented default. ``overridden`` reports whether the org has an
+         *     explicit override (so the UI can distinguish "on by default" from "on
+         *     because someone set it").
+         */
+        McpAuthorityResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /** Overridden */
+            overridden: boolean;
+        };
+        /** McpAuthorityUpdateRequest */
+        McpAuthorityUpdateRequest: {
+            /** Enabled */
+            enabled: boolean;
+        };
         /** McpConfigResponse */
         McpConfigResponse: {
             /** Mcp Url */
@@ -25715,6 +25765,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DbCapacityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_org_mcp_authority_api_v1_admin_org_mcp_human_linked_hitl_authority_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpAuthorityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    set_org_mcp_authority_api_v1_admin_org_mcp_human_linked_hitl_authority_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpAuthorityUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpAuthorityResponse"];
                 };
             };
             /** @description Validation Error */

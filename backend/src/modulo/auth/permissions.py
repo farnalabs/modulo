@@ -133,6 +133,15 @@ PERMISSIONS: dict[str, str] = {
     "org.authz_enforce.manage": "admin",
     "org.triggers.pause.manage": "admin",
     "org.guardrails.kill_switch.manage": "admin",
+    # FAR-1972: an org admin controls their own org's human-linked MCP HITL
+    # authority (whether a human-linked OAuth credential may decide a
+    # ``human_only`` HITL gate over MCP). Named in the setting's own namespace
+    # (``org.mcp...``) and deliberately NOT a near-miss of any existing key —
+    # no other key shares the ``org.mcp`` prefix, and it is far from both the
+    # ``mcp_server.*`` operator keys and the ``hitl.*`` decision keys, so a
+    # typo cannot silently resolve to a sibling's role. Mirrors the
+    # ``org.guardrails.kill_switch.manage`` governance-toggle pattern.
+    "org.mcp.human_linked_hitl_authority.manage": "admin",
     "org.settings.update": "admin",
     # guardrail definition/binding management — the admin-level permission for
     # managing guardrail definitions, node bindings, and the elevated (full,
@@ -367,6 +376,11 @@ NON_DELEGABLE_PERMISSIONS: frozenset[str] = frozenset(
         # break-glass / authz kill-switch controls.
         "org.authz_enforce.manage",
         "org.guardrails.kill_switch.manage",
+        # FAR-1972: the human-linked MCP HITL authority toggle is org-level
+        # authz governance (it widens or narrows which credential may decide a
+        # ``human_only`` gate), so it is never delegable to a credential —
+        # same class as the two entries above.
+        "org.mcp.human_linked_hitl_authority.manage",
         # instance-scope (SYSTEM_ORG_ID sentinel partition) error reads —
         # system-admin only, so never delegable to a credential (FAR-1547).
         "errors.resolve_instance",
