@@ -416,6 +416,45 @@ class TestDiffSnapshotsSemantic:
         # Impact follows the genuine change only (a -> b); nothing changed on c.
         assert semantic["impacted_nodes"] == ["a", "b"]
 
+    async def test_added_edge_with_ports_reports_edge_port_kind(self):
+        # FAR-1894: an ADDED edge's port binding IS a genuine semantic change —
+        # unlike an added node, it binds an already-existing output to an
+        # already-existing input, so it still surfaces in port_changes and
+        # carries the edge_port discriminator.
+        sid_a = uuid.uuid4()
+        sid_b = uuid.uuid4()
+        na = {"id": "a", "agent_id": "ag1", "label": "A", "outputs": [{"name": "out1", "schema_ref": "s"}]}
+        nb = {"id": "b", "agent_id": "ag2", "label": "B", "inputs": [{"name": "in1", "schema_ref": "s"}]}
+        snap_a = _mock_snapshot(
+            sid_a,
+            1,
+            nodes=[na, nb],
+            edges=[{"source": "b", "target": "a", "source_port": "out1"}],
+        )
+        snap_b = _mock_snapshot(
+            sid_b,
+            2,
+            nodes=[na, nb],
+            edges=[
+                {"source": "b", "target": "a", "source_port": "out1"},
+                {"source": "a", "target": "b", "source_port": "out1", "target_port": "in1"},
+            ],
+        )
+
+        session = _diff_session(snap_a, snap_b)
+        result = await diff_snapshots(session, sid_a, sid_b)
+        assert result is not None
+        assert [edge["source"] for edge in result["edges_added"]] == ["a"]
+
+        semantic = result["semantic"]
+        edge_entries = [p for p in semantic["port_changes"] if p["kind"] == "edge_port"]
+        assert edge_entries, "an added edge's port binding must surface in port_changes"
+        assert {p["change"] for p in edge_entries} == {"edge_source_port_repoint", "edge_target_port_repoint"}
+        assert {p["node_id"] for p in edge_entries} == {"a", "b"}
+        # The source-port repoint propagates impact from a through b; the
+        # target-port repoint does the same from b.
+        assert semantic["impacted_nodes"] == ["a", "b"]
+
     async def test_diff_no_port_changes_emits_empty_semantic(self):
         sid_a = uuid.uuid4()
         sid_b = uuid.uuid4()
