@@ -12398,7 +12398,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         _claim_receipt = await harvest_gh_pr_claim_bounded(
                             _claim_receipt_exec,
                             run_scope=run_id,
-                            timeout=20.0,
                         )
                     # Cancellation is RECORDED, not re-raised here: the dispatch
                     # re-raises it only after the sandbox kill / provider close /
