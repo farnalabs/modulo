@@ -204,6 +204,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     GET_RULES: ClassVar[list[RateLimitRule]] = [
         RateLimitRule(path_prefix="/api/v1/auth/login-context", max_requests=60, window_s=60),
         RateLimitRule(path_prefix="/api/v1/auth/org-login/", max_requests=60, window_s=60),
+        # FAR-1978: legacy single-org SSO provider discovery. Pre-auth and
+        # anonymous, so the POST/PUT/PATCH gate never fires for it; without
+        # this rule an anonymous caller could enumerate the discovery surface
+        # unthrottled. The budget matches its two siblings above (60/min/IP) —
+        # no reason to differ: all three answer the same login-page question.
+        RateLimitRule(path_prefix="/api/v1/auth/sso/providers", max_requests=60, window_s=60),
     ]
 
     # PRD §7.18: HITL review actions — 20/min per user, AGGREGATE across
