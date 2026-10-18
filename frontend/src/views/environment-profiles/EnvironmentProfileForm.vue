@@ -75,7 +75,37 @@
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
           :placeholder="$t('views.EnvironmentProfileForm.image_reference_placeholder')"
           data-testid="envprofile-form-image"
+          :aria-describedby="imageDescribedBy"
         />
+        <!-- FAR-1779 / ADR 059: make the BYO agent-image path discoverable —
+             the profile's image_ref is where an operator supplies their own
+             image, and the process the agent runs is set per sandbox_agent
+             node in the pipeline editor. -->
+        <p id="envprofile-form-image-help" class="mt-1 text-xs text-muted-foreground">
+          {{ $t('views.EnvironmentProfileForm.image_reference_help') }}
+        </p>
+        <!-- Digest pinning is advice, never enforcement (ADR 059 §4): a pinned
+             ref is visibly acknowledged, a mutable tag warns without blocking. -->
+        <p
+          v-if="imageRefState === 'pinned'"
+          id="envprofile-form-image-state"
+          role="status"
+          class="mt-1 flex items-center gap-1 text-xs text-success"
+          data-testid="envprofile-form-image-pinned"
+        >
+          <ShieldCheck :size="14" aria-hidden="true" />
+          {{ $t('views.EnvironmentProfileForm.image_digest_pinned') }}
+        </p>
+        <p
+          v-else-if="imageRefState === 'mutable'"
+          id="envprofile-form-image-state"
+          role="status"
+          class="mt-1 flex items-center gap-1 text-xs text-warning-text"
+          data-testid="envprofile-form-image-tag-warning"
+        >
+          <AlertTriangle :size="14" aria-hidden="true" />
+          {{ $t('views.EnvironmentProfileForm.image_mutable_tag_warning') }}
+        </p>
       </div>
 
       <div>
@@ -183,7 +213,7 @@ import { useI18n } from 'vue-i18n'
 import { useEnvironmentProfilesStore } from '../../stores/environmentProfiles'
 import type { ProfileCreatePayload } from '../../stores/environmentProfiles'
 import { runnerTierForProvider, runnerTierLabelKey } from '../../lib/runnerTiers'
-import { ArrowLeft } from '@lucide/vue'
+import { ArrowLeft, ShieldCheck, AlertTriangle } from '@lucide/vue'
 import Button from 'primevue/button'
 import Select from '../../components/shared/AppSelect.vue'
 
@@ -243,6 +273,31 @@ const providerTypeOptions = computed(() => [
   { value: 'e2b', label: t('views.EnvironmentProfileForm.e2b_sandboxed_cloud') },
   { value: 'kubernetes', label: t('views.EnvironmentProfileForm.kubernetes_external') },
 ])
+
+// FAR-1779 / ADR 059 §4: digest pinning is docs-advised, never enforced. A
+// `name@sha256:<64 hex>` ref is immutable and visibly acknowledged; any other
+// ref (a mutable tag, or no tag at all — an implicit `:latest`) warns without
+// blocking the save. The classification applies only where image_ref is a
+// container image (Docker and Kubernetes profiles); on E2B it is a template
+// ID, so warning about a digest there would be a false positive.
+const DIGEST_REF_RE = /@sha256:[0-9a-f]{64}$/i
+const DIGEST_PINNABLE_PROVIDERS = ['local_docker', 'kubernetes']
+
+const imageRefState = computed<'pinned' | 'mutable' | null>(() => {
+  if (!DIGEST_PINNABLE_PROVIDERS.includes(form.provider_type)) return null
+  const ref = form.image_ref.trim()
+  if (!ref) return null
+  return DIGEST_REF_RE.test(ref) ? 'pinned' : 'mutable'
+})
+
+// The image field always describes itself with the persistent helper; the
+// dynamic state region is referenced only while it is rendered, so no
+// reference to a missing id is ever emitted.
+const imageDescribedBy = computed(() =>
+  imageRefState.value
+    ? 'envprofile-form-image-help envprofile-form-image-state'
+    : 'envprofile-form-image-help',
+)
 
 // PrimeVue Select only forwards fallthrough attrs (e.g. aria-describedby) to
 // its wrapper <div>, not to the focusable combobox — route the hints through

@@ -386,3 +386,89 @@ describe('EnvironmentProfileForm — edit mode', () => {
     expect(postMock).not.toHaveBeenCalled()
   })
 })
+
+describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    routeState.params = {}
+  })
+
+  async function mountWithProvider(provider: string) {
+    const wrapper = mountForm()
+    await flush()
+    const vm = wrapper.vm as unknown as { form: { provider_type: string } }
+    vm.form.provider_type = provider
+    await nextTick()
+    return wrapper
+  }
+
+  it('renders the persistent BYO helper copy that names the agent-commands path', async () => {
+    const wrapper = await mountWithProvider('local_docker')
+    const help = wrapper.find('#envprofile-form-image-help')
+    expect(help.exists()).toBe(true)
+    expect(help.text()).toContain('Bring your own agent image')
+    expect(help.text()).toContain('agent commands')
+  })
+
+  it('acknowledges a digest-pinned ref and shows no mutable-tag warning', async () => {
+    const wrapper = await mountWithProvider('local_docker')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(`ghcr.io/acme/agent@sha256:${'a'.repeat(64)}`)
+    await nextTick()
+
+    const pinned = wrapper.find('[data-testid="envprofile-form-image-pinned"]')
+    expect(pinned.exists()).toBe(true)
+    expect(pinned.attributes('role')).toBe('status')
+    expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(false)
+  })
+
+  it('warns without blocking when a mutable tag is used, and still saves', async () => {
+    postMock.mockResolvedValue(fullProfile({ name: 'byo' }))
+    const wrapper = await mountWithProvider('local_docker')
+
+    await wrapper.find('[data-testid="envprofile-form-name"]').setValue('byo')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue('ghcr.io/acme/agent:latest')
+    await nextTick()
+
+    const warning = wrapper.find('[data-testid="envprofile-form-image-tag-warning"]')
+    expect(warning.exists()).toBe(true)
+    expect(warning.attributes('role')).toBe('status')
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(false)
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(postMock).toHaveBeenCalledTimes(1)
+    expect(postMock.mock.calls[0][1].image_ref).toBe('ghcr.io/acme/agent:latest')
+  })
+
+  it('warns on an implicit latest ref with no tag at all', async () => {
+    const wrapper = await mountWithProvider('kubernetes')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue('ghcr.io/acme/agent')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(true)
+  })
+
+  it('does not digest-warn an E2B template ID because image_ref is not a container image', async () => {
+    const wrapper = await mountWithProvider('e2b')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue('modulo-opencode')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(false)
+  })
+
+  it('references the dynamic state region only while it is rendered', async () => {
+    const wrapper = await mountWithProvider('local_docker')
+    const input = wrapper.find('[data-testid="envprofile-form-image"]')
+    expect(input.attributes('aria-describedby')).toBe('envprofile-form-image-help')
+
+    await input.setValue(`ghcr.io/acme/agent@sha256:${'b'.repeat(64)}`)
+    await nextTick()
+
+    const describedBy = input.attributes('aria-describedby') ?? ''
+    expect(describedBy).toContain('envprofile-form-image-help')
+    expect(describedBy).toContain('envprofile-form-image-state')
+  })
+})

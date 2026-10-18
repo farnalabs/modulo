@@ -69,6 +69,29 @@
             </span>
           </div>
 
+          <!-- FAR-1779: surface the pre-provision image-resolution guards the
+               backend ALREADY returns (no new guards) with actionable copy.
+               placeholder_digest means no registry image exists to pull, so
+               the row can never provision; image_not_pulled is a pull failure
+               on the runner machine. -->
+          <div
+            v-if="row.health?.placeholder_digest"
+            class="rounded-lg border border-warning/40 bg-warning/10 p-3"
+            role="status"
+            data-testid="runner-profile-image-unresolvable"
+          >
+            <p class="text-xs font-medium text-warning-text">{{ $t('views.RunnersProfilesTab.image_unresolvable_title') }}</p>
+            <p class="mt-0.5 text-xs text-muted-foreground">{{ $t('views.RunnersProfilesTab.image_unresolvable_hint') }}</p>
+          </div>
+          <p
+            v-else-if="row.health?.health_state === 'image_not_pulled'"
+            class="text-xs text-muted-foreground"
+            role="status"
+            data-testid="runner-profile-image-pull-hint"
+          >
+            {{ $t('views.RunnersProfilesTab.image_pull_hint') }}
+          </p>
+
           <div
             v-if="row.drift.drifted"
             class="rounded-lg border border-warning/40 bg-warning/10 p-3"

@@ -363,4 +363,36 @@ describe('RunnersProfilesTab', () => {
     await nextTick()
     expect(wrapper.text()).toContain('delete forbidden')
   })
+
+  it('surfaces an unresolvable placeholder-digest image with actionable copy', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useEnvironmentProfilesStore()
+    store.$patch({ profiles: [BUNDLED_PROFILE] as never })
+    const status = makeStatus({ placeholder_digest: true, available: false })
+    const wrapper = mount(RunnersProfilesTab, { props: { status, reloadStatus } })
+    await nextTick()
+    await flushPromises()
+
+    const note = wrapper.find('[data-testid="runner-profile-image-unresolvable"]')
+    expect(note.exists()).toBe(true)
+    expect(note.attributes('role')).toBe('status')
+    expect(note.text()).toContain('Image cannot be resolved')
+  })
+
+  it('surfaces the pull-remediation hint when the image is not pulled', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useEnvironmentProfilesStore()
+    store.$patch({ profiles: [BUNDLED_PROFILE] as never })
+    const status = makeStatus({ health_state: 'image_not_pulled', available: false })
+    const wrapper = mount(RunnersProfilesTab, { props: { status, reloadStatus } })
+    await nextTick()
+    await flushPromises()
+
+    const hint = wrapper.find('[data-testid="runner-profile-image-pull-hint"]')
+    expect(hint.exists()).toBe(true)
+    expect(hint.attributes('role')).toBe('status')
+    expect(hint.text()).toContain('not pulled on the runner machine')
+  })
 })

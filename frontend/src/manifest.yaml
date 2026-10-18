@@ -2692,6 +2692,12 @@ elements:
       - testid: runner-profile-drift
         type: element
         dynamic_testid: false
+      - testid: runner-profile-image-unresolvable
+        type: element
+        dynamic_testid: false
+      - testid: runner-profile-image-pull-hint
+        type: element
+        dynamic_testid: false
       - testid: runner-profile-active-workspaces
         type: element
         dynamic_testid: false
@@ -2729,6 +2735,12 @@ elements:
       - testid: envprofile-form-image
         type: input
         dynamic_testid: false
+      - testid: envprofile-form-image-pinned
+        type: element
+        dynamic_testid: false
+      - testid: envprofile-form-image-tag-warning
+        type: element
+        dynamic_testid: false
       - testid: envprofile-form-network
         type: select
         dynamic_testid: false
@@ -2762,6 +2774,12 @@ elements:
         dynamic_testid: false
       - testid: envprofile-form-image
         type: input
+        dynamic_testid: false
+      - testid: envprofile-form-image-pinned
+        type: element
+        dynamic_testid: false
+      - testid: envprofile-form-image-tag-warning
+        type: element
         dynamic_testid: false
       - testid: envprofile-form-network
         type: select
@@ -6083,6 +6101,8 @@ features:
             - "[x] The orphan reconciler (system cron, 5 min) lists labelled workspace containers machine-scoped by the modulo.machine.id label, cross-references active runs fail-safe (any cross-reference error aborts the sweep destroying nothing and emits runner.reconciler.sweep_aborted), destroys orphans past the 5-min grace with a destroy-path false-positive re-check (suspected_false_positive is the rollback signal), applies the 24h max-lifetime backstop regardless of run state, runs LOG-ONLY until RUNNER_RECONCILER_DESTROY_ENABLED=true, and exposes the advisory runner_workspace_reconcile liveness check on /healthz/ready"
             # Kubernetes provider in the environment-profile form (FAR-1559)
             - "[x] The environment-profile create/edit form offers the kubernetes provider as a first-class option (FAR-1559): the provider select renders all three manually-creatable provider types — local_docker, e2b and kubernetes (labelled 'External Runner (Kubernetes)', locale views.EnvironmentProfileForm.kubernetes_external) — while `local` and `runner_docker` stay system-seeded and are deliberately NOT offered for manual creation; the form keeps driving the single provider_type vocabulary (backend PROVIDER_TYPES = {local_docker, e2b, local, runner_docker, kubernetes}, FAR-595), and the selection flows through the existing create/update contract with the provider_type-is-required validation and tier hint preserved (frontend/src/views/environment-profiles/EnvironmentProfileForm.vue providerTypeOptions, frontend/src/__tests__/environment-profiles/EnvironmentProfileForm.spec.ts, backend/src/modulo/core/runtime_provider/k8s.py, backend/src/modulo/db/models/environment_profile.py)"
+            # BYO agent image path + digest-pinning UX (FAR-1779, ADR 059)
+            - "[x] The environment-profile form makes the BYO agent-image path discoverable and presents digest pinning as advice, never enforcement (FAR-1779, ADR 059 §4): the Image Reference field carries persistent helper copy that names the path — Docker and Kubernetes profiles run the given container image, E2B profiles use it as the template ID, and the process the agent runs is set per sandbox_agent node in the pipeline editor (its agent commands list); a name@sha256:<64 hex> ref is visibly acknowledged as pinned/immutable (role=status), while any non-digest ref (a mutable tag, or no tag — an implicit :latest) shows a NON-BLOCKING role=status warning advising a digest pin, and the save is never blocked; the digest classification applies only to container-image providers (local_docker, kubernetes) so an E2B template ID is never mis-warned; the Runners profiles list surfaces the pre-provision resolution states the backend already returns with actionable copy — a row whose ProfileHealthResponse.placeholder_digest is true (available=false) renders an 'image cannot be resolved' note pointing at Apply template or setting a real image, and a row with health_state=image_not_pulled renders a pull-remediation hint — while the existing dispatch guards (Kubernetes requires image_ref; runner_docker placeholder-digest refusal) are unchanged and no new backend guard is added (frontend/src/views/environment-profiles/EnvironmentProfileForm.vue, frontend/src/views/runners/RunnersProfilesTab.vue, frontend/src/__tests__/environment-profiles/EnvironmentProfileForm.spec.ts, frontend/src/__tests__/runners/RunnersProfilesTab.spec.ts)"
     feat-evals:
         description: Evaluation editor and proposal queue
         status: covered
