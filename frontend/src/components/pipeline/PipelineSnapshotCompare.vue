@@ -50,14 +50,13 @@
       </button>
     </div>
 
-    <p
+    <output
       v-if="status === 'loading'"
-      class="text-sm text-muted-foreground"
-      role="status"
+      class="block text-sm text-muted-foreground"
       data-testid="pipeline-compare-loading"
     >
       {{ $t('components.PipelineSnapshotCompare.loading') }}
-    </p>
+    </output>
 
     <p
       v-else-if="!canCompare"
@@ -70,14 +69,13 @@
     <!-- Truthful self-compare state: the same version on both sides has no
          meaningful diff, so it is reported as such instead of showing a
          meaningless all-zero comparison. -->
-    <p
+    <output
       v-else-if="isSelfCompare"
-      class="text-sm text-muted-foreground"
-      role="status"
+      class="block text-sm text-muted-foreground"
       data-testid="pipeline-compare-self"
     >
       {{ $t('components.PipelineSnapshotCompare.self_compare') }}
-    </p>
+    </output>
 
     <!-- VIS-3: the shared ErrorAlert owns this region's box, message and
          retry affordance; the wrapper keeps the assertive role and the BDD
@@ -100,13 +98,12 @@
         class="space-y-2"
         data-testid="pipeline-compare-semantic"
       >
-        <p
-          class="rounded-lg border bg-muted/30 p-3 text-sm font-medium"
-          role="status"
+        <output
+          class="block rounded-lg border bg-muted/30 p-3 text-sm font-medium"
           data-testid="pipeline-compare-summary"
         >
           {{ summaryLine }}
-        </p>
+        </output>
 
         <div
           v-if="breakingChanges.length > 0"
@@ -252,13 +249,13 @@
         >
           {{ showRaw ? $t('components.PipelineSnapshotCompare.raw_hide') : $t('components.PipelineSnapshotCompare.raw_show') }}
         </button>
-        <div :id="rawRegionId" role="region" :aria-label="$t('components.PipelineSnapshotCompare.raw_region_label')">
+        <section :id="rawRegionId" :aria-label="$t('components.PipelineSnapshotCompare.raw_region_label')">
           <pre
             v-if="showRaw"
             class="mt-2 max-h-96 overflow-auto rounded-lg border bg-muted/40 p-3 text-[11px]"
             data-testid="pipeline-compare-raw"
           >{{ rawJson }}</pre>
-        </div>
+        </section>
       </div>
     </template>
   </section>
@@ -452,36 +449,70 @@ const snapshotOptions = computed(() => {
   return options
 })
 
+/** One page of the snapshot catalog as read for the pickers. */
+interface CatalogPage {
+  /** Raw item count before unreadable rows are dropped — this drives paging. */
+  rawCount: number
+  /** The readable snapshots on this page (a real, positive version). */
+  snaps: CompareSnapshot[]
+  /** The server's declared total, when it reports a finite one. */
+  total: number | null
+}
+
+/** Read one catalog page; null when it cannot be read (transient failure). */
+async function fetchCatalogPage(page: number): Promise<CatalogPage | null> {
+  const { data, error } = await withTimeout((signal) =>
+    api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
+      params: { path: { pipeline_id: props.pipelineId }, query: { page, page_size: CATALOG_PAGE_SIZE } },
+      signal,
+    }),
+  )
+  if (error || !data) return null
+  const items = data.items ?? []
+  const snaps: CompareSnapshot[] = []
+  for (const raw of items) {
+    const snap = readSnapshot(raw)
+    if (snap && snap.snapshot_version > 0) snaps.push(snap)
+  }
+  return {
+    rawCount: items.length,
+    snaps,
+    total: Number.isFinite(data.total) ? (data.total as number) : null,
+  }
+}
+
+/**
+ * True when this page is the last worth fetching: an empty page, or the
+ * server's own total reached, or (when the total is unknown) a short page.
+ */
+function isLastCatalogPage(rawCount: number, seen: number, total: number | null): boolean {
+  if (rawCount === 0) return true
+  if (total !== null) return seen >= total
+  return rawCount < CATALOG_PAGE_SIZE
+}
+
+/** Page the whole snapshot history (bounded); null when a newer load superseded it. */
+async function collectCatalogPages(token: number): Promise<CompareSnapshot[] | null> {
+  const collected: CompareSnapshot[] = []
+  let total: number | null = null
+  let seen = 0
+  for (let page = 1; page <= CATALOG_MAX_PAGES; page += 1) {
+    const result = await fetchCatalogPage(page)
+    if (token !== catalogToken) return null
+    if (!result) break
+    seen += result.rawCount
+    collected.push(...result.snaps)
+    if (total === null && result.total !== null) total = result.total
+    if (isLastCatalogPage(result.rawCount, seen, total)) break
+  }
+  return collected
+}
+
 async function loadFullCatalog(): Promise<void> {
   const token = ++catalogToken
-  const collected: CompareSnapshot[] = []
   try {
-    let page = 1
-    let total: number | null = null
-    let seen = 0
-    while (page <= CATALOG_MAX_PAGES) {
-      const { data, error } = await withTimeout((signal) =>
-        api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
-          params: { path: { pipeline_id: props.pipelineId }, query: { page, page_size: CATALOG_PAGE_SIZE } },
-          signal,
-        }),
-      )
-      if (token !== catalogToken) return
-      if (error || !data) break
-      const items = data.items ?? []
-      seen += items.length
-      for (const raw of items) {
-        const snap = readSnapshot(raw)
-        if (snap && snap.snapshot_version > 0) collected.push(snap)
-      }
-      if (total === null && Number.isFinite(data.total)) total = data.total as number
-      if (items.length === 0) break
-      // The server's own total, or a short page when it is unknown, is the end.
-      if (total !== null && seen >= total) break
-      if (total === null && items.length < CATALOG_PAGE_SIZE) break
-      page += 1
-    }
-    if (token !== catalogToken) return
+    const collected = await collectCatalogPages(token)
+    if (token !== catalogToken || collected === null) return
     fullCatalog.value = collected
   } catch (e: unknown) {
     if (token !== catalogToken) return

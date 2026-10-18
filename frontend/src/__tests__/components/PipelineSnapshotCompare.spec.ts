@@ -136,7 +136,9 @@ describe('PipelineSnapshotCompare', () => {
     const wrapper = mountCompare()
     const loading = wrapper.find('[data-testid="pipeline-compare-loading"]')
     expect(loading.exists()).toBe(true)
-    expect(loading.attributes('role')).toBe('status')
+    // <output> carries the implicit status role (Sonar Web:S6819 prefers the
+    // native element over an explicit role="status").
+    expect(loading.element.tagName).toBe('OUTPUT')
   })
 
   it('defaults the compare side to the latest version when no id is in the query', async () => {
