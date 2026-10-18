@@ -4,7 +4,6 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
-    JSON,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -18,7 +17,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import Base, SoftDeleteMixin
+from modulo.db.models.base import JSONB_COL, Base, SoftDeleteMixin
 
 # The nil-UUID sentinel organisation — the SYSTEM / no-tenant sentinel
 # (seeded by migration 0172, ``0172_seed_orphan_organisation``, whose parent
@@ -84,8 +83,8 @@ class Organisation(SoftDeleteMixin, Base):
     # this non-FK ORM declaration.
     created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
 
-    settings_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
-    otel_config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    settings_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
+    otel_config_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
     plan_id: Mapped[str | None] = mapped_column(String(255))
     # Tenancy-bounded authorization kill-switch (ADR 047 DECISION 3). Dedicated
     # boolean column — NOT settings_json — atomic at statement level and
@@ -119,7 +118,7 @@ class Organisation(SoftDeleteMixin, Base):
     org_cumulative_spend_cents: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     deletion_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
     deletion_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    export_bundle_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=None)
+    export_bundle_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL, nullable=True, default=None)
     # Guardrail config-as-code snapshot pin (FAR-219 T3): applied/proposed
     # content hashes, serialized YAML and status. Absence = never applied.
-    guardrail_pins_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=None)
+    guardrail_pins_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL, nullable=True, default=None)

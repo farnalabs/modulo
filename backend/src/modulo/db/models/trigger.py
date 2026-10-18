@@ -4,7 +4,6 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
-    JSON,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -19,7 +18,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped, SoftDeleteMixin
+from modulo.db.models.base import JSONB_COL, OrgScoped, SoftDeleteMixin
 
 
 class Trigger(SoftDeleteMixin, OrgScoped):
@@ -74,7 +73,7 @@ class Trigger(SoftDeleteMixin, OrgScoped):
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     max_concurrent_runs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     daily_spend_limit: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
-    config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    config_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )

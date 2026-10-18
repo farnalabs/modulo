@@ -2,10 +2,10 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, LargeBinary, String, UniqueConstraint, Uuid
+from sqlalchemy import DateTime, ForeignKey, LargeBinary, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import JSONB_COL, OrgScoped
 
 
 class WebhookDedupHash(OrgScoped):
@@ -29,5 +29,5 @@ class WebhookPayload(OrgScoped):
         Uuid(), ForeignKey("trigger_events.id", ondelete="CASCADE"), nullable=True, index=True
     )
     raw_body: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    raw_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    raw_payload: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

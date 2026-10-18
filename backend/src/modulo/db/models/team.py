@@ -2,10 +2,10 @@ import uuid
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, ForeignKey, Index, Numeric, String, Uuid, text
+from sqlalchemy import ForeignKey, Index, Numeric, String, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped, SoftDeleteMixin
+from modulo.db.models.base import JSONB_COL, OrgScoped, SoftDeleteMixin
 
 
 class Team(SoftDeleteMixin, OrgScoped):  # SoftDeleteMixin FIRST (house pattern)
@@ -25,6 +25,6 @@ class Team(SoftDeleteMixin, OrgScoped):  # SoftDeleteMixin FIRST (house pattern)
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )
-    notification_endpoints: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
-    settings: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    notification_endpoints: Mapped[list[dict[str, Any]]] = mapped_column(JSONB_COL, nullable=False, default=list)
+    settings: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
     daily_spend_limit: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))

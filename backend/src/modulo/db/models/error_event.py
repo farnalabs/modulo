@@ -1,10 +1,10 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, Index, String, Text
+from sqlalchemy import CheckConstraint, DateTime, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import JSONB_COL, OrgScoped
 
 
 class ErrorEvent(OrgScoped):
@@ -21,7 +21,7 @@ class ErrorEvent(OrgScoped):
     level: Mapped[str] = mapped_column(String(20), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     stacktrace: Mapped[str | None] = mapped_column(Text)
-    context_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    context_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL)
     source: Mapped[str] = mapped_column(String(20), nullable=False)
     environment: Mapped[str | None] = mapped_column(String(50))
     version: Mapped[str | None] = mapped_column(String(50))

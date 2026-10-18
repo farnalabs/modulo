@@ -1,11 +1,11 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, LargeBinary, String, Uuid
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, LargeBinary, String, Uuid
 from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped, SoftDeleteMixin
+from modulo.db.models.base import JSONB_COL, OrgScoped, SoftDeleteMixin
 
 
 class NotificationEndpoint(SoftDeleteMixin, OrgScoped):
@@ -13,7 +13,7 @@ class NotificationEndpoint(SoftDeleteMixin, OrgScoped):
 
     url: Mapped[str] = mapped_column(String(2048), nullable=False)
     secret_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
-    events: Mapped[list[str]] = mapped_column(JSON, nullable=False, server_default=sa_text("'[]'"))
+    events: Mapped[list[str]] = mapped_column(JSONB_COL, nullable=False, server_default=sa_text("'[]'"))
 
     description: Mapped[str | None] = mapped_column(String(500))
     consecutive_dead_letter_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")

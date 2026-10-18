@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import JSONB_COL, OrgScoped
 
 
 class HitlClaim(OrgScoped):
@@ -75,8 +75,9 @@ class HitlClaim(OrgScoped):
     # Full resume payload persisted at decision time (B1) - the same dict the
     # web routes pass to executor.resume. Survives SAQ job loss so a recovered
     # resume injects the human's actual verdict, never an empty approval.
-    # jsonb in the parallel migration; generic JSON keeps SQLite/MariaDB parity.
-    decision_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=None)
+    # jsonb in the database after migration 0147 — JSONB_COL keeps the ORM
+    # declaration honest while preserving SQLite/MariaDB parity.
+    decision_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL, nullable=True, default=None)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Set by the hitl_overdue notification job once a `hitl_overdue` event has
     # been dispatched for this claim — keeps the job idempotent (one warning

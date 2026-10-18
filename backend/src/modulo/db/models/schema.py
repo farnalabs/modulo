@@ -2,10 +2,10 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint, Uuid, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import JSONB_COL, OrgScoped
 
 if TYPE_CHECKING:
     from modulo.db.models.account import Account
@@ -72,7 +72,7 @@ class SchemaVersion(OrgScoped):
     )
     version: Mapped[str] = mapped_column(String(50), nullable=False)
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
-    definition_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    definition_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False)
     published: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     deprecated: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     account_id: Mapped[uuid.UUID] = mapped_column(
