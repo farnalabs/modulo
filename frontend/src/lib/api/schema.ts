@@ -2114,10 +2114,10 @@ export interface paths {
          *     Served unauthenticated on purpose: the CI/CD deploy pipelines
          *     (deploy.yml, rc-validate.yml, deploy-watchdog.yml,
          *     deploy-staleness-check.yml) call it without a principal to verify which
-         *     build is live. The repo is public, so the git metadata is already
-         *     world-readable. Only genuinely non-public locals (hostname, ci_job_url)
-         *     are omitted. If values are absent they fall back to empty strings so the
-         *     endpoint is always safe to call.
+         *     build is live. Only public-safe build identifiers are returned; source-repo
+         *     free text (git_branch, git_commit_message) and other non-public locals
+         *     (hostname, ci_job_url) are omitted. If values are absent they fall back to
+         *     empty strings so the endpoint is always safe to call.
          */
         get: operations["deployment_info_api_v1_deployment_get"];
         put?: never;
