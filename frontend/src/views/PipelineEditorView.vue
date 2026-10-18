@@ -566,6 +566,20 @@
             </button>
           </div>
         </div>
+        <!-- Folder-list load failure. In-flow directly beneath the toolbar —
+             never absolutely positioned and never inside the fixed-height
+             canvas, because a degraded breadcrumb must not replace the page
+             with pageError yet must still be visible. NOT breakpoint-gated: this
+             view renders no FolderTree, so a gate would hide the failure at
+             >=md — exactly where it occurs. The shared contract lives in
+             FolderListError.vue. -->
+        <FolderListError
+          v-if="folderError"
+          :message="folderError"
+          :on-retry="loadFolders"
+          class="mx-3 my-2"
+          :data-testid="'pipeline-editor-folder-error'"
+        />
         <!-- FAR-1816: transient success notice after a restore. A plain toast
              would be unmounted the moment the view navigates back to latest,
              so it lives here as a persistent-until-explicit status region
@@ -1913,6 +1927,7 @@ import { usePlanStore } from '../stores/planStore'
 
 import FormDialog from '../components/shared/FormDialog.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import FolderListError from '../components/pipelines/FolderListError.vue'
 import FlowControls from '../components/shared/FlowControls.vue'
 import PipelineSnapshotTimeline from '../components/pipeline/PipelineSnapshotTimeline.vue'
 import PipelineVersionChip from '../components/pipeline/PipelineVersionChip.vue'
@@ -1925,6 +1940,7 @@ import { formatDateShort } from '../lib/formatDate'
 import { CANVAS_EDGE_STROKE } from '../constants/canvas'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/schema'
+import { invalidFolderListMessage, isFolderList, type FolderItem } from '../lib/api/folders'
 import type { LocationQueryRaw } from 'vue-router'
 import { useApi } from '../composables/useApi'
 import { useCurrentUser } from '../composables/useCurrentUser'
@@ -2656,7 +2672,11 @@ async function saveRetryPolicy() {
   }
 }
 
-const folders = ref<any[]>([])
+const folders = ref<FolderItem[]>([])
+// A failed folder-list load must be visible AND retryable: the folder
+// breadcrumb is derived from this list, so a silent failure leaves it wrong or
+// absent with no way to recover short of a reload. Mirrors PipelineListView.
+const folderError = ref<string | null>(null)
 const linkedLifecycleMaps = ref<any[]>([])
 
 const folderPath = computed(() => {
@@ -4157,14 +4177,29 @@ async function triggerRun() {
 }
 
 async function loadFolders() {
+  folderError.value = null
   try {
-    const response = await get<any[] | { items?: any[] }>('/api/v1/pipeline-folders')
-    // Accept both the raw-array and { items: [...] } response shapes — the
-    // folderPath computed iterates folders.value unconditionally, so a
-    // non-array payload would throw on every render (see loadLifecycleMaps
-    // for the same tolerance pattern).
-    folders.value = Array.isArray(response) ? response : (response.items ?? [])
+    const response = await get<FolderItem[]>('/api/v1/pipeline-folders')
+    // Guard before assigning: `get<FolderItem[]>` is an unchecked cast and
+    // useApi returns `undefined as T` on a 204, while the folderPath computed
+    // iterates folders.value (and dereferences f.id / f.parent_id) on every
+    // render — a non-array or a bad element would throw on every render.
+    // /api/v1/pipeline-folders returns a BARE array (backend `list[FolderResponse]`,
+    // generated contract `FolderResponse[]`), so the `{ items: [...] }` envelope
+    // this view used to tolerate was copy-paste from loadLifecycleMaps (which
+    // genuinely returns an envelope) and is rejected here like every other
+    // folder consumer. Do NOT coerce to []: that hides a real contract
+    // violation. A bad shape is logged loudly AND surfaced as a retryable
+    // alert below the toolbar (pageError replaces the whole page, which a
+    // degraded breadcrumb must not do), and the previous list is left intact.
+    if (!isFolderList(response)) {
+      console.error(invalidFolderListMessage('/api/v1/pipeline-folders', response))
+      folderError.value = t('views.PipelineEditorView.invalid_folder_list_response')
+      return
+    }
+    folders.value = response
   } catch (e) {
+    folderError.value = formatApiError(e)
     console.warn('Failed to load folders', e)
   }
 }

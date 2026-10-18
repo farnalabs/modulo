@@ -153,6 +153,80 @@ describe('FolderTree loading, error and empty states', () => {
   })
 })
 
+describe('FolderTree list-shape guard', () => {
+  it('renders the error state instead of crashing when the list response is undefined', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      // useApi returns `undefined as T` on a 204 — the generic is an unchecked
+      // cast, so this is a real shape the component can receive.
+      getMock.mockResolvedValue(undefined)
+      const wrapper = mountTree()
+      await flushPromises()
+      expect(wrapper.text()).toContain('The server returned an invalid folder list.')
+      expect(wrapper.text()).not.toContain('No folders yet')
+      expect(wrapper.findAll('[data-testid^="folder-tree-item-"]')).toHaveLength(0)
+      expect(consoleError).toHaveBeenCalled()
+      expect(String(consoleError.mock.calls[0][0])).toContain('/api/v1/pipeline-folders')
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it('renders the error state instead of crashing when the list response is a non-array object', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      // A contract change (e.g. a paginated envelope) can return an object where
+      // an array is expected; it must not be coerced to [] or allowed to crash.
+      getMock.mockResolvedValue({ items: [] })
+      const wrapper = mountTree()
+      await flushPromises()
+      expect(wrapper.text()).toContain('The server returned an invalid folder list.')
+      expect(wrapper.text()).not.toContain('No folders yet')
+      expect(wrapper.findAll('[data-testid^="folder-tree-item-"]')).toHaveLength(0)
+      expect(consoleError).toHaveBeenCalled()
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it('renders the error state instead of crashing when an element is null', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      // A container-only Array.isArray check passes [null]; the element is then
+      // dereferenced (f.parent_id, a.name) on every render and throws. The guard
+      // must validate elements, not just the container.
+      getMock.mockResolvedValue([null])
+      const wrapper = mountTree()
+      await flushPromises()
+      expect(wrapper.text()).toContain('The server returned an invalid folder list.')
+      expect(wrapper.text()).not.toContain('No folders yet')
+      expect(wrapper.findAll('[data-testid^="folder-tree-item-"]')).toHaveLength(0)
+      expect(consoleError).toHaveBeenCalled()
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it('renders the error state instead of crashing when an element is missing required fields', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      // [{}] is an object but has no string name/id. Pre-fix it was accepted
+      // and rendered as a ghost row (folder-tree-item-undefined) rather than
+      // throwing: Array.prototype.sort only invokes its comparator for arrays
+      // of two or more elements, so a single-element array never calls
+      // .localeCompare. The guard must still reject it.
+      getMock.mockResolvedValue([{}])
+      const wrapper = mountTree()
+      await flushPromises()
+      expect(wrapper.text()).toContain('The server returned an invalid folder list.')
+      expect(wrapper.findAll('[data-testid^="folder-tree-item-"]')).toHaveLength(0)
+      expect(consoleError).toHaveBeenCalled()
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+})
+
 describe('FolderTree rendering and selection', () => {
   it('renders nested folders in depth order with indentation and counts', async () => {
     const wrapper = await mountTreeWithFolders(
@@ -408,5 +482,69 @@ describe('FolderTree alphabetical sorting', () => {
       'folder-tree-item-c2',
       'folder-tree-item-c3',
     ])
+  })
+})
+
+describe('FolderTree stale rows under an error', () => {
+  it('removes stale interactive rows when a later refresh resolves a bad shape', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      // First load is good and renders one row.
+      getMock.mockResolvedValueOnce([makeFolder()])
+      const wrapper = mountTree()
+      await flushPromises()
+      expect(wrapper.findAll('[data-testid^="folder-tree-item-"]')).toHaveLength(1)
+
+      // A later reload (here: the delete flow's refresh) returns a bad shape.
+      // The earlier good load left the row in allFolders, but it must NOT stay
+      // rendered — the row is clickable (role=button) and a drop target that
+      // emits a real move-pipeline mutation, so a stale row under an error is
+      // both misleading and actionable.
+      getMock.mockResolvedValueOnce([null])
+      const deleteBtn = wrapper.findAll('button').find(b => b.attributes('aria-label') === 'Delete Folder')
+      await deleteBtn!.trigger('click')
+      const dialog = wrapper.find('[data-testid="dialog-stub"]')
+      await dialog.findAll('button').find(b => b.text() === 'Delete')!.trigger('click')
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('The server returned an invalid folder list.')
+      expect(wrapper.findAll('[data-testid^="folder-tree-item-"]')).toHaveLength(0)
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it('re-fetches and restores rows when the error-state retry is clicked', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      getMock.mockResolvedValueOnce([makeFolder()])
+      const wrapper = mountTree()
+      await flushPromises()
+
+      // Bad refresh -> the error state renders with a retry control.
+      getMock.mockResolvedValueOnce([null])
+      const deleteBtn = wrapper.findAll('button').find(b => b.attributes('aria-label') === 'Delete Folder')
+      await deleteBtn!.trigger('click')
+      const dialog = wrapper.find('[data-testid="dialog-stub"]')
+      await dialog.findAll('button').find(b => b.text() === 'Delete')!.trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[data-testid="folder-tree-error"]').exists()).toBe(true)
+      expect(
+        wrapper.find('[data-testid="folder-tree-error"] [data-testid="error-alert-retry"]').exists(),
+      ).toBe(true)
+
+      // Retry resolves a good list -> the error clears and rows return.
+      getMock.mockResolvedValueOnce([makeFolder({ id: 'f2', name: 'Restored' })])
+      await wrapper
+        .find('[data-testid="folder-tree-error"] [data-testid="error-alert-retry"]')
+        .trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="folder-tree-error"]').exists()).toBe(false)
+      expect(wrapper.findAll('[data-testid^="folder-tree-item-"]')).toHaveLength(1)
+      expect(wrapper.text()).toContain('Restored')
+    } finally {
+      consoleError.mockRestore()
+    }
   })
 })

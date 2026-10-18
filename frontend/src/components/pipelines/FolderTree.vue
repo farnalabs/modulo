@@ -42,15 +42,23 @@
         <div v-for="i in 3" :key="i" class="h-5 w-3/4 bg-muted rounded animate-pulse" />
       </div>
 
-      <div v-else-if="error" class="px-3 py-2 text-sm text-destructive">
-        {{ error }}
+      <div v-else-if="error" class="px-3 py-2">
+        <!-- Folder-list load failure inside the `hidden md:flex` sidebar, so it
+             is already >=md only (no `gated`). Failure is recoverable: retry
+             re-fetches. The shared contract lives in FolderListError.vue. -->
+        <FolderListError
+          :message="error"
+          :on-retry="loadFolders"
+          compact
+          :data-testid="'folder-tree-error'"
+        />
       </div>
 
       <div v-else-if="flatTree.length === 0" class="px-3 py-4 text-xs text-muted-foreground text-center">
         No folders yet
       </div>
 
-      <div>
+      <div v-else>
         <div
           v-for="element in flatTree"
           :key="element.folder.id"
@@ -181,19 +189,13 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useApi } from '@/composables/useApi'
 import { formatApiError } from '../../lib/api/formatError'
+import { invalidFolderListMessage, isFolderList, type FolderItem } from '../../lib/api/folders'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import Select from '../shared/AppSelect.vue'
 import ErrorAlert from '../shared/ErrorAlert.vue'
-
-interface FolderItem {
-  id: string
-  organisation_id: string
-  name: string
-  parent_id: string | null
-  sort_order: number
-}
+import FolderListError from './FolderListError.vue'
 
 interface FlatTreeItem {
   folder: FolderItem
@@ -311,7 +313,21 @@ async function loadFolders() {
   loading.value = true
   error.value = null
   try {
-    allFolders.value = await get<FolderItem[]>(apiBase.value)
+    const response = await get<FolderItem[]>(apiBase.value)
+    // The `get<FolderItem[]>` generic is an unchecked compile-time cast — at
+    // runtime useApi returns whatever body arrived, and `undefined as T` on a
+    // 204. The computeds below call .filter()/iterate this value on every
+    // render (and dereference each element's parent_id/name), so a bad shape —
+    // non-array container OR a non-folder element — would crash the whole view
+    // with an unhandled render error. isFolderList validates the container and
+    // every element; surface a bad shape as the error state instead of silently
+    // coercing it to [] (which would hide a real contract violation).
+    if (!isFolderList(response)) {
+      console.error(invalidFolderListMessage(apiBase.value, response))
+      error.value = t('components.pipelines.FolderTree.invalid_list_response')
+      return
+    }
+    allFolders.value = response
   } catch (e: unknown) {
     error.value = formatApiError(e)
   } finally {
