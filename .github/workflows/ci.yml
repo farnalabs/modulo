@@ -184,14 +184,18 @@ jobs:
         # and are ANCHORED to semgrep's own line prefixes, so a finding that
         # merely quotes the phrase (pipelines.py contains the literal
         # "dispatch.wait_timeout error") cannot false-trigger. We deliberately
-        # do NOT fail on "Partially analyzed": the pinned semgrep 1.79.0 does not
-        # fully parse real tree files — backend/src/modulo/api/mcp_server.py:2111
-        # (the PEP 695 generic `async def _run_db_shell[**TOOL_SHELL_P]`, a
-        # genuine 1-line skip), backend/src/modulo/core/pipeline_engine/
-        # node_runner.py:3567 (its `match` statement) and several frontend
-        # .spec.ts files — so matching it would make CI permanently red. The
-        # HITL graph-write guard's region at mcp_server.py:4014 is nonetheless
-        # analyzed despite the line-2111 skip (mutation-verified, FAR-1933).
+        # do NOT fail on "Partially analyzed". On THIS step's invocation
+        # (uv run --project backend --no-sync semgrep) the one reproducible
+        # per-file instance is backend/src/modulo/api/mcp_server.py:2111 (the
+        # PEP 695 generic `async def _run_db_shell[**TOOL_SHELL_P]`, a genuine
+        # 1-line skip), so matching it would make CI permanently red. Semgrep's
+        # aggregate partial-analysis summary is not stable across invocations /
+        # entry points — an earlier scan through a different semgrep binary
+        # named node_runner.py and several frontend .spec.ts files, which
+        # per-file scans with this invocation did not reproduce. The per-file
+        # scan is the authoritative signal. The HITL graph-write guard's region
+        # at mcp_server.py:4014 is nonetheless analyzed despite the line-2111
+        # skip (mutation-verified, FAR-1933).
         # `--error` semantics are unchanged: the step still propagates semgrep's
         # own exit code for real findings.
         working-directory: .
