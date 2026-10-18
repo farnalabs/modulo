@@ -11,9 +11,27 @@ covers the public catalogues (``/api/v1/manifest``,
 ``/api/v1/connectors/types``, ``/api/v1/registry/*``) plus the liveness probe.
 """
 
+from collections.abc import Generator
+
+import pytest
 from fastapi.testclient import TestClient
 
 from modulo.api.main import app
+
+
+@pytest.fixture(autouse=True)
+def _no_dependency_overrides() -> Generator[None, None, None]:
+    """Guarantee the client is genuinely anonymous.
+
+    Another test module's overrides must not be able to make these requests
+    authenticated, or the test passes for the wrong reason. Save and clear
+    the app's overrides for the duration of each test, then restore them.
+    """
+    saved = dict(app.dependency_overrides)
+    app.dependency_overrides.clear()
+    yield
+    app.dependency_overrides.clear()
+    app.dependency_overrides.update(saved)
 
 
 def _anonymous_client() -> TestClient:
