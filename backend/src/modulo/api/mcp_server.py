@@ -6366,7 +6366,10 @@ async def _check_human_only_gate(
     # The org-wide escape hatch (default ON). Read only when the credential IS
     # human-linked: for a not-linked credential the verdict is already deny and
     # the flag is irrelevant.
-    human_linked_authority = linkage.linked and await resolve_mcp_human_linked_hitl_authority(org_id=org_id)
+    human_linked_authority = linkage.linked and await resolve_mcp_human_linked_hitl_authority(
+        org_id=org_id,
+        flag_name="mcp_human_linked_hitl_authority",
+    )
     # deliver_manual injects the run's output directly (ADR 035) and stays
     # browser-only in step 1 — never honoured over MCP, even for a human-linked
     # credential.
