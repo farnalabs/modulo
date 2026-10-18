@@ -464,6 +464,50 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
   })
 
   it.each([
+    ['sha256', 'a'.repeat(64)],
+    ['sha384', 'b'.repeat(96)],
+    ['sha512', 'c'.repeat(128)],
+  ])('accepts a digest pinned with the %s algorithm as pinned', async (algorithm, hex) => {
+    // go-digest registers sha256/sha384/sha512 and the Docker daemon parses all
+    // three (`docker image inspect 'ghcr.io/acme/agent@sha512:<128 hex>'` →
+    // "No such image", i.e. parsed), so each must classify as pinned — not
+    // invalid — with the algorithm's exact lowercase-hex length.
+    const wrapper = await mountWithProvider('runner_docker')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(`ghcr.io/acme/agent@${algorithm}:${hex}`)
+    await nextTick()
+
+    const pinned = wrapper.find('[data-testid="envprofile-form-image-pinned"]')
+    expect(pinned.exists()).toBe(true)
+    expect(pinned.text()).toContain('Pinned by digest')
+    expect(wrapper.find('[data-testid="envprofile-form-image-invalid"]').exists()).toBe(false)
+  })
+
+  it.each([
+    ['sha256 with a 63-character digest', `sha256:${'a'.repeat(63)}`],
+    ['sha256 with a 65-character digest', `sha256:${'a'.repeat(65)}`],
+    ['sha384 with a 64-character digest (a sha256-length hex)', `sha384:${'a'.repeat(64)}`],
+    ['sha512 with a 96-character digest (a sha384-length hex)', `sha512:${'a'.repeat(96)}`],
+    ['uppercase hex in a sha384 digest', `sha384:${'A'.repeat(96)}`],
+    ['md5, an algorithm the daemon does not support', `md5:${'a'.repeat(32)}`],
+    ['blake3, an algorithm the daemon does not support', `blake3:${'a'.repeat(64)}`],
+  ])('reports a digest with %s as invalid, never pinned or mutable', async (_label, digest) => {
+    // The hex length is fixed per algorithm and the algorithm must be one
+    // go-digest registers; a wrong-length digest is not valid and the daemon
+    // rejects an unsupported algorithm (`md5`, `blake3`, …) with "unsupported
+    // digest algorithm", so neither may render the green pinned assurance.
+    const wrapper = await mountWithProvider('runner_docker')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(`ghcr.io/acme/agent@${digest}`)
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(false)
+    const invalid = wrapper.find('[data-testid="envprofile-form-image-invalid"]')
+    expect(invalid.exists()).toBe(true)
+    expect(invalid.attributes('role')).toBe('status')
+    expect(invalid.text()).toContain('not a valid image reference')
+  })
+
+  it.each([
     ['uppercase digest hex', `ghcr.io/acme/agent@sha256:${'A'.repeat(64)}`],
     ['uppercase repository path component', `ghcr.io/ACME/agent@sha256:${'a'.repeat(64)}`],
     ['embedded space', `ghcr.io/acme/agent @sha256:${'a'.repeat(64)}`],

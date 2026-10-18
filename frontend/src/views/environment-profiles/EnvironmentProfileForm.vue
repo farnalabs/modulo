@@ -304,9 +304,11 @@ const providerTypeOptions = computed(() => [
 ])
 
 // FAR-1779 / ADR 059 §4: digest pinning is docs-advised, never enforced. A
-// `name[@tag]@sha256:<64 lowercase hex>` ref is immutable and visibly
-// acknowledged; a valid ref that is not digest-pinned (a mutable tag, or no
-// tag at all — an implicit `:latest`) warns without blocking the save; and a
+// `name[@tag]@<algorithm>:<lowercase hex>` ref is immutable and visibly
+// acknowledged — the algorithm is one go-digest registers (sha256, sha384 or
+// sha512) with its fixed hex length; a valid ref that is not digest-pinned (a
+// mutable tag, or no tag at all — an implicit `:latest`) warns without blocking
+// the save; and a
 // ref that is NOT a valid Docker reference is reported as `invalid` with its
 // own accurate copy — never as a mutable tag, which would tell the operator to
 // "pin it" when their ref cannot even be pulled.
@@ -319,13 +321,16 @@ const providerTypeOptions = computed(() => [
 // single `.` or `_`, a double `__`, or a run of one-or-more `-` (so `my--repo`,
 // `my---repo` and `my__repo` are valid, while `my..repo`, `my._repo` and
 // `my-_repo` are not), plus an optional mixed-case tag and an optional
-// `@sha256:<64 lowercase hex>` digest. No whitespace anywhere. Docker accepts a
+// `@<algorithm>:<lowercase hex>` digest, where the algorithm is one go-digest
+// registers (sha256 with 64 hex, sha384 with 96, sha512 with 128) — any other
+// algorithm (`md5`, `blake3`, …) is rejected by the daemon as an unsupported
+// digest algorithm. No whitespace anywhere. Docker accepts a
 // mixed-case REGISTRY host (`GHCR.io/library/alpine`,
 // `MyRegistry.local/team/agent:tag`, `[::1]:5000/repo`) — only the repository
 // path is case-sensitive — so the two parts are validated with different
 // grammars. The whole reference is validated, not just its digest suffix:
 // Docker / containerd reject an uppercase repository path, uppercase digest hex
-// and an embedded space, so a ref that merely ENDS in `@sha256:<hex>` must
+// and an embedded space, so a ref that merely ENDS in `@<algorithm>:<hex>` must
 // never be announced as pinned. The repository path is also length-capped at
 // 255 characters (the daemon rejects a longer name outright), so an over-length
 // ref is likewise `invalid` rather than pinned. A Hub name with NO namespace is
@@ -350,7 +355,24 @@ const IPV6_ADDRESS = '\\[[a-fA-F0-9:]+\\]'
 const REGISTRY_HOST_RE = new RegExp(`^(?:${DOMAIN_NAME}|${IPV6_ADDRESS})(?::[0-9]+)?$`)
 const IMAGE_PATH_RE = new RegExp(`^${IMAGE_COMPONENT}(?:/${IMAGE_COMPONENT})*$`)
 const IMAGE_TAG_RE = new RegExp(`^${IMAGE_TAG}$`)
-const IMAGE_DIGEST_RE = /^sha256:[0-9a-f]{64}$/
+// go-digest (opencontainers/go-digest) registers exactly these three hash
+// algorithms, and the Docker daemon accepts all of them — `docker image inspect
+// 'ghcr.io/acme/agent@sha512:<128 hex>'` parses (`No such image`). The hex is
+// lowercase and the length is fixed per algorithm; any other algorithm (`md5`,
+// `blake3`, …) is rejected by the daemon as an unsupported digest algorithm, so
+// it must classify as `invalid` rather than pinned.
+const DIGEST_HEX_LENGTHS: Readonly<Record<string, number>> = {
+  sha256: 64,
+  sha384: 96,
+  sha512: 128,
+}
+const IMAGE_DIGEST_RE = /^(sha256|sha384|sha512):([0-9a-f]+)$/
+
+function isValidImageDigest(digest: string): boolean {
+  const match = IMAGE_DIGEST_RE.exec(digest)
+  if (match === null) return false
+  return match[2].length === DIGEST_HEX_LENGTHS[match[1]]
+}
 const DIGEST_PINNABLE_PROVIDERS = ['runner_docker', 'kubernetes']
 
 // Docker's own rule (distribution/reference `splitDockerDomain`): with a `/`
@@ -405,7 +427,7 @@ function isValidDockerImageRef(ref: string): boolean {
   let name = ref
   const at = ref.lastIndexOf('@')
   if (at !== -1) {
-    if (!IMAGE_DIGEST_RE.test(ref.slice(at + 1))) return false
+    if (!isValidImageDigest(ref.slice(at + 1))) return false
     name = ref.slice(0, at)
   }
   const lastSlash = name.lastIndexOf('/')
