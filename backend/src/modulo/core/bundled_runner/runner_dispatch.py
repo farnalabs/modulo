@@ -1289,6 +1289,7 @@ async def _read_and_validate_output(
         SandboxNodeFailedError,
         ScriptFailedError,
         ScriptInvalidOutputError,
+        _RawOutputMarkerRequest,
         _retain_raw_output_marker,
         _validate_against_schema,
     )
@@ -1310,18 +1311,20 @@ async def _read_and_validate_output(
             parse_error = "output.json is empty or JSON null"
         await _retain_raw_output_marker(
             session_factory,
-            run_id=run_id,
-            org_id_raw=org_id,
-            node_id=node_id,
-            attempt_key=attempt_key,
-            summary="Bundled Runner agent produced no parseable output.json — raw output retained",
-            source=_combine_raw_outputs(raw_output_str, agent_stdout_raw),
-            parse_error=parse_error,
-            exit_code=exit_code,
-            stdout_length=len(agent_stdout_raw),
-            stderr_length=len(agent_stderr_raw),
-            delivery_sentinel=delivery_sentinel,
-            max_artifact_bytes=stdout_cap,
+            _RawOutputMarkerRequest(
+                run_id=run_id,
+                org_id_raw=org_id,
+                node_id=node_id,
+                attempt_key=attempt_key,
+                summary="Bundled Runner agent produced no parseable output.json — raw output retained",
+                source=_combine_raw_outputs(raw_output_str, agent_stdout_raw),
+                parse_error=parse_error,
+                exit_code=exit_code,
+                stdout_length=len(agent_stdout_raw),
+                stderr_length=len(agent_stderr_raw),
+                delivery_sentinel=delivery_sentinel,
+                max_artifact_bytes=stdout_cap,
+            ),
         )
         if output_json is None:
             if sandbox_mode == "script" and script_lease_claimed:
@@ -1347,18 +1350,22 @@ async def _read_and_validate_output(
                 ) from None
             await _retain_raw_output_marker(
                 session_factory,
-                run_id=run_id,
-                org_id_raw=org_id,
-                node_id=node_id,
-                attempt_key=attempt_key,
-                summary=("Bundled Runner agent output failed declared output schema validation — raw output retained"),
-                source=_combine_raw_outputs(raw_output_str, agent_stdout_raw),
-                parse_error=str(schema_exc),
-                exit_code=exit_code,
-                stdout_length=len(agent_stdout_raw),
-                stderr_length=len(agent_stderr_raw),
-                delivery_sentinel=delivery_sentinel,
-                max_artifact_bytes=stdout_cap,
+                _RawOutputMarkerRequest(
+                    run_id=run_id,
+                    org_id_raw=org_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                    summary=(
+                        "Bundled Runner agent output failed declared output schema validation — raw output retained"
+                    ),
+                    source=_combine_raw_outputs(raw_output_str, agent_stdout_raw),
+                    parse_error=str(schema_exc),
+                    exit_code=exit_code,
+                    stdout_length=len(agent_stdout_raw),
+                    stderr_length=len(agent_stderr_raw),
+                    delivery_sentinel=delivery_sentinel,
+                    max_artifact_bytes=stdout_cap,
+                ),
             )
             raise SandboxNodeFailedError(
                 _schema_failure_message(node_id=node_id, schema_exc=str(schema_exc)),
@@ -1454,26 +1461,28 @@ async def _maybe_retain_delivery_sentinel(
     stdout_cap: int,
 ) -> None:
     """Best-effort retention of the delivery-sentinel idempotency marker."""
-    from modulo.core.pipeline_engine.node_runner import _retain_raw_output_marker
+    from modulo.core.pipeline_engine.node_runner import _RawOutputMarkerRequest, _retain_raw_output_marker
 
     if not (delivery_sentinel and _source_contains_sentinel(agent_stdout_raw, delivery_sentinel)):
         return
     try:
         await _retain_raw_output_marker(
             session_factory,
-            run_id=run_id,
-            org_id_raw=org_id,
-            node_id=node_id,
-            attempt_key=attempt_key,
-            summary="Bundled Runner completed with delivery sentinel observed (idempotency gate)",
-            source=agent_stdout_raw,
-            parse_error="",
-            exit_code=exit_code,
-            stdout_length=stdout_len,
-            stderr_length=stderr_len,
-            delivery_sentinel=delivery_sentinel,
-            status=status,
-            max_artifact_bytes=stdout_cap,
+            _RawOutputMarkerRequest(
+                run_id=run_id,
+                org_id_raw=org_id,
+                node_id=node_id,
+                attempt_key=attempt_key,
+                summary="Bundled Runner completed with delivery sentinel observed (idempotency gate)",
+                source=agent_stdout_raw,
+                parse_error="",
+                exit_code=exit_code,
+                stdout_length=stdout_len,
+                stderr_length=stderr_len,
+                delivery_sentinel=delivery_sentinel,
+                status=status,
+                max_artifact_bytes=stdout_cap,
+            ),
         )
     except Exception:
         _log.exception(

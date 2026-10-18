@@ -34,6 +34,7 @@ from modulo.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError,
     _marker_delivery_done_for_node,
     _persist_raw_output_marker,
+    _RawOutputMarkerRequest,
     _retain_raw_output_marker,
     make_sandbox_agent_fn,
 )
@@ -746,17 +747,19 @@ async def _retain(row: _FakeRunRow, *, source: str, sentinel: str | None, summar
 
     await _retain_raw_output_marker(
         _factory,
-        run_id="run-1",
-        org_id_raw=_ORG_ID,
-        node_id="n1",
-        attempt_key=_ATTEMPT_KEY,
-        summary=summary,
-        source=source,
-        parse_error="boom",
-        exit_code=1,
-        stdout_length=len(source),
-        stderr_length=0,
-        delivery_sentinel=sentinel,
+        _RawOutputMarkerRequest(
+            run_id="run-1",
+            org_id_raw=_ORG_ID,
+            node_id="n1",
+            attempt_key=_ATTEMPT_KEY,
+            summary=summary,
+            source=source,
+            parse_error="boom",
+            exit_code=1,
+            stdout_length=len(source),
+            stderr_length=0,
+            delivery_sentinel=sentinel,
+        ),
     )
 
 

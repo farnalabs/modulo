@@ -2184,26 +2184,37 @@ def _marker_delivery_done_for_node(markers: Any, run_id: Any, node_id: str) -> b
     return False
 
 
+@dataclass(frozen=True)
+class _RawOutputMarkerRequest:
+    """Everything ``_retain_raw_output_marker`` needs to build + persist a marker.
+
+    Grouped so the retention helper takes a single immutable request rather than
+    a long parameter list (Sonar S107); the field set/order mirrors the marker
+    builder's inputs and the shared fields the persist leg consumes.
+    """
+
+    run_id: str
+    org_id_raw: Any
+    node_id: str
+    attempt_key: str | None
+    summary: str
+    source: Any
+    parse_error: str
+    exit_code: int
+    stdout_length: int
+    stderr_length: int
+    delivery_sentinel: str | None = None
+    status: str = "failed"
+    index: int | str | None = None
+    payload: str | bytes | None = None
+    max_artifact_bytes: int = _MAX_ARTIFACT_LOG
+    stdout_artifact: dict[str, Any] | None = None
+    stderr_artifact: dict[str, Any] | None = None
+
+
 async def _retain_raw_output_marker(
     session_factory: Callable[..., Any] | None,
-    *,
-    run_id: str,
-    org_id_raw: Any,
-    node_id: str,
-    attempt_key: str | None,
-    summary: str,
-    source: Any,
-    parse_error: str,
-    exit_code: int,
-    stdout_length: int,
-    stderr_length: int,
-    delivery_sentinel: str | None = None,
-    status: str = "failed",
-    index: int | str | None = None,
-    payload: str | bytes | None = None,
-    max_artifact_bytes: int = _MAX_ARTIFACT_LOG,
-    stdout_artifact: dict[str, Any] | None = None,
-    stderr_artifact: dict[str, Any] | None = None,
+    request: _RawOutputMarkerRequest,
 ) -> None:
     """Single builder + persist for a raw-output retention marker (FAR-188).
 
@@ -2241,35 +2252,35 @@ async def _retain_raw_output_marker(
     separate fan-out item / content-edit payload here; the node_id already
     encodes ``parent+index`` for fan-out children).
     """
-    text = _normalize_marker_text(source)
+    text = _normalize_marker_text(request.source)
     marker: dict[str, Any] = {
         "_modulo_marker": True,
-        "status": status,
-        "summary": summary,
-        "raw_output": _redact_raw_output(text)[:max_artifact_bytes],
-        "parse_error": parse_error,
+        "status": request.status,
+        "summary": request.summary,
+        "raw_output": _redact_raw_output(text)[: request.max_artifact_bytes],
+        "parse_error": request.parse_error,
         "pr_url": _extract_pr_url(text),
-        "exit_code": exit_code,
-        "stdout_length": stdout_length,
-        "stderr_length": stderr_length,
-        "attempt_key": attempt_key,
-        "node_id": node_id,
+        "exit_code": request.exit_code,
+        "stdout_length": request.stdout_length,
+        "stderr_length": request.stderr_length,
+        "attempt_key": request.attempt_key,
+        "node_id": request.node_id,
     }
-    if _source_contains_delivery_sentinel(text, delivery_sentinel):
+    if _source_contains_delivery_sentinel(text, request.delivery_sentinel):
         marker["delivery_done"] = True
-    if stdout_artifact is not None:
-        marker["stdout_artifact"] = stdout_artifact
-    if stderr_artifact is not None:
-        marker["stderr_artifact"] = stderr_artifact
+    if request.stdout_artifact is not None:
+        marker["stdout_artifact"] = request.stdout_artifact
+    if request.stderr_artifact is not None:
+        marker["stderr_artifact"] = request.stderr_artifact
     await _persist_raw_output_marker(
         session_factory,
-        run_id=run_id,
-        org_id_raw=org_id_raw,
-        node_id=node_id,
-        attempt_key=attempt_key,
+        run_id=request.run_id,
+        org_id_raw=request.org_id_raw,
+        node_id=request.node_id,
+        attempt_key=request.attempt_key,
         marker=marker,
-        index=index,
-        payload=payload,
+        index=request.index,
+        payload=request.payload,
     )
 
 
@@ -8608,6 +8619,20 @@ class _WatchdogWallClock:
     start_time: float
 
 
+@dataclass(frozen=True)
+class _WatchdogWatchConfig:
+    """Opt-in stall-detector watch inputs (FAR-306).
+
+    Bundled so ``_SandboxWatchdog.__init__`` takes ONE parameter for the
+    loosely-related watch inputs (log path / globs / stdout-delta ratio) rather
+    than three.
+    """
+
+    log_path: str | None
+    globs: list[str]
+    percentage_delta: float | None
+
+
 class _SandboxWatchdog:
     """Per-run sandbox watchdog + live-streaming state (FAR-310 chunk 2b-2)."""
 
@@ -8618,11 +8643,9 @@ class _SandboxWatchdog:
         stall: _StallDetector,
         node_id: str,
         run_id: str,
-        watch_log_path: str | None,
-        watch_globs: list[str],
+        watch: _WatchdogWatchConfig,
         resource_limits: dict[str, Any] | None,
         sandbox_mode: str,
-        stdout_percentage_delta: float | None,
         stream_broker: RunEventBroker | None,
         drained_chunks: list[str],
         wall_clock: _WatchdogWallClock,
@@ -8653,11 +8676,11 @@ class _SandboxWatchdog:
         self._stall = stall
         self._node_id = node_id
         self._run_id = run_id
-        self._watch_log_path = watch_log_path
-        self._watch_globs = watch_globs
+        self._watch_log_path = watch.log_path
+        self._watch_globs = watch.globs
         self._resource_limits = resource_limits
         self._sandbox_mode = sandbox_mode
-        self._stdout_ratio = stdout_percentage_delta
+        self._stdout_ratio = watch.percentage_delta
         self._stream_broker = stream_broker
         self._stream_enabled = isinstance(stream_broker, RunEventBroker)
         self._drained_chunks = drained_chunks
@@ -11324,11 +11347,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 stall=_stall,
                 node_id=node_id,
                 run_id=run_id,
-                watch_log_path=watch_log_path,
-                watch_globs=watch_globs,
+                watch=_WatchdogWatchConfig(
+                    log_path=watch_log_path,
+                    globs=watch_globs,
+                    percentage_delta=stdout_percentage_delta,
+                ),
                 resource_limits=resource_limits,
                 sandbox_mode=sandbox_mode,
-                stdout_percentage_delta=stdout_percentage_delta,
                 stream_broker=_stream_broker,
                 drained_chunks=_drained_chunks,
                 wall_clock=_WatchdogWallClock(wallclock_budget_seconds, start_time),
@@ -11858,23 +11883,25 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 )
             await _retain_raw_output_marker(
                 session_factory,
-                run_id=run_id,
-                org_id_raw=org_id,
-                node_id=node_id,
-                attempt_key=attempt_key,
-                summary=(
-                    "Sandbox agent command stalled/timed out — raw stdout retained "
-                    "(bounded to the node's retention cap)"
+                _RawOutputMarkerRequest(
+                    run_id=run_id,
+                    org_id_raw=org_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                    summary=(
+                        "Sandbox agent command stalled/timed out — raw stdout retained "
+                        "(bounded to the node's retention cap)"
+                    ),
+                    source=_stall_source,
+                    parse_error=command_error,
+                    exit_code=exit_code,
+                    stdout_length=_stdout_len,
+                    stderr_length=_stderr_len,
+                    delivery_sentinel=delivery_sentinel,
+                    max_artifact_bytes=_stdout_cap,
+                    stdout_artifact=_stall_stdout_artifact,
+                    stderr_artifact=_stall_stderr_artifact,
                 ),
-                source=_stall_source,
-                parse_error=command_error,
-                exit_code=exit_code,
-                stdout_length=_stdout_len,
-                stderr_length=_stderr_len,
-                delivery_sentinel=delivery_sentinel,
-                max_artifact_bytes=_stdout_cap,
-                stdout_artifact=_stall_stdout_artifact,
-                stderr_artifact=_stall_stderr_artifact,
             )
             if watchdog.budget_killed:
                 # FAR-296 Phase 3b-3: the platform-side resource-cap killer
@@ -11952,18 +11979,20 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 _parse_error = output_read_error or "output.json is empty or JSON null"
                 await _retain_raw_output_marker(
                     session_factory,
-                    run_id=run_id,
-                    org_id_raw=org_id,
-                    node_id=node_id,
-                    attempt_key=attempt_key,
-                    summary="Sandbox agent produced no parseable output.json — raw output retained",
-                    source=_raw_combined,
-                    parse_error=_parse_error,
-                    exit_code=exit_code,
-                    stdout_length=_stdout_len,
-                    stderr_length=_stderr_len,
-                    delivery_sentinel=delivery_sentinel,
-                    max_artifact_bytes=_stdout_cap,
+                    _RawOutputMarkerRequest(
+                        run_id=run_id,
+                        org_id_raw=org_id,
+                        node_id=node_id,
+                        attempt_key=attempt_key,
+                        summary="Sandbox agent produced no parseable output.json — raw output retained",
+                        source=_raw_combined,
+                        parse_error=_parse_error,
+                        exit_code=exit_code,
+                        stdout_length=_stdout_len,
+                        stderr_length=_stderr_len,
+                        delivery_sentinel=delivery_sentinel,
+                        max_artifact_bytes=_stdout_cap,
+                    ),
                 )
                 # FAR-197: surface WHY the agent failed. The captured
                 # stdout/stderr tails plus the E2B log tail (the only place
@@ -12014,18 +12043,20 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # fall through to the shared shaping path below.
             await _retain_raw_output_marker(
                 session_factory,
-                run_id=run_id,
-                org_id_raw=org_id,
-                node_id=node_id,
-                attempt_key=attempt_key,
-                summary="Sandbox agent output.json parsed to a non-dict value — raw output retained",
-                source=_raw_combined,
-                parse_error=f"output.json parsed to non-dict type {type(output_json).__name__}",
-                exit_code=exit_code,
-                stdout_length=_stdout_len,
-                stderr_length=_stderr_len,
-                delivery_sentinel=delivery_sentinel,
-                max_artifact_bytes=_stdout_cap,
+                _RawOutputMarkerRequest(
+                    run_id=run_id,
+                    org_id_raw=org_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                    summary="Sandbox agent output.json parsed to a non-dict value — raw output retained",
+                    source=_raw_combined,
+                    parse_error=f"output.json parsed to non-dict type {type(output_json).__name__}",
+                    exit_code=exit_code,
+                    stdout_length=_stdout_len,
+                    stderr_length=_stderr_len,
+                    delivery_sentinel=delivery_sentinel,
+                    max_artifact_bytes=_stdout_cap,
+                ),
             )
 
         if sandbox_mode == "script":
@@ -12163,18 +12194,20 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 _schema_raw_parts = [p for p in (_normalize_marker_text(raw_output), agent_stdout_raw) if p]
                 await _retain_raw_output_marker(
                     session_factory,
-                    run_id=run_id,
-                    org_id_raw=org_id,
-                    node_id=node_id,
-                    attempt_key=attempt_key,
-                    summary=("Sandbox agent output failed declared output schema validation — raw output retained"),
-                    source="\n".join(_schema_raw_parts),
-                    parse_error=str(_schema_exc),
-                    exit_code=exit_code,
-                    stdout_length=_stdout_len,
-                    stderr_length=_stderr_len,
-                    delivery_sentinel=delivery_sentinel,
-                    max_artifact_bytes=_stdout_cap,
+                    _RawOutputMarkerRequest(
+                        run_id=run_id,
+                        org_id_raw=org_id,
+                        node_id=node_id,
+                        attempt_key=attempt_key,
+                        summary=("Sandbox agent output failed declared output schema validation — raw output retained"),
+                        source="\n".join(_schema_raw_parts),
+                        parse_error=str(_schema_exc),
+                        exit_code=exit_code,
+                        stdout_length=_stdout_len,
+                        stderr_length=_stderr_len,
+                        delivery_sentinel=delivery_sentinel,
+                        max_artifact_bytes=_stdout_cap,
+                    ),
                 )
                 from modulo.settings import get_settings
 
@@ -12264,19 +12297,21 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             try:
                 await _retain_raw_output_marker(
                     session_factory,
-                    run_id=run_id,
-                    org_id_raw=org_id,
-                    node_id=node_id,
-                    attempt_key=attempt_key,
-                    summary="Sandbox agent completed with delivery sentinel observed (idempotency gate)",
-                    source=agent_stdout_raw,
-                    parse_error="",
-                    exit_code=exit_code,
-                    stdout_length=_stdout_len,
-                    stderr_length=_stderr_len,
-                    delivery_sentinel=delivery_sentinel,
-                    status=status,
-                    max_artifact_bytes=_stdout_cap,
+                    _RawOutputMarkerRequest(
+                        run_id=run_id,
+                        org_id_raw=org_id,
+                        node_id=node_id,
+                        attempt_key=attempt_key,
+                        summary="Sandbox agent completed with delivery sentinel observed (idempotency gate)",
+                        source=agent_stdout_raw,
+                        parse_error="",
+                        exit_code=exit_code,
+                        stdout_length=_stdout_len,
+                        stderr_length=_stderr_len,
+                        delivery_sentinel=delivery_sentinel,
+                        status=status,
+                        max_artifact_bytes=_stdout_cap,
+                    ),
                 )
             except asyncio.CancelledError:
                 raise

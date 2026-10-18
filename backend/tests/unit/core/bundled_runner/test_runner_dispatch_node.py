@@ -403,8 +403,8 @@ async def test_run_schema_validation_failure_llm_raises_retryable(patch_node_run
 
     retained = {}
 
-    async def _retain(*a, **k):
-        retained.update(k)
+    async def _retain(_session_factory, request):
+        retained["request"] = request
 
     monkeypatch.setattr(nrm, "_validate_against_schema", _bad_schema, raising=False)
     monkeypatch.setattr(nrm, "_retain_raw_output_marker", _retain, raising=False)
@@ -413,8 +413,8 @@ async def test_run_schema_validation_failure_llm_raises_retryable(patch_node_run
     with pytest.raises(_FakeError) as excinfo:
         await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(_FakeProvider()))
     assert "schema validation" in str(excinfo.value)
-    assert retained.get("parse_error") == "schema mismatch"
-    assert '{"summary":"ok"}' in retained.get("source", "")
+    assert retained["request"].parse_error == "schema mismatch"
+    assert '{"summary":"ok"}' in retained["request"].source
 
 
 async def test_run_schema_validation_failure_llm_retryable_real_schema(patch_node_runner, monkeypatch) -> None:
@@ -457,8 +457,8 @@ async def test_run_delivery_sentinel_retained(patch_node_runner, monkeypatch) ->
 
     retained = {}
 
-    async def _retain(*a, **k):
-        retained.update(k)
+    async def _retain(_session_factory, request):
+        retained["request"] = request
 
     monkeypatch.setattr(nrm, "_retain_raw_output_marker", _retain, raising=False)
     monkeypatch.setattr(runner_dispatch, "_read_file_via_exec", AsyncMock(return_value='{"summary":"done"}'))
@@ -467,7 +467,7 @@ async def test_run_delivery_sentinel_retained(patch_node_runner, monkeypatch) ->
         _config(sandbox_mode="llm", delivery_sentinel="DONE"),
         _route(_FakeProvider(stream_chunks=[("stdout", "DONE observed")], stream_exit=0)),
     )
-    assert retained.get("delivery_sentinel") == "DONE"
+    assert retained["request"].delivery_sentinel == "DONE"
 
 
 async def test_run_stream_error_raises_retryable(patch_node_runner, monkeypatch) -> None:
@@ -588,15 +588,15 @@ async def test_run_full_retention_caps_raw_output_marker(patch_node_runner, monk
 
     retained = {}
 
-    async def _retain(*a, **k):
-        retained.update(k)
+    async def _retain(_session_factory, request):
+        retained["request"] = request
 
     monkeypatch.setattr(nrm, "_retain_raw_output_marker", _retain, raising=False)
     monkeypatch.setattr(runner_dispatch, "_read_file_via_exec", AsyncMock(return_value="not json {"))
     cfg = _config(node_def={"capability_scope": {}, "stdout_retention_mode": "full", "stdout_max_bytes": 2048})
     with pytest.raises(_FakeError):
         await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(_FakeProvider()))
-    assert retained.get("max_artifact_bytes") == 2048
+    assert retained["request"].max_artifact_bytes == 2048
 
 
 async def test_run_stdout_org_ceiling_clamps_cap(patch_node_runner, monkeypatch) -> None:
