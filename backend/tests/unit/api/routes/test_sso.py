@@ -8,21 +8,24 @@ fake session; the callback is mocked to perform a ``session.execute()`` (standin
 for the JIT-provisioning queries) so the pre-fix handler fails loudly.
 """
 
+import urllib.parse
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import Request
+from fastapi import Request, Response
 from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.exception_handlers import sso_error_redirect
 from modulo.api.routes.sso import (
+    _OIDC_FLOW_COOKIE,
     _resolve_org_slug_for_error,
     _resolve_saml_for_route,
     oidc_callback,
+    oidc_login,
 )
-from modulo.auth.sso import SsoCallbackError, SsoProvisioningDeniedError
+from modulo.auth.sso import SsoCallbackError, SsoProvisioningDeniedError, sign_state, verify_state
 from modulo.settings import Settings
 
 _VALID_32 = "a" * 32
@@ -75,14 +78,46 @@ class _BeginCtx:
         return False
 
 
-def _make_callback_request() -> Request:
+def _flow_cookie_value(
+    raw_state: str,
+    nonce: str = "test-nonce",
+    code_verifier: str = "test-verifier",
+) -> str:
+    """Build the signed correlation-cookie value a real login redirect sets."""
+    return sign_state(f"{raw_state}:{nonce}:{code_verifier}", _VALID_32)
+
+
+_UNSET = object()
+
+
+def _make_callback_request(
+    *,
+    raw_state: str = "xyz",
+    state: str | None = None,
+    cookie_raw_state: object = _UNSET,
+) -> Request:
+    """Build a callback request carrying a validly-signed state.
+
+    FAR-1982: the callback requires the signed state AND the login-time flow
+    cookie (``__Host-modulo_oidc_flow``) whose raw_state matches it. The default
+    request carries both, as a real browser would. Pass ``cookie_raw_state=None``
+    for no cookie, a different string for a mismatched one, or ``state`` to
+    override the query value verbatim.
+    """
+    bound_raw_state = raw_state if cookie_raw_state is _UNSET else cookie_raw_state
+    headers: list[tuple[bytes, bytes]] = []
+    if isinstance(bound_raw_state, str):
+        cookie_value = _flow_cookie_value(bound_raw_state)
+        headers.append((b"cookie", f"{_OIDC_FLOW_COOKIE}={cookie_value}".encode()))
+    state_value = state if state is not None else sign_state(f"google:{raw_state}", _VALID_32)
+    query_string = urllib.parse.urlencode({"code": "abc", "state": state_value}).encode()
     return Request(
         {
             "type": "http",
             "method": "GET",
             "path": "/api/v1/auth/oidc/google/callback",
-            "query_string": b"code=abc&state=google:xyz",
-            "headers": [],
+            "query_string": query_string,
+            "headers": headers,
             "scheme": "http",
             "server": ("test", 80),
             "client": ("test", 123),
@@ -110,7 +145,14 @@ async def test_oidc_callback_runs_db_work_inside_begin() -> None:
         system_session: object,
         app_session: object,
         redirect_uri: str,
+        *,
+        expected_nonce: str,
+        code_verifier: str,
     ) -> dict:
+        # FAR-1982: the route must thread the flow-cookie nonce/verifier through
+        # to the exchange/verify step, not just require the cookie to exist.
+        assert expected_nonce == "test-nonce"
+        assert code_verifier == "test-verifier"
         assert isinstance(app_session, _AutobeginAwareSession)
         await app_session.execute(MagicMock())
         return {"access_token": "at", "refresh_token": "rt"}
@@ -346,3 +388,178 @@ async def test_resolve_org_slug_for_error_read_failure_is_swallowed() -> None:
             raise RuntimeError("session unusable")
 
     assert await _resolve_org_slug_for_error(_BoomSession(), uuid.uuid4()) is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-1982: nonce + PKCE are carried across the IdP round-trip and bound
+# ---------------------------------------------------------------------------
+# The login leg mints a per-request nonce (ID-token binding) and PKCE verifier
+# (code-exchange binding) and stores them in a short-lived, host-only
+# correlation cookie. The callback REQUIRES that cookie to match the returned
+# state and threads the nonce/verifier into the exchange — fail closed, before
+# any token exchange. These tests pin that wiring.
+
+
+def _set_cookie_header(response: Response, name: str) -> str | None:
+    for header in response.headers.getlist("set-cookie"):
+        if header.startswith(f"{name}="):
+            return header
+    return None
+
+
+async def test_oidc_login_sets_host_prefixed_flow_cookie() -> None:
+    """The login redirect stores nonce + PKCE verifier in a __Host- cookie."""
+    settings = _make_settings()
+    fake = _AutobeginAwareSession()
+    raw_state = str(uuid.uuid4())
+    nonce = "nonce-abc"
+    code_verifier = "verifier-xyz"
+
+    async def fake_authorize_url(*_args: object, **_kwargs: object) -> tuple[str, str, str, str]:
+        return "https://idp.example.com/authorize?state=x", raw_state, nonce, code_verifier
+
+    with patch("modulo.api.routes.sso.oidc_get_authorize_url", new=fake_authorize_url):
+        resp = await oidc_login(
+            provider="google",
+            _request=_make_request(),
+            _=None,
+            settings=settings,
+            session=fake,
+            system_session=fake,
+        )
+
+    assert resp.status_code == 307
+    header = _set_cookie_header(resp, _OIDC_FLOW_COOKIE)
+    assert header is not None
+    lowered = header.lower()
+    assert "httponly" in lowered
+    # __Host- requires Secure + Path=/; LAX is required for the cross-site
+    # IdP -> callback top-level GET navigation.
+    assert "secure" in lowered
+    assert "samesite=lax" in lowered
+    assert "path=/" in lowered
+    assert _OIDC_FLOW_COOKIE.startswith("__Host-")
+    value = header.split(";", 1)[0].split("=", 1)[1]
+    assert verify_state(value, settings.secret_key) == f"{raw_state}:{nonce}:{code_verifier}"
+
+
+async def test_oidc_callback_rejects_state_without_flow_cookie() -> None:
+    """A validly signed state with NO flow cookie must be rejected (fail closed)."""
+    settings = _make_settings()
+    fake = _AutobeginAwareSession()
+    request = _make_callback_request(cookie_raw_state=None)
+    process = AsyncMock()
+
+    with (
+        patch("modulo.api.routes.sso.oidc_process_callback", new=process),
+        pytest.raises(SsoCallbackError) as exc_info,
+    ):
+        await oidc_callback(
+            provider="google",
+            request=request,
+            _=None,
+            settings=settings,
+            session=fake,
+            system_session=fake,
+        )
+
+    assert exc_info.value.code == "auth_failed"
+    process.assert_not_awaited()
+
+
+async def test_oidc_callback_rejects_flow_cookie_bound_to_another_state() -> None:
+    """A cookie minted for a DIFFERENT flow must not satisfy the binding."""
+    settings = _make_settings()
+    fake = _AutobeginAwareSession()
+    request = _make_callback_request(raw_state="victim", cookie_raw_state="attacker")
+    process = AsyncMock()
+
+    with (
+        patch("modulo.api.routes.sso.oidc_process_callback", new=process),
+        pytest.raises(SsoCallbackError) as exc_info,
+    ):
+        await oidc_callback(
+            provider="google",
+            request=request,
+            _=None,
+            settings=settings,
+            session=fake,
+            system_session=fake,
+        )
+
+    assert exc_info.value.code == "auth_failed"
+    process.assert_not_awaited()
+
+
+async def test_oidc_callback_rejects_tampered_state_even_with_a_cookie() -> None:
+    """A state failing its HMAC check is rejected regardless of the cookie."""
+    settings = _make_settings()
+    fake = _AutobeginAwareSession()
+    request = _make_callback_request(state="google:xyz:deadbeef", cookie_raw_state="xyz")
+    process = AsyncMock()
+
+    with (
+        patch("modulo.api.routes.sso.oidc_process_callback", new=process),
+        pytest.raises(SsoCallbackError) as exc_info,
+    ):
+        await oidc_callback(
+            provider="google",
+            request=request,
+            _=None,
+            settings=settings,
+            session=fake,
+            system_session=fake,
+        )
+
+    assert exc_info.value.code == "auth_failed"
+    process.assert_not_awaited()
+
+
+async def test_oidc_callback_clears_flow_cookie_on_success() -> None:
+    """A completed flow must expire the correlation cookie."""
+    settings = _make_settings()
+    fake = _AutobeginAwareSession()
+    request = _make_callback_request()
+
+    async def fake_process_callback(*_args: object, **_kwargs: object) -> dict[str, str]:
+        return {"access_token": "at", "refresh_token": "rt"}
+
+    with patch("modulo.api.routes.sso.oidc_process_callback", new=fake_process_callback):
+        resp = await oidc_callback(
+            provider="google",
+            request=request,
+            _=None,
+            settings=settings,
+            session=fake,
+            system_session=fake,
+        )
+
+    assert resp.status_code == 307
+    header = _set_cookie_header(resp, _OIDC_FLOW_COOKIE)
+    assert header is not None
+    assert "max-age=0" in header.lower()
+
+
+async def test_oidc_callback_threads_nonce_and_verifier_from_the_cookie() -> None:
+    """The callback hands the cookie's nonce/verifier to the exchange step."""
+    settings = _make_settings()
+    fake = _AutobeginAwareSession()
+    request = _make_callback_request(raw_state="flow-state")
+    captured: dict[str, str] = {}
+
+    async def capturing_callback(*_args: object, **kwargs: object) -> dict[str, str]:
+        captured["nonce"] = str(kwargs["expected_nonce"])
+        captured["verifier"] = str(kwargs["code_verifier"])
+        return {"access_token": "at", "refresh_token": "rt"}
+
+    with patch("modulo.api.routes.sso.oidc_process_callback", new=capturing_callback):
+        await oidc_callback(
+            provider="google",
+            request=request,
+            _=None,
+            settings=settings,
+            session=fake,
+            system_session=fake,
+        )
+
+    assert captured == {"nonce": "test-nonce", "verifier": "test-verifier"}

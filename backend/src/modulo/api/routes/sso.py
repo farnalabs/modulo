@@ -1,5 +1,6 @@
 """SSO routes: OIDC and SAML 2.0 login flows."""
 
+import hmac
 import logging
 import secrets
 import uuid
@@ -38,7 +39,9 @@ from modulo.auth.sso import (
     saml_get_auth_url,
     saml_process_response,
     sign_saml_relay_state,
+    sign_state,
     verify_saml_relay_state,
+    verify_state,
 )
 from modulo.core.audit_coverage import audited_system, bind_audit_org
 from modulo.core.license import verify_license_key
@@ -342,6 +345,109 @@ async def sso_providers(
 # OIDC
 # ---------------------------------------------------------------------------
 
+# FAR-1982: the login leg mints a per-request ``nonce`` (which the IdP binds
+# into the ID token) and a PKCE ``code_verifier`` (whose S256 challenge travels
+# in the authorize URL), and must carry both across the IdP round-trip to the
+# callback. They are stored in a short-lived, httpOnly correlation cookie.
+#
+# Cookie-prefix decision (FAR-1982): the ``__Host-`` prefix is ADOPTED. A
+# host-only cookie resists a sibling subdomain swapping in a ``Domain=`` cookie
+# of the same name *while it exists*, but a subdomain sibling can set one when
+# the victim has none (cookie tossing) and shadow the correlation value. The
+# ``__Host-`` prefix closes that: the browser refuses to attach a ``Domain=``
+# attribute to a ``__Host-``-named cookie (and requires ``Secure`` + ``Path=/``),
+# so the only cookie that can satisfy this name is the host-only one this
+# server set. The cost is exactly those mandatory attributes:
+#   * ``Secure`` unconditionally — over plain HTTP a browser stores the cookie
+#     only for a potentially-trustworthy origin (``localhost``/``127.0.0.1``).
+#     A dev instance reached at a non-localhost HTTP host (LAN IP, custom
+#     /etc/hosts name) therefore loses the cookie and the login fails CLOSED.
+#     The repo's docker-compose local dev serves ``http://localhost:8000``
+#     (potentially-trustworthy) and sets no ``DEBUG``, so the documented local
+#     path is unaffected; ``Settings.debug`` (env ``DEBUG``) still relaxes
+#     ``Secure`` on the post-login auth cookies, so a debug instance on a
+#     non-localhost HTTP host keeps its session but cannot complete SSO login.
+#   * ``Path=/`` — the cookie is sent on every same-host request for its 10-min
+#     lifetime rather than only under ``/api/v1/auth/oidc``; a minor scope cost.
+# SameSite is LAX (NOT Strict as the post-login auth cookies use): the
+# IdP -> callback leg is a CROSS-SITE top-level GET navigation, on which Strict
+# cookies are withheld, so a Strict cookie would break every legitimate login.
+_OIDC_FLOW_COOKIE = "__Host-modulo_oidc_flow"
+_OIDC_FLOW_TTL_SECONDS = 600  # 10 minutes, matching the SAML RelayState TTL
+
+
+def _set_oidc_flow_cookie(
+    response: Response,
+    raw_state: str,
+    nonce: str,
+    code_verifier: str,
+    settings: Settings,
+) -> None:
+    """Bind the request nonce + PKCE verifier to this browser (FAR-1982).
+
+    The value is the HMAC-signed ``raw_state:nonce:code_verifier`` payload, so a
+    cookie not written by this server cannot satisfy the callback's binding
+    check. The signed ``state`` proves non-forgery; this cookie proves the
+    callback belongs to THIS browser and carries the secrets the exchange needs.
+    """
+    response.set_cookie(
+        key=_OIDC_FLOW_COOKIE,
+        value=sign_state(f"{raw_state}:{nonce}:{code_verifier}", settings.secret_key),
+        httponly=True,
+        samesite="lax",
+        secure=True,
+        max_age=_OIDC_FLOW_TTL_SECONDS,
+        path="/",
+    )
+
+
+def _clear_oidc_flow_cookie(response: Response, settings: Settings) -> None:
+    """Expire the correlation cookie once the flow has completed."""
+    response.set_cookie(
+        key=_OIDC_FLOW_COOKIE,
+        value="",
+        httponly=True,
+        samesite="lax",
+        secure=True,
+        max_age=0,
+        path="/",
+    )
+
+
+def _read_oidc_flow_cookie(request: Request, state: str, settings: Settings) -> tuple[str, str] | None:
+    """Return ``(nonce, code_verifier)`` for a bound flow, else ``None``.
+
+    Fail closed on every malformed input: an absent/unverifiable cookie, a
+    tampered state, a cookie whose ``raw_state`` does not match the returned
+    state, or an empty nonce/verifier all return ``None`` and the caller raises
+    an auth failure before any token exchange (FAR-1982).
+    """
+    state_data = verify_state(state, settings.secret_key)
+    if not state_data or ":" not in state_data:
+        return None
+    # ``state`` is ``<provider_id>:<raw_state>`` (see oidc_get_authorize_url);
+    # raw_state is a UUID, so rsplit isolates it even if a provider_id slug ever
+    # contained a colon.
+    raw_state = state_data.rsplit(":", 1)[-1]
+
+    cookie_value = request.cookies.get(_OIDC_FLOW_COOKIE)
+    if not cookie_value:
+        return None
+    cookie_data = verify_state(cookie_value, settings.secret_key)
+    if not cookie_data:
+        return None
+    # ``raw_state``/``nonce``/``code_verifier`` all use URL-safe alphabets that
+    # exclude ``:``, so a 2-split is unambiguous.
+    parts = cookie_data.split(":", 2)
+    if len(parts) != 3:
+        return None
+    cookie_raw_state, nonce, code_verifier = parts
+    if not hmac.compare_digest(cookie_raw_state, raw_state):
+        return None
+    if not nonce or not code_verifier:
+        return None
+    return nonce, code_verifier
+
 
 @router.get("/oidc/{provider}/login")
 @handle_db_errors("sso.oidc_login")
@@ -359,11 +465,17 @@ async def oidc_login(
 
     try:
         async with session.begin():
-            auth_url, _ = await oidc_get_authorize_url(provider, settings, redirect_uri, system_session, session)
+            auth_url, raw_state, nonce, code_verifier = await oidc_get_authorize_url(
+                provider, settings, redirect_uri, system_session, session
+            )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
 
-    return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
+    response = Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
+    # FAR-1982: carry the nonce + PKCE verifier to the callback in a
+    # browser-bound, tossing-resistant cookie.
+    _set_oidc_flow_cookie(response, raw_state, nonce, code_verifier, settings)
+    return response
 
 
 @router.get("/oidc/{provider}/callback")
@@ -388,17 +500,39 @@ async def oidc_callback(
         # page with an error code rather than rendering a raw JSON page.
         raise SsoCallbackError(SSO_ERROR_AUTH_FAILED)
 
+    # FAR-1982: the signed state only proves non-forgery — the nonce and PKCE
+    # verifier that bind the ID token and the code exchange to THIS browser ride
+    # in the login-time correlation cookie. Require it (fail closed) so a
+    # callback replayed from another browser cannot complete.
+    flow = _read_oidc_flow_cookie(request, state, settings)
+    if flow is None:
+        _log.warning("sso.oidc_flow_unbound provider=%s", sanitise_log_value(provider))
+        raise SsoCallbackError(SSO_ERROR_AUTH_FAILED)
+    expected_nonce, code_verifier = flow
+
     public_url = get_public_url(settings).rstrip("/")
     redirect_uri = f"{public_url}/api/v1/auth/oidc/{provider}/callback"
 
     tokens = await _run_sso_callback_process(
         session,
-        partial(oidc_process_callback, code, state, settings, system_session, session, redirect_uri),
+        partial(
+            oidc_process_callback,
+            code,
+            state,
+            settings,
+            system_session,
+            session,
+            redirect_uri,
+            expected_nonce=expected_nonce,
+            code_verifier=code_verifier,
+        ),
         log_context=f"OIDC callback for provider {sanitise_log_value(provider)}",
         contract_tag="sso.oidc_callback",
     )
 
-    return _redirect_to_frontend(tokens, settings)
+    response = _redirect_to_frontend(tokens, settings)
+    _clear_oidc_flow_cookie(response, settings)
+    return response
 
 
 # ---------------------------------------------------------------------------
