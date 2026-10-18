@@ -55,6 +55,28 @@ export default {
     }
   },
   "views": {
+    "EvidenceView": {
+      "title": "Evidence",
+      "subtitle": "Inspect the evidence recorded for a run. Fields are filtered on the server for your role before this view receives them.",
+      "run_id": "Run ID",
+      "run_id_placeholder": "Paste a run ID",
+      "node_id": "Node ID (optional)",
+      "key": "Evidence key (optional)",
+      "load": "Load evidence",
+      "loading": "Loading evidence...",
+      "run_id_required": "Enter a run ID to load its evidence.",
+      "load_failed": "Could not load evidence (HTTP {status}).",
+      "prompt_title": "Choose a run",
+      "prompt_description": "Enter a run ID above and select Load evidence to view that run's recorded evidence.",
+      "empty_title": "No evidence",
+      "empty_description": "No evidence rows were recorded for this run.",
+      "row_count": "{count} row | {count} rows",
+      "redaction_note": "Redacted fields are shown as [REDACTED] by the server for your role; the values below are exactly what the server returned.",
+      "col_key": "Key",
+      "col_subject": "Subject",
+      "col_observed": "Observed at",
+      "col_value": "Value"
+    },
     "OAuthConsentView": {
       "authorize_access": "Authorize access",
       "consent_description": "Approve this application to access your organisation's MCP tools.",
@@ -393,7 +415,8 @@ export default {
       "visibility_team": "Team",
       "pipeline_name_placeholder": "Pipeline name",
       "delete_confirm": "Are you sure? This permanently deletes the pipeline and all its runs.",
-      "failed_to_load_folders": "Failed to load folders: {error}"
+      "failed_to_load_folders": "Failed to load folders: {error}",
+      "invalid_folder_list_response": "The server returned an invalid folder list."
     },
     "SettingsRateLimitsView": {
       "rate_limits": "Rate Limits",
@@ -593,6 +616,7 @@ export default {
       "enter_your_password": "Enter your password",
       "modulo": "Modulo",
       "or_continue_with": "or continue with",
+      "saml": "SAML",
       "sign_in_to_org": "Sign in to {orgName}",
       "sign_in_with": "Sign in with {provider}",
       "used_last_time": "Used last time"
@@ -627,7 +651,12 @@ export default {
       "apply_filters": "Apply Filters",
       "failed_to_dismiss_notification": "Failed to dismiss notification",
       "loading_notifications": "Loading notifications",
-      "request_timed_out": "Notifications request timed out after 30s"
+      "request_timed_out": "Notifications request timed out after 30s",
+      "dismiss_all": "Dismiss all",
+      "dismissing_all": "Dismissing…",
+      "dismissed_all_status": "All notifications dismissed for you",
+      "failed_to_dismiss_all": "Failed to dismiss all notifications",
+      "nothing_to_dismiss": "Nothing to dismiss"
     },
     "EnvironmentProfileForm": {
       "back_to_profiles": "Back to environment profiles",
@@ -1354,6 +1383,7 @@ export default {
       "empty_run_warning": "No input provided — this pipeline will run with an empty input payload. Are you sure?",
       "failed_to_load_graph": "Failed to load graph: {error}",
       "failed_to_load_pipeline": "Failed to load pipeline: {error}",
+      "invalid_folder_list_response": "The server returned an invalid folder list.",
       "failed_to_archive_pipeline": "Failed to archive pipeline: {error}",
       "failed_to_unarchive_pipeline": "Failed to unarchive pipeline: {error}",
       "failed_to_update_max_duration": "Failed to update max duration: {error}",
@@ -3297,6 +3327,7 @@ export default {
     "SchemaListView": {
       "deprecate_schema": "Deprecate schema",
       "failed_to_load_folders": "Failed to load folders:",
+      "invalid_folder_list_response": "The server returned an invalid folder list.",
       "deprecating": "Deprecating...",
       "manage_schemas_and_deprecate_outdated_definitions": "Manage schemas and deprecate outdated definitions",
       "no_schemas_found": "No schemas found",
@@ -3996,6 +4027,7 @@ export default {
       "FolderTree": {
         "parent_folder": "Parent folder",
         "no_parent_root_level": "No parent (root level)",
+        "invalid_list_response": "The server returned an invalid folder list.",
         "delete_confirm_empty": "Are you sure you want to delete this folder?",
         "delete_confirm_with_items": "Are you sure you want to delete this folder? {itemNoun} will be moved to {uncategorisedLabel}."
       }
@@ -4328,6 +4360,7 @@ export default {
       "item_rate_limits": "Rate Limits",
       "item_hitl_review": "HITL Review",
       "item_observability": "Observability",
+      "item_evidence": "Evidence",
       "item_email_settings": "Email",
       "item_error_forwarders": "Error Forwarders",
       "item_settings_guardrails": "Guardrails",
@@ -4429,10 +4462,11 @@ export default {
     },
     "NotificationDropdown": {
       "title": "Notifications",
-      "mark_all_read": "Mark all as read",
-      "marking_all_read": "Marking…",
-      "marked_all_read_status": "All notifications marked as read",
-      "failed_to_mark_all_read": "Failed to mark all as read",
+      "dismiss_all": "Dismiss all",
+      "dismissing_all": "Dismissing…",
+      "dismissed_all_status": "All notifications dismissed for you",
+      "failed_to_dismiss_all": "Failed to dismiss all notifications",
+      "nothing_to_dismiss": "Nothing to dismiss",
       "failed_to_load": "Couldn't load notifications",
       "retry": "Retry",
       "no_notifications": "No notifications",
@@ -4457,7 +4491,12 @@ export default {
       "no_notifications": "No notifications",
       "page_x_of_y": "Page {current} of {total}",
       "previous_page": "Previous page",
-      "next_page": "Next page"
+      "next_page": "Next page",
+      "dismiss_all": "Dismiss all",
+      "dismissing_all": "Dismissing…",
+      "dismissed_all_status": "All notifications dismissed for you",
+      "failed_to_dismiss_all": "Failed to dismiss all notifications",
+      "nothing_to_dismiss": "Nothing to dismiss"
     },
     "PipelineSnapshotTimeline": {
       "version_timeline": "Version timeline",
@@ -4585,6 +4624,7 @@ export default {
   },
   "nav": {
     "analytics": "Analytics",
+    "evidence": "Evidence",
     "environment-profiles": "Environment Profiles",
     "parameter-schemas": "Parameter Schemas",
     "eval_proposals": "Proposals",

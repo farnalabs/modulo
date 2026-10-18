@@ -16,6 +16,9 @@ from modulo.core.hitl_manager.overdue_warning import (
 )
 from modulo.db.models.hitl_claim import HitlClaim
 
+from .conftest import mock_begin as _mock_begin
+from .conftest import session_factory as _mock_session_factory
+
 _ORG = uuid.uuid4()
 
 
@@ -148,20 +151,6 @@ async def test_returns_empty_when_query_fails() -> None:
 # ---------------------------------------------------------------------------
 # dispatch_overdue_notifications
 # ---------------------------------------------------------------------------
-
-
-def _mock_begin(session: AsyncMock) -> None:
-    begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin = MagicMock(return_value=begin_cm)
-
-
-def _mock_session_factory(session: AsyncMock) -> MagicMock:
-    cm = AsyncMock()
-    cm.__aenter__ = AsyncMock(return_value=session)
-    cm.__aexit__ = AsyncMock(return_value=False)
-    return MagicMock(return_value=cm)
 
 
 def _overdue_row(

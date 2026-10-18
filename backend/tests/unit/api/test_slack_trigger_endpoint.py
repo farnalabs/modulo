@@ -560,6 +560,78 @@ def test_app_mention_trigger_busy_records_delivery_then_acks(client: TestClient)
     assert len(kwargs["payload_hash"]) == 64
 
 
+def test_app_mention_rate_limited_records_event_then_returns_429(client: TestClient) -> None:
+    """FAR-1916 slack mirror: a delivery refused by the pipeline's rate limit
+    returns 429 AND the ``rate_limited`` TriggerEvent + raw payload survive the
+    refusal.
+
+    The engine writes the ``rate_limited`` event INSIDE the main transaction at
+    both raise sites, so that write rolls back with the unwound transaction —
+    a rate-limited app_mention was refused but invisible. The route now
+    re-records the refusal (with the raw body) in a FRESH transaction AFTER the
+    unwind, exactly like the webhook receive path. This test runs the REAL
+    post-unwind recorder against a fake fresh session and asserts the persisted
+    event + payload rows — not merely that a helper was called."""
+    from modulo.db.models.trigger_event import TriggerEvent
+    from modulo.db.models.webhook import WebhookPayload
+
+    fresh_session = AsyncMock()
+    fresh_begin_cm = AsyncMock()
+    fresh_begin_cm.__aenter__ = AsyncMock(return_value=None)
+    fresh_begin_cm.__aexit__ = AsyncMock(return_value=False)
+    fresh_session.begin = MagicMock(return_value=fresh_begin_cm)
+    fresh_session.in_transaction = MagicMock(return_value=True)
+    fresh_session.add = MagicMock()
+
+    @asynccontextmanager
+    async def _fresh_factory() -> AsyncGenerator[AsyncMock, None]:
+        yield fresh_session
+
+    body = _event_body()
+    ts = str(int(time.time()))
+    with (
+        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.slack.set_rls_org"),
+        patch("modulo.api.trigger_busy.async_sessionmaker", return_value=_fresh_factory),
+        patch("modulo.api.trigger_busy.get_or_create_engine", return_value=MagicMock()),
+        patch("modulo.api.trigger_busy.get_settings", return_value=_make_settings()),
+        patch("modulo.api.trigger_busy.set_rls_org", new_callable=AsyncMock),
+        # FAR-1287: the route snapshots the pipeline before dispatch, and the
+        # snapshot's advisory lock is resolved onto a dedicated engine.
+        patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=_lock_engine_stub()),
+    ):
+        m.side_effect = PipelineRateLimitError(uuid.uuid4(), "k", 3, 60)
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/slack",
+            content=body,
+            headers={**_headers(ts, body), "Content-Type": "application/json"},
+        )
+
+    # The 429 contract is preserved exactly — detail, and NO Retry-After (the
+    # rate-limit refusal has never carried one).
+    assert resp.status_code == 429, resp.text
+    assert "rate limit exceeded" in resp.json()["detail"]
+    assert "Retry-After" not in resp.headers
+
+    # The refusal SURVIVED in the fresh transaction opened after the unwind:
+    # exactly one rate_limited TriggerEvent, scoped to trigger + org, carrying
+    # a hash that matches the stored raw payload row.
+    added = [call.args[0] for call in fresh_session.add.call_args_list]
+    events = [obj for obj in added if isinstance(obj, TriggerEvent)]
+    assert len(events) == 1
+    recorded_event = events[0]
+    assert recorded_event.validation_result == "rate_limited"
+    assert recorded_event.trigger_id == _TRIGGER_ID
+    assert recorded_event.organisation_id == _ORG_ID
+    payloads = [obj for obj in added if isinstance(obj, WebhookPayload)]
+    assert len(payloads) == 1
+    assert payloads[0].raw_body == body
+    assert recorded_event.raw_payload_hash == hashlib.sha256(body).hexdigest()
+    # The fresh transaction COMMITTED — begin() exited cleanly (no rollback).
+    assert fresh_begin_cm.__aexit__.await_count == 1
+    assert fresh_begin_cm.__aexit__.await_args.args == (None, None, None)
+
+
 def test_app_mention_archived_pipeline_returns_409(client: TestClient) -> None:
     """FAR-1528: an archived/soft-deleted pipeline refuses the delivery with
     409 at the create_run choke point - never a generic 500."""
@@ -680,6 +752,27 @@ async def test_ack_slack_busy_delivery_unresolvable_org_refuses_429() -> None:
     assert headers["Retry-After"] == "5"
 
 
+async def test_record_slack_rate_limit_refusal_unresolvable_org_skips_recording() -> None:
+    """Defensive arm (changed-lines coverage): a rate-limit refusal with no
+    resolved org has no tenant to scope the event to, so the recorder skips the
+    write (best-effort, logged) rather than persist an unscoped row or raise.
+
+    ``org_id`` is always resolved by the time the engine can raise
+    ``PipelineRateLimitError``; the route still raises its unchanged 429 after
+    the helper returns — this only pins the helper's defensive arm."""
+    from modulo.api.routes.slack import _record_slack_rate_limit_refusal
+
+    with patch("modulo.api.routes.slack._record_refused_delivery", new_callable=AsyncMock) as record:
+        await _record_slack_rate_limit_refusal(
+            trigger_id=_TRIGGER_ID,
+            org_id=None,
+            raw_body=b"{}",
+            raw_payload={},
+        )
+
+    record.assert_not_awaited()
+
+
 def _dispatch_trigger_mock() -> MagicMock:
     trigger = MagicMock()
     trigger.id = _TRIGGER_ID
@@ -700,7 +793,6 @@ def _dispatch_trigger_mock() -> MagicMock:
         (SlackEventTypeError("unsupported envelope"), 400),
         (SlackAppMentionParseError("malformed"), 400),
         (DuplicateWebhookError("hash"), 400),
-        (PipelineRateLimitError(uuid.uuid4(), None, 1, 60), 429),
     ],
     ids=[
         "trigger_not_found",
@@ -711,14 +803,20 @@ def _dispatch_trigger_mock() -> MagicMock:
         "slack_event_type",
         "slack_app_mention_parse",
         "duplicate_webhook",
-        "pipeline_rate_limit",
     ],
 )
 async def test_run_slack_pipeline_maps_dispatch_family_errors(side_effect: Exception, expected_status: int) -> None:
     """S3776 split invariant: ``_run_slack_pipeline`` maps the typed errors
     the engine can raise mid-dispatch to the SAME statuses the original
     single route ladder produced — the error→status mapping is unchanged by
-    the split (each arm a verbatim subsequence of the original ladder)."""
+    the split (each arm a verbatim subsequence of the original ladder).
+
+    ``PipelineRateLimitError`` is DELIBERATELY excluded from this mapping:
+    it must propagate out of the in-transaction helper so the route's outer
+    ladder can re-record the refusal post-unwind before raising the 429
+    (FAR-1916 slack mirror) — see
+    ``test_run_slack_pipeline_propagates_rate_limit_for_post_unwind_record``.
+    """
     from modulo.api.routes.slack import _run_slack_pipeline
 
     session = _make_trigger_session()
@@ -743,6 +841,43 @@ async def test_run_slack_pipeline_maps_dispatch_family_errors(side_effect: Excep
             )
 
     assert exc_info.value.status_code == expected_status
+
+
+async def test_run_slack_pipeline_propagates_rate_limit_for_post_unwind_record() -> None:
+    """FAR-1916 slack mirror: ``_run_slack_pipeline`` must PROPAGATE the
+    engine's ``PipelineRateLimitError`` (never convert it to a 429 inside the
+    transaction).
+
+    The engine writes its ``rate_limited`` TriggerEvent INSIDE the main
+    transaction; converting the refusal to an ``HTTPException`` here would
+    unwind that transaction with the event lost and put the route's outer
+    ladder out of reach, so the post-unwind re-record could never run. This
+    pins the propagation contract directly."""
+    from modulo.api.routes.slack import _run_slack_pipeline
+
+    session = _make_trigger_session()
+    rate_limit_error = PipelineRateLimitError(uuid.uuid4(), None, 1, 60)
+    with (
+        patch("modulo.api.routes.slack.ensure_triggers_resumable", new_callable=AsyncMock),
+        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock, side_effect=rate_limit_error),
+        patch("modulo.api.routes.slack.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+    ):
+        snap_mock = MagicMock()
+        snap_mock.id = uuid.uuid4()
+        snap.return_value = snap_mock
+        with pytest.raises(PipelineRateLimitError) as exc_info:
+            await _run_slack_pipeline(
+                session=session,
+                trigger=_dispatch_trigger_mock(),
+                trigger_id=_TRIGGER_ID,
+                org_id=_ORG_ID,
+                raw_body=b"{}",
+                raw_payload={},
+                slack_signature="v0=bad",
+                slack_timestamp="1",
+            )
+
+    assert exc_info.value is rate_limit_error
 
 
 async def test_verify_slack_delivery_maps_inactive_trigger_to_404() -> None:

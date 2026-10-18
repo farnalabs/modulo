@@ -12,6 +12,12 @@ from sqlalchemy.orm.attributes import set_committed_value
 from sqlalchemy.orm.util import identity_key
 
 from modulo.db.crud.base import apply_updates
+from modulo.db.models.evidence_redaction_rule import (
+    CATCH_ALL_REDACTED_FIELDS,
+    EVIDENCE_REDACTION_CATCH_ALL_PATTERN,
+    EVIDENCE_REDACTION_CATCH_ALL_ROLE,
+    EvidenceRedactionRule,
+)
 from modulo.db.models.organisation import (
     MODULO_REGISTRY_ORG_ID,
     SYSTEM_ORG_ID,
@@ -103,6 +109,37 @@ async def get_organisation(
     return result.scalar_one_or_none()
 
 
+async def _seed_evidence_redaction_catch_all(session: AsyncSession, org_id: uuid.UUID) -> None:
+    """Seed the MANDATORY §2.4 evidence-redaction catch-all rule for a new org.
+
+    Migration ``0320_evidence_redaction_rules`` seeds this row for orgs that
+    existed at migration time; orgs created AFTER it have no row, so the
+    redaction boundary would fall back to its in-code default (which is correct
+    today, but the row is the documented source of truth and the hook a future
+    admin UI edits). Idempotent: an org that already carries a live catch-all
+    row keeps it.
+    """
+    existing = await session.execute(
+        select(EvidenceRedactionRule.id).where(
+            EvidenceRedactionRule.organisation_id == org_id,
+            EvidenceRedactionRule.key_pattern == EVIDENCE_REDACTION_CATCH_ALL_PATTERN,
+            EvidenceRedactionRule.role == EVIDENCE_REDACTION_CATCH_ALL_ROLE,
+        )
+    )
+    if existing.first() is not None:
+        return
+    session.add(
+        EvidenceRedactionRule(
+            organisation_id=org_id,
+            key_pattern=EVIDENCE_REDACTION_CATCH_ALL_PATTERN,
+            role=EVIDENCE_REDACTION_CATCH_ALL_ROLE,
+            redacted_fields=list(CATCH_ALL_REDACTED_FIELDS),
+        )
+    )
+    await session.flush()
+    _log.info("seed.evidence_redaction_catch_all_created", extra={"org_id": str(org_id)})
+
+
 async def create_organisation(
     session: AsyncSession,
     *,
@@ -120,6 +157,14 @@ async def create_organisation(
     session.add(org)
     await session.flush()
     await session.refresh(org)
+
+    # Seed the mandatory evidence-redaction catch-all (§2.4). Runs for EVERY new
+    # org, independent of created_by, so a freshly-created org always carries the
+    # rule the migration seeds for pre-existing orgs.
+    try:
+        await _seed_evidence_redaction_catch_all(session, org.id)
+    except Exception:
+        _log.warning("seed.evidence_redaction_catch_all_failed_for_new_org", exc_info=True)
 
     # Seed system schemas for the new organisation.
     if created_by is not None:

@@ -10,6 +10,9 @@ import pytest
 
 from modulo.core.hitl_manager.expiry_job import ClaimExpiryJob, expire_stale_claims
 
+from .conftest import mock_begin as _mock_begin
+from .conftest import session_factory as _mock_session_factory
+
 _ORG = uuid.uuid4()
 _CLAIM_ID_1 = uuid.uuid4()
 _CLAIM_ID_2 = uuid.uuid4()
@@ -21,25 +24,13 @@ _GATE_A = "gate-a"
 _GATE_B = "gate-b"
 
 
-def _mock_session_factory(session: AsyncMock) -> MagicMock:
-    """Build a factory that returns the given session from both __aenter__ calls."""
-    cm = AsyncMock()
-    cm.__aenter__ = AsyncMock(return_value=session)
-    cm.__aexit__ = AsyncMock(return_value=False)
-
-    return MagicMock(return_value=cm)
-
-
 def _org_list_session() -> AsyncMock:
     """Session mock that returns a single org ID on execute."""
     session = AsyncMock()
     result = MagicMock()
     result.scalars.return_value = [_ORG]
     session.execute = AsyncMock(return_value=result)
-    begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin = MagicMock(return_value=begin_cm)
+    _mock_begin(session)
     return session
 
 

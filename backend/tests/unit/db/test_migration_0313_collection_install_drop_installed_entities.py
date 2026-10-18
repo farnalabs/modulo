@@ -3,12 +3,11 @@
 Structural contract (no Postgres needed — the bind is mocked):
 
 * **Revision chain** — 0313 revises ``0312_memberships_active_lookups``; the
-  migrations directory has exactly one head
-  (``0320_organisation_cost_state``, pinned by all sibling
-  chain tests), the revision id matches the filename, and neither
-  ``branch_labels`` nor ``depends_on`` is set (the pre-commit
-  check-migration-heads hook and every ``test_single_head_*`` pin depend on
-  that shape).
+  graph's single, linear head is asserted by the shared
+  ``_migration_graph.assert_single_linear_head`` helper (never a hard-coded head
+  value), the revision id matches the filename, and neither ``branch_labels``
+  nor ``depends_on`` is set (the pre-commit check-migration-heads hook and this
+  file's ``test_no_branch_labels_or_depends_on`` depend on that shape).
 * **Upgrade (mocked ``op``)** — drops the duplicate
   ``collection_install.installed_entities`` JSON column, GATED on an inspector
   existence check so the upgrade is idempotent/re-runnable.
@@ -27,15 +26,14 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
-from alembic.script import ScriptDirectory
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import JSONB
 
 from modulo.db.models.collection_install import CollectionInstall, CollectionInstallEntity
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_REVISION = "0313_collection_install_drop_installed_entities"
 _MIGRATION_DOWN_REVISION = "0312_memberships_active_lookups"
-_HEAD_MIGRATION = "0320_organisation_cost_state"
 
 _DROPPED_COLUMN = "installed_entities"
 _INSTALL_TABLE = "collection_install"
@@ -86,9 +84,8 @@ def _run(what: str, *, column_exists: bool) -> _Recorder:
 
 
 class TestChain:
-    def test_single_head_is_0320_organisation_cost_state(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_down_revision_is_0312_memberships_active_lookups(self) -> None:
         assert _load_migration().down_revision == _MIGRATION_DOWN_REVISION

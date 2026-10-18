@@ -14,44 +14,9 @@ database, and pin the four-way agreement behind FAR-1438:
 A future change to any one of them (a new terminal status, a changed flag
 condition, a re-keyed index) fails here instead of silently orphaning the
 index and dropping the sweep back to a full-table scan of ``runs`` every
-60 seconds. Also pins the chain
-(``0277_run_daily_facts_trigger_dispatch_phase`` ->
-``0278_runs_workspace_drift_sweep_index`` ->
-``0279_table_autovacuum_tuning`` ->
-``0280_runs_node_deadline_watchdog_fired_count`` ->
-``0281_org_api_keys_grants`` ->
-``0282_env_profiles_kubernetes`` ->
-``0283_runs_drop_unused_indexes`` ->
-``0284_add_rejected_run_status`` ->
-``0285_system_audit_events`` ->
-``0286_pipeline_run_state`` ->
-``0287_team_rls_lifecycle_evals`` ->
-``0288_runs_execution_origin`` ->
-``0289_pipelines_environment_profile`` ->
-``0290_scheduled_reports_due_scan`` ->
-``0291_invitations_lookup_constraints`` ->
-``0292_audit_events_resource_lookup`` ->
-``0293_oauth_clients_team_id``, then
-``0294_eval_results_org_fk``, then
-``0295_decision_record_event_identity``, then
-``0296_benign_run_outcomes``, then
-``0297_autonomy_gating_s1``, then
-``0298_accounts_kind``, then
-``0299_accounts_service_identity``, then
-``0300_benign_facts_repair``, then
-``0301_oauth_consent_state_preauth_rls``, then
-``0302_runs_run_grouping``, then
-``0303_feedback_records_lookup_indexes``, then
-``0305_guardrail_escalate_action`` then ``0306_trigger_secret_encryption`` then
-``0307_runs_guardrail_override_resume_pending`` then ``0308_runs_dispatch_phase_history`` then
-``0314_external_agents_mcp_servers`` then
-``0315_service_accounts_lifecycle`` then
-``0316_policy_gate_evaluation_mode`` then
-``0317_drop_retired_pipeline_diff_rollback_flag`` then
-``0318_trigger_event_required_refs_missing`` then
-``0319_trigger_event_parse_failed`` then
-``0320_organisation_cost_state`` as the
-single linear head) and the
+60 seconds. This migration's own parent is pinned by ``_DOWN_REVISION`` below;
+the graph's single linear head, and its completeness, are asserted by
+``_migration_graph.assert_single_linear_head``. The file also pins the
 ``ORDER BY id`` / ``LIMIT 200`` access shape
 the ``(id)`` key is chosen to serve.
 
@@ -67,18 +32,17 @@ from types import ModuleType
 from typing import Any, Self
 from unittest.mock import patch
 
-from alembic.script import ScriptDirectory
 from sqlalchemy import Index
 from sqlalchemy.dialects import postgresql
 
 from modulo.core.cron_helpers import _sweep_workspace_input_drift_flags
 from modulo.db.models.run import TERMINAL_STATUSES, Run
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0278_runs_workspace_drift_sweep_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0277_run_daily_facts_trigger_dispatch_phase"
-_CHAIN_HEAD_MIGRATION = "0320_organisation_cost_state"
 _INDEX_NAME = "ix_runs_workspace_drift_sweep"
 _KEY_COLUMNS = ("id",)
 
@@ -215,9 +179,8 @@ def _model_index() -> Index:
 
 
 class TestChain:
-    def test_single_head_is_0288_runs_execution_origin(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_down_revision_is_0277_run_daily_facts_trigger_dispatch_phase(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION

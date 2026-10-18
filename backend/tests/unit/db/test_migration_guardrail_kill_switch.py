@@ -21,13 +21,12 @@ These tests assert:
 
 from pathlib import Path
 
-from alembic.script import ScriptDirectory
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
 _MIGRATION_0006 = "0108_schema_org_identity"
 _MIGRATION_0113 = "0113_guardrail_summary"
-_HEAD_MIGRATION = "0320_organisation_cost_state"
 
 
 def _source(name: str) -> str:
@@ -36,14 +35,9 @@ def _source(name: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _script() -> ScriptDirectory:
-    return ScriptDirectory(str(_VERSIONS.parent))
-
-
 class TestKillSwitchMigration:
-    def test_single_head(self) -> None:
-        heads = _script().get_heads()
-        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_0006_upgrade_adds_kill_switch_columns(self) -> None:
         source = _source(_MIGRATION_0006)

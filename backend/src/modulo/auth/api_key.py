@@ -6,7 +6,8 @@ Storage:     lookup_prefix = first 8 chars after "mk_"
 
 Alpha scopes:
   operator — read + trigger + HITL
-  runner   — trigger only
+  runner   — trigger/list runs, plus run.cancel, run.evals,
+             api_key.create/update/revoke, hitl.claim/list and library.copy
 
 Team-scoped enforcement:
   When an API key has a non-null ``team_id``, all operations performed
@@ -262,9 +263,10 @@ async def mint_run_api_key(
     FAR-296 Phase 3b: the key gives the script a restricted identity to call
     the Modulo API. Runner is the tightest role that can trigger/list runs; it
     also grants run.cancel, run.evals, api_key.create/update/revoke,
-    hitl.claim/list, library.copy, and housekeeping.list — NOT
-    pipeline/connector/secret access. Escalation risk from a leaked key (e.g.
-    minting further runner-scope keys) is mitigated by the short TTL (clamped
+    hitl.claim/list, and library.copy — NOT pipeline/connector/secret access,
+    and NOT the admin-only housekeeping surface. Escalation risk from a leaked
+    key (e.g. minting further runner-scope keys) is mitigated by the short TTL
+    (clamped
     to ``[300, 86400]``s), per-run linkage, and revocation at run finalization.
     Fail-open: the caller decides whether a failed mint blocks the dispatch
     (it should NOT — the sandbox runs without the key rather than failing).

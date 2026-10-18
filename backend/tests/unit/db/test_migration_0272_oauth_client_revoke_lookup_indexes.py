@@ -4,10 +4,11 @@ Structural - load the migration module and assert its contract without a
 database, and pin model/migration parity for the two new OAuth
 client-revoke lookup indexes:
 
-* the chain is pinned (0272 -> ``0271_org_api_keys_revocation_sweep_indexes``)
-  with ``0273_runs_dispatch_phase`` the single linear head, so the
-  pre-commit check-migration-heads hook and every ``test_single_head_*``
-  pin cannot be ambushed by a renumber;
+* this migration's parent is pinned (0272 -> ``0271_org_api_keys_revocation_sweep_indexes``),
+  and the migration graph's single, linear head is asserted by the shared
+  ``_migration_graph.assert_single_linear_head`` helper (never a hard-coded
+  head value), so the pre-commit ``check-migration-heads`` hook cannot be
+  ambushed by a renumber;
 * the upgrade emits exactly the two ``CREATE INDEX IF NOT EXISTS`` statements
   the client-revoke DELETEs rely on (``auth/oauth.py::delete_oauth_client``
   against ``oauth_authorization_codes`` and ``oauth_token_families``), each
@@ -28,10 +29,10 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
-from alembic.script import ScriptDirectory
 from sqlalchemy import Index
 
 from modulo.db.models.oauth_token import OAuthAuthorizationCode, OAuthTokenFamily
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0272_oauth_client_revoke_lookup_indexes"
@@ -106,45 +107,11 @@ def _model_indexes(model: type) -> dict[str, Index]:
 
 
 class TestChain:
-    def test_single_head_is_0275(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        # 0273_runs_dispatch_phase (FAR-1088), then
-        # 0274_policy_gate_pin_fingerprint_operator_control (FAR-967 chunk 10), then
-        # 0275_run_cancel_reason_vocabulary (FAR-1406), then
-        # 0276_runs_autovacuum_enabled (FAR-1419), then
-        # 0277_run_daily_facts_trigger_dispatch_phase (FAR-1421), then
-        # 0278_runs_workspace_drift_sweep_index (FAR-1438), then
-        # 0279_table_autovacuum_tuning (FAR-1442), then
-        # 0280_runs_node_deadline_watchdog_fired_count (FAR-1463), then
-        # 0281_org_api_keys_grants (FAR-1477), then
-        # 0282_env_profiles_kubernetes (FAR-1051), then
-        # 0283_runs_drop_unused_indexes (FAR-1443), then
-        # 0284_add_rejected_run_status (FAR-1487), then
-        # 0285_system_audit_events (FAR-1517), then
-        # 0286_pipeline_run_state (FAR-1530), then
-        # 0287_team_rls_lifecycle_evals (FAR-1514), then
-        # 0288_runs_execution_origin (FAR-1141), then
-        # 0289_pipelines_environment_profile (FAR-1558), then
-        # 0290_scheduled_reports_due_scan, then
-        # 0291_invitations_lookup_constraints, then
-        # 0292_audit_events_resource_lookup, then
-        # 0293_oauth_clients_team_id, then
-        # 0294_eval_results_org_fk, then
-        # 0295_decision_record_event_identity, then
-        # 0296_benign_run_outcomes, then 0297_autonomy_gating_s1, then
-        # 0298_accounts_kind, then 0299_accounts_service_identity, then
-        # 0300_benign_facts_repair, then 0301_oauth_consent_state_preauth_rls,
-        # then 0302_runs_run_grouping, then 0303_feedback_records_lookup_indexes,
-        # then 0305_guardrail_escalate_action, then 0306_trigger_secret_encryption,
-        # then 0307_runs_guardrail_override_resume_pending, then
-        # 0313_collection_install_drop_installed_entities, 0314_external_agents_mcp_servers and
-        # 0315_service_accounts_lifecycle, 0316_policy_gate_evaluation_mode,
-        # 0317_drop_retired_pipeline_diff_rollback_flag,
-        # 0318_trigger_event_required_refs_missing,
-        # 0319_trigger_event_parse_failed and
-        # 0320_organisation_cost_state now chain onto this migration,
-        # so the single head moved up another revision.
-        assert heads == ["0320_organisation_cost_state"], f"expected a single head, got {heads}"
+    def test_single_linear_head(self) -> None:
+        # 0272 is mid-chain, so the tip moves as later migrations land on top;
+        # the helper asserts the graph has exactly one, linear, complete head
+        # without pinning its value (FAR-1929).
+        assert_single_linear_head(script_directory())
 
     def test_down_revision_is_0271_org_api_keys_revocation_sweep_indexes(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION

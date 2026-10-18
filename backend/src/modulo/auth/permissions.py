@@ -178,8 +178,11 @@ PERMISSIONS: dict[str, str] = {
     "eval.definition.update": "operator",
     "eval.definition.delete": "operator",
     # housekeeping
-    "housekeeping.list": "runner",
-    "housekeeping.perform": "operator",
+    # RETIRED (FAR-1879): ``housekeeping.list`` and ``housekeeping.perform``
+    # are no longer keys. Both MCP tools now resolve to ``housekeeping.manage``
+    # (admin) and enforce the system-admin gate in their own bodies, matching
+    # their REST twins. A leftover grant naming either retired key fails closed
+    # (``is_delegable`` is False for an unknown key).
     # determination — SDLC scan + pipeline draft generation read all of the
     # org's connected tool data (repos, PRs, issues), so it is operator-scoped
     # like schema.infer rather than viewer/runner.
@@ -213,6 +216,10 @@ PERMISSIONS: dict[str, str] = {
     "housekeeping.manage": "admin",
     "run_retention.manage": "admin",
     "evidence_retention.manage": "admin",
+    # Evidence read surface + server-side redaction boundary (FAR-944).
+    # Reads are viewer-floor; managing the redaction rules is admin-only.
+    "evidence.read": "viewer",
+    "evidence.redaction.manage": "admin",
     "admin.trigger_events": "admin",
     "admin.queue_metrics": "admin",
     "admin.notification.manage": "admin",

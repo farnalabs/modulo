@@ -3,11 +3,11 @@
 Structural contract (no Postgres needed):
 
 * **Revision chain** - 0305 revises ``0304_metrics_staging_recorded_at_index``;
-  the migrations directory has exactly one head
-  (``0320_organisation_cost_state``, pinned by all sibling chain tests), the
-  revision id matches the filename, and neither ``branch_labels`` nor
-  ``depends_on`` is set (the pre-commit check-migration-heads hook and every
-  ``test_single_head_*`` pin depend on that shape).
+  the graph's single, linear head is asserted by the shared
+  ``_migration_graph.assert_single_linear_head`` helper (never a hard-coded head
+  value), the revision id matches the filename, and neither ``branch_labels``
+  nor ``depends_on`` is set (the pre-commit check-migration-heads hook and this
+  file's ``test_no_branch_labels_or_depends_on`` depend on that shape).
 * **Upgrade (mocked ``op``)** - Postgres drops + recreates BOTH action CHECKs
   widened with ``'escalate'`` (``NOT VALID`` then ``VALIDATE``); SQLite does the
   same through batch mode (SQLite has no ``ALTER TABLE ... ADD CHECK``).
@@ -26,7 +26,6 @@ from types import ModuleType
 from typing import get_args, get_type_hints
 from unittest.mock import MagicMock, patch
 
-from alembic.script import ScriptDirectory
 from sqlalchemy import CheckConstraint
 
 from modulo.core.guardrails import GuardrailAction
@@ -36,10 +35,10 @@ from modulo.db.models.policy_gate_decision import (
     RESOLVED_ACTION_VALUES,
     PolicyGateDecision,
 )
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_REVISION = "0305_guardrail_escalate_action"
 _MIGRATION_DOWN_REVISION = "0304_metrics_staging_recorded_at_index"
-_HEAD_MIGRATION = "0320_organisation_cost_state"
 _GATES_CHECK = "ck_policy_gates_action"
 _DECISIONS_CHECK = "ck_policy_gate_decisions_resolved_action"
 
@@ -88,9 +87,8 @@ def _executed_sql(op: MagicMock) -> list[str]:
 
 
 class TestChain:
-    def test_single_head_is_0320_organisation_cost_state(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_down_revision_is_0304_metrics_staging_recorded_at_index(self) -> None:
         assert _load_migration().down_revision == _MIGRATION_DOWN_REVISION

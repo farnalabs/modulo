@@ -123,10 +123,12 @@ def _fake_primitive(
     tags: list[str] | None = None,
     content_json: dict | None = None,
     tier: str = "native",
+    source: str = "local",
 ) -> MagicMock:
     p = MagicMock()
     p.id = pid or uuid.uuid4()
     p.visibility = visibility
+    p.source = source
     p.primitive_type = primitive_type
     p.name = name
     p.slug = slug
@@ -357,20 +359,26 @@ async def test_list_primitives_exclude_community():
 
 
 async def test_list_primitives_source_community_only():
-    """?source=community returns only the community-database items — no Native, no org items."""
+    """?source=community returns only the community-database items — no Native, no local org rows.
+
+    ``source`` now travels into the org query (``test_list_primitives_source_forwarded_to_org_query``),
+    so the CRUD excludes non-community org rows in SQL; the mocked org page below is
+    therefore empty and the response is exactly the community set. That SQL exclusion
+    is proven against real SQLite in ``tests/unit/db/crud/test_offset_has_more_sweep.py``.
+    """
     session = _mock_session()
     org_id = uuid.uuid4()
-    org_prim = _fake_primitive()
-    org_prim.source = "local"
-    org_page: PageResult = PageResult(items=[org_prim], total=1, page=1, page_size=20)
+    org_page: PageResult = PageResult(items=[], total=0, page=1, page_size=20)
 
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page),
+        patch(
+            "modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page
+        ) as mock_list,
     ):
         result = await list_primitives(session, org_id, source="community")
 
-    assert org_prim not in result.items
+    assert mock_list.call_args.kwargs["source"] == "community"
     assert {p.slug for p in result.items} == _EXPECTED_COMMUNITY_SLUGS
     assert all(p.source == "community" for p in result.items)
     assert all(p.verified is False for p in result.items)
@@ -579,28 +587,117 @@ async def test_list_primitives_custom_excluded_tiers_filters_modulo():
     assert preview_prim not in result.items
 
 
-async def test_list_primitives_has_more_reflects_the_narrowed_page():
-    """``source``/``excluded_tiers`` narrow AFTER the offset query, so the org page's
-    own ``has_more`` can contradict the returned items (FAR-1881). The envelope must
-    describe the page actually returned: a full org page forwarded verbatim would
-    claim a next page for a response that is smaller than its own page size.
+async def test_list_primitives_source_forwarded_to_org_query():
+    """``source`` travels into the CRUD query so the COUNT narrows with the rows.
+
+    Regression guard (FAR-1897): the filter used to be applied in Python AFTER
+    ``list_library_primitives`` had counted the unfiltered page, so ``total``
+    described a different universe from the rows returned.
     """
     session = _mock_session()
     org_id = uuid.uuid4()
-    org_prim = _fake_primitive()
-    org_prim.source = "local"
-    # The org query saw a full page, so it believes a next page exists...
-    org_page: PageResult = PageResult(items=[org_prim], total=100, page=1, page_size=20, has_more=True)
+    org_page: PageResult = PageResult(items=[], total=0, page=1, page_size=20)
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch(
+            "modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page
+        ) as mock_list,
+    ):
+        await list_primitives(session, org_id, source="local")
+
+    mock_list.assert_awaited_once()
+    assert mock_list.call_args.kwargs["source"] == "local"
+
+
+async def test_list_primitives_source_local_has_more_tracks_the_filtered_total():
+    """``?source=local`` over 45 local org rows reports the filtered total and a truthful
+    ``has_more`` on both the first and the final page (FAR-1897).
+
+    Before the SQL filter, ``total`` was collapsed to the page-slice length, so page 1
+    of 45 rows at ``page_size=20`` reported ``has_more=False`` and hid two thirds of
+    the library.
+    """
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    page_size = 20
+    local_rows = [_fake_primitive(source="local") for _ in range(45)]
+
+    first_page: PageResult = PageResult(
+        items=local_rows[:page_size], total=len(local_rows), page=1, page_size=page_size, has_more=True
+    )
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=first_page),
+    ):
+        first = await list_primitives(session, org_id, source="local", page=1, page_size=page_size)
+
+    assert first.total == len(local_rows)
+    assert first.has_more is True
+
+    final_page: PageResult = PageResult(
+        items=local_rows[-5:], total=len(local_rows), page=3, page_size=page_size, has_more=False
+    )
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=final_page),
+    ):
+        last = await list_primitives(session, org_id, source="local", page=3, page_size=page_size)
+
+    assert last.total == len(local_rows)
+    assert last.has_more is False
+
+
+async def test_list_primitives_source_modulo_returns_the_complete_in_memory_set():
+    """``?source=modulo`` returns the whole in-memory Native set on every page.
+
+    The in-memory sources are bounded and re-merged whole — they are never
+    cursor-paginated (the asymmetry is documented on ``next_cursor``), so
+    ``has_more`` is the only meaningful "another page" signal on that path.
+    """
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    # The org query is source-filtered, so it contributes nothing on this path.
+    org_page: PageResult = PageResult(items=[], total=0, page=1, page_size=20, has_more=False)
 
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page),
     ):
-        # ...but ?source=community narrows to the in-memory community set.
-        result = await list_primitives(session, org_id, source="community")
+        first = await list_primitives(session, org_id, source="modulo", page=1)
+        second = await list_primitives(session, org_id, source="modulo", page=2)
 
-    assert len(result.items) == len(_EXPECTED_COMMUNITY_SLUGS)
-    assert len(result.items) < result.page_size
+    assert first.items
+    assert all(p.source == "modulo" for p in first.items)
+    assert [p.slug for p in second.items] == [p.slug for p in first.items]
+    assert first.has_more is False
+    assert second.has_more is False
+
+
+async def test_list_primitives_has_more_is_recomputed_not_forwarded():
+    """``has_more`` is derived from the merged page, never forwarded verbatim (FAR-1881).
+
+    The mock's forwarded ``has_more=True`` is deliberately inconsistent with its own
+    ``total`` (20 rows of 20 — there is no next page). Forwarding it would advertise a
+    phantom next page; recomputing from ``total``/``items`` reports ``False``.
+    """
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    local_rows = [_fake_primitive(source="local") for _ in range(20)]
+    inconsistent_page: PageResult = PageResult(
+        items=local_rows, total=len(local_rows), page=1, page_size=20, has_more=True
+    )
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch(
+            "modulo.core.library_service.list_library_primitives",
+            new_callable=AsyncMock,
+            return_value=inconsistent_page,
+        ),
+    ):
+        result = await list_primitives(session, org_id, source="local", page=1, page_size=20)
+
     assert result.has_more is False
 
 

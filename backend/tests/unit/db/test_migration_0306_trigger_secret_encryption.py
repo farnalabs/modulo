@@ -3,9 +3,10 @@
 Structural + behavioural contract (no Postgres needed — the bind is mocked):
 
 * **Revision chain** — 0306 revises ``0305_guardrail_escalate_action``
-  (the migrations directory has exactly one head, pinned by every sibling
-  chain test), the revision id matches the filename, and neither
-  ``branch_labels`` nor ``depends_on`` is set.
+  (the graph's single, linear head is asserted by the shared
+  ``_migration_graph.assert_single_linear_head`` helper, never a hard-coded head
+  value), the revision id matches the filename, and neither ``branch_labels``
+  nor ``depends_on`` is set.
 * **Skip semantics (mocked bind)** — the upgrade rewrites ONLY rows whose
   ``hmac_secret``/``signing_secret`` are PLAINTEXT strings: values that are
   already Fernet tokens, the sensitive-value mask sentinel, empty strings,
@@ -31,16 +32,15 @@ from types import ModuleType
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from alembic.script import ScriptDirectory
 from cryptography.fernet import Fernet
 
 from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0306_trigger_secret_encryption"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0305_guardrail_escalate_action"
-_CHAIN_HEAD_MIGRATION = "0320_organisation_cost_state"
 
 _KEY = "c3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3M="  # url-safe base64 of 32 b's — a valid deterministic Fernet key
 _FERNET = Fernet(_KEY.encode())
@@ -108,9 +108,8 @@ def _run_upgrade(configs: list[dict[str, Any]]) -> tuple[MagicMock, ModuleType]:
 
 
 class TestChain:
-    def test_single_head_is_0320_organisation_cost_state(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_down_revision_is_0305_guardrail_escalate_action(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION

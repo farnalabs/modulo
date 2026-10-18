@@ -146,3 +146,36 @@ def test_recency_window_constant_present() -> None:
     so the guard's limits are honest."""
     raw = _raw()
     assert "30" in raw, "30-minute recency window constant/comment missing"
+
+
+# --- FAR-1935: deterministic conflict fingerprint so duplicate dispatches
+# --- dedupe in the Branch Fixer instead of launching a second run.
+
+
+def test_dispatch_payload_includes_fingerprint() -> None:
+    """FAR-1935: the dispatch payload MUST carry a ``fingerprint``, mirroring
+    ci.yml's notify-pr-failure payload. Without it the Branch Fixer cannot
+    dedupe repeat dispatches for the same conflict (observed on #1937, which
+    was dispatched twice ~2h apart while the first run was still live)."""
+    raw = _raw()
+    assert "--arg fingerprint" in raw, "Dispatch payload omits --arg fingerprint (FAR-1935)"
+    assert "fingerprint: $fingerprint" in raw, "Dispatch jq object omits the fingerprint key (FAR-1935)"
+
+
+def test_fingerprint_is_keyed_on_pr_and_main_sha() -> None:
+    """FAR-1935: the fingerprint must key on the conflicting state — the PR
+    number and the tip of main. Same PR + same main = the SAME merge to
+    reconcile = dedupe; main moved = a genuinely different merge = different
+    fingerprint = allowed through."""
+    raw = _raw()
+    expected = 'FINGERPRINT="conflict|pr:${PR_NUM}|main:${MAIN_SHA}"'
+    assert expected in raw, "Fingerprint shape is not conflict|pr:<n>|main:<sha> (FAR-1935)"
+
+
+def test_resolves_main_sha_for_the_fingerprint() -> None:
+    """FAR-1935: the main SHA the fingerprint keys on must be resolved by the
+    workflow. This job has no actions/checkout step and therefore no git remote,
+    so it is fetched through the GitHub API."""
+    raw = _raw()
+    assert "repos/farnalabs/modulo/commits/main" in raw, "Workflow does not resolve the tip of main (FAR-1935)"
+    assert "MAIN_SHA=" in raw, "Workflow never assigns MAIN_SHA (FAR-1935)"

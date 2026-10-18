@@ -390,11 +390,18 @@ async def _record_rejected_delivery(
     # it and lets the recorder inherit the original event's hash instead.
     payload_hash = sha256_hex(raw_body) if raw_body is not None else None
     if kind == "busy":
+        # FAR-1904 follow-up: forward ``source_event_id`` too. The XOR guard
+        # above admits the replay shape (no raw body, only ``source_event_id``)
+        # for EVERY kind, and ``record_busy_delivery`` already supports it —
+        # dropping it here would persist a busy event with an empty
+        # ``raw_payload_hash`` and no payload row, exactly the
+        # silent-empty-record class the guard exists to prevent.
         await record_busy_delivery(
             trigger_id=trigger_id,
             org_id=org_id,
             trigger_type="webhook",
             payload_hash=payload_hash,
+            source_event_id=source_event_id,
             raw_body=raw_body,
             raw_payload=raw_payload,
         )
@@ -1015,6 +1022,28 @@ async def receive_webhook(
             detail=str(exc),
         ) from exc
     except PipelineRateLimitError as exc:
+        # FAR-1916 (receive mirror): the pipeline's configured rate limit
+        # refused the delivery. The engine writes the ``rate_limited``
+        # TriggerEvent INSIDE the main transaction (both raise sites), so that
+        # write rolls back with the unwound transaction — re-record the refusal
+        # + raw payload in a FRESH transaction AFTER the unwind
+        # (_record_rejected_delivery, the concurrency/backpressure pattern), or
+        # a rate-limited delivery is refused but invisible in the event log.
+        # The 429 status/detail contract is unchanged; unlike the busy and
+        # concurrency refusals this arm has never carried a Retry-After, and
+        # this fix deliberately does not add one.
+        _log.info(
+            "webhooks.receive_webhook.rate_limited trigger=%s pipeline=%s",
+            trigger_id,
+            exc.pipeline_id,
+        )
+        await _record_rejected_delivery(
+            kind="rate_limited",
+            trigger_id=trigger_id,
+            org_id=org_id,
+            raw_body=raw_body,
+            raw_payload=raw_payload,
+        )
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=str(exc),

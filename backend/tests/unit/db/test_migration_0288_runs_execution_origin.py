@@ -3,42 +3,9 @@
 Structural — load the migration module and pin its contract without a
 database, plus ORM parity for both new columns:
 
-1. the chain: 0288 revises 0287_team_rls_lifecycle_evals,
-   0289_pipelines_environment_profile chains onto 0288, and
-   0290_scheduled_reports_due_scan chains onto 0289, and
-   0291_invitations_lookup_constraints chains onto 0290, and
-   0292_audit_events_resource_lookup chains onto 0291_invitations_lookup_constraints, and
-   0293_oauth_clients_team_id chains onto 0292_audit_events_resource_lookup, and
-   0294_eval_results_org_fk chains onto 0293_oauth_clients_team_id, and
-   0295_decision_record_event_identity chains onto 0294_eval_results_org_fk, and
-   0296_benign_run_outcomes chains onto 0295_decision_record_event_identity, and
-   0297_autonomy_gating_s1 chains onto 0296_benign_run_outcomes, and
-   0298_accounts_kind chains onto 0297_autonomy_gating_s1, and
-   0299_accounts_service_identity chains onto 0298_accounts_kind, and
-   0300_benign_facts_repair chains onto 0299_accounts_service_identity,
-   0301_oauth_consent_state_preauth_rls chains onto 0300_benign_facts_repair,
-   0302_runs_run_grouping chains onto 0301_oauth_consent_state_preauth_rls, and
-   0303_feedback_records_lookup_indexes chains onto 0302_runs_run_grouping, and
-   0305_guardrail_escalate_action chains onto 0304_metrics_staging_recorded_at_index, and
-   0306_trigger_secret_encryption chains onto 0305_guardrail_escalate_action, and
-   0307_runs_guardrail_override_resume_pending chains onto 0306_trigger_secret_encryption, and
-   0308_runs_dispatch_phase_history chains onto 0307_runs_guardrail_override_resume_pending, and
-   0313_collection_install_drop_installed_entities chains onto
-   0312_memberships_active_lookups, and
-   0314_external_agents_mcp_servers chains onto
-   0313_collection_install_drop_installed_entities, and
-   0315_service_accounts_lifecycle chains onto
-   0314_external_agents_mcp_servers, and
-   0316_policy_gate_evaluation_mode chains onto
-   0315_service_accounts_lifecycle, and
-   0317_drop_retired_pipeline_diff_rollback_flag chains onto
-   0316_policy_gate_evaluation_mode, and
-    0318_trigger_event_required_refs_missing chains onto
-    0317_drop_retired_pipeline_diff_rollback_flag, and
-    0319_trigger_event_parse_failed chains onto
-    0318_trigger_event_required_refs_missing, and
-    0320_organisation_cost_state chains onto
-    0319_trigger_event_parse_failed as the single linear head;
+1. the chain: this migration's own parent is pinned by ``_DOWN_REVISION``
+   below; the graph's single linear head, and its completeness, are asserted
+   by ``_migration_graph.assert_single_linear_head``;
 2. the upgrade adds EXACTLY two nullable ``varchar(20)`` columns with NO
    server default and NO backfill (metadata-only on the hot ``runs`` table);
 3. the downgrade drops exactly those two columns;
@@ -59,17 +26,16 @@ from types import ModuleType
 from typing import Any
 from unittest.mock import patch
 
-from alembic.script import ScriptDirectory
 from sqlalchemy import String
 
 from modulo.db.models.run import EXECUTION_ORIGIN_DISPATCHED, EXECUTION_ORIGIN_VALUES, Run
 from modulo.db.models.run_daily_facts import RunDailyFact
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0288_runs_execution_origin"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0287_team_rls_lifecycle_evals"
-_CHAIN_HEAD_MIGRATION = "0320_organisation_cost_state"
 
 #: (table, column) pairs the upgrade must add — the two read surfaces ADR-042
 #: needs: the run row itself and the self-contained analytics fact.
@@ -102,9 +68,8 @@ def _migration_calls(entry_point: str) -> list[tuple[tuple[Any, ...], dict[str, 
 
 
 class TestChain:
-    def test_single_head_is_0288_runs_execution_origin(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_down_revision_is_0287_team_rls_lifecycle_evals(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION

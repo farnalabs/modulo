@@ -27,7 +27,7 @@ _ORG_SCOPED_EXEMPT_TABLES: frozenset[str] = frozenset(
         # organisation_cost_state (FAR-1833) is a one-row-per-org child keyed by
         # ``org_id`` (its primary key), not ``organisation_id``, so it is outside
         # the generic organisation_id sweep. It STILL enables its own ``org_id``
-        # RLS policy (migration 0318) — the exemption here is about the column
+        # RLS policy (migration 0321) — the exemption here is about the column
         # name, not the tenancy posture.
         "organisation_cost_state",
     }
@@ -83,6 +83,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "eval_suites",
         "evals",
         "evidence",
+        "evidence_redaction_rules",
         "external_agents",
         "feature_flag_catalog",
         "feedback_records",

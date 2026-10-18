@@ -13,9 +13,13 @@ register unscoped tools.
 
 from __future__ import annotations
 
+import ast
 import re
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
+
+import pytest
 
 from modulo.core.mcp.scope_validator import READ_ONLY_TOOLS, TOOL_SCOPE_REQUIREMENTS
 
@@ -323,3 +327,441 @@ def test_create_api_key_classified_org_only() -> None:
     """Minting is an org-level operation: under a user-scoped key the
     ``create_api_key`` MCP tool is denied (user minting is REST-JWT-only)."""
     assert _classified_caller_scope("create_api_key") == _ORG_ONLY
+
+
+# ---------------------------------------------------------------------------
+# FAR-1930: the system-admin requirement is DECLARED once and ENFORCED by the
+# shared resolver — never re-implemented per tool.
+#
+# Before centralisation each system-admin-gated tool carried its own in-body
+# ``if not _ctx_is_system_admin_val(): return ...`` check. The requirement now
+# lives in ``scope_validator.SYSTEM_ADMIN_TOOLS`` and the resolver enforces it,
+# so a tool cannot ship the declaration without the gate. These guards walk the
+# declaration and prove the gate is live; the can-fail test proves the guard
+# itself is not vacuous.
+# ---------------------------------------------------------------------------
+
+_EXPECTED_SYSTEM_ADMIN_TOOLS = frozenset(
+    {
+        "list_feature_flags",
+        "list_housekeeping",
+        "perform_housekeeping",
+    }
+)
+
+
+def _system_admin_declared_tools() -> frozenset[str]:
+    """Read the declaration through the MODULE (so a monkeypatch is visible)
+    rather than a bound import."""
+    import modulo.core.mcp.scope_validator as sv
+
+    return sv.SYSTEM_ADMIN_TOOLS
+
+
+def _unenforced_system_admin_declarations(declared: frozenset[str]) -> list[str]:
+    """Return declared tools whose system-admin requirement is NOT enforced.
+
+    A live gate means: for a caller whose other legs all pass (an ``admin``
+    org role, an org-wide JWT credential), the resolver ALLOWS the tool when
+    the claim is present and DENIES it when the claim is absent. A declared
+    tool that is unmapped — or whose resolver leg was removed — cannot satisfy
+    the first condition, so it is reported.
+    """
+    from modulo.core.mcp.scope_validator import resolve_tool_access
+
+    unenforced: list[str] = []
+    for tool in sorted(declared):
+        with_claim, _ = resolve_tool_access(
+            tool=tool,
+            action=None,
+            role="admin",
+            key_scope="org",
+            auth_type="jwt",
+            allowed_tools=None,
+            kill_switch=True,
+            is_system_admin=True,
+        )
+        without_claim, _ = resolve_tool_access(
+            tool=tool,
+            action=None,
+            role="admin",
+            key_scope="org",
+            auth_type="jwt",
+            allowed_tools=None,
+            kill_switch=True,
+            is_system_admin=False,
+        )
+        if not with_claim or without_claim:
+            unenforced.append(tool)
+    return unenforced
+
+
+def test_system_admin_declaration_is_pinned() -> None:
+    """The declared set is pinned so adding a system-admin-gated tool is a
+    deliberate, reviewed change (not an accidental omission)."""
+    assert _system_admin_declared_tools() == _EXPECTED_SYSTEM_ADMIN_TOOLS
+
+
+def test_every_declared_system_admin_tool_is_registered() -> None:
+    registered = _registered_tool_names()
+    for tool in _system_admin_declared_tools():
+        assert tool in registered, f"SYSTEM_ADMIN_TOOLS declares unregistered tool '{tool}'"
+
+
+def test_every_declared_system_admin_tool_is_enforced_by_the_shared_resolver() -> None:
+    """Every declared tool's requirement is enforced by ``resolve_tool_access``.
+
+    A declaration with no live gate (the tool is unmapped, or the resolver leg
+    was removed) fails here — the structural guard against shipping the
+    declaration without the enforcement.
+    """
+    unenforced = _unenforced_system_admin_declarations(_system_admin_declared_tools())
+    assert not unenforced, (
+        f"declared system-admin tools with NO live enforcement in the shared "
+        f"resolver: {unenforced} — declare the tool in SYSTEM_ADMIN_TOOLS only "
+        f"when resolve_tool_access actually denies it without the claim"
+    )
+
+
+def test_structural_guard_catches_a_declaration_without_a_live_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prove the guard can fail: a declared tool that the resolver cannot gate
+    (here, unmapped) is reported by ``_unenforced_system_admin_declarations``.
+
+    Without this, the guard could pass vacuously for every declaration.
+    """
+    import modulo.core.mcp.scope_validator as sv
+
+    monkeypatch.setattr(
+        sv,
+        "SYSTEM_ADMIN_TOOLS",
+        sv.SYSTEM_ADMIN_TOOLS | {"not_a_real_tool"},
+    )
+    assert _unenforced_system_admin_declarations(sv.SYSTEM_ADMIN_TOOLS) == ["not_a_real_tool"]
+
+
+def test_system_admin_flag_is_inert_for_every_undeclared_tool() -> None:
+    """FAR-1930 blast-radius proof: the system-admin leg cannot change any tool
+    OUTSIDE the declaration.
+
+    The resolver is on the path of every MCP tool, so a centralised gate has to
+    leave every other tool's effective access bit-identical. This enumerates
+    every registered tool NOT in ``SYSTEM_ADMIN_TOOLS`` across the role/
+    credential matrix and asserts the decision (allow/deny AND the resolved
+    permission key) is identical whether the claim is absent or present.
+    """
+    from modulo.core.mcp.scope_validator import resolve_tool_access
+
+    declared = _system_admin_declared_tools()
+    undeclared = _registered_tool_names() - declared
+    assert undeclared, "expected many tools outside the system-admin declaration"
+
+    for tool in sorted(undeclared):
+        for role in ("viewer", "runner", "operator", "admin"):
+            for key_scope, auth_type in (("org", "api_key"), ("user", "jwt"), (None, None)):
+                with_claim = resolve_tool_access(
+                    tool=tool,
+                    action=None,
+                    role=role,
+                    key_scope=key_scope,
+                    auth_type=auth_type,
+                    allowed_tools=None,
+                    kill_switch=True,
+                    is_system_admin=True,
+                )
+                without_claim = resolve_tool_access(
+                    tool=tool,
+                    action=None,
+                    role=role,
+                    key_scope=key_scope,
+                    auth_type=auth_type,
+                    allowed_tools=None,
+                    kill_switch=True,
+                    is_system_admin=False,
+                )
+                assert with_claim == without_claim, (
+                    f"tool '{tool}' decision changed with the system-admin flag "
+                    f"(role={role}, key_scope={key_scope}, auth_type={auth_type}); "
+                    f"it does not declare a requirement and must be unaffected"
+                )
+
+
+def test_system_admin_flag_is_read_only_by_the_shared_dispatch_wrapper() -> None:
+    """The ``_ctx_is_system_admin_val()`` ContextVar is read at exactly ONE
+    call site in the MCP server — the shared dispatch wrapper
+    ``_check_agent_tool_scope`` (plus its definition).
+
+    A per-tool in-body gate (the duplicated shape FAR-1930 centralised away)
+    reintroduces a second reader and fails here.
+    """
+    path = _SRC_ROOT / "api" / "mcp_server.py"
+    call_sites = len(re.findall(r"_ctx_is_system_admin_val\(\)", path.read_text(encoding="utf-8")))
+    assert call_sites == 2, (
+        f"expected exactly one _ctx_is_system_admin_val() call site (the shared "
+        f"wrapper) plus its definition in api/mcp_server.py, found {call_sites} — "
+        f"a per-tool system-admin gate has crept back in; enforce the "
+        f"requirement through SYSTEM_ADMIN_TOOLS instead"
+    )
+
+
+# ---------------------------------------------------------------------------
+# FAR-1930 (finding A): the WIRED CHAIN — a declaration is only real if the
+# declared tool's handler actually routes through the shared chokepoint.
+#
+# The resolver's system-admin leg is reachable only through
+# ``_check_agent_tool_scope``. A tool declared in ``SYSTEM_ADMIN_TOOLS`` whose
+# handler never calls that chokepoint is SILENTLY UNENFORCED while every
+# resolver-level guard passes — the exact failure mode FAR-1930 names. The
+# guard below walks the real call graph of ``api/mcp_server.py`` (following
+# delegating helpers transitively, as the handlers do at runtime) and asserts
+# every declared tool reaches the chokepoint under its OWN name. The set of
+# registered tools that do NOT is pinned, so a future tool must either be
+# wired or join a reviewed exception.
+# ---------------------------------------------------------------------------
+
+_MCP_SERVER_SRC = _SRC_ROOT / "api" / "mcp_server.py"
+_CHOKEPOINT = "_check_agent_tool_scope"
+
+# Registered MCP tools whose handler does NOT route through the shared
+# chokepoint (verified by ``_tools_not_reaching_chokepoint``). Adding a tool
+# here needs a deliberate reason; a SYSTEM-ADMIN tool must NEVER be here.
+#
+# ``get_org_config`` is the known, deliberate, TICKETED exception: it mirrors
+# the system-admin-only REST ``GET /api/v1/system-admin/config`` but today
+# authorises only ``validate_current_auth()`` — a pre-existing authz gap on a
+# shipped tool, tracked separately (changing its authorisation model has its
+# own caller check). It is pinned here so the guard REPORTS it rather than
+# silently normalising it; do not "fix" it as part of this change.
+_TOOLS_NOT_ROUTED_THROUGH_CHOKEPOINT = frozenset(
+    {
+        "get_available_features",
+        "get_integration_status",
+        "get_org_config",  # ticketed authz gap — deliberate exception
+        "get_pipeline_graph",
+        "get_run_status",
+        "list_pipelines",
+        "list_schemas",
+        "search_documentation",
+        "validate_payload",
+    }
+)
+
+
+@dataclass(frozen=True)
+class _CallGraph:
+    """The ``api/mcp_server.py`` call graph used by the wired-chain guard.
+
+    ``tool_to_func`` maps a registered tool name to its handler function;
+    ``func_callees`` maps a function to the names/attrs it calls;
+    ``func_chokepoint_literals`` maps a function to the tool-name literals it
+    passes to ``_check_agent_tool_scope``.
+    """
+
+    tool_to_func: dict[str, str]
+    func_callees: dict[str, set[str]]
+    func_chokepoint_literals: dict[str, set[str]]
+
+    def _reachable_functions(self, tool: str) -> set[str]:
+        start = self.tool_to_func.get(tool)
+        if start is None:
+            return set()
+        reached: set[str] = set()
+        stack = [start]
+        while stack:
+            func = stack.pop()
+            for callee in self.func_callees.get(func, set()):
+                if callee in self.func_callees and callee not in reached:
+                    reached.add(callee)
+                    stack.append(callee)
+        return reached | {start}
+
+    def reaches_chokepoint(self, tool: str) -> bool:
+        """True when ANY reachable function calls the chokepoint (including a
+        parameterised call, e.g. the autonomy helper's ``tool_name`` arg)."""
+        return any(_CHOKEPOINT in self.func_callees.get(func, set()) for func in self._reachable_functions(tool))
+
+    def gates_under_own_name(self, tool: str) -> bool:
+        """True when a reachable function gates THIS tool by name — a
+        chokepoint call whose literal first argument equals the tool name."""
+        return any(tool in self.func_chokepoint_literals.get(func, set()) for func in self._reachable_functions(tool))
+
+
+def _build_call_graph() -> _CallGraph:
+    tree = ast.parse(_MCP_SERVER_SRC.read_text(encoding="utf-8"), filename=str(_MCP_SERVER_SRC))
+    tool_to_func: dict[str, str] = {}
+    func_callees: dict[str, set[str]] = {}
+    func_chokepoint_literals: dict[str, set[str]] = {}
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        callees: set[str] = set()
+        literals: set[str] = set()
+        for sub in ast.walk(node):
+            if not isinstance(sub, ast.Call):
+                continue
+            callee = sub.func
+            if isinstance(callee, ast.Name):
+                callees.add(callee.id)
+                if (
+                    callee.id == _CHOKEPOINT
+                    and sub.args
+                    and isinstance(sub.args[0], ast.Constant)
+                    and isinstance(sub.args[0].value, str)
+                ):
+                    literals.add(sub.args[0].value)
+            elif isinstance(callee, ast.Attribute):
+                callees.add(callee.attr)
+        func_callees[node.name] = callees
+        func_chokepoint_literals[node.name] = literals
+        for dec in node.decorator_list:
+            if not isinstance(dec, ast.Call):
+                continue
+            deco = dec.func
+            is_mcp_tool = (isinstance(deco, ast.Attribute) and deco.attr == "tool") or (
+                isinstance(deco, ast.Name) and deco.id == "tool"
+            )
+            if not is_mcp_tool:
+                continue
+            name = node.name
+            for kw in dec.keywords:
+                if kw.arg == "name" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                    name = kw.value.value
+            tool_to_func[name] = node.name
+    return _CallGraph(
+        tool_to_func=tool_to_func,
+        func_callees=func_callees,
+        func_chokepoint_literals=func_chokepoint_literals,
+    )
+
+
+def _tools_not_reaching_chokepoint() -> frozenset[str]:
+    graph = _build_call_graph()
+    return frozenset(tool for tool in _registered_tool_names() if not graph.reaches_chokepoint(tool))
+
+
+def test_call_graph_covers_every_registered_tool() -> None:
+    """The AST-derived tool map must match the live registry — otherwise the
+    wired-chain guard below could pass vacuously for a tool it never found."""
+    graph = _build_call_graph()
+    assert set(graph.tool_to_func) == _registered_tool_names()
+
+
+def test_tools_not_routed_through_the_chokepoint_are_pinned() -> None:
+    """The set of tools that bypass the shared chokepoint is explicit and
+    pinned: a future tool either gets wired, or is added here deliberately."""
+    actual = _tools_not_reaching_chokepoint()
+    assert actual == _TOOLS_NOT_ROUTED_THROUGH_CHOKEPOINT, (
+        f"the chokepoint-routing set changed — newly unrouted: "
+        f"{sorted(actual - _TOOLS_NOT_ROUTED_THROUGH_CHOKEPOINT)}; newly routed "
+        f"(remove from the pinned exception set): "
+        f"{sorted(_TOOLS_NOT_ROUTED_THROUGH_CHOKEPOINT - actual)}"
+    )
+
+
+def test_every_declared_system_admin_tool_routes_through_the_chokepoint() -> None:
+    """Every declared system-admin tool's handler reaches the shared chokepoint.
+
+    A declaration whose handler never calls ``_check_agent_tool_scope`` is
+    silently unenforced — the failure mode FAR-1930's requirement names.
+    """
+    graph = _build_call_graph()
+    unwired = [tool for tool in sorted(_system_admin_declared_tools()) if not graph.reaches_chokepoint(tool)]
+    assert not unwired, (
+        f"declared system-admin tools whose handler never routes through "
+        f"{_CHOKEPOINT}: {unwired} — the declaration is silently unenforced"
+    )
+
+
+def test_declared_system_admin_tools_are_gated_under_their_own_name() -> None:
+    """A declared tool must be gated BY NAME, not merely reach the chokepoint
+    for some OTHER tool (which would protect the wrong thing).
+
+    The autonomy demote/promote tools route through a parameterised helper
+    (``_check_agent_tool_scope(tool_name)``). A declared tool using that shape
+    would fail here; that is deliberate — declaring it must be an explicit
+    decision (gate it by name, or extend this guard), never an implicit pass.
+    """
+    graph = _build_call_graph()
+    not_by_name = [tool for tool in sorted(_system_admin_declared_tools()) if not graph.gates_under_own_name(tool)]
+    assert not not_by_name, (
+        f"declared system-admin tools not gated under their own name: {not_by_name} — "
+        f"the call reaches {_CHOKEPOINT} but not with this tool's name"
+    )
+
+
+def test_structural_guard_catches_a_declaration_without_wiring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Can-fail proof for the requirement's OWN named failure mode: a tool
+    declared in ``SYSTEM_ADMIN_TOOLS`` whose handler does NOT route through
+    the chokepoint. Here ``list_pipelines`` — a real, unrouted registered
+    tool — is declared and the guard reports it."""
+    import modulo.core.mcp.scope_validator as sv
+
+    monkeypatch.setattr(sv, "SYSTEM_ADMIN_TOOLS", sv.SYSTEM_ADMIN_TOOLS | {"list_pipelines"})
+    graph = _build_call_graph()
+    unwired = [tool for tool in sorted(sv.SYSTEM_ADMIN_TOOLS) if not graph.reaches_chokepoint(tool)]
+    assert unwired == ["list_pipelines"]
+
+
+def test_structural_guard_catches_a_declaration_gated_under_the_wrong_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Can-fail proof for the own-name guard: declaring a tool whose handler
+    only ever gates a DIFFERENT tool is reported. ``list_pipelines`` is
+    unrouted; declaring it fails the own-name check."""
+    import modulo.core.mcp.scope_validator as sv
+
+    monkeypatch.setattr(sv, "SYSTEM_ADMIN_TOOLS", sv.SYSTEM_ADMIN_TOOLS | {"list_pipelines"})
+    graph = _build_call_graph()
+    not_by_name = [tool for tool in sorted(sv.SYSTEM_ADMIN_TOOLS) if not graph.gates_under_own_name(tool)]
+    assert not_by_name == ["list_pipelines"]
+
+
+# ---------------------------------------------------------------------------
+# FAR-1930 (finding B): ONE unified per-tool registry
+#
+# ``_TOOL_REQUIREMENTS`` declares the permission key AND the system-admin
+# requirement on a single entry; ``TOOL_SCOPE_REQUIREMENTS``,
+# ``READ_ONLY_TOOLS`` and ``SYSTEM_ADMIN_TOOLS`` are DERIVED views. These
+# tests pin the derivation and the registry's internal consistency, so the
+# dual-bookkeeping FAR-1930 set out to remove cannot creep back in.
+# ---------------------------------------------------------------------------
+
+
+def test_public_views_are_derived_from_the_unified_registry() -> None:
+    import modulo.core.mcp.scope_validator as sv
+
+    requirements = sv._TOOL_REQUIREMENTS
+    assert dict(sv.TOOL_SCOPE_REQUIREMENTS) == {
+        key: req.permission_key for key, req in requirements.items() if req.permission_key is not None
+    }
+    assert frozenset(key for key, req in requirements.items() if req.permission_key is None) == sv.READ_ONLY_TOOLS
+    assert frozenset(key for key, req in requirements.items() if req.system_admin) == sv.SYSTEM_ADMIN_TOOLS
+
+
+def test_unified_registry_declares_every_registered_tool() -> None:
+    """One registry entry per registered tool: a new tool cannot ship
+    unclassified, and no entry references a non-existent tool."""
+    import modulo.core.mcp.scope_validator as sv
+
+    base_keys = {key.split(":", 1)[0] for key in sv._TOOL_REQUIREMENTS}
+    registered = _registered_tool_names()
+    assert registered <= base_keys, f"registered tools with no unified registry entry: {sorted(registered - base_keys)}"
+    assert base_keys <= registered, f"registry entries referencing no registered tool: {sorted(base_keys - registered)}"
+
+
+def test_unified_registry_entries_are_internally_consistent() -> None:
+    """Each entry is exactly one of: a permission-mapped tool/action, a
+    read-only tool (no permission key), optionally with the system-admin claim.
+    A ``tool:action`` key must be mapped, never read-only."""
+    import modulo.core.mcp.scope_validator as sv
+
+    for key, req in sv._TOOL_REQUIREMENTS.items():
+        if req.permission_key is None:
+            assert ":" not in key, f"action key '{key}' must declare a permission key"
+            assert key in sv.READ_ONLY_TOOLS
+        else:
+            assert key not in sv.READ_ONLY_TOOLS, f"mapped key '{key}' must not be read-only"
+    assert not (sv.READ_ONLY_TOOLS & set(sv.TOOL_SCOPE_REQUIREMENTS))

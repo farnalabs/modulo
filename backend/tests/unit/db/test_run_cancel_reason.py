@@ -7,7 +7,8 @@ migration-owned CHECK) behind a nullable column, so this file pins:
   migration's CHECK list stay in sync — a value written by a cancellation
   site but missing from the CHECK fails the write on a fresh DB, and a CHECK
   value with no constant invites an untyped literal;
-* the migration chains off the current head (0259) and carries both columns;
+* the migration pins its parent (never a named head value) and carries both
+  columns;
 * ``request_cancellation`` — the operator/agent cancel path — records WHY
   (reason) and WHO (actor) in the same write as ``status='cancelled'``, and
   refuses a reason outside the vocabulary;

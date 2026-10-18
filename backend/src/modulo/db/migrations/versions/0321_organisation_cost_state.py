@@ -36,8 +36,8 @@ Reversible: the downgrade drops the RLS policy, disables RLS and drops the new
 table. Both directions leave the three ``organisations`` columns untouched, so a
 rollback loses no pre-existing data.
 
-Revision ID: 0320_organisation_cost_state
-Revises: 0319_trigger_event_parse_failed
+Revision ID: 0321_organisation_cost_state
+Revises: 0320_evidence_redaction_rules
 Create Date: 2026-10-16
 """
 
@@ -48,8 +48,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0320_organisation_cost_state"
-down_revision: str | None = "0319_trigger_event_parse_failed"
+revision: str = "0321_organisation_cost_state"
+down_revision: str | None = "0320_evidence_redaction_rules"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

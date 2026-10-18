@@ -20,21 +20,9 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-from alembic.script import ScriptDirectory
-
 from modulo.core.feature_flags import _KNOWN_FLAGS
 from modulo.core.seed_data.catalog import FLAGS
-
-_HEAD_MIGRATION_NAME = "0320_organisation_cost_state"
-_HEAD_MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "src"
-    / "modulo"
-    / "db"
-    / "migrations"
-    / "versions"
-    / (f"{_HEAD_MIGRATION_NAME}.py")
-)
+from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 # Flags the old 0072 sync migration upserted (the FAR-114 sync set). The seed
 # catalog must still cover all of them. ``pipeline_diff_rollback`` was retired
@@ -73,16 +61,9 @@ def _load_migration(name: str, path: Path) -> ModuleType:
     return module
 
 
-def _script() -> ScriptDirectory:
-    return ScriptDirectory(str(_HEAD_MIGRATION_PATH.parent.parent))
-
-
 class TestReconciliationChain:
-    def test_single_head_is_0008(self) -> None:
-        script = _script()
-        assert script.get_heads() == [_HEAD_MIGRATION_NAME], (
-            f"expected a single head {_HEAD_MIGRATION_NAME}, got {script.get_heads()}"
-        )
+    def test_single_linear_head(self) -> None:
+        assert_single_linear_head(script_directory())
 
     def test_0007_creates_feature_flag_catalog_columns(self) -> None:
         """The reconciliation chain must create the columns the startup seed
