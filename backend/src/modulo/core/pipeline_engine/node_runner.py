@@ -4138,34 +4138,38 @@ def _is_safe_schema(schema: dict[str, Any]) -> tuple[bool, str]:
     if len(serialised) > _MAX_SCHEMA_BYTES:
         return False, f"schema serialises to {len(serialised)} bytes (max {_MAX_SCHEMA_BYTES})"
 
-    def _depth(obj: Any, current: int = 0) -> int:
-        if current > _MAX_SCHEMA_DEPTH:
-            return current
-        if isinstance(obj, dict):
-            return max((_depth(v, current + 1) for v in obj.values()), default=current)
-        if isinstance(obj, list):
-            return max((_depth(v, current + 1) for v in obj), default=current)
-        return current
-
-    depth = _depth(schema)
+    depth = _schema_depth(schema)
     if depth > _MAX_SCHEMA_DEPTH:
         return False, f"schema nesting depth {depth} exceeds max {_MAX_SCHEMA_DEPTH}"
 
-    def _has_external_ref(obj: Any) -> bool:
-        if isinstance(obj, dict):
-            if "$ref" in obj:
-                ref = obj["$ref"]
-                if isinstance(ref, str) and not ref.startswith("#"):
-                    return True
-            return any(_has_external_ref(v) for v in obj.values())
-        if isinstance(obj, list):
-            return any(_has_external_ref(v) for v in obj)
-        return False
-
-    if _has_external_ref(schema):
+    if _schema_has_external_ref(schema):
         return False, "schema contains external $ref (not a local # pointer)"
 
     return True, ""
+
+
+def _schema_depth(obj: Any, current: int = 0) -> int:
+    """Recursive nesting depth of a JSON-like object, capped at the limit."""
+    if current > _MAX_SCHEMA_DEPTH:
+        return current
+    if isinstance(obj, dict):
+        return max((_schema_depth(v, current + 1) for v in obj.values()), default=current)
+    if isinstance(obj, list):
+        return max((_schema_depth(v, current + 1) for v in obj), default=current)
+    return current
+
+
+def _schema_has_external_ref(obj: Any) -> bool:
+    """True when *obj* contains a ``$ref`` that is not a local ``#`` pointer."""
+    if isinstance(obj, dict):
+        if "$ref" in obj:
+            ref = obj["$ref"]
+            if isinstance(ref, str) and not ref.startswith("#"):
+                return True
+        return any(_schema_has_external_ref(v) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_schema_has_external_ref(v) for v in obj)
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -5835,6 +5839,107 @@ def _resolve_subject_parent_and_key(
     return None, None
 
 
+async def _resolve_live_autonomy(
+    *,
+    org_id: uuid.UUID | None,
+    session_factory: Callable[..., Any] | None,
+    pipeline_id: Any,
+) -> tuple[bool, str | None]:
+    """Resolve the org ``autonomy_gating`` flag and, when on, the live earned level.
+
+    The flag is resolved FIRST (fail-open, default OFF); the live earned level
+    is read only when the flag is ON, so the default gate path costs no extra
+    per-gate SELECT.
+    """
+    gating_enabled = await is_autonomy_gating_enabled(org_id=org_id)
+    if not gating_enabled:
+        return False, None
+    earned_live = await read_live_earned_autonomy(session_factory, org_id=org_id, pipeline_id=pipeline_id)
+    return True, earned_live
+
+
+async def _emit_autonomy_clamp_event(
+    *,
+    session_factory: Callable[..., Any] | None,
+    org_id: uuid.UUID | None,
+    run_id: Any,
+    pipeline_id: Any,
+    review_id: str,
+    resolution: AutonomyResolution,
+) -> None:
+    """Record a ceiling clamp (requested/effective/ceiling) when one occurred (FAR-1163 S0)."""
+    if not (resolution.clamped and resolution.requested is not None):
+        return
+    await emit_autonomy_clamp_telemetry(
+        session_factory,
+        org_id=org_id,
+        run_id=run_id,
+        review_id=review_id,
+        requested=resolution.requested.value,
+        effective=resolution.effective.value,
+        ceiling=resolution.ceiling.value,
+        # FAR-1163: carry the pipeline id (seeded into state by the executor
+        # alongside _run_id/_org_id) — without it every production clamp event
+        # had pipeline_id: null while the unit test passed it explicitly.
+        pipeline_id=pipeline_id,
+    )
+
+
+async def _emit_autonomy_level_applied(
+    *,
+    session_factory: Callable[..., Any] | None,
+    org_id: uuid.UUID | None,
+    run_id: Any,
+    pipeline_id: Any,
+    review_id: str,
+    autonomy_level: str,
+    gate_outcome: str,
+    human_only: bool,
+) -> None:
+    """Record the effective autonomy granted on a gate (skip / auto-approve / fired)."""
+    await emit_autonomy_telemetry(
+        session_factory,
+        org_id=org_id,
+        run_id=run_id,
+        review_id=review_id,
+        autonomy_level=autonomy_level,
+        gate_outcome=gate_outcome,
+        human_only=human_only,
+        # FAR-1163: carry the pipeline id so the level-applied event is joinable.
+        pipeline_id=pipeline_id,
+    )
+
+
+def _resolve_hitl_subject(
+    subject_path: str | None, state: dict[str, Any], review_id: str
+) -> tuple[str | None, dict[str, Any] | None, str | None]:
+    """Resolve ``subject_path`` against ``state`` (failure-isolated) — FAR-859 / FAR-862.
+
+    Returns ``(resolved_subject, subject_parent, subject_leaf_key)``; a bad path
+    or an unresolvable value yields ``(None, None, None)``. The parent container
+    and leaf key let the frontend reconstruct a shape-preserving
+    ``modified_output``.
+    """
+    if not subject_path:
+        return None, None, None
+    resolved_subject: str | None = None
+    resolved_subject_parent: dict[str, Any] | None = None
+    resolved_subject_leaf_key: str | None = None
+    try:
+        compiled_subject = compile_jmespath(subject_path)
+        subject_value = compiled_subject.search(state)
+        if subject_value is not None:
+            resolved_subject = serialize_value(subject_value)
+            resolved_subject_parent, resolved_subject_leaf_key = _resolve_subject_parent_and_key(subject_path, state)
+    except Exception:
+        _log.debug(
+            "hitl_review.subject_path_resolution_failed",
+            extra={"review_id": review_id, "subject_path": subject_path},
+            exc_info=True,
+        )
+    return resolved_subject, resolved_subject_parent, resolved_subject_leaf_key
+
+
 def make_hitl_review_fn(
     hitl_review_config: dict[str, Any],
     *,
@@ -5942,14 +6047,11 @@ def make_hitl_review_fn(
         # The live earned level is combined with the run's pinned-at-start value
         # INSIDE resolve_autonomy so a demotion bites this in-flight run while a
         # promotion does not.
-        gating_enabled = await is_autonomy_gating_enabled(org_id=org_id)
-        earned_live: str | None = None
-        if gating_enabled:
-            earned_live = await read_live_earned_autonomy(
-                session_factory,
-                org_id=org_id,
-                pipeline_id=state.get("_pipeline_id"),
-            )
+        gating_enabled, earned_live = await _resolve_live_autonomy(
+            org_id=org_id,
+            session_factory=session_factory,
+            pipeline_id=state.get("_pipeline_id"),
+        )
         resolution, autonomy_result = _hitl_review_autonomy_result(
             review_id,
             state,
@@ -5962,54 +6064,41 @@ def make_hitl_review_fn(
         # record the clamp (requested/effective/ceiling) IN ADDITION to the
         # normal level-applied event — on both the skip/auto-approve and the
         # fired path. Fail-open like the sibling telemetry.
-        if resolution.clamped and resolution.requested is not None:
-            await emit_autonomy_clamp_telemetry(
-                session_factory,
-                org_id=org_id,
-                run_id=state.get("_run_id"),
-                review_id=review_id,
-                requested=resolution.requested.value,
-                effective=autonomy.value,
-                ceiling=resolution.ceiling.value,
-                # FAR-1163: carry the pipeline id (seeded into state by the
-                # executor alongside _run_id/_org_id) — without it every
-                # production clamp event had pipeline_id: null while the unit
-                # test passed it explicitly.
-                pipeline_id=state.get("_pipeline_id"),
-            )
+        await _emit_autonomy_clamp_event(
+            session_factory=session_factory,
+            org_id=org_id,
+            run_id=state.get("_run_id"),
+            pipeline_id=state.get("_pipeline_id"),
+            review_id=review_id,
+            resolution=resolution,
+        )
         if autonomy_result is not None:
             # skipped (fully_autonomous) or auto_approved (notify_on_complete):
             # record the effective autonomy granted as evidence (fail-open).
             outcome = autonomy_result["artifacts"][0]["status"]
-            await emit_autonomy_telemetry(
-                session_factory,
+            await _emit_autonomy_level_applied(
+                session_factory=session_factory,
                 org_id=org_id,
                 run_id=state.get("_run_id"),
+                pipeline_id=state.get("_pipeline_id"),
                 review_id=review_id,
                 autonomy_level=autonomy.value,
                 gate_outcome=outcome,
                 human_only=human_only,
-                # FAR-1163: carry the pipeline id (seeded into state by the
-                # executor alongside _run_id/_org_id) — without it every
-                # production level-applied event on this path had
-                # pipeline_id: null while the unit test passed it explicitly.
-                pipeline_id=state.get("_pipeline_id"),
             )
             return autonomy_result
 
         # --- First invocation — store config and interrupt. ---
         # Gate fired (human path): record the effective autonomy + fired outcome.
-        await emit_autonomy_telemetry(
-            session_factory,
+        await _emit_autonomy_level_applied(
+            session_factory=session_factory,
             org_id=org_id,
             run_id=state.get("_run_id"),
+            pipeline_id=state.get("_pipeline_id"),
             review_id=review_id,
             autonomy_level=autonomy.value,
             gate_outcome="fired",
             human_only=human_only,
-            # FAR-1163: same pipeline-id forwarding as the skip/auto-approve
-            # path above — the fired event must be joinable too.
-            pipeline_id=state.get("_pipeline_id"),
         )
         hitl_reviews: list[dict[str, Any]] = list(state.get("_hitl_reviews") or [])
         hitl_reviews.append(hitl_review_config)
@@ -6018,28 +6107,9 @@ def make_hitl_review_fn(
         # FAR-859: resolve subject_path against the SAME state root the
         # condition evaluates against (failure-isolated — a bad path or
         # unresolvable value yields None).
-        resolved_subject: str | None = None
-        resolved_subject_parent: dict[str, Any] | None = None
-        resolved_subject_leaf_key: str | None = None
-        if subject_path:
-            try:
-                compiled_subject = compile_jmespath(subject_path)
-                subject_value = compiled_subject.search(state)
-                if subject_value is not None:
-                    resolved_subject = serialize_value(subject_value)
-                    # FAR-862: capture the parent container + leaf key so the
-                    # frontend can reconstruct a shape-preserving modified_output.
-                    # Walk the JMESPath prefix (everything before the last `.`
-                    # segment access) to find the dict that holds the subject.
-                    resolved_subject_parent, resolved_subject_leaf_key = _resolve_subject_parent_and_key(
-                        subject_path, state
-                    )
-            except Exception:
-                _log.debug(
-                    "hitl_review.subject_path_resolution_failed",
-                    extra={"review_id": review_id, "subject_path": subject_path},
-                    exc_info=True,
-                )
+        resolved_subject, resolved_subject_parent, resolved_subject_leaf_key = _resolve_hitl_subject(
+            subject_path, state, review_id
+        )
 
         # State mutations before the interrupt are persisted by the checkpointer.
         decision = interrupt(
@@ -6693,67 +6763,105 @@ async def _await_dispatch_terminal(
                 timeout=min(_DISPATCH_WAIT_POLL_CALL_TIMEOUT_SECONDS, remaining),
             )
         except Exception as exc:
-            if not _is_transient_dispatch_poll_error(exc):
-                # Permanent: an ACL denial, a contract breach or a 4xx. It
-                # cannot succeed on a retry and the wait window is not what
-                # broke — surface it AS ITSELF, now, never as wait_timeout.
-                raise
-            if loop.time() >= deadline:
-                # The window closed on a transient fault: the typed wait
-                # timeout is what actually ended the wait (cause chained).
-                raise _timeout_error() from exc
             consecutive_errors += 1
-            # FAR-1141 FIX 4: the tolerance is time-scaled to the window that
-            # is actually left, not a fixed count — recomputed on every failure
-            # so it shrinks with the deadline instead of outliving it.
-            poll_error_budget = _dispatch_poll_error_budget(deadline - loop.time())
-            if consecutive_errors > poll_error_budget:
-                if not str(exc):
-                    # A bare asyncio.TimeoutError renders as "" — an empty
-                    # error tells an operator nothing about which run failed or
-                    # why, so the cap never lets one escape unwrapped.
-                    raise TimeoutError(
-                        f"dispatch get_run_status(run_id={run_id!r}) timed out on "
-                        f"{consecutive_errors} consecutive polls "
-                        f"(budget {poll_error_budget} for {max(deadline - loop.time(), 0.0):g}s remaining; "
-                        f"per-call cap {_DISPATCH_WAIT_POLL_CALL_TIMEOUT_SECONDS:g}s)",
-                    ) from exc
-                raise
-            _log.warning(
-                "dispatch.await_completion.poll_retry run=%s attempt=%s/%s error=%s",
-                run_id,
-                consecutive_errors,
-                poll_error_budget,
+            sleep_for = _await_dispatch_poll_error(
                 exc,
+                run_id=run_id,
+                consecutive_errors=consecutive_errors,
+                deadline=deadline,
+                loop=loop,
+                timeout_error=_timeout_error,
             )
-            # FAR-1141 FIX 4: honour the provider's Retry-After rather than
-            # hammering a rate limiter at the flat poll interval (which burned
-            # the budget in seconds and turned a 60 s window into an aborted
-            # wait). Bounded by the remaining window as every other sleep is.
-            retry_after = _transient_poll_retry_after(exc)
-            sleep_for = max(_DISPATCH_WAIT_POLL_INTERVAL_SECONDS, retry_after or 0.0)
-            await asyncio.sleep(min(sleep_for, max(deadline - loop.time(), 0.0)))
+            await asyncio.sleep(sleep_for)
             continue
         consecutive_errors = 0
         state = _dispatch_result_to_state(polled)
-        if not isinstance(state, dict):
-            # A CI runner's get_run_status contract is a CIRun (-> dict). Fail
-            # loud on a contract breach — never read a status off a non-dict.
-            raise ValueError(
-                f"dispatch get_run_status returned a non-dict result for run {run_id!r}: {type(state).__name__}",
-            )
-        last_status = str(state.get("status") or "")
-        outcome = DISPATCH_STATUS_OUTCOME_MAP.get(last_status)
-        if outcome is None:
-            raise ValueError(
-                f"Unknown substrate status {last_status!r} — expected one of {sorted(DISPATCH_STATUS_OUTCOME_MAP)}",
-            )
+        last_status, outcome = _dispatch_status_outcome(state, run_id)
         if outcome != "poll":
-            return state
+            # ``_dispatch_status_outcome`` already proved ``state`` is a dict.
+            return cast(dict[str, Any], state)
         remaining = deadline - loop.time()
         if remaining <= 0:
             raise _timeout_error()
         await asyncio.sleep(min(_DISPATCH_WAIT_POLL_INTERVAL_SECONDS, remaining))
+
+
+def _await_dispatch_poll_error(
+    exc: Exception,
+    *,
+    run_id: str,
+    consecutive_errors: int,
+    deadline: float,
+    loop: asyncio.AbstractEventLoop,
+    timeout_error: Callable[[], DispatchWaitTimeoutError],
+) -> float:
+    """Classify a poll fault (FAR-1141): raise, or return the bounded retry sleep.
+
+    A PERMANENT fault (ACL denial, contract breach, 4xx) surfaces as itself
+    immediately. A transient fault inside the window retries with a time-scaled
+    consecutive-error budget and honours the provider's ``Retry-After``; once
+    the budget is exceeded (or the window closed) it raises.
+    """
+    if not _is_transient_dispatch_poll_error(exc):
+        # Permanent: an ACL denial, a contract breach or a 4xx. It cannot
+        # succeed on a retry and the wait window is not what broke — surface
+        # it AS ITSELF, now, never as wait_timeout.
+        raise exc
+    if loop.time() >= deadline:
+        # The window closed on a transient fault: the typed wait timeout is
+        # what actually ended the wait (cause chained).
+        raise timeout_error() from exc
+    # FAR-1141 FIX 4: the tolerance is time-scaled to the window that is
+    # actually left, not a fixed count — recomputed on every failure so it
+    # shrinks with the deadline instead of outliving it.
+    poll_error_budget = _dispatch_poll_error_budget(deadline - loop.time())
+    if consecutive_errors > poll_error_budget:
+        if not str(exc):
+            # A bare asyncio.TimeoutError renders as "" — an empty error tells
+            # an operator nothing about which run failed or why, so the cap
+            # never lets one escape unwrapped.
+            raise TimeoutError(
+                f"dispatch get_run_status(run_id={run_id!r}) timed out on "
+                f"{consecutive_errors} consecutive polls "
+                f"(budget {poll_error_budget} for {max(deadline - loop.time(), 0.0):g}s remaining; "
+                f"per-call cap {_DISPATCH_WAIT_POLL_CALL_TIMEOUT_SECONDS:g}s)",
+            ) from exc
+        raise exc
+    _log.warning(
+        "dispatch.await_completion.poll_retry run=%s attempt=%s/%s error=%s",
+        run_id,
+        consecutive_errors,
+        poll_error_budget,
+        exc,
+    )
+    # FAR-1141 FIX 4: honour the provider's Retry-After rather than hammering a
+    # rate limiter at the flat poll interval (which burned the budget in
+    # seconds and turned a 60 s window into an aborted wait). Bounded by the
+    # remaining window as every other sleep is.
+    retry_after = _transient_poll_retry_after(exc)
+    sleep_for = max(_DISPATCH_WAIT_POLL_INTERVAL_SECONDS, retry_after or 0.0)
+    return min(sleep_for, max(deadline - loop.time(), 0.0))
+
+
+def _dispatch_status_outcome(state: Any, run_id: str) -> tuple[str, str]:
+    """Validate a polled status and map it to a poll/terminal outcome (FAR-1141).
+
+    A non-dict result or an unknown substrate status fails loud — never read a
+    status off a contract breach.
+    """
+    if not isinstance(state, dict):
+        # A CI runner's get_run_status contract is a CIRun (-> dict). Fail loud
+        # on a contract breach — never read a status off a non-dict.
+        raise ValueError(
+            f"dispatch get_run_status returned a non-dict result for run {run_id!r}: {type(state).__name__}",
+        )
+    last_status = str(state.get("status") or "")
+    outcome = DISPATCH_STATUS_OUTCOME_MAP.get(last_status)
+    if outcome is None:
+        raise ValueError(
+            f"Unknown substrate status {last_status!r} — expected one of {sorted(DISPATCH_STATUS_OUTCOME_MAP)}",
+        )
+    return last_status, outcome
 
 
 def _stamp_dispatch_provenance(result: Any, instance_id: str) -> Any:
@@ -6853,49 +6961,70 @@ async def _run_connector_dispatch(
     Results (``CIRun`` / ``CIRunLog`` / ``list[CIRun]``) are converted to plain
     dicts for state.
     """
-    from modulo.connectors.base import CIRunStatus
-
     if dispatch_action == "trigger_run":
-        pipeline_id = str(_dispatch_arg(filters, data, "pipeline_id", resource))
-        branch = str(_dispatch_arg(filters, data, "branch", "") or "")
-        raw_variables = _dispatch_arg(filters, data, "variables")
-        if raw_variables is None:
-            variables: dict[str, Any] | None = None
-        elif isinstance(raw_variables, dict):
-            variables = dict(raw_variables)
-        else:
-            # Fire-once doctrine: a malformed dispatch input must fail loud,
-            # never fire the external job with silently dropped variables.
-            raise ValueError("dispatch trigger_run 'variables' must be an object")
-        result = await connector.trigger_run(pipeline_id=pipeline_id, branch=branch, variables=variables)
+        result = await _dispatch_trigger_run(connector, resource, filters, data)
     elif dispatch_action == "get_run_status":
-        run_id = _dispatch_arg(filters, data, "run_id")
-        if not run_id:
-            raise ValueError("dispatch get_run_status requires a 'run_id' input")
-        result = await connector.get_run_status(run_id=str(run_id))
+        result = await _dispatch_get_run_status(connector, filters, data)
     elif dispatch_action == "get_run_logs":
-        run_id = _dispatch_arg(filters, data, "run_id")
-        if not run_id:
-            raise ValueError("dispatch get_run_logs requires a 'run_id' input")
-        raw_cursor = _dispatch_arg(filters, data, "cursor")
-        result = await connector.get_run_logs(run_id=str(run_id), cursor=str(raw_cursor) if raw_cursor else None)
+        result = await _dispatch_get_run_logs(connector, filters, data)
     elif dispatch_action == "list_runs":
-        raw_pipeline_id = _dispatch_arg(filters, data, "pipeline_id")
-        raw_status = _dispatch_arg(filters, data, "status")
-        status: CIRunStatus | None = None
-        if raw_status is not None and raw_status != "":
-            status = raw_status if isinstance(raw_status, CIRunStatus) else CIRunStatus(str(raw_status))
-        limit = int(_dispatch_arg(filters, data, "limit", 20))
-        result = await connector.list_runs(
-            pipeline_id=str(raw_pipeline_id) if raw_pipeline_id else None,
-            status=status,
-            limit=limit,
-        )
+        result = await _dispatch_list_runs(connector, filters, data)
     else:
         raise ValueError(
             f"Unknown dispatch_action {dispatch_action!r} — expected one of {sorted(_DISPATCH_ACTIONS)}",
         )
     return _dispatch_result_to_state(result)
+
+
+async def _dispatch_trigger_run(connector: Any, resource: str, filters: dict[str, Any], data: dict[str, Any]) -> Any:
+    """Dispatch ``trigger_run``; a malformed ``variables`` input fails loud."""
+    pipeline_id = str(_dispatch_arg(filters, data, "pipeline_id", resource))
+    branch = str(_dispatch_arg(filters, data, "branch", "") or "")
+    raw_variables = _dispatch_arg(filters, data, "variables")
+    variables: dict[str, Any] | None
+    if raw_variables is None:
+        variables = None
+    elif isinstance(raw_variables, dict):
+        variables = dict(raw_variables)
+    else:
+        # Fire-once doctrine: a malformed dispatch input must fail loud,
+        # never fire the external job with silently dropped variables.
+        raise ValueError("dispatch trigger_run 'variables' must be an object")
+    return await connector.trigger_run(pipeline_id=pipeline_id, branch=branch, variables=variables)
+
+
+async def _dispatch_get_run_status(connector: Any, filters: dict[str, Any], data: dict[str, Any]) -> Any:
+    """Dispatch ``get_run_status``; a missing ``run_id`` fails loud."""
+    run_id = _dispatch_arg(filters, data, "run_id")
+    if not run_id:
+        raise ValueError("dispatch get_run_status requires a 'run_id' input")
+    return await connector.get_run_status(run_id=str(run_id))
+
+
+async def _dispatch_get_run_logs(connector: Any, filters: dict[str, Any], data: dict[str, Any]) -> Any:
+    """Dispatch ``get_run_logs``; a missing ``run_id`` fails loud."""
+    run_id = _dispatch_arg(filters, data, "run_id")
+    if not run_id:
+        raise ValueError("dispatch get_run_logs requires a 'run_id' input")
+    raw_cursor = _dispatch_arg(filters, data, "cursor")
+    return await connector.get_run_logs(run_id=str(run_id), cursor=str(raw_cursor) if raw_cursor else None)
+
+
+async def _dispatch_list_runs(connector: Any, filters: dict[str, Any], data: dict[str, Any]) -> Any:
+    """Dispatch ``list_runs`` with an optional status filter and limit."""
+    from modulo.connectors.base import CIRunStatus
+
+    raw_pipeline_id = _dispatch_arg(filters, data, "pipeline_id")
+    raw_status = _dispatch_arg(filters, data, "status")
+    status: CIRunStatus | None = None
+    if raw_status is not None and raw_status != "":
+        status = raw_status if isinstance(raw_status, CIRunStatus) else CIRunStatus(str(raw_status))
+    limit = int(_dispatch_arg(filters, data, "limit", 20))
+    return await connector.list_runs(
+        pipeline_id=str(raw_pipeline_id) if raw_pipeline_id else None,
+        status=status,
+        limit=limit,
+    )
 
 
 async def _run_connector_action(
@@ -7135,6 +7264,137 @@ async def _connector_success_phase(
     return _guard_connector_secret_output(result, node_id)
 
 
+def _validate_connector_dispatch_config(
+    node_def: dict[str, Any],
+    *,
+    node_id: str,
+    op: str,
+    node_type: str,
+    dispatch_action: str,
+    timeout: float | None,
+) -> tuple[bool, float | None]:
+    """Validate a connector node's dispatch/wait config at graph-build time.
+
+    Returns ``(await_completion, dispatch_wait_seconds)``. Every malformed
+    combination fails loud here so a hand-written graph never silently no-ops.
+    """
+    if op == "dispatch" and dispatch_action not in _DISPATCH_ACTIONS:
+        # Fail loud at graph-build time — never a silent fall-through to query.
+        raise ValueError(
+            f"Unknown dispatch_action {dispatch_action!r} for node {node_id!r} — "
+            f"expected one of {sorted(_DISPATCH_ACTIONS)}",
+        )
+    # FAR-1141 slice 2: node-level wait config, read from node_def (the API /
+    # CLI models persist these fields — they are NOT dropped at the boundary).
+    raw_await_completion: Any = node_def.get("await_completion", False)
+    if not isinstance(raw_await_completion, bool):
+        raise ValueError(f"await_completion must be a bool for node {node_id!r}, got {raw_await_completion!r}")
+    await_completion: bool = raw_await_completion
+    raw_wait_timeout: Any = node_def.get("wait_timeout")
+    dispatch_wait_seconds: float | None = None
+    if op == "dispatch":
+        dispatch_wait_seconds = _resolve_dispatch_wait_timeout(raw_wait_timeout, timeout, node_id)
+    if op != "dispatch" and (await_completion or raw_wait_timeout is not None):
+        # Mirror of the API's dispatch-only field rule: a declared-but-unread
+        # wait config would be a silent no-op.
+        raise ValueError(
+            f"await_completion / wait_timeout are only read by a dispatch node's dispatch "
+            f"operation (node {node_id!r} uses op={op!r})",
+        )
+    if node_type == "dispatch" and op != "dispatch":
+        # FAR-1141 (MAJOR 3): a dispatch node that does not route the dispatch
+        # verb would silently run a QUERY — no job ever fired. The API model
+        # rejects that at save time; a hand-written / legacy graph fails LOUD
+        # here instead of silently doing nothing.
+        raise ValueError(
+            f"dispatch node {node_id!r} must route connector_binding.operation='dispatch' (got {op!r})",
+        )
+    if await_completion and dispatch_action != "trigger_run":
+        # FAR-1141 (MAJOR 4): the wait loop only ever runs for trigger_run, so
+        # await_completion on any other action is declared-but-unread.
+        raise ValueError(
+            f"await_completion=True requires dispatch_action='trigger_run' (node {node_id!r} uses {dispatch_action!r})",
+        )
+    if raw_wait_timeout is not None and not await_completion:
+        # FAR-1141 (MAJOR 4): the wait window is only read when await_completion
+        # is true — a wait_timeout with await_completion=false is never used.
+        raise ValueError(
+            f"wait_timeout requires await_completion=True for node {node_id!r}",
+        )
+    return await_completion, dispatch_wait_seconds
+
+
+def _connector_resolve_or_error(
+    binding: dict[str, Any],
+    node_id: str,
+    connector_type: str,
+    allowed_connectors: list[str] | None,
+) -> tuple[Any, dict[str, Any] | None]:
+    """Enforce the connector scope, then resolve the binding connector.
+
+    Returns ``(connector, None)`` on success, or ``(None, block)`` where
+    *block* is the failure artifact to return from the node.
+    """
+    scope_block = _enforce_connector_scope(binding, node_id, connector_type, allowed_connectors)
+    if scope_block is not None:
+        return None, scope_block
+    connector, error_artifact = _resolve_binding_connector(
+        binding,
+        node_id,
+        allowed_connectors=allowed_connectors,
+    )
+    return connector, error_artifact
+
+
+async def _connector_invoke_phase(
+    connector: Any,
+    op: str,
+    resource: str,
+    filters: dict[str, Any],
+    data: dict[str, Any],
+    *,
+    dispatch_action: str,
+    await_completion: bool,
+    dispatch_wait_seconds: float | None,
+    session_factory: Callable[..., Any] | None,
+    state: dict[str, Any],
+    node_id: str,
+    intent_active: bool,
+) -> tuple[bool, Any]:
+    """Run the connector action (+ optional dispatch wait).
+
+    Returns ``(True, result)`` on success, or ``(False, failure_envelope)`` when
+    the action raised. A ``DispatchWaitTimeoutError`` propagates (terminal and
+    typed — the job is already fired, so it must never be retried).
+    """
+    try:
+        result = await _run_connector_action(connector, op, resource, filters, data, dispatch_action=dispatch_action)
+        if op == "dispatch" and dispatch_action == "trigger_run" and await_completion:
+            # FAR-1141: trigger_run fired EXACTLY ONCE above; this loop only
+            # observes the substrate until it settles or the window expires.
+            result = await _await_dispatch_terminal(
+                connector,
+                result,
+                wait_timeout=dispatch_wait_seconds or _DISPATCH_WAIT_TIMEOUT_DEFAULT_SECONDS,
+            )
+        return True, result
+    except DispatchWaitTimeoutError:
+        raise
+    except Exception as exc:
+        failure = await _connector_action_failure(
+            session_factory,
+            connector,
+            state,
+            node_id,
+            resource,
+            filters,
+            data,
+            intent_active,
+            exc,
+        )
+        return False, failure
+
+
 def make_connector_fn(
     node_def: dict[str, Any],
     *,
@@ -7219,51 +7479,14 @@ def make_connector_fn(
     # falls back to the dispatch verb, everything else queries).
     op: str = connector_binding_operation(node_def)
     dispatch_action: str = str(binding.get("dispatch_action") or "trigger_run")
-    if op == "dispatch" and dispatch_action not in _DISPATCH_ACTIONS:
-        # Fail loud at graph-build time — never a silent fall-through to query.
-        raise ValueError(
-            f"Unknown dispatch_action {dispatch_action!r} for node {node_id!r} — "
-            f"expected one of {sorted(_DISPATCH_ACTIONS)}",
-        )
-    # FAR-1141 slice 2: node-level wait config, read from node_def (the API /
-    # CLI models persist these fields — they are NOT dropped at the boundary).
-    # Both are validated at GRAPH BUILD so a hand-written graph fails loud here,
-    # not silently at run time.
-    raw_await_completion: Any = node_def.get("await_completion", False)
-    if not isinstance(raw_await_completion, bool):
-        raise ValueError(f"await_completion must be a bool for node {node_id!r}, got {raw_await_completion!r}")
-    await_completion: bool = raw_await_completion
-    raw_wait_timeout: Any = node_def.get("wait_timeout")
-    dispatch_wait_seconds: float | None = None
-    if op == "dispatch":
-        dispatch_wait_seconds = _resolve_dispatch_wait_timeout(raw_wait_timeout, timeout, node_id)
-    if op != "dispatch" and (await_completion or raw_wait_timeout is not None):
-        # Mirror of the API's dispatch-only field rule: a declared-but-unread
-        # wait config would be a silent no-op.
-        raise ValueError(
-            f"await_completion / wait_timeout are only read by a dispatch node's dispatch "
-            f"operation (node {node_id!r} uses op={op!r})",
-        )
-    if node_type == "dispatch" and op != "dispatch":
-        # FAR-1141 (MAJOR 3): a dispatch node that does not route the dispatch
-        # verb would silently run a QUERY — no job ever fired. The API model
-        # rejects that at save time; a hand-written / legacy graph fails LOUD
-        # here instead of silently doing nothing.
-        raise ValueError(
-            f"dispatch node {node_id!r} must route connector_binding.operation='dispatch' (got {op!r})",
-        )
-    if await_completion and dispatch_action != "trigger_run":
-        # FAR-1141 (MAJOR 4): the wait loop only ever runs for trigger_run, so
-        # await_completion on any other action is declared-but-unread.
-        raise ValueError(
-            f"await_completion=True requires dispatch_action='trigger_run' (node {node_id!r} uses {dispatch_action!r})",
-        )
-    if raw_wait_timeout is not None and not await_completion:
-        # FAR-1141 (MAJOR 4): the wait window is only read when await_completion
-        # is true — a wait_timeout with await_completion=false is never used.
-        raise ValueError(
-            f"wait_timeout requires await_completion=True for node {node_id!r}",
-        )
+    await_completion, dispatch_wait_seconds = _validate_connector_dispatch_config(
+        node_def,
+        node_id=node_id,
+        op=op,
+        node_type=node_type,
+        dispatch_action=dispatch_action,
+        timeout=timeout,
+    )
     # FAR-418: node-level capability_scope. ``allowed_connectors`` narrows (never
     # widens) which connectors this node may resolve — deny-by-default within the
     # scope. Absent/empty (the UNRESTRICTED default) preserves the pre-scope
@@ -7284,15 +7507,7 @@ def make_connector_fn(
             connector_instance_ids=_conformance_instance_ids(instance_id),
         )
 
-        scope_block = _enforce_connector_scope(binding, node_id, connector_type, allowed_connectors)
-        if scope_block is not None:
-            return scope_block
-
-        connector, error_artifact = _resolve_binding_connector(
-            binding,
-            node_id,
-            allowed_connectors=allowed_connectors,
-        )
+        connector, error_artifact = _connector_resolve_or_error(binding, node_id, connector_type, allowed_connectors)
         if error_artifact is not None:
             return error_artifact
 
@@ -7310,36 +7525,23 @@ def make_connector_fn(
         if suppress_envelope is not None:
             return suppress_envelope
 
-        try:
-            result = await _run_connector_action(
-                connector, op, resource, filters, data, dispatch_action=dispatch_action
-            )
-            if op == "dispatch" and dispatch_action == "trigger_run" and await_completion:
-                # FAR-1141: trigger_run fired EXACTLY ONCE above; this loop only
-                # observes the substrate until it settles or the window expires.
-                result = await _await_dispatch_terminal(
-                    connector,
-                    result,
-                    wait_timeout=dispatch_wait_seconds or _DISPATCH_WAIT_TIMEOUT_DEFAULT_SECONDS,
-                )
-        except DispatchWaitTimeoutError:
-            # A terminal TYPED error — it must reach the executor's generic
-            # catch so runs.error_code lands on dispatch.wait_timeout (never a
-            # generic connector failure envelope, and never a retry: the job is
-            # already fired on the customer's substrate).
-            raise
-        except Exception as exc:
-            return await _connector_action_failure(
-                session_factory,
-                connector,
-                state,
-                node_id,
-                resource,
-                filters,
-                data,
-                intent_active,
-                exc,
-            )
+        ok, result = await _connector_invoke_phase(
+            connector,
+            op,
+            resource,
+            filters,
+            data,
+            dispatch_action=dispatch_action,
+            await_completion=await_completion,
+            dispatch_wait_seconds=dispatch_wait_seconds,
+            session_factory=session_factory,
+            state=state,
+            node_id=node_id,
+            intent_active=intent_active,
+        )
+        if not ok:
+            # ``_connector_invoke_phase`` returns the failure envelope here.
+            return cast(dict[str, Any], result)
 
         if op == "dispatch":
             # FAR-1141: every successful dispatch result is stamped as WITNESSED
@@ -7474,31 +7676,12 @@ async def _wait_command_with_exec_process(
     stdout_parts: list[str] = []
     stderr_parts: list[str] = []
 
-    async def _invoke(callback: Callable[[str], Awaitable[None] | None], data: str) -> None:
-        # The callback contract accepts EITHER a coroutine-returning
-        # (``async def``) callback or a plain synchronous one; only await when
-        # the call actually returned an awaitable (the watchdog's stream
-        # callbacks are synchronous).
-        result = callback(data)
-        if result is not None:
-            await result
-
-    async def _pump() -> None:
-        async for chunk in process.chunks:
-            data = getattr(chunk, "data", "")
-            if getattr(chunk, "stream", "stdout") == "stderr":
-                stderr_parts.append(data)
-                if on_stderr is not None:
-                    await _invoke(on_stderr, data)
-            else:
-                stdout_parts.append(data)
-                if on_stdout is not None:
-                    await _invoke(on_stdout, data)
-
     # nosemgrep: create-task-without-guard — this helper is an async def, so a
     # running event loop always exists (same exclusion as the other in-module
     # task creations).
-    pump = asyncio.ensure_future(_pump())  # nosemgrep: create-task-without-guard
+    pump = asyncio.ensure_future(
+        _pump_exec_chunks(process, stdout_parts, stderr_parts, on_stdout=on_stdout, on_stderr=on_stderr)
+    )  # nosemgrep: create-task-without-guard
     # One persistent waiter for ``done``: reused across slices so a slice
     # timeout cancels nothing (see the invariant above).
     done_waiter = asyncio.ensure_future(process.done.wait())  # nosemgrep: create-task-without-guard
@@ -7518,31 +7701,79 @@ async def _wait_command_with_exec_process(
             if time.monotonic() - last_activity() >= idle_timeout:
                 # Kill the command so the still-running agent cannot write a
                 # fabricated /home/user/output.json, then fail fast.
-                try:
-                    await asyncio.wait_for(process.kill(), timeout=10.0)
-                except Exception:
-                    _log.exception("sandbox_agent.idle_watchdog_kill_failed")
+                await _kill_exec_process(process)
                 return None, f"agent produced no output for {idle_timeout:.0f}s"
     finally:
-        if not done_waiter.done():
-            done_waiter.cancel()
-        if reached_done:
-            # ``done`` fires from the chunk generator's finally, one hop after
-            # the LAST chunk has been fed to the watchdog callbacks — join the
-            # pump (bounded) so no callback is still pending when we return.
-            try:
-                await asyncio.wait_for(pump, timeout=_SANDBOX_TAIL_READ_TIMEOUT)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.debug("sandbox_agent.stream_pump_failed", exc_info=True)
-        if not pump.done():
-            pump.cancel()
+        await _finalize_exec_wait(done_waiter, pump, reached_done=reached_done)
 
+    return _exec_stream_outcome(process, "".join(stdout_parts), "".join(stderr_parts))
+
+
+async def _invoke_stream_callback(callback: Callable[[str], Awaitable[None] | None], data: str) -> None:
+    """Invoke a stream callback that may be sync or coroutine-returning."""
+    # The callback contract accepts EITHER a coroutine-returning (``async def``)
+    # callback or a plain synchronous one; only await when the call actually
+    # returned an awaitable (the watchdog's stream callbacks are synchronous).
+    result = callback(data)
+    if result is not None:
+        await result
+
+
+async def _pump_exec_chunks(
+    process: Any,
+    stdout_parts: list[str],
+    stderr_parts: list[str],
+    *,
+    on_stdout: Callable[[str], Awaitable[None] | None] | None,
+    on_stderr: Callable[[str], Awaitable[None] | None] | None,
+) -> None:
+    """Pump ``ExecProcess.chunks`` into the buffers and the watchdog callbacks."""
+    async for chunk in process.chunks:
+        data = getattr(chunk, "data", "")
+        if getattr(chunk, "stream", "stdout") == "stderr":
+            stderr_parts.append(data)
+            if on_stderr is not None:
+                await _invoke_stream_callback(on_stderr, data)
+        else:
+            stdout_parts.append(data)
+            if on_stdout is not None:
+                await _invoke_stream_callback(on_stdout, data)
+
+
+async def _kill_exec_process(process: Any) -> None:
+    """Best-effort bounded kill of the still-running exec process."""
+    try:
+        await asyncio.wait_for(process.kill(), timeout=10.0)
+    except Exception:
+        _log.exception("sandbox_agent.idle_watchdog_kill_failed")
+
+
+async def _finalize_exec_wait(done_waiter: Any, pump: Any, *, reached_done: bool) -> None:
+    """Cancel the waiter and (when the stream ended) join the pump, bounded."""
+    if not done_waiter.done():
+        done_waiter.cancel()
+    if reached_done:
+        # ``done`` fires from the chunk generator's finally, one hop after the
+        # LAST chunk has been fed to the watchdog callbacks — join the pump
+        # (bounded) so no callback is still pending when we return.
+        try:
+            await asyncio.wait_for(pump, timeout=_SANDBOX_TAIL_READ_TIMEOUT)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.debug("sandbox_agent.stream_pump_failed", exc_info=True)
+    if not pump.done():
+        pump.cancel()
+
+
+def _exec_stream_outcome(process: Any, stdout: str, stderr: str) -> tuple[Any, str | None]:
+    """Map the exec process's terminal state to ``(outcome, None)``.
+
+    A stream ERROR or an end with no exit code returns ``exit_code = -1`` plus
+    ``stream_error``; a healthy end carries the real exit code.
+    """
     error = getattr(process, "error", None)
     exit_code = getattr(process, "exit_code", None)
-    stdout = "".join(stdout_parts)
-    stderr = "".join(stderr_parts)
     if error is not None or exit_code is None:
         stream_error = str(error) if error else "stream ended without an exit code"
         _log.warning(
@@ -7550,12 +7781,7 @@ async def _wait_command_with_exec_process(
             extra={"stream_error": stream_error[:_MAX_ERROR_MSG]},
         )
         return (
-            _ExecStreamOutcome(
-                exit_code=-1,
-                stdout=stdout,
-                stderr=stderr,
-                stream_error=stream_error,
-            ),
+            _ExecStreamOutcome(exit_code=-1, stdout=stdout, stderr=stderr, stream_error=stream_error),
             None,
         )
     return (
