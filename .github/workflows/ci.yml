@@ -41,13 +41,15 @@ jobs:
 
   changes:
     # FAR-1427: one cheap, checkout-free path detector feeding the path gates
-    # on the heavy jobs below (Frontend and WCAG, Tier 1b testcontainers,
-    # SonarCloud scan). It reads the PR file list from the GitHub API (no
-    # checkout, no toolchain: a few seconds) and publishes three outputs:
+    # on the heavy jobs below (Frontend and WCAG, Frontend unit suite
+    # (merge-queue parity), Tier 1b testcontainers, SonarCloud scan). It reads
+    # the PR file list from the GitHub API (no checkout, no toolchain: a few
+    # seconds) and publishes three outputs:
     #
-    #   frontend      - the Frontend and WCAG job has something to validate:
-    #                   anything under frontend/, the e2e route-coverage script,
-    #                   or this workflow itself.
+    #   frontend      - the Frontend and WCAG job (and the FAR-1947 merge-queue
+    #                   parity job) has something to validate: anything under
+    #                   frontend/, the e2e route-coverage script, or this
+    #                   workflow itself.
     #   sonar         - the change is NOT docs-only (markdown + docs/ outside
     #                   docs/api/examples/). SonarCloud analyses source,
     #                   workflows, Dockerfiles and config, so anything else keeps
