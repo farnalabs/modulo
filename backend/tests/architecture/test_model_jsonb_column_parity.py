@@ -24,13 +24,27 @@ result, an attribute (0147's ``_add_temp_column`` builds ``... ADD COLUMN
 "{tmp}" {cast}`` from parameters) — yields no pair. A parsed-pairs inventory
 alone would then miss it SILENTLY — the exact defect class this file has now
 shipped three times.
-``test_every_executed_jsonb_declaration_is_parsed_or_justified`` therefore closes
-the class: every executed SQL string that declares a jsonb column — a literal
-``jsonb`` type token, or a column TYPE that is an interpolation (which COULD be
-jsonb) — must EITHER yield at least one pair OR be named in
-``_UNPARSED_JSONB_DDL`` with the reason it is out of the extractor's reach. A new
-declaration that parses to nothing and is not justified FAILS the gate with a
-message naming it, so it can never be silently ignored.
+``test_every_executed_jsonb_declaration_is_parsed_or_justified`` narrows that gap
+but does NOT close it — it is bounded, best-effort cover, not the guarantee. It
+inspects only the declarations the renderer can reach AT THE CALL SITE: one
+written SYNTACTICALLY as a string literal, an f-string, a ``+``-concatenation,
+or a module-level scalar-string constant, passed directly to an execute-family
+call. Each such declaration that yields no pair — a literal ``jsonb`` type
+token, or a column TYPE that is an interpolation (which COULD be jsonb) — must
+be named in ``_UNPARSED_JSONB_DDL`` with the reason it is out of the extractor's
+reach, or the gate fails naming it. A declaration reached any other way —
+through a function-local variable, a module-level constant whose value is a CALL
+(``DDL = sa.text("...")``), or a subscript (``DDLS[0]``) — produces no rendering
+at all, so the net emits nothing for it and it passes unseen.
+
+That class is closed elsewhere, not here: the authoritative net is the
+live-database oracle
+``tests/integration/test_initial_migration.py::test_migrated_schema_matches_orm_metadata``,
+which runs the real migration chain and compares the resulting schema to the ORM
+metadata. Its ``_JSONB_DB_TO_JSON_ORM`` ignore map is now empty, so a genuine
+``jsonb``(DB) → ``JSON``(ORM) divergence — however the migration declared it —
+fails there. This PR-time gate is a fast partial guardrail in front of that
+oracle; it is not the authority.
 
 The FAR-1878 residual was CLOSED by FAR-1941: the 16 columns that were declared
 bare generic ``JSON`` over a physical ``jsonb`` column are aligned, and their
@@ -325,9 +339,11 @@ def _execute_sql_literals(tree: ast.Module) -> list[str]:
     module-level string constants referenced by name, ``+`` concatenations, and
     the SIMPLE interpolated case — a ``for <col> in <CONSTANT>`` loop, rendered
     once per element (0226/0235). A string whose interpolation the loop resolver
-    cannot bind yields nothing here; ``_executed_sql_jsonb_declarations`` is what
-    guarantees such a case cannot pass unchecked. Only strings actually handed to
-    the executor are yielded — docstring prose is never a declaration.
+    cannot bind yields nothing here, and so does a declaration reached through a
+    function-local variable, a call-wrapped constant or a subscript:
+    ``_executed_sql_jsonb_declarations`` catches the first kind (a rendered shape
+    with an unresolved interpolation) but not the second. Only strings actually
+    handed to the executor are yielded — docstring prose is never a declaration.
     """
     module_values = _module_string_expressions(tree)
     bindings = _loop_sequence_bindings(tree, _module_string_sequence_constants(tree))
@@ -579,22 +595,27 @@ def test_jsonb_is_only_constructed_in_the_shared_alias() -> None:
 # *expression* under this definition, and no migration declares a column that
 # way — add it here if one ever does.
 #
-# The raw-SQL path only sees strings actually handed to an executor
-# (``op.execute`` / ``<bind>.execute`` / a migration-local ``_execute``
-# wrapper); prose in a docstring or comment is never a declaration, however
+# The raw-SQL path only inspects strings actually handed to an executor
+# (``op.execute`` / ``<bind>.execute`` / a migration-local ``_execute`` wrapper)
+# AND reachable by the renderer at that call site — a literal, an f-string, a
+# ``+``-concatenation or a module-level scalar-string constant. A declaration
+# passed through a function-local variable, a call-wrapped constant or a
+# subscript is not seen here at all (see the boundary note in this module's
+# docstring). Prose in a docstring or comment is never a declaration, however
 # jsonb-shaped it looks (0129's docstring shows an ``ALTER ... TYPE jsonb``).
 #
 # NOT parsed, and no longer claimed to be: an interpolation the loop resolver
 # cannot bind. 0147's ``_add_temp_column`` builds ``... ADD COLUMN "{tmp}"
 # {cast}`` from a runtime variable, and its table/column also arrive by
-# parameter; 0129 has the identical helper. The declaration net
-# (``_executed_sql_jsonb_declarations`` + ``_UNPARSED_JSONB_DDL`` below) is what
-# keeps such a case from passing SILENTLY: every executed SQL string that
-# declares a jsonb column — a literal ``jsonb`` type token, or a column TYPE
-# that is an interpolation (which could be jsonb) — must parse to at least one
-# pair OR be named there with a reason, or
-# ``test_every_executed_jsonb_declaration_is_parsed_or_justified`` fails naming
-# it.
+# parameter; 0129 has the identical helper. Where such a shape IS rendered (the
+# f-string at the execute call site), the declaration net
+# (``_executed_sql_jsonb_declarations`` + ``_UNPARSED_JSONB_DDL`` below) makes it
+# either parse to a pair or be named there with a reason, so it does not pass
+# silently. Where it is NOT rendered — the argument is a function-local
+# variable, a call-wrapped constant or a subscript — the net produces nothing
+# for it and cannot see it; that class is closed by the live-database oracle in
+# ``tests/integration/test_initial_migration.py``, not by this file (see the
+# module docstring).
 # ---------------------------------------------------------------------------
 
 _ALTER_ADD_JSONB_RE = re.compile(
@@ -1135,15 +1156,21 @@ def test_interpolated_loop_ddl_is_resolved_not_excused() -> None:
 
 
 def test_every_executed_jsonb_declaration_is_parsed_or_justified() -> None:
-    """No executed SQL jsonb declaration may be SILENTLY outside the gate.
+    """Every RENDERED executed-SQL jsonb declaration parses or is justified.
 
-    Parsing cannot resolve every interpolation. This net closes the class: every
-    executed SQL string that declares a jsonb column — literally, or with a TYPE
-    that is an interpolation which could be jsonb — must parse to at least one
-    pair OR be named in ``_UNPARSED_JSONB_DDL`` with a reason. A new declaration
-    that does neither fails HERE, naming it, instead of sitting unchecked while
+    Best-effort, not exhaustive. This net sees only declarations the renderer
+    can reach at the execute call site — a string literal, an f-string, a ``+``
+    concatenation or a module-level scalar-string constant. Each such
+    declaration that does not resolve to a ``(table, column)`` pair — including
+    one whose TYPE is an interpolation which could be jsonb — must be named in
+    ``_UNPARSED_JSONB_DDL`` with a reason, or it fails HERE, naming it, rather
+    than passing quietly while
     ``test_every_migration_declared_jsonb_column_is_jsonb_on_postgres`` reads as
-    green.
+    green. A declaration reached through a function-local variable, a
+    call-wrapped constant or a subscript produces no rendering and is therefore
+    NOT seen by this test; that class is closed by the live-database oracle in
+    ``tests/integration/test_initial_migration.py`` (see the module docstring),
+    not here.
     """
     unexplained: list[str] = []
     for path in sorted(_MIGRATION_VERSIONS_DIR.glob("*.py")):
