@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
-"""Regenerate the duplicate-validation-predicate baseline.
+"""Regenerate the duplicated-logic baseline.
 
-The whole-tree lens ``test_no_duplicate_validation_predicates`` reports every
-validation-named function that carries a non-empty validation-error ``detail``
-string which a validation-named function in a DIFFERENT module carries too: the
-same predicate written independently in more than one caller, so a widening in
-one copy silently leaves the other stale. The PRE-EXISTING offenders are frozen
-in ``backend/tests/architecture/duplicate_validation_predicate_baseline.txt`` so
-the gate blocks NEW duplicates immediately while the backlog is untangled.
+Three whole-tree lenses in ``test_duplicate_validation_predicates.py`` report
+pre-existing duplication, each frozen in
+``backend/tests/architecture/duplicate_validation_predicate_baseline.txt``:
 
-The lens and its canonical renderer live in the architecture test module, so
-this script reuses them directly rather than duplicating the AST logic.
+* a validation-named function carrying a validation-error ``detail`` string
+  which a validation-named function in a DIFFERENT module carries too;
+* a private module-level string constant re-declared with the same name and
+  value in another module;
+* a statement block that is an exact copy of a function's complete body in
+  another module.
+
+Freezing the PRE-EXISTING offenders lets each gate block NEW duplication
+immediately while the backlog is untangled.
+
+The lenses and their canonical renderer live in the architecture test module,
+so this script reuses them directly rather than duplicating the AST logic.
 
 Run from ``backend/``::
 
@@ -37,7 +43,7 @@ import test_duplicate_validation_predicates as lens  # noqa: E402
 def main() -> int:
     keys = lens._current_baseline_keys()
     lens.BASELINE_PATH.write_text(lens._render_baseline(keys), encoding="utf-8")
-    print(f"wrote {len(keys)} duplicate-validation baseline entries to {lens.BASELINE_PATH}")
+    print(f"wrote {len(keys)} duplicated-logic baseline entries to {lens.BASELINE_PATH}")
     return 0
 
 
