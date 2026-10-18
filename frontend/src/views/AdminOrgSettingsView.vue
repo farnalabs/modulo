@@ -214,7 +214,7 @@
       </SectionCard>
 
       <!-- Delete Organization -->
-      <SectionCard title="Delete Organisation" description="Permanently delete this organisation and all associated data. This action cannot be undone." class="border-destructive/30" title-class="text-destructive" description-class="text-destructive/80">
+      <SectionCard title="Delete Organisation" description="Permanently delete this organisation and all associated data. This action cannot be undone." class="border-destructive/30" title-class="text-destructive" description-class="text-destructive-text">
         <Button type="button" severity="danger" class="h-8 px-2.5" @click="deleteDialogOpen = true">
           Delete Organisation
         </Button>

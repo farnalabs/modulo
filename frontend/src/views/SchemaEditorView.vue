@@ -15,7 +15,12 @@
       @update:search-query="searchQuery = $event"
     />
 
-    <main class="flex-1 overflow-y-auto">
+    <!-- FAR-1913: axe `scrollable-region-focusable` flags this scroll container
+         when its content has no focusable child (e.g. the empty/`:id`-not-found
+         state). tabindex="0" makes the scroll region reachable and scrollable by
+         keyboard, the same remediation AppSelect applies to PrimeVue's
+         `.p-select-list-container`. -->
+    <main class="flex-1 overflow-y-auto" tabindex="0">
       <div v-if="!editingSchema" class="p-6">
         <EmptyState :title="$t('views.SchemaEditorView.select_or_create')" />
       </div>
