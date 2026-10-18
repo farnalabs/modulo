@@ -134,6 +134,38 @@ class TestScrubUrlCredentials:
         text = "timeout value 5:5 exceeded"
         assert scrub_url_credentials(text) == text
 
+    def test_scrubs_every_userinfo_occurrence(self) -> None:
+        """The possessive-quantifier rewrite (S8786) is behaviour-preserving.
+
+        Both quantifiers are followed by a literal their class excludes
+        (``:`` / ``@``), so possessive matching cannot change the result; this
+        pins the multi-occurrence ``sub`` behaviour, which is what the probe's
+        error strings actually contain (one URL per engine/proxy error).
+        """
+        text = "tcp://alice:first-secret@a.internal:2375 and tcp://bob:second-secret@b.internal:2375"
+        scrubbed = scrub_url_credentials(text)
+        assert "first-secret" not in scrubbed
+        assert "second-secret" not in scrubbed
+        assert scrubbed.count("***@") == 2
+        assert "a.internal:2375" in scrubbed
+        assert "b.internal:2375" in scrubbed
+
+    def test_does_not_scrub_password_containing_a_colon(self) -> None:
+        """A userinfo block with an embedded ``:`` does not match — unchanged
+        by the possessive rewrite (the class excludes ``:`` in both halves)."""
+        text = "tcp://alice:pa:ss@proxy.internal:2375"
+        assert scrub_url_credentials(text) == text
+
+    def test_userinfo_after_a_long_credential_free_run_is_still_found(self) -> None:
+        """Pins the exact shape the super-linear finding was about: a long run
+        of class characters before the real userinfo. Possessive matching must
+        still locate the userinfo later in the same string."""
+        filler = "a" * 500
+        text = f"tcp://proxy.internal:2375/{filler} //alice:s3cret@proxy.internal:2375"
+        scrubbed = scrub_url_credentials(text)
+        assert "s3cret" not in scrubbed
+        assert "***@proxy.internal:2375" in scrubbed
+
 
 def _fake_session_factory(session: AsyncMock) -> Any:
     class _Factory:

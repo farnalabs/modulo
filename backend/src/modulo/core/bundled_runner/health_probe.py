@@ -65,7 +65,11 @@ NOTIFICATION_ACTION_URL = "/admin/runners/concurrency"
 
 #: Matches ``userinfo@`` inside any URL embedded in an error string
 #: (credential-bearing ``MODULO_DOCKER_HOST`` — tcp://user:pass@host:port).
-_URL_USERINFO_RE = re.compile(r"(?<=//)[^/?#\s:@]+:[^/?#\s:@]+@")
+#: Possessive quantifiers (S8786): the repetitions are followed by a literal
+#: the class cannot match (``:`` / ``@``), so refusing to backtrack is exactly
+#: equivalent while removing the backtracking points that made the scan
+#: super-linear on a long credential-free URL run.
+_URL_USERINFO_RE = re.compile(r"(?<=//)[^/?#\s:@]++:[^/?#\s:@]++@")
 
 #: qa F17: the strip states are a closed contract shared with the wire
 #: schema (routes/runners derives its Pydantic Literals from this union).
