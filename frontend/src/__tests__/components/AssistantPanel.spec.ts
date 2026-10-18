@@ -271,9 +271,13 @@ describe('AssistantPanel', () => {
     const wrapper = await mountPanelOpen()
     store.error = 'Rate limit exceeded, slow down'
     await nextTick()
-    const banner = wrapper.find('.text-orange-600')
+    const banner = wrapper.find('.text-warning-text')
     expect(banner.exists()).toBe(true)
     expect(banner.text()).toContain('Rate limit exceeded')
+    // FAR-1913: the rate-limit arm must not fall back to hardcoded orange — the
+    // light `bg-orange-50` shipped into dark mode and measured 3.35:1 (AA fail).
+    expect(wrapper.find('.text-orange-600').exists()).toBe(false)
+    expect(wrapper.find('.bg-orange-50').exists()).toBe(false)
   })
 
   it('starts renaming from the titlebar and saves via Enter', async () => {
