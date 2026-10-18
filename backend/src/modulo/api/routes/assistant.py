@@ -1013,7 +1013,7 @@ async def _wait_for_stream_resume(
     session_id_str: str,
 ) -> None:
     if registry is not None:
-        await registry.subscribe_resume(session_id_str, timeout=300.0)
+        await registry.subscribe_resume(session_id_str)
     else:
         resume_ev = _resume_events.get(session_id_str)
         if resume_ev is not None:
@@ -1058,7 +1058,7 @@ async def _await_permission_decision(
     approved: list[dict[str, Any]] = []
     try:
         if registry is not None:
-            decision_data = await registry.subscribe_permission_response(req_id, timeout=60.0)
+            decision_data = await registry.subscribe_permission_response(req_id)
             decision = {"action": "reject"} if decision_data is None else decision_data
         else:
             await asyncio.wait_for(event.wait(), timeout=60.0)
@@ -1083,7 +1083,7 @@ async def _wait_for_ui_command_results(
     results: list[dict[str, Any]] = []
     try:
         if registry is not None:
-            ready = await registry.subscribe_ui_results(session_id_str, timeout=120.0)
+            ready = await registry.subscribe_ui_results(session_id_str)
             if ready:
                 results = await registry.get_and_clear_ui_command_results(session_id_str)
         else:

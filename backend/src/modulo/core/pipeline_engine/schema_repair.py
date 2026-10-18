@@ -92,6 +92,39 @@ def _clear_validator_cache() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _schema_error_result(exc: Exception) -> tuple[bool, list[dict[str, Any]]]:
+    """Build the single ``schema_error`` failure returned for a malformed schema."""
+    return False, [{"pointer": "$", "constraint": "schema_error", "message": str(exc)[:200]}]
+
+
+def _error_pointer(error: Any) -> str:
+    """Convert a jsonschema error's path to JSON Pointer format."""
+    pointer = error.json_path or "$"
+    if pointer.startswith("$."):
+        pointer = "/" + pointer[2:].replace(".", "/")
+    elif pointer == "$":
+        pointer = ""
+    return str(pointer)
+
+
+def _error_info(error: Any) -> dict[str, Any]:
+    """Render one jsonschema error as structured, length-capped metadata."""
+    err_info: dict[str, Any] = {
+        "pointer": _error_pointer(error),
+        "constraint": error.validator,
+    }
+    if error.message:
+        err_info["message"] = error.message[:200]
+    if error.validator_value is not None:
+        err_info["validator_value"] = str(error.validator_value)[:100]
+    if error.instance is not None:
+        err_info["actual"] = str(error.instance)[:100]
+    if error.validator == "enum" and error.validator_value is not None:
+        # FIX F: cap allowed values to prevent prompt injection
+        err_info["allowed"] = [str(v)[:50] for v in error.validator_value[:10]]
+    return err_info
+
+
 def validate_against_schema(
     data: Any,
     schema: dict[str, Any],
@@ -123,36 +156,12 @@ def validate_against_schema(
             "schema_repair.malformed_schema",
             extra={"error": str(exc)[:200]},
         )
-        return False, [{"pointer": "$", "constraint": "schema_error", "message": str(exc)[:200]}]
+        return _schema_error_result(exc)
 
     errors: list[dict[str, Any]] = []
 
     try:
-        for error in validator.iter_errors(data):
-            pointer = error.json_path or "$"
-            # Convert json_path notation to JSON Pointer format
-            if pointer.startswith("$."):
-                pointer = "/" + pointer[2:].replace(".", "/")
-            elif pointer == "$":
-                pointer = ""
-
-            err_info: dict[str, Any] = {
-                "pointer": pointer,
-                "constraint": error.validator,
-            }
-            if error.message:
-                err_info["message"] = error.message[:200]
-            if error.validator_value is not None:
-                err_info["validator_value"] = str(error.validator_value)[:100]
-            if error.instance is not None:
-                err_info["actual"] = str(error.instance)[:100]
-            if error.validator == "enum" and error.validator_value is not None:
-                # FIX F: cap allowed values to prevent prompt injection
-                raw_allowed = error.validator_value
-                capped = [str(v)[:50] for v in raw_allowed[:10]]
-                err_info["allowed"] = capped
-
-            errors.append(err_info)
+        errors.extend(_error_info(error) for error in validator.iter_errors(data))
     except (JsonschemaError, UnknownType) as exc:
         # FIX G: runtime validation failure on a schema that compiled OK
         # but raises during iteration (e.g. recursive schema blow-up)
@@ -160,7 +169,7 @@ def validate_against_schema(
             "schema_repair.schema_runtime_error",
             extra={"error": str(exc)[:200]},
         )
-        return False, [{"pointer": "$", "constraint": "schema_error", "message": str(exc)[:200]}]
+        return _schema_error_result(exc)
 
     return len(errors) == 0, errors
 
@@ -210,6 +219,27 @@ Validation errors:
 Return ONLY the corrected JSON output, nothing else."""
 
 
+def _format_repair_error(index: int, err: dict[str, Any]) -> str:
+    """Format one structured validation error for the repair prompt."""
+    parts = [f"  Error {index}:"]
+    if err.get("pointer"):
+        parts.append(f"  Location: {err['pointer']}")
+    if err.get("constraint"):
+        parts.append(f"  Constraint: {err['constraint']}")
+    if err.get("expected"):
+        parts.append(f"  Expected: {err['expected']}")
+    if err.get("actual"):
+        parts.append(f"  Actual: {err['actual']}")
+    if err.get("allowed"):
+        allowed = err["allowed"]
+        if isinstance(allowed, list):
+            capped = [str(v)[:50] for v in allowed[:10]]
+            parts.append(f"  Allowed values: {capped}")
+        else:
+            parts.append(f"  Allowed values: {str(allowed)[:50]}")
+    return "\n".join(parts)
+
+
 def _build_repair_prompt(
     errors: list[dict[str, Any]],
     schema_id: str,
@@ -226,27 +256,7 @@ def _build_repair_prompt(
     FIX F: ``allowed`` values are capped to at most 10 values, each at most
     50 chars, before interpolation into the prompt.
     """
-    error_lines: list[str] = []
-    for i, err in enumerate(errors, 1):
-        parts = [f"  Error {i}:"]
-        if err.get("pointer"):
-            parts.append(f"  Location: {err['pointer']}")
-        if err.get("constraint"):
-            parts.append(f"  Constraint: {err['constraint']}")
-        if err.get("expected"):
-            parts.append(f"  Expected: {err['expected']}")
-        if err.get("actual"):
-            parts.append(f"  Actual: {err['actual']}")
-        if err.get("allowed"):
-            allowed = err["allowed"]
-            if isinstance(allowed, list):
-                capped = [str(v)[:50] for v in allowed[:10]]
-                parts.append(f"  Allowed values: {capped}")
-            else:
-                parts.append(f"  Allowed values: {str(allowed)[:50]}")
-        error_lines.append("\n".join(parts))
-
-    errors_text = "\n".join(error_lines)
+    errors_text = "\n".join(_format_repair_error(i, err) for i, err in enumerate(errors, 1))
 
     prompt = _REPAIR_PROMPT_TEMPLATE.format(
         schema_id=schema_id,
@@ -469,6 +479,86 @@ def _exhausted_repair_result(
     return outcome.value, errors, data
 
 
+def _attempt_repairs(
+    repair: SchemaRepairLoop,
+    initial_errors: list[dict[str, Any]],
+    schema: dict[str, Any],
+    schema_id: str,
+    repair_invoke_fn: Any,
+) -> tuple[SchemaValidationOutcome | None, list[dict[str, Any]], Any, int]:
+    """Drive the repair attempts until a terminal outcome or budget exhaustion.
+
+    Returns ``(outcome, errors, repaired_data, wasted_count)``:
+
+    - ``PASSED_AFTER_REPAIR`` — *repaired_data* holds the corrected payload.
+    - ``REPAIR_EXHAUSTED`` / ``NATIVE_DECODE_NOT_JSON`` — terminal failure.
+    - ``None`` — the budget was exhausted with no terminal outcome.
+    """
+    current_errors = initial_errors
+    # FAR-902: track attempts whose sole failure was schema rejection.
+    wasted_count = 0
+
+    # FIX D: loop checks is_exhausted BEFORE attempting, so budget=N yields
+    # exactly N invocations (is_exhausted is False until _attempt >= budget).
+    while not repair.is_exhausted:
+        outcome = repair.record_attempt(current_errors)
+        if outcome == SchemaValidationOutcome.REPAIR_EXHAUSTED:
+            return SchemaValidationOutcome.REPAIR_EXHAUSTED, current_errors, None, wasted_count
+
+        # Build repair prompt, invoke the backend, and re-validate.
+        prompt = repair.build_repair_prompt(current_errors)
+        attempt_outcome, current_errors, repaired_data = _invoke_and_validate_repair(
+            prompt,
+            schema,
+            current_errors,
+            schema_id,
+            repair.attempts_used,
+            repair_invoke_fn,
+        )
+        if attempt_outcome == SchemaValidationOutcome.PASSED_AFTER_REPAIR:
+            return SchemaValidationOutcome.PASSED_AFTER_REPAIR, [], repaired_data, wasted_count
+        if attempt_outcome is not None:
+            # Terminal: invoke failure or non-JSON output.
+            return attempt_outcome, current_errors, None, wasted_count
+
+        # Schema rejection was the sole failure cause for this attempt.
+        wasted_count += 1
+
+    # Budget exhaustion: the loop exited because is_exhausted is True
+    return None, current_errors, None, wasted_count
+
+
+def _no_budget_repair_result(
+    data: Any,
+    schema: dict[str, Any],
+    repair_info: dict[str, int] | None,
+) -> tuple[str, list[dict[str, Any]], Any]:
+    """Terminal result when there is no repair budget or no invoke function."""
+    is_valid, errors = validate_against_schema(data, schema)
+    _seed_repair_info(repair_info)
+    if is_valid:
+        return SchemaValidationOutcome.NATIVE_DECODED_AND_VALIDATED.value, [], data
+    return SchemaValidationOutcome.REPAIR_EXHAUSTED.value, errors, data
+
+
+def _spend_limited_repair_result(
+    data: Any,
+    schema: dict[str, Any],
+    schema_id: str,
+    current_spend: float,
+    daily_spend_limit: float,
+    repair_info: dict[str, int] | None,
+) -> tuple[str, list[dict[str, Any]], Any]:
+    """Terminal result when the daily spend limit has already been reached."""
+    _log.warning(
+        "schema_repair.skip_spend_limit",
+        extra={"schema_id": schema_id, "spend": current_spend, "limit": daily_spend_limit},
+    )
+    _spend_check_valid, errors = validate_against_schema(data, schema)
+    _seed_repair_info(repair_info)
+    return SchemaValidationOutcome.REPAIR_EXHAUSTED.value, errors, data
+
+
 def run_repair_loop(
     data: Any,
     schema: dict[str, Any],
@@ -508,21 +598,11 @@ def run_repair_loop(
     """
     if budget <= 0 or repair_invoke_fn is None:
         # No repair budget or no invoke function → terminal failure
-        is_valid, errors = validate_against_schema(data, schema)
-        _seed_repair_info(_repair_info)
-        if is_valid:
-            return SchemaValidationOutcome.NATIVE_DECODED_AND_VALIDATED.value, [], data
-        return SchemaValidationOutcome.REPAIR_EXHAUSTED.value, errors, data
+        return _no_budget_repair_result(data, schema, _repair_info)
 
     # Check daily spend limit before attempting repair
     if daily_spend_limit is not None and current_spend >= daily_spend_limit:
-        _log.warning(
-            "schema_repair.skip_spend_limit",
-            extra={"schema_id": schema_id, "spend": current_spend, "limit": daily_spend_limit},
-        )
-        _spend_check_valid, errors = validate_against_schema(data, schema)
-        _seed_repair_info(_repair_info)
-        return SchemaValidationOutcome.REPAIR_EXHAUSTED.value, errors, data
+        return _spend_limited_repair_result(data, schema, schema_id, current_spend, daily_spend_limit, _repair_info)
 
     # Initial validation to get the errors
     is_valid, current_errors = validate_against_schema(data, schema)
@@ -536,72 +616,22 @@ def run_repair_loop(
         schema_version=schema_version,
     )
 
-    last_outcome = SchemaValidationOutcome.POSTHOC_VALIDATION_FAILED
-    # FAR-902: track attempts whose sole failure was schema rejection.
-    wasted_count = 0
+    outcome, current_errors, repaired_data, wasted_count = _attempt_repairs(
+        repair,
+        current_errors,
+        schema,
+        schema_id,
+        repair_invoke_fn,
+    )
+    if outcome == SchemaValidationOutcome.PASSED_AFTER_REPAIR:
+        if _repair_info is not None:
+            _repair_info["repair_attempts"] = repair.attempts_used
+            _repair_info["wasted_attempts"] = wasted_count
+        return SchemaValidationOutcome.PASSED_AFTER_REPAIR.value, [], repaired_data
 
-    # FIX D: loop checks is_exhausted BEFORE attempting, so budget=N yields
-    # exactly N invocations (is_exhausted is False until _attempt >= budget).
-    while not repair.is_exhausted:
-        outcome = repair.record_attempt(current_errors)
-        if outcome == SchemaValidationOutcome.REPAIR_EXHAUSTED:
-            last_outcome = SchemaValidationOutcome.REPAIR_EXHAUSTED
-            break
-
-        # Build repair prompt, invoke the backend, and re-validate.
-        prompt = repair.build_repair_prompt(current_errors)
-        attempt_outcome, current_errors, repaired_data = _invoke_and_validate_repair(
-            prompt,
-            schema,
-            current_errors,
-            schema_id,
-            repair.attempts_used,
-            repair_invoke_fn,
-        )
-        if attempt_outcome == SchemaValidationOutcome.PASSED_AFTER_REPAIR:
-            if _repair_info is not None:
-                _repair_info["repair_attempts"] = repair.attempts_used
-                _repair_info["wasted_attempts"] = wasted_count
-            return SchemaValidationOutcome.PASSED_AFTER_REPAIR.value, [], repaired_data
-        if attempt_outcome is not None:
-            # Terminal: invoke failure or non-JSON output.
-            last_outcome = attempt_outcome
-            break
-
-        # Schema rejection was the sole failure cause for this attempt.
-        wasted_count += 1
-        last_outcome = SchemaValidationOutcome.REPAIR_ATTEMPTED
-
-    # Check terminal outcomes from break (invoke failure, bad JSON)
-    if last_outcome in (
-        SchemaValidationOutcome.NATIVE_DECODE_NOT_JSON,
-        SchemaValidationOutcome.REPAIR_EXHAUSTED,
-    ):
-        return _exhausted_repair_result(
-            last_outcome,
-            current_errors,
-            data,
-            repair,
-            wasted_count,
-            _repair_info,
-        )
-
-    # Budget exhaustion: the loop exited because is_exhausted is True
-    if repair.is_exhausted:
-        return _exhausted_repair_result(
-            SchemaValidationOutcome.REPAIR_EXHAUSTED,
-            current_errors,
-            data,
-            repair,
-            wasted_count,
-            _repair_info,
-        )
-
-    # Should not reach here, but defensive: the loop can only exit via a break
-    # (handled at the terminal-outcome check above) or because ``is_exhausted``
-    # became True (handled immediately above), so this tail is unreachable.
-    return _exhausted_repair_result(  # pragma: no cover - unreachable defensive fall-through
-        last_outcome,
+    final_outcome = outcome if outcome is not None else SchemaValidationOutcome.REPAIR_EXHAUSTED
+    return _exhausted_repair_result(
+        final_outcome,
         current_errors,
         data,
         repair,
