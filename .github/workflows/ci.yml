@@ -260,6 +260,7 @@ jobs:
           .semgrep/callable-dunder-name.yml:.semgrep/tests/callable-dunder-name.py
           .semgrep/missing-is-privileged.yml:.semgrep/tests/graph-write-missing-is-privileged.py
           .semgrep/hitl-review-mcp-caller-type.yml:.semgrep/tests/hitl-review-mcp-caller-type-literal.py
+          .semgrep/mcp-human-only-constant-non-browser.yml:.semgrep/tests/mcp-human-only-constant-non-browser.py
           "
           for pair in $pairs; do
             rule="${pair%%:*}"
