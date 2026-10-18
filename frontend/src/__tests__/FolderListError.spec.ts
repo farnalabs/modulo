@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 
 import FolderListError from '../components/pipelines/FolderListError.vue'
@@ -19,6 +19,19 @@ function mountError(attrs: Record<string, unknown> = {}, gated = false) {
     attrs,
   })
 }
+
+// Every mount runs the component's dev-only unsupported-attr warning. Spy on
+// it file-wide so the existing dismissal tests stay quiet and the warning is
+// observable in the tests that assert on it.
+let warnSpy: ReturnType<typeof vi.spyOn>
+
+beforeEach(() => {
+  warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+})
+
+afterEach(() => {
+  warnSpy.mockRestore()
+})
 
 describe('FolderListError', () => {
   it('renders the caller testid on the alert root, with no wrapper element', () => {
@@ -91,5 +104,25 @@ describe('FolderListError', () => {
       dismissIcon: true,
     })
     expect(wrapper.find('[data-testid="error-alert-dismiss"]').exists()).toBe(false)
+  })
+
+  it('ignores a retryable attr so the retry affordance always renders', () => {
+    // retry is this surface's only recovery affordance, so a call site passing
+    // retryable=false must not be able to remove the retry button. Before the
+    // refusal the attr fell through and ErrorAlert rendered no button.
+    const wrapper = mountError({ retryable: false })
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+  })
+
+  it('warns in dev when an unsupported attr is dropped', () => {
+    mountError({ retryable: false })
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    // The message must name the attr so the call site can find what it passed.
+    expect(warnSpy.mock.calls[0][0]).toContain('retryable')
+  })
+
+  it('does not warn when no unsupported attr is passed', () => {
+    mountError({ 'data-testid': 'probe-folder-error', class: 'mb-4' })
+    expect(warnSpy).not.toHaveBeenCalled()
   })
 })

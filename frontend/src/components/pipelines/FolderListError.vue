@@ -34,33 +34,59 @@
  * re-enable the dismiss button (`on-dismiss`/`dismiss-label`/
  * `dismiss-icon`, in either their kebab or camel spelling) never reach
  * ErrorAlert, because automatic fallthrough is disabled and those attrs
- * are filtered out of the forwarded set. Every other attr is still
- * forwarded, so nothing is silently dropped. Dismissing the folder-list
+ * are filtered out of the forwarded set. Dismissing the folder-list
  * failure would strand the folder list empty (or silently wrong) with no
  * retry until a full reload; retry is the only recovery affordance.
+ *
+ * That same filtered set also refuses `retryable`, because retry is this
+ * surface's only recovery affordance: a call site may not switch it off,
+ * so it stays ErrorAlert's default, an always-visible retry. A refused
+ * attr is reported in development rather than dropped in silence; every
+ * other attr is still forwarded, so nothing is silently swallowed.
  *
  * The root is <ErrorAlert> directly - no wrapper element - so the `class`
  * and `data-testid` a call site passes are forwarded (FolderListError ->
  * ErrorAlert -> its root <div>) and the alert renders as a single node.
  */
-import { computed, useAttrs } from 'vue'
+import { computed, useAttrs, watchEffect } from 'vue'
 import ErrorAlert from '../shared/ErrorAlert.vue'
 
 // Automatic fallthrough is off so a call site can never re-enable ErrorAlert's
-// dismiss button: ErrorAlert declares onDismiss/dismissLabel/dismissIcon, so
-// with fallthrough a caller passing on-dismiss would render it. Dismiss-shaped
-// attrs are dropped; every other attr is still forwarded, so nothing is
-// silently swallowed.
+// dismiss button or switch off its retry affordance: ErrorAlert declares
+// onDismiss/dismissLabel/dismissIcon and retryable, so with fallthrough a
+// caller passing on-dismiss or retryable=false would take effect. Unsupported
+// attrs are refused and reported in development; every other attr is still
+// forwarded, so nothing is silently swallowed.
 defineOptions({ inheritAttrs: false })
 
-const DISMISS_ATTRS = new Set(['ondismiss', 'dismisslabel', 'dismissicon'])
+const UNSUPPORTED_ATTRS = new Set(['ondismiss', 'dismisslabel', 'dismissicon', 'retryable'])
+const normaliseAttrName = (key: string) => key.replace(/-/g, '').toLowerCase()
+
 const forwardedAttrs = computed(() =>
   Object.fromEntries(
     Object.entries(useAttrs()).filter(
-      ([key]) => !DISMISS_ATTRS.has(key.replace(/-/g, '').toLowerCase())
+      ([key]) => !UNSUPPORTED_ATTRS.has(normaliseAttrName(key))
     )
   )
 )
+
+// A refused attr must not vanish without a trace - a call site that passed one
+// believes it configured something. Dev-only so production stays quiet, and
+// watchEffect-based so it reports the current attr set rather than firing on
+// every render.
+const unsupportedAttrNames = computed(() =>
+  Object.keys(useAttrs()).filter((key) => UNSUPPORTED_ATTRS.has(normaliseAttrName(key)))
+)
+
+if (import.meta.env.DEV) {
+  watchEffect(() => {
+    if (unsupportedAttrNames.value.length > 0) {
+      console.warn(
+        `FolderListError: ignoring unsupported attr(s) on the folder-error surface: ${unsupportedAttrNames.value.join(', ')}. The surface is never dismissible and its retry affordance is always shown.`
+      )
+    }
+  })
+}
 
 // Mirrors ErrorAlert's prop idiom (a leading `on` for the callback). No
 // dismiss prop exists by design - see the comment above.
