@@ -1831,7 +1831,9 @@ class _ProviderCommands:
         self,
         command: str,
         *,
-        timeout: float | None = None,  # noqa: ASYNC109 — mirrors the SDK command signature the T10 helpers call
+        # mirrors the E2B SDK sandbox.commands.run signature the T10 helpers call;
+        # S7483 accepted - this duck-typed stand-in has no timeout context manager.
+        timeout: float | None = None,  # noqa: ASYNC109  # NOSONAR
         background: bool = False,
         **_kwargs: Any,
     ) -> Any:
