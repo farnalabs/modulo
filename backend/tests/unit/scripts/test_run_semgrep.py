@@ -22,8 +22,11 @@ the two conditions can never be swapped silently:
   signature) — including through the real ``_run_windows`` code path — returns
   non-zero;
 - a WALL-CLOCK KILL (``subprocess.TimeoutExpired``) returns **0** with a loud
-  warning: it is a machine-load / changed-file-count condition, not a detected
-  skip, and CI (Linux) is the authoritative full scan;
+  warning ONLY when the killed process's captured output holds no per-rule skip —
+  it is then a machine-load / changed-file-count condition, not a detected skip,
+  and CI (Linux) is the authoritative full scan. A kill that follows a REPORTED
+  skip (the skip is present in the captured ``exc.stdout``/``exc.stderr``)
+  returns **1** instead (FAR-1933 T4);
 - a genuine tool error (missing binary, spawn failure) returns 0 with a warning.
 
 The module is loaded from the repo-root ``scripts/`` directory (not a package)
@@ -66,8 +69,10 @@ _TIMEOUT_STOPPED = (
 _FINDING_QUOTING_PHRASE = (
     "backend/src/modulo/api/routes/pipelines.py:1617: dispatch.wait_timeout error not surfaced to the caller\n"
 )
-#: The non-fatal parse skip mcp_server.py reports on every run (FAR-1933).
-_PARTIAL_PARSING = "Partially analyzed backend/src/modulo/api/mcp_server.py (PEP 695 parse skip)\n"
+#: A non-fatal parse skip on a tree file the pinned semgrep 1.79.0 does not fully
+#: parse (node_runner.py's `match` statement at line 3567; FAR-1933). It must
+#: never be read as a per-rule timeout skip.
+_PARTIAL_PARSING = "Partially analyzed backend/src/modulo/core/pipeline_engine/node_runner.py (parse skip)\n"
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -125,7 +130,7 @@ def test_json_detector_false_for_clean_payload(tmp_path: Path) -> None:
 def test_json_detector_false_for_partial_parsing_only(tmp_path: Path) -> None:
     """PartialParsing is expected and non-fatal — it must never fail the gate."""
     path = tmp_path / "partial.json"
-    _write_json(path, {"errors": [{"type": "PartialParsing", "message": "PEP 695 parse skip"}], "results": []})
+    _write_json(path, {"errors": [{"type": "PartialParsing", "message": "match-statement parse skip"}], "results": []})
     assert not mod._semgrep_json_timeout(path)
 
 
@@ -209,9 +214,56 @@ def test_run_windows_wall_clock_kill_warns_and_exits_zero(capsys: pytest.Capture
     captured = capsys.readouterr()
     assert rc == 0
     assert "did NOT complete on Windows" in captured.err
-    assert "No per-rule timeout was reported" in captured.err
+    assert "No per-rule timeout skip was found in the output semgrep emitted before" in captured.err
     assert "CI (Linux)" in captured.err
     # It must be a warning, never reported as a hard FAILURE.
+    assert "reported as a FAILURE" not in captured.err
+
+
+def test_run_windows_wall_clock_kill_with_captured_skip_fails(capsys: pytest.CaptureFixture[str]) -> None:
+    """A kill AFTER semgrep reported a per-rule skip fails CLOSED.
+
+    ``subprocess.run`` captures what the killed process emitted before the kill,
+    so the skip is OBSERVED from that captured output rather than assumed absent
+    (FAR-1933 T4): a kill that follows a reported skip must not reopen the
+    silent-pass hole FAR-1859 closed.
+    """
+    exc = subprocess.TimeoutExpired(
+        cmd="semgrep",
+        timeout=mod._SEMGREP_TIMEOUT,
+        output=_TIMEOUT_WARNING,
+    )
+    with (
+        mock.patch.object(mod, "_get_changed_py_files", return_value=(_CHANGED, None)),
+        mock.patch.object(mod.subprocess, "run", side_effect=exc),
+    ):
+        rc = mod._run_windows()
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "reported as a FAILURE" in captured.err
+
+
+def test_run_windows_wall_clock_kill_with_captured_non_skip_stays_open(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A kill whose captured output holds only a FINDING excerpt (no skip) stays open.
+
+    The captured output is scanned with the same anchored detector, so a finding
+    that merely quotes the timeout phrase cannot turn an environmental kill into
+    a false FAILURE.
+    """
+    exc = subprocess.TimeoutExpired(
+        cmd="semgrep",
+        timeout=mod._SEMGREP_TIMEOUT,
+        output=_FINDING_QUOTING_PHRASE,
+    )
+    with (
+        mock.patch.object(mod, "_get_changed_py_files", return_value=(_CHANGED, None)),
+        mock.patch.object(mod.subprocess, "run", side_effect=exc),
+    ):
+        rc = mod._run_windows()
+    captured = capsys.readouterr()
+    assert rc == 0
     assert "reported as a FAILURE" not in captured.err
 
 

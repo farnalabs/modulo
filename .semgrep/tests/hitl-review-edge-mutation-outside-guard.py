@@ -19,9 +19,9 @@ def unsafe_delete_elsewhere(session, pipeline_id):
 
 
 def unsafe_aliased_delete_elsewhere(session, pipeline_id):
-    # ruleid: hitl-gate-edge-mutation-outside-guard
     from sqlalchemy import delete as sa_delete
 
+    # ruleid: hitl-gate-edge-mutation-outside-guard
     await session.execute(sa_delete(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))
 
 
