@@ -280,6 +280,73 @@ describe('AdminRunRetentionView', () => {
     clickSpy.mockRestore()
   })
 
+  it('warns when the export body lacks the completeness sentinel (FAR-1924)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      // A truncated export: records but NO terminating {"_complete":true} line.
+      blob: async () => new Blob(['{"id":"run-1"}\n']),
+      json: async () => ({}),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    if (typeof URL.createObjectURL !== 'function') {
+      ;(URL as unknown as { createObjectURL: unknown }).createObjectURL = vi.fn()
+    }
+    if (typeof URL.revokeObjectURL !== 'function') {
+      ;(URL as unknown as { revokeObjectURL: unknown }).revokeObjectURL = vi.fn()
+    }
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    const wrapper = await mountView()
+    await wrapper.find('[data-testid="admin-run-retention-export"]').trigger('click')
+    await flushPromises()
+    await flushPromises()
+
+    const warning = wrapper.find('[data-testid="admin-run-retention-export-warning"]')
+    expect(warning.exists()).toBe(true)
+    expect(warning.attributes('role')).toBe('status')
+    expect(warning.text()).toContain('may be incomplete')
+    // Non-blocking: the file was still downloaded and the success banner shows.
+    expect(wrapper.find('[data-testid="admin-run-retention-export-result"]').exists()).toBe(true)
+
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('does not warn when the export body ends with the completeness sentinel (FAR-1924)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      blob: async () => new Blob(['{"id":"run-1"}\n{"_complete":true}\n']),
+      json: async () => ({}),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    if (typeof URL.createObjectURL !== 'function') {
+      ;(URL as unknown as { createObjectURL: unknown }).createObjectURL = vi.fn()
+    }
+    if (typeof URL.revokeObjectURL !== 'function') {
+      ;(URL as unknown as { revokeObjectURL: unknown }).revokeObjectURL = vi.fn()
+    }
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    const wrapper = await mountView()
+    await wrapper.find('[data-testid="admin-run-retention-export"]').trigger('click')
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="admin-run-retention-export-warning"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="admin-run-retention-export-result"]').exists()).toBe(true)
+
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
   it('purges the currently applied snapshot (auto-apply keeps applied in sync, FAR-868)', async () => {
     const wrapper = await mountView()
     // With auto-apply, filter changes are applied immediately, so the

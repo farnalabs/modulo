@@ -28,6 +28,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from starlette.responses import StreamingResponse
 
 from modulo.api.routes import analytics as route
@@ -229,6 +230,21 @@ class TestScanRoute:
                 stream_factory=lambda **_: _raising(AnalyticsRateLimitedError("over budget")),
             )
         assert exc_info.value.status_code == 429
+
+    async def test_untyped_db_error_maps_through_the_shared_classifier(self) -> None:
+        """A non-typed start-up failure gets the shared classifier's verdict.
+
+        The typed ``AnalyticsError`` keep their own mapping (see the 429 test);
+        an ``IntegrityError`` is not an ``AnalyticsError``, so it falls through
+        to the shared classifier — which maps it to 409 rather than the generic
+        500 the module-local ``_map_service_error`` fallback would have given.
+        """
+        with pytest.raises(HTTPException) as exc_info:
+            await _call_scan(
+                format="json",
+                stream_factory=lambda **_: _raising(IntegrityError("s", {}, Exception())),
+            )
+        assert exc_info.value.status_code == 409
 
     async def test_http_exception_passes_through_untouched(self) -> None:
         original = HTTPException(status_code=418, detail="teapot")

@@ -96,6 +96,29 @@ purging old run data.
 - [x] Run retention lists candidates with estimated byte sizes, exports as
       NDJSON, and purges terminal runs cascading to checkpoints; requires
       `confirm: true` (`run_retention.feature`)
+- [x] The run-retention export wire contract (FAR-1924): the body is NDJSON
+      with exactly one run record per line, and the FINAL line is
+      `{"_complete":true}` — emitted ONLY when the export stream ran to
+      exhaustion. Its absence means the export was truncated (a mid-stream
+      failure still returns HTTP 200 with no error), so an external compliance
+      consumer must check for the final sentinel before treating the file as a
+      complete record, and a schema-mapping consumer must skip it rather than
+      read it as a run record. The in-product download
+      (`AdminRunRetentionView.vue`) honours it: when the sentinel is absent it
+      shows a non-blocking `role="status"` warning that the export may be
+      incomplete (`AdminRunRetentionView.spec.ts`,
+      `tests/unit/api/test_admin_run_data_retention.py`)
+- [x] All three streaming exports (run-retention export, audit `/scan`,
+      analytics `/scan`) prime their body generator through the shared
+      `prime_stream` helper and re-emit it through the shared
+      `reemit_primed_stream` helper (`backend/src/modulo/api/db_error_handling.py`),
+      so a start-up failure maps to the SAME HTTP status a non-streaming
+      endpoint would answer (IntegrityError -> 409, ProgrammingError -> 501,
+      SQLSTATE 55P03 -> 409, ValidationError -> 422, SQLAlchemyError -> 503,
+      `HTTPException` passthrough, Exception -> 500) instead of each route's
+      hand-rolled subset (`test_db_error_handling.py`,
+      `test_admin_run_data_retention.py`, `test_audit_scan_route.py`,
+      `test_analytics_scan_route.py`)
 - [x] Org sandbox concurrency is viewable/updatable on
       `GET/PUT /api/v1/admin/org/sandbox-concurrency` (clamped 1..100)
       (`admin.py`)
@@ -103,6 +126,14 @@ purging old run data.
 ## Known Gaps
 
 ## QA History
+- 2026-10-18: **FAR-1924** - documented the run-retention export wire contract
+  (NDJSON, one record per line, final `{"_complete":true}` sentinel on complete
+  exhaustion only) and recorded that all three streaming exports now share one
+  `prime_stream` / `reemit_primed_stream` implementation
+  (`backend/src/modulo/api/db_error_handling.py`) instead of three hand-rolled
+  copies whose narrower exception mapping silently downgraded IntegrityError /
+  lock-timeout / ValidationError to 503/500. Contract mirrored in
+  `frontend/src/manifest.yaml` and the in-product download warning.
 - 2026-10-16: **product-map review pass** - tracked the FAR-1815
   `edit_snapshot_retention` housekeeping category that shipped without a
   product-map home: the per-pipeline newest-200 edit-snapshot sweep (with its

@@ -2065,6 +2065,7 @@ export default {
       "purge_selected": "Purge selected",
       "cancel": "Cancel",
       "export_downloaded": "Export downloaded.",
+      "export_may_be_incomplete": "The download completed, but the export may be incomplete: the completion marker was missing. Re-run the export before treating this file as a complete record.",
       "failed_to_load_candidates": "Failed to load candidates",
       "purge_failed": "Purge failed",
       "export_failed": "Export failed",

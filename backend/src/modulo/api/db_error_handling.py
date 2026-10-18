@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from functools import wraps
 from typing import NoReturn, ParamSpec, TypeVar
 
@@ -271,6 +271,87 @@ def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
+
+
+async def prime_stream[T](
+    stream: AsyncIterator[T],
+    log_prefix: str,
+    *,
+    map_domain_error: Callable[[Exception], HTTPException | None] | None = None,
+) -> T | None:
+    """Pull a streaming body's FIRST item out of *stream*, mapping any failure.
+
+    Streaming routes return a ``StreamingResponse`` whose generator is consumed
+    AFTER the handler returns, so a route-level ``@handle_db_errors`` decorator
+    cannot see an error raised by the generator's first step — it can only
+    answer a truncated 200. Awaiting the first item HERE pulls that work forward
+    to where the handler can still raise a real HTTP status.
+
+    Every escaped exception is routed through the module's ONE classifier
+    (:func:`_translate_wrapped_exception`), so a start-up failure gets exactly
+    the same arm it would from a non-streaming endpoint — IntegrityError -> 409,
+    ProgrammingError -> 501, SQLSTATE 55P03 lock timeout -> 409,
+    pydantic.ValidationError -> 422, PendingRollbackError/InvalidRequestError
+    refinements, the domain refusals, ``CancelledError``/``StorageExhaustedError``
+    re-raise, ``HTTPException`` passthrough, and the ``Exception`` -> 500
+    backstop. The previous hand-written copies (one per streaming route) mapped
+    only a subset of these and silently downgraded the rest to 503/500.
+
+    ``log_prefix`` keys the classifier's structured records
+    (``<log_prefix>.programming_error`` etc.). ``map_domain_error`` is the seam
+    for a route whose module owns a DOMAIN translator ahead of the classifier
+    (analytics' typed ``AnalyticsError`` -> 429/422/501/503): it returns the
+    route's ``HTTPException`` (raised here, preserving its exact status/detail)
+    or ``None`` to fall through to the shared classifier. ``HTTPException`` is
+    never handed to it — it always passes through untouched.
+
+    Returns the first item, or ``None`` when *stream* is already empty
+    (``StopAsyncIteration``) — re-emit the returned item (when non-``None``)
+    ahead of the rest via :func:`reemit_primed_stream` so no record is lost.
+    """
+    try:
+        return await stream.__anext__()
+    except StopAsyncIteration:
+        return None
+    except Exception as exc:  # routed through the module classifier
+        if map_domain_error is not None and not isinstance(exc, HTTPException):
+            mapped = map_domain_error(exc)
+            if mapped is not None:
+                raise mapped from None
+        _translate_wrapped_exception(exc, log_prefix)
+
+
+async def reemit_primed_stream[T](
+    stream: AsyncIterator[T],
+    first: T | None,
+    render: Callable[[T], str],
+    *,
+    header: str | None = None,
+    trailer: str | None = None,
+) -> AsyncIterator[str]:
+    """Re-emit a primed stream as the wire body, preserving order.
+
+    The single implementation of the first-item-then-the-rest chunker the three
+    streaming exports (run-retention export, audit scan, analytics scan) used to
+    duplicate. ``first`` is the item already pulled by :func:`prime_stream` (to
+    surface pre-stream errors); it is emitted BEFORE ``stream`` so no record is
+    lost. ``render`` serialises one item to its wire chunk (an NDJSON line, a CSV
+    row, ...).
+
+    ``header`` (e.g. the CSV column header) is emitted once, before any item.
+    ``trailer`` (e.g. a completeness sentinel) is emitted ONLY after the DB
+    iteration runs to exhaustion — an error mid-stream propagates out of the
+    ``async for`` and the trailer is never reached, so its absence is the
+    truncation signal a compliance consumer checks.
+    """
+    if header is not None:
+        yield header
+    if first is not None:
+        yield render(first)
+    async for item in stream:
+        yield render(item)
+    if trailer is not None:
+        yield trailer
 
 
 def raise_lock_timeout_conflict_if(exc: SQLAlchemyError, log_key: str) -> None:

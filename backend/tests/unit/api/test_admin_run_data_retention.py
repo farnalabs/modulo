@@ -314,6 +314,30 @@ class TestExport:
         assert resp.status_code == 501, resp.text
         assert resp.json()["detail"] == _MSG_501
 
+    def test_startup_integrity_error_yields_409_not_503(self) -> None:
+        """FAR-1924 regression: the shared classifier's 409 arm is reachable.
+
+        The old hand-rolled priming copy mapped only ProgrammingError ->
+        501 / SQLAlchemyError -> 503 / Exception -> 500, so an ``IntegrityError``
+        (a ``SQLAlchemyError`` subclass, mapped to 409 by the shared classifier)
+        was silently downgraded to a 503. ``prime_stream`` routes every arm
+        through the one classifier, so the 409 verdict now surfaces before the
+        response starts.
+        """
+        session = _make_session()
+        client = _build_unhandled(session, _principal())
+        with (
+            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch(
+                "modulo.api.routes.admin_run_retention.iter_run_export",
+                new=_raising_export(IntegrityError("s", {}, Exception())),
+            ),
+        ):
+            resp = client.post(EXPORT_URL, json={})
+
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"] == "Resource conflict. The operation could not be completed."
+
     def test_startup_http_exception_passes_through_untouched(self) -> None:
         """An HTTPException raised while priming is re-raised with its status."""
         session = _make_session()

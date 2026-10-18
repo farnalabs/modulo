@@ -49,6 +49,19 @@
       >
         {{ exportSuccess }}
       </div>
+      <!-- FAR-1924: the NDJSON export ends with a {"_complete":true} sentinel
+           ONLY when the stream ran to exhaustion. Its absence means the body
+           was truncated mid-stream (HTTP 200, no error), so warn rather than
+           let a consumer treat a partial compliance artefact as complete.
+           Non-blocking: the download already happened. -->
+      <div
+        v-if="exportWarning"
+        class="mb-4 rounded-lg border border-warning/50 bg-warning/10 p-3 text-sm text-warning-text"
+        data-testid="admin-run-retention-export-warning"
+        role="status"
+      >
+        {{ exportWarning }}
+      </div>
       <div
         v-if="purgeResult"
         class="mb-4 rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success"
@@ -308,6 +321,12 @@ const error = ref<string | null>(null)
 const exporting = ref(false)
 const exportError = ref<string | null>(null)
 const exportSuccess = ref<string | null>(null)
+const exportWarning = ref<string | null>(null)
+
+// The terminating record the backend appends ONLY when the export stream ran
+// to exhaustion (see ``_COMPLETE_SENTINEL`` in admin_run_retention.py and the
+// documented wire contract). Its absence means a truncated body.
+const EXPORT_COMPLETE_SENTINEL = '{"_complete":true}'
 
 const purging = ref(false)
 const purgeError = ref<string | null>(null)
@@ -450,10 +469,20 @@ async function executePurge() {
   }
 }
 
+function lastNonEmptyLine(text: string): string {
+  const lines = text.split('\n')
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim()
+    if (line) return line
+  }
+  return ''
+}
+
 async function exportFile() {
   exporting.value = true
   exportError.value = null
   exportSuccess.value = null
+  exportWarning.value = null
   try {
     const res = await fetch('/api/v1/admin/run-retention/export', {
       method: 'POST',
@@ -465,6 +494,10 @@ async function exportFile() {
       throw new Error(formatApiError(detail) || t('views.AdminRunRetentionView.export_failed_status', { status: res.status }))
     }
     const blob = await res.blob()
+    // FAR-1924: inspect the wire contract before handing the file to the user.
+    // The sentinel is present only on a complete stream — a truncated export
+    // still arrives as an HTTP 200, so this is the only truncation signal.
+    const complete = lastNonEmptyLine(await blob.text()) === EXPORT_COMPLETE_SENTINEL
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -472,6 +505,9 @@ async function exportFile() {
     a.click()
     URL.revokeObjectURL(url)
     exportSuccess.value = t('views.AdminRunRetentionView.export_downloaded')
+    if (!complete) {
+      exportWarning.value = t('views.AdminRunRetentionView.export_may_be_incomplete')
+    }
   } catch (e: unknown) {
     exportError.value = e instanceof Error ? e.message : t('views.AdminRunRetentionView.export_failed')
   } finally {

@@ -119,6 +119,33 @@ uv run scripts/backup-prune.py --backup-dir /backups/daily            # execute
 0 3 * * * cd /opt/modulo/codebase && uv run scripts/backup-prune.py --backup-dir /backups/daily
 ```
 
+## Run Data Retention Export
+
+Separately from backup files, Modulo retains run data in the database. The
+**Run Retention** admin page (`/admin/run-retention`, system-admin only)
+exports the runs matching the current filter so they can be archived before
+the **purge**, which permanently deletes terminal runs and their checkpoints.
+The export is created by `POST /api/v1/admin/run-retention/export` and
+downloaded from the page.
+
+### Export wire contract
+
+The export body is **NDJSON**: exactly one run record per line. The **final
+line is `{"_complete":true}`**, and it is emitted only when the export stream
+ran to completion.
+
+- If `{"_complete":true}` is **absent**, the export was **truncated**. A
+  failure after the stream has started still returns HTTP 200 (the first
+  record has already primed a successful response), so the terminating line is
+  the only truncation signal. Verify it before treating the file as a complete
+  compliance record.
+- A consumer that maps each line to a schema must **skip** the
+  `{"_complete":true}` line rather than read it as a run record.
+- The in-product download performs this check and shows a non-blocking warning
+  when the terminating line is missing.
+
+See the feature's contract line in `docs/product-map/system/runtime.md`.
+
 ## Full Restoration Walkthrough
 
 ```bash
