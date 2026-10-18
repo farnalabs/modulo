@@ -1485,7 +1485,7 @@ jobs:
     # gate. A job that is merely SKIPPED is neither failure() nor cancelled();
     # every job here either always runs (path gates are step-level) or is only
     # skipped because an ancestor already failed, which is itself a failure.
-    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
+    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -1774,8 +1774,17 @@ jobs:
     # pre-deploy gate (e.g. SonarCloud, schema freshness, secret scan)
     # had no automated fix mechanism. The Branch Fixer creates its own
     # fix branch from main — branchName: main, prNumber: 0 signals this.
+    #
+    # FAR-1947/FAR-1429: `needs` must list EVERY job that can fail on main —
+    # the `contains(needs.*.result, 'failure')` guard below only sees jobs named
+    # here, so a failing job omitted from this list never reaches the dispatcher.
+    # `tier1b-light` and the FAR-1947 `frontend-unit-parity` job both run on
+    # every push to main (the detector forces all outputs true off-PR), so both
+    # belong here. PR-only jobs (`coverage-gate`, `sonar-new-issues-gate`) stay
+    # out deliberately: they are skipped on main, which is neither failure nor
+    # cancelled.
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && always()
-    needs: [backend-lint, backend-test, integration-changed, frontend, runner-ci-harness, sonarcloud-scan, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
+    needs: [backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -1908,8 +1917,15 @@ jobs:
     # the URL secret points at the dogfood map's endpoint.
     #
     # NOT a required check: this job is observability only.
+    #
+    # FAR-1947/FAR-1429: the `!contains(needs.*.result, 'failure')` guard reads
+    # ONLY the jobs named in `needs`, so a failure of a job omitted here still
+    # satisfies the guard and self-reports the "ci" stage as done — a false-green
+    # observability report while the PR's run is red. Every job that can fail on
+    # a PR must be listed: the FAR-1947 `frontend-unit-parity` job, plus the
+    # pre-existing `tier1b-light` and `runner-ci-harness` omissions swept here.
     if: github.event_name == 'pull_request' && !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
-    needs: [backend-lint, backend-test, integration-changed, frontend, coverage-gate, sonarcloud-scan, sonar-new-issues-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
+    needs: [backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, coverage-gate, sonarcloud-scan, sonar-new-issues-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     steps:
       - name: Self-report CI Validate stage to Modulo (fail-open, best-effort)
