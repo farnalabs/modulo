@@ -1016,7 +1016,7 @@ async def _converge_pipeline_edges(
     stable; edges left by an older seed are removed (FAR-1248: none existed,
     so the live graph read showed no connections).
     """
-    from modulo.db.crud.pipeline import GraphWriteRecording, replace_pipeline_graph
+    from modulo.db.crud.pipeline import GraphWriteActor, GraphWriteRecording, replace_pipeline_graph
 
     existing = list(
         (await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline.id))).scalars()
@@ -1072,9 +1072,11 @@ async def _converge_pipeline_edges(
         org_id=org.id,
         nodes=nodes,
         edges=[dict(row) for row in edge_rows],
-        is_privileged=True,
-        caller_type="rest",
-        is_guardrail_admin=True,
+        actor=GraphWriteActor(
+            is_privileged=True,
+            caller_type="rest",
+            is_guardrail_admin=True,
+        ),
         # ``has_version_history`` is already a bool, so it is used directly as
         # the recording's ``record_snapshot``: genesis (False) requests no
         # snapshot — exactly what the old defaulted-off flag did — and a

@@ -16,6 +16,7 @@ from sqlalchemy import Table, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.db.crud.pipeline import (
+    GraphWriteActor,
     archive_pipeline,
     get_pipeline,
     get_pipeline_graph,
@@ -150,8 +151,7 @@ async def test_replace_pipeline_graph_refuses_other_org(session: AsyncSession) -
         org_id=_ORG_A,
         nodes=[],
         edges=[],
-        is_privileged=True,
-        caller_type="rest",
+        actor=GraphWriteActor(is_privileged=True, caller_type="rest"),
     )
 
     assert result is None

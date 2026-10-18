@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import copy
 import uuid
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -22,7 +22,7 @@ from modulo.db.crud.hitl_review_guard import (
     DiffResult,
     HitlReviewWeakeningDenied,
 )
-from modulo.db.crud.pipeline import _edge_to_plain_dict, replace_pipeline_graph
+from modulo.db.crud.pipeline import GraphWriteActor, _edge_to_plain_dict, replace_pipeline_graph
 from modulo.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
@@ -138,6 +138,30 @@ def _snapshot_result(snapshot: _SnapshotRow | None) -> MagicMock:
     return result
 
 
+def _actor(
+    is_privileged: bool,
+    caller_type: Literal["rest", "mcp"] = "rest",
+    *,
+    account_id: uuid.UUID | None = None,
+    is_guardrail_admin: bool = False,
+    grants_deny_privilege: bool = False,
+    grants_deny_guardrail_admin: bool = False,
+) -> GraphWriteActor:
+    """Build the request-resolved actor/auth context the graph write now takes.
+
+    Mirrors how each call site resolves the six values from its request; the
+    values are still chosen per call, this only packages them.
+    """
+    return GraphWriteActor(
+        is_privileged=is_privileged,
+        caller_type=caller_type,
+        account_id=account_id,
+        is_guardrail_admin=is_guardrail_admin,
+        grants_deny_privilege=grants_deny_privilege,
+        grants_deny_guardrail_admin=grants_deny_guardrail_admin,
+    )
+
+
 def _weakening_edges(old_cfg: dict, new_cfg: dict) -> tuple[list[_EdgeRow], list[dict]]:
     old = [_EdgeRow(cfg=old_cfg)]
     new = [
@@ -172,8 +196,7 @@ async def test_replace_pipeline_graph_guard_runs_before_delete(monkeypatch: pyte
             org_id=uuid.uuid4(),
             nodes=[],
             edges=new,
-            is_privileged=False,
-            caller_type="rest",
+            actor=_actor(False),
         )
     assert excinfo.value.reason_code == REASON_INSUFFICIENT_ROLE
     # The deny happened before the delete/insert executes: execute was called
@@ -239,9 +262,7 @@ async def test_live_role_check_runs_after_the_row_lock(monkeypatch: pytest.Monke
         org_id=uuid.uuid4(),
         nodes=[],
         edges=new,
-        is_privileged=False,
-        caller_type="rest",
-        account_id=uuid.uuid4(),
+        actor=_actor(False, account_id=uuid.uuid4()),
         _on_lock_acquired=on_lock,
     )
     assert result is not None
@@ -271,9 +292,7 @@ async def test_fail_closed_no_retry_on_role_query_db_error(monkeypatch: pytest.M
             org_id=uuid.uuid4(),
             nodes=[],
             edges=new,
-            is_privileged=True,
-            caller_type="rest",
-            account_id=uuid.uuid4(),
+            actor=_actor(True, account_id=uuid.uuid4()),
         )
     assert excinfo.value.reason_code == REASON_ROLE_CHECK_DB_ERROR
     assert calls == 1, "no second role query may be attempted"
@@ -296,9 +315,7 @@ async def test_missing_membership_denies_with_role_changed(monkeypatch: pytest.M
             org_id=uuid.uuid4(),
             nodes=[],
             edges=new,
-            is_privileged=True,
-            caller_type="rest",
-            account_id=uuid.uuid4(),
+            actor=_actor(True, account_id=uuid.uuid4()),
         )
     assert excinfo.value.reason_code == REASON_ROLE_CHANGED
 
@@ -331,8 +348,7 @@ async def test_non_liftable_regardless_of_authz_enforce(monkeypatch: pytest.Monk
                 org_id=uuid.uuid4(),
                 nodes=[],
                 edges=new,
-                is_privileged=False,
-                caller_type="rest",
+                actor=_actor(False),
             )
         assert excinfo.value.reason_code == REASON_INSUFFICIENT_ROLE
     finally:
@@ -360,8 +376,7 @@ async def test_mcp_caller_type_is_always_denied_even_when_privileged(
             org_id=uuid.uuid4(),
             nodes=[],
             edges=new,
-            is_privileged=True,  # would be privileged over REST
-            caller_type="mcp",
+            actor=_actor(True, "mcp"),  # would be privileged over REST
         )
     assert excinfo.value.reason_code == REASON_MCP_NOT_PERMITTED
     assert not _hitl_audits(audit)
@@ -391,8 +406,7 @@ async def test_mcp_non_weakening_write_is_allowed(monkeypatch: pytest.MonkeyPatc
         org_id=uuid.uuid4(),
         nodes=[],
         edges=new,
-        is_privileged=True,
-        caller_type="mcp",
+        actor=_actor(True, "mcp"),
     )
     assert result is not None
     assert not _hitl_audits(audit)
@@ -420,8 +434,7 @@ async def test_denied_then_allowed_for_privileged(monkeypatch: pytest.MonkeyPatc
             org_id=uuid.uuid4(),
             nodes=[],
             edges=new,
-            is_privileged=False,
-            caller_type="rest",
+            actor=_actor(False),
         )
     assert not _hitl_audits(audit)
 
@@ -439,9 +452,7 @@ async def test_denied_then_allowed_for_privileged(monkeypatch: pytest.MonkeyPatc
         org_id=uuid.uuid4(),
         nodes=[],
         edges=new,
-        is_privileged=True,
-        caller_type="rest",
-        account_id=uuid.uuid4(),
+        actor=_actor(True, account_id=uuid.uuid4()),
     )
     assert result is not None
     assert len(_hitl_audits(audit)) == 1
@@ -482,8 +493,7 @@ async def test_replace_denies_node_level_hitl_config_weakening_for_non_privilege
             org_id=uuid.uuid4(),
             nodes=[new_hitl_node],
             edges=[],
-            is_privileged=False,
-            caller_type="rest",
+            actor=_actor(False),
         )
     assert excinfo.value.reason_code == REASON_INSUFFICIENT_ROLE
     assert excinfo.value.weakening_types == ["human_only"]
@@ -525,9 +535,7 @@ async def test_replace_allows_node_level_weakening_for_privileged_with_audit(
         org_id=uuid.uuid4(),
         nodes=[new_hitl_node],
         edges=new,
-        is_privileged=True,
-        caller_type="rest",
-        account_id=uuid.uuid4(),
+        actor=_actor(True, account_id=uuid.uuid4()),
     )
     assert result is not None
     assert len(_hitl_audits(audit)) == 1
@@ -556,8 +564,7 @@ async def test_replace_denies_hitl_node_removal_for_non_privileged(
             org_id=uuid.uuid4(),
             nodes=[],  # hitl node removed from the graph
             edges=[],
-            is_privileged=False,
-            caller_type="rest",
+            actor=_actor(False),
         )
     assert excinfo.value.reason_code == REASON_CORRELATION_KEY_MISMATCH
     assert excinfo.value.weakening_types == ["structural:hitl_node_removed"]
@@ -581,8 +588,7 @@ async def test_replace_untouched_hitl_config_is_not_weakening(
         org_id=uuid.uuid4(),
         nodes=[copy.deepcopy(old_hitl_node)],
         edges=[],
-        is_privileged=False,
-        caller_type="rest",
+        actor=_actor(False),
     )
     assert result is not None
     assert not _hitl_audits(audit)
@@ -607,9 +613,7 @@ async def test_allowed_weakening_with_live_admin_role_under_lock(monkeypatch: py
         org_id=uuid.uuid4(),
         nodes=[],
         edges=new,
-        is_privileged=False,  # stale flag; the live role overrides to privileged
-        caller_type="rest",
-        account_id=uuid.uuid4(),
+        actor=_actor(False, account_id=uuid.uuid4()),  # stale flag; the live role overrides to privileged
     )
     assert result is not None
     assert len(_hitl_audits(audit)) == 1
@@ -633,9 +637,7 @@ async def test_live_role_demotion_denies_even_when_route_flag_privileged(monkeyp
             org_id=uuid.uuid4(),
             nodes=[],
             edges=new,
-            is_privileged=True,  # route-time flag said privileged
-            caller_type="rest",
-            account_id=uuid.uuid4(),
+            actor=_actor(True, account_id=uuid.uuid4()),  # route-time flag said privileged
         )
     assert excinfo.value.reason_code == REASON_INSUFFICIENT_ROLE
 
@@ -658,8 +660,7 @@ async def test_on_lock_acquired_is_noop_by_default(monkeypatch: pytest.MonkeyPat
         org_id=uuid.uuid4(),
         nodes=[],
         edges=new,
-        is_privileged=True,
-        caller_type="rest",
+        actor=_actor(True),
     )
     assert result is not None
 
@@ -681,8 +682,7 @@ async def test_on_lock_acquired_hook_invoked_after_lock(monkeypatch: pytest.Monk
         org_id=uuid.uuid4(),
         nodes=[],
         edges=[],
-        is_privileged=True,
-        caller_type="rest",
+        actor=_actor(True),
         _on_lock_acquired=on_lock,
     )
     assert events == ["lock"]
@@ -707,8 +707,7 @@ async def test_edge_deletion_denied_with_correlation_key_mismatch(monkeypatch: p
             org_id=uuid.uuid4(),
             nodes=[],
             edges=[],  # drops the gated edge entirely
-            is_privileged=False,
-            caller_type="rest",
+            actor=_actor(False),
         )
     assert excinfo.value.reason_code == REASON_CORRELATION_KEY_MISMATCH
     assert excinfo.value.payload_json["affected_edges"][0]["weakening_types"] == ["structural:edge_deleted"]
@@ -744,8 +743,7 @@ async def test_replace_preserves_gate_when_config_key_omitted(monkeypatch: pytes
         org_id=uuid.uuid4(),
         nodes=[],
         edges=new,
-        is_privileged=False,
-        caller_type="rest",
+        actor=_actor(False),
     )
     assert result is not None
     persisted = result[1]
@@ -779,8 +777,7 @@ async def test_replace_preserves_gate_when_presence_flag_false(monkeypatch: pyte
         org_id=uuid.uuid4(),
         nodes=[],
         edges=new,
-        is_privileged=False,
-        caller_type="rest",
+        actor=_actor(False),
     )
     assert result is not None
     persisted = result[1]
@@ -811,8 +808,7 @@ async def test_replace_omitted_key_on_new_edge_still_writes_none(monkeypatch: py
         org_id=uuid.uuid4(),
         nodes=[],
         edges=new,
-        is_privileged=False,
-        caller_type="rest",
+        actor=_actor(False),
     )
     assert result is not None
     persisted = result[1]
@@ -846,8 +842,7 @@ async def test_replace_explicit_null_still_denies_for_non_privileged(monkeypatch
             org_id=uuid.uuid4(),
             nodes=[],
             edges=new,
-            is_privileged=False,
-            caller_type="rest",
+            actor=_actor(False),
         )
     assert excinfo.value.reason_code == REASON_CORRELATION_KEY_MISMATCH
     assert not _hitl_audits(audit)
@@ -879,8 +874,7 @@ async def test_replace_explicit_null_writes_none_for_privileged(monkeypatch: pyt
         org_id=uuid.uuid4(),
         nodes=[],
         edges=new,
-        is_privileged=True,
-        caller_type="rest",
+        actor=_actor(True),
     )
     assert result is not None
     persisted = result[1]
@@ -918,8 +912,7 @@ async def test_replace_explicit_null_still_denies_for_mcp(monkeypatch: pytest.Mo
             org_id=uuid.uuid4(),
             nodes=[],
             edges=new,
-            is_privileged=True,
-            caller_type="mcp",
+            actor=_actor(True, "mcp"),
         )
     assert excinfo.value.reason_code == REASON_MCP_NOT_PERMITTED
     assert not _hitl_audits(audit)
@@ -952,8 +945,7 @@ async def test_replace_present_false_with_config_on_new_edge_ignores_value(monke
         org_id=uuid.uuid4(),
         nodes=[],
         edges=new,
-        is_privileged=False,
-        caller_type="rest",
+        actor=_actor(False),
     )
     assert result is not None
     persisted = result[1]
@@ -1004,8 +996,7 @@ async def test_replace_pipeline_graph_denies_guardrail_binding_strip_for_nonadmi
             org_id=uuid.uuid4(),
             nodes=nodes,
             edges=[],
-            is_privileged=False,
-            caller_type="rest",
+            actor=_actor(False),
         )
     assert str(bound_node) in excinfo.value.stripped_node_ids
     assert "strip a guardrail binding" in excinfo.value.detail
@@ -1046,9 +1037,7 @@ async def test_replace_pipeline_graph_allows_guardrail_strip_for_admin(
         org_id=uuid.uuid4(),
         nodes=nodes,
         edges=[],
-        is_privileged=True,
-        caller_type="rest",
-        is_guardrail_admin=True,
+        actor=_actor(True, is_guardrail_admin=True),
     )
     assert result is not None
 
@@ -1084,10 +1073,7 @@ async def test_replace_pipeline_graph_denies_guardrail_strip_via_live_role(
             org_id=uuid.uuid4(),
             nodes=nodes,
             edges=[],
-            is_privileged=True,
-            caller_type="rest",
-            account_id=uuid.uuid4(),
-            is_guardrail_admin=True,
+            actor=_actor(True, account_id=uuid.uuid4(), is_guardrail_admin=True),
         )
     assert "strip a guardrail binding" in excinfo.value.detail
 
@@ -1205,8 +1191,7 @@ async def test_replace_pipeline_graph_persists_condition_expression(
         org_id=uuid.uuid4(),
         nodes=[],
         edges=[edge],
-        is_privileged=True,
-        caller_type="mcp",
+        actor=_actor(True, "mcp"),
     )
     assert result is not None
     _, persisted_edges = result
