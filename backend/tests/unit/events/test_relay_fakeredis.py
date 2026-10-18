@@ -70,7 +70,7 @@ async def _establish_relay(bus: EventBus, broker: RedisEventBroker) -> tuple[Eve
     """Subscribe the SSE queue FIRST, then acquire the relay (subscribe before publish)."""
     q = await bus.subscribe(_ORG)
     relay = EventRelay(broker=broker, bus=bus, has_clients=lambda _org: True)
-    await relay.acquire(_ORG)
+    relay.acquire(_ORG)
     # Subscribe confirmation drained -> subscription established before any publish.
     assert await relay.wait_ready(_ORG, max_wait_s=5), "relay subscription was not established"
     return relay, q

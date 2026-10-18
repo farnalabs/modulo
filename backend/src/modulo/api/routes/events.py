@@ -222,7 +222,7 @@ async def sse_event_stream(
     relay = await _ensure_relay()
     if relay is not None:
         try:
-            await relay.acquire(org_id)
+            relay.acquire(org_id)
         except asyncio.CancelledError:
             await event_bus.unsubscribe(org_id, queue)
             await _untrack_connection(org_id, queue)
