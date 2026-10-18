@@ -129,6 +129,31 @@ def test_json_detector_false_for_partial_parsing_only(tmp_path: Path) -> None:
     assert not mod._semgrep_json_timeout(path)
 
 
+def test_json_detector_false_for_list_typed_partial_parsing(tmp_path: Path) -> None:
+    """Semgrep may serialise ``errors[].type`` as a LIST (observed on 1.175.0).
+
+    A bare ``in frozenset`` test on that list raised
+    ``TypeError: unhashable type: 'list'`` and crashed the gate — it must be
+    treated as the same non-fatal PartialParsing verdict instead.
+    """
+    path = tmp_path / "partial-list.json"
+    _write_json(
+        path,
+        {"errors": [{"type": ["PartialParsing"], "message": "partial parse"}], "results": []},
+    )
+    assert not mod._semgrep_json_timeout(path)
+
+
+def test_json_detector_true_for_list_typed_timeout(tmp_path: Path) -> None:
+    """A fatal class inside a list-typed ``type`` is still fatal."""
+    path = tmp_path / "timeout-list.json"
+    _write_json(
+        path,
+        {"errors": [{"type": ["PartialParsing", "Timeout"], "message": "timeout"}], "results": []},
+    )
+    assert mod._semgrep_json_timeout(path)
+
+
 def test_json_detector_false_when_file_missing(tmp_path: Path) -> None:
     assert not mod._semgrep_json_timeout(tmp_path / "does-not-exist.json")
 

@@ -169,6 +169,28 @@ def _semgrep_skipped_files(output: str) -> bool:
     return any(pattern.search(output) for pattern in _SEMGREP_TIMEOUT_PATTERNS)
 
 
+def _json_error_type_is_fatal(error: object) -> bool:
+    """True when a JSON error entry's ``type`` names a fatal (incomplete) class.
+
+    Semgrep serialises ``errors[].type`` as EITHER a string OR a LIST of
+    strings (observed on 1.175.0 for an error carrying several type labels,
+    e.g. a ``PartialParsing`` entry on the large ``mcp_server.py``). A bare
+    ``in frozenset`` membership test on a list raises
+    ``TypeError: unhashable type: 'list'`` — and because it sits in the
+    incomplete-scan detector, it crashed the whole gate on a partial parse
+    instead of reporting the intended "not fatal" verdict. The gate must
+    survive the error it guards, so both shapes are handled.
+    """
+    if not isinstance(error, dict):
+        return False
+    error_type = error.get("type")
+    if isinstance(error_type, str):
+        return error_type in _SEMGREP_JSON_FATAL_ERROR_TYPES
+    if isinstance(error_type, list):
+        return any(isinstance(item, str) and item in _SEMGREP_JSON_FATAL_ERROR_TYPES for item in error_type)
+    return False
+
+
 def _semgrep_json_timeout(json_path: str | os.PathLike[str]) -> bool:
     """Return True when the semgrep ``--json-output`` payload is incomplete.
 
@@ -187,7 +209,7 @@ def _semgrep_json_timeout(json_path: str | os.PathLike[str]) -> bool:
     errors = payload.get("errors") if isinstance(payload, dict) else None
     if not isinstance(errors, list):
         return False
-    return any(isinstance(err, dict) and err.get("type") in _SEMGREP_JSON_FATAL_ERROR_TYPES for err in errors)
+    return any(_json_error_type_is_fatal(err) for err in errors)
 
 
 def _semgrep_scan_incomplete(output: str, json_path: str | os.PathLike[str] | None = None) -> bool:
