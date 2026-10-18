@@ -467,11 +467,24 @@ async def _checkpoint_created_at_present(session: AsyncSession) -> bool:
 # production path). The ``EXISTS`` probes are index-served on
 # (organisation_id, thread_id), so a fully-purged thread drops out of the
 # candidate set and the sweep resumes from the remainder on the next tick.
+#
+# The ``NOT EXISTS`` guard is the SAME one Class 2 carries, and it is the
+# function's stated invariant: a thread is a candidate only when NO non-terminal
+# run shares it. A resume child (``run_group_kind='resume'``) legitimately
+# shares its parent's ``langgraph_thread_id``, so an aged terminal parent must
+# not drag a live child's resume state out with it. The anti-join is bounded:
+# the outer ``LIMIT`` caps the candidate fetch, and the probe is served by the
+# ``langgraph_thread_id`` index.
 _RUN_EXPIRED_CANDIDATES_SQL = """
 SELECT r.organisation_id, r.langgraph_thread_id
 FROM runs r
 WHERE r.status = ANY(:terminal_statuses)
   AND COALESCE(r.completed_at, r.created_at) < :cutoff
+  AND NOT EXISTS (
+    SELECT 1 FROM runs live
+    WHERE live.langgraph_thread_id = r.langgraph_thread_id
+      AND live.status <> ALL(:terminal_statuses)
+  )
   AND (
     EXISTS (
       SELECT 1 FROM checkpoints c

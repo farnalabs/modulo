@@ -109,6 +109,10 @@ async def _insert_run(
     snapshot_id: uuid.UUID,
     thread_id: str,
     status: str,
+    parent_run_id: uuid.UUID | None = None,
+    run_group_kind: str | None = None,
+    run_group_id: uuid.UUID | None = None,
+    completed_at: datetime | None = None,
 ) -> uuid.UUID:
     run_id = uuid.uuid4()
     # run_number must be unique per (org, run_number) — derive it from the
@@ -118,8 +122,10 @@ async def _insert_run(
         await conn.execute(
             text(
                 "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                "trigger_type, status, input_hash, langgraph_thread_id, run_number) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', :st, :ih, :thread, :rn)",
+                "trigger_type, status, input_hash, langgraph_thread_id, run_number, "
+                "parent_run_id, run_group_kind, run_group_id, completed_at) "
+                "VALUES (:id, :oid, :pid, :sid, 'manual', :st, :ih, :thread, :rn, "
+                ":parent, :kind, :group, :completed_at)",
             ),
             {
                 "id": str(run_id),
@@ -130,6 +136,10 @@ async def _insert_run(
                 "ih": uuid.uuid4().hex,
                 "thread": thread_id,
                 "rn": run_number,
+                "parent": str(parent_run_id) if parent_run_id else None,
+                "kind": run_group_kind,
+                "group": str(run_group_id) if run_group_id else None,
+                "completed_at": completed_at,
             },
         )
     return run_id
@@ -1162,3 +1172,90 @@ class TestBatchDeleteLanggraphCheckpoints:
                     {"oid": str(org_id)},
                 )
                 assert result.scalar_one() == 5, f"{table} must retain 5 of 6 rows (deployed path, bounded)"
+
+    async def test_deployed_path_keeps_thread_shared_with_live_run(
+        self, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FAR-1971: the deployed path never purges a thread a live run shares.
+
+        A resume child inherits its parent's ``langgraph_thread_id`` to continue
+        the parent's checkpoint. When the parent is an aged TERMINAL run and the
+        child is still live (non-terminal), the thread must NOT be a purge
+        candidate — the checkpoints ARE the live child's resume state, and
+        deleting them makes ``resume_run`` restart the graph from scratch.
+
+        This exercises the DEPLOYED (no ``created_at``) candidate class, whose
+        live-run guard must match the ``created_at``-present class. The positive
+        control (an aged terminal thread with no live run) is still purged.
+        """
+        from modulo.db.crud import org_deletion as org_deletion_mod
+
+        async def _no_created_at(_session: Any) -> bool:
+            return False
+
+        monkeypatch.setattr(org_deletion_mod, "_checkpoint_created_at_present", _no_created_at)
+
+        await _drain_eligible_checkpoints(db_engine)
+
+        org_id = await _create_org(db_engine, "live-shared")
+        user_id = await _create_user(db_engine, org_id, "live-shared@test.com")
+        pid = await _create_pipeline(db_engine, org_id, "Live Shared Pipeline", user_id)
+        sid = await _create_snapshot(db_engine, org_id, pid)
+        old_ts = datetime.now(UTC) - timedelta(days=31)
+
+        # Thread shared by an aged terminal parent and a live resume child.
+        shared_thread = "thread-shared-with-live"
+        parent_run_id = await _insert_run(
+            db_engine,
+            org_id=org_id,
+            pipeline_id=pid,
+            snapshot_id=sid,
+            thread_id=shared_thread,
+            status="complete",
+            completed_at=old_ts,
+        )
+        await _insert_run(
+            db_engine,
+            org_id=org_id,
+            pipeline_id=pid,
+            snapshot_id=sid,
+            thread_id=shared_thread,
+            status="running",
+            parent_run_id=parent_run_id,
+            run_group_kind="resume",
+            run_group_id=parent_run_id,
+        )
+
+        # Positive control: an aged terminal thread with no live run.
+        purged_thread = "thread-terminal-only"
+        await _insert_run(
+            db_engine,
+            org_id=org_id,
+            pipeline_id=pid,
+            snapshot_id=sid,
+            thread_id=purged_thread,
+            status="complete",
+            completed_at=old_ts,
+        )
+
+        await _insert_checkpoint_triple(db_engine, org_id, [shared_thread, purged_thread], datetime.now(UTC))
+
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with factory() as session:
+            count = await org_deletion_mod.batch_delete_langgraph_checkpoints(session)
+
+        # Only the terminal-only thread's three rows go; the live-shared thread
+        # is excluded because a non-terminal run still owns its checkpoints.
+        assert count == 3
+        async with db_engine.connect() as conn:
+            for table in ("checkpoints", "checkpoint_writes", "checkpoint_blobs"):
+                live_shared = await conn.execute(
+                    text(f"SELECT COUNT(*) FROM {table} WHERE organisation_id = :oid AND thread_id = :thread"),  # noqa: S608
+                    {"oid": str(org_id), "thread": shared_thread},
+                )
+                assert live_shared.scalar_one() == 1, f"live-shared {table} row must survive the purge"
+                terminal_only = await conn.execute(
+                    text(f"SELECT COUNT(*) FROM {table} WHERE organisation_id = :oid AND thread_id = :thread"),  # noqa: S608
+                    {"oid": str(org_id), "thread": purged_thread},
+                )
+                assert terminal_only.scalar_one() == 0, f"terminal-only {table} row must be purged"
