@@ -74,6 +74,15 @@ describe('AdminHousekeepingView — scan', () => {
     expect(wrapper.text()).toContain('Scanning')
     expect(wrapper.find('[data-testid="hk-error"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="hk-category"]').exists()).toBe(false)
+
+    // The skeleton is a labelled live region: a native <output> carries the
+    // implicit `status` role, so assistive tech is told the scan is running
+    // without an explicit role attribute (which SonarCloud Web:S6819 rejects).
+    // Matches the NotificationsPage / AdminErrorDetailView skeleton pattern.
+    const skeleton = wrapper.find('[data-testid="hk-loading"]')
+    expect(skeleton.exists()).toBe(true)
+    expect(skeleton.element.tagName).toBe('OUTPUT')
+    expect(skeleton.attributes('aria-busy')).toBe('true')
   })
 
   it('renders categories and candidates after a successful scan', async () => {
@@ -134,6 +143,16 @@ describe('AdminHousekeepingView — scan', () => {
     const wrapper = mountView()
     await nextTick()
     expect(wrapper.text()).toContain('not-a-date')
+  })
+
+  it('shows an em-dash placeholder when the candidate has no created_at', async () => {
+    mockGet.mockResolvedValue(scanPayload([
+      category('stale_pipelines', [candidate('p-1', 'Undated', { created_at: null })]),
+    ]))
+    const wrapper = mountView()
+    await nextTick()
+    expect(wrapper.find('[data-testid="hk-candidate-checkbox"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('—')
   })
 })
 
