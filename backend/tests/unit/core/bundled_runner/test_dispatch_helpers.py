@@ -78,7 +78,7 @@ def test_parse_uuid_roundtrip_and_none() -> None:
     assert rd._parse_uuid(object()) is None
 
 
-async def test_render_agent_template_uses_shared_sandbox_jinja_environment(
+def test_render_agent_template_uses_shared_sandbox_jinja_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The bundled-runner renderer resolves the shared FAR-226 helper.
@@ -119,7 +119,7 @@ async def test_render_agent_template_uses_shared_sandbox_jinja_environment(
 # ---------------------------------------------------------------------------
 
 
-async def test_render_agent_template_injects_baked_model_value() -> None:
+def test_render_agent_template_injects_baked_model_value() -> None:
     """The Bundled Runner path interpolates `{{ model }}` from the SNAPSHOT's
     baked `_resolved_model` — parity with the E2B node-runner render."""
     result = rd._render_agent_template(
@@ -138,7 +138,7 @@ async def test_render_agent_template_injects_baked_model_value() -> None:
     assert rendered_command == "opencode run --model opencode-go/mimo-v2.6-flash --auto"
 
 
-async def test_render_agent_template_run_override_beats_baked_value() -> None:
+def test_render_agent_template_run_override_beats_baked_value() -> None:
     """Rung 1 folds in pre-dispatch: the run's frozen `_run_overrides.model`
     overrides the baked value for that run."""
     result = rd._render_agent_template(
@@ -157,7 +157,7 @@ async def test_render_agent_template_run_override_beats_baked_value() -> None:
     assert rendered_command == "opencode run --model opencode-go/variant-choice --auto"
 
 
-async def test_render_agent_template_model_class_without_value_fails_closed() -> None:
+def test_render_agent_template_model_class_without_value_fails_closed() -> None:
     """An opted-in node with no baked model and no run override refuses before
     any workspace provisioning (ADR 037 D3) — no blank --model dispatch."""
     with pytest.raises(ValueError, match="no model was resolved at snapshot mint"):
