@@ -261,19 +261,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Every fixture under .semgrep/tests/ is exercised here (FAR-1933),
-          # paired to the rule FILE that contains its rule id. Pairing is by
-          # RULE ID, not by rule-file stem (see the step comment above): a
-          # stem-derived loop is how a dead rule can ship green for months.
+          # Every fixture in the repo carrying a semgrep test annotation
+          # (`# ruleid:` / `# ok:`) is exercised here (FAR-1933), paired to the
+          # rule FILE that contains its rule id. Pairing is by RULE ID, not by
+          # rule-file stem (see the step comment above): a stem-derived loop is
+          # how a dead rule can ship green for months. Most fixtures live under
+          # .semgrep/tests/, but two sit BESIDE their rule files
+          # (credential_in_state.py, missing_session_begin.py) — a sweep scoped
+          # to .semgrep/tests/*.py is exactly what missed them, so enumerate by
+          # annotation, not by directory:
+          #   grep -rl '# ruleid:' --include='*.py' --include='*.ts' \
+          #     --include='*.vue' --include='*.js' .
           pairs="
           .semgrep/all-empty-iterable.yml:.semgrep/tests/all-empty-iterable.py
           .semgrep/asyncio_waitfor_wait_unshielded.yml:.semgrep/tests/asyncio-waitfor-wait-unshielded.py
           .semgrep/callable-dunder-name.yml:.semgrep/tests/callable-dunder-name.py
           .semgrep/connector-egress-verify-required.yml:.semgrep/tests/connector-egress-verify-required.py
+          .semgrep/credential_in_state.yml:.semgrep/credential_in_state.py
           .semgrep/exception-mro-ordering.yml:.semgrep/tests/test_exception_mro_ordering.py
           .semgrep/hitl-review-edge-mutation-outside-guard.yml:.semgrep/tests/hitl-review-edge-mutation-outside-guard.py
           .semgrep/hitl-review-mcp-caller-type.yml:.semgrep/tests/hitl-review-mcp-caller-type-literal.py
           .semgrep/missing-is-privileged.yml:.semgrep/tests/graph-write-missing-is-privileged.py
+          .semgrep/missing_session_begin.yml:.semgrep/missing_session_begin.py
           .semgrep/no-raw-httpx-client.yml:.semgrep/tests/no-raw-httpx-client.py
           .semgrep/non_serializable_in_langgraph_state.yml:.semgrep/tests/non-serializable-in-langgraph-state.py
           .semgrep/retry-loop-last-exc.yml:.semgrep/tests/retry-loop-last-exc.py

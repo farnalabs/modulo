@@ -69,10 +69,21 @@ _TIMEOUT_STOPPED = (
 _FINDING_QUOTING_PHRASE = (
     "backend/src/modulo/api/routes/pipelines.py:1617: dispatch.wait_timeout error not surfaced to the caller\n"
 )
-#: A non-fatal parse skip on a tree file the pinned semgrep 1.79.0 does not fully
-#: parse (node_runner.py's `match` statement at line 3567; FAR-1933). It must
-#: never be read as a per-rule timeout skip.
-_PARTIAL_PARSING = "Partially analyzed backend/src/modulo/core/pipeline_engine/node_runner.py (parse skip)\n"
+#: The ONE non-fatal parse skip that reproduces per-file on the invocation CI
+#: uses (`uv run --project backend --no-sync semgrep`): the PEP 695 generic
+#: ``async def _run_db_shell[**TOOL_SHELL_P](`` at mcp_server.py:2111, which
+#: costs exactly one line. Observed 2026-10-18 — ``--json-output`` carries a
+#: ``PartialParsing`` error naming that line, and ``--verbose`` prints
+#: "[WARN] Syntax error at line ...:2111" plus "… (1 lines skipped)". The same
+#: per-file scan of node_runner.py reports ``errors: []`` and "• <none>", so no
+#: parse-skip attribution for that file is reproducible here. A line like this
+#: must never be read as a per-rule timeout skip.
+_PARTIAL_PARSING = (
+    "WARN Syntax error at line backend/src/modulo/api/mcp_server.py:2111: "
+    "`[**TOOL_SHELL_P]` was unexpected\n"
+    "  Partially analyzed due to parsing or internal Semgrep errors\n"
+    "   • backend/src/modulo/api/mcp_server.py (1 lines skipped)\n"
+)
 
 
 def _write_json(path: Path, payload: object) -> None:
