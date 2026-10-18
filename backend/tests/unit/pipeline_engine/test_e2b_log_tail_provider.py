@@ -166,7 +166,7 @@ async def test_build_log_tail_provider_returns_none_when_hub_init_fails(
     """A hub/config failure is swallowed and surfaces as ``None`` (never raises)."""
     from modulo.core.runtime_provider.hub import RuntimeProviderHub
 
-    async def _boom(self: RuntimeProviderHub, config: dict[str, Any]) -> None:
+    def _boom(self: RuntimeProviderHub, config: dict[str, Any]) -> None:
         raise RuntimeError("hub exploded")
 
     monkeypatch.setattr(RuntimeProviderHub, "initialise", _boom)

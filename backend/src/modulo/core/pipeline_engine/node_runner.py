@@ -1137,7 +1137,7 @@ async def _build_log_tail_provider(api_key: str) -> "RuntimeProvider | None":
 
     try:
         provider_hub = RuntimeProviderHub()
-        await provider_hub.initialise({"e2b": {"type": "e2b", "api_key": api_key}})
+        provider_hub.initialise({"e2b": {"type": "e2b", "api_key": api_key}})
     except Exception:
         return None
     return provider_hub.get("e2b")

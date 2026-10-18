@@ -313,7 +313,7 @@ async def test_build_isolation_provider_returns_none_when_hub_init_fails(
     from modulo.core.runtime_provider.hub import RuntimeProviderHub
     from tests.unit._e2b_sandbox_bridge import original_seam
 
-    async def _boom(self: RuntimeProviderHub, config: dict[str, Any]) -> None:
+    def _boom(self: RuntimeProviderHub, config: dict[str, Any]) -> None:
         raise RuntimeError("hub exploded")
 
     monkeypatch.setattr(RuntimeProviderHub, "initialise", _boom)

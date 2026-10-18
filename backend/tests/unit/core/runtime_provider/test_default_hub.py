@@ -297,7 +297,7 @@ class TestUnknownProviderType:
         hub = RuntimeProviderHub()
 
         with pytest.raises(UnknownProviderTypeError) as exc_info:
-            await hub.initialise({"my_runner": {"type": "nonexistent_provider"}})
+            hub.initialise({"my_runner": {"type": "nonexistent_provider"}})
 
         assert "nonexistent_provider" in str(exc_info.value)
 
