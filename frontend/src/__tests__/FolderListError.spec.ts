@@ -78,11 +78,14 @@ describe('FolderListError', () => {
     expect(wrapper.find('[data-testid="error-alert-dismiss"]').exists()).toBe(false)
   })
 
-  it('filters the camelCase dismiss attr spellings as well as the kebab forms', () => {
-    // Vue camelises prop lookup, so a caller may write onDismiss/dismissLabel/
-    // dismissIcon as well as on-dismiss/dismiss-label/dismiss-icon; all six
-    // spellings must be refused.
+  it('refuses every dismiss attr spelling, kebab and camel, in one mount', () => {
+    // Vue camelises prop lookup, so a caller may write on-dismiss/dismiss-label/
+    // dismiss-icon as kebab attrs or onDismiss/dismissLabel/dismissIcon as camel
+    // attrs; all six spellings are passed here at once and all must be refused.
     const wrapper = mountError({
+      'on-dismiss': vi.fn(),
+      'dismiss-label': 'Close',
+      'dismiss-icon': true,
       onDismiss: vi.fn(),
       dismissLabel: 'Close',
       dismissIcon: true,
