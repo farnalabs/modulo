@@ -328,7 +328,11 @@ const providerTypeOptions = computed(() => [
 // and an embedded space, so a ref that merely ENDS in `@sha256:<hex>` must
 // never be announced as pinned. The repository path is also length-capped at
 // 255 characters (the daemon rejects a longer name outright), so an over-length
-// ref is likewise `invalid` rather than pinned.
+// ref is likewise `invalid` rather than pinned. A Hub name with NO namespace is
+// normalised to `library/<name>` BEFORE that cap is applied, so such a name may
+// only be 247 characters (255 minus the 8-character `library/` prefix) — a
+// 248-character no-namespace name normalises to 256 and is rejected, even
+// though a 255-character namespaced/host path is accepted.
 //
 // The classification applies only where image_ref is dispatched as a container
 // image — the Runner (runner_docker) and Kubernetes providers. E2B is excluded
@@ -372,10 +376,16 @@ function isDockerRegistryHost(component: string): boolean {
 // rejected. An over-length path cannot be pulled, so it must never render the
 // green pinned assurance.
 const REPOSITORY_PATH_MAX = 255
+// Docker normalises a Hub name with NO namespace to `library/<name>` before
+// applying the 255-character repository-path cap, so the raw name may only be
+// 247 characters. Measured against the daemon: `'a'.repeat(247)` parses
+// (`No such image`) while `'a'.repeat(248)` is rejected with "repository name
+// must not be more than 255 characters".
+const HUB_NO_NAMESPACE_MAX = REPOSITORY_PATH_MAX - 'library/'.length
 
 function isValidDockerImageName(name: string): boolean {
   const slash = name.indexOf('/')
-  if (slash === -1) return name.length <= REPOSITORY_PATH_MAX && IMAGE_PATH_RE.test(name)
+  if (slash === -1) return name.length <= HUB_NO_NAMESPACE_MAX && IMAGE_PATH_RE.test(name)
   const first = name.slice(0, slash)
   const path = name.slice(slash + 1)
   // A non-host first component is a Docker Hub namespace, so Docker measures

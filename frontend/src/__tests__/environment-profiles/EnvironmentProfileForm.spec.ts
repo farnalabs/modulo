@@ -537,6 +537,31 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
     expect(invalid.text()).toContain('not a valid image reference')
   })
 
+  it('caps a Docker Hub name with no namespace at 247 characters', async () => {
+    // A no-namespace Hub name is normalised to `library/<name>` before the
+    // 255-character repository-path cap is applied, so the raw name may only be
+    // 247 characters (255 - len(`library/`)). Measured against the daemon: 247
+    // parses (`No such image`), 248 is rejected with "repository name must not
+    // be more than 255 characters" — an over-length ref cannot be pulled, so it
+    // is `invalid`, never the green pinned assurance.
+    const digest = `sha256:${'a'.repeat(64)}`
+    const wrapper = await mountWithProvider('runner_docker')
+
+    // 247 characters is valid and digest-pinned.
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(`${'a'.repeat(247)}@${digest}`)
+    await nextTick()
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="envprofile-form-image-invalid"]').exists()).toBe(false)
+
+    // 248 characters normalises to 256 and is rejected.
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(`${'a'.repeat(248)}@${digest}`)
+    await nextTick()
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(false)
+    const invalid = wrapper.find('[data-testid="envprofile-form-image-invalid"]')
+    expect(invalid.exists()).toBe(true)
+    expect(invalid.text()).toContain('not a valid image reference')
+  })
+
   it('reports the release placeholder digest as unresolvable, never pinned', async () => {
     // FAR-1779 C1: the release placeholder is syntactically a valid digest but
     // no registry image exists behind it, so the green "pinned / immutable"

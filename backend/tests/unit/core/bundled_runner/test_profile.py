@@ -62,7 +62,7 @@ def test_drift_none_for_fresh_template_row() -> None:
 def test_drift_ignores_operator_owned_image_ref() -> None:
     """An operator-set image_ref is not drift.
 
-    Ownership is placeholder-scoped (the FAR-1924/FAR-1779 delivery decision,
+    Ownership is placeholder-scoped (the FAR-1779 delivery decision,
     not an ADR rule): once the operator owns the reference (any non-placeholder
     image), it must not be reported as a "shipped template updated" state.
     """
@@ -104,7 +104,7 @@ def test_drift_treats_missing_image_ref_as_template_owned(monkeypatch: pytest.Mo
 def test_seeded_profile_still_receives_template_image_ref() -> None:
     """The template supplies image_ref at SEED time only.
 
-    Ownership is placeholder-scoped (FAR-1924/FAR-1779, not an ADR rule).
+    Ownership is placeholder-scoped (FAR-1779, not an ADR rule).
     """
     values = build_bundled_runner_profile_values()
     assert values["image_ref"] == BUNDLED_RUNNER_IMAGE_REF

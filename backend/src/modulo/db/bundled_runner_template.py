@@ -22,7 +22,7 @@ Digest contract (ADR 029 / plan D4):
   on the Runners page. Operator-owned fields are surfaced, never silently
   re-applied.
 - ``image_ref`` ownership is PLACEHOLDER-SCOPED (the ownership decision made
-  in the FAR-1924/FAR-1779 delivery, not an ADR rule): while a row still
+  in the FAR-1779 delivery, not an ADR rule): while a row still
   carries the release placeholder digest (or no image at all), the template
   owns it — it participates in drift and an apply writes
   ``BUNDLED_RUNNER_IMAGE_REF``, so an advanced release constant reaches
