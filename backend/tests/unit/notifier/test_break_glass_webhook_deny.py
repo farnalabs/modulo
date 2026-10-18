@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy.exc import SQLAlchemyError
+from tests.unit.notifier.conftest import make_scalar_result, session_factory_for
 
 from modulo.core.notifier import DispatchResult, Notifier
 from modulo.db.models.account import Account
@@ -52,23 +53,16 @@ def _endpoint(account_id: uuid.UUID | None = None) -> NotificationEndpoint:
 
 def _session_factory(owners: list[Account], *, raise_on_execute: bool = False) -> MagicMock:
     """Session factory returning one session shared by owner-load + in-app blocks."""
-    result = MagicMock()
-    result.scalars.return_value.__iter__ = lambda self: iter(owners)
     session = AsyncMock()
     if raise_on_execute:
         session.execute = AsyncMock(side_effect=SQLAlchemyError("db down"))
     else:
-        session.execute = AsyncMock(return_value=result)
+        session.execute = AsyncMock(return_value=make_scalar_result(owners))
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
-    return MagicMock(
-        side_effect=lambda: AsyncMock(
-            __aenter__=AsyncMock(return_value=session),
-            __aexit__=AsyncMock(return_value=False),
-        )
-    )
+    return session_factory_for(session)
 
 
 async def _reject(n: Notifier, endpoints: list[NotificationEndpoint], owners: list[Account]) -> list[Any]:
@@ -144,12 +138,7 @@ async def test_reject_re_raises_cancelled_error(notifier: Notifier) -> None:
     ep = _endpoint(account_id=uuid.uuid4())
     session = AsyncMock()
     session.execute = AsyncMock(side_effect=asyncio.CancelledError)
-    factory = MagicMock(
-        side_effect=lambda: AsyncMock(
-            __aenter__=AsyncMock(return_value=session),
-            __aexit__=AsyncMock(return_value=False),
-        )
-    )
+    factory = session_factory_for(session)
 
     with (
         patch.object(notifier, "_session_factory", factory),

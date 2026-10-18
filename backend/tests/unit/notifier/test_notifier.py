@@ -14,6 +14,7 @@ import pytest
 import respx
 from cryptography.fernet import Fernet
 from httpx import Response
+from tests.unit.notifier.conftest import make_scalar_result, session_factory_for
 
 from modulo.core.notifier import (
     MAX_ATTEMPTS,
@@ -53,21 +54,6 @@ def _configure_rls_session(session: AsyncMock) -> MagicMock:
     return begin_cm
 
 
-def _session_factory_for(session: AsyncMock) -> MagicMock:
-    """Build a ``sessionmaker``-shaped mock whose ``async with`` yields ``session``.
-
-    Every invocation of the returned factory yields the SAME session, so a code
-    path that opens the session more than once (e.g. the owner-read and in-app
-    blocks) shares one mock.
-    """
-    return MagicMock(
-        side_effect=lambda: AsyncMock(
-            __aenter__=AsyncMock(return_value=session),
-            __aexit__=AsyncMock(return_value=False),
-        )
-    )
-
-
 def _make_db_session(
     *,
     execute: AsyncMock | None = None,
@@ -88,7 +74,7 @@ def _make_db_session(
         session.execute = execute
     if add is not None:
         session.add = add
-    factory = _session_factory_for(session)
+    factory = session_factory_for(session)
     return session, factory
 
 
@@ -123,13 +109,13 @@ async def _get_endpoints_for_event(
     team_id: uuid.UUID | None = None,
 ) -> list[NotificationEndpoint]:
     """Helper: create a mock session, call _get_subscribed_endpoints, return results."""
-    result = _make_scalar_result(endpoints)
+    result = make_scalar_result(endpoints)
 
     session = AsyncMock()
     _configure_rls_session(session)
     session.execute = AsyncMock(return_value=result)
 
-    factory = _session_factory_for(session)
+    factory = session_factory_for(session)
 
     n = Notifier(MagicMock(), _KEY)
     with patch.object(n, "_session_factory", factory):
@@ -163,7 +149,7 @@ async def test_get_subscribed_endpoints_skips_unsubscribed() -> None:
 
 async def test_get_subscribed_endpoints_filters_auto_disabled_in_query() -> None:
     """The generated query excludes auto-disabled endpoints (SQL-level filter)."""
-    result = _make_scalar_result([_fake_endpoint()])
+    result = make_scalar_result([_fake_endpoint()])
 
     session = AsyncMock()
     _configure_rls_session(session)
@@ -175,7 +161,7 @@ async def test_get_subscribed_endpoints_filters_auto_disabled_in_query() -> None
 
     session.execute = AsyncMock(side_effect=_capture)
 
-    factory = _session_factory_for(session)
+    factory = session_factory_for(session)
 
     n = Notifier(MagicMock(), _KEY)
     with patch.object(n, "_session_factory", factory):
@@ -210,13 +196,13 @@ async def test_get_subscribed_endpoints_runs_in_explicit_transaction() -> None:
     the real ``set_rls_org`` (sqlite dialect stores the org in
     ``session.info``) so the full call chain is exercised."""
     ep = _fake_endpoint()
-    result = _make_scalar_result([ep])
+    result = make_scalar_result([ep])
 
     session = AsyncMock()
     begin_cm = _configure_rls_session(session)
     session.execute = AsyncMock(return_value=result)
 
-    factory = _session_factory_for(session)
+    factory = session_factory_for(session)
 
     n = Notifier(MagicMock(), _KEY)
     with patch.object(n, "_session_factory", factory):
@@ -1098,12 +1084,6 @@ async def test_team_scoped_dispatch(notifier: Notifier, team_id, expected_team_i
 # ---------------------------------------------------------------------------
 
 
-def _make_scalar_result(endpoints: list[NotificationEndpoint]) -> MagicMock:
-    result = MagicMock()
-    result.scalars.return_value.__iter__ = lambda self: iter(endpoints)
-    return result
-
-
 def _make_session_factory(
     endpoints_by_team: list[NotificationEndpoint], endpoints_org: list[NotificationEndpoint]
 ) -> MagicMock:
@@ -1114,14 +1094,14 @@ def _make_session_factory(
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return _make_scalar_result(endpoints_by_team)
-        return _make_scalar_result(endpoints_org)
+            return make_scalar_result(endpoints_by_team)
+        return make_scalar_result(endpoints_org)
 
     session = AsyncMock()
     _configure_rls_session(session)
     session.execute = AsyncMock(side_effect=execute_side_effect)
 
-    return _session_factory_for(session)
+    return session_factory_for(session)
 
 
 @pytest.mark.parametrize(
