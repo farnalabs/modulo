@@ -376,60 +376,140 @@ class TestAbortSandboxes:
             assert await _abort_org_live_sandboxes(mock_session, _ORG_ID) == 1
 
 
+class _FakeTransaction:
+    def __init__(self, session: "_FakeSweepSession") -> None:
+        self._session = session
+
+    async def __aenter__(self) -> "_FakeSweepSession":
+        return self._session
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        return False
+
+
+class _FakeSweepSession:
+    """Minimal async-session double for the candidate-driven sweep unit tests.
+
+    Records each ``session.begin()`` (one per committed batch, FAR-1971b) and
+    returns scripted ``execute`` results in order.
+    """
+
+    def __init__(self, scripted: list[Any]) -> None:
+        self._scripted = list(scripted)
+        self.begins = 0
+        self.executed: list[str] = []
+
+    def begin(self) -> _FakeTransaction:
+        self.begins += 1
+        return _FakeTransaction(self)
+
+    async def execute(self, statement: Any, params: Any = None) -> Any:
+        self.executed.append(str(statement))
+        return self._scripted.pop(0)
+
+
+def _column_result(present: bool) -> MagicMock:
+    result = MagicMock()
+    result.first = MagicMock(return_value=(1,) if present else None)
+    return result
+
+
+def _rows_result(*pairs: tuple[uuid.UUID, str]) -> MagicMock:
+    result = MagicMock()
+    result.all = MagicMock(return_value=[(org, thread) for org, thread in pairs])
+    return result
+
+
+def _rowcount_result(rowcount: int) -> MagicMock:
+    result = MagicMock()
+    result.rowcount = rowcount
+    return result
+
+
 class TestBatchDeleteLanggraphCheckpoints:
-    @staticmethod
-    def _result_with_rowcount(rowcount: int) -> MagicMock:
-        result = MagicMock()
-        result.rowcount = rowcount
-        return result
+    async def test_deleted_total_when_counts_below_batch(self) -> None:
+        """A short candidate batch deletes across all three tables and totals them.
 
-    async def test_deleted_total_when_counts_below_batch(self, mock_session: AsyncMock) -> None:
-        # has_created_at=True path; each statement deletes fewer than batch_size once.
-        col_check = MagicMock()
-        col_check.first = MagicMock(return_value=(1,))
-        mock_session.execute = AsyncMock(
-            side_effect=[
-                col_check,
-                self._result_with_rowcount(5),
-                self._result_with_rowcount(5),
-                self._result_with_rowcount(5),
+        Deployed path (no ``created_at``): one run-expired candidate thread, so
+        only the run-candidate select plus one delete per table execute.
+        """
+        session = _FakeSweepSession(
+            [
+                _column_result(False),
+                _rows_result((_ORG_ID, "t1")),
+                _rowcount_result(5),
+                _rowcount_result(5),
+                _rowcount_result(5),
             ]
         )
         from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
 
-        result = await batch_delete_langgraph_checkpoints(mock_session)
+        result = await batch_delete_langgraph_checkpoints(session)
         assert result == 15
+        # introspection transaction + one committed batch transaction (FAR-1971b)
+        assert session.begins == 2
+        # deployed path never issues the created_at-driven stale selects
+        assert not any("FROM checkpoints t" in stmt for stmt in session.executed)
 
-    async def test_loops_until_below_batch_size(self, mock_session: AsyncMock) -> None:
-        # 3 statements, first table needs two passes (>= batch then partial), others one.
-        col_check = MagicMock()
-        col_check.first = MagicMock(return_value=(1,))
-        mock_session.execute = AsyncMock(
-            side_effect=[
-                col_check,
-                self._result_with_rowcount(500),
-                self._result_with_rowcount(40),
-                self._result_with_rowcount(50),
-                self._result_with_rowcount(50),
+    async def test_loops_until_below_batch_size(self) -> None:
+        """A full candidate batch loops again; a short one ends the sweep."""
+        session = _FakeSweepSession(
+            [
+                _column_result(False),
+                _rows_result((_ORG_ID, "t1"), (_ORG_ID, "t2")),  # full batch (== batch_size)
+                _rowcount_result(300),
+                _rowcount_result(150),
+                _rowcount_result(50),
+                _rows_result((_ORG_ID, "t3")),  # short batch
+                _rowcount_result(40),
+                _rowcount_result(0),
+                _rowcount_result(0),
             ]
         )
         from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
 
-        result = await batch_delete_langgraph_checkpoints(mock_session, batch_size=500, max_age_days=10)
-        assert result == 500 + 40 + 50 + 50
+        result = await batch_delete_langgraph_checkpoints(session, batch_size=2, max_age_days=10)
+        assert result == 300 + 150 + 50 + 40
+        # introspection transaction + two committed batch transactions
+        assert session.begins == 3
 
-    async def test_deployed_schema_path_without_created_at(self, mock_session: AsyncMock) -> None:
-        col_check = MagicMock()
-        col_check.first = MagicMock(return_value=None)
-        mock_session.execute = AsyncMock(
-            side_effect=[
-                col_check,
-                self._result_with_rowcount(7),
-                self._result_with_rowcount(7),
-                self._result_with_rowcount(7),
+    async def test_stops_at_row_budget(self) -> None:
+        """FAR-1971c: the sweep stops once the per-tick row budget is spent."""
+        session = _FakeSweepSession(
+            [
+                _column_result(False),
+                _rows_result((_ORG_ID, "t1")),
+                _rowcount_result(1),
+                _rowcount_result(1),
+                _rowcount_result(1),
+                _rows_result((_ORG_ID, "t2")),
+                _rowcount_result(1),
+                _rowcount_result(1),
+                _rowcount_result(1),
             ]
         )
         from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
 
-        result = await batch_delete_langgraph_checkpoints(mock_session)
+        result = await batch_delete_langgraph_checkpoints(session, batch_size=1, max_rows_per_tick=5)
+        # Two batches ran (3 rows each); the budget of 5 stopped the third.
+        assert result == 6
+        assert session.begins == 3
+
+    async def test_deployed_schema_path_without_created_at(self) -> None:
+        """The sentinel run-expired select is used and stale selects are skipped."""
+        session = _FakeSweepSession(
+            [
+                _column_result(False),
+                _rows_result((_ORG_ID, "t1")),
+                _rowcount_result(7),
+                _rowcount_result(7),
+                _rowcount_result(7),
+            ]
+        )
+        from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+
+        result = await batch_delete_langgraph_checkpoints(session)
         assert result == 21
+        assert any("FROM runs r" in stmt for stmt in session.executed)
+        # every delete targets (organisation_id, thread_id), never ctid
+        assert all("ctid" not in stmt for stmt in session.executed)

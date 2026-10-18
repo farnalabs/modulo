@@ -169,6 +169,53 @@ async def _get_org_status(db_engine: AsyncEngine, org_id: uuid.UUID) -> dict[str
         }
 
 
+async def _insert_checkpoint_triple(
+    db_engine: AsyncEngine, org_id: uuid.UUID, threads: list[str], created_at: datetime
+) -> None:
+    """Insert one ``checkpoints`` + ``checkpoint_writes`` + ``checkpoint_blobs`` row per thread."""
+    async with db_engine.connect() as conn, conn.begin():
+        for i, thread in enumerate(threads):
+            ckp = f"ckp-{i}-{thread}"
+            await conn.execute(
+                text(
+                    "INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, checkpoint_id, "
+                    "parent_checkpoint_id, type, checkpoint, metadata, created_at) "
+                    "VALUES (:org, :thread, '', :ckp, NULL, NULL, '{}'::jsonb, '{}'::jsonb, :created_at)"
+                ),
+                {"org": str(org_id), "thread": thread, "ckp": ckp, "created_at": created_at},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO checkpoint_writes (organisation_id, thread_id, checkpoint_ns, checkpoint_id, "
+                    "task_id, idx, channel, type, blob, created_at) "
+                    "VALUES (:org, :thread, '', :ckp, 'task', 0, 'channel', 'json', :blob, :created_at)"
+                ),
+                {"org": str(org_id), "thread": thread, "ckp": ckp, "blob": b"write", "created_at": created_at},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO checkpoint_blobs (organisation_id, thread_id, checkpoint_ns, channel, version, "
+                    "type, blob, created_at) "
+                    "VALUES (:org, :thread, '', 'channel', 'v1', 'bytes', :blob, :created_at)"
+                ),
+                {"org": str(org_id), "thread": thread, "blob": b"blob", "created_at": created_at},
+            )
+
+
+async def _drain_eligible_checkpoints(db_engine: AsyncEngine) -> None:
+    """Purge every currently-eligible checkpoint row so a budgeted test starts clean.
+
+    The sweep is intentionally cross-org, so a budgeted test cannot scope it to
+    its own org; draining the eligible set first makes the candidate selection
+    deterministic for the threads the test then seeds.
+    """
+    from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        await batch_delete_langgraph_checkpoints(session, max_rows_per_tick=10_000_000)
+
+
 # ── Tests: request_org_deletion ─────────────────────────────────────
 
 
@@ -1015,3 +1062,103 @@ class TestBatchDeleteLanggraphCheckpoints:
                 {"oid": str(org_id)},
             )
             assert result.scalar_one() == 1, "blob referenced by the fresh checkpoint must survive"
+
+    async def test_budget_bounds_and_commits_progress(self, db_engine: AsyncEngine) -> None:
+        """FAR-1971: the sweep commits each batch and stops at the per-tick budget.
+
+        Without the fix the whole ``while`` loop ran in ONE transaction, so a
+        partial run committed NOTHING, and there was no row budget — it drained
+        every eligible row (or ran to the wall-clock limit). This test seeds six
+        eligible threads, gives the sweep a budget of two rows and a one-thread
+        batch, then asserts (a) only one thread's rows went (bounded) and (b) a
+        SEPARATE connection already sees the deletions without any explicit
+        ``session.commit()`` (committed per batch).
+        """
+        from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+
+        await _drain_eligible_checkpoints(db_engine)
+
+        org_id = await _create_org(db_engine, "budget")
+        user_id = await _create_user(db_engine, org_id, "budget@test.com")
+        pid = await _create_pipeline(db_engine, org_id, "Budget Pipeline", user_id)
+        sid = await _create_snapshot(db_engine, org_id, pid)
+        old_ts = datetime.now(UTC) - timedelta(days=31)
+
+        threads = [f"thread-budget-{i}" for i in range(6)]
+        for thread in threads:
+            await _insert_run(
+                db_engine, org_id=org_id, pipeline_id=pid, snapshot_id=sid, thread_id=thread, status="complete"
+            )
+        await _insert_checkpoint_triple(db_engine, org_id, threads, old_ts)
+
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with factory() as session:
+            count = await batch_delete_langgraph_checkpoints(
+                session, batch_size=1, max_age_days=30, max_rows_per_tick=2
+            )
+
+        # One thread's checkpoint + write + blob — NOT all 18. The budget, not
+        # the absence of work, stopped the sweep.
+        assert count == 3
+        # No explicit commit happened on ``session``; a separate connection only
+        # sees the deletions because each batch committed on its own.
+        async with db_engine.connect() as conn:
+            for table in ("checkpoints", "checkpoint_writes", "checkpoint_blobs"):
+                result = await conn.execute(
+                    text(f"SELECT COUNT(*) FROM {table} WHERE organisation_id = :oid"),  # noqa: S608
+                    {"oid": str(org_id)},
+                )
+                assert result.scalar_one() == 5, f"{table} must retain 5 of 6 rows (budget-bounded)"
+
+    async def test_deployed_schema_path_bounded_and_committed(
+        self, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FAR-1971a: the deployed (no ``created_at``) path is candidate-driven.
+
+        Production runs the branch where the checkpoint ``created_at`` column is
+        absent, i.e. the sweep must select aged TERMINAL runs and delete their
+        threads by ``(organisation_id, thread_id)``. It must still be bounded and
+        commit per batch. The introspection is monkeypatched to the deployed
+        answer so this test exercises exactly the production query variant.
+        """
+        from modulo.db.crud import org_deletion as org_deletion_mod
+
+        async def _no_created_at(_session: Any) -> bool:
+            return False
+
+        monkeypatch.setattr(org_deletion_mod, "_checkpoint_created_at_present", _no_created_at)
+
+        await _drain_eligible_checkpoints(db_engine)
+
+        org_id = await _create_org(db_engine, "deployed")
+        user_id = await _create_user(db_engine, org_id, "deployed@test.com")
+        pid = await _create_pipeline(db_engine, org_id, "Deployed Pipeline", user_id)
+        sid = await _create_snapshot(db_engine, org_id, pid)
+        old_ts = datetime.now(UTC) - timedelta(days=31)
+
+        threads = [f"thread-deployed-{i}" for i in range(6)]
+        for thread in threads:
+            run_id = await _insert_run(
+                db_engine, org_id=org_id, pipeline_id=pid, snapshot_id=sid, thread_id=thread, status="complete"
+            )
+            async with db_engine.connect() as conn, conn.begin():
+                await conn.execute(
+                    text("UPDATE runs SET completed_at = :ts WHERE id = :rid"),
+                    {"ts": old_ts, "rid": str(run_id)},
+                )
+        await _insert_checkpoint_triple(db_engine, org_id, threads, datetime.now(UTC))
+
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with factory() as session:
+            count = await org_deletion_mod.batch_delete_langgraph_checkpoints(
+                session, batch_size=1, max_age_days=30, max_rows_per_tick=2
+            )
+
+        assert count == 3
+        async with db_engine.connect() as conn:
+            for table in ("checkpoints", "checkpoint_writes", "checkpoint_blobs"):
+                result = await conn.execute(
+                    text(f"SELECT COUNT(*) FROM {table} WHERE organisation_id = :oid"),  # noqa: S608
+                    {"oid": str(org_id)},
+                )
+                assert result.scalar_one() == 5, f"{table} must retain 5 of 6 rows (deployed path, bounded)"
